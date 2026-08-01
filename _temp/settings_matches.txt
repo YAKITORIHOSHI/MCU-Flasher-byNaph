@@ -1,0 +1,4 @@
+﻿
+mcu_flash_gui.py:12157:    def _open_settings(self):
+
+

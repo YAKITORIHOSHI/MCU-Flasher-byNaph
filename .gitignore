@@ -1,0 +1,77 @@
+# === PlatformIO / Arduino toolchain caches (these caused the "files too large" warning) ===
+.pio/
+.pioenvs/
+.piolibdeps/
+env/*
+!env/Scripts/
+!env/Scripts/python.exe
+env.platformio.cache/
+**/.platformio/
+**/platformio/cache/
+**/platformio/downloads/
+**/platformio/packages/
+
+# Arduino CLI / IDE bootstrap artifacts
+**/arduino-cli*
+**/find_arduino_cli*
+**/bootstrap_arduino_cli*
+
+# NOTE: installers/*.exe and installers/*.AppImage are intentionally NOT
+# ignored here — they're tracked via Git LFS (see .gitattributes).
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+.venv/
+venv/
+env_gui/
+
+# PyInstaller output (rebuildable, often large)
+*.build/
+*.dist/
+
+# === Backups (you seem to keep manual backup folders — exclude unless intentional) ===
+-backups*/
+backups/
+*backup*/
+
+# === OS / Editor cruft ===
+.DS_Store
+Thumbs.db
+desktop.ini
+*.zip
+.vscode/
+.idea/
+*.log
+*.lock
+$null
+
+
+# === Project-specific caches ===
+project.checksum
+*.checksum
+compile_cache/
+*_syntax_errors.json
+*_tab_order.json
+*_gui_cache.json
+
+# === Compiled firmware / build artifacts (PlatformIO output) ===
+*.o
+*.d
+*.bin
+*.elf
+*.map
+*.a
+*.dblite
+
+.pio_cache/
+
+.pio_cache/
+"index_json/library_index.json" 

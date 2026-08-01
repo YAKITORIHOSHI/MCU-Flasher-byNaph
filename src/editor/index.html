@@ -1,0 +1,2562 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>MCU Flasher — Embedded Code Editor</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #151922;
+      /* Matches Theme.BG_DARKEST */
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
+      color: #abb2bf;
+      overflow: hidden;
+    }
+
+    #app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    #tab-bar {
+      display: flex;
+      align-items: center;
+      background: #0f121a;
+      /* Matches Theme.BG_DARK */
+      border-bottom: 1px solid #222938;
+      /* Matches Theme.BORDER */
+      overflow-x: auto;
+      overflow-y: hidden;
+      height: 35px;
+      box-sizing: border-box;
+    }
+
+    #detached-action-bar {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      min-height: 40px;
+      padding: 5px 8px;
+      box-sizing: border-box;
+      background: #0f121a;
+      border-bottom: 1px solid #222938;
+      overflow-x: auto;
+    }
+
+    #detached-action-bar.visible {
+      display: flex;
+    }
+
+    #detached-action-bar .toolbar-label {
+      color: #7f8c8d;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 3px;
+    }
+
+    #detached-action-bar .toolbar-divider {
+      width: 2px;
+      height: 22px;
+      margin: 0 5px;
+      flex: 0 0 auto;
+      background: #222938;
+    }
+
+    #detached-action-bar button {
+      color: #f4f7fb;
+      border: 0;
+      padding: 5px 10px;
+      font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
+      cursor: pointer;
+    }
+
+    #detached-action-bar button:hover {
+      filter: brightness(1.18);
+    }
+
+    #detached-action-bar .compile {
+      background: #2d7d46;
+    }
+
+    #detached-action-bar .upload {
+      background: #2077b0;
+    }
+
+    #detached-action-bar .stop {
+      background: #a03030;
+    }
+
+    #detached-action-bar .clean,
+    #detached-action-bar .reload {
+      background: #3a4555;
+    }
+
+    #detached-action-bar .save {
+      background: #2d7d46;
+    }
+
+    #detached-action-bar .save-all {
+      background: #8244a0;
+    }
+
+    #detached-action-bar .modify {
+      background: #1a7a70;
+    }
+
+    #tab-bar::-webkit-scrollbar {
+      height: 3px;
+    }
+
+    #tab-bar::-webkit-scrollbar-track {
+      background: #0f121a;
+    }
+
+    #tab-bar::-webkit-scrollbar-thumb {
+      background: #222938;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      height: 100%;
+      background: #0f121a;
+      border-right: 1px solid #1c212e;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      user-select: none;
+      color: #7f8c8d;
+      box-sizing: border-box;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
+    .tab:hover {
+      background: #171c28;
+      color: #abb2bf;
+    }
+
+    .tab.active {
+      background: #151922;
+      color: #00d2ff;
+      font-weight: 600;
+    }
+
+    .tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #00d2ff;
+    }
+
+    .tab .dirty-dot {
+      width: 6px;
+      height: 6px;
+      background: #ff9f00;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    #editor-container {
+      flex: 1;
+      position: relative;
+      background: #151922;
+    }
+
+    #monaco-anchor {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+
+    .monaco-editor .decorationsOverviewRuler {
+      display: none !important;
+    }
+
+    .monaco-definition-link {
+      color: #00d2ff !important;
+      cursor: pointer !important;
+      text-decoration: underline !important;
+      text-decoration-color: #00d2ff !important;
+      text-underline-offset: 2px;
+    }
+
+    #definition-hover-card {
+      display: none;
+      position: fixed;
+      z-index: 10000;
+      max-width: 460px;
+      padding: 8px 10px;
+      border: 1px solid #00d2ff;
+      border-radius: 5px;
+      background: #101722;
+      color: #dce5ef;
+      box-shadow: 0 5px 16px rgba(0, 0, 0, 0.38);
+      font: 12px/1.45 'Consolas', 'Courier New', monospace;
+      pointer-events: none;
+      transform: translateY(-100%);
+    }
+
+    #definition-hover-card .symbol-kind {
+      margin-bottom: 3px;
+      color: #00d2ff;
+      font: 700 11px 'Montserrat', 'Segoe UI', sans-serif;
+      text-transform: uppercase;
+    }
+
+    #definition-hover-card .signature,
+    #definition-hover-card .symbol-detail {
+      margin-top: 3px;
+    }
+
+    #definition-hover-card strong {
+      color: #7fdbff;
+    }
+
+    .tab.dragging {
+      opacity: 0.5;
+    }
+
+    /* Custom VS Code style floating hover container widget */
+    #monaco-custom-hover-card {
+      position: fixed;
+      z-index: 99999;
+      display: none;
+      background: #1e2430;
+      border: 1px solid #323b4d;
+      border-radius: 6px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      padding: 10px 14px;
+      max-width: 450px;
+      font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+      font-size: 12px;
+      color: #abb2bf;
+      pointer-events: none;
+      transition: opacity 0.15s ease-in-out;
+    }
+
+    #monaco-custom-hover-card .hover-title {
+      color: #61afef;
+      font-weight: bold;
+      font-size: 13px;
+    }
+
+    #monaco-custom-hover-card .hover-kind {
+      color: #e06c75;
+      font-style: italic;
+    }
+
+    #monaco-custom-hover-card .hover-proto {
+      color: #98c379;
+      background: #161b24;
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin: 6px 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #monaco-custom-hover-card .hover-detail {
+      margin-top: 4px;
+      color: #c8d3df;
+      word-break: break-word;
+    }
+
+    #monaco-custom-hover-card strong {
+      color: #7fdbff;
+    }
+
+    #monaco-custom-hover-card .hover-link {
+      color: #00d2ff;
+      margin-top: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-block;
+      text-decoration: underline;
+    }
+
+    #monaco-custom-hover-card .hover-link:hover {
+      color: #66e2ff;
+    }
+
+    /* AI Edits Glow & Diff Highlighting Styles */
+    .monaco-editor .ai-edit-added-line,
+    .ai-edit-added-line {
+      background-color: rgba(46, 160, 67, 0.42) !important;
+      border-left: 5px solid #3fb950 !important;
+      box-shadow: inset 0 0 12px rgba(46, 160, 67, 0.50) !important;
+      animation: greenGlowPulse 0.9s ease-in-out infinite alternate !important;
+    }
+
+    .monaco-editor .ai-edit-removed-line,
+    .ai-edit-removed-line {
+      background-color: rgba(248, 81, 73, 0.42) !important;
+      border-left: 5px solid #f85149 !important;
+      box-shadow: inset 0 0 12px rgba(248, 81, 73, 0.50) !important;
+      animation: redGlowPulse 0.9s ease-in-out infinite alternate !important;
+    }
+
+    .monaco-editor .ai-edit-modified-line,
+    .ai-edit-modified-line {
+      background-color: rgba(56, 139, 253, 0.36) !important;
+      border-left: 5px solid #58a6ff !important;
+      box-shadow: inset 0 0 12px rgba(56, 139, 253, 0.48) !important;
+      animation: blueGlowPulse 0.9s ease-in-out infinite alternate !important;
+    }
+
+    .monaco-editor .ai-edit-added-inline,
+    .ai-edit-added-inline {
+      background-color: rgba(46, 160, 67, 0.45) !important;
+      color: #aff5b4 !important;
+      border-radius: 3px !important;
+    }
+
+    .monaco-editor .ai-edit-removed-inline,
+    .ai-edit-removed-inline {
+      background-color: rgba(248, 81, 73, 0.45) !important;
+      color: #ffdcd7 !important;
+      border-radius: 3px !important;
+    }
+
+    .monaco-editor .ai-edit-modified-inline,
+    .ai-edit-modified-inline {
+      background-color: rgba(56, 139, 253, 0.45) !important;
+      color: #dbeeff !important;
+      border-radius: 3px !important;
+    }
+
+    .ai-edit-added-gutter::before {
+      content: '+';
+      color: #3fb950;
+      font-weight: bold;
+      font-size: 14px;
+      margin-left: 3px;
+    }
+
+    .ai-edit-removed-gutter::before {
+      content: '-';
+      color: #f85149;
+      font-weight: bold;
+      font-size: 14px;
+      margin-left: 3px;
+    }
+
+    .ai-edit-modified-gutter::before {
+      content: '~';
+      color: #58a6ff;
+      font-weight: bold;
+      font-size: 14px;
+      margin-left: 3px;
+    }
+
+    @keyframes greenGlowPulse {
+      0% {
+        background-color: rgba(46, 160, 67, 0.20) !important;
+        box-shadow: inset 0 0 6px rgba(46, 160, 67, 0.25) !important;
+      }
+
+      100% {
+        background-color: rgba(46, 160, 67, 0.40) !important;
+        box-shadow: inset 0 0 18px rgba(46, 160, 67, 0.65) !important;
+      }
+    }
+
+    @keyframes redGlowPulse {
+      0% {
+        background-color: rgba(248, 81, 73, 0.20) !important;
+        box-shadow: inset 0 0 6px rgba(248, 81, 73, 0.25) !important;
+      }
+
+      100% {
+        background-color: rgba(248, 81, 73, 0.40) !important;
+        box-shadow: inset 0 0 18px rgba(248, 81, 73, 0.65) !important;
+      }
+    }
+
+    @keyframes blueGlowPulse {
+      0% {
+        background-color: rgba(56, 139, 253, 0.22) !important;
+        box-shadow: inset 0 0 6px rgba(56, 139, 253, 0.28) !important;
+      }
+
+      100% {
+        background-color: rgba(56, 139, 253, 0.46) !important;
+        box-shadow: inset 0 0 18px rgba(56, 139, 253, 0.68) !important;
+      }
+    }
+
+    #ai-diff-banner {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      z-index: 99999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(21, 25, 34, 0.95);
+      border: 1px solid #2ea043;
+      border-radius: 6px;
+      padding: 6px 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 12px rgba(46, 160, 67, 0.3);
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
+      font-size: 12px;
+      color: #e6edf3;
+      backdrop-filter: blur(8px);
+      animation: bannerSlideIn 0.3s ease-out;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: min(calc(100% - 32px), 760px);
+      box-sizing: border-box;
+    }
+
+    #ai-diff-banner .review-title {
+      color: #00d2ff;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    #ai-diff-banner .review-file {
+      max-width: 190px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #f0f6fc;
+      font-weight: 600;
+    }
+
+    #ai-diff-banner .review-position {
+      color: #8b949e;
+      white-space: nowrap;
+    }
+
+    #ai-diff-banner .review-message {
+      color: #f2cc60;
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #ai-diff-banner .review-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 2px;
+    }
+
+    #ai-diff-banner .diff-badge-add {
+      background: rgba(46, 160, 67, 0.25);
+      color: #3fb950;
+      border: 1px solid rgba(46, 160, 67, 0.6);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    #ai-diff-banner .diff-badge-remove {
+      background: rgba(248, 81, 73, 0.25);
+      color: #f85149;
+      border: 1px solid rgba(248, 81, 73, 0.6);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    #ai-diff-banner .diff-badge-modify {
+      background: rgba(56, 139, 253, 0.2);
+      color: #58a6ff;
+      border: 1px solid rgba(56, 139, 253, 0.55);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    #ai-diff-banner .review-btn {
+      background: #21262d;
+      color: #abb2bf;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    #ai-diff-banner .review-btn:hover:not(:disabled) {
+      background: #30363d;
+      color: #ffffff;
+      border-color: #00d2ff;
+    }
+
+    #ai-diff-banner .review-btn:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    #ai-diff-banner .review-btn.reject {
+      color: #ffb4ae;
+      border-color: rgba(248, 81, 73, 0.7);
+    }
+
+    #ai-diff-banner .review-btn.reject:hover:not(:disabled) {
+      background: rgba(248, 81, 73, 0.22);
+      border-color: #f85149;
+    }
+
+    #ai-diff-banner .review-btn.accept {
+      color: #ffffff;
+      background: #238636;
+      border-color: #2ea043;
+      font-weight: 700;
+    }
+
+    #ai-diff-banner .review-btn.accept:hover:not(:disabled) {
+      background: #2ea043;
+      border-color: #3fb950;
+    }
+
+    @media (max-width: 700px) {
+      #ai-diff-banner {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        top: auto;
+        transform: none;
+        animation-name: bannerSlideInMobile;
+        width: auto;
+        gap: 6px;
+        padding: 5px 7px;
+        flex-wrap: wrap;
+        font-size: 11px;
+        max-width: none;
+      }
+
+      #ai-diff-banner .review-file,
+      #ai-diff-banner .review-message {
+        max-width: calc(100vw - 145px);
+      }
+
+      #ai-diff-banner .review-actions {
+        margin-left: 0;
+      }
+
+      #detached-action-bar button {
+        padding: 5px 7px;
+      }
+    }
+
+    @keyframes bannerSlideIn {
+      from {
+        transform: translate(-50%, 12px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translate(-50%, 0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes bannerSlideInMobile {
+      from {
+        transform: translateY(12px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="app-container">
+    <div id="detached-action-bar" aria-label="Detached editor actions">
+      <span class="toolbar-label">ACTIONS</span>
+      <button class="compile" data-action="compile">Compile</button>
+      <button class="upload" data-action="upload">Upload</button>
+      <button class="stop" data-action="stop">Stop</button>
+      <button class="clean" data-action="clean">Clean</button>
+      <span class="toolbar-divider" aria-hidden="true"></span>
+      <button class="save" data-action="save">Save</button>
+      <button class="save-all" data-action="save_all">Save All</button>
+      <button class="reload" data-action="reload">Reload</button>
+      <button class="modify" data-action="modify">Modify</button>
+    </div>
+    <div id="tab-bar"></div>
+    <div id="editor-container">
+      <div id="monaco-anchor"></div>
+      <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
+        <span class="review-title">🤖 AI Review</span>
+        <span id="ai-review-file" class="review-file"></span>
+        <span id="ai-review-position" class="review-position"></span>
+        <span id="ai-diff-add-count" class="diff-badge-add">+0 added</span>
+        <span id="ai-diff-modify-count" class="diff-badge-modify">~0 changed</span>
+        <span id="ai-diff-remove-count" class="diff-badge-remove">-0 removed</span>
+        <span id="ai-review-message" class="review-message"></span>
+        <span class="review-actions">
+          <button id="ai-review-reject" class="review-btn reject" type="button">Reject</button>
+          <button id="ai-review-accept" class="review-btn accept" type="button">Accept</button>
+        </span>
+      </div>
+    </div>
+    <div id="definition-hover-card" role="tooltip"></div>
+  </div>
+
+  <!-- Local, C++-only trimmed Monaco bundle. No CDN / network dependency. -->
+  <script src="bundle.js"></script>
+  <script>
+    (function () {
+      const bar = document.getElementById('detached-action-bar');
+      window.setDetachedActionBar = function (visible) {
+        bar.classList.toggle('visible', !!visible);
+        if (window.editorInstance) window.editorInstance.layout();
+      };
+      bar.addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button || !window.pywebview || !window.pywebview.api) return;
+        button.disabled = true;
+        try {
+          await window.pywebview.api.run_action(button.dataset.action);
+        } finally {
+          window.setTimeout(() => { button.disabled = false; }, 250);
+        }
+      });
+    })();
+
+    (function () {
+      let fileList = [];
+
+      let syncInFlight = null;
+      function syncTabPaths() {
+        if (syncInFlight) return syncInFlight;
+        if (!window.pywebview || !window.pywebview.api ||
+            !window.pywebview.api.get_project_files) {
+          return Promise.resolve([]);
+        }
+        syncInFlight = window.pywebview.api.get_project_files()
+          .then((files) => {
+            fileList = Array.isArray(files) ? files : [];
+            window.projectFileList = fileList;
+            const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
+            const validPaths = new Set(fileList.map((file) =>
+              String(file.path || '').replace(/\\/g, '/').toLowerCase()
+            ));
+            const mappedPaths = tabs.map((tab) =>
+              String(tab._filePath || '').replace(/\\/g, '/').toLowerCase()
+            );
+            const needsFullMap = mappedPaths.some((path) => !path || !validPaths.has(path)) ||
+              new Set(mappedPaths.filter(Boolean)).size !== mappedPaths.filter(Boolean).length;
+
+            // Bundle tab IDs are sanitized and can collide. The bundle creates
+            // tabs in exactly get_project_files() order, so a stateless index
+            // map is collision-free during initial/incremental construction.
+            // Once every tab has a unique path, preserve it across drag moves.
+            if (needsFullMap) {
+              tabs.forEach((tab, index) => {
+                const file = fileList[index];
+                if (!file) return;
+                tab._filePath = file.path;
+                tab.setAttribute('data-file-path', file.path);
+                tab.setAttribute('draggable', 'true');
+              });
+            } else {
+              tabs.forEach((tab) => tab.setAttribute('draggable', 'true'));
+            }
+            return fileList;
+          })
+          .catch((error) => {
+            console.error('Could not map editor tabs to project files:', error);
+            return [];
+          })
+          .finally(() => { syncInFlight = null; });
+        return syncInFlight;
+      }
+
+      window.syncTabPaths = syncTabPaths;
+      if (window.pywebview && window.pywebview.api) {
+        setTimeout(syncTabPaths, 0);
+      } else {
+        window.addEventListener('pywebviewready', () => setTimeout(syncTabPaths, 0));
+      }
+
+      let tabSyncTimer = null;
+      const observer = new MutationObserver(() => {
+        clearTimeout(tabSyncTimer);
+        tabSyncTimer = setTimeout(syncTabPaths, 0);
+      });
+
+      const tabBar = document.getElementById('tab-bar');
+      observer.observe(tabBar, { childList: true });
+
+      let dragSrcEl = null;
+
+      tabBar.addEventListener('dragstart', (e) => {
+        const tab = e.target.closest('.tab');
+        if (!tab) return;
+        dragSrcEl = tab;
+        e.dataTransfer.effectAllowed = 'move';
+        tab.classList.add('dragging');
+      });
+
+      tabBar.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const tab = e.target.closest('.tab');
+        if (!tab || tab === dragSrcEl) return;
+
+        const rect = tab.getBoundingClientRect();
+        const midpoint = rect.left + rect.width / 2;
+        if (e.clientX < midpoint) {
+          tabBar.insertBefore(dragSrcEl, tab);
+        } else {
+          tabBar.insertBefore(dragSrcEl, tab.nextSibling);
+        }
+      });
+
+      tabBar.addEventListener('dragend', (e) => {
+        const tab = e.target.closest('.tab');
+        if (tab) tab.classList.remove('dragging');
+        dragSrcEl = null;
+
+        const paths = [];
+        for (const child of tabBar.children) {
+          if (child._filePath) {
+            paths.push(child._filePath);
+          }
+        }
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.save_tab_order) {
+          window.pywebview.api.save_tab_order(paths);
+        }
+      });
+    })();
+
+    (function () {
+      let monacoFontSize = 14;
+      function handleZoom(e) {
+        if (e.ctrlKey || e.metaKey) {
+          if (e.key === '=' || e.key === '+' || e.keyCode === 187 || e.keyCode === 107) {
+            e.preventDefault();
+            e.stopPropagation();
+            zoomMonaco(1);
+          } else if (e.key === '-' || e.keyCode === 189 || e.keyCode === 109) {
+            e.preventDefault();
+            e.stopPropagation();
+            zoomMonaco(-1);
+          }
+        }
+      }
+
+      function zoomMonaco(delta) {
+        if (window.editorInstance) {
+          monacoFontSize = Math.max(6, Math.min(40, monacoFontSize + delta));
+          window.editorInstance.updateOptions({ fontSize: monacoFontSize });
+        }
+      }
+
+      window.addEventListener('keydown', handleZoom, true);
+      document.addEventListener('keydown', handleZoom, true);
+
+      window.setEditorMarkers = function (errorsJsonStr) {
+        if (!window.editorInstance) return;
+        const model = window.editorInstance.getModel();
+        if (!model) return;
+        try {
+          const errors = JSON.parse(errorsJsonStr);
+          const markers = errors.map(err => {
+            const lineContent = model.getLineContent(err.line) || "";
+            let endCol = err.col + 1;
+            if (err.col - 1 < lineContent.length) {
+              let idx = err.col - 1;
+              while (idx < lineContent.length && /\w/.test(lineContent[idx])) {
+                idx++;
+              }
+              endCol = Math.max(err.col + 1, idx + 1);
+            }
+            return {
+              severity: err.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+              message: err.message,
+              startLineNumber: err.line,
+              startColumn: err.col,
+              endLineNumber: err.line,
+              endColumn: endCol
+            };
+          });
+          monaco.editor.setModelMarkers(model, "owner_python_syntax", markers);
+        } catch (e) {
+          console.error(e);
+        }
+      };
+
+      let lastCheckedContent = "";
+      let syntaxCheckTimeout = null;
+
+      function runMonacoSyntaxCheck() {
+        if (!window.editorInstance || !window.pywebview || !window.pywebview.api || !window.pywebview.api.realtime_check_syntax) {
+          return;
+        }
+        const model = window.editorInstance.getModel();
+        if (!model) return;
+
+        const activeTab = document.querySelector('.tab.active');
+        const filePath = activeTab ? activeTab._filePath : "";
+        if (!filePath) return;
+
+        if (!filePath.endsWith('.ino') && !filePath.endsWith('.cpp') && !filePath.endsWith('.h')) {
+          window.setEditorMarkers("[]");
+          return;
+        }
+
+        const content = model.getValue();
+        if (content === lastCheckedContent) return;
+        lastCheckedContent = content;
+
+        if (window.pywebview && window.pywebview.api) {
+          window.pywebview.api.realtime_check_syntax(filePath, content).then(errorsJsonStr => {
+            window.setEditorMarkers(errorsJsonStr);
+          }).catch(err => console.error(err));
+        } else {
+          console.warn("Detached mode: pywebview API not available. Realtime syntax disabled.");
+        }
+      }
+
+      function scheduleSyntaxCheck() {
+        if (syntaxCheckTimeout) {
+          clearTimeout(syntaxCheckTimeout);
+        }
+        syntaxCheckTimeout = setTimeout(runMonacoSyntaxCheck, 300);
+      }
+
+      function syncModelLanguageForActiveTab() {
+        if (!window.editorInstance || typeof monaco === 'undefined' || !monaco.editor) return;
+        const activeTab = document.querySelector('#tab-bar .tab.active');
+        const activePath = activeTab ? activeTab._filePath : "";
+        if (!activePath) return;
+
+        const model = window.editorInstance.getModel();
+        if (!model) return;
+
+        const ext = activePath.split('.').pop().toLowerCase();
+        let targetLang = 'cpp';
+        if (ext === 'txt') {
+          targetLang = 'plaintext';
+        } else if (ext === 'md') {
+          targetLang = 'markdown';
+        } else if (ext === 'json') {
+          targetLang = 'json';
+        } else if (ext === 'py') {
+          targetLang = 'python';
+        } else if (ext === 'js') {
+          targetLang = 'javascript';
+        } else if (ext === 'ini') {
+          targetLang = 'ini';
+        } else if (['ino', 'cpp', 'c', 'h', 'hpp'].includes(ext)) {
+          targetLang = 'cpp';
+        } else {
+          targetLang = 'plaintext';
+        }
+
+        try {
+          const currentLang = model.getLanguageId ? model.getLanguageId() : '';
+          if (currentLang !== targetLang) {
+            monaco.editor.setModelLanguage(model, targetLang);
+          }
+        } catch (e) { }
+      }
+
+      window.syncModelLanguageForActiveTab = syncModelLanguageForActiveTab;
+
+      function checkMonacoSyntaxRealtime() {
+        if (!window.editorInstance) {
+          setTimeout(checkMonacoSyntaxRealtime, 1000);
+          return;
+        }
+
+        const model = window.editorInstance.getModel();
+        if (!model) {
+          setTimeout(checkMonacoSyntaxRealtime, 500);
+          return;
+        }
+
+        syncModelLanguageForActiveTab();
+
+        if (!window.editorInstance._syntax_listener_added) {
+          window.editorInstance._syntax_listener_added = true;
+
+          window.editorInstance.onDidChangeModelContent(() => {
+            if (window._applyingAiReviewModelUpdate) return;
+            scheduleSyntaxCheck();
+            if (window.pywebview && window.pywebview.api) {
+              const activeTab = document.querySelector('.tab.active');
+              const filePath = activeTab ? activeTab._filePath : "";
+              if (filePath && window.pywebview.api.mark_modified) {
+                window.pywebview.api.mark_modified(filePath, true);
+              }
+              if (window.pywebview.api.on_editor_content_change) {
+                window.pywebview.api.on_editor_content_change();
+              }
+            }
+          });
+
+          window.editorInstance.onDidChangeModel(() => {
+            lastCheckedContent = ""; // Force recheck on tab switch
+            syncModelLanguageForActiveTab();
+            scheduleSyntaxCheck();
+          });
+
+          scheduleSyntaxCheck();
+        }
+
+        setTimeout(checkMonacoSyntaxRealtime, 2000);
+      }
+
+      const tabBarElem = document.getElementById('tab-bar');
+      if (tabBarElem) {
+        tabBarElem.addEventListener('click', () => {
+          setTimeout(syncModelLanguageForActiveTab, 50);
+        });
+      }
+
+      // Start polling for editor instance initialization
+      setTimeout(checkMonacoSyntaxRealtime, 1000);
+    })();
+
+    // ── AI Edit Diff & Glowing Text Highlight Engine ──────────────────────
+    // Transactional AI review engine. OpenCode writes to the project first;
+    // this layer keeps that write highlighted and reversible until the user
+    // explicitly accepts or rejects it.
+    (function () {
+      const bundledReloadActiveFile = window.reloadActiveFile;
+      const decorationsByModel = new Map();
+      let currentReview = null;
+      let currentReviewModel = null;
+      let renderGeneration = 0;
+      let resolvingReview = false;
+      let workspaceReloadScheduled = false;
+      let tabInteractionLocked = false;
+      let glyphMarginWasEnabled = null;
+      let reloadQueue = Promise.resolve();
+      let deferredReviewCancellations = [];
+
+      function normalizePath(path) {
+        return String(path || '').replace(/\\/g, '/').toLowerCase();
+      }
+
+      function bridgeApi() {
+        return window.pywebview && window.pywebview.api
+          ? window.pywebview.api
+          : null;
+      }
+
+      function pause(milliseconds) {
+        return new Promise((resolve) => setTimeout(resolve, milliseconds));
+      }
+
+      function activeEditorPath() {
+        const activeTab = document.querySelector('#tab-bar .tab.active');
+        return activeTab ? activeTab._filePath || '' : '';
+      }
+
+      function tabForPath(path) {
+        const wanted = normalizePath(path);
+        return Array.from(document.querySelectorAll('#tab-bar .tab'))
+          .find((tab) => normalizePath(tab._filePath) === wanted) || null;
+      }
+
+      function modelHasUnsavedChanges(path, model) {
+        const tab = tabForPath(path);
+        const dirtyDot = tab ? tab.querySelector('.dirty-dot') : null;
+        return !!(model && dirtyDot && dirtyDot.style.display !== 'none');
+      }
+
+      const reviewTabBar = document.getElementById('tab-bar');
+      if (reviewTabBar) {
+        for (const eventName of ['click', 'dragstart', 'drop']) {
+          reviewTabBar.addEventListener(eventName, (event) => {
+            if (tabInteractionLocked && event.isTrusted) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          }, true);
+        }
+      }
+
+      function replaceDecorations(model, decorations) {
+        if (!model) return;
+        const key = model.uri.toString();
+        const previous = decorationsByModel.get(key) || [];
+        const next = model.deltaDecorations(previous, decorations || []);
+        if (next.length) decorationsByModel.set(key, next);
+        else decorationsByModel.delete(key);
+      }
+
+      function clearDecorations(model) {
+        if (!model) return;
+        const key = model.uri.toString();
+        const ids = decorationsByModel.get(key) || [];
+        if (ids.length) model.deltaDecorations(ids, []);
+        decorationsByModel.delete(key);
+      }
+
+      window.clearAiDiffHighlights = function () {
+        if (typeof monaco !== 'undefined' && monaco.editor) {
+          for (const model of monaco.editor.getModels()) clearDecorations(model);
+        }
+        if (!currentReview) {
+          const banner = document.getElementById('ai-diff-banner');
+          if (banner) banner.style.display = 'none';
+        }
+      };
+
+      function setReviewButtonsDisabled(disabled) {
+        const accept = document.getElementById('ai-review-accept');
+        const reject = document.getElementById('ai-review-reject');
+        if (accept) accept.disabled = !!disabled;
+        if (reject) reject.disabled = !!disabled;
+      }
+
+      function showReviewBanner(snapshot, message) {
+        const banner = document.getElementById('ai-diff-banner');
+        if (!banner || !snapshot) return;
+        const diff = snapshot.diff || {};
+        const file = document.getElementById('ai-review-file');
+        const position = document.getElementById('ai-review-position');
+        const addBadge = document.getElementById('ai-diff-add-count');
+        const modifyBadge = document.getElementById('ai-diff-modify-count');
+        const removeBadge = document.getElementById('ai-diff-remove-count');
+        const messageNode = document.getElementById('ai-review-message');
+        if (file) {
+          file.textContent = snapshot.fileName || String(snapshot.path || '').split(/[\\/]/).pop();
+          file.title = snapshot.path || '';
+        }
+        if (position) {
+          const index = Number(snapshot.reviewIndex) || 1;
+          const count = Number(snapshot.pendingCount) || 1;
+          position.textContent = `${index} of ${count}`;
+        }
+        if (addBadge) addBadge.textContent = `+${Number(diff.added) || 0} added`;
+        if (modifyBadge) modifyBadge.textContent = `~${Number(diff.modified) || 0} changed`;
+        if (removeBadge) removeBadge.textContent = `-${Number(diff.removed) || 0} removed`;
+        let stateMessage = message || '';
+        if (!stateMessage && snapshot.beforeExists === false) stateMessage = 'New file';
+        if (!stateMessage && snapshot.afterExists === false) stateMessage = 'File deleted';
+        if (messageNode) {
+          messageNode.textContent = stateMessage;
+          messageNode.title = stateMessage;
+          messageNode.style.display = stateMessage ? 'inline' : 'none';
+        }
+        banner.style.display = 'flex';
+      }
+
+      async function reloadThroughBundleOnce(expectedPath) {
+        if (typeof bundledReloadActiveFile !== 'function') return false;
+        const expected = normalizePath(expectedPath || activeEditorPath());
+        if (expected && normalizePath(activeEditorPath()) !== expected) {
+          throw new Error('The target editor tab is not active.');
+        }
+        let editorWasReadOnly = false;
+        if (window.editorInstance && typeof monaco !== 'undefined' && monaco.editor.EditorOption) {
+          editorWasReadOnly = !!window.editorInstance.getOption(
+            monaco.editor.EditorOption.readOnly
+          );
+          window.editorInstance.updateOptions({ readOnly: true });
+        }
+        window._applyingAiReviewModelUpdate = true;
+        tabInteractionLocked = true;
+        try {
+          await bundledReloadActiveFile();
+          if (expected && normalizePath(activeEditorPath()) !== expected) {
+            throw new Error('The active editor tab changed during reload.');
+          }
+          return true;
+        } finally {
+          tabInteractionLocked = false;
+          window._applyingAiReviewModelUpdate = false;
+          if (window.editorInstance) {
+            window.editorInstance.updateOptions({ readOnly: editorWasReadOnly });
+          }
+        }
+      }
+
+      function reloadThroughBundle(expectedPath) {
+        const operation = reloadQueue.then(
+          () => reloadThroughBundleOnce(expectedPath),
+          () => reloadThroughBundleOnce(expectedPath)
+        );
+        reloadQueue = operation.catch(() => false);
+        return operation;
+      }
+
+      // Keep normal Reload using the bundle's own clean-state path. That path
+      // resets both Monaco's model and the bundle's private dirty-dot state.
+      window.reloadActiveFile = async function () {
+        try {
+          return await reloadThroughBundle(activeEditorPath());
+        } catch (error) {
+          console.error('reloadActiveFile error:', error);
+          return false;
+        }
+      };
+
+      window.activateProjectFile = function (path) {
+        const wanted = normalizePath(path);
+        if (!wanted) return false;
+        const target = tabForPath(path);
+        if (!target) return false;
+        if (!target.classList.contains('active')) target.click();
+        return true;
+      };
+
+      async function activateAndResolveModel(path, timeoutMs) {
+        const wanted = normalizePath(path);
+        const deadline = Date.now() + (timeoutMs || 1400);
+        if (typeof window.syncTabPaths === 'function') {
+          try { await window.syncTabPaths(); } catch (error) { }
+        }
+        while (Date.now() < deadline) {
+          window.activateProjectFile(path);
+          await pause(25);
+          const activeTab = document.querySelector('#tab-bar .tab.active');
+          if (activeTab && normalizePath(activeTab._filePath) === wanted &&
+              window.editorInstance && window.editorInstance.getModel()) {
+            return window.editorInstance.getModel();
+          }
+          await pause(35);
+        }
+        return null;
+      }
+
+      function revealFirstChange(model, firstLine) {
+        if (!model || !window.editorInstance ||
+            window.editorInstance.getModel() !== model) return;
+        const line = Math.min(
+          Math.max(1, Number(firstLine) || 1),
+          Math.max(1, model.getLineCount())
+        );
+        const reveal = () => {
+          if (window.editorInstance.getModel() !== model) return;
+          window.editorInstance.revealLineInCenter(line);
+          window.editorInstance.setPosition({ lineNumber: line, column: 1 });
+          window.editorInstance.focus();
+        };
+        reveal();
+        setTimeout(reveal, 90);
+      }
+
+      function enableReviewGlyphMargin() {
+        if (!window.editorInstance || typeof monaco === 'undefined') return;
+        if (glyphMarginWasEnabled === null && monaco.editor.EditorOption) {
+          glyphMarginWasEnabled = !!window.editorInstance.getOption(
+            monaco.editor.EditorOption.glyphMargin
+          );
+        }
+        window.editorInstance.updateOptions({ glyphMargin: true });
+      }
+
+      function restoreGlyphMargin() {
+        if (!window.editorInstance || glyphMarginWasEnabled === null) return;
+        window.editorInstance.updateOptions({ glyphMargin: glyphMarginWasEnabled });
+        glyphMarginWasEnabled = null;
+      }
+
+      window.applyStructuredAiDiff = function (diff, model, snapshot) {
+        if (!model || !diff || typeof monaco === 'undefined') return;
+        enableReviewGlyphMargin();
+        const lineCount = Math.max(1, model.getLineCount());
+        const decorations = [];
+        const changes = Array.isArray(diff.changes) ? diff.changes : [];
+        for (const change of changes) {
+          let start = Math.min(lineCount, Math.max(1, Number(change.startLine) || 1));
+          let end = Math.min(lineCount, Math.max(start, Number(change.endLine) || start));
+          const kind = ['added', 'removed', 'modified'].includes(change.type)
+            ? change.type : 'modified';
+          if (snapshot && snapshot.afterExists === false && kind === 'removed') {
+            start = 1;
+            end = lineCount;
+          }
+          const color = kind === 'added' ? '#3fb950'
+            : (kind === 'removed' ? '#f85149' : '#58a6ff');
+          decorations.push({
+            range: new monaco.Range(start, 1, end, model.getLineMaxColumn(end)),
+            options: {
+              isWholeLine: true,
+              className: `ai-edit-${kind}-line`,
+              inlineClassName: `ai-edit-${kind}-inline`,
+              linesDecorationsClassName: `ai-edit-${kind}-gutter`,
+              glyphMarginClassName: `ai-edit-${kind}-gutter`,
+              overviewRuler: {
+                color,
+                position: monaco.editor.OverviewRulerLane.Full
+              }
+            }
+          });
+        }
+        replaceDecorations(model, decorations);
+        showReviewBanner(snapshot || currentReview);
+        revealFirstChange(model, diff.firstLine);
+      };
+
+      window.applyAiDiffHighlights = function (oldContent, newContent, model, snapshot) {
+        if (!model || oldContent === newContent) {
+          if (model) clearDecorations(model);
+          showReviewBanner(snapshot || currentReview);
+          return;
+        }
+        const oldLines = String(oldContent || '').split(/\r?\n/);
+        const newLines = String(newContent || '').split(/\r?\n/);
+        let prefix = 0;
+        const limit = Math.min(oldLines.length, newLines.length);
+        while (prefix < limit && oldLines[prefix] === newLines[prefix]) prefix++;
+        const firstLine = Math.min(Math.max(1, prefix + 1), model.getLineCount());
+        replaceDecorations(model, [{
+          range: new monaco.Range(firstLine, 1, model.getLineCount(), model.getLineMaxColumn(model.getLineCount())),
+          options: {
+            isWholeLine: true,
+            className: 'ai-edit-modified-line',
+            inlineClassName: 'ai-edit-modified-inline',
+            linesDecorationsClassName: 'ai-edit-modified-gutter',
+            glyphMarginClassName: 'ai-edit-modified-gutter'
+          }
+        }]);
+        showReviewBanner(snapshot || currentReview);
+        revealFirstChange(model, firstLine);
+      };
+
+      function scheduleWorkspaceReload(preferredPath) {
+        const dirtyTabs = Array.from(document.querySelectorAll('#tab-bar .tab')).filter((tab) => {
+          const dot = tab.querySelector('.dirty-dot');
+          return dot && dot.style.display !== 'none';
+        });
+        if (dirtyTabs.length && !window.confirm(
+          `Refreshing the editor will discard unsaved changes in ${dirtyTabs.length} ` +
+          `${dirtyTabs.length === 1 ? 'file' : 'files'}. Continue?`
+        )) {
+          if (currentReview) {
+            showReviewBanner(currentReview, 'Workspace refresh paused to preserve unsaved changes');
+          }
+          return false;
+        }
+        if (preferredPath) {
+          try { sessionStorage.setItem('pending_ai_review_path', preferredPath); } catch (error) { }
+        }
+        if (workspaceReloadScheduled) return true;
+        workspaceReloadScheduled = true;
+        setTimeout(() => window.location.reload(), 60);
+        return true;
+      }
+
+      function reviewIsCurrent(snapshot, generation) {
+        return generation === renderGeneration && currentReview && snapshot &&
+          currentReview.revision === snapshot.revision &&
+          normalizePath(currentReview.path) === normalizePath(snapshot.path);
+      }
+
+      window.reloadActiveFileWithDiff = async function (filePath) {
+        const api = bridgeApi();
+        if (!api || !api.consume_ai_edit_snapshot || !filePath) return;
+        if (currentReview &&
+            normalizePath(currentReview.path) !== normalizePath(filePath) &&
+            !resolvingReview) {
+          showReviewBanner(currentReview, 'Another AI-edited file is queued');
+          return;
+        }
+        const generation = ++renderGeneration;
+        let snapshot = null;
+        setReviewButtonsDisabled(true);
+        try {
+          while (tabInteractionLocked) await pause(20);
+          if (generation !== renderGeneration) return;
+          snapshot = await api.consume_ai_edit_snapshot(filePath) || {};
+          if (generation !== renderGeneration || !snapshot.path) return;
+          currentReview = snapshot;
+          currentReviewModel = null;
+          showReviewBanner(snapshot);
+
+          let model = await activateAndResolveModel(snapshot.path, 1500);
+          if (!reviewIsCurrent(snapshot, generation)) return;
+
+          if (!model && snapshot.afterExists !== false) {
+            // A newly-created source is not in the bundle's tab list yet.
+            // The Python review survives this reload and will resume below.
+            let alreadyReloaded = false;
+            try {
+              alreadyReloaded = normalizePath(
+                sessionStorage.getItem('ai_review_reload_attempted') || ''
+              ) === normalizePath(snapshot.path);
+              if (!alreadyReloaded) {
+                sessionStorage.setItem('ai_review_reload_attempted', snapshot.path);
+              }
+            } catch (error) { }
+            if (alreadyReloaded) {
+              showReviewBanner(snapshot, 'File is outside the open editor tabs');
+              return;
+            }
+            scheduleWorkspaceReload(snapshot.path);
+            return;
+          }
+
+          if (model) {
+            try {
+              if (normalizePath(sessionStorage.getItem('ai_review_reload_attempted') || '') ===
+                  normalizePath(snapshot.path)) {
+                sessionStorage.removeItem('ai_review_reload_attempted');
+              }
+            } catch (error) { }
+          }
+
+          if (model && snapshot.afterExists !== false) {
+            const currentText = model.getValue();
+            if (modelHasUnsavedChanges(snapshot.path, model) &&
+                currentText !== String(snapshot.content || '')) {
+              currentReviewModel = model;
+              showReviewBanner(
+                snapshot,
+                'Unsaved editor changes conflict; either decision will ask before discarding them'
+              );
+              return;
+            }
+            if (currentText !== String(snapshot.content || '')) {
+              await reloadThroughBundle(snapshot.path);
+              if (!reviewIsCurrent(snapshot, generation)) return;
+              model = await activateAndResolveModel(snapshot.path, 500);
+            }
+          }
+          if (!reviewIsCurrent(snapshot, generation)) return;
+
+          currentReviewModel = model;
+          if (model) {
+            const modelContent = model.getValue();
+            window.lastKnownFileContents = window.lastKnownFileContents || {};
+            window.lastKnownFileContents[normalizePath(snapshot.path)] = modelContent;
+            if (snapshot.diff) {
+              window.applyStructuredAiDiff(snapshot.diff, model, snapshot);
+            } else {
+              window.applyAiDiffHighlights(
+                snapshot.beforeContent || '', modelContent, model, snapshot
+              );
+            }
+          } else {
+            // Deleted files have no model after a full workspace reload, but
+            // remain fully reviewable and reversible from the banner.
+            showReviewBanner(snapshot, 'File deleted');
+          }
+        } catch (error) {
+          console.error('reloadActiveFileWithDiff error:', error);
+          if (currentReview) showReviewBanner(currentReview, `Review error: ${error}`);
+        } finally {
+          if (reviewIsCurrent(snapshot, generation) && !resolvingReview) {
+            setReviewButtonsDisabled(false);
+          }
+        }
+      };
+
+      async function resolveCurrentReview(accept) {
+        if (resolvingReview || !currentReview) return;
+        const api = bridgeApi();
+        if (!api || (accept && !api.accept_ai_edit) || (!accept && !api.reject_ai_edit)) return;
+        const reviewAtClick = currentReview;
+        const modelAtClick = currentReviewModel;
+        const modelDiverged = !!(
+          modelAtClick && modelAtClick.getValue() !== String(reviewAtClick.content || '')
+        );
+        if (modelDiverged && !window.confirm(
+          accept
+            ? 'Accept the AI edit and discard the conflicting unsaved editor changes?'
+            : 'Reject the AI edit and discard the conflicting unsaved editor changes?'
+        )) {
+          return;
+        }
+        renderGeneration += 1;
+        resolvingReview = true;
+        setReviewButtonsDisabled(true);
+        showReviewBanner(currentReview, accept ? 'Accepting…' : 'Restoring original…');
+        try {
+          const result = accept
+            ? await api.accept_ai_edit(reviewAtClick.path, reviewAtClick.revision)
+            : await api.reject_ai_edit(reviewAtClick.path, reviewAtClick.revision);
+          if (!result || !result.success) {
+            const clickedStillCurrent = currentReview &&
+              currentReview.revision === reviewAtClick.revision &&
+              normalizePath(currentReview.path) === normalizePath(reviewAtClick.path);
+            if (!clickedStillCurrent) {
+              if (currentReview && currentReview.path) {
+                await window.reloadActiveFileWithDiff(currentReview.path);
+              } else {
+                const reviews = api.get_ai_edit_reviews
+                  ? await api.get_ai_edit_reviews() || [] : [];
+                if (reviews.length) {
+                  await window.reloadActiveFileWithDiff(reviews[0].path);
+                } else {
+                  const banner = document.getElementById('ai-diff-banner');
+                  if (banner) banner.style.display = 'none';
+                  restoreGlyphMargin();
+                }
+              }
+              return;
+            }
+            const latest = result && result.snapshot;
+            if (latest && latest.revision !== reviewAtClick.revision) {
+              await window.reloadActiveFileWithDiff(latest.path || reviewAtClick.path);
+            } else {
+              showReviewBanner(reviewAtClick, (result && result.error) || 'Review could not be resolved.');
+            }
+            return;
+          }
+
+          const clickedStillCurrent = currentReview &&
+            currentReview.revision === reviewAtClick.revision &&
+            normalizePath(currentReview.path) === normalizePath(reviewAtClick.path);
+          const workspaceShapeChanged = (
+            !accept && Boolean(reviewAtClick.beforeExists) !== Boolean(reviewAtClick.afterExists)
+          ) || (accept && reviewAtClick.afterExists === false);
+          if (!clickedStillCurrent) {
+            // A watcher callback may have installed a newer review while this
+            // decision was crossing the Python bridge. The older response must
+            // never clear or hide that newer authoritative review.
+            const reviews = api.get_ai_edit_reviews
+              ? await api.get_ai_edit_reviews() || [] : [];
+            const activeRevision = currentReview && currentReview.revision;
+            const activePath = currentReview && normalizePath(currentReview.path);
+            const nextReview = reviews.find((review) =>
+              review.revision === activeRevision && normalizePath(review.path) === activePath
+            ) || reviews[0] || null;
+            if (workspaceShapeChanged) {
+              scheduleWorkspaceReload(nextReview ? nextReview.path : '');
+            } else if (nextReview) {
+              await window.reloadActiveFileWithDiff(nextReview.path);
+            } else {
+              currentReview = null;
+              currentReviewModel = null;
+              const banner = document.getElementById('ai-diff-banner');
+              if (banner) banner.style.display = 'none';
+              restoreGlyphMargin();
+            }
+            return;
+          }
+
+          window.clearAiDiffHighlights();
+          currentReview = null;
+          currentReviewModel = null;
+          if (workspaceShapeChanged) {
+            scheduleWorkspaceReload(result.nextPath || '');
+            return;
+          }
+          if (!accept || modelDiverged) {
+            const restoredModel = await activateAndResolveModel(reviewAtClick.path, 600);
+            if (restoredModel) await reloadThroughBundle(reviewAtClick.path);
+          }
+          if (result.nextPath) {
+            await window.reloadActiveFileWithDiff(result.nextPath);
+          } else {
+            const banner = document.getElementById('ai-diff-banner');
+            if (banner) banner.style.display = 'none';
+            restoreGlyphMargin();
+          }
+        } catch (error) {
+          console.error('AI review decision error:', error);
+          const clickedStillCurrent = currentReview &&
+            currentReview.revision === reviewAtClick.revision &&
+            normalizePath(currentReview.path) === normalizePath(reviewAtClick.path);
+          if (clickedStillCurrent) {
+            currentReviewModel = modelAtClick;
+            showReviewBanner(reviewAtClick, `Decision failed: ${error}`);
+          } else {
+            // A watcher cancellation may have cleared this review while the
+            // Python bridge promise was in flight. Never resurrect that stale
+            // review after the bridge reports an exception; resume from the
+            // backend's authoritative pending queue instead.
+            try {
+              const reviews = api.get_ai_edit_reviews
+                ? await api.get_ai_edit_reviews() || [] : [];
+              currentReview = null;
+              currentReviewModel = null;
+              if (reviews.length) {
+                await window.reloadActiveFileWithDiff(reviews[0].path);
+              } else {
+                const banner = document.getElementById('ai-diff-banner');
+                if (banner) banner.style.display = 'none';
+                restoreGlyphMargin();
+              }
+            } catch (refreshError) {
+              console.error('AI review recovery error:', refreshError);
+              currentReview = null;
+              currentReviewModel = null;
+              const banner = document.getElementById('ai-diff-banner');
+              if (banner) banner.style.display = 'none';
+              restoreGlyphMargin();
+            }
+          }
+        } finally {
+          resolvingReview = false;
+          if (deferredReviewCancellations.length) {
+            const deferred = deferredReviewCancellations;
+            deferredReviewCancellations = [];
+            for (const cancellation of deferred) {
+              try {
+                await recoverCancelledReview(cancellation);
+              } catch (recoveryError) {
+                console.error('Deferred AI cancellation recovery error:', recoveryError);
+              }
+            }
+          }
+          setReviewButtonsDisabled(!currentReview);
+        }
+      }
+
+      async function recoverCancelledReview(cancellation) {
+        const path = cancellation.path;
+        const afterExists = cancellation.afterExists;
+        const cancelledReview = cancellation.review;
+        const cancelledModel = cancellation.model;
+        const api = bridgeApi();
+        const reviews = api && api.get_ai_edit_reviews
+          ? await api.get_ai_edit_reviews() || [] : [];
+        const nextPath = currentReview && currentReview.path
+          ? currentReview.path : (reviews[0] && reviews[0].path) || '';
+        const workspaceShapeChanged = !afterExists || !!(
+          cancelledReview &&
+          Boolean(cancelledReview.afterExists) !== Boolean(afterExists)
+        );
+        const hasDivergentBuffer = !!(
+          cancelledReview && cancelledModel &&
+          cancelledModel.getValue() !== String(cancelledReview.content || '')
+        );
+        if (workspaceShapeChanged && !hasDivergentBuffer) {
+          scheduleWorkspaceReload(nextPath);
+          return;
+        }
+
+        // A net-zero A -> B -> A edit removes the backend review. Reload the
+        // clean Monaco model so B cannot remain visible and later be saved as
+        // an unreviewed user edit. Preserve a genuinely divergent user buffer.
+        if (afterExists && !hasDivergentBuffer && tabForPath(path)) {
+          const model = await activateAndResolveModel(path, 500);
+          if (model && !modelHasUnsavedChanges(path, model)) {
+            await reloadThroughBundle(path);
+          }
+        }
+
+        if (nextPath) {
+          await window.reloadActiveFileWithDiff(nextPath);
+        } else {
+          const banner = document.getElementById('ai-diff-banner');
+          if (banner) banner.style.display = 'none';
+          restoreGlyphMargin();
+        }
+      }
+
+      window.onAiReviewCancelled = async function (path, afterExists = true) {
+        const cancelledCurrent = currentReview &&
+          normalizePath(currentReview.path) === normalizePath(path);
+        const cancellation = {
+          path,
+          afterExists: Boolean(afterExists),
+          review: cancelledCurrent ? currentReview : null,
+          model: cancelledCurrent ? currentReviewModel : null
+        };
+        if (cancelledCurrent) {
+          renderGeneration += 1;
+          if (currentReviewModel) clearDecorations(currentReviewModel);
+          currentReview = null;
+          currentReviewModel = null;
+          const banner = document.getElementById('ai-diff-banner');
+          if (banner) banner.style.display = 'none';
+        }
+        if (resolvingReview) {
+          // The decision's finally block performs this recovery after the
+          // bridge settles, so a cancelled A -> B -> A edit cannot leave B in
+          // Monaco with no review banner.
+          deferredReviewCancellations.push(cancellation);
+          return;
+        }
+        await recoverCancelledReview(cancellation);
+      };
+
+      window.resetAiReviewForProject = function () {
+        renderGeneration += 1;
+        workspaceReloadScheduled = false;
+        currentReview = null;
+        currentReviewModel = null;
+        window.clearAiDiffHighlights();
+        restoreGlyphMargin();
+        setReviewButtonsDisabled(true);
+        try {
+          sessionStorage.removeItem('pending_ai_review_path');
+          sessionStorage.removeItem('ai_review_reload_attempted');
+        } catch (error) { }
+        setTimeout(resumePendingReview, 300);
+      };
+
+      async function resumePendingReview() {
+        const api = bridgeApi();
+        if (!api || !api.get_ai_edit_reviews || !window.editorInstance) {
+          setTimeout(resumePendingReview, 250);
+          return;
+        }
+        try {
+          if (typeof window.syncTabPaths === 'function') await window.syncTabPaths();
+          const reviews = await api.get_ai_edit_reviews() || [];
+          if (!reviews.length || currentReview) return;
+          let preferred = '';
+          try {
+            preferred = sessionStorage.getItem('pending_ai_review_path') || '';
+            sessionStorage.removeItem('pending_ai_review_path');
+          } catch (error) { }
+          const target = reviews.find((review) =>
+            normalizePath(review.path) === normalizePath(preferred)
+          ) || reviews[0];
+          if (target && target.path) await window.reloadActiveFileWithDiff(target.path);
+        } catch (error) {
+          console.error('Could not resume pending AI review:', error);
+          setTimeout(resumePendingReview, 500);
+        }
+      }
+
+      const acceptButton = document.getElementById('ai-review-accept');
+      const rejectButton = document.getElementById('ai-review-reject');
+      if (acceptButton) acceptButton.addEventListener('click', () => resolveCurrentReview(true));
+      if (rejectButton) rejectButton.addEventListener('click', () => resolveCurrentReview(false));
+
+      if (window.pywebview && window.pywebview.api) {
+        setTimeout(resumePendingReview, 700);
+      } else {
+        window.addEventListener('pywebviewready', () => setTimeout(resumePendingReview, 700));
+      }
+    })();
+
+    // ── Direct Event-Based Go To Definition Handler & Hover Provider ──────────
+    (function () {
+      // Navigation is based on the source models already loaded in Monaco.
+      // It must remain available while editing, even before the first compile.
+      window.setProjectCompiledState = function () { };
+
+      function isPositionInStringOrComment(model, position) {
+        if (!model || !position) return false;
+        const lineText = model.getLineContent(position.lineNumber) || '';
+        const col = position.column - 1; // 0-indexed
+        const textBefore = lineText.substring(0, col);
+
+        // Check single line comment
+        const commentIdx = textBefore.indexOf('//');
+        if (commentIdx !== -1) return true;
+
+        // Check block comment start before position and not closed before position
+        const openBlock = textBefore.lastIndexOf('/*');
+        const closeBlock = textBefore.lastIndexOf('*/');
+        if (openBlock !== -1 && openBlock > closeBlock) return true;
+
+        // Count unescaped string quote delimiters up to column
+        let inDouble = false;
+        let inSingle = false;
+        let inBacktick = false;
+        for (let i = 0; i < lineText.length && i < col; i++) {
+          const ch = lineText[i];
+          const prev = i > 0 ? lineText[i - 1] : '';
+          if (ch === '"' && prev !== '\\' && !inSingle && !inBacktick) {
+            inDouble = !inDouble;
+          } else if (ch === "'" && prev !== '\\' && !inDouble && !inBacktick) {
+            inSingle = !inSingle;
+          } else if (ch === '`' && prev !== '\\' && !inDouble && !inSingle) {
+            inBacktick = !inBacktick;
+          }
+        }
+        return inDouble || inSingle || inBacktick;
+      }
+
+      async function jumpToDefinitionAtPosition(targetPos, explicitWord) {
+        if (!window.editorInstance) return false;
+        const editor = window.editorInstance;
+        const model = editor.getModel();
+        if (!model) return false;
+
+        let targetWord = explicitWord;
+        let pos = targetPos;
+
+        if (!targetWord) {
+          pos = targetPos || editor.getPosition();
+          if (!pos) return false;
+          if (isPositionInStringOrComment(model, pos)) return false;
+          const wordInfo = model.getWordAtPosition(pos);
+          if (!wordInfo || !wordInfo.word) return false;
+          targetWord = wordInfo.word;
+        } else if (pos && isPositionInStringOrComment(model, pos)) {
+          return false;
+        }
+
+        const keywords = new Set([
+          'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+          'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+          'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+          'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+          'false', 'null', 'nullptr', 'include', 'define', 'ifdef', 'ifndef',
+          'endif', 'import', 'from', 'def', 'pass', 'try', 'except', 'finally',
+          'with', 'as', 'size_t', 'uint8_t', 'uint16_t', 'uint32_t', 'int8_t',
+          'int16_t', 'int32_t', 'String'
+        ]);
+        if (keywords.has(targetWord)) return false;
+
+        const sym = await findProjectSymbol(targetWord, model);
+        if (sym && sym.line) {
+          activateProjectFile(sym.path);
+          const targetModel = editor.getModel();
+          const lineText = targetModel.getLineContent(sym.line) || '';
+          const colIndex = lineText.indexOf(targetWord);
+          const targetCol = colIndex !== -1 ? colIndex + 1 : 1;
+
+          const selectionEndColumn = targetCol + targetWord.length;
+          editor.setSelection({
+            selectionStartLineNumber: sym.line,
+            selectionStartColumn: targetCol,
+            positionLineNumber: sym.line,
+            positionColumn: selectionEndColumn
+          });
+          if (typeof editor.revealPositionInCenter === 'function') {
+            editor.revealPositionInCenter({ lineNumber: sym.line, column: targetCol });
+          } else if (typeof editor.revealLineInCenter === 'function') {
+            editor.revealLineInCenter(sym.line);
+          }
+          editor.focus();
+          return true;
+        }
+
+        return false;
+      }
+
+      window.jumpToDefinitionWord = function (word) {
+        return jumpToDefinitionAtPosition(null, word);
+      };
+
+      // Built-in Arduino function registry for rich tooltips
+      const BUILTIN_ARDUINO = {
+        'pinMode': { kind: 'function', returnType: 'void', params: ['uint8_t pin', 'uint8_t mode'], prototype: 'void pinMode(uint8_t pin, uint8_t mode)' },
+        'digitalWrite': { kind: 'function', returnType: 'void', params: ['uint8_t pin', 'uint8_t val'], prototype: 'void digitalWrite(uint8_t pin, uint8_t val)' },
+        'digitalRead': { kind: 'function', returnType: 'int', params: ['uint8_t pin'], prototype: 'int digitalRead(uint8_t pin)' },
+        'analogWrite': { kind: 'function', returnType: 'void', params: ['uint8_t pin', 'int val'], prototype: 'void analogWrite(uint8_t pin, int val)' },
+        'analogRead': { kind: 'function', returnType: 'int', params: ['uint8_t pin'], prototype: 'int analogRead(uint8_t pin)' },
+        'delay': { kind: 'function', returnType: 'void', params: ['unsigned long ms'], prototype: 'void delay(unsigned long ms)' },
+        'delayMicroseconds': { kind: 'function', returnType: 'void', params: ['unsigned int us'], prototype: 'void delayMicroseconds(unsigned int us)' },
+        'millis': { kind: 'function', returnType: 'unsigned long', params: [], prototype: 'unsigned long millis()' },
+        'micros': { kind: 'function', returnType: 'unsigned long', params: [], prototype: 'unsigned long micros()' },
+        'attachInterrupt': { kind: 'function', returnType: 'void', params: ['uint8_t interrupt', 'void (*userFunc)(void)', 'int mode'], prototype: 'void attachInterrupt(uint8_t interrupt, void (*userFunc)(void), int mode)' },
+        'detachInterrupt': { kind: 'function', returnType: 'void', params: ['uint8_t interrupt'], prototype: 'void detachInterrupt(uint8_t interrupt)' },
+        'interrupts': { kind: 'function', returnType: 'void', params: [], prototype: 'void interrupts()' },
+        'noInterrupts': { kind: 'function', returnType: 'void', params: [], prototype: 'void noInterrupts()' },
+        'map': { kind: 'function', returnType: 'long', params: ['long x', 'long in_min', 'long in_max', 'long out_min', 'long out_max'], prototype: 'long map(long x, long in_min, long in_max, long out_min, long out_max)' },
+        'constrain': { kind: 'function', returnType: 'long', params: ['long x', 'long a', 'long b'], prototype: 'long constrain(long x, long a, long b)' },
+        'min': { kind: 'function', returnType: 'auto', params: ['a', 'b'], prototype: 'min(a, b)' },
+        'max': { kind: 'function', returnType: 'auto', params: ['a', 'b'], prototype: 'max(a, b)' },
+        'abs': { kind: 'function', returnType: 'auto', params: ['x'], prototype: 'abs(x)' },
+        'sq': { kind: 'function', returnType: 'auto', params: ['x'], prototype: 'sq(x)' },
+        'sqrt': { kind: 'function', returnType: 'double', params: ['double x'], prototype: 'double sqrt(double x)' },
+        'pow': { kind: 'function', returnType: 'double', params: ['double base', 'double exponent'], prototype: 'double pow(double base, double exponent)' },
+        'random': { kind: 'function', returnType: 'long', params: ['long min', 'long max'], prototype: 'long random(long min, long max)' },
+        'randomSeed': { kind: 'function', returnType: 'void', params: ['unsigned long seed'], prototype: 'void randomSeed(unsigned long seed)' },
+        'begin': { kind: 'function', returnType: 'void', params: ['unsigned long baud'], prototype: 'void begin(unsigned long baud)' },
+        'print': { kind: 'function', returnType: 'size_t', params: ['val'], prototype: 'size_t print(val)' },
+        'println': { kind: 'function', returnType: 'size_t', params: ['val'], prototype: 'size_t println(val)' },
+        'read': { kind: 'function', returnType: 'int', params: [], prototype: 'int read()' },
+        'write': { kind: 'function', returnType: 'size_t', params: ['uint8_t val'], prototype: 'size_t write(uint8_t val)' },
+        'available': { kind: 'function', returnType: 'int', params: [], prototype: 'int available()' }
+      };
+
+      async function findProjectSymbol(word, activeModel) {
+        const files = window.projectFileList || [];
+        const api = window.pywebview && window.pywebview.api;
+        if (!word || !api || !files.length) return null;
+
+        const activeTab = document.querySelector('#tab-bar .tab.active');
+        const activePath = activeTab && activeTab._filePath;
+        const orderedFiles = files.slice().sort((a, b) => {
+          return a.path === activePath ? -1 : b.path === activePath ? 1 : 0;
+        });
+        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short)\\s+)*[a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:\\s*[*&])*)';
+        const functionPattern = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*\\(([^)]*)\\)', 'i');
+        const variablePattern = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*(=|;|,|\\[)', 'i');
+        const macroPattern = new RegExp('#\\s*define\\s+' + escapedWord + '\\b', 'i');
+        let fallback = null;
+
+        for (const file of orderedFiles) {
+          let content = '';
+          if (file.path === activePath && activeModel) {
+            content = activeModel.getValue();
+          } else {
+            try {
+              const result = await api.read_file(file.path);
+              content = result && result.content || '';
+            } catch (error) {
+              continue;
+            }
+          }
+
+          const lines = content.split(/\r?\n/);
+          for (let index = 0; index < lines.length; index++) {
+            const line = lines[index].trim();
+            if (!line || line.startsWith('//')) continue;
+            if (macroPattern.test(line)) {
+              return { path: file.path, line: index + 1, kind: 'macro', isDefinition: true };
+            }
+
+            const functionMatch = line.match(functionPattern);
+            if (functionMatch) {
+              const isDefinition = line.includes('{') ||
+                (index + 1 < lines.length && lines[index + 1].trim().startsWith('{'));
+              const symbol = {
+                path: file.path,
+                line: index + 1,
+                kind: 'function',
+                returnType: functionMatch[1].trim(),
+                params: functionMatch[2].trim(),
+                isDefinition
+              };
+              if (isDefinition) return symbol;
+              if (!fallback) fallback = symbol;
+            }
+
+            const variableMatch = line.match(variablePattern);
+            if (!fallback && variableMatch) {
+              fallback = {
+                path: file.path,
+                line: index + 1,
+                kind: 'variable',
+                returnType: variableMatch[1].trim(),
+                isDefinition: false
+              };
+            }
+          }
+        }
+
+        return fallback;
+      }
+
+      function escapeHtml(value) {
+        return String(value || '').replace(/[&<>'"]/g, char => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+        }[char]));
+      }
+
+      function formatTypedName(value) {
+        const text = escapeHtml(value).trim();
+        const match = text.match(/^(.+?)(\s+([A-Za-z_]\w*(?:\s*=.*)?))$/);
+        return match ? '<strong>' + match[1] + '</strong>' + match[2] : text;
+      }
+
+      function getHoveredDeclaration(word, model, position) {
+        if (!model || !position) return null;
+        if (isPositionInStringOrComment(model, position)) return null;
+        const line = model.getLineContent(position.lineNumber) || '';
+        const wordIdx = line.indexOf(word);
+        const eqIdx = line.indexOf('=');
+        // Word comes AFTER '=' on line: it is an assigned value (e.g. dir = "STABLE"), NOT the declared variable name!
+        if (eqIdx !== -1 && wordIdx > eqIdx) {
+          return null;
+        }
+        const escapedWord = word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
+        const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short)\\s+)*[a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:\\s*[*&])*)';
+        const functionMatch = line.match(new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*\\(([^)]*)\\)', 'i'));
+        if (functionMatch) {
+          const isDefinition = line.includes('{') ||
+            (position.lineNumber < model.getLineCount() && model.getLineContent(position.lineNumber + 1).trim().startsWith('{'));
+          return {
+            kind: 'function', returnType: functionMatch[1].trim(),
+            params: functionMatch[2].trim(), isDefinition
+          };
+        }
+        const variableMatch = line.match(new RegExp('(?:^|;\\s*|\\{\\s*|(?:^|\\s)(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short|int|float|double|char|bool|void|auto|String|[a-zA-Z_]\\w*)\\s+)' + typePattern + '\\s+' + escapedWord + '\\b\\s*(=|;|,|\\[)', 'i'));
+        return variableMatch ? { kind: 'variable', returnType: variableMatch[1].trim(), isDefinition: true } : null;
+      }
+
+      function showDefinitionCard(anchorElement, word, symbol, declaration, model, position) {
+        const card = document.getElementById('definition-hover-card');
+        if (!card || !anchorElement || !symbol) return;
+        const info = declaration || symbol;
+        const label = info.kind === 'function'
+          ? (info.isDefinition ? 'Function definition' : 'Function declaration')
+          : info.kind === 'variable' ? 'Variable declaration' : 'Macro declaration';
+        const signature = info.kind === 'function'
+          ? '<strong>' + escapeHtml(info.returnType) + '</strong> ' + escapeHtml(word) +
+          '(' + formatTypedName(info.params) + ')' + (info.isDefinition ? ' {}' : ';')
+          : '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word);
+        const line = model.getLineContent(position.lineNumber) || '';
+        const callMatch = !declaration && line.match(new RegExp(
+          word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'
+        ));
+        const callValues = callMatch && callMatch[1].trim();
+        let details = '';
+        if (info.kind === 'function' && callValues) {
+          details =
+            '<div class="symbol-detail"><strong>Parameter/s:</strong> ' + escapeHtml(word) +
+            '(' + escapeHtml(callValues) + ') &rarr; ' + escapeHtml(callValues) + '</div>' +
+            '<div class="symbol-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
+            '(' + formatTypedName(info.params) + ') &rarr; ' + formatTypedName(info.params) + '</div>';
+        } else if (info.kind === 'function') {
+          details = '<div class="symbol-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
+            '(' + formatTypedName(info.params) + ') &rarr; ' + formatTypedName(info.params) + '</div>';
+        }
+        card.innerHTML = '<div class="symbol-kind">' + label + '</div><div class="signature">' +
+          signature + '</div>' + details;
+        const rect = anchorElement.getBoundingClientRect();
+        card.style.left = Math.max(8, rect.left) + 'px';
+        card.style.top = Math.max(8, rect.top - 7) + 'px';
+        card.style.display = 'block';
+      }
+
+      function hideDefinitionCard() {
+        const card = document.getElementById('definition-hover-card');
+        if (card) card.style.display = 'none';
+      }
+
+      function parseSymbolDetails(word, currentModel, position) {
+        if (!word || typeof word !== 'string') return null;
+
+        const keywords = new Set([
+          'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+          'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+          'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+          'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+          'false', 'null', 'nullptr', 'include', 'define', 'ifdef', 'ifndef',
+          'endif', 'import', 'from', 'def', 'pass', 'try', 'except', 'finally',
+          'with', 'as', 'lambda', 'global', 'nonlocal', 'yield', 'raise'
+        ]);
+        if (keywords.has(word)) return null;
+
+        // 1. Check BUILTIN_ARDUINO registry first
+        if (BUILTIN_ARDUINO[word]) {
+          const b = BUILTIN_ARDUINO[word];
+          return {
+            kind: b.kind || 'function',
+            name: word,
+            returnType: b.returnType || '',
+            params: b.params || [],
+            prototype: b.prototype || `${word}()`
+          };
+        }
+
+        // 2. Scan open Monaco models
+        const models = (typeof monaco !== 'undefined' && monaco.editor) ? monaco.editor.getModels() : (currentModel ? [currentModel] : []);
+        if (currentModel) {
+          models.sort((a, b) => (a === currentModel ? -1 : b === currentModel ? 1 : 0));
+        }
+
+        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|virtual|unsigned|signed|long|short|void|int|float|double|char|bool|uint8_t|uint16_t|uint32_t|int8_t|int16_t|int32_t|size_t|auto|String|[a-zA-Z_]\\w*)\\s+)+[*&]*)';
+        const funcRegex = new RegExp('(?:^|\\s)' + typePattern + '\\s+(?:[a-zA-Z_]\\w*::)?' + escapedWord + '\\s*\\(([^)]*)\\)', 'i');
+        const macroRegex = new RegExp('#\\s*define\\s+' + escapedWord + '(?:\\(([^)]*)\\))?\\s*(.*)', 'i');
+        const varRegex = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*(?:=\\s*[^;,]+|\\[[^\\]]*\\]|;|,)', 'i');
+        const typeRegex = new RegExp('(class|struct|enum|union)\\s+' + escapedWord, 'i');
+
+        // Python specific symbol matchers
+        const pyFuncRegex = new RegExp('(?:^|\\s)(?:async\\s+)?def\\s+' + escapedWord + '\\s*\\(([^)]*)\\)(?:\\s*->\\s*([^{\\n:]+))?', 'i');
+        const pyClassRegex = new RegExp('(?:^|\\s)class\\s+' + escapedWord + '(?:\\(([^)]*)\\))?', 'i');
+        const pyVarRegex = new RegExp('(?:^|\\s)' + escapedWord + '\\s*(?::\\s*([a-zA-Z_]\\w*))?\\s*=', 'i');
+
+        let fallbackSym = null;
+
+        for (const m of models) {
+          const count = m.getLineCount();
+          for (let l = 1; l <= count; l++) {
+            const line = m.getLineContent(l).trim();
+            if (!line || line.startsWith('//')) continue;
+
+            const mPyFunc = line.match(pyFuncRegex);
+            if (mPyFunc) {
+              const paramStr = mPyFunc[1] ? mPyFunc[1].trim() : '';
+              const retType = mPyFunc[2] ? mPyFunc[2].trim() : '';
+              return {
+                kind: 'function',
+                name: word,
+                returnType: retType,
+                params: paramStr ? paramStr.split(',').map(s => s.trim()) : [],
+                prototype: `def ${word}(${paramStr})${retType ? ' -> ' + retType : ''}`,
+                line: l,
+                model: m
+              };
+            }
+
+            const mPyClass = line.match(pyClassRegex);
+            if (mPyClass) {
+              const baseClass = mPyClass[1] ? mPyClass[1].trim() : '';
+              return {
+                kind: 'class',
+                name: word,
+                returnType: '',
+                params: [],
+                prototype: `class ${word}${baseClass ? '(' + baseClass + ')' : ''}`,
+                line: l,
+                model: m
+              };
+            }
+
+            const mPyVar = line.match(pyVarRegex);
+            if (mPyVar && !fallbackSym) {
+              const typeAnnotation = mPyVar[1] ? mPyVar[1].trim() : '';
+              fallbackSym = {
+                kind: 'variable',
+                name: word,
+                returnType: typeAnnotation,
+                params: [],
+                prototype: typeAnnotation ? `${word}: ${typeAnnotation}` : `${word}`,
+                line: l,
+                model: m
+              };
+            }
+
+            const mType = line.match(typeRegex);
+            if (mType) {
+              return {
+                kind: mType[1].toLowerCase(),
+                name: word,
+                returnType: '',
+                params: [],
+                prototype: mType[0],
+                line: l,
+                model: m
+              };
+            }
+
+            const mMacro = line.match(macroRegex);
+            if (mMacro) {
+              const macroParams = mMacro[1] ? mMacro[1].split(',').map(s => s.trim()) : [];
+              return {
+                kind: 'macro',
+                name: word,
+                returnType: '',
+                params: macroParams,
+                prototype: `#define ${word}${mMacro[1] ? '(' + mMacro[1] + ')' : ''} ${mMacro[2] || ''}`.trim(),
+                line: l,
+                model: m
+              };
+            }
+
+            const mFunc = line.match(funcRegex);
+            if (mFunc) {
+              const retType = mFunc[1].trim();
+              const paramStr = mFunc[2].trim();
+              const paramsList = paramStr ? paramStr.split(',').map(s => s.trim()) : [];
+              const isImpl = line.includes('{') || (l < count && m.getLineContent(l + 1).trim().startsWith('{'));
+              const symObj = {
+                kind: 'function',
+                name: word,
+                returnType: retType,
+                params: paramsList,
+                prototype: `${retType} ${word}(${paramStr})`,
+                line: l,
+                model: m
+              };
+              if (isImpl) {
+                return symObj;
+              } else if (!fallbackSym) {
+                fallbackSym = symObj;
+              }
+            }
+
+            const mVar = line.match(varRegex);
+            if (mVar && !fallbackSym) {
+              const retType = mVar[1].trim();
+              fallbackSym = {
+                kind: 'variable',
+                name: word,
+                returnType: retType,
+                params: [],
+                prototype: `${retType} ${word}`,
+                line: l,
+                model: m
+              };
+            }
+          }
+        }
+
+        if (fallbackSym) {
+          return fallbackSym;
+        }
+
+        // 3. Context check at position in currentModel
+        if (currentModel && position) {
+          const lineContent = currentModel.getLineContent(position.lineNumber) || '';
+          const wordInfo = currentModel.getWordAtPosition(position);
+          if (wordInfo) {
+            const restOfLine = lineContent.substring(wordInfo.endColumn - 1).trim();
+            if (restOfLine.startsWith('(')) {
+              const matchCall = restOfLine.match(/^\(([^)]*)\)/);
+              const callArgsStr = matchCall ? matchCall[1].trim() : '';
+              const callArgsList = callArgsStr ? callArgsStr.split(',').map(s => s.trim()) : [];
+              return {
+                kind: 'function',
+                name: word,
+                returnType: '',
+                params: callArgsList,
+                prototype: `${word}(${callArgsStr})`
+              };
+            }
+          }
+        }
+
+        // 4. Default fallback: Variable
+        return {
+          kind: 'variable',
+          name: word,
+          returnType: '',
+          params: [],
+          prototype: word
+        };
+      }
+
+      function attachNavigationListeners() {
+        if (!window.editorInstance) {
+          setTimeout(attachNavigationListeners, 300);
+          return;
+        }
+
+        const editor = window.editorInstance;
+        if (editor._nav_listeners_attached) return;
+        editor._nav_listeners_attached = true;
+
+        let ctrlHoverDecorations = [];
+        let hoverRequestId = 0;
+
+        function clearCtrlHover() {
+          hoverRequestId++;
+          ctrlHoverDecorations = editor.deltaDecorations(ctrlHoverDecorations, []);
+        }
+
+        function disposeControlHover() {
+          hideHoverCard();
+          clearCtrlHover();
+        }
+
+        function updateCtrlHover(position, modifierPressed) {
+          hoverRequestId++;
+          if (!modifierPressed || !position) {
+            clearCtrlHover();
+            return;
+          }
+
+          const model = editor.getModel();
+          const word = model && model.getWordAtPosition(position);
+          if (!word || !word.word) {
+            clearCtrlHover();
+            return;
+          }
+
+          ctrlHoverDecorations = editor.deltaDecorations(ctrlHoverDecorations, [{
+            range: {
+              startLineNumber: position.lineNumber,
+              startColumn: word.startColumn,
+              endLineNumber: position.lineNumber,
+              endColumn: word.endColumn
+            },
+            options: { inlineClassName: 'monaco-definition-link' }
+          }]);
+        }
+
+        // Create custom floating hover container widget
+        let customHoverCard = document.getElementById('monaco-custom-hover-card');
+        if (!customHoverCard) {
+          customHoverCard = document.createElement('div');
+          customHoverCard.id = 'monaco-custom-hover-card';
+          document.body.appendChild(customHoverCard);
+        }
+
+        let hoverTimer = null;
+        let lastHoverWord = '';
+
+        function hideHoverCard() {
+          if (hoverTimer) clearTimeout(hoverTimer);
+          customHoverCard.style.display = 'none';
+          lastHoverWord = '';
+        }
+
+        customHoverCard.addEventListener('mouseleave', hideHoverCard);
+
+        // Global DOM event listeners to dispose hover card immediately when Control key is released or window loses focus
+        window.addEventListener('keyup', (e) => {
+          if (e.key === 'Control' || e.key === 'Meta' || (!e.ctrlKey && !e.metaKey)) {
+            disposeControlHover();
+          }
+        }, true);
+
+        window.addEventListener('blur', () => {
+          disposeControlHover();
+        }, true);
+
+        function renderHoverCardAt(pos, clientX, clientY) {
+          if (!pos) {
+            disposeControlHover();
+            return;
+          }
+          const model = editor.getModel();
+          if (!model) {
+            disposeControlHover();
+            return;
+          }
+          const wordInfo = model.getWordAtPosition(pos);
+          if (!wordInfo || !wordInfo.word) {
+            disposeControlHover();
+            return;
+          }
+
+          const word = wordInfo.word;
+          const keywords = new Set([
+            'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+            'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+            'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+            'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+            'false', 'null', 'nullptr', 'import', 'from', 'def', 'pass', 'try',
+            'except', 'finally', 'with', 'as'
+          ]);
+          if (keywords.has(word)) {
+            disposeControlHover();
+            return;
+          }
+
+          if (word === lastHoverWord && customHoverCard.style.display === 'block') return;
+          lastHoverWord = word;
+
+          const sym = parseSymbolDetails(word, model, pos);
+          let html = '';
+          if (sym) {
+            const isFunc = sym.kind === 'function';
+            const kindDisplay = isFunc ? 'function' : (sym.kind || 'variable');
+
+            html = `<div><span class="hover-kind">(${kindDisplay})</span> <span class="hover-title">${sym.name || word}</span></div>`;
+
+            if (sym.returnType) {
+              html += `<div style="font-size:11px; color:#abb2bf; margin-top:3px;">Return Type: <span style="color:#e5c07b; font-weight:600;">${sym.returnType}</span></div>`;
+            }
+
+            if (isFunc) {
+              if (sym.params && sym.params.length > 0) {
+                const paramElements = sym.params.map(p => `<code style="background:#161b24; padding:2px 5px; border-radius:3px; color:#98c379; margin-right:3px;">${p}</code>`).join(' ');
+                html += `<div style="font-size:11px; color:#abb2bf; margin-top:5px;"><strong>Parameters/Arguments:</strong><div style="margin-top:3px; display:flex; flex-wrap:wrap; gap:4px;">${paramElements}</div></div>`;
+              } else {
+                html += `<div style="font-size:11px; color:#abb2bf; margin-top:5px;"><strong>Parameters/Arguments:</strong> <em style="color:#7f8c8d;">none</em></div>`;
+              }
+            }
+
+            if (sym.prototype) {
+              html += `<div class="hover-proto">${sym.prototype}</div>`;
+            }
+          } else {
+            html = `<div><span class="hover-kind">(variable)</span> <span class="hover-title">${word}</span></div>`;
+            html += `<div class="hover-proto">${word}</div>`;
+          }
+
+          html += `<div class="hover-link" onclick="window.jumpToDefinitionWord('${word}')">👉 Go to Definition (Click / Tab)</div>`;
+          customHoverCard.innerHTML = html;
+
+          // Position floating hover container near cursor
+          const left = Math.min(window.innerWidth - 320, Math.max(10, clientX + 12));
+          const top = Math.max(10, clientY - 80);
+          customHoverCard.style.left = left + 'px';
+          customHoverCard.style.top = top + 'px';
+          customHoverCard.style.display = 'block';
+        }
+
+        // Replace the older generic hover card with a declaration-aware card.
+        async function renderHoverCardAt(pos, clientX, clientY, anchorElement) {
+          if (!pos) {
+            disposeControlHover();
+            return;
+          }
+          const model = editor.getModel();
+          if (!model || isPositionInStringOrComment(model, pos)) {
+            disposeControlHover();
+            return;
+          }
+          const wordInfo = model.getWordAtPosition(pos);
+          if (!wordInfo || !wordInfo.word) {
+            disposeControlHover();
+            return;
+          }
+
+          const word = wordInfo.word;
+          lastHoverWord = word;
+          const declaration = getHoveredDeclaration(word, model, pos);
+          const symbol = await findProjectSymbol(word, model) || parseSymbolDetails(word, model, pos);
+          if (word !== lastHoverWord || !symbol) return;
+
+          const info = declaration || symbol;
+          const isFunction = info.kind === 'function';
+          const params = Array.isArray(info.params) ? info.params.join(', ') : (info.params || '');
+          const label = isFunction
+            ? (info.isDefinition ? 'Function definition' : 'Function declaration')
+            : info.kind === 'macro'
+              ? 'Macro declaration'
+              : (declaration || (info && (info.returnType || info.line)))
+                ? 'Variable declaration'
+                : 'Symbol';
+          const signature = isFunction
+            ? '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word) +
+            '(' + formatTypedName(params) + ')' + (info.isDefinition ? ' {}' : ';')
+            : '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word);
+          const currentLine = model.getLineContent(pos.lineNumber) || '';
+          const callMatch = !declaration && currentLine.match(new RegExp(
+            word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'
+          ));
+          const callValues = callMatch && callMatch[1].trim();
+          let html = '<div><span class="hover-kind">' + label + '</span></div>' +
+            '<div class="hover-proto">' + signature + '</div>';
+          if (isFunction && callValues) {
+            html += '<div class="hover-detail"><strong>Parameter/s:</strong> ' + escapeHtml(word) +
+              '(' + escapeHtml(callValues) + ') &rarr; ' + escapeHtml(callValues) + '</div>' +
+              '<div class="hover-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
+              '(' + formatTypedName(params) + ') &rarr; ' + formatTypedName(params) + '</div>';
+          } else if (isFunction) {
+            html += '<div class="hover-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
+              '(' + formatTypedName(params) + ') &rarr; ' + formatTypedName(params) + '</div>';
+          }
+          customHoverCard.innerHTML = html;
+          // A hidden element reports zero height. Make it measurable before
+          // calculating its position so it sits above, rather than over, the
+          // hovered symbol.
+          customHoverCard.style.visibility = 'hidden';
+          customHoverCard.style.display = 'block';
+          const anchorRect = anchorElement && anchorElement.getBoundingClientRect
+            ? anchorElement.getBoundingClientRect() : null;
+          const anchorX = anchorRect && anchorRect.width ? anchorRect.left : clientX;
+          const anchorTop = anchorRect && anchorRect.height ? anchorRect.top : clientY;
+          const left = Math.min(window.innerWidth - customHoverCard.offsetWidth - 8, Math.max(8, anchorX));
+          const top = Math.max(8, anchorTop - customHoverCard.offsetHeight - 6);
+          customHoverCard.style.left = left + 'px';
+          customHoverCard.style.top = top + 'px';
+          customHoverCard.style.visibility = 'visible';
+          customHoverCard.style.display = 'block';
+        }
+
+        editor.onMouseMove((e) => {
+          const event = e.event || e.browserEvent || {};
+          const pos = e.target && e.target.position;
+          const isCtrl = !!(event.ctrlKey || event.metaKey);
+
+          if (!isCtrl || !pos) {
+            disposeControlHover();
+            return;
+          }
+
+          const model = editor.getModel();
+          if (!model || isPositionInStringOrComment(model, pos)) {
+            disposeControlHover();
+            return;
+          }
+
+          const wordInfo = model.getWordAtPosition(pos);
+          if (!wordInfo || !wordInfo.word) {
+            disposeControlHover();
+            return;
+          }
+
+          const word = wordInfo.word;
+          const keywords = new Set([
+            'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+            'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+            'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+            'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+            'false', 'null', 'nullptr', 'import', 'from', 'def', 'pass', 'try',
+            'except', 'finally', 'with', 'as'
+          ]);
+          if (keywords.has(word)) {
+            disposeControlHover();
+            return;
+          }
+
+          updateCtrlHover(pos, true);
+
+          if (hoverTimer) clearTimeout(hoverTimer);
+          const cx = event.clientX || (e.browserEvent && e.browserEvent.clientX) || 100;
+          const cy = event.clientY || (e.browserEvent && e.browserEvent.clientY) || 100;
+          hoverTimer = setTimeout(() => {
+            renderHoverCardAt(pos, cx, cy, e.target && e.target.element);
+          }, 100);
+        });
+
+        editor.onMouseLeave(() => {
+          disposeControlHover();
+        });
+        editor.onKeyUp((e) => {
+          const event = e.browserEvent || {};
+          if (!event.ctrlKey && !event.metaKey) disposeControlHover();
+        });
+        editor.onDidChangeModelContent(() => {
+          disposeControlHover();
+        });
+        editor.onDidChangeModel(() => {
+          disposeControlHover();
+        });
+
+        // Register command for command URI execution inside Markdown hover tooltips
+        try {
+          if (typeof monaco !== 'undefined' && monaco.editor && monaco.editor.registerCommand) {
+            monaco.editor.registerCommand('gotoDefinitionWord', function (accessor, wordArg) {
+              let word = wordArg;
+              if (Array.isArray(word)) word = word[0];
+              if (word) jumpToDefinitionAtPosition(null, word);
+            });
+          }
+          editor.addAction({
+            id: 'gotoDefinitionWord',
+            label: 'Go to Definition',
+            run: function (ed, wordArg) {
+              let word = wordArg;
+              if (Array.isArray(word)) word = word[0];
+              if (word) jumpToDefinitionAtPosition(null, word);
+            }
+          });
+        } catch (e) { }
+
+        // Register Definition Provider & Hover Provider for Monaco
+        const SUPPORTED_LANGS = ['cpp', 'c', 'ino', 'h', 'python', 'py', 'javascript', 'js', 'json', 'plaintext'];
+        try {
+          if (typeof monaco !== 'undefined' && monaco.languages) {
+            monaco.languages.registerDefinitionProvider(SUPPORTED_LANGS, {
+              provideDefinition: function (model, position) {
+                if (isPositionInStringOrComment(model, position)) return null;
+                const wordInfo = model.getWordAtPosition(position);
+                if (!wordInfo || !wordInfo.word) return null;
+                const sym = parseSymbolDetails(wordInfo.word, model, position);
+                if (sym && sym.model && sym.line) {
+                  return {
+                    uri: sym.model.uri,
+                    range: new monaco.Range(sym.line, 1, sym.line, 1)
+                  };
+                }
+                return null;
+              }
+            });
+          }
+        } catch (e) { }
+
+        // Register Hover Provider matching Arduino IDE 2.x / VS Code styling
+        try {
+          if (typeof monaco !== 'undefined' && monaco.languages) {
+            monaco.languages.registerHoverProvider(SUPPORTED_LANGS, {
+              provideHover: function (model, position) {
+                if (isPositionInStringOrComment(model, position)) return null;
+                const wordInfo = model.getWordAtPosition(position);
+                if (!wordInfo || !wordInfo.word) return null;
+
+                const keywords = new Set([
+                  'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+                  'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+                  'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+                  'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+                  'false', 'null', 'nullptr', 'import', 'from', 'def', 'pass', 'try',
+                  'except', 'finally', 'with', 'as'
+                ]);
+                if (keywords.has(wordInfo.word)) return null;
+
+                const sym = parseSymbolDetails(wordInfo.word, model, position);
+
+                const lines = [];
+                if (sym) {
+                  lines.push(`**${sym.kind}** \`${sym.name}\``);
+                  if (sym.returnType) {
+                    lines.push(`&nbsp;&nbsp;&nbsp;&nbsp;→ \`${sym.returnType}\``);
+                  }
+                  if (sym.kind === 'function' || (sym.params && sym.params.length > 0)) {
+                    if (sym.params && sym.params.length > 0) {
+                      lines.push(`\n**Parameters / Arguments:**`);
+                      sym.params.forEach(p => lines.push(`&nbsp;&nbsp;\`${p}\``));
+                    } else {
+                      lines.push(`\n**Parameters:** \`none\``);
+                    }
+                  }
+                  if (sym.prototype) {
+                    lines.push(`\n---`);
+                    lines.push(`**Symbol Prototype**`);
+                    const encodedWord = encodeURIComponent(JSON.stringify([sym.name]));
+                    lines.push(`[👉 \`${sym.prototype}\`](command:gotoDefinitionWord?${encodedWord})`);
+                  }
+                } else {
+                  lines.push(`**(variable)** \`${wordInfo.word}\``);
+                  const encodedWord = encodeURIComponent(JSON.stringify([wordInfo.word]));
+                  lines.push(`[👉 Jump to Definition](command:gotoDefinitionWord?${encodedWord})`);
+                }
+
+                return {
+                  range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
+                  contents: [
+                    {
+                      value: lines.join('\n  \n'),
+                      isTrusted: true
+                    }
+                  ]
+                };
+              }
+            });
+          }
+        } catch (e) {
+          console.error("Failed to register Monaco hover provider:", e);
+        }
+
+        // Mouse click listener (Ctrl + Click or Cmd + Click)
+        editor.onMouseDown((e) => {
+          const evt = e.event || e.browserEvent || {};
+          const isCtrl = evt.ctrlKey || evt.metaKey || (e.browserEvent && (e.browserEvent.ctrlKey || e.browserEvent.metaKey));
+          const isLeft = evt.leftButton === true || evt.button === 0 || (e.browserEvent && (e.browserEvent.leftButton === true || e.browserEvent.button === 0));
+
+          if (isCtrl && isLeft) {
+            const pos = (e.target && e.target.position) ? e.target.position : editor.getPosition();
+            if (pos) {
+              editor.setPosition(pos);
+              jumpToDefinitionAtPosition(pos);
+            }
+          }
+        });
+
+        // Keyboard listener (F12)
+        editor.onKeyDown((e) => {
+          const key = e.browserEvent ? e.browserEvent.key : '';
+          const keyCode = e.browserEvent ? e.browserEvent.keyCode : e.keyCode;
+          if (key === 'F12' || keyCode === 123 || keyCode === 104) {
+            if (e.browserEvent) {
+              e.browserEvent.preventDefault();
+              e.browserEvent.stopPropagation();
+            }
+            jumpToDefinitionAtPosition();
+          }
+        });
+
+        // Global DOM level 3 event listener fallback
+        const anchor = document.getElementById('monaco-anchor') || document.body;
+        anchor.addEventListener('click', (e) => {
+          if (e.ctrlKey || e.metaKey) {
+            setTimeout(() => {
+              jumpToDefinitionAtPosition();
+            }, 20);
+          }
+        }, true);
+
+        window.addEventListener('keydown', (e) => {
+          if (e.key === 'F12' || e.keyCode === 123) {
+            e.preventDefault();
+            e.stopPropagation();
+            jumpToDefinitionAtPosition();
+          }
+        }, true);
+      }
+
+      setTimeout(attachNavigationListeners, 300);
+    })();
+  </script>
+</body>
+
+</html>

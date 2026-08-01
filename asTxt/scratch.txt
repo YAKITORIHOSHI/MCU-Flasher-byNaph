@@ -1,0 +1,4 @@
+ISSUES TO RESOLVE:
+(1) When running 2 GUI's at the same time, the detach editor does not work properly, make sure to have this on different task even though it was the same app, I want to work with multiple sketch projects at the same time.
+(2) There was this min width and I want to decrease it further so that it can work on lower screen dimensions; We can put the 'ACTIONS' buttons and 'OPTIONS' checkbox and buttons on the editors container if the editor was detached.
+(3)

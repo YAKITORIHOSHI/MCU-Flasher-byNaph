@@ -1,0 +1,32 @@
+{
+  "instances": {},
+  "shared": {
+    "last_sketch_dir": "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\7-31-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
+    "recent_projects": [
+      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\7-31-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
+      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\7-31-26\\SINGLE-TASK-DEFAULT\\BLE_Receiver-Final",
+      "C:\\Users\\napht\\Documents\\NeoPixel_ColorWheel",
+      "C:\\Users\\napht\\Downloads"
+    ],
+    "port_board_map": {
+      "COM4": "ESP32S3 Dev Module",
+      "COM3": "ESP32 Dev Module",
+      "COM5": "ESP32 Dev Module",
+      "COM6": "ESP32 Dev Module",
+      "COM18": "ESP32S3 Dev Module",
+      "COM22": "ESP32 Dev Module"
+    },
+    "clear_serial_on_upload": true,
+    "cpu_multithreading": "HIGH",
+    "graphics_acceleration": "ON",
+    "monitor_font_size": 10,
+    "autosave_enabled": true,
+    "autosave_delay_ms": 1500,
+    "editor_mode": "monaco",
+    "monaco_boot_pending": false,
+    "periodic_reload_enabled": false,
+    "periodic_reload_interval_s": 3,
+    "auto_clear_serial_monitor": false,
+    "clear_build_console_on_action": true
+  }
+}

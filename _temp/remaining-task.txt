@@ -1,0 +1,7 @@
+'mcu_flash_gui.py'
+
+* The 'Soft Reset' requires framework to be processed so work things out on bootstrap.
+* There are times that the project during compile will likely fail if I use different board before the current one and requires a clean and recompile, I get that but the thing was I execute upload so regardless it needs a clean and compile it should still proceed to upload.
+* Can you make the TABS arrangeable? for Monaco and Default Editors.
+* Clicking the folder project name on tab opens a 'Default Folder Selector of Windows' launches, how about open it in 'File Explorer' instead.
+* 'Modify' action only have a TextField that you can input the filename for your new file and you can only add project that way, so to make this more easier for users add another feature when you can use  'Default Folder Selector of Windows' to look for the file you wanted to add but of course only .ino, .cpp, .h, and .txt will be accepted.

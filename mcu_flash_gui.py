@@ -1,0 +1,20455 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+MCU Flasher by Naph — ESP32 Compile, Upload & Serial Monitor
+A modern dark-themed GUI tool for Arduino ESP32 development.
+"""
+
+# Add src/libs to sys.path so we can import moved utility modules
+import sys
+from pathlib import Path
+_libs_path = Path(__file__).resolve().parent / "src" / "libs"
+if str(_libs_path) not in sys.path:
+    sys.path.insert(0, str(_libs_path))
+
+import hashlib
+import json
+import os
+import re
+import tempfile
+import subprocess
+if len(sys.argv) > 1:
+    if sys.argv[1].endswith("qscintilla_viewer.py"):
+        # pyrefly: ignore [missing-import]
+        import qscintilla_viewer
+        sys.exit(qscintilla_viewer.main())
+import textwrap
+import threading
+import time
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from pathlib import Path
+from datetime import datetime
+try:
+    # pyrefly: ignore [missing-import]
+    from bootstrap import ensure_platformio_penv_with_hook
+except ImportError:
+    # pyrefly: ignore [missing-import]
+    def ensure_platformio_penv_with_hook(*args, **kwargs):
+        return False
+try:
+    # pyrefly: ignore [missing-import]
+    from bootstrap import find_arduino_cli as _bootstrap_find_arduino_cli
+except ImportError:
+    _bootstrap_find_arduino_cli = None
+try:
+    # pyrefly: ignore [missing-import]
+    from bootstrap import ensure_arduino_cli as _bootstrap_ensure_arduino_cli
+except ImportError:
+    _bootstrap_ensure_arduino_cli = None
+try:
+    # pyrefly: ignore [missing-import]
+    from bootstrap import get_last_arduino_cli_error as _bootstrap_get_last_arduino_cli_error
+except ImportError:
+    _bootstrap_get_last_arduino_cli_error = None
+try:
+    # pyrefly: ignore [missing-import]
+    from bootstrap import _platform_already_installed
+except ImportError:
+    _platform_already_installed = None
+
+try:
+    from src.dbs import dbs_create, dbs_read, dbs_update, dbs_delete
+except Exception:
+    import src.dbs.dbs_create as dbs_create
+    import src.dbs.dbs_read as dbs_read
+    import src.dbs.dbs_update as dbs_update
+    import src.dbs.dbs_delete as dbs_delete
+
+if getattr(sys, 'frozen', False):
+    SCRIPT_DIR = Path(sys.executable).resolve().parent
+else:
+    SCRIPT_DIR = Path(__file__).resolve().parent
+
+UPLOAD_CONNECTION_ATTEMPTS = 10
+
+def hide_hidden_attribute(path) -> None:
+    """Set the Windows hidden attribute (FILE_ATTRIBUTE_HIDDEN = 0x02) on
+    internal files/folders so they don't clutter Windows Explorer.
+
+    NTFS volumes only.  On FAT32/exFAT (flash drives, external disks) the
+    attribute is skipped entirely: Windows treats any file carrying HIDDEN
+    or SYSTEM as special, and Python's plain open(..., "w") then fails with
+    PermissionError [Errno 13] on those volumes — a hidden-attribute file
+    there is a write-bomb waiting to happen.  Directories stay fully usable
+    with the attribute (only individual FILES are affected), and Explorer
+    hides files equally well on both volume types."""
+    try:
+        p = Path(path)
+        if not p.exists() or sys.platform != "win32":
+            return
+        if not is_ntfs_path(p):
+            return
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+        if attrs != -1 and not (attrs & 0x02):
+            ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
+    except Exception:
+        pass
+
+def unhide_hidden_attribute(path) -> None:
+    """Remove Windows hidden and system attributes on Windows."""
+    try:
+        p = Path(path)
+        if not p.exists():
+            return
+        if sys.platform == "win32":
+            import ctypes
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+            if attrs != -1 and ((attrs & 0x02) or (attrs & 0x04)):
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x02 & ~0x04)
+    except Exception:
+        pass
+
+def ensure_file_writable(path) -> None:
+    """Ensure file is writable by clearing POSIX read-only flags and Windows
+    FILE_ATTRIBUTE_READONLY (0x01), FILE_ATTRIBUTE_HIDDEN (0x02) and
+    FILE_ATTRIBUTE_SYSTEM (0x04).  The GUI marks internal files (platformio.ini,
+    .pio, src, ...) with hidden+system so Explorer stays clean; those attributes
+    can make Python's open() fail with PermissionError on some filesystems
+    (notably removable exFAT drives), so they must be cleared before writing."""
+    try:
+        p = Path(path)
+        if not p.exists():
+            return
+        os.chmod(p, 0o666)
+        if sys.platform == "win32":
+            import ctypes
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+            if attrs != -1 and (attrs & 0x01):  # 0x01 = FILE_ATTRIBUTE_READONLY
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x01)
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+            if attrs != -1 and ((attrs & 0x02) or (attrs & 0x04)):
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x02 & ~0x04)
+    except Exception:
+        pass
+
+
+def is_nonfatal_pio_clean_report(text: str) -> bool:
+    """True for PlatformIO's non-fatal fs.rmtree retry reports, e.g.
+
+        [WinError 145] The directory is not empty: '...' \n Please manually remove the file `...'
+
+    These appear when a stale build cache can't be fully deleted (a file is
+    locked by another process, e.g. antivirus scanning a removable drive).
+    PlatformIO retries once and then CONTINUES the build, so these lines must
+    never be rendered as fatal errors by the console classifiers."""
+    low = text.lower()
+    return (
+        ("[winerror" in low and "is not empty" in low)
+        or "manually remove the file" in low
+    )
+
+
+_volume_info_cache: dict = {}
+
+def get_volume_info(path) -> tuple:
+    """Return (filesystem_name, drive_type_label) for the volume containing
+    `path`, e.g. ('NTFS', 'Fixed'), ('exFAT', 'Removable'), ('', '').
+    Results are cached per volume."""
+    try:
+        drive = os.path.splitdrive(str(path))[0]
+        if not drive:
+            return "", ""
+        root = drive + os.sep
+        cached = _volume_info_cache.get(root)
+        if cached is not None:
+            return cached
+        fs_name, type_label = "", ""
+        if sys.platform == "win32":
+            import ctypes
+            _type_names = {2: "Removable", 3: "Fixed", 4: "Network", 5: "CD/DVD", 6: "RAM"}
+            _dt = ctypes.windll.kernel32.GetDriveTypeW(root)
+            type_label = _type_names.get(_dt, "")
+            _buf = ctypes.create_unicode_buffer(64)
+            if ctypes.windll.kernel32.GetVolumeInformationW(
+                root, None, 0, None, None, None, _buf, 64
+            ):
+                fs_name = _buf.value
+        _volume_info_cache[root] = (fs_name, type_label)
+        return fs_name, type_label
+    except Exception:
+        return "", ""
+
+
+def is_ntfs_path(path) -> bool:
+    """True if the volume containing `path` is NTFS (the only volume type on
+    which Windows hidden-attribute tricks are both reliable and harmless)."""
+    fs_name, _ = get_volume_info(path)
+    return fs_name.upper() == "NTFS"
+
+
+_writability_cache: dict = {}
+
+def is_volume_writable(path) -> bool:
+    """Probe whether the volume containing `path` accepts writes.  Catches
+    USB flash drives with the hardware lock switch engaged, read-only
+    mounts, and volumes flagged dirty after an unsafe removal.  Result is
+    cached per volume."""
+    try:
+        drive = os.path.splitdrive(str(path))[0]
+        if not drive or drive in _writability_cache:
+            return _writability_cache.get(drive, True)
+        # Probe inside the nearest existing directory along the path.  Never
+        # probe the volume root itself — roots are frequently unwritable for
+        # standard users (e.g. C:\) even though the volume works fine.
+        probe_dir = os.path.abspath(str(path))
+        if not os.path.isdir(probe_dir):
+            probe_dir = os.path.dirname(probe_dir)
+        volume_root = drive + os.sep
+        while probe_dir and not os.path.isdir(probe_dir):
+            _parent = os.path.dirname(probe_dir)
+            if _parent == probe_dir or os.path.normpath(_parent) == os.path.normpath(volume_root):
+                break
+            probe_dir = _parent
+        if (
+            not probe_dir
+            or not os.path.isdir(probe_dir)
+            or os.path.normpath(probe_dir) == os.path.normpath(volume_root)
+        ):
+            return True  # no sensible place to probe — don't guess False
+        import tempfile as _tf
+        _probe = _tf.NamedTemporaryFile(
+            prefix=".mcu_fs_probe_", suffix=".tmp", dir=probe_dir, delete=False
+        )
+        _probe.close()
+        os.unlink(_probe.name)
+        result = True
+    except OSError:
+        result = False
+    except Exception:
+        result = True
+    _writability_cache[drive] = result
+    return result
+
+
+def robust_rmtree(path, max_attempts: int = 5) -> bool:
+    """Delete a file or directory tree as robustly as possible across every
+    filesystem a sketch may live on (NTFS, exFAT, FAT32, removable drives):
+
+      1. clears hidden/system/read-only attributes on every entry (Windows),
+      2. retries the whole removal with short backoff — transient WinError 145
+         ("directory is not empty") on removable/exFAT volumes is normally
+         antivirus/indexer locking that clears within a second,
+      3. sweeps leftover '*.trash-*' siblings from previous failed removals,
+      4. as a last resort renames the tree to a hidden '*.trash-<ts>' sibling —
+         rename touches only the directory entry, so it succeeds even when
+         children are locked — then removes the renamed copy best-effort.
+
+    Returns True if `path` no longer exists afterwards."""
+    import stat as _stat
+    target = Path(path)
+    if not target.exists() and not target.is_symlink():
+        return True
+
+    def _on_rm_error(func, p, exc_info):
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), 128)  # FILE_ATTRIBUTE_NORMAL
+            os.chmod(p, _stat.S_IWRITE)
+            func(p)
+        except Exception:
+            pass
+
+    # 3. Sweep old trash siblings from earlier failed removals.
+    try:
+        import glob as _glob
+        for stale in _glob.glob(str(target.parent / (target.name + ".trash-*"))):
+            stale_p = Path(stale)
+            if stale_p.is_dir():
+                import shutil as _sh
+                try:
+                    _sh.rmtree(stale_p, onerror=_on_rm_error)
+                except Exception:
+                    pass
+            else:
+                try:
+                    stale_p.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    for attempt in range(max_attempts):
+        if not target.exists():
+            return True
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(target), 128)
+            if target.is_dir():
+                import shutil as _sh
+                _sh.rmtree(target, onerror=_on_rm_error)
+            else:
+                try:
+                    target.unlink()
+                except OSError:
+                    os.chmod(str(target), _stat.S_IWRITE)
+                    target.unlink()
+            return True
+        except Exception:
+            time.sleep(0.2 * (attempt + 1))
+
+    # 4. Last resort: rename the locked tree aside (rename touches only the
+    # directory entry, so it succeeds even when children are still locked).
+    try:
+        if not target.exists():
+            return True
+        trash = target.with_name(target.name + f".trash-{int(time.time())}")
+        if target.is_dir():
+            os.rename(str(target), str(trash))
+            import shutil as _sh
+            try:
+                _sh.rmtree(trash, onerror=_on_rm_error)
+            except Exception:
+                pass
+        else:
+            try:
+                target.unlink()
+            except OSError:
+                os.rename(str(target), str(trash))
+                trash.unlink(missing_ok=True)
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(str(trash), 0x02)  # keep Explorer clean
+        return not target.exists()
+    except Exception:
+        return not target.exists()
+
+
+def get_project_temp_file(project_dir, filename: str) -> Path:
+    """Store temporary metadata & cache files in system temp directory based on project path hash so the sketch directory stays completely clean."""
+    try:
+        p = Path(project_dir).resolve()
+        h = hashlib.md5(str(p).encode("utf-8")).hexdigest()[:12]
+        temp_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_cache"
+        temp_dir.mkdir(exist_ok=True)
+        legacy_file = p / filename
+        if legacy_file.exists():
+            try:
+                legacy_file.unlink()
+            except Exception:
+                pass
+        return temp_dir / f"{h}_{filename}"
+    except Exception:
+        return Path(tempfile.gettempdir()) / filename
+
+
+def get_ai_review_state_file(project_dir) -> Path:
+    """Return a durable per-project journal path for reversible AI edits."""
+    project_path = Path(project_dir).resolve(strict=False)
+    project_hash = hashlib.sha256(
+        os.path.normcase(str(project_path)).encode("utf-8")
+    ).hexdigest()[:20]
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        state_dir = Path(local_app_data) / "MCU Flasher by Naph" / "ai-reviews"
+    else:
+        state_dir = Path.home() / ".mcu_flash_gui" / "ai-reviews"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        state_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_ai_reviews"
+        state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir / f"{project_hash}.json"
+
+def ensure_hidden_read_first_md(sketch_dir) -> None:
+    """
+    Generate hidden .opencodeignore and AGENTS.md in sketch_dir.
+    Instructs OpenCode CLI to ONLY read root sketch files (*.ino, *.h, *.cpp) and NOTE.txt.
+    Excludes src/ and platformio.ini from OpenCode file scans.
+    Removes redundant duplicate instruction files and applies Windows hidden attribute so Windows Explorer stays 100% clean.
+    """
+    try:
+        s_dir = Path(sketch_dir)
+        if not s_dir.exists() or not s_dir.is_dir():
+            return
+
+        # 1. Clean up old duplicate instruction & ignore files from project root
+        redundant_files = (
+            "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md",
+            "OPENCODE.md", ".ignore"
+        )
+        for r_name in redundant_files:
+            rf = s_dir / r_name
+            if rf.exists():
+                try:
+                    rf.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # 2. Single native OpenCode ignore configuration (.opencodeignore)
+        ignore_content = (
+            "# Auto-generated by MCU Flash GUI for OpenCode AI\n"
+            "src/\n"
+            ".pio/\n"
+            "platformio.ini\n"
+            "build_artifacts/\n"
+            ".build_artifacts/\n"
+            ".mcu_gui_cache.json\n"
+            ".mcu_flash_syntax_errors.json\n"
+            ".ai_edit_signal\n"
+            ".vscode/\n"
+            ".clangd/\n"
+            ".cache/\n"
+        )
+        opencode_ign = s_dir / ".opencodeignore"
+        try:
+            ensure_file_writable(opencode_ign)
+            opencode_ign.write_text(ignore_content, encoding="utf-8")
+            hide_hidden_attribute(opencode_ign)
+        except Exception:
+            pass
+
+        # 3. Single instructions file recognized by OpenCode CLI (AGENTS.md)
+        content = (
+            "---\n"
+            "name: project-sketch-scope\n"
+            "description: \"AI workspace instructions for MCU Flash GUI project. Specifies files to read vs ignore.\"\n"
+            "---\n\n"
+            "# 🚨 CRITICAL OPENCODE AI WORKSPACE INSTRUCTIONS 🚨\n\n"
+            "## 🎯 Target Scope & File Rules\n\n"
+            "### 1. ONLY READ & EDIT MAIN SKETCH FILES AT PROJECT ROOT\n"
+            "- Focus strictly on primary working source code files located at the root of this project folder:\n"
+            "  - `*.ino` (Arduino main sketch files at root)\n"
+            "  - `*.h` / `*.hpp` (C/C++ header files at root)\n"
+            "  - `*.cpp` / `*.c` (C/C++ source files at root)\n"
+            "  - `NOTE.txt` / `*.txt` (Authorized notes & project documentation files created by AI)\n\n"
+            "### 2. DO NOT READ OR EDIT BUILD & INTERNAL TOOLCHAIN FILES\n"
+            "- **IGNORE** `platformio.ini` (managed automatically by MCU Flash GUI).\n"
+            "- **IGNORE** `.pio/` directory and internal build artifacts.\n"
+            "- **IGNORE** `.vscode/`, `.git/`, `.cache/`, `.clangd/`, `env/`, `node_modules/`, `_temp/`.\n\n"
+            "### 3. EXCLUDE `src/` BACKUP & EXTRA DIRECTORY\n"
+            "- **IGNORE** all files inside `src/` (`src/*`).\n"
+            "- Files inside `src/` are internal backups/extras used by MCU Flash GUI and must **NOT** be read, edited, or modified by the AI.\n"
+            "- Work ONLY with active sketch files (`.ino`, `.h`, `.cpp`) and authorized project notes (`NOTE.txt`) at the project root level.\n\n"
+            "---\n"
+            "*Generated automatically by MCU Flash GUI by Naph for OpenCode AI Assistant.*\n"
+        )
+
+        agents_md = s_dir / "AGENTS.md"
+        try:
+            ensure_file_writable(agents_md)
+            agents_md.write_text(content, encoding="utf-8")
+            hide_hidden_attribute(agents_md)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def hide_internal_project_metadata(sketch_dir) -> None:
+    """Hide internal metadata files & folders (.pio, src, .opencodeignore, AGENTS.md, etc.) in Windows Explorer."""
+    try:
+        s_dir = Path(sketch_dir)
+        if not s_dir.exists():
+            return
+        
+        # Ensure platformio.ini is always editable
+        ini_p = s_dir / "platformio.ini"
+        if ini_p.exists():
+            ensure_file_writable(ini_p)
+
+        # Ensure OpenCode ignore files & instructions exist first before anything else
+        ensure_hidden_read_first_md(s_dir)
+
+        internal_names = [
+            ".pio", "platformio.ini", "src", ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
+            ".ai_edit_signal", "build_artifacts", ".build_artifacts",
+            ".pio_cache", ".vscode", ".clangd", ".cache", "_temp",
+            ".opencodeignore", ".ignore", "AGENTS.md", "OPENCODE.md",
+            "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md"
+        ]
+        for name in internal_names:
+            p = s_dir / name
+            if p.exists():
+                hide_hidden_attribute(p)
+        
+        # Guarantee root sketch files and notes are unhidden
+        for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.txt"):
+            for f in s_dir.glob(ext):
+                unhide_hidden_attribute(f)
+    except Exception:
+        pass
+
+def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
+    """Heal platformio.ini when moved across devices or user accounts.
+    Scans for symlink://<path> entries in lib_deps and paths in lib_extra_dirs.
+    If a target path does not exist on the current machine (e.g. C:/Users/Admin/... on a machine with user napht),
+    this function re-navigates it to the current device's download directory (Libs/<folder>),
+    or standard Arduino/PlatformIO library locations using arduino_lib_req helper.
+    """
+    try:
+        p = Path(ini_path)
+        if not p.exists() or not p.is_file():
+            return False
+
+        ensure_file_writable(p)
+        content = p.read_text(encoding="utf-8", errors="replace")
+        old_content = content
+
+        try:
+            from src.libs.arduino_lib_req import heal_library_path_on_current_device
+        except Exception:
+            heal_library_path_on_current_device = lambda s: s
+
+        download_dir = _get_download_dir()
+        current_libs_dir = Path(download_dir) / "Libs"
+        modified = False
+
+        # 1. Heal symlink:// entries
+        def _heal_symlink_match(match):
+            nonlocal modified
+            full_slug = match.group(0)
+            healed = heal_library_path_on_current_device(full_slug)
+            if healed != full_slug:
+                modified = True
+            return healed
+
+        symlink_pattern = re.compile(r'symlink://[^\s\n\r]+', re.IGNORECASE)
+        content = symlink_pattern.sub(_heal_symlink_match, content)
+
+        # 2. Heal lib_extra_dirs
+        def _heal_extra_dirs_match(match):
+            nonlocal modified
+            line = match.group(0)
+            key = match.group(1)
+            raw_dirs = match.group(2).strip()
+
+            dir_parts = [d.strip() for d in raw_dirs.split(",") if d.strip()]
+            valid_dirs = []
+            for d in dir_parts:
+                d_obj = Path(d.replace("\\", "/"))
+                if d_obj.exists():
+                    valid_dirs.append(d_obj.resolve().as_posix())
+                else:
+                    if current_libs_dir.exists():
+                        valid_dirs.append(current_libs_dir.resolve().as_posix())
+                        modified = True
+
+            if not valid_dirs and current_libs_dir.exists():
+                valid_dirs.append(current_libs_dir.resolve().as_posix())
+                modified = True
+
+            if valid_dirs:
+                return f"lib_extra_dirs = {', '.join(valid_dirs)}"
+            return line
+
+        extra_dirs_pattern = re.compile(r'^(lib_extra_dirs\s*=)(.*)$', re.MULTILINE | re.IGNORECASE)
+        content = extra_dirs_pattern.sub(_heal_extra_dirs_match, content)
+
+        if modified or content != old_content:
+            _write_ok = False
+            _last_err = None
+            for _i in range(6):
+                try:
+                    ensure_file_writable(p)
+                    p.write_text(content, encoding="utf-8")
+                    _write_ok = True
+                    break
+                except Exception as _e:
+                    _last_err = _e
+                    time.sleep(0.15 * (_i + 1))
+            if not _write_ok:
+                try:
+                    import tempfile as _tf
+                    _bak = p.with_suffix(p.suffix + ".locked")
+                    _bak.write_text(content, encoding="utf-8")
+                except Exception:
+                    pass
+                return False
+            if sketch_dir and sketch_dir.exists():
+                _healed_stale = any(
+                    s.startswith("symlink://") and not Path(s[len("symlink://"):]).exists()
+                    for s in symlink_pattern.findall(old_content)
+                )
+                if _healed_stale:
+                    libdeps_dir = sketch_dir / ".pio" / "libdeps"
+                    if libdeps_dir.exists():
+                        robust_rmtree(libdeps_dir)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+try:
+    from dedicated_AI import AIController, is_opencode_installed
+except Exception:
+    AIController = None
+    is_opencode_installed = lambda: False
+
+# pyrefly: ignore [missing-import]
+try:
+    # pyrefly: ignore [missing-import]
+    import webview
+except Exception:
+    # pywebview (and its native backend deps) is only required for the
+    # Monaco editor mode. The Default (Tkinter) editor mode works fine
+    # without it, so don't hard-fail the whole app if it's missing.
+    webview = None
+
+# Unique title used to locate the pywebview-hosted editor's native OS
+# window so it can be reparented (embedded) into the Tkinter frame below,
+# instead of it floating around as its own separate window. Note: some
+# pywebview backends sync the native window's title with the loaded page's
+# <title> tag once it finishes loading, which can silently replace this —
+# see _find_editor_hwnd() below, which doesn't rely on the title alone.
+EDITOR_WINDOW_TITLE = "MCU Flasher — Embedded Code Editor (Closing this window will attach back to the MAIN window)"
+
+# Windows-only: lets us reparent the editor's native window into the
+# Tkinter frame via the Win32 API. Import is best-effort — if pywin32
+# isn't installed, the app still runs fine, it just falls back to the
+# old "Open Editor Window" popup behavior instead of true embedding.
+win32gui = None
+win32con = None
+win32process = None
+_wm_set_embedded = 0
+if sys.platform == "win32":
+    try:
+        import win32gui
+        import win32con
+        import win32process
+        import ctypes
+        _wm_set_embedded = ctypes.windll.user32.RegisterWindowMessageW("MCU_Flash_Set_Embedded")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("naph.mcuflasher.gui.v3")
+    except Exception:
+        pass
+
+# Global event to signal when the user cancels project selection at startup
+project_cancelled = threading.Event()
+
+
+def _list_own_toplevel_hwnds() -> set:
+    """Enumerate all top-level window handles belonging to this process.
+    Used to spot the pywebview editor window by "what showed up" rather
+    than by title, since some backends silently rewrite the window title
+    to match the loaded page's <title> tag."""
+    if win32gui is None or win32process is None:
+        return set()
+    my_pid = os.getpid()
+    hwnds = []
+
+    def _cb(hwnd, _):
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid == my_pid:
+                hwnds.append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception:
+        pass
+    return set(hwnds)
+
+
+class MonacoAutosaveWorker:
+    """Single-timer Monaco autosave debounce.
+
+    The previous implementation submitted one sleeping thread-pool job for
+    every keystroke. On a low-end device those jobs accumulated and could keep
+    autosave minutes behind the editor. One cancellable timer gives the same
+    debounce semantics with at most one background thread.
+    """
+    def __init__(self, gui):
+        self.gui = gui
+        self._timer: threading.Timer | None = None
+        self._lock = threading.Lock()
+
+    def start(self):
+        return
+
+    def stop(self):
+        with self._lock:
+            timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def update_state(self):
+        """Update thread pool worker state based on current configuration."""
+        if getattr(self.gui, "autosave_enabled", False):
+            self.start()
+        else:
+            self.stop()
+
+    def notify_edit(self):
+        if not getattr(self.gui, "autosave_enabled", False):
+            self.stop()
+            return
+        delay_ms = max(200, int(getattr(self.gui, "autosave_delay_ms", 1500)))
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(delay_ms / 1000.0, self._request_save)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _request_save(self):
+        with self._lock:
+            self._timer = None
+        def _do_save():
+            if not getattr(self.gui, "autosave_enabled", False):
+                return
+            if hasattr(self.gui, "editor_api") and self.gui.editor_api:
+                dirty = any(self.gui.editor_api.modified_files.values())
+                if dirty:
+                    if hasattr(self.gui, "_save_all_editor_files") and callable(self.gui._save_all_editor_files):
+                        self.gui._save_all_editor_files()
+
+        if hasattr(self.gui, "root") and self.gui.root:
+            try:
+                self.gui.root.after(0, _do_save)
+            except Exception:
+                pass
+
+
+def build_ai_line_diff(before_content: str, after_content: str) -> dict:
+    """Build compact Monaco decoration ranges for one external AI edit."""
+    import difflib
+
+    before_lines = str(before_content or "").splitlines()
+    after_lines = str(after_content or "").splitlines()
+    if before_content == after_content:
+        return {"changes": [], "added": 0, "removed": 0, "modified": 0, "firstLine": 1}
+
+    # SequenceMatcher gives accurate VS Code-like hunks for normal sketches.
+    # For very large generated files, bound the work to the changed middle
+    # region so one AI edit can never freeze the editor bridge.
+    if len(before_lines) + len(after_lines) > 8000:
+        prefix = 0
+        limit = min(len(before_lines), len(after_lines))
+        while prefix < limit and before_lines[prefix] == after_lines[prefix]:
+            prefix += 1
+        old_tail, new_tail = len(before_lines), len(after_lines)
+        while old_tail > prefix and new_tail > prefix and before_lines[old_tail - 1] == after_lines[new_tail - 1]:
+            old_tail -= 1
+            new_tail -= 1
+        opcodes = [("replace", prefix, old_tail, prefix, new_tail)]
+    else:
+        opcodes = difflib.SequenceMatcher(
+            None, before_lines, after_lines, autojunk=False
+        ).get_opcodes()
+
+    changes = []
+    added = removed = modified = 0
+    first_line = None
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            continue
+        old_count, new_count = i2 - i1, j2 - j1
+        start = max(1, j1 + 1)
+        end = max(start, j2)
+        if tag == "insert":
+            kind = "added"
+            added += new_count
+        elif tag == "delete":
+            kind = "removed"
+            removed += old_count
+            end = start
+        else:
+            kind = "modified"
+            shared = min(old_count, new_count)
+            modified += max(1, shared)
+            added += max(0, new_count - old_count)
+            removed += max(0, old_count - new_count)
+        changes.append({"type": kind, "startLine": start, "endLine": end})
+        first_line = start if first_line is None else min(first_line, start)
+
+    return {
+        "changes": changes,
+        "added": added,
+        "removed": removed,
+        "modified": modified,
+        "firstLine": first_line or 1,
+    }
+
+
+class EditorApi:
+    def __init__(self, gui):
+        self._gui = gui
+        self.active_file_path = None
+        self.modified_files = {} # path -> is_modified
+        self._pending_ai_edits = {}
+        self._pending_ai_lock = threading.Lock()
+        self._ai_review_revision = 0
+        self._ai_review_generation = 0
+        self._ai_review_journal_error = ""
+        self._ai_review_journal_recovery_required = False
+        configured_state_path = getattr(gui, "ai_review_state_path", None)
+        self._ai_review_state_path_is_configured = bool(configured_state_path)
+        project_dir = getattr(gui, "sketch_dir_path", None)
+        if configured_state_path:
+            self._ai_review_state_path = Path(configured_state_path)
+        elif project_dir:
+            self._ai_review_state_path = get_ai_review_state_file(project_dir)
+        else:
+            self._ai_review_state_path = None
+        self._load_pending_ai_edits()
+
+    @staticmethod
+    def _path_key(path):
+        try:
+            return os.path.normcase(str(Path(path or "").resolve(strict=False)))
+        except (OSError, ValueError):
+            return os.path.normcase(os.path.abspath(str(path or "")))
+
+    def bind_project(self, project_dir):
+        """Switch the review journal when the main GUI changes projects."""
+        with self._pending_ai_lock:
+            if self._ai_review_journal_recovery_required:
+                raise OSError(
+                    self._ai_review_journal_error
+                    or "The current project's AI review journal needs manual recovery."
+                )
+            try:
+                self._commit_pending_ai_edits_locked()
+            except Exception as exc:
+                self._ai_review_journal_error = (
+                    "The current project's AI review journal could not be saved "
+                    f"before switching projects: {exc}"
+                )
+                raise OSError(self._ai_review_journal_error) from exc
+            self._pending_ai_edits = {}
+            self._ai_review_revision = 0
+            self._ai_review_generation = 0
+            self._ai_review_journal_error = ""
+            self._ai_review_journal_recovery_required = False
+            if not self._ai_review_state_path_is_configured:
+                self._ai_review_state_path = get_ai_review_state_file(project_dir)
+            self.modified_files.clear()
+            self.active_file_path = None
+            self._load_pending_ai_edits_locked()
+
+    def _path_is_in_project(self, path):
+        project_dir = getattr(self._gui, "sketch_dir_path", None)
+        if not project_dir or not path:
+            return False
+        try:
+            project_root = Path(project_dir).resolve(strict=False)
+            candidate = Path(path).resolve(strict=False)
+            return os.path.commonpath(
+                [os.path.normcase(str(project_root)), os.path.normcase(str(candidate))]
+            ) == os.path.normcase(str(project_root))
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _read_text_exact(path):
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as stream:
+            return stream.read()
+
+    @staticmethod
+    def _write_text_atomic(path, content):
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        ensure_file_writable(target)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.ai-review-",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        try:
+            with os.fdopen(
+                file_descriptor, "w", encoding="utf-8", errors="strict", newline=""
+            ) as stream:
+                stream.write(str(content))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, target)
+        except Exception:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+            raise
+
+    def _next_ai_review_revision_locked(self):
+        self._ai_review_revision += 1
+        return str(self._ai_review_revision)
+
+    def _ai_review_state_data_locked(self, generation=None):
+        return {
+            "version": 2,
+            "generation": (
+                self._ai_review_generation if generation is None else int(generation)
+            ),
+            "revision": self._ai_review_revision,
+            "reviews": list(self._pending_ai_edits.values()),
+        }
+
+    def _ai_review_backup_path(self):
+        state_path = self._ai_review_state_path
+        return state_path.with_suffix(state_path.suffix + ".bak") if state_path else None
+
+    @staticmethod
+    def _write_ai_review_journal_atomic(path, data):
+        """Atomically replace one journal replica with fully synced JSON."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        ensure_file_writable(target)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
+        try:
+            with os.fdopen(
+                file_descriptor, "w", encoding="utf-8", errors="strict", newline=""
+            ) as stream:
+                json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, target)
+        except Exception:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+            raise
+
+    def _persist_pending_ai_edits_replicated_locked(self):
+        """Commit the next journal generation to the recovery replica first.
+
+        The backup is the commit point.  If replacing the primary is interrupted,
+        startup can select the newer backup by generation without losing a review.
+        Empty review sets are written as tombstones instead of deleting the files,
+        so an older replica can never resurrect a resolved review.
+        """
+        state_path = self._ai_review_state_path
+        if self._ai_review_journal_recovery_required:
+            raise OSError(
+                self._ai_review_journal_error
+                or "The AI review journal needs manual recovery."
+            )
+        if not state_path:
+            if self._pending_ai_edits:
+                raise OSError("No AI review journal path is configured.")
+            return
+        backup_path = self._ai_review_backup_path()
+        if not backup_path:
+            raise OSError("No AI review recovery journal path is configured.")
+
+        generation = max(
+            self._ai_review_generation + 1,
+            self._ai_review_revision,
+        )
+        data = self._ai_review_state_data_locked(generation)
+
+        # Backup-first ordering guarantees that a committed generation is never
+        # represented only by the more fragile primary replica.
+        self._write_ai_review_journal_atomic(backup_path, data)
+        self._ai_review_generation = generation
+        try:
+            self._write_ai_review_journal_atomic(state_path, data)
+        except Exception as exc:
+            # The newest generation is already durable in the backup.  Treat the
+            # commit as successful; startup will prefer it and repair naturally
+            # on the next journal write.
+            print(f"[MCU Flasher] AI review primary replica is stale: {exc}")
+        self._ai_review_journal_error = ""
+        self._ai_review_journal_recovery_required = False
+
+    def _persist_pending_ai_edits_fallback_locked(self):
+        """Independent retry entry point used after a failed journal commit."""
+        self._persist_pending_ai_edits_replicated_locked()
+
+    def _persist_pending_ai_edits_locked(self):
+        self._persist_pending_ai_edits_replicated_locked()
+
+    def _commit_pending_ai_edits_locked(self):
+        """Commit through either entry point or raise without hiding failure."""
+        try:
+            self._persist_pending_ai_edits_locked()
+        except Exception as primary_exc:
+            try:
+                self._persist_pending_ai_edits_fallback_locked()
+            except Exception as fallback_exc:
+                self._ai_review_journal_error = (
+                    "AI review journal commit failed: "
+                    f"{primary_exc}; retry failed: {fallback_exc}"
+                )
+                raise OSError(self._ai_review_journal_error) from fallback_exc
+
+    def _load_pending_ai_edits(self):
+        with self._pending_ai_lock:
+            self._load_pending_ai_edits_locked()
+
+    def _load_pending_ai_edits_locked(self):
+        state_path = self._ai_review_state_path
+        if not state_path:
+            self._pending_ai_edits = {}
+            self._ai_review_revision = 0
+            self._ai_review_generation = 0
+            self._ai_review_journal_error = ""
+            self._ai_review_journal_recovery_required = False
+            return
+        candidates = [state_path]
+        backup_path = self._ai_review_backup_path()
+        if backup_path:
+            candidates.append(backup_path)
+        existing_candidates = [candidate for candidate in candidates if candidate.exists()]
+        if not existing_candidates:
+            self._pending_ai_edits = {}
+            self._ai_review_revision = 0
+            self._ai_review_generation = 0
+            self._ai_review_journal_error = ""
+            self._ai_review_journal_recovery_required = False
+            return
+
+        load_errors = []
+        failed_candidates = set()
+        loaded_candidates = []
+        for candidate in existing_candidates:
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("journal root must be an object")
+                version = int(data.get("version", 1) or 1)
+                if version not in (1, 2):
+                    raise ValueError(f"unsupported journal version {version}")
+                reviews = data.get("reviews", [])
+                if not isinstance(reviews, list):
+                    raise ValueError("journal reviews must be a list")
+                revision = int(data.get("revision", 0) or 0)
+                if revision < 0:
+                    raise ValueError("journal revision cannot be negative")
+                if version >= 2:
+                    generation = int(data.get("generation", -1))
+                    if generation < 0:
+                        raise ValueError("journal generation is missing or negative")
+                else:
+                    # Version 1 used revision as its only monotonic value.  It is
+                    # safe while the primary exists, but never authoritative as
+                    # a backup-only recovery because old backups were one write
+                    # behind.
+                    generation = revision
+
+                loaded = {}
+                normalized_reviews = []
+                for raw_value in reviews:
+                    if not isinstance(raw_value, dict):
+                        raise ValueError("journal contains a non-object review")
+                    raw = dict(raw_value)
+                    if not self._path_is_in_project(raw.get("path")):
+                        raise ValueError("journal contains a review outside the active project")
+                    before_content = str(raw.get("beforeContent", ""))
+                    after_content = str(raw.get("content", ""))
+                    raw["beforeContent"] = before_content
+                    raw["content"] = after_content
+                    raw["beforeExists"] = bool(raw.get("beforeExists", True))
+                    raw["afterExists"] = bool(raw.get("afterExists", True))
+                    raw["diff"] = build_ai_line_diff(before_content, after_content)
+                    raw["revision"] = str(raw.get("revision", "0"))
+                    key = self._path_key(raw["path"])
+                    if key in loaded:
+                        raise ValueError("journal contains duplicate review paths")
+                    loaded[key] = raw
+                    normalized_reviews.append(raw)
+
+                effective_revision = max(
+                    revision,
+                    max((int(item.get("revision", 0) or 0) for item in loaded.values()), default=0),
+                )
+                signature = json.dumps(
+                    {
+                        "revision": effective_revision,
+                        "reviews": normalized_reviews,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                loaded_candidates.append({
+                    "path": candidate,
+                    "version": version,
+                    "generation": generation,
+                    "revision": effective_revision,
+                    "reviews": loaded,
+                    "signature": signature,
+                })
+            except Exception as exc:
+                load_errors.append(f"{candidate.name}: {exc}")
+                failed_candidates.add(candidate)
+
+        primary = next(
+            (item for item in loaded_candidates if item["path"] == state_path), None
+        )
+        backup = next(
+            (item for item in loaded_candidates if item["path"] == backup_path), None
+        )
+
+        # A version-1 backup may be the deliberately stale copy left behind by
+        # the previous writer, including after the last review was resolved.
+        # Never resurrect it when its primary is absent or corrupt.
+        if not primary and backup and backup["version"] < 2:
+            load_errors.append(
+                f"{backup_path.name}: legacy backup cannot prove it is the newest generation"
+            )
+            loaded_candidates = []
+
+        # In v2 the backup is written first and is the commit point.  If it is
+        # present but unreadable, a valid primary may still be an older
+        # generation from an interrupted replacement, so selecting it could
+        # silently omit the newest review.
+        if primary and primary["version"] >= 2 and backup_path in failed_candidates:
+            load_errors.append(
+                f"{backup_path.name}: corrupt commit replica makes the primary ambiguous"
+            )
+            loaded_candidates = []
+
+        if loaded_candidates:
+            # A valid legacy primary remains authoritative until the first v2
+            # write migrates it.  Version 2 replicas are selected strictly by
+            # committed generation, regardless of filename.
+            if primary and primary["version"] < 2:
+                newest = [primary]
+            else:
+                newest_generation = max(
+                    item["generation"] for item in loaded_candidates
+                )
+                newest = [
+                    item for item in loaded_candidates
+                    if item["generation"] == newest_generation
+                ]
+            signatures = {item["signature"] for item in newest}
+            if len(signatures) != 1:
+                load_errors.append(
+                    "journal replicas disagree within the newest committed generation"
+                )
+                loaded_candidates = []
+            else:
+                selected = next(
+                    (item for item in newest if item["path"] == state_path), newest[0]
+                )
+                self._pending_ai_edits = selected["reviews"]
+                self._ai_review_revision = selected["revision"]
+                self._ai_review_generation = selected["generation"]
+                self._ai_review_journal_error = ""
+                self._ai_review_journal_recovery_required = False
+                if selected["path"] == backup_path:
+                    print("[MCU Flasher] Recovered newest AI review journal from backup.")
+                return
+
+        # Fail closed: malformed or ambiguous journals may contain the only
+        # exact Reject copy.  Compile/Upload remains blocked until recovery.
+        self._pending_ai_edits = {}
+        self._ai_review_revision = 0
+        self._ai_review_generation = 0
+        self._ai_review_journal_error = "; ".join(load_errors) or (
+            "No trustworthy AI review journal generation could be loaded."
+        )
+        self._ai_review_journal_recovery_required = True
+
+    def _snapshot_for_key_locked(self, key):
+        payload = self._pending_ai_edits.get(key)
+        if not payload:
+            return {}
+        keys = list(self._pending_ai_edits)
+        snapshot = dict(payload)
+        snapshot["pendingCount"] = len(keys)
+        snapshot["reviewIndex"] = keys.index(key) + 1
+        snapshot["fileName"] = Path(snapshot["path"]).name
+        return snapshot
+
+    def queue_ai_edit_snapshot(
+        self,
+        path,
+        before_content,
+        after_content,
+        before_exists=True,
+        after_exists=True,
+    ):
+        if not path or not self._path_is_in_project(path):
+            return False
+        before_content = str(before_content or "")
+        after_content = str(after_content or "")
+        before_exists = bool(before_exists)
+        after_exists = bool(after_exists)
+        if before_exists == after_exists and before_content == after_content:
+            return False
+        resolved_path = str(Path(path).resolve(strict=False))
+        key = self._path_key(resolved_path)
+        with self._pending_ai_lock:
+            existing = self._pending_ai_edits.get(key)
+            if existing:
+                original_content = str(existing.get("beforeContent", ""))
+                original_exists = bool(existing.get("beforeExists", True))
+                review_id = str(existing.get("reviewId") or key)
+            else:
+                original_content = before_content
+                original_exists = before_exists
+                review_id = key
+            if existing and original_exists == after_exists and original_content == after_content:
+                self._pending_ai_edits.pop(key, None)
+                self._next_ai_review_revision_locked()
+                try:
+                    self._commit_pending_ai_edits_locked()
+                except Exception as exc:
+                    print(f"[MCU Flasher] Could not persist AI review cancellation: {exc}")
+                    # The old journal still says this review is pending.  Keep
+                    # memory consistent with that durable state and fail closed.
+                    self._pending_ai_edits[key] = existing
+                    return False
+                return "cancelled"
+            payload = {
+                "reviewId": review_id,
+                "revision": self._next_ai_review_revision_locked(),
+                "path": resolved_path,
+                "beforeContent": original_content,
+                "content": after_content,
+                "beforeExists": original_exists,
+                "afterExists": after_exists,
+                "diff": build_ai_line_diff(original_content, after_content),
+            }
+            self._pending_ai_edits[key] = payload
+            try:
+                self._commit_pending_ai_edits_locked()
+            except Exception as exc:
+                # Retain the exact Reject copy in memory and let the journal
+                # error block Compile/Upload until storage becomes writable.
+                print(f"[MCU Flasher] Could not persist pending AI review: {exc}")
+        return True
+
+    def consume_ai_edit_snapshot(self, path):
+        """Compatibility name retained for JavaScript; this is now a safe peek.
+
+        A review is removed only after an explicit Accept or Reject response.
+        """
+        with self._pending_ai_lock:
+            return self._snapshot_for_key_locked(self._path_key(path))
+
+    def get_ai_edit_reviews(self):
+        with self._pending_ai_lock:
+            result = []
+            for key in self._pending_ai_edits:
+                snapshot = self._snapshot_for_key_locked(key)
+                result.append({
+                    "reviewId": snapshot.get("reviewId"),
+                    "revision": snapshot.get("revision"),
+                    "path": snapshot.get("path"),
+                    "fileName": snapshot.get("fileName"),
+                    "beforeExists": snapshot.get("beforeExists"),
+                    "afterExists": snapshot.get("afterExists"),
+                    "diff": snapshot.get("diff"),
+                    "pendingCount": snapshot.get("pendingCount"),
+                    "reviewIndex": snapshot.get("reviewIndex"),
+                })
+            return result
+
+    def has_pending_ai_edit(self, path):
+        with self._pending_ai_lock:
+            return self._path_key(path) in self._pending_ai_edits
+
+    def has_any_pending_ai_edits(self):
+        with self._pending_ai_lock:
+            return bool(self._pending_ai_edits) or bool(self._ai_review_journal_error)
+
+    def get_ai_review_journal_error(self):
+        with self._pending_ai_lock:
+            return self._ai_review_journal_error
+
+    def _resolve_ai_edit(self, path, revision, accept):
+        key = self._path_key(path)
+        with self._pending_ai_lock:
+            payload = self._pending_ai_edits.get(key)
+            if not payload:
+                return {"success": False, "error": "This AI review is no longer pending."}
+            if str(revision or "") != str(payload.get("revision", "")):
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "error": "The AI edit changed while it was being reviewed. The latest version has been reopened.",
+                    "snapshot": self._snapshot_for_key_locked(key),
+                }
+            if not self._path_is_in_project(payload.get("path")):
+                return {"success": False, "error": "The reviewed file is outside the active project."}
+
+            target = Path(payload["path"])
+            actual_exists = target.is_file()
+            actual_content = self._read_text_exact(target) if actual_exists else ""
+            if (actual_exists != bool(payload.get("afterExists", True))
+                    or actual_content != str(payload.get("content", ""))):
+                # Adopt the current disk state as a new proposal revision. The
+                # user gets to inspect it before deciding again, while Reject
+                # still targets the first pre-AI original.
+                payload["afterExists"] = actual_exists
+                payload["content"] = actual_content
+                payload["revision"] = self._next_ai_review_revision_locked()
+                payload["diff"] = build_ai_line_diff(
+                    payload.get("beforeContent", ""), actual_content
+                )
+                try:
+                    self._commit_pending_ai_edits_locked()
+                except Exception as exc:
+                    print(f"[MCU Flasher] Could not persist refreshed AI review: {exc}")
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "error": "The file changed during review. The latest version is now shown; review it again.",
+                    "snapshot": self._snapshot_for_key_locked(key),
+                }
+
+            try:
+                if not accept:
+                    if bool(payload.get("beforeExists", True)):
+                        self._write_text_atomic(target, payload.get("beforeContent", ""))
+                    elif target.exists():
+                        ensure_file_writable(target)
+                        target.unlink()
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "error": f"Could not restore the original file: {exc}",
+                }
+
+            resolved_payload = dict(payload)
+            final_exists = (
+                bool(resolved_payload.get("afterExists", True))
+                if accept else bool(resolved_payload.get("beforeExists", True))
+            )
+            final_content = (
+                str(resolved_payload.get("content", ""))
+                if accept else str(resolved_payload.get("beforeContent", ""))
+            )
+            controller = getattr(self._gui, "ai_controller", None)
+            if controller:
+                # Rebaseline before potentially slow journal fsync work so the
+                # watcher cannot report Reject's restoration as a new AI edit.
+                controller.note_local_save(
+                    resolved_payload["path"], final_content if final_exists else None
+                )
+            pending_before_resolution = dict(self._pending_ai_edits)
+            self._pending_ai_edits.pop(key, None)
+            try:
+                self._commit_pending_ai_edits_locked()
+            except Exception as exc:
+                # Do not report a successful decision while durable storage
+                # still contains the old review.  Keeping it pending makes a
+                # later retry/restart honest and the journal error blocks build
+                # actions until the state can be committed safely.
+                self._pending_ai_edits = pending_before_resolution
+                return {
+                    "success": False,
+                    "journalError": True,
+                    "error": (
+                        "The AI review decision could not be saved and remains "
+                        f"pending: {exc}"
+                    ),
+                    "snapshot": self._snapshot_for_key_locked(key),
+                }
+            next_path = next(iter(self._pending_ai_edits.values()), {}).get("path", "")
+            pending_count = len(self._pending_ai_edits)
+
+        self.modified_files[resolved_payload["path"]] = False
+
+        def _notify_resolution():
+            if hasattr(self._gui, "_update_skip_compile_state"):
+                self._gui._update_skip_compile_state()
+            if hasattr(self._gui, "_update_editor_info"):
+                self._gui._update_editor_info()
+            if hasattr(self._gui, "_append_notif"):
+                verb = "accepted" if accept else "rejected"
+                name = Path(resolved_payload["path"]).name
+                self._gui._append_notif(
+                    f"  AI edit {verb}: {name}",
+                    "success" if accept else "warning",
+                    category="system",
+                    title=f"AI edit {verb}",
+                )
+
+        root = getattr(self._gui, "root", None)
+        if root:
+            try:
+                root.after(0, _notify_resolution)
+            except Exception:
+                pass
+        result = {
+            "success": True,
+            "action": "accepted" if accept else "rejected",
+            "path": resolved_payload["path"],
+            "beforeExists": bool(resolved_payload.get("beforeExists", True)),
+            "afterExists": bool(resolved_payload.get("afterExists", True)),
+            "nextPath": next_path,
+            "pendingCount": pending_count,
+        }
+        return result
+
+    def accept_ai_edit(self, path, revision):
+        return self._resolve_ai_edit(path, revision, accept=True)
+
+    def reject_ai_edit(self, path, revision):
+        return self._resolve_ai_edit(path, revision, accept=False)
+
+    def on_editor_content_change(self):
+        if self._gui and hasattr(self._gui, "_monaco_autosave_worker"):
+            self._gui._monaco_autosave_worker.notify_edit()
+
+
+    def get_project_files(self):
+        project_dir = getattr(self._gui, "sketch_dir_path", None)
+        if not project_dir:
+            return []
+        sketch_dir = Path(project_dir)
+        if not sketch_dir.exists():
+            return []
+        supported_suffixes = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
+        ignored_directories = {
+            ".git", ".vscode", "env", "node_modules", "__pycache__",
+            ".platformio", "build", ".pio", "src",
+        }
+        files = []
+        for candidate in sketch_dir.rglob("*"):
+            if not candidate.is_file() or candidate.suffix.lower() not in supported_suffixes:
+                continue
+            try:
+                relative_parts = candidate.relative_to(sketch_dir).parts[:-1]
+            except ValueError:
+                continue
+            if any(
+                part.lower() in ignored_directories or part.startswith(".")
+                for part in relative_parts
+            ):
+                continue
+            files.append(candidate)
+        files.sort(key=lambda item: str(item.relative_to(sketch_dir)).lower())
+
+        order_file = sketch_dir / ".mcu_flash_tab_order.json"
+        if order_file.exists():
+            try:
+                import json
+                saved_order = json.loads(order_file.read_text(encoding="utf-8"))
+                file_map = {}
+                for f in files:
+                    try:
+                        rel = str(f.relative_to(sketch_dir))
+                    except Exception:
+                        rel = str(f)
+                    file_map[rel] = f
+                ordered_files = []
+                for name in saved_order:
+                    if name in file_map:
+                        ordered_files.append(file_map.pop(name))
+                ordered_files.extend(file_map.values())
+                files = ordered_files
+            except Exception:
+                pass
+
+        return [{"name": f.name, "path": str(f)} for f in files]
+
+    def save_tab_order(self, paths):
+        if not self._gui or not self._gui.sketch_dir_path:
+            return {"success": False}
+        order_file = self._gui.sketch_dir_path / ".mcu_flash_tab_order.json"
+        try:
+            import json
+            normalized_paths = []
+            for p in paths:
+                try:
+                    path_obj = Path(p)
+                    if path_obj.is_absolute():
+                        normalized_paths.append(str(path_obj.relative_to(self._gui.sketch_dir_path)))
+                    else:
+                        normalized_paths.append(p)
+                except Exception:
+                    normalized_paths.append(p)
+            order_file.write_text(json.dumps(normalized_paths, indent=2), encoding="utf-8")
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def read_file(self, path):
+        if not self._path_is_in_project(path):
+            return {"error": "File is outside the active project."}
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+                content = f.read()
+            return {"content": content}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def save_file(self, path, content):
+        if not self._path_is_in_project(path):
+            return {"success": False, "error": "File is outside the active project."}
+        if self.has_pending_ai_edit(path):
+            return {
+                "success": False,
+                "reviewPending": True,
+                "error": "Accept or reject the pending AI edit before saving this file.",
+            }
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+            if self._gui and getattr(self._gui, "ai_controller", None):
+                self._gui.ai_controller.note_local_save(path, content)
+            # Trigger skip compile check in Tkinter GUI (thread-safe after call)
+            if self._gui:
+                self._gui.root.after(0, self._gui._update_skip_compile_state)
+                self._gui.root.after(0, self._gui._update_editor_info)
+            return {"success": True}
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    def mark_modified(self, path, is_modified):
+        self.modified_files[path] = is_modified
+        if is_modified and self._gui and hasattr(self._gui, "_monaco_autosave_worker"):
+            self._gui._monaco_autosave_worker.notify_edit()
+        if self._gui:
+            self._gui.root.after(0, self._gui._update_skip_compile_state)
+
+    def set_active_file(self, path):
+        self.active_file_path = path
+        if self._gui:
+            self._gui.root.after(0, self._gui._update_editor_info)
+
+    def realtime_check_syntax(self, file_path, content):
+        if not self._gui:
+            return "[]"
+        try:
+            from src.syntax_checker import analyze_cpp_syntax
+            from pathlib import Path
+            import json
+            
+            p = Path(file_path)
+            defined_funcs = self._gui._get_project_defined_functions()
+            errors = analyze_cpp_syntax(content, p, defined_funcs)
+            
+            # Write errors to the temporary json file for external readers (like QScintilla) to stay in sync
+            if self._gui.sketch_dir_path:
+                err_file = get_project_temp_file(self._gui.sketch_dir_path, ".mcu_flash_syntax_errors.json")
+                try:
+                    err_file.write_text(json.dumps(errors, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            
+            # Update the bottom panel in Tkinter thread-safely!
+            self._gui.root.after(0, lambda: self._gui._update_syntax_check_ui(errors))
+            
+            # Return JSON string of errors to JavaScript
+            return json.dumps(errors)
+        except Exception as e:
+            import json
+            return json.dumps([{"severity": "error", "message": f"Syntax checker error: {e}", "line": 1, "col": 1}])
+
+    def run_action(self, action):
+        """Run a main-GUI action requested by the detached Monaco toolbar."""
+        if not self._gui:
+            return {"success": False, "error": "GUI is not available"}
+        actions = {
+            "compile": self._gui._do_compile,
+            "upload": self._gui._do_upload,
+            "stop": self._gui._do_stop,
+            "clean": self._gui._do_clean,
+            "save": self._gui._trigger_save,
+            "save_all": self._gui._trigger_save_all,
+            "reload": self._gui._reload_current_editor_file,
+            "modify": self._gui._open_modify_files_dialog,
+        }
+        command = actions.get(str(action))
+        if command is None:
+            return {"success": False, "error": "Unknown action"}
+        self._gui.root.after(0, command)
+        return {"success": True}
+
+# ─── Suppress console window flashes on Windows ─────────────────────────────
+if sys.platform == "win32":
+    try:
+        # pyrefly: ignore [missing-import]
+        import win_subprocess_hide as _wsh
+        _wsh.install()
+        _wsh.install_venv_site_hook(SCRIPT_DIR)
+    except Exception:
+        pass
+
+def _get_safe_platformio_core_dir(script_dir: Path) -> str:
+    frameworks_dir = script_dir / "src" / "_board-frameworks"
+    try:
+        frameworks_dir.mkdir(parents=True, exist_ok=True)
+        hide_hidden_attribute(frameworks_dir)
+    except Exception:
+        pass
+    local_path = frameworks_dir / ".platformio"
+    local_path_str = str(local_path)
+    if sys.platform == "win32":
+        junction_path = Path("C:\\") / ".platformio-mcu-gui"
+        try:
+            local_path.mkdir(parents=True, exist_ok=True)
+            if os.path.lexists(str(junction_path)) or junction_path.exists() or junction_path.is_symlink():
+                subprocess.run(["cmd", "/c", "rmdir", str(junction_path)], creationflags=subprocess.CREATE_NO_WINDOW)
+            res = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(junction_path), local_path_str],
+                capture_output=True, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            if res.returncode == 0 or junction_path.exists():
+                return str(junction_path)
+        except Exception:
+            pass
+    return local_path_str
+
+os.environ["PLATFORMIO_CORE_DIR"] = _get_safe_platformio_core_dir(SCRIPT_DIR)
+os.environ["PYTHONUNBUFFERED"] = "1"
+os.environ["PLATFORMIO_UNBUFFERED"] = "1"
+
+def _available_memory_gb() -> float | None:
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        return None
+
+
+def _system_reserved_cpu_count(total_cpus: int) -> int:
+    """Reserve more UI/system headroom on midrange and faster processors."""
+    total_cpus = max(1, int(total_cpus or 1))
+    if total_cpus >= 8:
+        return 2
+    if total_cpus > 1:
+        return 1
+    return 0
+
+
+def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = None,
+                                available_gb: float | None = None) -> int:
+    """Return a build/background concurrency level that will not swamp small PCs.
+
+    Compiler processes are memory-heavy, so CPU count alone is not a safe
+    multiplier. Reserve one logical CPU on low-end systems or two on systems
+    with 8+ logical CPUs for Tk/WebView/serial handling, then cap workers by
+    currently available RAM (roughly 750 MB per compiler job).
+    """
+    cpus = max(1, int(total_cpus or os.cpu_count() or 2))
+    memory_gb = _available_memory_gb() if available_gb is None else available_gb
+    cpu_budget = max(1, cpus - _system_reserved_cpu_count(cpus))
+    if memory_gb is not None:
+        memory_budget = max(1, int(max(0.75, memory_gb - 1.0) / 0.75))
+        cpu_budget = min(cpu_budget, memory_budget)
+
+    normalized = str(mode or "HIGH").upper()
+    if normalized == "LOW":
+        return max(1, min(2, cpu_budget))
+    if normalized == "MEDIUM":
+        return max(1, min(cpu_budget, max(2, (cpus + 1) // 2)))
+    if normalized in ("ULTRA", "MAX", "MAXIMUM"):
+        return max(1, min(cpu_budget, cpus, 16))
+    return max(1, min(cpu_budget, cpus, 12))
+
+
+_max_cpu_jobs = str(_resource_safe_worker_count("HIGH"))
+
+os.environ["PLATFORMIO_BUILD_JOBS"] = _max_cpu_jobs
+os.environ["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+os.environ["SCONSFLAGS"] = f"-j{_max_cpu_jobs}"
+
+# PlatformIO bootstraps its OWN private virtualenv ("penv") under
+# PLATFORMIO_CORE_DIR the first time it runs. That's a completely separate
+# interpreter from the one running this GUI (and from the GUI's "env" venv
+# hooked above), so every subprocess SCons spawns during compile/upload
+# (compilers, esptool, helper python.exe calls) was popping its own console
+# window with zero patching. Install the same hook there too. This is a
+# no-op (returns False) if penv hasn't been created yet — see the repeat
+# call near where PlatformIO is actually invoked, which catches that case.
+
+# Configure stdout/stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeError
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# ─── Serial library (installed by bootstrap.py) ─────────────────
+import serial
+import serial.tools.list_ports
+
+
+# ═══════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+DEFAULT_SKETCH_DIR = SCRIPT_DIR
+DEFAULT_BAUD = 115200
+DEFAULT_UPLOAD_SPEED = 460800
+
+def _get_download_dir() -> str:
+    """Read the download directory from the shared settings file.
+
+    arduino_lib_req.py writes the user's chosen download folder to
+    ``arduino_browser_settings.json`` next to this script.  This helper
+    reads that file so every call-site in this GUI always uses the
+    same, up-to-date path — even if the user changed it while the
+    Download Manager was open.
+    """
+    settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
+    if settings_file.exists():
+        try:
+            settings = json.loads(settings_file.read_text(encoding="utf-8"))
+            download_dir = settings.get("download_dir", "")
+            if download_dir and os.path.isdir(download_dir):
+                return download_dir
+        except Exception:
+            pass
+    # Fallback to default download dir
+    return os.path.join(os.path.expanduser("~"), "Documents", "_MCUFlasherByNaph_src")
+
+
+def load_dynamic_boards(default_boards: dict) -> dict:
+    """Scan the download directory for boards.txt platform definitions
+    and load all downloaded board types dynamically into the GUI."""
+    boards = default_boards.copy()
+    
+    download_dir = _get_download_dir()
+        
+    boards_path = Path(download_dir) / "Boards"
+    if boards_path.is_dir():
+        # Scan subfolders for boards.txt
+        for p in boards_path.glob("**/boards.txt"):
+            parent_name = p.parent.name.lower()
+            if "esp32" in parent_name:
+                platform = "espressif32"
+            elif "esp8266" in parent_name:
+                platform = "espressif8266"
+            elif "avr" in parent_name or "uno" in parent_name:
+                platform = "atmelavr"
+            else:
+                platform = "espressif32"
+                
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if ".name=" in line:
+                        parts = line.split(".name=", 1)
+                        if len(parts) == 2:
+                            board_id = parts[0].strip()
+                            if "." in board_id:
+                                continue
+                            display_name = parts[1].strip()
+                            if display_name and display_name not in boards:
+                                pio_board = board_id.lower()
+                                if pio_board in ("esp32", "esp32_family"):
+                                    pio_board = "esp32dev"
+                                elif pio_board == "esp32s3":
+                                    pio_board = "esp32-s3-devkitc-1"
+                                elif pio_board == "esp32c3":
+                                    pio_board = "esp32-c3-devkit-m-1"
+                                elif pio_board == "esp32s2":
+                                    pio_board = "esp32-s2-kaluga-1"
+                                elif pio_board == "esp32c6":
+                                    pio_board = "esp32-c6-devkitc-1"
+                                elif pio_board == "nodemcu":
+                                    pio_board = "nodemcuv2"
+                                
+                                boards[display_name] = {
+                                    "platform": platform,
+                                    "board": pio_board,
+                                    "framework": "arduino"
+                                }
+            except Exception:
+                pass
+    return boards
+
+
+SUPPORTED_BOARDS = load_dynamic_boards({})
+
+
+def load_downloaded_board_usb_ids() -> set[tuple[int, int]]:
+    """Read VID/PID pairs from the user's downloaded boards.txt files."""
+    pairs: set[tuple[int, int]] = set()
+    values: dict[tuple[str, str], dict[str, int]] = {}
+    boards_path = Path(_get_download_dir()) / "Boards"
+    if not boards_path.is_dir():
+        return pairs
+
+    property_re = re.compile(
+        r"^([^.=]+)\.(?:upload_port\.)?(vid|pid)\.(\d+)\s*=\s*(0x[0-9a-f]+|\d+)\s*$",
+        re.IGNORECASE,
+    )
+    for boards_file in boards_path.glob("**/boards.txt"):
+        try:
+            for raw_line in boards_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                match = property_re.match(raw_line.strip())
+                if not match:
+                    continue
+                board_id, field, index, raw_value = match.groups()
+                try:
+                    values.setdefault((board_id.lower(), index), {})[field.lower()] = int(raw_value, 0)
+                except ValueError:
+                    continue
+        except OSError:
+            continue
+
+    for usb_id in values.values():
+        if "vid" in usb_id and "pid" in usb_id:
+            pairs.add((usb_id["vid"], usb_id["pid"]))
+    return pairs
+
+
+# Exact USB identities supplied by the board packages the user downloaded.
+DOWNLOADED_BOARD_USB_IDS = load_downloaded_board_usb_ids()
+
+# ─── Canonical chip-feature descriptions ─────────────────────────
+# PlatformIO bundles its own esptool build per platform version, and older
+# bundled copies print a much shorter "Features:" line (e.g. "WiFi, BLE,
+# Embedded PSRAM 8MB (AP_3v3)") than a current standalone esptool CLI does
+# ("Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB
+# (AP_3v3)"). Rather than depend on whichever wording that bundled version
+# happens to use, fill in the well-known hardware description for the
+# detected chip family ourselves, and keep only the live-detected memory
+# info (PSRAM/flash) from the tool's own output since that part is
+# genuinely board-specific.
+_CHIP_FEATURE_TEMPLATES = {
+    "ESP32-S3": "Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz",
+    "ESP32-C6": "Wi-Fi 6, BT 5 (LE), 802.15.4, Dual Core (RISC-V), 160MHz",
+    "ESP32-C3": "Wi-Fi, BT 5 (LE), Single Core (RISC-V), 160MHz",
+    "ESP32-H2": "BT 5 (LE), 802.15.4, Single Core (RISC-V), 96MHz",
+    "ESP32-S2": "Wi-Fi, Single Core, 240MHz",
+    "ESP32":    "Wi-Fi, BT/BLE (Classic + LE), Dual Core, 240MHz",
+}
+
+
+def _enrich_chip_features(chip_model: str, raw_features: str) -> str:
+    """Swap a terse esptool 'Features:' line for the fuller, canonical
+    description of the detected chip family, preserving any live-detected
+    PSRAM/flash mention from the tool's own output. Falls back to the raw
+    string unchanged if the chip family isn't recognized."""
+    if not raw_features or not chip_model:
+        return raw_features
+    upper_model = chip_model.upper()
+    # Check longer/more-specific names first — "ESP32" is a substring of
+    # "ESP32-S3", so a naive lookup would misidentify every S-series/C-series
+    # chip as plain "ESP32".
+    family = next(
+        (name for name in sorted(_CHIP_FEATURE_TEMPLATES, key=len, reverse=True)
+         if name in upper_model),
+        None,
+    )
+    if not family:
+        return raw_features
+    template = _CHIP_FEATURE_TEMPLATES[family]
+    mem_match = re.search(r'(embedded\s+psram.*)$', raw_features, re.IGNORECASE)
+    return f"{template}, {mem_match.group(1).strip()}" if mem_match else template
+
+
+# esptool 4.x and 5.x use different progress formats.  Keep the parser
+# independent from Tk so the same transformation can be used by both the
+# direct fast uploader and PlatformIO's compatibility uploader.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_ESPTOOL_V5_WRITE_PROGRESS_RE = re.compile(
+    r"\bWriting\s+at\s+(?P<address>0x[0-9a-f]+)\s*"
+    r"\[[^\]\r\n]*\]\s*"
+    r"(?P<percent>\d{1,3}(?:\.\d+)?)\s*%"
+    r"(?:\s*(?P<written>[\d,]+)\s*/\s*(?P<total>[\d,]+)\s+bytes)?",
+    re.IGNORECASE,
+)
+_ESPTOOL_V4_WRITE_PROGRESS_RE = re.compile(
+    r"\bWriting\s+at\s+(?P<address>0x[0-9a-f]+)\.{3}\s*"
+    r"\(\s*(?P<percent>\d{1,3}(?:\.\d+)?)\s*%\s*\)",
+    re.IGNORECASE,
+)
+_ESPTOOL_IMAGE_START_RE = re.compile(
+    r"^\s*Writing\s+(?P<source>.+)\s+at\s+"
+    r"(?P<address>0x[0-9a-f]+)\.{3}\s*$",
+    re.IGNORECASE,
+)
+_ESPTOOL_COMPRESSED_RE = re.compile(
+    r"\bCompressed\s+(?P<raw>[\d,]+)\s+bytes\s+to\s+"
+    r"(?P<compressed>[\d,]+)",
+    re.IGNORECASE,
+)
+_ESPTOOL_WROTE_RE = re.compile(
+    r"\bWrote\s+(?P<raw>[\d,]+)\s+bytes"
+    r"(?:\s+\((?P<compressed>[\d,]+)\s+compressed\))?"
+    r"\s+at\s+(?P<address>0x[0-9a-f]+)"
+    r"\s+in\s+(?P<seconds>[\d.]+)\s+seconds"
+    r"(?:\s+\((?:effective\s+)?(?P<rate>[\d.]+)\s+kbit/s\))?",
+    re.IGNORECASE,
+)
+
+
+def _strip_terminal_escapes(text: str) -> str:
+    """Remove ANSI styling and carriage returns before parsing tool output."""
+    return _ANSI_ESCAPE_RE.sub("", str(text or "")).replace("\r", "").strip()
+
+
+def _parse_esptool_image_start(line: str) -> dict | None:
+    """Return the image path/address from a v5 ``Writing 'file' at`` row."""
+    clean = _strip_terminal_escapes(line)
+    match = _ESPTOOL_IMAGE_START_RE.search(clean)
+    if not match:
+        return None
+    source = match.group("source").strip()
+    if len(source) >= 2 and source[0] in ("'", '"') and source[-1] == source[0]:
+        source = source[1:-1]
+    return {"source": source, "address": match.group("address").lower()}
+
+
+def _parse_esptool_write_progress(line: str) -> dict | None:
+    """Parse one esptool 4.x/5.x flash-progress row.
+
+    Byte counters are exact in esptool 5.x.  Older 4.x rows expose only a
+    percentage, so ``written`` and ``total`` deliberately remain ``None``.
+    """
+    clean = _strip_terminal_escapes(line)
+    match = _ESPTOOL_V5_WRITE_PROGRESS_RE.search(clean)
+    version = 5
+    if not match:
+        match = _ESPTOOL_V4_WRITE_PROGRESS_RE.search(clean)
+        version = 4
+    if not match:
+        return None
+    written = match.groupdict().get("written")
+    total = match.groupdict().get("total")
+    return {
+        "address": match.group("address").lower(),
+        "percent": max(0.0, min(100.0, float(match.group("percent")))),
+        "written": int(written.replace(",", "")) if written else None,
+        "total": int(total.replace(",", "")) if total else None,
+        "version": version,
+    }
+
+
+def _parse_esptool_compressed(line: str) -> dict | None:
+    clean = _strip_terminal_escapes(line)
+    match = _ESPTOOL_COMPRESSED_RE.search(clean)
+    if not match:
+        return None
+    return {
+        "raw": int(match.group("raw").replace(",", "")),
+        "compressed": int(match.group("compressed").replace(",", "")),
+    }
+
+
+def _parse_esptool_wrote(line: str) -> dict | None:
+    clean = _strip_terminal_escapes(line)
+    match = _ESPTOOL_WROTE_RE.search(clean)
+    if not match:
+        return None
+    values = match.groupdict()
+    return {
+        "raw": int(values["raw"].replace(",", "")),
+        "compressed": (
+            int(values["compressed"].replace(",", ""))
+            if values.get("compressed") else None
+        ),
+        "address": values["address"].lower(),
+        "seconds": float(values["seconds"]),
+        "rate": float(values["rate"]) if values.get("rate") else None,
+    }
+
+
+def _format_upload_progress_row(label: str, stage: int, stage_total: int,
+                                percent: float, written: int | None = None,
+                                total: int | None = None, bar_width: int = 30) -> str:
+    """Build the app's compact flash-progress row (no timestamp)."""
+    pct = max(0.0, min(100.0, float(percent)))
+    width = max(8, int(bar_width))
+    filled = max(0, min(width, int(round(width * pct / 100.0))))
+    bar = "█" * filled + "░" * (width - filled)
+    complete = pct >= 99.95
+    status = "✔ Flashed" if complete else "⚡ Flashing"
+    row = f"  {status} [{stage}/{stage_total}] {label} [ {bar} ] | {pct:.1f}%"
+    if written is not None and total is not None:
+        row += f" | {int(written):,}/{int(total):,} bytes"
+    return row
+
+# ─── USB-serial chip → board-family fingerprinting ──────────────
+# Most "ESP32 vs. Arduino" port mismatches come down to which USB-serial
+# bridge chip is on the board, and that's visible in the port description
+# pyserial reports (e.g. "CH340", "CP210x", "Silicon Labs", "FTDI").
+# Mapping each chip to the one-or-few board families it's actually sold
+# with lets us catch a wrong-board selection instead of waving through
+# any keyword shared across families.
+#
+#   CH340/CH341      → classic Arduino Uno/Nano/clones (also some ESP8266
+#                       boards, but never genuine ESP32 dev modules)
+#   CP210x/Silicon Labs → ESP32 dev modules (the standard Espressif bridge)
+#   CH9102           → newer ESP32-S2/S3/C3 boards (native USB or WCH bridge)
+#   FTDI             → both AVR boards and some ESP8266 boards; ambiguous,
+#                       so it's allowed for either family
+#   wch.cn / usb serial → generic/ambiguous, allowed for either family
+USB_CHIP_BOARD_FAMILIES = {
+    # keyword found in port description → (set of platforms it's valid for, human label)
+    "ch340":        ({"atmelavr", "espressif8266"}, "CH340 (Arduino/ESP8266-style USB-serial)"),
+    "ch341":        ({"atmelavr", "espressif8266"}, "CH341 (Arduino/ESP8266-style USB-serial)"),
+    "cp210":        ({"espressif32", "espressif8266"}, "CP210x (Espressif USB-serial)"),
+    "silicon labs":({"espressif32", "espressif8266"}, "Silicon Labs CP210x (Espressif USB-serial)"),
+    "ch9102":       ({"espressif32"}, "CH9102 (ESP32-S2/S3/C3 USB-serial)"),
+    "ftdi":         ({"atmelavr", "espressif8266", "espressif32"}, "FTDI (generic USB-serial)"),
+    "wch.cn":       ({"atmelavr", "espressif8266", "espressif32"}, "WCH USB-serial (generic)"),
+    "esp32-s3":     ({"espressif32"}, "ESP32-S3 Native USB"),
+    "esp32s3":      ({"espressif32"}, "ESP32-S3 Native USB"),
+    "jtag":         ({"espressif32"}, "USB JTAG/serial debug unit"),
+    "usb bridge":   ({"espressif32"}, "ESP32 USB Bridge"),
+    "usb serial":   ({"espressif32", "espressif8266", "atmelavr"}, "USB Serial (generic/CDC)"),
+    "usb-to-serial":({"espressif32", "espressif8266", "atmelavr"}, "USB-to-Serial (generic)"),
+    "usb to serial":({"espressif32", "espressif8266", "atmelavr"}, "USB to Serial (generic)"),
+    "esp32":        ({"espressif32"}, "ESP32 Device"),
+    "esp8266":      ({"espressif8266"}, "ESP8266 Device"),
+}
+
+
+_PIO_EXECUTABLE_CACHE: list[str] | None = None
+
+
+def find_pio_executable() -> list[str] | None:
+    """
+    Locate the platformio command in the local project environment.
+
+    Strategy: always prefer  `python -m platformio`  over the .exe wrapper
+    scripts that pip installs (pio.exe / platformio.exe).  Those .exe files
+    are thin MSVC-compiled launchers; on machines that lack the exact Visual
+    C++ runtime they were built against they throw 0xc0000142
+    (STATUS_DLL_INIT_FAILED) and kill the upload silently.  Invoking
+    platformio as a Python module bypasses those launchers entirely and works
+    on every machine that has Python and platformio installed.
+
+    The result is cached at module level: resolving this costs a
+    "python -m platformio --version" subprocess call (1-5+ seconds just to
+    import PlatformIO's CLI), and the answer never changes during one run of
+    this app. Only a *successful* lookup is cached — a miss stays uncached so
+    installing PlatformIO mid-session is still picked up on the next call.
+    """
+    global _PIO_EXECUTABLE_CACHE
+    if _PIO_EXECUTABLE_CACHE is not None:
+        return _PIO_EXECUTABLE_CACHE
+
+    def _probe() -> list[str] | None:
+        _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+        def _py_has_platformio(py: Path) -> bool:
+            try:
+                res = subprocess.run(
+                    [str(py), "-m", "platformio", "--version"],
+                    capture_output=True, timeout=5, creationflags=_cf,
+                )
+                return res.returncode == 0
+            except Exception:
+                return False
+
+        # ── 1. Current interpreter first (fastest — already in the venv) ──
+        if _py_has_platformio(Path(sys.executable)):
+            return [sys.executable, "-m", "platformio"]
+
+        # ── 2. python.exe siblings near our venv Scripts dir ───────────────
+        python_dir = Path(sys.executable).parent
+        for name in ["python.exe", "python3.exe", "python", "python3"]:
+            for d in [python_dir, python_dir.parent / "Scripts", python_dir.parent / "bin"]:
+                py_cand = d / name
+                if py_cand.exists() and py_cand.resolve() != Path(sys.executable).resolve():
+                    if _py_has_platformio(py_cand):
+                        return [str(py_cand), "-m", "platformio"]
+
+        # ── 3. PlatformIO's own embedded venv (PLATFORMIO_CORE_DIR/penv) ───
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR")
+        if not pio_core_dir:
+            local_pio = SCRIPT_DIR / "env" / ".platformio"
+            if local_pio.exists():
+                pio_core_dir = str(local_pio)
+
+        if pio_core_dir:
+            pio_core_path = Path(pio_core_dir)
+            for scripts_dir in [pio_core_path / "penv" / "Scripts", pio_core_path / "penv" / "bin"]:
+                for name in ["python.exe", "python3.exe", "python", "python3"]:
+                    py_cand = scripts_dir / name
+                    if py_cand.exists():
+                        if _py_has_platformio(py_cand):
+                            # penv may have just been created (e.g. first-ever
+                            # run, bootstrapped moments ago by ensure_platformio).
+                            # Make sure the console-hiding hook made it in before
+                            # we hand this interpreter back to be used for the
+                            # actual compile/upload subprocess.
+                            if sys.platform == "win32":
+                                try:
+                                    # pyrefly: ignore [missing-import]
+                                    import win_subprocess_hide as _wsh_inner
+                                    _wsh_inner.install_platformio_penv_hook(pio_core_dir)
+                                except Exception:
+                                    pass
+                            return [str(py_cand), "-m", "platformio"]
+
+        return None
+
+    result = _probe()
+    if result is not None:
+        _PIO_EXECUTABLE_CACHE = result
+    return result
+
+
+def ensure_platformio() -> list[str] | None:
+    """Find PlatformIO or auto-install it. Returns the pio command list."""
+    pio = find_pio_executable()
+    if pio:
+        return pio
+
+    # Not found anywhere — try installing via pip
+    print("[MCU Flasher] PlatformIO not found — installing via pip...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "platformio"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as e:
+        print(f"[MCU Flasher] pip install platformio failed: {e}")
+        return None
+
+    # Try finding it again after install
+    pio = find_pio_executable()
+    return pio
+
+
+def find_arduino_cli_executable() -> str | None:
+    """Locate the arduino-cli executable."""
+    import shutil
+    from pathlib import Path
+
+    # Check cached path file first
+    script_dir = SCRIPT_DIR
+    cached_file = script_dir / "arduino_cli_path.txt"
+    if cached_file.exists():
+        try:
+            path_str = cached_file.read_text(encoding="utf-8").strip()
+            if path_str and os.path.exists(path_str):
+                return path_str
+        except Exception:
+            pass
+
+    cli = shutil.which("arduino-cli")
+    if cli:
+        return cli
+
+    # Prefer bootstrap's broader search (checks more install dirs and,
+    # on Windows, the MSI's uninstall registry entry) so this dialog
+    # doesn't pop up just because the MSI landed somewhere non-standard.
+    if _bootstrap_find_arduino_cli is not None:
+        try:
+            cli = _bootstrap_find_arduino_cli()
+            if cli:
+                try:
+                    cached_file.write_text(cli, encoding="utf-8")
+                except Exception:
+                    pass
+                return cli
+        except Exception:
+            pass
+
+    # Check standard Windows installation directories
+    for p in [r"C:\Program Files\Arduino CLI\arduino-cli.exe", r"C:\Program Files (x86)\Arduino CLI\arduino-cli.exe"]:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+
+def _get_widget_dpi_scale(widget: tk.Widget) -> float:
+    """Return the display scale for a Tk window (1.0 at 96 DPI)."""
+    try:
+        tk_scale = float(widget.tk.call("tk", "scaling")) / (96.0 / 72.0)
+    except Exception:
+        tk_scale = 1.0
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            get_dpi = getattr(ctypes.windll.user32, "GetDpiForWindow", None)
+            if get_dpi is not None:
+                get_dpi.argtypes = [ctypes.c_void_p]
+                get_dpi.restype = ctypes.c_uint
+                dpi = int(get_dpi(ctypes.c_void_p(widget.winfo_id())))
+                if dpi > 0:
+                    tk_scale = dpi / 96.0
+        except Exception:
+            pass
+    return max(0.75, min(3.0, tk_scale))
+
+
+def _get_monitor_work_area(widget: tk.Widget) -> tuple[int, int, int, int]:
+    """Return (left, top, right, bottom) for the window's nearest monitor."""
+    try:
+        fallback = (0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight())
+    except Exception:
+        fallback = (0, 0, 1920, 1080)
+    if sys.platform != "win32":
+        return fallback
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)
+        ]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        monitor = user32.MonitorFromWindow(wintypes.HWND(widget.winfo_id()), 2)
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            rect = info.rcWork
+            if rect.right > rect.left and rect.bottom > rect.top:
+                return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+    except Exception:
+        pass
+    return fallback
+
+
+def center_toplevel(toplevel: tk.Toplevel, parent: tk.Tk | tk.Toplevel, width: int | None = None, height: int | None = None):
+    """Center a Toplevel dialog relative to its parent window.
+    If width or height is None or 0, dynamically measures the Toplevel's required content size.
+    Clamps dimensions to fit within current screen boundaries.
+    """
+    toplevel.update_idletasks()
+    if parent:
+        try:
+            parent.update_idletasks()
+        except Exception:
+            pass
+
+    req_w = toplevel.winfo_reqwidth()
+    req_h = toplevel.winfo_reqheight()
+
+    dpi_scale = _get_widget_dpi_scale(toplevel)
+    w = round(width * dpi_scale) if (width and width > 0) else req_w
+    h = round(height * dpi_scale) if (height and height > 0) else req_h
+
+    work_left, work_top, work_right, work_bottom = _get_monitor_work_area(toplevel)
+    screen_w = work_right - work_left
+    screen_h = work_bottom - work_top
+    margin_x = round(40 * dpi_scale)
+    margin_y = round(60 * dpi_scale)
+
+    w = min(w, max(240, screen_w - margin_x))
+    h = min(h, max(200, screen_h - margin_y))
+
+    if parent and parent.winfo_viewable() and parent.winfo_ismapped() and parent.winfo_width() > 1:
+        parent_w = parent.winfo_width()
+        parent_h = parent.winfo_height()
+        parent_x = parent.winfo_x()
+        parent_y = parent.winfo_y()
+        x = parent_x + (parent_w - w) // 2
+        y = parent_y + (parent_h - h) // 2
+    else:
+        x = work_left + (screen_w - w) // 2
+        y = work_top + (screen_h - h) // 2
+
+    x = min(max(work_left, x), max(work_left, work_right - w))
+    y = min(max(work_top, y), max(work_top, work_bottom - h))
+    x_part = f"+{x}" if x >= 0 else str(x)
+    y_part = f"+{y}" if y >= 0 else str(y)
+    toplevel.geometry(f"{w}x{h}{x_part}{y_part}")
+
+
+def safe_reclaim_os_focus(widget: tk.Widget):
+    """Safely steal Windows OS keyboard focus back from embedded pywebview/Monaco Editor
+    to a Tkinter widget after a 10ms delay, avoiding Win32 message pump deadlocks.
+    """
+    def _do_steal():
+        try:
+            top = widget.winfo_toplevel()
+            top.focus_force()
+            if hasattr(widget, "focus_force"):
+                widget.focus_force()
+            widget.focus_set()
+        except Exception:
+            pass
+    try:
+        widget.after(10, _do_steal)
+    except Exception:
+        pass
+
+
+def setup_combobox_place_popdown(root: tk.Widget):
+    """Override Tcl ::ttk::combobox::PlacePopdown to support opening popdown lists upwards ('above')
+    when requested via set_combobox_direction(combo, 'above').
+    """
+    tcl_override = f"""
+    proc ::ttk::combobox::PlacePopdown {{cb popdown}} {{
+        set x [winfo rootx $cb]
+        set y [winfo rooty $cb]
+        set w [winfo width $cb]
+        set h [winfo height $cb]
+        set style [$cb cget -style]
+        if {{ $style eq {{}} }} {{
+          set style TCombobox
+        }}
+        set postoffset [ttk::style lookup $style -postoffset {{}} {{0 0 0 0}}]
+        foreach var {{x y w h}} delta $postoffset {{
+            incr $var $delta
+        }}
+
+        set H [winfo reqheight $popdown]
+        if {{[info exists ::combobox_direction($cb)] && $::combobox_direction($cb) eq "above"}} {{
+            set Y [expr {{$y - $H}}]
+        }} elseif {{$y + $h + $H > [winfo screenheight $popdown]}} {{
+            set Y [expr {{$y - $H}}]
+        }} else {{
+            set Y [expr {{$y + $h}}]
+        }}
+        wm geometry $popdown ${{w}}x${{H}}+${{x}}+${{Y}}
+    }}
+    """
+    try:
+        root.tk.eval(tcl_override)
+    except Exception:
+        pass
+
+
+def set_combobox_direction(combo: ttk.Combobox, direction: str = "above"):
+    """Specify popdown list orientation for a ttk.Combobox ('above' or 'below')."""
+    try:
+        combo.tk.call("set", f"::combobox_direction({combo})", direction)
+    except Exception:
+        pass
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# BOARD COMPATIBILITY DETECTOR
+# ═══════════════════════════════════════════════════════════════
+def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None:
+    """Search SUPPORTED_BOARDS for a board matching *platform*
+    (e.g. "espressif32"), optionally preferring one whose PlatformIO
+    board id contains *variant_hint* (e.g. "s3" to prefer an S3-specific
+    entry over a generic ESP32 one when both exist).
+
+    Replaces the old approach of hardcoding a single guaranteed-to-exist
+    display name per platform/variant (e.g. always returning the literal
+    string "ESP32-S3 Dev Module"). Now that board entries are populated
+    by load_dynamic_boards from whatever boards.txt files are actually
+    downloaded, the real display name for "an ESP32-S3 board" varies by
+    what's installed and is never something this code can assume in
+    advance -- so this searches the live dict by platform/board-id
+    instead of returning a literal name.
+
+    Returns None if no board of the requested platform exists at all
+    (e.g. nothing has been downloaded yet) -- callers must handle that,
+    same as they previously had to handle SUPPORTED_BOARDS lookups
+    failing for any other reason.
+    """
+    variant_hint = variant_hint.lower()
+    
+    # Prioritize standard "ESP32 Dev Module" or "esp32dev" for plain ESP32 (no variant hint or esp32 / esp32dev)
+    if platform == "espressif32" and variant_hint in ("", "esp32", "esp32dev"):
+        for name, info in SUPPORTED_BOARDS.items():
+            if info.get("platform") == "espressif32" and name.lower() == "esp32 dev module":
+                return name
+        for name, info in SUPPORTED_BOARDS.items():
+            if info.get("platform") == "espressif32" and info.get("board") == "esp32dev":
+                return name
+
+    # Prioritize standard "ESP32-S3 Dev Module" over Octal / WROOM2 variants for ESP32-S3
+    if platform == "espressif32" and variant_hint in ("esp32s3", "s3", "esp32-s3"):
+        for name, info in SUPPORTED_BOARDS.items():
+            if info.get("platform") == "espressif32" and name.lower() in ("esp32-s3 dev module", "esp32s3 dev module"):
+                return name
+        for name, info in SUPPORTED_BOARDS.items():
+            if info.get("platform") == "espressif32" and info.get("board", "").lower() in ("esp32-s3-devkitc-1", "esp32s3dev"):
+                return name
+        for name, info in SUPPORTED_BOARDS.items():
+            if info.get("platform") == "espressif32" and ("esp32-s3 dev module" in name.lower() or "esp32s3 dev module" in name.lower()):
+                if "octal" not in name.lower():
+                    return name
+
+    fallback = None
+    for name, info in SUPPORTED_BOARDS.items():
+        if info.get("platform") != platform:
+            continue
+        if variant_hint and variant_hint in info.get("board", "").lower():
+            return name
+        if fallback is None:
+            fallback = name
+        # Prefer "Dev Module" entries over generic ones (e.g. "ESP32 Family Device")
+        elif "dev module" in name.lower() and "dev module" not in fallback.lower():
+            fallback = name
+    return fallback
+
+
+def is_s3_board(p_board: str) -> bool:
+    """True when *p_board* (a PlatformIO board id, e.g. from
+    board_info["board"]) identifies an ESP32-S3 variant.
+
+    Several compile-flag decisions (native-USB CDC build flags, dio
+    flash mode, upload_protocol=esptool) need to apply to "whichever
+    downloaded board is an S3", not to one specific hardcoded board id.
+    load_dynamic_boards normalizes any boards.txt entry whose .name= key
+    starts with esp32s3 to the PlatformIO id "esp32-s3-devkitc-1" -- so
+    checking for the substring "s3" in the id (rather than comparing
+    against that one exact string) tracks the same real distinction
+    while still matching if a differently-packaged S3 board ever
+    produces a differently-formatted id containing "s3", instead of
+    silently failing to recognize it.
+    """
+    return "s3" in (p_board or "").lower()
+
+
+def boards_by_platform(board_names, platforms: set[str]) -> set[str]:
+    """Return the subset of *board_names* whose SUPPORTED_BOARDS platform
+    is in *platforms*.
+
+    Several rules need "every currently-known board belonging to platform
+    X" (e.g. "exclude every ESP32-family board" when an AVR-exclusive
+    header is found). The old code spelled that out as a fixed set of
+    specific display names -- {"Arduino Uno", "ESP32 Dev Module",
+    "ESP32-S3 Dev Module"} -- which only worked because those three
+    names were hardcoded and therefore always exactly the boards that
+    existed. Now that board entries are disk-discovered, there could be
+    zero ESP32 boards downloaded, or several differently-named ones (a
+    plain ESP32 dev board AND a separately-named S3 board, say) -- a
+    fixed three-name list can't track either case. This looks up each
+    name's actual platform in SUPPORTED_BOARDS and filters by that,
+    so a rule means what it says ("every espressif32-platform board")
+    regardless of how many such boards exist or what they're named.
+
+    Board names not present in SUPPORTED_BOARDS are silently skipped
+    rather than raising, since callers pass in sets that may already be
+    a subset of SUPPORTED_BOARDS.keys() (e.g. mid-filter `boards`).
+    """
+    return {
+        name for name in board_names
+        if SUPPORTED_BOARDS.get(name, {}).get("platform") in platforms
+    }
+
+
+# ─── Board auto-detect via esptool ──────────────────────────────────────────
+# Chip name returned by esptool → board family + PlatformIO variant hint,
+# resolved against the live SUPPORTED_BOARDS dict via find_board_for_platform
+# rather than a fixed display-name string. Only ESP chips are detectable
+# this way; AVR boards use avrdude instead.
+_ESPTOOL_CHIP_TO_PLATFORM_HINT: dict[str, tuple[str, str]] = {
+    "ESP32-S3":   ("espressif32", "s3"),
+    "ESP32-S2":   ("espressif32", "s2"),
+    "ESP32-C3":   ("espressif32", "c3"),
+    "ESP32-C6":   ("espressif32", "c6"),
+    "ESP32-H2":   ("espressif32", "h2"),
+    "ESP32":      ("espressif32", ""),
+    "ESP8266EX":  ("espressif8266", ""),
+    "ESP8266":    ("espressif8266", ""),
+}
+
+
+def detect_chip_on_port(port: str) -> tuple[str | None, str | None]:
+    """Probe *port* with esptool and return (chip_name, board_display_name).
+
+    Both values are None when detection fails (no ESP chip, port busy, etc.).
+    The function must never raise — it is called from UI threads.
+
+    Uses the esptool Python API directly (same approach as
+    `_probe_chip_info`) rather than scraping CLI stdout with regexes — the
+    CLI's "Detecting chip type..." / "Chip is ..." text has changed across
+    esptool versions and is fragile to parse. `esp.CHIP_NAME` is a stable,
+    canonical string (e.g. "ESP32-S3", "ESP32-C3", "ESP32", "ESP8266").
+
+    Returns
+    -------
+    chip_name   : raw chip string from esptool, e.g. "ESP32-C3"
+    board_name  : matching SUPPORTED_BOARDS key resolved via
+                  find_board_for_platform, e.g. "ESP32 Dev Module" --
+                  or None if no board of the matching platform has been
+                  downloaded yet (find_board_for_platform found nothing)
+    """
+    try:
+        # pyrefly: ignore [missing-import]
+        import esptool
+
+        if not hasattr(esptool, "get_default_connected_device"):
+            return None, None
+
+        esp = esptool.get_default_connected_device(
+            serial_list=[port],
+            port=port,
+            connect_attempts=2,
+            initial_baud=115200,
+        )
+        try:
+            chip_name = getattr(esp, "CHIP_NAME", None)
+        finally:
+            try:
+                esp._port.close()
+            except Exception:
+                pass
+
+        if not chip_name:
+            return None, None
+
+        chip_name_upper = chip_name.upper()
+        board = None
+        # Match the longest/most specific key first (e.g. "ESP32-S3"
+        # before the bare "ESP32" entry would also match as a substring)
+        # so a variant-specific board is preferred whenever one has been
+        # downloaded, falling back to the nearest available espressif32
+        # board only when no exact variant match exists.
+        for chip_key in sorted(_ESPTOOL_CHIP_TO_PLATFORM_HINT, key=len, reverse=True):
+            if chip_key in chip_name_upper:
+                platform, variant_hint = _ESPTOOL_CHIP_TO_PLATFORM_HINT[chip_key]
+                board = find_board_for_platform(platform, variant_hint=variant_hint)
+                break
+
+        return chip_name, board
+    except Exception:
+        pass
+    return None, None
+
+
+def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
+    """Statically analyse source files and return which of the supported
+    boards this sketch is likely compatible with.
+
+    Returns
+    -------
+    compatible : set of board display-names (subset of SUPPORTED_BOARDS keys)
+    reasons    : list of human-readable strings explaining each exclusion
+                 (empty when nothing was excluded or detected)
+    """
+    all_texts: list[str] = []
+    for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
+        for f in sorted(sketch_dir.glob(ext)):
+            try:
+                all_texts.append(f.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                pass
+    if not all_texts:
+        return set(SUPPORTED_BOARDS.keys()), []
+
+    all_code = "\n".join(all_texts)
+
+    # Collect normalised include names
+    raw_includes = re.findall(r'#include\s*[<"]([^>"]+)[>"]', all_code, re.IGNORECASE)
+    includes = {h.lower() for h in raw_includes}
+
+    # Strip comments before scanning for API calls
+    code_nc = re.sub(r'//.*?$', '', all_code, flags=re.MULTILINE)
+    code_nc = re.sub(r'/\*.*?\*/', '', code_nc, flags=re.DOTALL)
+
+    boards = set(SUPPORTED_BOARDS.keys())
+    exclusions: list[str] = []
+
+    # ── ESP8266-exclusive headers ──────────────────────────────────────────
+    ESP8266_ONLY = {
+        "esp8266wifi.h", "esp8266webserver.h", "esp8266httpclient.h",
+        "esp8266mdns.h", "esp8266netbios.h", "esp8266ping.h",
+        "esp8266wifimulti.h", "espsoftwareserial.h",
+        "espconn.h", "user_interface.h",
+    }
+    hit = includes & ESP8266_ONLY
+    if hit:
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("platform") == "espressif8266"}
+        exclusions.append(
+            f"ESP8266-exclusive header(s) detected: {_fmt_hits(hit)} "
+            f"→ compatible only with ESP8266 boards"
+        )
+
+    # ── ESP32-exclusive headers ────────────────────────────────────────────
+    ESP32_ONLY_H = {
+        "bledevice.h", "bleclient.h", "bleserver.h", "blescan.h",
+        "blesecurity.h", "bleadvertising.h", "bleuuid.h",
+        "nimbledevice.h",
+        "nimblecharacteristic.h", "nimbleserver.h", "nimblescan.h",
+        "nimbleclient.h", "nimblesecurity.h", "nimbleadvertising.h",
+        "esp_bt.h", "esp_bt_main.h", "esp_gap_ble_api.h",
+        "esp_gatts_api.h", "esp_gatt_common_api.h",
+        "driver/ledc.h", "driver/mcpwm.h", "driver/pcnt.h",
+        "driver/rmt.h", "driver/pulse_cnt.h",
+        "soc/soc.h", "soc/rtc_cntl_reg.h",
+        "esp_adc_cal.h", "esp_camera.h",
+        "esp32servo.h", "fastaccelstepper.h",
+        "wifiprov.h",
+        "wifi_provisioning/manager.h",
+        "wifi_provisioning/scheme_softap.h",
+        "wifi_provisioning/scheme_ble.h",
+        "wifi_provisioning/scheme_console.h",
+    }
+    hit = includes & ESP32_ONLY_H
+    if hit:
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("platform") == "espressif32"}
+        exclusions.append(
+            f"ESP32-exclusive header(s) detected: {_fmt_hits(hit)} "
+            f"→ compatible only with ESP32 boards"
+        )
+
+    # ── ESP-family headers (ESP32 + ESP8266 only, rules out AVR) ──────────
+    ESP_FAMILY = {
+        "wifi.h", "wificlient.h", "wificlientsecure.h", "wifiserver.h",
+        "wifiudp.h", "wifiap.h", "wifimulti.h", "wifiscan.h",
+        "esp_wifi.h", "esp_event.h", "esp_log.h", "esp_system.h",
+        "esp_sleep.h", "esp_partition.h", "esp_ota_ops.h",
+        "nvs_flash.h", "nvs.h",
+        "spiffs.h", "littlefs.h", "esp_spiffs.h", "esp_littlefs.h",
+        "preferences.h", "update.h",
+        "freertos/freertos.h", "freertos/task.h",
+        "lwip/err.h", "lwip/sockets.h", "lwip/sys.h",
+        "mbedtls/aes.h", "mbedtls/md.h",
+    }
+    hit = includes & ESP_FAMILY
+    if hit:
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("platform") in {"espressif32", "espressif8266"}}
+        exclusions.append(
+            f"ESP-family header(s) detected: {_fmt_hits(hit)} "
+            f"→ not compatible with Arduino AVR (no WiFi/BT/NVS hardware)"
+        )
+
+    # ── ESP32-exclusive API calls ──────────────────────────────────────────
+    ESP32_APIS = [
+        (r'\bdacWrite\s*\(', "dacWrite()"),
+        (r'\bledcSetup\s*\(', "ledcSetup()"),
+        (r'\bledcAttachPin\s*\(', "ledcAttachPin()"),
+        (r'\bledcWrite\s*\(', "ledcWrite()"),
+        (r'\banalogReadMilliVolts\s*\(', "analogReadMilliVolts()"),
+        (r'\bhallRead\s*\(', "hallRead()"),
+        (r'\btouchRead\s*\(', "touchRead()"),
+        (r'\besp_restart\s*\(', "esp_restart()"),
+        (r'\bxTaskCreate\s*\(', "xTaskCreate()"),
+        (r'\bxTaskCreatePinnedToCore\s*\(', "xTaskCreatePinnedToCore()"),
+        (r'\bvTaskDelay\s*\(', "vTaskDelay()"),
+        (r'\bpdMS_TO_TICKS\s*\(', "pdMS_TO_TICKS()"),
+    ]
+    api_hits = [label for pattern, label in ESP32_APIS if re.search(pattern, code_nc)]
+    if api_hits:
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("platform") == "espressif32"}
+        preview = ", ".join(api_hits[:3]) + ("..." if len(api_hits) > 3 else "")
+        exclusions.append(
+            f"ESP32-exclusive API call(s): {preview} "
+            f"→ compatible only with ESP32 boards"
+        )
+
+    # ── Serial1 / Serial2 rules out Uno ───────────────────────────────────
+    if re.search(r'\bSerial[12]\b', code_nc):
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("board") != "uno" and SUPPORTED_BOARDS.get(b, {}).get("platform") != "atmelavr"}
+        exclusions.append(
+            "Uses Serial1 / Serial2 — not compatible with Uno (which only has Serial)"
+        )
+
+    # ── AVR-exclusive headers (rules out both ESP boards) ─────────────────
+    AVR_ONLY = {
+        "avr/pgmspace.h", "avr/io.h", "avr/interrupt.h",
+        "avr/wdt.h", "avr/eeprom.h",
+    }
+    hit = includes & AVR_ONLY
+    if hit:
+        boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("platform") == "atmelavr"}
+        exclusions.append(
+            f"AVR-exclusive header(s) detected: {_fmt_hits(hit)} "
+            f"→ compatible only with Arduino AVR"
+        )
+
+    # ── GPIO pin-number analysis ──────────────────────────────────────────
+    gpio_result = _analyze_gpio_compatibility(sketch_dir)
+    excluded_pins_summary = {}  # pins_str -> list of board names
+    for board in gpio_result["excluded"]:
+        if board in boards:
+            boards.discard(board)
+            bad = gpio_result["pin_hits"].get(board, [])
+            bad_pins = sorted({pin for pin, _ in bad})
+            if bad_pins:
+                pin_list = ", ".join(str(p) for p in bad_pins[:6])
+                if len(bad_pins) > 6:
+                    pin_list += f" (+{len(bad_pins)-6} more)"
+                excluded_pins_summary.setdefault(pin_list, []).append(board)
+
+    for pins_str, board_names in excluded_pins_summary.items():
+        if len(board_names) > 3:
+            exclusions.append(
+                f"GPIO pin(s) out of range ({pins_str}) for {len(board_names)} boards "
+                f"(e.g., {', '.join(sorted(board_names)[:3])}...) → not compatible"
+            )
+        else:
+            for board in board_names:
+                exclusions.append(
+                    f"GPIO pin(s) out of range for {board}: {pins_str} → not compatible"
+                )
+
+    # GPIO reserved-pin warnings (don't exclude, just caution)
+    warnings_summary = {}  # (pin, ctx, msg_type) -> list of board names
+    for board, pin, ctx, msg_type in gpio_result["warnings"]:
+        if board in boards:
+            warnings_summary.setdefault((pin, ctx, msg_type), []).append(board)
+
+    for (pin, ctx, msg_type), board_names in warnings_summary.items():
+        if len(board_names) > 3:
+            exclusions.append(
+                f"⚠ GPIO {pin} ({ctx}) is reserved for {msg_type} on {len(board_names)} boards "
+                f"(e.g., {', '.join(sorted(board_names)[:3])}...) — may cause instability"
+            )
+        else:
+            for board in board_names:
+                exclusions.append(
+                    f"⚠ GPIO {pin} ({ctx}) is reserved for {msg_type} on most {board.split()[0]} modules — may cause instability"
+                )
+
+    return boards, exclusions
+
+
+def _fmt_hits(hit_set: set[str], max_show: int = 3) -> str:
+    """Format a set of matched header names for display."""
+    items = sorted(hit_set)
+    shown = items[:max_show]
+    rest  = len(items) - max_show
+    result = ", ".join(shown)
+    if rest > 0:
+        result += f" (+{rest} more)"
+    return result
+
+
+def _format_compat_label(boards: set[str]) -> str:
+    """Turn the compatible board set into a display string dynamically."""
+    if not boards:
+        return "Unknown / Incompatible"
+        
+    def get_short_name(b):
+        if b == "Arduino Uno":
+            return "Arduino Uno"
+        b_upper = b.upper()
+        if "ESP32-S3" in b_upper:
+            return "ESP32-S3"
+        elif "ESP32-C3" in b_upper:
+            return "ESP32-C3"
+        elif "ESP32-C6" in b_upper:
+            return "ESP32-C6"
+        elif "ESP32-S2" in b_upper:
+            return "ESP32-S2"
+        elif "ESP32" in b_upper:
+            return "ESP32"
+        elif "ESP8266" in b_upper or "NODEMCU" in b_upper:
+            return "ESP8266"
+        elif "UNO" in b_upper:
+            return "Uno"
+        return b
+        
+    ordered = sorted(list({get_short_name(b) for b in boards}))
+    if len(ordered) == 1:
+        return ordered[0]
+    if len(ordered) == 2:
+        return f"{ordered[0]} and {ordered[1]}"
+    return ", ".join(ordered[:-1]) + f", and {ordered[-1]}"
+
+
+def _analyze_gpio_compatibility(sketch_dir: Path) -> dict:
+    """Scan all source files for GPIO function calls and resolve pin numbers.
+
+    Detects literal integers AND #define / const-int aliases.
+    Returns:
+        excluded : set of board names ruled out by out-of-range GPIO usage
+        warnings : list of (board_name, message) for reserved-pin cautions
+        pin_hits : dict board_name -> [(pin_num, context_str), ...]
+    """
+    GPIO_FUNCS = [
+        "pinMode", "digitalWrite", "digitalRead",
+        "analogWrite", "analogRead", "analogReadResolution",
+        "touchRead", "dacWrite", "ledcAttachPin",
+        "pulseIn", "pulseInLong",
+        "tone", "noTone",
+        "attachInterrupt", "detachInterrupt",
+        "shiftIn", "shiftOut",
+    ]
+
+    all_texts: list[str] = []
+    for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
+        for f in sorted(sketch_dir.glob(ext)):
+            try:
+                all_texts.append(f.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                pass
+    if not all_texts:
+        return {"excluded": set(), "warnings": [], "pin_hits": {}}
+
+    all_code = "\n".join(all_texts)
+
+    # Strip comments before scanning
+    code_nc = re.sub(r'//.*?$', '', all_code, flags=re.MULTILINE)
+    code_nc = re.sub(r'/\*.*?\*/', '', code_nc, flags=re.DOTALL)
+
+    # Resolve #define NAME <int> and const int NAME = <int>
+    defines: dict[str, int] = {}
+    for m in re.finditer(r'#\s*define\s+(\w+)\s+(0x[0-9a-fA-F]+|\d+)\b', all_code):
+        try:
+            defines[m.group(1)] = int(m.group(2), 0)
+        except ValueError:
+            pass
+    for m in re.finditer(
+        r'\bconst\s+(?:int|uint8_t|uint16_t|byte)\s+(\w+)\s*=\s*(0x[0-9a-fA-F]+|\d+)\s*;',
+        all_code
+    ):
+        try:
+            defines[m.group(1)] = int(m.group(2), 0)
+        except ValueError:
+            pass
+
+    # Extract pin literals from GPIO function calls
+    func_pat = "|".join(re.escape(fn) for fn in GPIO_FUNCS)
+    call_re  = re.compile(
+        rf'\b({func_pat})\s*\(\s*([A-Za-z_]\w*|\d+)\s*[,)]',
+        re.MULTILINE
+    )
+    pin_calls: list[tuple[int, str]] = []
+    for m in call_re.finditer(code_nc):
+        arg = m.group(2)
+        pin = int(arg) if arg.isdigit() else defines.get(arg)
+        if pin is not None:
+            pin_calls.append((pin, f"{m.group(1)}({arg}…)"))
+
+    # Classify each pin against board limits dynamically
+    excluded: set[str] = set()
+    warnings: list[tuple[str, str]] = []
+    pin_hits: dict[str, list] = {name: [] for name in SUPPORTED_BOARDS.keys()}
+
+    seen_reserved: set[tuple[str, int]] = set()   # avoid duplicate warnings
+
+    for pin, ctx in pin_calls:
+        for board_name, b_info in SUPPORTED_BOARDS.items():
+            platform = b_info.get("platform", "")
+            board_id = b_info.get("board", "").lower()
+            
+            # Determine maximum GPIO pin limits dynamically
+            max_pin = 999
+            if platform == "atmelavr":
+                max_pin = 19
+            elif platform == "espressif8266":
+                max_pin = 16
+            elif platform == "espressif32":
+                if "s3" in board_id:
+                    max_pin = 48
+                elif "c3" in board_id:
+                    max_pin = 21
+                elif "c6" in board_id:
+                    max_pin = 30
+                elif "s2" in board_id:
+                    max_pin = 46
+                else:
+                    max_pin = 39
+
+            if pin > max_pin:
+                pin_hits[board_name].append((pin, ctx))
+
+            # Determine reserved flash pins
+            reserved_pins = set()
+            is_s3 = False
+            if platform == "espressif32":
+                if "s3" in board_id:
+                    reserved_pins = {26, 27, 28, 29, 30, 31, 32}
+                    is_s3 = True
+                else:
+                    reserved_pins = {6, 7, 8, 9, 10, 11}
+            elif platform in ("espressif32", "espressif8266"):
+                reserved_pins = {6, 7, 8, 9, 10, 11}
+
+            if pin in reserved_pins:
+                key = (board_name, pin)
+                if key not in seen_reserved:
+                    seen_reserved.add(key)
+                    msg_type = "SPI flash/PSRAM" if is_s3 else "SPI flash"
+                    warnings.append((board_name, pin, ctx, msg_type))
+
+    for board, hits in pin_hits.items():
+        if hits:
+            excluded.add(board)
+
+    return {"excluded": excluded, "warnings": warnings, "pin_hits": pin_hits}
+
+
+
+# Known warnings from toolchain/SCons that can be ignored if needed
+KNOWN_WARNINGS = []
+
+
+# ═══════════════════════════════════════════════════════════════
+# ANSI ESCAPE HANDLING
+# ═══════════════════════════════════════════════════════════════
+# Matches CSI sequences (ESC [ ... letter), e.g. \033[2J, \033[H, \033[1;31m,
+# plus the bare cursor-home form \033[H with no params. Covers clear-screen,
+# cursor movement, and SGR (color) codes — anything a basic terminal emitter
+# like Simulation.ino's draw() would send.
+ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+
+# Sequences that conventionally mean "clear the screen / reset view".
+# \033[2J  = erase entire screen
+# \033[3J  = erase scrollback (some terminals)
+# \033[H   = cursor to home (0,0)
+# Sketches commonly send \033[2J\033[H back-to-back (as Simulation.ino does)
+# to clear and then home the cursor in one shot. This matches a *run* of one
+# or more such codes glued together as a single unit, so a glued pair only
+# triggers one clear instead of two.
+ANSI_CLEAR_RE = re.compile(r"(?:\x1b\[(?:2J|3J|H)|\[2J\[H\]|\[2J\[H)+", re.IGNORECASE)
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI/CSI escape sequences from a string, leaving plain text."""
+    clean = ANSI_CLEAR_RE.sub("", text)
+    return ANSI_CSI_RE.sub("", clean)
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# COLOR PALETTE — Dark Cyberpunk / Robotics theme
+# ═══════════════════════════════════════════════════════════════
+class Theme:
+    BG_DARKEST  = "#0a0e14"
+    BG_DARK     = "#10151c"
+    BG_MID      = "#161d27"
+    BG_LIGHT    = "#1c2532"
+    BG_HOVER    = "#243040"
+    BORDER      = "#2a3545"
+    BORDER_LIT  = "#3d5068"
+
+    TEXT        = "#c8d2dc"
+    TEXT_DIM    = "#6b7d94"
+    TEXT_BRIGHT = "#e8edf3"
+
+    CYAN        = "#39c5bb"
+    CYAN_DIM    = "#1f7872"
+    GREEN       = "#5ccc6e"
+    GREEN_DIM   = "#2d6636"
+    YELLOW      = "#e8b83a"
+    YELLOW_DIM  = "#7a6020"
+    RED         = "#f05050"
+    RED_DIM     = "#7a2828"
+    MAGENTA     = "#c678dd"
+    PURPLE      = "#b388ff"
+    PURPLE_DIM  = "#9d7cc4"
+    BLUE        = "#61afef"
+    ORANGE      = "#d19a66"
+
+    BTN_COMPILE   = "#2d7d46"
+    BTN_COMPILE_H = "#38a058"
+    BTN_UPLOAD    = "#8244a0"
+    BTN_UPLOAD_H  = "#a05cc0"
+    BTN_FULL      = "#2077b0"
+    BTN_FULL_H    = "#2899dd"
+    BTN_MONITOR   = "#1a7a70"
+    BTN_MONITOR_H = "#22a090"
+    BTN_STOP      = "#a03030"
+    BTN_STOP_H    = "#cc4444"
+    BTN_CLEAR     = "#3a4555"
+    BTN_CLEAR_H   = "#4a5a70"
+    BTN_DIM       = "#2a3342"
+    BTN_DIM_H     = "#3a4555"
+    BTN_DANGER    = "#7a2828"
+    BTN_DANGER_H  = "#a03030"
+
+
+LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
+GUI_CONFIG_FILE = LOCAL_GUI_CONFIG if (SCRIPT_DIR / "src").exists() else (Path.home() / ".mcu_gui_config.json")
+
+# Resolved at startup in main() before MCUUploadGUI is constructed. Lets the
+# crash-safety revert logic (Monaco -> Default) apply even though the config
+# file itself still says "monaco" until the user is warned/confirms again.
+_RESOLVED_EDITOR_MODE = None
+
+# ── Per-instance config key ─────────────────────────────────────────────────
+# Each GUI window (process) gets a unique instance ID so two windows launched
+# at the same time don't read/write each other's "last_sketch_dir" in the
+# shared config file.  The config JSON becomes:
+#   { "instances": { "<pid>": { "last_sketch_dir": "..." }, ... },
+#     "shared": { ... }   ← reserved for truly-shared settings later }
+# Old single-key format is migrated automatically on first load.
+import os as _os
+_INSTANCE_ID = str(_os.getpid())
+del _os
+
+# The normal launcher is deliberately single-window.  A named OS mutex is
+# crash-safe (Windows releases it when a process dies) and avoids relying on
+# a writable config file during the bootstrap/relaunch race.  --new-window is
+# the explicit opt-in used when a user really wants an independent task.
+_GUI_INSTANCE_MUTEX = None
+
+
+def _claim_gui_instance() -> bool:
+    """Claim the normal GUI slot, returning False when it is already in use."""
+    global _GUI_INSTANCE_MUTEX
+    if sys.platform != "win32" or "--new-window" in sys.argv:
+        return True
+    try:
+        import ctypes
+        ctypes.set_last_error(0)
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\MCUFlasherByNaph.MainGUI")
+        if not handle:
+            return True  # do not block a launch merely because the API failed
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return False
+        _GUI_INSTANCE_MUTEX = handle
+    except Exception:
+        return True
+    return True
+
+
+_CONFIG_MEM_CACHE: dict = {}
+_CONFIG_MEM_MTIME: float = 0.0
+
+def _load_raw_config() -> dict:
+    global _CONFIG_MEM_CACHE, _CONFIG_MEM_MTIME
+    now = time.time()
+    if _CONFIG_MEM_CACHE and (now - _CONFIG_MEM_MTIME < 2.0):
+        return _CONFIG_MEM_CACHE
+    for target in (LOCAL_GUI_CONFIG, Path.home() / ".mcu_gui_config.json"):
+        if target.exists() and target.stat().st_size > 0:
+            try:
+                _CONFIG_MEM_CACHE = json.loads(target.read_text(encoding="utf-8"))
+                _CONFIG_MEM_MTIME = now
+                return _CONFIG_MEM_CACHE
+            except Exception:
+                pass
+    _CONFIG_MEM_CACHE = {}
+    _CONFIG_MEM_MTIME = now
+    return {}
+
+
+def _save_raw_config(data: dict):
+    global _CONFIG_MEM_CACHE, _CONFIG_MEM_MTIME
+    payload = json.dumps(data, indent=2)
+    _CONFIG_MEM_CACHE = data.copy()
+    _CONFIG_MEM_MTIME = time.time()
+    for target in (LOCAL_GUI_CONFIG, Path.home() / ".mcu_gui_config.json"):
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(payload, encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _own_create_time():
+    """This process's start time (seconds since epoch), or None if psutil
+    is unavailable. Stashed in an instance's config entry at registration
+    so later liveness checks can tell 'still the same process' apart from
+    'a different process now sitting on the same recycled PID'."""
+    try:
+        import psutil as _psutil_check
+        return _psutil_check.Process().create_time()
+    except Exception:
+        return None
+
+
+def _get_alive_pid_create_times() -> "dict[str, float] | None":
+    """Return {pid_str: create_time} for every process currently running,
+    or None if psutil isn't available. Used instead of a bare PID-membership
+    check: Windows recycles PIDs quickly, so a lock/registration entry left
+    behind by a crashed or force-killed instance can otherwise be mistaken
+    for still-alive just because some unrelated process later reused its PID."""
+    try:
+        import psutil as _psutil_check
+        return {
+            str(p.pid): p.info.get("create_time")
+            for p in _psutil_check.process_iter(["create_time"])
+        }
+    except Exception:
+        return None
+
+
+def _instance_is_alive(pid: str, inst: dict, alive: "dict[str, float] | None") -> bool:
+    """True if `inst` (an entry from the instances config) still belongs to
+    a live MCU Flasher process. Requires both a matching PID AND a matching
+    create_time, so a dead instance's stale entry can't be revived just
+    because its old PID number got handed to a different process."""
+    if alive is None:
+        return True  # psutil unavailable — assume alive rather than falsely evict
+    if pid not in alive:
+        return False
+    stored_ct = inst.get("create_time")
+    proc_ct = alive.get(pid)
+    if proc_ct is None:
+        return True  # couldn't read the live process's create_time (e.g. permissions) —
+                      # can't disprove it, so don't evict on uncertain grounds
+    if stored_ct is None:
+        # This entry predates create_time tracking, meaning it was written
+        # by a build before this fix (or by a process that crashed before
+        # a create_time could ever be recorded). There's no way to verify
+        # it's really the same process that once owned this PID, so don't
+        # give it the benefit of the doubt — treat it as stale.
+        return False
+    return abs(proc_ct - stored_ct) < 2.0
+
+
+def get_editor_mode() -> str:
+    """Return the persisted editor mode preference: 'default' or 'monaco'."""
+    data = _load_raw_config()
+    return data.get("shared", {}).get("editor_mode", "default")
+
+
+def set_editor_mode(mode: str):
+    data = _load_raw_config()
+    data.setdefault("shared", {})["editor_mode"] = mode
+    _save_raw_config(data)
+
+
+def get_autosave_settings() -> tuple:
+    """Return (enabled: bool, delay_ms: int) for the Default editor's
+    auto-save feature. Defaults to disabled with a 1500ms delay."""
+    data = _load_raw_config()
+    shared = data.get("shared", {})
+    enabled = bool(shared.get("autosave_enabled", False))
+    try:
+        delay_ms = int(shared.get("autosave_delay_ms", 1500))
+    except Exception:
+        delay_ms = 1500
+    if delay_ms < 200:
+        delay_ms = 200
+    return enabled, delay_ms
+
+
+def set_autosave_settings(enabled: bool, delay_ms: int):
+    data = _load_raw_config()
+    shared = data.setdefault("shared", {})
+    shared["autosave_enabled"] = bool(enabled)
+    shared["autosave_delay_ms"] = int(delay_ms)
+    _save_raw_config(data)
+
+
+def get_periodic_reload_settings() -> tuple:
+    """Return (enabled: bool, interval_s: int) for the periodic editor
+    tab reload feature. Always disabled."""
+    return False, 5
+
+
+def set_periodic_reload_settings(enabled: bool, interval_s: int):
+    data = _load_raw_config()
+    shared = data.setdefault("shared", {})
+    shared["periodic_reload_enabled"] = False
+    _save_raw_config(data)
+
+
+def get_monitor_font_size() -> int:
+    """Return the shared Build/Serial/Syntax display size (12pt by default)."""
+    try:
+        size = int(_load_raw_config().get("shared", {}).get("monitor_font_size", 12))
+    except Exception:
+        size = 12
+    return max(8, min(24, size))
+
+
+def get_monaco_boot_pending() -> bool:
+    """True if a previous Monaco launch never confirmed it started cleanly
+    (i.e. the process crashed before it could clear the sentinel)."""
+    data = _load_raw_config()
+    return bool(data.get("shared", {}).get("monaco_boot_pending", False))
+
+
+def set_monaco_boot_pending(pending: bool):
+    data = _load_raw_config()
+    data.setdefault("shared", {})["monaco_boot_pending"] = bool(pending)
+    _save_raw_config(data)
+
+
+def get_remembered_board_for_port(port_device: str) -> str:
+    """Return the board type last successfully used with this physical port
+    (e.g. 'COM16' -> 'ESP32 Dev Module'), or '' if nothing is on record.
+
+    Stored in the 'shared' section (not per-instance) since a COM port is a
+    physical machine-wide device — the same USB cable plugged into the same
+    port should be remembered the same way regardless of which project/GUI
+    instance is asking."""
+    if not port_device:
+        return ""
+    data = _load_raw_config()
+    return data.get("shared", {}).get("port_board_map", {}).get(port_device.upper(), "")
+
+
+def remember_port_board(port_device: str, board_name: str):
+    """Persist the (port -> board) association so the next time this exact
+    physical port is attached — even after closing the app or opening a
+    different project — the same board type is auto-selected instantly."""
+    if not port_device or not board_name:
+        return
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {}).setdefault("port_board_map", {})[port_device.upper()] = board_name
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
+def get_clear_serial_on_upload() -> bool:
+    """Return whether Auto-clear Serial Monitor on Upload is enabled (defaults to True)."""
+    try:
+        data = _load_raw_config()
+        return bool(data.get("shared", {}).get("clear_serial_on_upload", True))
+    except Exception:
+        return True
+
+
+def set_clear_serial_on_upload(enabled: bool):
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {})["clear_serial_on_upload"] = bool(enabled)
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
+def get_clear_build_console_on_action() -> bool:
+    """Return whether Clear Screen on Action for Build Console is enabled (defaults to True)."""
+    try:
+        data = _load_raw_config()
+        return bool(data.get("shared", {}).get("clear_build_console_on_action", True))
+    except Exception:
+        return True
+
+
+def set_clear_build_console_on_action(enabled: bool):
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {})["clear_build_console_on_action"] = bool(enabled)
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
+def get_auto_clear_serial_monitor() -> bool:
+    """Return whether Auto Clear Serial Monitor is enabled (defaults to False)."""
+    try:
+        data = _load_raw_config()
+        return bool(data.get("shared", {}).get("auto_clear_serial_monitor", False))
+    except Exception:
+        return False
+
+
+def set_auto_clear_serial_monitor(enabled: bool):
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {})["auto_clear_serial_monitor"] = bool(enabled)
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
+def load_gui_config() -> dict:
+    """Return this instance's config dict (creates it if absent)."""
+    data = _load_raw_config()
+    # Migrate old flat format {"last_sketch_dir": "..."} → new nested format
+    if "instances" not in data:
+        old_dir = data.get("last_sketch_dir", "")
+        data = {"instances": {}, "shared": {}}
+        if old_dir:
+            data["instances"][_INSTANCE_ID] = {"last_sketch_dir": old_dir}
+            data["shared"] = {"last_sketch_dir": old_dir}
+        _save_raw_config(data)
+    
+    # Initialize the current PID's config block using fallback from shared or other active configs
+    if _INSTANCE_ID not in data.get("instances", {}):
+        if "instances" not in data:
+            data["instances"] = {}
+        fallback_dir = ""
+        if "shared" in data and "last_sketch_dir" in data["shared"]:
+            fallback_dir = data["shared"]["last_sketch_dir"]
+        else:
+            for inst in data.get("instances", {}).values():
+                if inst.get("last_sketch_dir"):
+                    fallback_dir = inst["last_sketch_dir"]
+                    break
+        data["instances"][_INSTANCE_ID] = {"last_sketch_dir": fallback_dir}
+        _save_raw_config(data)
+
+    # Backfill create_time if this entry doesn't have one yet (covers both
+    # the freshly-created case above and instances migrated from the old
+    # flat format, which predate create_time tracking).
+    inst = data["instances"].get(_INSTANCE_ID)
+    if inst is not None and "create_time" not in inst:
+        inst["create_time"] = _own_create_time()
+        _save_raw_config(data)
+
+    return data["instances"].get(_INSTANCE_ID, {})
+
+
+def save_gui_config(config: dict):
+    """Persist this instance's config dict without touching other instances."""
+    data = _load_raw_config()
+    if "instances" not in data:
+        data = {"instances": {}, "shared": {}}
+    data["instances"][_INSTANCE_ID] = config
+    
+    # Also update the shared config so new instances can inherit it
+    if "shared" not in data:
+        data["shared"] = {}
+    if "last_sketch_dir" in config:
+        data["shared"]["last_sketch_dir"] = config["last_sketch_dir"]
+        
+    # Prune stale instance entries (processes that no longer exist, or whose
+    # PID has since been recycled by an unrelated process)
+    alive = _get_alive_pid_create_times()
+    if alive is not None:
+        data["instances"] = {
+            k: v for k, v in data["instances"].items()
+            if k == _INSTANCE_ID or _instance_is_alive(k, v, alive)
+        }
+    _save_raw_config(data)
+
+
+def load_recent_projects() -> list[str]:
+    """Load and return the list of recently opened project paths (up to 10),
+    automatically filtering out folders that no longer exist on disk."""
+    data = _load_raw_config()
+    recent = data.get("shared", {}).get("recent_projects", [])
+    valid_recent = []
+    changed = False
+    for p in recent:
+        try:
+            if Path(p).is_dir():
+                valid_recent.append(p)
+            else:
+                changed = True
+        except Exception:
+            changed = True
+    if changed:
+        if "shared" not in data:
+            data["shared"] = {}
+        data["shared"]["recent_projects"] = valid_recent
+        _save_raw_config(data)
+    return valid_recent
+
+
+def add_recent_project(path: str):
+    """Add a project folder path to the recent list (max 10 folders),
+    bumping it to the top of the list if it already exists."""
+    data = _load_raw_config()
+    if "shared" not in data:
+        data["shared"] = {}
+    recent = data["shared"].get("recent_projects", [])
+    try:
+        path = str(Path(path).resolve())
+    except Exception:
+        path = str(path)
+    if path in recent:
+        recent.remove(path)
+    recent.insert(0, path)
+    recent = recent[:10]
+    data["shared"]["recent_projects"] = recent
+    _save_raw_config(data)
+
+
+def port_occupied_owner(port: str | None) -> str | None:
+    """Return the owning PID (as string) if `port` is occupied by another live instance, else None."""
+    if not port or str(port).startswith("─"):
+        return None
+    match = re.match(r"(COM\d+|/dev/\S+)", str(port))
+    target = (match.group(1) if match else str(port).split()[0]).upper()
+    data = _load_raw_config()
+    alive = _get_alive_pid_create_times()
+    instances = data.get("instances", {})
+    for pid, inst in instances.items():
+        if pid == _INSTANCE_ID:
+            continue
+        if not _instance_is_alive(pid, inst, alive):
+            continue
+        p = inst.get("selected_port")
+        if p:
+            m = re.match(r"(COM\d+|/dev/\S+)", str(p))
+            dev = (m.group(1) if m else str(p).split()[0]).upper()
+            if dev == target:
+                return pid
+    return None
+
+
+def get_occupied_ports() -> set[str]:
+    """Retrieve set of COM port devices currently selected by other active instances."""
+    data = _load_raw_config()
+    occupied = set()
+    
+    # Get currently alive PIDs (with create_time) to filter out stale instances
+    alive = _get_alive_pid_create_times()
+
+    instances = data.get("instances", {})
+    for pid, inst in instances.items():
+        if pid == _INSTANCE_ID:
+            continue
+        if not _instance_is_alive(pid, inst, alive):
+            continue
+        port = inst.get("selected_port")
+        if port:
+            match = re.match(r"(COM\d+|/dev/\S+)", str(port))
+            dev = match.group(1) if match else str(port).split()[0]
+            if dev:
+                occupied.add(dev)
+                occupied.add(dev.upper())
+    return occupied
+
+
+def get_occupied_folders() -> dict[str, str]:
+    """Retrieve project folders currently active in other live instances.
+
+    Returns {resolved_folder_path: owner_pid}, mirroring get_occupied_ports()
+    so the same "another window already has this" pattern covers both the
+    COM port and the sketch-folder resource.
+    """
+    data = _load_raw_config()
+    occupied: dict[str, str] = {}
+
+    alive = _get_alive_pid_create_times()
+
+    instances = data.get("instances", {})
+    for pid, inst in instances.items():
+        if pid == _INSTANCE_ID:
+            continue
+        if not _instance_is_alive(pid, inst, alive):
+            continue
+        folder = inst.get("active_sketch_dir")
+        if folder:
+            try:
+                resolved = str(Path(folder).resolve())
+            except Exception:
+                resolved = folder
+            occupied[resolved] = pid
+    return occupied
+
+
+def folder_lock_owner(path) -> str | None:
+    """Return the owning PID (as a string) if `path` is locked by another
+    live instance, else None. Accepts a str or Path; resolves before
+    comparing so trailing slashes / '.' segments / case-on-Windows don't
+    cause false negatives."""
+    try:
+        resolved = str(Path(path).resolve())
+    except Exception:
+        resolved = str(path)
+    occupied = get_occupied_folders()
+    # Path.resolve() is already case-normalized on Windows, but compare
+    # case-insensitively there too in case one side couldn't resolve.
+    if sys.platform == "win32":
+        resolved_l = resolved.lower()
+        for folder, pid in occupied.items():
+            if folder.lower() == resolved_l:
+                return pid
+        return None
+    return occupied.get(resolved)
+
+# ═══════════════════════════════════════════════════════════════
+# STARTUP PROJECT SELECTOR
+# ═══════════════════════════════════════════════════════════════
+# Shown before the main window: choose an existing project folder, or
+# scaffold a brand-new one (.ino + optional .h/.cpp pair, wired together
+# with #pragma once / #include automatically).
+_VALID_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _make_dialog_btn(parent, text, command, bg, bg_hover, font, width=None) -> tk.Button:
+    """Standalone flat-button factory (selector window runs before
+    MCUUploadGUI exists, so it can't reuse the instance-bound helpers)."""
+    btn = tk.Button(
+        parent, text=text, command=command,
+        font=font, fg=Theme.TEXT_BRIGHT, bg=bg,
+        activebackground=bg_hover, activeforeground=Theme.TEXT_BRIGHT,
+        relief=tk.FLAT, borderwidth=0, padx=14, pady=6, cursor="hand2",
+    )
+    if width:
+        btn.configure(width=width)
+    btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
+    btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+    return btn
+
+
+def _make_toolbar_btn(parent, text, command, bg, bg_hover, font) -> tk.Button:
+    """Small toolbar button that packs itself (side=LEFT) into *parent*.
+    Used for notification/tab toolbars that sit outside MCUUploadGUI's
+    instance-method helpers."""
+    btn = tk.Button(
+        parent, text=text, command=command,
+        font=font, fg=Theme.TEXT_BRIGHT, bg=bg,
+        activebackground=bg_hover, activeforeground=Theme.TEXT_BRIGHT,
+        relief=tk.FLAT, borderwidth=0, padx=8, pady=3, cursor="hand2",
+    )
+    btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
+    btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+    btn.pack(side=tk.LEFT, padx=(4, 0))
+    return btn
+
+
+def _scaffold_new_project(dest_parent: Path, project_name: str,
+                           include_h: bool, include_cpp: bool) -> Path:
+    """Create <dest_parent>/<project_name>/ with the main .ino and the
+    optional .h / .cpp pair, fully wired with #pragma once / #include.
+    Returns the new project folder path. Raises on failure (caller catches)."""
+    project_dir = dest_parent / project_name
+    project_dir.mkdir(parents=True, exist_ok=False)
+    ensure_hidden_read_first_md(project_dir)
+
+    ino_includes = ""
+    if include_h:
+        ino_includes += f'#include "{project_name}.h"\n'
+
+    ino_content = (
+        f"{ino_includes}\n"
+        f"void setup() {{\n"
+        f"  \n"
+        f"}}\n\n"
+        f"void loop() {{\n"
+        f"  \n"
+        f"}}\n"
+    )
+    (project_dir / f"{project_name}.ino").write_text(ino_content, encoding="utf-8")
+
+    if include_h:
+        h_content = "#pragma once\n\n"
+        (project_dir / f"{project_name}.h").write_text(h_content, encoding="utf-8")
+
+    if include_cpp:
+        cpp_includes = f'#include "{project_name}.h"\n\n' if include_h else ""
+        (project_dir / f"{project_name}.cpp").write_text(cpp_includes, encoding="utf-8")
+
+    return project_dir
+
+
+class ProjectSelectorDialog:
+    """Modal startup window: pick an existing project folder, or build a
+    new one from scratch. Call `.run()`; returns a Path or None (cancelled)."""
+
+    def __init__(self, root: tk.Tk, initial_dir: str = ""):
+        self.root = root
+        self.result: Path | None = None
+        self.initial_dir = initial_dir
+        self.frame_existing: tk.Frame | None = None
+        self.frame_new: tk.Frame | None = None
+
+        self.win = tk.Toplevel(root)
+        self.win.withdraw()
+        self.win.configure(bg=Theme.BG_DARKEST)
+        self.win.title("MCU Flasher by Naph — Select Project")
+        # Enable resizability so user and system can adjust dialog dimensions dynamically
+        self.win.resizable(True, True)
+
+        # Query the active work area and use logical dimensions so the same
+        # layout is selected at 100%, 150%, and 200% display scaling.
+        work_left, work_top, work_right, work_bottom = _get_monitor_work_area(self.win)
+        screen_w = work_right - work_left
+        screen_h = work_bottom - work_top
+        display_scale = _get_widget_dpi_scale(self.win)
+        logical_w = screen_w / display_scale
+        logical_h = screen_h / display_scale
+
+        is_small_screen = (logical_w < 1400 or logical_h < 800)
+
+        if is_small_screen:
+            width = min(660, max(520, int(logical_w * 0.52)))
+            height = min(560, max(420, int(logical_h * 0.75)))
+            self.win.minsize(round(480 * display_scale), round(400 * display_scale))
+            title_size, sub_size, label_size = 13, 8, 9
+            top_pad_y, bot_pad_y = (10, 0), (2, 8)
+        else:
+            width = min(700, max(600, int(logical_w * 0.45)))
+            height = min(660, max(520, int(logical_h * 0.65)))
+            self.win.minsize(round(520 * display_scale), round(460 * display_scale))
+            title_size, sub_size, label_size = 15, 9, 10
+            top_pad_y, bot_pad_y = (18, 0), (2, 14)
+
+        width = min(round(width * display_scale), screen_w - round(32 * display_scale))
+        height = min(round(height * display_scale), screen_h - round(48 * display_scale))
+        x = work_left + max(0, (screen_w - width) // 2)
+        y = work_top + max(0, (screen_h - height) // 2)
+        x_part = f"+{x}" if x >= 0 else str(x)
+        y_part = f"+{y}" if y >= 0 else str(y)
+        self.win.geometry(f"{width}x{height}{x_part}{y_part}")
+        self.win.configure(bg=Theme.BG_DARKEST)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        f_title = tkfont.Font(family="Montserrat", size=title_size, weight="bold")
+        f_sub = tkfont.Font(family="Montserrat", size=sub_size)
+        f_label = tkfont.Font(family="Montserrat", size=label_size)
+        f_btn = tkfont.Font(family="Montserrat", size=label_size, weight="bold")
+        f_mono = tkfont.Font(family="Consolas", size=max(8, label_size - 1))
+        self._fonts = (f_title, f_sub, f_label, f_btn, f_mono)
+
+        tk.Label(self.win, text="⚡ MCU Flasher by Naph", font=f_title,
+                 fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=top_pad_y)
+        tk.Label(self.win, text="Open an existing project, or create a new one",
+                 font=f_sub, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(pady=bot_pad_y)
+
+        # ── Mode tabs (Existing / New) ───────────────────────────────
+        tab_bar = tk.Frame(self.win, bg=Theme.BG_DARKEST)
+        tab_bar.pack(fill=tk.X, padx=24)
+
+        self.btn_tab_existing = _make_dialog_btn(
+            tab_bar, "📂 Existing Project", lambda: self._switch_tab("existing"),
+            Theme.BTN_FULL, Theme.BTN_FULL_H, f_btn)
+        self.btn_tab_existing.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
+
+        self.btn_tab_new = _make_dialog_btn(
+            tab_bar, "✨ New Project", lambda: self._switch_tab("new"),
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, f_btn)
+        self.btn_tab_new.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0))
+
+        tk.Frame(self.win, bg=Theme.BORDER, height=2).pack(fill=tk.X, padx=24, pady=(12, 0))
+
+        # ── Body container (swapped per tab) ─────────────────────────
+        self.body = tk.Frame(self.win, bg=Theme.BG_DARKEST)
+        self.body.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+
+        try:
+            self._build_existing_tab()
+        except Exception as e:
+            print(f"[WARN] Error building existing project tab: {e}")
+
+        try:
+            self._build_new_tab()
+        except Exception as e:
+            print(f"[WARN] Error building new project tab: {e}")
+
+        try:
+            self._switch_tab("existing")
+        except Exception:
+            pass
+
+        self.win.bind("<Escape>", lambda e: self._on_cancel())
+
+        # Safely present window, bring to front, focus, and apply modal grab AFTER deiconify
+        try:
+            self.win.update_idletasks()
+            x = max(0, (screen_w - width) // 2)
+            y = max(0, (screen_h - height) // 2)
+            self.win.geometry(f"{width}x{height}+{x}+{y}")
+            self.win.deiconify()
+            self.win.lift()
+            self.win.focus_force()
+            self.win.attributes("-topmost", True)
+            self.win.after(500, self._unset_selector_topmost)
+            self.win.grab_set()
+        except Exception:
+            try:
+                self.win.deiconify()
+                self.win.lift()
+                self.win.focus_force()
+                self.win.grab_set()
+            except Exception:
+                pass
+
+    def _unset_selector_topmost(self):
+        try:
+            if hasattr(self, "win") and self.win:
+                self.win.attributes("-topmost", False)
+        except Exception:
+            pass
+
+    # ── Tab switching ────────────────────────────────────────────────────
+    def _switch_tab(self, which: str):
+        self.mode = which
+        if which == "existing":
+            if hasattr(self, "btn_tab_existing") and self.btn_tab_existing:
+                self.btn_tab_existing.configure(bg=Theme.BTN_FULL)
+            if hasattr(self, "btn_tab_new") and self.btn_tab_new:
+                self.btn_tab_new.configure(bg=Theme.BTN_CLEAR)
+            if getattr(self, "frame_new", None):
+                self.frame_new.pack_forget()
+            if getattr(self, "frame_existing", None):
+                self.frame_existing.pack(fill=tk.BOTH, expand=True)
+        else:
+            if hasattr(self, "btn_tab_new") and self.btn_tab_new:
+                self.btn_tab_new.configure(bg=Theme.BTN_FULL)
+            if hasattr(self, "btn_tab_existing") and self.btn_tab_existing:
+                self.btn_tab_existing.configure(bg=Theme.BTN_CLEAR)
+            if getattr(self, "frame_existing", None):
+                self.frame_existing.pack_forget()
+            if getattr(self, "frame_new", None):
+                self.frame_new.pack(fill=tk.BOTH, expand=True)
+
+    def _get_project_files(self, folder_path: Path | str) -> list[str]:
+        """Scan a project directory for .cpp, .ino, .h, .hpp, .txt files."""
+        valid_exts = {".cpp", ".ino", ".h", ".hpp", ".txt"}
+        found_files: list[tuple[int, str]] = []
+        try:
+            p = Path(folder_path)
+            if not p.exists() or not p.is_dir():
+                return []
+            
+            dirs_to_check = [p]
+            src_dir = p / "src"
+            if src_dir.exists() and src_dir.is_dir():
+                dirs_to_check.append(src_dir)
+
+            seen = set()
+            for d in dirs_to_check:
+                try:
+                    for item in d.iterdir():
+                        if item.is_file():
+                            ext = item.suffix.lower()
+                            if ext in valid_exts:
+                                rel_path = item.name if d == p else f"src/{item.name}"
+                                if rel_path not in seen:
+                                    seen.add(rel_path)
+                                    prio = 0 if ext == ".ino" else (1 if ext in (".h", ".hpp") else (2 if ext == ".cpp" else 3))
+                                    found_files.append((prio, rel_path))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        found_files.sort(key=lambda x: (x[0], x[1].lower()))
+        return [name for _, name in found_files]
+
+    # ── Existing-project tab ────────────────────────────────────────────
+    def _build_existing_tab(self):
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+        self.frame_existing = tk.Frame(self.body, bg=Theme.BG_DARKEST)
+
+        # Action Buttons row packed at the bottom FIRST so it is always visible and never cut off
+        btn_row = tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST)
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+        _make_dialog_btn(btn_row, "Cancel", self._on_cancel,
+                          Theme.BTN_STOP, Theme.BTN_STOP_H, f_btn).pack(side=tk.RIGHT, padx=(8, 0))
+        _make_dialog_btn(btn_row, "Open Project ▶", self._on_open_existing,
+                          Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, f_btn).pack(side=tk.RIGHT)
+
+        tk.Label(self.frame_existing,
+                 text="Pick a folder that already contains your sketch\n"
+                      "(.ino / .cpp / .h / .txt files and, optionally, platformio.ini).",
+                 font=f_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
+                 justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 12))
+
+        self.existing_path_var = tk.StringVar(value=self.initial_dir)
+        path_row = tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST)
+        path_row.pack(fill=tk.X, pady=(0, 8))
+
+        entry = tk.Entry(path_row, textvariable=self.existing_path_var,
+                          font=f_mono, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+                          insertbackground=Theme.CYAN, borderwidth=0,
+                          highlightthickness=1, highlightcolor=Theme.CYAN_DIM,
+                          highlightbackground=Theme.BORDER)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=4)
+
+        browse_btn = _make_dialog_btn(path_row, "Browse…", self._browse_existing,
+                                       Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, f_label)
+        browse_btn.pack(side=tk.LEFT)
+
+        # Live Preview of files inside selected project folder
+        preview_frame = tk.Frame(self.frame_existing, bg=Theme.BG_DARK, padx=10, pady=6,
+                                 highlightthickness=1, highlightbackground=Theme.BORDER)
+        preview_frame.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(preview_frame, text="Folder Contents (.cpp / .ino / .h / .txt):",
+                 font=f_sub, fg=Theme.CYAN, bg=Theme.BG_DARK, anchor=tk.W).pack(anchor=tk.W)
+
+        self.existing_contents_lbl = tk.Label(
+            preview_frame, text="Select a folder to view files...", font=f_mono,
+            fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARK, anchor=tk.W, justify=tk.LEFT, wraplength=480
+        )
+        self.existing_contents_lbl.pack(anchor=tk.W, pady=(2, 0))
+
+        preview_frame.bind(
+            "<Configure>",
+            lambda e: self.existing_contents_lbl.configure(wraplength=max(180, e.width - 24))
+        )
+
+        def _update_existing_contents(*args):
+            raw = self.existing_path_var.get().strip()
+            if not raw:
+                self.existing_contents_lbl.config(text="No folder selected", fg=Theme.TEXT_DIM)
+                return
+            p = Path(raw)
+            if not p.exists() or not p.is_dir():
+                self.existing_contents_lbl.config(text="⚠️ Folder does not exist", fg=Theme.RED)
+                return
+            files = self._get_project_files(p)
+            if files:
+                file_str = "  •  ".join(files[:10])
+                if len(files) > 10:
+                    file_str += f"   (+{len(files) - 10} more)"
+                self.existing_contents_lbl.config(text=f"📄 {file_str}", fg=Theme.GREEN)
+            else:
+                self.existing_contents_lbl.config(text="⚠️ No .cpp, .ino, .h, or .txt files found in this folder", fg=Theme.YELLOW)
+
+        self.existing_path_var.trace_add("write", _update_existing_contents)
+        _update_existing_contents()
+
+        # Recent Projects list
+        recent_list = load_recent_projects()
+        if self.initial_dir:
+            try:
+                curr_resolved = str(Path(self.initial_dir).resolve())
+                recent_list = [p for p in recent_list if str(Path(p).resolve()) != curr_resolved]
+            except Exception:
+                recent_list = [p for p in recent_list if p != self.initial_dir]
+
+        if recent_list:
+            tk.Label(
+                self.frame_existing, text="Recent Projects (double-click to open):", font=f_label,
+                fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor=tk.W
+            ).pack(anchor=tk.W, pady=(8, 4))
+
+            # Scrollable container for the recent project entries
+            scroll_outer = tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST)
+            scroll_outer.pack(fill=tk.BOTH, expand=True)
+
+            canvas = tk.Canvas(
+                scroll_outer, bg=Theme.BG_DARKEST, highlightthickness=0, bd=0
+            )
+            scrollbar = ttk.Scrollbar(
+                scroll_outer, orient=tk.VERTICAL, command=canvas.yview,
+                style="Vertical.TScrollbar"
+            )
+
+            def _auto_set(lo, hi):
+                if float(lo) <= 0.0 and float(hi) >= 1.0:
+                    scrollbar.pack_forget()
+                else:
+                    if not scrollbar.winfo_ismapped():
+                        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                scrollbar.set(lo, hi)
+
+            canvas.configure(yscrollcommand=_auto_set)
+
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            recent_frame = tk.Frame(canvas, bg=Theme.BG_DARKEST)
+            canvas_window = canvas.create_window((0, 0), window=recent_frame, anchor=tk.NW)
+
+            def _on_recent_frame_configure(event):
+                canvas.configure(scrollregion=canvas.bbox("all"))
+
+            def _on_canvas_configure(event):
+                canvas.itemconfig(canvas_window, width=event.width)
+
+            recent_frame.bind("<Configure>", _on_recent_frame_configure)
+            canvas.bind("<Configure>", _on_canvas_configure)
+
+            # Mousewheel scrolling — bind to canvas and all child labels
+            def _on_mousewheel(event):
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+            canvas.bind("<MouseWheel>", _on_mousewheel)
+
+            for path in recent_list:
+                try:
+                    p_path = Path(path)
+                    owner_pid = folder_lock_owner(p_path) if p_path.exists() else None
+                    is_locked = owner_pid is not None
+                    files = self._get_project_files(p_path) if p_path.exists() else []
+                    if files:
+                        files_str = "📄 " + "  •  ".join(files[:6]) + (f" (+{len(files)-6} more)" if len(files) > 6 else "")
+                        files_color = Theme.CYAN_DIM
+                    else:
+                        files_str = "📄 (No .cpp / .ino / .h / .txt files found)"
+                        files_color = Theme.TEXT_DIM
+
+                    if is_locked:
+                        btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
+                        fg_color = Theme.RED
+                        bg_idle = Theme.BG_DARK
+                        bg_hover = Theme.BG_DARK  # no hover highlight; it's not openable
+                        cursor = "no" if sys.platform == "win32" else "X_cursor"
+                    else:
+                        btn_text = f" 📁 {p_path.name}  —  {path}"
+                        fg_color = Theme.TEXT_BRIGHT
+                        bg_idle = Theme.BG_DARK
+                        bg_hover = Theme.BG_HOVER
+                        cursor = "hand2"
+
+                    card = tk.Frame(recent_frame, bg=bg_idle, padx=8, pady=5, cursor=cursor)
+                    card.pack(fill=tk.X, pady=3)
+
+                    lbl_title = tk.Label(card, text=btn_text, font=f_mono, fg=fg_color, bg=bg_idle, anchor=tk.W, cursor=cursor)
+                    lbl_title.pack(fill=tk.X)
+
+                    lbl_files = tk.Label(card, text=f"    {files_str}", font=f_sub, fg=files_color, bg=bg_idle, anchor=tk.W, cursor=cursor)
+                    lbl_files.pack(fill=tk.X, pady=(2, 0))
+
+                    card.bind("<MouseWheel>", _on_mousewheel)
+                    lbl_title.bind("<MouseWheel>", _on_mousewheel)
+                    lbl_files.bind("<MouseWheel>", _on_mousewheel)
+
+                    def _make_handlers(c=card, lt=lbl_title, lf=lbl_files, p=path, bg_h=bg_hover, bg_i=bg_idle):
+                        def on_enter(e):
+                            c.configure(bg=bg_h)
+                            lt.configure(bg=bg_h)
+                            lf.configure(bg=bg_h)
+
+                        def on_leave(e):
+                            c.configure(bg=bg_i)
+                            lt.configure(bg=bg_i)
+                            lf.configure(bg=bg_i)
+
+                        for widget in (c, lt, lf):
+                            widget.bind("<Enter>", on_enter)
+                            widget.bind("<Leave>", on_leave)
+                            widget.bind("<Button-1>", lambda e, p=p: self.existing_path_var.set(p))
+                            widget.bind("<Double-Button-1>", lambda e, p=p: (self.existing_path_var.set(p), self._on_open_existing()))
+                    _make_handlers()
+                except Exception as ex:
+                    print(f"[WARN] Error rendering recent path '{path}': {ex}")
+        else:
+            # Fallback spacer
+            tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST).pack(fill=tk.BOTH, expand=True)
+
+
+    def _browse_existing(self):
+        from tkinter import filedialog
+        init_dir = self.existing_path_var.get().strip() or str(Path.home())
+        if init_dir:
+            try:
+                p_init = Path(init_dir)
+                if p_init.is_file():
+                    init_dir = str(p_init.parent)
+            except Exception:
+                pass
+
+        selected = filedialog.askopenfilename(
+            initialdir=init_dir,
+            title="Select Existing Sketch / Project File (.ino, .cpp, .h, .txt)",
+            parent=self.win,
+            filetypes=[
+                ("Project Files & Sketches (*.ino, *.cpp, *.h, *.txt)", "*.ino;*.cpp;*.h;*.hpp;*.txt;platformio.ini"),
+                ("Arduino Sketches (*.ino)", "*.ino"),
+                ("C/C++ Source & Headers (*.cpp, *.h)", "*.cpp;*.h;*.hpp"),
+                ("Text Files (*.txt)", "*.txt"),
+                ("All Files (*.*)", "*.*")
+            ]
+        )
+        if selected:
+            p = Path(selected)
+            folder = p.parent if p.is_file() else p
+            self.existing_path_var.set(str(folder))
+
+    def _on_open_existing(self):
+        import tkinter.messagebox as mb
+        raw = self.existing_path_var.get().strip()
+        if not raw:
+            mb.showwarning("No Folder Selected", "Please choose a project folder first.", parent=self.win)
+            return
+        p = Path(raw)
+        if not p.exists() or not p.is_dir():
+            mb.showerror("Invalid Folder", f"This folder does not exist:\n{p}", parent=self.win)
+            return
+        owner_pid = folder_lock_owner(p)
+        if owner_pid is not None:
+            mb.showerror(
+                "Project In Use",
+                f"This project folder is already open in another MCU Flasher window "
+                f"(PID {owner_pid}):\n{p}\n\n"
+                "Close that window first, or choose a different project.",
+                parent=self.win,
+            )
+            return
+
+        if not _validate_and_scaffold_ino(self.win, p):
+            return
+
+        self.result = p
+        self.win.destroy()
+
+    # ── New-project tab ─────────────────────────────────────────────────
+    def _build_new_tab(self):
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+        self.frame_new = tk.Frame(self.body, bg=Theme.BG_DARKEST)
+
+        # Action Buttons row packed at the bottom FIRST so it is always visible and never cut off
+        btn_row = tk.Frame(self.frame_new, bg=Theme.BG_DARKEST)
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+        _make_dialog_btn(btn_row, "Cancel", self._on_cancel,
+                          Theme.BTN_STOP, Theme.BTN_STOP_H, f_btn).pack(side=tk.RIGHT, padx=(8, 0))
+        _make_dialog_btn(btn_row, "Create Project ▶", self._on_create_new,
+                          Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, f_btn).pack(side=tk.RIGHT)
+
+        tk.Label(self.frame_new, text="Files to include", font=f_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(anchor=tk.W)
+
+        files_row = tk.Frame(self.frame_new, bg=Theme.BG_DARKEST)
+        files_row.pack(fill=tk.X, pady=(6, 16))
+
+        # .ino — always included, shown as a disabled/checked indicator
+        ino_chip = tk.Frame(files_row, bg=Theme.BG_LIGHT, padx=10, pady=6)
+        ino_chip.pack(side=tk.LEFT, padx=(0, 8))
+        tk.Label(ino_chip, text="✔ <name>.ino", font=f_label,
+                 fg=Theme.GREEN, bg=Theme.BG_LIGHT).pack()
+        tk.Label(files_row, text="(always created)", font=f_sub,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side=tk.LEFT)
+
+        check_row = tk.Frame(self.frame_new, bg=Theme.BG_DARKEST)
+        check_row.pack(fill=tk.X, pady=(0, 4))
+
+        self.var_include_h = tk.BooleanVar(value=False)
+        self.var_include_cpp = tk.BooleanVar(value=False)
+
+        def _styled_check(parent, text, var):
+            cb = tk.Checkbutton(
+                parent, text=text, variable=var,
+                font=f_label, fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST,
+                activebackground=Theme.BG_DARKEST, activeforeground=Theme.CYAN,
+                selectcolor=Theme.BG_LIGHT, borderwidth=0, highlightthickness=0,
+                cursor="hand2", anchor=tk.W,
+            )
+            return cb
+
+        cb_h = _styled_check(check_row, "  Include <name>.h    →  #pragma once", self.var_include_h)
+        cb_h.pack(anchor=tk.W, pady=2)
+        cb_cpp = _styled_check(check_row, "  Include <name>.cpp  →  #include \"<name>.h\" (if .h included)", self.var_include_cpp)
+        cb_cpp.pack(anchor=tk.W, pady=2)
+
+        tk.Frame(self.frame_new, bg=Theme.BORDER, height=1).pack(fill=tk.X, pady=14)
+
+        # ── Project name ──
+        tk.Label(self.frame_new, text="Project name", font=f_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(anchor=tk.W)
+        self.new_name_var = tk.StringVar(value="")
+        name_entry = tk.Entry(self.frame_new, textvariable=self.new_name_var,
+                               font=f_mono, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+                               insertbackground=Theme.CYAN, borderwidth=0,
+                               highlightthickness=1, highlightcolor=Theme.CYAN_DIM,
+                               highlightbackground=Theme.BORDER)
+        name_entry.pack(fill=tk.X, pady=(6, 14), ipady=4)
+
+        # ── Destination folder ──
+        tk.Label(self.frame_new, text="Create inside", font=f_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(anchor=tk.W)
+        dest_row = tk.Frame(self.frame_new, bg=Theme.BG_DARKEST)
+        dest_row.pack(fill=tk.X, pady=(6, 4))
+
+        default_dest = str(Path.home())
+        if self.initial_dir:
+            try:
+                p = Path(self.initial_dir)
+                if p.exists():
+                    default_dest = str(p.parent)
+            except Exception:
+                pass
+        self.new_dest_var = tk.StringVar(value=default_dest)
+        dest_entry = tk.Entry(dest_row, textvariable=self.new_dest_var,
+                               font=f_mono, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+                               insertbackground=Theme.CYAN, borderwidth=0,
+                               highlightthickness=1, highlightcolor=Theme.CYAN_DIM,
+                               highlightbackground=Theme.BORDER)
+        dest_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=4)
+        _make_dialog_btn(dest_row, "Browse…", self._browse_dest,
+                          Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, f_label).pack(side=tk.LEFT)
+
+        # Live preview of final path
+        self.new_preview_var = tk.StringVar(value="")
+        self.new_preview_lbl = tk.Label(
+            self.frame_new, textvariable=self.new_preview_var, font=f_sub,
+            fg=Theme.CYAN_DIM, bg=Theme.BG_DARKEST, anchor=tk.W,
+            justify=tk.LEFT, wraplength=480
+        )
+        self.new_preview_lbl.pack(anchor=tk.W, pady=(4, 0))
+
+        self.frame_new.bind(
+            "<Configure>",
+            lambda e: self.new_preview_lbl.configure(wraplength=max(180, e.width - 32))
+        )
+
+        self.new_name_var.trace_add("write", lambda *a: self._update_new_preview())
+        self.new_dest_var.trace_add("write", lambda *a: self._update_new_preview())
+        self._update_new_preview()
+        tk.Frame(self.frame_new, bg=Theme.BG_DARKEST).pack(fill=tk.BOTH, expand=True)
+
+    def _update_new_preview(self):
+        name = self.new_name_var.get().strip()
+        dest = self.new_dest_var.get().strip()
+        if name and dest:
+            self.new_preview_var.set(f"Will create:  {Path(dest) / name}")
+        else:
+            self.new_preview_var.set("")
+
+    def _browse_dest(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(
+            initialdir=self.new_dest_var.get() or str(Path.home()),
+            title="Select Destination Folder",
+            parent=self.win,
+        )
+        if folder:
+            self.new_dest_var.set(folder)
+
+    def _on_create_new(self):
+        import tkinter.messagebox as mb
+        name = self.new_name_var.get().strip()
+        dest_raw = self.new_dest_var.get().strip()
+
+        if not name:
+            mb.showwarning("Project Name Required", "Please enter a project name.", parent=self.win)
+            return
+        if not _VALID_NAME_RE.match(name):
+            mb.showerror(
+                "Invalid Project Name",
+                "Project name must start with a letter or underscore, and contain "
+                "only letters, numbers, and underscores (no spaces or symbols).\n\n"
+                "This name is reused for the .ino / .h / .cpp filenames.",
+                parent=self.win,
+            )
+            return
+        if not dest_raw:
+            mb.showwarning("Destination Required", "Please choose a destination folder.", parent=self.win)
+            return
+
+        dest_parent = Path(dest_raw)
+        if not dest_parent.exists() or not dest_parent.is_dir():
+            mb.showerror("Invalid Destination", f"This folder does not exist:\n{dest_parent}", parent=self.win)
+            return
+
+        target = dest_parent / name
+        if target.exists():
+            mb.showerror(
+                "Folder Already Exists",
+                f"A folder named '{name}' already exists at:\n{dest_parent}\n\n"
+                "Choose a different name or destination.",
+                parent=self.win,
+            )
+            return
+
+        try:
+            project_dir = _scaffold_new_project(
+                dest_parent, name,
+                include_h=self.var_include_h.get(),
+                include_cpp=self.var_include_cpp.get(),
+            )
+        except Exception as e:
+            mb.showerror("Could Not Create Project", f"Failed to create project:\n{e}", parent=self.win)
+            return
+
+        self.result = project_dir
+        self.win.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.win.destroy()
+
+    def run(self) -> Path | None:
+        self.win.wait_window()
+        return self.result
+def _validate_and_scaffold_ino(parent_win, folder_path: Path) -> bool:
+    """Validate that the project folder contains at least one .ino file.
+    If not, prompt the user to make the folder a project directory and
+    automatically create a default .ino file (aligned to the folder name).
+    Returns True if valid/created, False if user cancelled or error occurred.
+    """
+    try:
+        ino_files = list(folder_path.glob("*.ino"))
+    except Exception:
+        ino_files = []
+        
+    if ino_files:
+        return True
+
+    from tkinter import messagebox
+    res = messagebox.askyesno(
+        "Create Arduino Sketch?",
+        f"The selected folder does not contain any Arduino sketch (.ino) files.\n\n"
+        f"Would you like to make this a project directory and create a default .ino file aligned to the current folder?",
+        parent=parent_win
+    )
+    if res:
+        try:
+            ensure_hidden_read_first_md(folder_path)
+            sketch_name = folder_path.name
+            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', sketch_name)
+            if not safe_name or safe_name[0].isdigit():
+                safe_name = "_" + safe_name if safe_name else "sketch"
+            ino_path = folder_path / f"{safe_name}.ino"
+            
+            default_content = (
+                "void setup() {\n"
+                "  // put your setup code here, to run once:\n\n"
+                "}\n\n"
+                "void loop() {\n"
+                "  // put your main code here, to run repeatedly:\n\n"
+                "}\n"
+            )
+            ino_path.write_text(default_content, encoding="utf-8")
+            return True
+        except Exception as e:
+            messagebox.showerror(
+                "Error Creating File",
+                f"Failed to create .ino file:\n{e}",
+                parent=parent_win
+            )
+            return False
+    return False
+
+
+def show_project_selector(root: tk.Tk, initial_dir: str = "") -> Path | None:
+    """Show the startup project selector and return the chosen/created
+    project folder, or None if the user cancelled."""
+    dlg = ProjectSelectorDialog(root, initial_dir)
+    return dlg.run()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# BOARD SEARCH MODAL DIALOG
+# ═══════════════════════════════════════════════════════════════
+class BoardSearchDialog(tk.Toplevel):
+    """
+    Clean modal dialog to search & select from all supported MCU boards.
+    """
+    def __init__(self, parent, current_board, board_list, on_select_callback):
+        super().__init__(parent)
+        self.title("🔍 Search & Select MCU Board")
+        self.configure(bg=Theme.BG_MID)
+        self.resizable(False, False)
+
+        self.on_select_callback = on_select_callback
+        self.all_boards = list(board_list)
+        self.result = None
+
+        center_toplevel(self, width=460, height=400, parent=parent)
+
+        # Header
+        hdr_frame = tk.Frame(self, bg=Theme.BG_DARK, pady=8, padx=12)
+        hdr_frame.pack(fill=tk.X)
+        tk.Label(
+            hdr_frame, text="🔍 Search MCU Board",
+            font=("Montserrat", 11, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARK
+        ).pack(side=tk.LEFT)
+
+        # Search Entry
+        search_frame = tk.Frame(self, bg=Theme.BG_MID, pady=8, padx=12)
+        search_frame.pack(fill=tk.X)
+
+        tk.Label(
+            search_frame, text="Search:", font=("Montserrat", 9, "bold"),
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.search_var = tk.StringVar()
+        self.search_ent = tk.Entry(
+            search_frame, textvariable=self.search_var,
+            font=("Consolas", 10), bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            insertbackground=Theme.CYAN, borderwidth=0, highlightthickness=1,
+            highlightcolor=Theme.CYAN_DIM, highlightbackground=Theme.BORDER
+        )
+        self.search_ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+        self.search_ent.bind("<KeyRelease>", self._apply_filter)
+        self.search_ent.bind("<Down>", self._focus_listbox)
+        self.search_ent.bind("<Return>", self._on_return)
+        self.search_ent.bind("<Escape>", lambda e: self.destroy())
+
+        # Listbox Frame
+        list_frame = tk.Frame(self, bg=Theme.BG_LIGHT, bd=1, relief=tk.SOLID)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+
+        self.scrollbar = ttk.Scrollbar(
+            list_frame, orient=tk.VERTICAL,
+            style="Vertical.TScrollbar"
+        )
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.listbox = tk.Listbox(
+            list_frame, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            selectbackground=Theme.BG_HOVER, selectforeground=Theme.CYAN,
+            highlightthickness=0, bd=0, activestyle="none",
+            font=("Consolas", 9), yscrollcommand=self.scrollbar.set,
+            justify="left", exportselection=False
+        )
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.config(command=self.listbox.yview)
+
+        self.listbox.bind("<Double-Button-1>", self._on_double_click)
+        self.listbox.bind("<Return>", self._on_return)
+        self.listbox.bind("<Escape>", lambda e: self.destroy())
+
+        # Action Buttons
+        btn_frame = tk.Frame(self, bg=Theme.BG_MID, pady=8, padx=12)
+        btn_frame.pack(fill=tk.X)
+
+        self.btn_select = tk.Button(
+            btn_frame, text="Select Board", font=("Montserrat", 9, "bold"),
+            bg=Theme.BTN_MONITOR, fg="#ffffff", activebackground=Theme.BTN_MONITOR_H,
+            activeforeground="#ffffff", bd=0, padx=12, pady=4, cursor="hand2", command=self._confirm_selection
+        )
+        self.btn_select.pack(side=tk.RIGHT, padx=(6, 0))
+
+        btn_cancel = tk.Button(
+            btn_frame, text="Cancel", font=("Montserrat", 9),
+            bg=Theme.BG_LIGHT, fg=Theme.TEXT_DIM, activebackground=Theme.BG_HOVER,
+            bd=0, padx=12, pady=4, cursor="hand2", command=self.destroy
+        )
+        btn_cancel.pack(side=tk.RIGHT)
+
+        # Populate initial list
+        self._populate_list(self.all_boards)
+        if current_board in self.all_boards:
+            idx = self.all_boards.index(current_board)
+            self.listbox.selection_set(idx)
+            self.listbox.see(idx)
+
+        # Grab modal focus
+        self.transient(parent)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        self.search_ent.focus_set()
+        self.after(50, lambda: (self.lift(), self.focus_force(), self.search_ent.focus_force()))
+
+    def _populate_list(self, items):
+        self.listbox.delete(0, tk.END)
+        if items:
+            self.listbox.insert(tk.END, *items)
+
+    def _apply_filter(self, event=None):
+        if event and event.keysym in ("Up", "Down", "Return", "Escape"):
+            return
+        query = self.search_var.get().strip().lower()
+        if not query:
+            matches = list(self.all_boards)
+        else:
+            matches = [b for b in self.all_boards if query in b.lower()]
+        self._populate_list(matches)
+        if matches:
+            self.listbox.selection_set(0)
+
+    def _focus_listbox(self, event=None):
+        self.listbox.focus_set()
+        if self.listbox.size() > 0 and not self.listbox.curselection():
+            self.listbox.selection_set(0)
+        return "break"
+
+    def _on_double_click(self, event=None):
+        self._confirm_selection()
+
+    def _on_return(self, event=None):
+        self._confirm_selection()
+
+    def _confirm_selection(self):
+        sel = self.listbox.curselection()
+        if sel:
+            board = self.listbox.get(sel[0])
+            self.result = board
+            if self.on_select_callback:
+                self.on_select_callback(board)
+        self.destroy()
+
+
+# ─────────────────────────────────────────────────────────────
+# TOOLTIP COMPONENT
+# ─────────────────────────────────────────────────────────────
+class ToolTip:
+    """Creates a custom floating tooltip when hovering over a widget."""
+    def __init__(self, widget, text_func):
+        self.widget = widget
+        self.text_func = text_func
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text_func():
+            return
+        
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        
+        # Styled tooltip matching the theme palette
+        label = tk.Label(
+            tw, text=self.text_func(), justify=tk.LEFT,
+            background=Theme.BG_LIGHT, foreground=Theme.TEXT_BRIGHT,
+            relief=tk.SOLID, borderwidth=1,
+            highlightbackground=Theme.BORDER,
+            padx=8, pady=4,
+            font=("Montserrat", 9)
+        )
+        label.pack(ipadx=1)
+
+        # Force geometry calculation to get accurate window width
+        tw.update_idletasks()
+        
+        # Calculate screen/widget-relative tooltip position
+        widget_x = self.widget.winfo_rootx()
+        widget_w = self.widget.winfo_width()
+        widget_h = self.widget.winfo_height()
+        tip_w = tw.winfo_width()
+        
+        x = widget_x + 10
+        y = self.widget.winfo_rooty() + widget_h + 5
+        
+        # Check if tooltip extends beyond screen width
+        try:
+            screen_w = self.widget.winfo_screenwidth()
+            if x + tip_w > screen_w:
+                x = widget_x + widget_w - tip_w
+        except Exception:
+            pass
+            
+        if x < 0:
+            x = 10
+            
+        tw.wm_geometry(f"+{x}+{y}")
+
+    def hide_tip(self, event=None):
+        tw = self.tip_window
+        self.tip_window = None
+        if tw:
+            tw.destroy()
+
+
+class CircularLoadingOverlay(tk.Frame):
+    """
+    Sleek, modern loading overlay with an animated circular spinner.
+    Covers the AI container for 3 seconds while OpenCode AI starts in the background.
+    """
+    def __init__(self, parent, bg_color="#0c0d10", spinner_color="#00e5ff", text="Initializing AI Assistant..."):
+        super().__init__(parent, bg=bg_color)
+        self.bg_color = bg_color
+        self.spinner_color = spinner_color
+        self.angle = 0
+        self.is_animating = True
+        self._after_id = None
+
+        self.center_frame = tk.Frame(self, bg=bg_color)
+        self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.size = 64
+        self.canvas = tk.Canvas(
+            self.center_frame,
+            width=self.size,
+            height=self.size,
+            bg=bg_color,
+            highlightthickness=0
+        )
+        self.canvas.pack(pady=(0, 16))
+
+        self.title_label = tk.Label(
+            self.center_frame,
+            text=text,
+            font=("Segoe UI", 12, "bold"),
+            fg="#ffffff",
+            bg=bg_color
+        )
+        self.title_label.pack(pady=(0, 4))
+
+        self.sub_label = tk.Label(
+            self.center_frame,
+            text="Preparing workspace & loading AI environment...",
+            font=("Segoe UI", 9),
+            fg="#8a8f9d",
+            bg=bg_color
+        )
+        self.sub_label.pack()
+
+        self._draw_spinner()
+
+    def _draw_spinner(self):
+        if not self.is_animating:
+            return
+        try:
+            self.canvas.delete("all")
+            pad = 6
+            r = self.size - pad
+            self.canvas.create_oval(
+                pad, pad, r, r,
+                outline="#1e2330",
+                width=4
+            )
+            self.canvas.create_arc(
+                pad, pad, r, r,
+                start=self.angle,
+                extent=100,
+                outline=self.spinner_color,
+                style="arc",
+                width=4
+            )
+            self.angle = (self.angle + 12) % 360
+            self._after_id = self.after(30, self._draw_spinner)
+        except Exception:
+            pass
+
+    def stop_and_destroy(self):
+        self.is_animating = False
+        if self._after_id:
+            try:
+                self.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        try:
+            self.place_forget()
+            self.destroy()
+        except Exception:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN APPLICATION
+# ═══════════════════════════════════════════════════════════════
+class MCUUploadGUI:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.editor_mode = globals().get("_RESOLVED_EDITOR_MODE") or get_editor_mode()
+        self.editor_detached = False
+        self.autosave_enabled, self.autosave_delay_ms = get_autosave_settings()
+        self.periodic_reload_enabled, self.periodic_reload_interval_s = get_periodic_reload_settings()
+        self._periodic_reload_after_id = None
+        self._monaco_autosave_worker = MonacoAutosaveWorker(self)
+        self._monaco_autosave_worker.update_state()
+        self._restart_periodic_reload()
+        if AIController is not None and is_opencode_installed():
+            self.ai_controller = AIController(
+                get_sketch_dir_func=lambda: getattr(self, "sketch_dir_path", os.getcwd()),
+                root=self.root,
+                on_ai_edit_func=self._on_ai_applied_edit,
+                on_state_change_func=self._update_ai_button_label
+            )
+        else:
+            self.ai_controller = None
+        self.root.title("MCU Flasher by Naph — ESP32 Upload & Monitor")
+        self.screen_w, self.screen_h = self._get_current_monitor_dimensions()
+        self._display_scale = _get_widget_dpi_scale(self.root)
+
+        # Use half of the active monitor as the normal resize floor. The
+        # compact responsive mode keeps both toolbars on one row at that
+        # width; portrait displays are clamped safely inside their work area.
+        self._min_window_width = self._minimum_width_for_display(
+            self.screen_w, self.screen_h, self._display_scale
+        )
+        logical_screen_h = self.screen_h / self._display_scale
+        logical_min_h = min(460, max(400, logical_screen_h - 120))
+        safe_margin_h = min(self.screen_h // 4, round(48 * self._display_scale))
+        self._min_window_height = min(
+            round(logical_min_h * self._display_scale),
+            max(260, self.screen_h - safe_margin_h),
+        )
+        self.root.minsize(self._min_window_width, self._min_window_height)
+
+        if (self.screen_w / self._display_scale < 1400
+                or self.screen_h / self._display_scale < 800):
+            self._editor_height = 200
+            self._editor_minsize = 140
+            self._bottom_height = 220
+            self._bottom_minsize = 190
+        else:
+            self._editor_height = 400
+            self._editor_minsize = 180
+            self._bottom_height = 250
+            self._bottom_minsize = 210
+        self.root.configure(bg=Theme.BG_DARKEST)
+
+        # ── State ──
+        self.serial_conn: serial.Serial | None = None
+        self.serial_thread: threading.Thread | None = None
+        self.serial_running = False
+        self._monitor_should_run = False   # intent flag: True = keep reconnecting
+        self._first_connect_done = False    # becomes True after the first successful serial connect
+        self._monitor_paused = False       # True = keep reading the port, but hold back display
+        self.process: subprocess.Popen | None = None
+        self._download_managers: list[subprocess.Popen] = []
+        self.is_busy = False
+        # Compile owns the CPU; cooperative background workers check this
+        # event before performing scans, probes, or syntax work.
+        self._compile_background_lock = threading.Event()
+        self._board_port_confirmed = False  # True only once esptool's live probe (or a known chip signature) confirms what's on the port
+        self.sketch_dir_path = DEFAULT_SKETCH_DIR
+        self._last_known_ports: set = set()  # for USB hotplug detection
+        self._auto_start_after_id = None
+        self._last_conn_attempt = {"port": "", "baud": 0, "board": "", "time": 0.0}
+        # High-baud serial devices can produce hundreds of lines per second.
+        # Batch those lines before touching Tk, whose widget updates must stay
+        # on the main thread.
+        self._serial_display_queue: list[tuple[str, str, bool]] = []
+        self._serial_display_lock = threading.Lock()
+        self._serial_display_flush_scheduled = False
+        # Track if we're at the start of a new line (for timestamp prefix)
+        self._serial_at_line_start = True
+        # Avoid repeating the same warning on automatic reconnects. A changed
+        # USB descriptor gets a fresh warning.
+        self._warned_unrecognized_port_signatures: set[tuple[str, str]] = set()
+        self._first_run = True
+        self._last_monitor_error = ""
+        self._focus_tab_on_unlock = None  # one-shot: tab index to select when busy state next clears
+
+        # ── Compile cache ──
+        # Tracks whether sources have changed since the last successful compile.
+        # _compile_cache_hash is the hash saved after the last successful compile
+        # for the current project. It is invalidated whenever the folder changes.
+        self._compile_cache_hash: str | None = None
+        # Track which board the last successful compile was for so we can tell
+        # the user "board changed → full rebuild" instead of "first-time compile".
+        self._last_compiled_board: str | None = None
+        # Per-board hash cache: {board_name: hash}. Lets each board remember its
+        # own "sources unchanged, safe to skip recompile" state independently,
+        # so switching back to a previously-built board doesn't force a
+        # needless rebuild just because a different board was compiled in between.
+        self._compile_cache_by_board: dict[str, str] = {}
+        # Exact PlatformIO DEBUG/RAM/Flash rows from each successful build.
+        # The direct esptool path intentionally skips PlatformIO's upload
+        # wrapper, so this cache lets it restore the useful build summary
+        # without paying for another SCons/project scan.
+        self._build_metadata_by_board: dict[str, dict] = {}
+        self._platform_upload_metadata_cache: dict[tuple[str, str, str], dict] = {}
+        self._compat_warnings_approved_hash: str | None = None
+        self._stop_requested: bool = False
+        self._op_session_id: int = 0
+
+        import concurrent.futures
+        self._bg_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, min(3, _resource_safe_worker_count("MEDIUM"))),
+            thread_name_prefix="MCUBgExecutor"
+        )
+
+        # ── Startup project selector ──
+        # Prompt for a project (existing folder, or scaffold a new one)
+        # before the main window appears.
+        self.root.withdraw()  # hide main window until project is chosen
+        config = load_gui_config()
+        
+        # Check if project was passed in command line arguments (e.g. after a restart)
+        cmd_project = None
+        if "--project" in sys.argv:
+            try:
+                idx = sys.argv.index("--project")
+                if idx + 1 < len(sys.argv):
+                    candidate = Path(sys.argv[idx + 1])
+                    if candidate.exists() and candidate.is_dir():
+                        cmd_project = candidate
+            except Exception:
+                pass
+
+        if cmd_project:
+            if _validate_and_scaffold_ino(self.root, cmd_project):
+                project_dir = cmd_project
+            else:
+                cmd_project = None
+
+        if not cmd_project:
+            last_dir = config.get("last_sketch_dir") or ""
+            if last_dir and not Path(last_dir).exists():
+                last_dir = ""
+            project_dir = show_project_selector(self.root, initial_dir=last_dir)
+
+        if not project_dir:
+            try:
+                set_monaco_boot_pending(False)
+                project_cancelled.set()
+            except Exception:
+                pass
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            return
+
+        self.sketch_dir_path = project_dir
+        config["last_sketch_dir"] = str(self.sketch_dir_path)
+        save_gui_config(config)
+
+        self.root.deiconify()  # show main window now
+        self.root.lift()
+        self.root.focus_force()
+        self.root.attributes("-topmost", True)
+        self.root.after(500, self._unset_main_topmost)
+
+        # ── Icon ──
+        try:
+            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            if icon_path.exists():
+                self.root.iconbitmap(default=str(icon_path))
+                self.root.iconbitmap(str(icon_path))
+            else:
+                self.root.iconbitmap(default="")
+        except Exception:
+            pass
+
+        # ── Fonts & button scaling ──
+        # Continuous scale factor based on screen resolution instead of a
+        # hard small/large cutoff, so sizing adapts smoothly across monitors
+        # (1.0 == a 1920x1080 reference display). Also trimmed down slightly
+        # across the board since the old fixed sizes ran a bit large.
+        logical_screen_w = self.screen_w / self._display_scale
+        logical_screen_h = self.screen_h / self._display_scale
+        self._ui_scale = max(
+            0.65,
+            min(1.0, min(logical_screen_w / 1920.0, logical_screen_h / 1080.0)),
+        )
+        self._last_applied_scale = self._ui_scale
+        self._scalable_buttons: list[tk.Button] = []
+
+        def _sz(base: float, floor: int) -> int:
+            return max(floor, round(base * self._ui_scale))
+
+        self.font_title    = tkfont.Font(family="Montserrat", size=_sz(15, 11), weight="bold")
+        self.font_subtitle = tkfont.Font(family="Montserrat", size=_sz(9, 8))
+        self.font_label    = tkfont.Font(family="Montserrat", size=_sz(9, 8))
+        self.font_btn      = tkfont.Font(family="Montserrat", size=_sz(9, 7), weight="bold")
+        self.font_mono     = tkfont.Font(family="Consolas", size=_sz(10, 8))
+        self.font_mono_sm  = tkfont.Font(family="Consolas", size=_sz(9, 8))
+        self.font_status   = tkfont.Font(family="Montserrat", size=_sz(9, 8))
+        self.monitor_font_size = get_monitor_font_size()
+        self.monitor_font = tkfont.Font(family="Consolas", size=self.monitor_font_size)
+        self.monitor_font_bold = tkfont.Font(family="Consolas", size=self.monitor_font_size, weight="bold")
+        self.monitor_font_header = tkfont.Font(family="Consolas", size=self.monitor_font_size + 1, weight="bold")
+        self.monitor_font_large_bold = tkfont.Font(family="Consolas", size=self.monitor_font_size + 2, weight="bold")
+        self.monitor_heading_font = tkfont.Font(family="Montserrat", size=self.monitor_font_size, weight="bold")
+        self._btn_padx = round(_sz(10, 6) * self._display_scale)
+        self._btn_pady = round(_sz(3, 2) * self._display_scale)
+
+        self._build_ui()
+
+        # Force immediate rendering of the UI & Code Editor to the screen
+        self.root.update_idletasks()
+
+        # Re-tune button padding/font live as the window is resized, so
+        # buttons keep shrinking a bit further if the user makes the window
+        # smaller than the screen (not just at startup).
+        self.root.bind("<Configure>", self._on_root_configure)
+        # Refresh skip-compile readiness whenever the main window regains focus
+        # (e.g. after the embedded editor has auto-saved files on the side).
+        self.root.bind("<FocusIn>", lambda _e: self.root.after(
+            200, self._update_skip_compile_state), add="+")
+
+        # ── Cleanup on close ──
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._first_run = False
+        self._deferred_bg_done = False
+
+        # Defer secondary background services (serial probing, syntax checks)
+        # until the Code Editor is fully loaded & rendered (or 1500ms safety fallback),
+        # giving 100% CPU & thread priority to editor startup.
+        self.root.after(1500, self._deferred_background_init)
+
+    def _unset_main_topmost(self):
+        try:
+            if hasattr(self, "root") and self.root:
+                self.root.attributes("-topmost", False)
+        except Exception:
+            pass
+
+    def _deferred_background_init(self):
+        """Asynchronously initialize secondary background services (serial port probing,
+        board state checks, background syntax checker, serial monitor connection) AFTER
+        the editor UI is fully rendered and interactive."""
+        if getattr(self, "_deferred_bg_done", False):
+            return
+        self._deferred_bg_done = True
+        try:
+            self._on_board_changed()
+            self._refresh_ports()
+            self._update_hardware_action_buttons()
+            # ── Start the serial monitor FIRST, before any esptool probe ──
+            # The probe inside _refresh_ports above runs in a background thread
+            # and may open/close the port via esptool — which eats the MCU's
+            # boot banner (ESP-ROM, rst, load, entry) before the monitor can
+            # see it. Starting the monitor here means it opens the port first,
+            # captures the full boot output, and the probe then skips the port
+            # (it detects the monitor is alive and returns early).
+            self._monitor_should_run = True  # signals esptool probe to bail out immediately
+            self._schedule_auto_start_monitor(0)
+            self._start_port_polling()
+            self._start_background_syntax_thread()
+        except Exception as e:
+            print(f"[MCU Flasher] Error in deferred background init: {e}")
+
+    def _get_sketch_display_name(self) -> str:
+        if hasattr(self, "sketch_dir_path") and self.sketch_dir_path:
+            return self.sketch_dir_path.name
+        return ""
+
+    def _update_sketch_marquee(self):
+        """Perform a smooth sliding/marquee text animation step for the project name label."""
+        if getattr(self, "_sketch_marquee_after_id", None) is not None:
+            try:
+                self.root.after_cancel(self._sketch_marquee_after_id)
+            except Exception:
+                pass
+            self._sketch_marquee_after_id = None
+
+        if not hasattr(self, "lbl_sketch") or not self.lbl_sketch:
+            return
+
+        folder_name = self.sketch_dir_path.name if hasattr(self, "sketch_dir_path") and self.sketch_dir_path else ""
+        if not folder_name:
+            return
+
+        width = 0
+        try:
+            width = self.root.winfo_width()
+        except Exception:
+            pass
+
+        # Determine visible character limit based on window width
+        if width and width < 950:
+            limit = 14
+        elif width and width < 1200:
+            limit = 18
+        elif width and width < 1400:
+            limit = 28
+        else:
+            limit = 45
+
+        if len(folder_name) <= limit:
+            # Full project name fits inside container, no sliding needed
+            try:
+                self.lbl_sketch.configure(text=folder_name)
+            except Exception:
+                pass
+            self._sketch_marquee_idx = 0
+            self._sketch_marquee_dir = 1
+            self._sketch_marquee_after_id = self.root.after(1000, self._update_sketch_marquee)
+            return
+
+        # Perform ping-pong marquee animation with pauses at start and end
+        max_idx = len(folder_name) - limit
+        idx = getattr(self, "_sketch_marquee_idx", 0)
+        direction = getattr(self, "_sketch_marquee_dir", 1)
+
+        display_str = folder_name[idx:idx + limit]
+        try:
+            self.lbl_sketch.configure(text=display_str)
+        except Exception:
+            pass
+
+        delay = 350
+        if idx == 0 and direction == 1:
+            delay = 1800  # Pause at start so user can read beginning easily
+        elif idx >= max_idx and direction == 1:
+            delay = 1800  # Pause at end
+            direction = -1
+        elif idx <= 0 and direction == -1:
+            delay = 1800  # Pause at start before bouncing right again
+            direction = 1
+
+        next_idx = idx + direction
+        if next_idx > max_idx:
+            next_idx = max_idx
+            direction = -1
+        elif next_idx < 0:
+            next_idx = 0
+            direction = 1
+
+        self._sketch_marquee_idx = next_idx
+        self._sketch_marquee_dir = direction
+
+        self._sketch_marquee_after_id = self.root.after(delay, self._update_sketch_marquee)
+
+    # ──────────────────────────────────────────────────────────
+    # UI CONSTRUCTION
+    # ──────────────────────────────────────────────────────────
+    def _build_ui(self):
+        # Use the 'clam' ttk theme for the whole window right from the start.
+        # Native themes (vista/xpnative on Windows, aqua on macOS) render
+        # Notebook tabs, Comboboxes, and Scrollbars using the OS's own visual
+        # styling engine and silently ignore ttk style.configure() background/
+        # foreground overrides. 'clam' draws everything with ttk's own
+        # generic engine, which is the only way our dark colorway (Theme.*)
+        # actually reaches these widgets. This must happen before any ttk
+        # widget in this window is created or styled.
+        ttk.Style().theme_use("clam")
+
+        # ── Title Bar ──
+        logical_screen_w = self.screen_w / self._display_scale
+        logical_screen_h = self.screen_h / self._display_scale
+        is_compact_display = logical_screen_w < 1400 or logical_screen_h < 800
+        title_pady = round((6 if is_compact_display else 10) * self._display_scale)
+        title_padx = round((10 if is_compact_display else 16) * self._display_scale)
+        title_frame = tk.Frame(self.root, bg=Theme.BG_DARK, pady=title_pady, padx=title_padx)
+        self.title_frame = title_frame
+        title_frame.pack(fill=tk.X)
+
+        self.title_row_top = tk.Frame(title_frame, bg=Theme.BG_DARK)
+        self.title_row_top.pack(fill=tk.X)
+
+        self.title_row_bottom = tk.Frame(title_frame, bg=Theme.BG_DARK)
+
+        self.title_left = tk.Frame(self.title_row_top, bg=Theme.BG_DARK)
+        self.title_left.pack(side=tk.LEFT)
+
+        # Logo text
+        tk.Label(
+            self.title_left, text="⚡ MCU Flasher by Naph",
+            font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARK,
+        ).pack(side=tk.LEFT)
+        self.lbl_app_title = self.title_left.winfo_children()[-1]
+
+        self.title_subtitle_label = None
+
+        # Sketch path on the right (packed first to lock it to the far right)
+        self.sketch_frame = tk.Frame(self.title_row_top, bg=Theme.BG_DARK)
+        self.sketch_frame.pack(side=tk.RIGHT)
+
+        self.lbl_sketch_icon = tk.Label(
+            self.sketch_frame, text="📁 ",
+            font=self.font_mono_sm, fg=Theme.TEXT_DIM, bg=Theme.BG_DARK,
+            cursor="hand2"
+        )
+        self.lbl_sketch_icon.pack(side=tk.LEFT)
+        self.lbl_sketch_icon.bind("<Button-1>", lambda e: self._open_sketch_in_explorer())
+        self.lbl_sketch_icon.bind("<Button-3>", lambda e: self._select_sketch_folder())
+
+        self.lbl_sketch = tk.Label(
+            self.sketch_frame, text=self._get_sketch_display_name(),
+            font=self.font_mono_sm, fg=Theme.TEXT_DIM, bg=Theme.BG_DARK,
+            cursor="hand2"
+        )
+        self.lbl_sketch.pack(side=tk.LEFT)
+        self.lbl_sketch.bind("<Button-1>", lambda e: self._open_sketch_in_explorer())
+        self.lbl_sketch.bind("<Button-3>", lambda e: self._select_sketch_folder())
+        ToolTip(self.lbl_sketch, lambda: f"{self.sketch_dir_path}  •  Left-click: open in Explorer  •  Right-click: change project folder")
+        ToolTip(self.lbl_sketch_icon, lambda: f"{self.sketch_dir_path}  •  Left-click: open in Explorer  •  Right-click: change project folder")
+
+        self._update_sketch_marquee()
+
+        self.btn_new_project = self._make_icon_btn(
+            self.sketch_frame, "📁", self._new_project,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, width=3
+        )
+        self.btn_new_project.pack(side=tk.LEFT, padx=(4, 0))
+
+        download_btn_text = "⬇ Download" if is_compact_display else "⬇ Download Boards/Libraries"
+        self.btn_download_mgr = self._make_btn(
+            self.sketch_frame, download_btn_text, self._open_download_manager,
+            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, font=self.font_label
+        )
+        self.btn_download_mgr.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Centered action buttons container with indicator
+        self.actions_frame = tk.Frame(self.root, bg=Theme.BG_DARK)
+        self.actions_frame.pack(in_=self.title_row_top, side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.top_compact_actions = tk.Frame(self.root, bg=Theme.BG_DARK)
+        self.top_compact_inner = tk.Frame(self.top_compact_actions, bg=Theme.BG_DARK)
+        self.top_compact_inner.pack(expand=True)
+        # Compact mode keeps the two most common actions visible, and puts
+        # every other action behind the same kind of lightweight popup used
+        # by OPTIONS.  This prevents functionality disappearing on narrow
+        # windows while keeping the title bar useful.
+        self._actions_dropdown_btn = self._make_btn(
+            self.root, "Actions ▾", self._toggle_actions_dropdown,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        self._actions_dropdown_win = None
+
+        self.inner_actions = tk.Frame(self.actions_frame, bg=Theme.BG_DARK)
+        self.inner_actions.pack(expand=True)
+
+        self.lbl_actions_title = tk.Label(
+            self.root, text="ACTIONS", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK
+        )
+        self.lbl_actions_title.pack(in_=self.inner_actions, side=tk.LEFT, padx=(0, 8))
+
+        self.btn_compile = self._make_btn(self.root, "⚙ Compile", self._do_compile,
+                                           Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
+        self.btn_compile.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        self.btn_upload = self._make_btn(self.root, "⚡ Upload", self._do_upload,
+                                          Theme.BTN_FULL, Theme.BTN_FULL_H)
+        self.btn_upload.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        self.btn_stop = self._make_btn(self.root, "■ Stop", self._do_stop,
+                                        Theme.BTN_STOP, Theme.BTN_STOP_H)
+        self.btn_stop.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+        self.btn_stop.configure(state=tk.DISABLED)
+
+        self.btn_clean = self._make_btn(self.root, "🧹 Clean", self._do_clean,
+                                         Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
+        self.btn_clean.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        # Divider frame
+        self.title_divider = tk.Frame(self.root, bg=Theme.BORDER, width=2, height=22)
+        self.title_divider.pack(in_=self.inner_actions, side=tk.LEFT, padx=8)
+
+        self.btn_save = self._make_btn(
+            self.root, "💾 Save", self._trigger_save,
+            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
+        )
+        self.btn_save.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        self.btn_save_all = self._make_btn(
+            self.root, "💾 Save All", self._trigger_save_all,
+            Theme.BTN_FULL, Theme.BTN_FULL_H
+        )
+        self.btn_save_all.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        self.btn_reload_file = self._make_btn(
+            self.root, "↺ Reload", lambda: self._reload_current_editor_file(),
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
+        )
+        self.btn_reload_file.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        self.btn_modify_files = self._make_btn(
+            self.root, "🛠 Modify", self._open_modify_files_dialog,
+            Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
+        )
+        self.btn_modify_files.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+        # ── Separator ──
+        tk.Frame(self.root, bg=Theme.CYAN_DIM, height=2).pack(fill=tk.X)
+
+        # ── Controls Bar ──
+        ctrl_frame = tk.Frame(
+            self.root, bg=Theme.BG_MID,
+            pady=round(10 * self._display_scale),
+            padx=round(16 * self._display_scale),
+        )
+        self.ctrl_frame = ctrl_frame
+        ctrl_frame.pack(fill=tk.X)
+
+        self.ctrl_row_top = tk.Frame(ctrl_frame, bg=Theme.BG_MID)
+        self.ctrl_row_top.pack(fill=tk.X)
+
+        self.ctrl_row_bottom = tk.Frame(ctrl_frame, bg=Theme.BG_MID)
+
+        # Board selection
+        self.board_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
+        self.board_group.pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Label(self.board_group, text="BOARD", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(anchor=tk.W)
+
+        board_row = tk.Frame(self.board_group, bg=Theme.BG_MID)
+        board_row.pack(fill=tk.X)
+
+        self._build_board_dropdown(board_row)
+
+        # Port selection
+        self.port_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
+        self.port_group.pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Label(self.port_group, text="PORT", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(anchor=tk.W)
+
+        port_row = tk.Frame(self.port_group, bg=Theme.BG_MID)
+        port_row.pack()
+
+        self.port_var = tk.StringVar()
+        # Make the width of the port combobox dynamic to prevent overflow on smaller screens (like 1366x768)
+        port_width = 30 if is_compact_display else 45
+        self.port_combo = ttk.Combobox(
+            port_row, textvariable=self.port_var, width=port_width,
+            font=self.font_mono_sm, state="readonly", justify="left",
+            postcommand=self._refresh_ports,
+        )
+        self.port_combo.pack(side=tk.LEFT, padx=(0, 4))
+        self.port_combo.bind("<<ComboboxSelected>>", lambda e: self._on_port_changed())
+        self.port_combo.bind("<Button-1>", lambda e: safe_reclaim_os_focus(self.port_combo), add="+")
+
+        self._marquee_dir = 1
+        self._marquee_pause = 0
+        self._board_marquee_dir = 1
+        self._board_marquee_pause = 0
+        self._start_marquee()
+
+        # Baud rate now lives in the Serial Monitor tab header only.
+        # Keep baud_var for internal use (auto_start_monitor, resume_monitor).
+        self.baud_var = tk.StringVar(value=str(DEFAULT_BAUD))
+
+        # Upload speed (used for flashing; independent of serial monitor baud)
+        self.upload_spd_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
+        self.upload_spd_group.pack(side=tk.LEFT, padx=(0, 8))
+        self._upload_spd_group = self.upload_spd_group  # saved for show/hide
+
+        lbl_upload_spd = tk.Label(self.upload_spd_group, text="UPLOAD SPD", font=self.font_label,
+                                  fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
+        lbl_upload_spd.pack(anchor=tk.W)
+        self._lbl_upload_spd = lbl_upload_spd  # referenced by _apply_responsive_layout
+
+        self.upload_speed_var = tk.StringVar(value=str(DEFAULT_UPLOAD_SPEED))
+        self.upload_speed_combo = ttk.Combobox(
+            self.upload_spd_group, textvariable=self.upload_speed_var, width=10,
+            font=self.font_mono_sm, state="readonly", justify="center",
+            values=["115200", "230400", "460800", "512000", "921600"],
+        )
+        self.upload_speed_combo.pack()
+        self.upload_speed_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_upload_speed_changed()
+        )
+
+        def _get_upload_speed_tip():
+            board_name = self.board_var.get()
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            platform = board_info.get("platform", "")
+            if platform == "atmelavr":
+                return "115200 is the only stable upload speed supported by AVR boards."
+            elif platform in ("espressif32", "espressif8266"):
+                return "460800 is the recommended stable upload speed for ESP32/ESP8266."
+            return "460800 is the recommended stable upload speed."
+
+        ToolTip(lbl_upload_spd, _get_upload_speed_tip)
+        ToolTip(self.upload_speed_combo, _get_upload_speed_tip)
+
+        # Action buttons moved to title bar
+
+        # Right side: clear + autoscroll
+        self.right_group = tk.Frame(self.root, bg=Theme.BG_MID)
+        self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT)
+        self._right_ctrl_group = self.right_group  # saved for upload spd re-packing
+
+        self.lbl_options_title = tk.Label(self.right_group, text="OPTIONS", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
+        self.lbl_options_title.pack(pady=(0, 2))
+
+        self.opt_row = tk.Frame(self.right_group, bg=Theme.BG_MID)
+        self.opt_row.pack()
+
+        self.opt_checkboxes_frame = tk.Frame(self.opt_row, bg=Theme.BG_MID)
+        self.opt_checkboxes_frame.pack(side=tk.LEFT, padx=(0, 16))
+
+        self.opt_buttons_frame = tk.Frame(self.opt_row, bg=Theme.BG_MID)
+        self.opt_buttons_frame.pack(side=tk.LEFT)
+
+        self.console_autoscroll_var = tk.BooleanVar(value=True)
+        self.serial_autoscroll_var = tk.BooleanVar(value=True)
+
+        self.timestamp_var = tk.BooleanVar(value=False)
+        self.cb_timestamp = tk.Checkbutton(
+            self.opt_checkboxes_frame, text="Time Stamp", variable=self.timestamp_var,
+            command=self._toggle_timestamps,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_timestamp.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.skip_compile_var = tk.BooleanVar(value=False)
+        self.cb_skip_compile = tk.Checkbutton(
+            self.opt_checkboxes_frame, text="Skip Compile", variable=self.skip_compile_var,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_skip_compile.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_detach_editor = self._make_btn(
+            self.opt_buttons_frame, "🗗 Detach Editor", self._toggle_editor_detachment,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        if sys.platform == "win32" and win32gui is not None:
+            self.btn_detach_editor.pack(side=tk.LEFT, padx=(0, 8))
+            self._update_detach_button_style()
+
+        self.btn_toggle_editor = self._make_btn(
+            self.opt_buttons_frame, "🗖 Hide Editor", self._toggle_editor_pane,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        self.btn_toggle_editor.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_toggle_monitors = self._make_btn(
+            self.opt_buttons_frame, "🗖 Hide Monitors", self._toggle_monitors_pane,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        self.btn_toggle_monitors.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_settings = self._make_btn(
+            self.root, "⚙ Settings", self._open_settings,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        self.btn_settings.pack(in_=self.opt_buttons_frame, side=tk.LEFT, padx=(0, 8))
+
+        if self.ai_controller:
+            self.btn_ai_assistant = self._make_btn(
+                self.root, "🤖 AI Assistant", self._toggle_ai_side_panel,
+                Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+            )
+            self.btn_ai_assistant.pack(in_=self.opt_buttons_frame, side=tk.LEFT, padx=(0, 8))
+            self.ai_controller.add_button(self.btn_ai_assistant)
+        else:
+            self.btn_ai_assistant = None
+
+        # Dropdown trigger for compact mode (shows option buttons in a popup)
+        self._opt_dropdown_btn = self._make_btn(
+            self.root, "⚙ ▾", self._toggle_options_dropdown,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_btn
+        )
+        self._opt_dropdown_win = None
+
+        # ── Separator ──
+        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+
+        # ═══════════════════════════════════════════════════════
+        # REDESIGNED ARDUINO-IDE STYLE LAYOUT
+        # ═══════════════════════════════════════════════════════
+        # style Bottom.TNotebook for dark theme
+        try:
+            style = ttk.Style()
+            style.configure("Bottom.TNotebook",
+                            background=Theme.BG_DARK,
+                            borderwidth=0,
+                            tabmargins=[2, 4, 0, 0])
+            style.configure("Bottom.TNotebook.Tab",
+                            background=Theme.BG_MID,
+                            foreground=Theme.TEXT_DIM,
+                            padding=[16, 6],
+                            font=("Segoe UI", 9, "bold"))
+            style.map("Bottom.TNotebook.Tab",
+                      background=[("selected", Theme.BG_HOVER), ("active", Theme.BG_LIGHT)],
+                      foreground=[("selected", Theme.TEXT_BRIGHT), ("active", Theme.TEXT)])
+        except Exception:
+            pass
+
+        try:
+            raw_data = _load_raw_config()
+            graphics_accel = raw_data.get("shared", {}).get("graphics_acceleration", "ON") != "OFF"
+        except Exception:
+            graphics_accel = True
+
+        # ── HORIZONTAL SPLIT PANE: Left (Editor + Monitors) | Right (AI Assistant) ──
+        self.h_split_pane = tk.PanedWindow(
+            self.root, orient=tk.HORIZONTAL,
+            bg=Theme.BORDER, sashwidth=4, sashrelief=tk.FLAT,
+            borderwidth=0,
+            opaqueresize=graphics_accel,
+        )
+        self.h_split_pane.pack(fill=tk.BOTH, expand=True)
+
+        # ── LEFT: Main Vertical Pane (Editor top, Monitors bottom) ──
+        self.main_pane = tk.PanedWindow(
+            self.h_split_pane, orient=tk.VERTICAL,
+            bg=Theme.BORDER, sashwidth=3, sashrelief=tk.FLAT,
+            borderwidth=0,
+            opaqueresize=graphics_accel,
+        )
+        self.h_split_pane.add(self.main_pane, stretch="always")
+
+        # ── RIGHT SIDEBAR: OpenCode AI Assistant Side Container ──
+        self.ai_side_container = tk.Frame(self.h_split_pane, bg=Theme.BG_DARKEST)
+
+        # AI Side Header Bar
+        self.ai_side_header = tk.Frame(self.ai_side_container, bg=Theme.BG_MID, height=32, padx=8, pady=4)
+        self.ai_side_header.pack(fill=tk.X)
+
+        self.lbl_ai_side_title = tk.Label(
+            self.ai_side_header,
+            text="🤖 OPENCODE AI ASSISTANT",
+            font=tkfont.Font(family="Montserrat", size=9, weight="bold"),
+            fg=Theme.CYAN, bg=Theme.BG_MID
+        )
+        self.lbl_ai_side_title.pack(side=tk.LEFT, padx=(2, 0))
+        # Embed frame for pywebview AI window
+        self.ai_embed_frame = tk.Frame(self.ai_side_container, bg=Theme.BG_DARKEST)
+        self.ai_embed_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.ai_embed_frame.bind("<Configure>", self._resize_embedded_ai)
+        self._ai_side_visible = False
+        self._ai_is_embedded = False
+        self._ai_hwnd = None
+
+        # ── TOP: Embedded Code Editor ──
+        editor_frame = tk.Frame(self.main_pane, bg=Theme.BG_DARKEST)
+        self.editor_frame = editor_frame
+        self._build_editor(editor_frame)
+        self.main_pane.add(editor_frame, minsize=self._editor_minsize, height=self._editor_height)
+
+        # ── BOTTOM: Build Console + Serial Monitor Tabs ──
+        bottom_frame = tk.Frame(self.main_pane, bg=Theme.BG_DARK)
+        self.bottom_frame = bottom_frame
+        self.bottom_notebook = ttk.Notebook(bottom_frame, style="Bottom.TNotebook")
+        self.bottom_notebook.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        # ── TAB 1: Build Console ──
+        build_console_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+
+        # Build Console Header
+        console_header = tk.Frame(build_console_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        console_header.pack(fill=tk.X)
+
+        self.lbl_build_console_title = tk.Label(
+            console_header, text="⚙ BUILD CONSOLE",
+            font=self.monitor_heading_font,
+            fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_build_console_title.pack(side=tk.LEFT)
+
+        btn_clear_console = self._make_btn(
+            console_header, "🗑 Clear", self._clear_console,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_clear_console.pack(side=tk.RIGHT)
+        self.btn_clear_console_header = btn_clear_console
+
+        def _copy_console():
+            text = self.console.get("1.0", tk.END).strip()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            btn_copy_console.config(text="✔ Copied!")
+            self.root.after(1500, lambda: btn_copy_console.config(text="⧉ Copy"))
+
+        btn_copy_console = self._make_btn(
+            console_header, "⧉ Copy", _copy_console,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_copy_console.pack(side=tk.RIGHT, padx=(0, 6))
+        self.btn_copy_console_header = btn_copy_console
+
+        initial_clear_val = get_clear_serial_on_upload()
+        self.clear_serial_on_upload_var = tk.BooleanVar(value=initial_clear_val)
+        self.cb_clear_serial_on_upload = tk.Checkbutton(
+            console_header, text="Auto-clear Serial Monitor on Action",
+            variable=self.clear_serial_on_upload_var,
+            command=lambda: set_clear_serial_on_upload(self.clear_serial_on_upload_var.get()),
+            font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_clear_serial_on_upload.pack(side=tk.RIGHT, padx=(0, 10))
+
+        initial_clear_build_val = get_clear_build_console_on_action()
+        self.clear_build_console_on_action_var = tk.BooleanVar(value=initial_clear_build_val)
+        self.cb_clear_build_console_on_action = tk.Checkbutton(
+            console_header, text="Clear Screen on Action",
+            variable=self.clear_build_console_on_action_var,
+            command=lambda: set_clear_build_console_on_action(self.clear_build_console_on_action_var.get()),
+            font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_clear_build_console_on_action.pack(side=tk.RIGHT, padx=(0, 10))
+        self.cb_console_autoscroll = tk.Checkbutton(
+            console_header, text="Auto-scroll",
+            variable=self.console_autoscroll_var,
+            font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_console_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
+
+        tk.Frame(build_console_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+
+        self.console = tk.Text(
+            build_console_frame,
+            bg=Theme.BG_DARKEST,
+            fg=Theme.TEXT,
+            font=self.monitor_font,
+            insertbackground=Theme.CYAN,
+            selectbackground=Theme.BG_HOVER,
+            selectforeground=Theme.TEXT_BRIGHT,
+            inactiveselectbackground=Theme.BG_HOVER,
+            exportselection=False,
+            borderwidth=0,
+            highlightthickness=0,
+            padx=12,
+            pady=8,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            cursor="xterm",
+        )
+
+        scrollbar = ttk.Scrollbar(
+            build_console_frame, orient=tk.VERTICAL, command=self.console.yview
+        )
+        self.console.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._setup_selectable_read_only_text(self.console, clear_callback=self._clear_console)
+
+        # Console text tags for coloring
+        for widget in [self.console]:  # tag setup helper
+            widget.tag_configure("info",    foreground=Theme.BLUE)
+            widget.tag_configure("success", foreground=Theme.GREEN)
+            widget.tag_configure("success_bold_lg", foreground=Theme.GREEN, font=self.monitor_font_large_bold)
+            widget.tag_configure("warning", foreground=Theme.YELLOW)
+            widget.tag_configure("error",   foreground=Theme.RED)
+            widget.tag_configure("system",  foreground=Theme.CYAN)
+            widget.tag_configure("dim",     foreground=Theme.TEXT_DIM)
+            widget.tag_configure("magenta", foreground=Theme.MAGENTA)
+            widget.tag_configure("magenta_bold_lg", foreground=Theme.MAGENTA, font=self.monitor_font_large_bold)
+            widget.tag_configure("orange",  foreground=Theme.ORANGE)
+            widget.tag_configure("bold",    font=self.monitor_font_bold)
+            widget.tag_configure("port_highlight", foreground="#ff3fa4",
+                                 font=self.monitor_font_bold)
+            widget.tag_configure("header",  foreground=Theme.CYAN,
+                                 font=self.monitor_font_header)
+            widget.tag_configure("purple",  foreground=Theme.PURPLE)
+            widget.tag_configure("purple_dim", foreground=Theme.PURPLE_DIM)
+            widget.tag_configure("purple_header", foreground=Theme.PURPLE,
+                                 font=self.monitor_font_bold)
+            widget.tag_configure("purple_info", foreground=Theme.PURPLE_DIM)
+            widget.tag_configure("purple_value", foreground=Theme.TEXT_BRIGHT)
+            widget.tag_configure("sent",    foreground=Theme.MAGENTA)
+            widget.tag_configure("severe_alert", foreground="#FF3355", font=self.monitor_font_bold)
+            widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
+
+        self.bottom_notebook.add(build_console_frame, text="  ⚙ Build Console  ")
+
+        # ── TAB 2: Serial Monitor Panel ──
+        serial_monitor_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+
+        # Serial monitor header
+        serial_header = tk.Frame(serial_monitor_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        serial_header.pack(fill=tk.X)
+
+        self.lbl_serial_monitor_title = tk.Label(
+            serial_header, text="📡 SERIAL MONITOR",
+            font=self.monitor_heading_font,
+            fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+
+        btn_reset_mcu = self._make_btn(
+            serial_header, "↺ Reset", self._reset_mcu_from_monitor,
+            "#8B5E3C", "#A0724F", font=self.font_mono_sm
+        )
+        btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
+        self.btn_reset_mcu = btn_reset_mcu
+
+        btn_pause_serial = self._make_btn(
+            serial_header, "⏸ Pause", self._toggle_serial_pause,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
+        self.btn_pause_serial = btn_pause_serial
+
+        # Baud rate selector in Serial Monitor tab (right side)
+        self.serial_baud_group = tk.Frame(serial_header, bg=Theme.BG_MID)
+        self.serial_baud_group.pack(side=tk.RIGHT, padx=(6, 0))
+
+        self.lbl_serial_baud = tk.Label(
+            self.serial_baud_group, text="BAUD RATE", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID
+        )
+        self.lbl_serial_baud.pack(side=tk.LEFT)
+
+        self.serial_baud_var = tk.StringVar(value=str(DEFAULT_BAUD))
+        self.serial_baud_combo = ttk.Combobox(
+            self.serial_baud_group, textvariable=self.serial_baud_var, width=10,
+            font=self.font_mono_sm, state="readonly",
+            values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"],
+        )
+        self.serial_baud_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self.serial_baud_combo.bind("<<ComboboxSelected>>", lambda e: self._on_serial_baud_changed())
+
+        # Small divider between BAUD RATE and status indicator
+        tk.Frame(serial_header, bg=Theme.CYAN_DIM, width=1, height=20).pack(
+            side=tk.RIGHT, padx=(8, 8), fill=tk.Y)
+
+        self.serial_status = tk.Label(
+            serial_header, text="● Disconnected", font=self.font_status,
+            fg=Theme.RED, bg=Theme.BG_MID, anchor=tk.E,
+        )
+        self.serial_status.pack(side=tk.RIGHT, padx=(0, 10))
+
+        btn_clear_serial = self._make_btn(
+            serial_header, "🗑 Clear", self._clear_serial_console,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_clear_serial.pack(side=tk.RIGHT, padx=(0, 10))
+        self.btn_clear_serial_header = btn_clear_serial
+
+        def _copy_serial():
+            text = self.serial_console.get("1.0", tk.END).strip()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            btn_copy_serial.config(text="✔ Copied!")
+            self.root.after(1500, lambda: btn_copy_serial.config(text="⧉ Copy"))
+
+        btn_copy_serial = self._make_btn(
+            serial_header, "⧉ Copy", _copy_serial,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_copy_serial.pack(side=tk.RIGHT, padx=(0, 6))
+        self.btn_copy_serial_header = btn_copy_serial
+
+        self.ansi_clear_var = tk.BooleanVar(value=True)
+        self.cb_ansi_clear = tk.Checkbutton(
+            serial_header, text="Clear-screen", variable=self.ansi_clear_var,
+            font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_ansi_clear.pack(side=tk.RIGHT, padx=(0, 10))
+
+        self.cb_serial_autoscroll = tk.Checkbutton(
+            serial_header, text="Auto-scroll", variable=self.serial_autoscroll_var,
+            font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_MID,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+            activeforeground=Theme.TEXT,
+        )
+        self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
+
+        tk.Frame(serial_monitor_frame, bg=Theme.CYAN_DIM, height=1).pack(fill=tk.X)
+
+        # Serial input bar (packed at BOTTOM first so it's always visible and never clipped)
+        input_frame = tk.Frame(serial_monitor_frame, bg=Theme.BG_DARK, pady=6, padx=10)
+        input_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Frame(serial_monitor_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Label(
+            input_frame, text="SEND ▸", font=self.font_label,
+            fg=Theme.CYAN, bg=Theme.BG_DARK,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.serial_input = tk.Entry(
+            input_frame,
+            bg=Theme.BG_LIGHT,
+            fg=Theme.TEXT_BRIGHT,
+            font=self.font_mono,
+            insertbackground=Theme.CYAN,
+            selectbackground=Theme.CYAN_DIM,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightcolor=Theme.CYAN_DIM,
+            highlightbackground=Theme.BORDER,
+        )
+        self.serial_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=4)
+        self.serial_input.bind("<Return>", self._send_serial)
+        self.serial_input.bind("<Button-1>", lambda e: safe_reclaim_os_focus(self.serial_input), add="+")
+
+        self.line_ending_var = tk.StringVar(value="\\r\\n")
+        le_combo = ttk.Combobox(
+            input_frame, textvariable=self.line_ending_var, width=8,
+            font=self.font_mono_sm, state="readonly",
+            values=["None", "\\n", "\\r", "\\r\\n"],
+        )
+        set_combobox_direction(le_combo, "above")
+        le_combo.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.btn_send = self._make_btn(input_frame, "Send", self._send_serial,
+                                        Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        self.btn_send.pack(side=tk.LEFT)
+
+        # Serial output text container (expands to fill space between top header and bottom input bar)
+        serial_console_frame = tk.Frame(serial_monitor_frame, bg=Theme.BG_DARKEST)
+        serial_console_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.serial_console = tk.Text(
+            serial_console_frame,
+            bg=Theme.BG_DARKEST,
+            fg=Theme.TEXT,
+            font=self.monitor_font,
+            insertbackground=Theme.CYAN,
+            selectbackground=Theme.BG_HOVER,
+            selectforeground=Theme.TEXT_BRIGHT,
+            inactiveselectbackground=Theme.BG_HOVER,
+            exportselection=False,
+            borderwidth=0,
+            highlightthickness=0,
+            padx=10,
+            pady=6,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            cursor="xterm",
+        )
+
+        serial_scrollbar = ttk.Scrollbar(
+            serial_console_frame, orient=tk.VERTICAL, command=self.serial_console.yview
+        )
+        self.serial_console.configure(yscrollcommand=serial_scrollbar.set)
+
+        serial_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.serial_console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._setup_selectable_read_only_text(self.serial_console, clear_callback=self._clear_serial_console, target_input_widget=self.serial_input)
+
+        # Serial console text tags
+        for widget in [self.serial_console]:
+            widget.tag_configure("info",    foreground=Theme.BLUE)
+            widget.tag_configure("success", foreground=Theme.GREEN)
+            widget.tag_configure("success_bold_lg", foreground=Theme.GREEN, font=self.monitor_font_large_bold)
+            widget.tag_configure("warning", foreground=Theme.YELLOW)
+            widget.tag_configure("error",   foreground=Theme.RED)
+            widget.tag_configure("system",  foreground=Theme.CYAN)
+            widget.tag_configure("dim",     foreground=Theme.TEXT_DIM)
+            widget.tag_configure("magenta", foreground=Theme.MAGENTA)
+            widget.tag_configure("magenta_bold_lg", foreground=Theme.MAGENTA, font=self.monitor_font_large_bold)
+            widget.tag_configure("orange",  foreground=Theme.ORANGE)
+            widget.tag_configure("purple_header", foreground=Theme.PURPLE,
+                                 font=self.monitor_font_bold)
+            widget.tag_configure("purple_info", foreground=Theme.PURPLE_DIM)
+            widget.tag_configure("purple_value", foreground=Theme.TEXT_BRIGHT)
+            widget.tag_configure("sent",    foreground=Theme.MAGENTA)
+            widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
+
+        self.bottom_notebook.add(serial_monitor_frame, text="  📡 Serial Monitor  ")
+
+        # ── TAB 3: Notifications ──
+        notif_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+
+        notif_header = tk.Frame(notif_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        notif_header.pack(fill=tk.X)
+
+        tk.Label(
+            notif_header, text="🔔 NOTIFICATIONS",
+            font=self.monitor_heading_font,
+            fg=Theme.ORANGE, bg=Theme.BG_MID,
+        ).pack(side=tk.LEFT)
+
+        notif_toolbar = tk.Frame(notif_header, bg=Theme.BG_MID)
+        notif_toolbar.pack(side=tk.RIGHT)
+
+        tk.Label(notif_toolbar, text="Filter:", font=self.font_btn, fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(side=tk.LEFT, padx=(0, 4))
+        self._notif_filter_var = tk.StringVar(value="All")
+        notif_combo = ttk.Combobox(
+            notif_toolbar,
+            textvariable=self._notif_filter_var,
+            values=["All", "📦 Boards & Libraries", "🔌 USB Devices", "✖ Errors"],
+            state="readonly",
+            width=18,
+            font=self.font_mono_sm
+        )
+        notif_combo.pack(side=tk.LEFT, padx=(0, 10))
+        notif_combo.bind("<<ComboboxSelected>>", lambda e: self._load_persistent_notifications(self._notif_filter_var.get()))
+
+        def _clear_notifications():
+            try:
+                dbs_delete.clear_all_notifications()
+            except Exception as e:
+                print(f"[MCU Flasher] Error clearing database notifications: {e}")
+            self.notif_console.configure(state=tk.NORMAL)
+            self.notif_console.delete("1.0", tk.END)
+            self.notif_console.insert(tk.END, "  🗑 All notifications cleared.\n", "dim")
+            self.notif_console.configure(state=tk.DISABLED)
+
+        def _copy_notifications():
+            try:
+                text = self.notif_console.get("1.0", tk.END).rstrip()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                btn_copy_notif.config(text="✔ Copied!", bg=Theme.GREEN)
+                self.root.after(1500, lambda: btn_copy_notif.config(text="📋 Copy", bg=Theme.BTN_DIM))
+            except Exception:
+                pass
+
+        btn_copy_notif = _make_toolbar_btn(notif_toolbar, "📋 Copy", _copy_notifications, Theme.BTN_DIM,
+                          Theme.BTN_DIM_H, self.font_btn)
+        _make_toolbar_btn(notif_toolbar, "🗑 Clear All", _clear_notifications, Theme.BTN_DANGER,
+                          Theme.BTN_DANGER_H, self.font_btn)
+
+        notif_text_frame = tk.Frame(notif_frame, bg=Theme.BG_DARKEST)
+        notif_text_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        self.notif_console = tk.Text(
+            notif_text_frame,
+            bg=Theme.BG_DARK,
+            fg=Theme.TEXT,
+            insertbackground=Theme.TEXT,
+            selectbackground=Theme.BG_HOVER,
+            selectforeground=Theme.TEXT_BRIGHT,
+            inactiveselectbackground=Theme.BG_HOVER,
+            exportselection=False,
+            font=self.monitor_font,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            padx=6, pady=6,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            cursor="xterm",
+            yscrollcommand=lambda *a: notif_scroll.set(*a),
+        )
+        notif_scroll = ttk.Scrollbar(
+            notif_text_frame, orient=tk.VERTICAL, command=self.notif_console.yview,
+        )
+        self.notif_console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        notif_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._setup_selectable_read_only_text(self.notif_console, clear_callback=_clear_notifications)
+
+        for tag_name, color in [
+            ("timestamp", Theme.TEXT_DIM),
+            ("dim",       Theme.TEXT_DIM),
+            ("info",      Theme.CYAN),
+            ("success",   Theme.GREEN),
+            ("warning",   Theme.YELLOW),
+            ("error",     Theme.RED),
+            ("system",    Theme.PURPLE),
+            ("header",    Theme.ORANGE),
+        ]:
+            self.notif_console.tag_configure(tag_name, foreground=color)
+
+        self.bottom_notebook.add(notif_frame, text="  🔔 Notifications  ")
+        self._load_persistent_notifications()
+
+        # ── TAB 4: Syntax Check Panel ──
+        syntax_check_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+
+        # Syntax header
+        syntax_header = tk.Frame(syntax_check_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        syntax_header.pack(fill=tk.X)
+
+        self.lbl_syntax_status = tk.Label(
+            syntax_header, text="🔍 SYNTAX CHECK",
+            font=self.monitor_heading_font,
+            fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_syntax_status.pack(side=tk.LEFT)
+
+        lbl_syntax_beta_notice = tk.Label(
+            syntax_header, text=" (Beta: Checker is under progress; some warnings or errors may be approximate)",
+            font=tkfont.Font(family="Montserrat", size=8),
+            fg=Theme.YELLOW, bg=Theme.BG_MID,
+        )
+        lbl_syntax_beta_notice.pack(side=tk.LEFT, padx=(6, 0))
+
+        # Treeview to display results
+        tree_frame = tk.Frame(syntax_check_frame, bg=Theme.BG_DARKEST)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # Style treeview to match the theme
+        try:
+            style = ttk.Style()
+            style.configure(
+                "Syntax.Treeview",
+                background=Theme.BG_DARK,
+                foreground=Theme.TEXT,
+                fieldbackground=Theme.BG_DARK,
+                rowheight=26,
+                font=self.monitor_font
+            )
+            style.configure(
+                "Syntax.Treeview.Heading",
+                font=("Segoe UI", 9, "bold"),
+                background=Theme.BG_MID,
+                foreground=Theme.TEXT_BRIGHT,
+                padding=[8, 4]
+            )
+        except Exception:
+            pass
+
+        self.syntax_tree = ttk.Treeview(
+            tree_frame, columns=("file", "line", "severity", "desc"), show="headings",
+            style="Syntax.Treeview"
+        )
+        self.syntax_tree.heading("file", text="  File  ")
+        self.syntax_tree.heading("line", text="  Line  ")
+        self.syntax_tree.heading("severity", text="  Severity  ")
+        self.syntax_tree.heading("desc", text="  Description  ")
+
+        self.syntax_tree.column("file", width=160, minwidth=100, stretch=True, anchor=tk.W)
+        self.syntax_tree.column("line", width=70, minwidth=60, stretch=False, anchor=tk.CENTER)
+        self.syntax_tree.column("severity", width=110, minwidth=90, stretch=False, anchor=tk.CENTER)
+        self.syntax_tree.column("desc", width=400, minwidth=150, stretch=True, anchor=tk.W)
+
+        scrollbar_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.syntax_tree.yview)
+        self.syntax_tree.configure(yscrollcommand=scrollbar_y.set)
+
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.syntax_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Color tags
+        self.syntax_tree.tag_configure("error", foreground=Theme.RED)
+        self.syntax_tree.tag_configure("warning", foreground=Theme.ORANGE)
+
+        self.syntax_tree.bind("<Double-Button-1>", self._on_syntax_tree_double_click)
+
+        self.bottom_notebook.add(syntax_check_frame, text="  🔍 Syntax Check  ")
+
+        self.main_pane.add(bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
+
+        # ── Editor / Monitors show-hide state ──
+        self.editor_pane_visible = True
+        self.monitors_pane_visible = True
+        self._update_pane_toggle_buttons()
+
+        # ── Status Bar ──
+        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+
+        status_frame = tk.Frame(self.root, bg=Theme.BG_DARK, pady=4, padx=12)
+        status_frame.pack(fill=tk.X)
+
+        self.status_label = tk.Label(
+            status_frame, text="Ready", font=self.font_status,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, anchor=tk.W,
+        )
+        self.status_label.pack(side=tk.LEFT)
+
+        self.editor_info_label = tk.Label(
+            status_frame, text="", font=self.font_status,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, anchor=tk.E,
+        )
+        self.editor_info_label.pack(side=tk.RIGHT)
+
+        # Style ttk widgets (comboboxes, scrollbars)
+        style = ttk.Style()
+        setup_combobox_place_popdown(self.root)
+        style.configure("TCombobox",
+                         fieldbackground=Theme.BG_LIGHT,
+                         background=Theme.BG_HOVER,
+                         foreground=Theme.TEXT_BRIGHT,
+                         selectbackground=Theme.CYAN_DIM,
+                         selectforeground=Theme.TEXT_BRIGHT,
+                         bordercolor=Theme.BORDER,
+                         arrowcolor=Theme.TEXT_DIM)
+        style.map("TCombobox",
+                   fieldbackground=[("readonly", Theme.BG_LIGHT)],
+                   selectbackground=[("readonly", Theme.CYAN_DIM)],
+                   selectforeground=[("readonly", Theme.TEXT_BRIGHT)])
+
+        # Style the dropdown popup listbox for ttk.Combobox (the "clam" theme
+        # uses a plain Tk Listbox for its popdown, so we set global Listbox
+        # defaults AND add Tcl-level hooks to re-style it each time it opens.)
+        self.root.option_add("*TCombobox*Listbox.background", Theme.BG_LIGHT)
+        self.root.option_add("*TCombobox*Listbox.foreground", Theme.TEXT_BRIGHT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", Theme.BG_HOVER)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", Theme.CYAN)
+        self.root.option_add("*TCombobox*Listbox.relief", "flat")
+        self.root.option_add("*TCombobox*Listbox.borderWidth", "1")
+        self.root.option_add("*TCombobox*Listbox.highlightBackground", Theme.BORDER)
+        self.root.option_add("*TCombobox*Listbox.justify", "left")
+        self.root.option_add("*Combobox*Listbox.justify", "left")
+
+        # Also set global Listbox defaults so other custom popups
+        # (BoardSearchDialog, etc.) inherit the same dark look.
+        self.root.option_add("*Listbox.background", Theme.BG_LIGHT)
+        self.root.option_add("*Listbox.foreground", Theme.TEXT_BRIGHT)
+        self.root.option_add("*Listbox.selectBackground", Theme.BG_HOVER)
+        self.root.option_add("*Listbox.selectForeground", Theme.CYAN)
+        self.root.option_add("*Listbox.justify", "left")
+
+        style.configure("Vertical.TScrollbar",
+                        background=Theme.BG_MID,
+                        troughcolor=Theme.BG_DARKEST,
+                        bordercolor=Theme.BG_DARKEST,
+                        arrowcolor=Theme.TEXT_DIM,
+                        lightcolor=Theme.BG_MID,
+                        darkcolor=Theme.BG_MID)
+        style.map("Vertical.TScrollbar",
+                  background=[("active", Theme.BORDER_LIT)])
+
+        # Welcome message
+        self._print_welcome()
+        self._update_editor_info()
+
+    def _setup_selectable_read_only_text(self, text_widget: tk.Text, clear_callback=None, target_input_widget: tk.Widget = None):
+        """Configure a read-only console Text widget so mouse text selection, highlighting,
+        Ctrl+C/Ctrl+A keyboard shortcuts, and right-click context menu ALWAYS work reliably,
+        even when state='disabled' and regardless of focus changes.
+        If target_input_widget is provided:
+          - A simple click on text_widget redirects focus to target_input_widget.
+          - Hold-click, click-and-drag selection, or double-click preserves selection on text_widget.
+        """
+        text_widget.configure(
+            exportselection=False,
+            inactiveselectbackground=Theme.BG_HOVER,
+            cursor="xterm",
+        )
+
+        press_state = {"time": 0.0, "x": 0, "y": 0, "timer": None}
+
+        def _on_click(event):
+            text_widget.focus_set()
+            if press_state["timer"] is not None:
+                try:
+                    text_widget.after_cancel(press_state["timer"])
+                except Exception:
+                    pass
+                press_state["timer"] = None
+            press_state["time"] = time.time()
+            press_state["x"] = event.x
+            press_state["y"] = event.y
+
+        def _on_release(event):
+            if not target_input_widget:
+                return
+
+            dt = time.time() - press_state["time"]
+            dx = abs(event.x - press_state["x"])
+            dy = abs(event.y - press_state["y"])
+
+            # If user dragged mouse (dx > 4 or dy > 4), or held click down (> 0.25s),
+            # treat it as text selection / hold-click on console print. Focus stays on text_widget.
+            if dx > 4 or dy > 4 or dt > 0.25:
+                return
+
+            # For quick single click, schedule focus redirect after a short delay (180ms)
+            # so double-click word selection or drag-selection is not interrupted.
+            def _do_focus_redirect():
+                press_state["timer"] = None
+                try:
+                    # If text was selected (e.g. double-click or drag), don't redirect focus
+                    if bool(text_widget.tag_ranges("sel")):
+                        return
+                    safe_reclaim_os_focus(target_input_widget)
+                except Exception:
+                    pass
+
+            if press_state["timer"] is not None:
+                try:
+                    text_widget.after_cancel(press_state["timer"])
+                except Exception:
+                    pass
+
+            press_state["timer"] = text_widget.after(180, _do_focus_redirect)
+
+        def _on_copy(event=None):
+            try:
+                sel = text_widget.get("sel.first", "sel.last")
+                if sel:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(sel)
+            except tk.TclError:
+                pass
+            return "break"
+
+        def _on_select_all(event=None):
+            text_widget.tag_add("sel", "1.0", tk.END)
+            text_widget.focus_set()
+            return "break"
+
+        # Explicit keyboard focus on click
+        text_widget.bind("<Button-1>", _on_click, add="+")
+        if target_input_widget:
+            text_widget.bind("<ButtonRelease-1>", _on_release, add="+")
+
+        # Explicit copy & select-all bindings for disabled widgets
+        text_widget.bind("<Control-c>", _on_copy)
+        text_widget.bind("<Control-C>", _on_copy)
+        text_widget.bind("<Control-a>", _on_select_all)
+        text_widget.bind("<Control-A>", _on_select_all)
+        text_widget.bind("<Command-c>", _on_copy)
+        text_widget.bind("<Command-C>", _on_copy)
+        text_widget.bind("<Command-a>", _on_select_all)
+        text_widget.bind("<Command-A>", _on_select_all)
+
+        # Context menu (Right-click)
+        menu = tk.Menu(
+            text_widget, tearoff=0, bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
+            activebackground=Theme.CYAN, activeforeground=Theme.BG_DARKEST,
+            bd=1, relief=tk.SOLID
+        )
+        menu.add_command(label="📋 Copy", command=_on_copy, accelerator="Ctrl+C")
+        menu.add_command(label="Select All", command=_on_select_all, accelerator="Ctrl+A")
+        if clear_callback:
+            menu.add_separator()
+            menu.add_command(label="🗑 Clear", command=clear_callback)
+
+        def _show_context_menu(event):
+            text_widget.focus_set()
+            try:
+                has_sel = bool(text_widget.tag_ranges("sel"))
+                menu.entryconfig(0, state=tk.NORMAL if has_sel else tk.DISABLED)
+            except Exception:
+                pass
+            menu.tk_popup(event.x_root, event.y_root)
+
+        text_widget.bind("<Button-3>", _show_context_menu)
+        text_widget.bind("<Button-2>", _show_context_menu)
+
+    def _make_btn(self, parent, text, command, bg, bg_hover, width=None, font=None) -> tk.Button:
+        """Create a styled flat button."""
+        btn_font = font if font is not None else self.font_btn
+        btn = tk.Button(
+            parent, text=text, command=command,
+            font=btn_font, fg=Theme.TEXT_BRIGHT, bg=bg,
+            activebackground=bg_hover, activeforeground=Theme.TEXT_BRIGHT,
+            relief=tk.FLAT, borderwidth=0, padx=self._btn_padx, pady=self._btn_pady, cursor="hand2",
+        )
+        if width:
+            btn.configure(width=width)
+        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
+        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+        self._scalable_buttons.append(btn)
+        return btn
+
+    def _make_icon_btn(self, parent, text, command, bg, bg_hover, width=3) -> tk.Button:
+        """Create a small icon button."""
+        btn = tk.Button(
+            parent, text=text, command=command,
+            font=self.font_btn, fg=Theme.TEXT, bg=bg,
+            activebackground=bg_hover, activeforeground=Theme.TEXT_BRIGHT,
+            relief=tk.FLAT, borderwidth=0, width=width, cursor="hand2",
+        )
+        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
+        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+        return btn
+
+    def _get_current_monitor_dimensions(self):
+        """Return the work-area dimensions of the monitor containing the app."""
+        left, top, right, bottom = _get_monitor_work_area(self.root)
+        return max(1, right - left), max(1, bottom - top)
+
+    def _get_window_dpi_scale(self) -> float:
+        return _get_widget_dpi_scale(self.root)
+
+    @staticmethod
+    def _minimum_width_for_display(
+        screen_width: int, screen_height: int, display_scale: float = 1.0
+    ) -> int:
+        """Half-screen normally; compact but on-screen for portrait displays."""
+        screen_width = max(1, int(screen_width))
+        screen_height = max(1, int(screen_height))
+        display_scale = max(0.75, min(3.0, float(display_scale or 1.0)))
+        safe_margin = min(screen_width // 4, round(24 * display_scale))
+        usable_width = max(240, screen_width - safe_margin)
+        compact_floor = round(320 * display_scale)
+        minimum = max(compact_floor, screen_width // 2)
+        if screen_height > screen_width and screen_width < 900:
+            minimum = max(minimum, min(round(560 * display_scale), usable_width))
+        return min(minimum, usable_width)
+
+    def _on_root_configure(self, event):
+        """Debounced handler for live window-resize rescaling of buttons."""
+        if event.widget is not self.root:
+            return
+        for attr in ("_resize_after_id", "_minwidth_after_id"):
+            aid = getattr(self, attr, None)
+            if aid:
+                try:
+                    self.root.after_cancel(aid)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        self._resize_after_id = self.root.after(150, self._apply_dynamic_button_scale)
+        self._minwidth_after_id = self.root.after(150, self._update_min_window_width)
+
+    def _update_min_window_width(self):
+        """Set root minsize width to half the screen the window is currently on.
+        Called on every Configure event (move/resize), debounced 150 ms.
+        This keeps the window usable when dragged between monitors of different
+        resolutions (e.g. 1920 px ↔ 1366 px)."""
+        self._minwidth_after_id = None
+        sw, sh = self._get_current_monitor_dimensions()
+        display_scale = self._get_window_dpi_scale()
+        new_min_w = self._minimum_width_for_display(sw, sh, display_scale)
+        logical_screen_h = sh / display_scale
+        logical_min_h = min(460, max(400, logical_screen_h - 120))
+        safe_margin_h = min(sh // 4, round(48 * display_scale))
+        new_min_h = min(
+            round(logical_min_h * display_scale), max(260, sh - safe_margin_h)
+        )
+        min_key = (new_min_w, new_min_h, round(display_scale, 3))
+        if min_key == getattr(self, "_last_minimum_geometry", None):
+            return
+        self._last_minimum_geometry = min_key
+        self._last_minwidth = new_min_w
+        self._min_window_height = new_min_h
+        self._display_scale = display_scale
+        self.screen_w, self.screen_h = sw, sh
+        self.root.minsize(new_min_w, new_min_h)
+
+    def _apply_dynamic_button_scale(self):
+        """Shrink (or restore) button font/padding based on the current
+        window width, on top of the static screen-resolution scale computed
+        at startup. Lets buttons keep auto-resizing as the user resizes the
+        window, not just once when the app launches."""
+        self._resize_after_id = None
+        try:
+            width = self.root.winfo_width()
+            height = self.root.winfo_height()
+        except Exception:
+            return
+        if width <= 1:
+            return
+        self._apply_responsive_layout(width, height)
+
+        # How much the current window width has shrunk relative to a
+        # reasonable reference width for this screen.
+        display_scale = self._get_window_dpi_scale()
+        self._display_scale = display_scale
+        logical_width = width / display_scale
+        logical_screen_w = self.screen_w / display_scale
+        logical_screen_h = self.screen_h / display_scale
+        self._ui_scale = max(
+            0.65,
+            min(1.0, min(logical_screen_w / 1920.0, logical_screen_h / 1080.0)),
+        )
+        ref_width = max(900, min(logical_screen_w, 1920))
+        dyn_factor = max(0.75, min(1.0, logical_width / ref_width))
+        scale = max(0.6, min(1.0, self._ui_scale * dyn_factor))
+
+        scale_key = (round(scale, 3), round(display_scale, 3))
+        if scale_key == getattr(self, "_last_applied_layout_scale", None):
+            return  # avoid churn for tiny resize deltas
+        self._last_applied_layout_scale = scale_key
+        self._last_applied_scale = scale
+
+        new_btn_size = max(7, round(9 * scale))
+        self.font_btn.configure(size=new_btn_size)
+
+        try:
+            self.font_title.configure(size=max(11, round(15 * scale)))
+            self.font_subtitle.configure(size=max(8, round(9 * scale)))
+            self.font_label.configure(size=max(8, round(9 * scale)))
+            self.font_mono.configure(size=max(8, round(10 * scale)))
+            self.font_mono_sm.configure(size=max(8, round(9 * scale)))
+            self.font_status.configure(size=max(8, round(9 * scale)))
+        except Exception:
+            pass
+
+        self._btn_padx = max(
+            round(6 * display_scale), round(10 * scale * display_scale)
+        )
+        self._btn_pady = max(
+            round(2 * display_scale), round(3 * scale * display_scale)
+        )
+        for btn in self._scalable_buttons:
+            try:
+                btn.configure(padx=self._btn_padx, pady=self._btn_pady)
+            except Exception:
+                pass
+
+    def _apply_responsive_layout(self, width: int, height: int):
+        """Keep the packed controls and vertical panes usable as the window
+        changes size.  Widget widths are expressed in characters, so adapting
+        them here is more reliable across DPI scales than fixed pixels."""
+        actual_width = width
+        display_scale = self._get_window_dpi_scale()
+        self._display_scale = display_scale
+        width = max(1, round(width / display_scale))
+        height = max(1, round(height / display_scale))
+
+        # Below this width the title bar must give priority to the one-row
+        # action toolbar. Compact labels reclaim space without hiding actions.
+        compact = width < 1200
+        if width < 650:
+            port_chars = 8
+            board_chars = 12
+            baud_chars = 7
+            upload_spd_chars = 6
+        elif width < 760:
+            port_chars = 11
+            board_chars = 16
+            baud_chars = 8
+            upload_spd_chars = 7
+        elif width < 850:
+            port_chars = 14
+            board_chars = 20
+            baud_chars = 8
+            upload_spd_chars = 8
+        elif width < 1150:
+            port_chars = 20
+            board_chars = 26
+            baud_chars = 10
+            upload_spd_chars = 10
+        elif width < 1450:
+            port_chars = 26
+            board_chars = 34
+            baud_chars = 10
+            upload_spd_chars = 10
+        else:
+            port_chars = 34
+            board_chars = 42
+            baud_chars = 10
+            upload_spd_chars = 10
+
+        try:
+            self.port_combo.configure(width=port_chars)
+            self.board_combo.entry.configure(width=board_chars)
+            if hasattr(self, "serial_baud_combo"):
+                self.serial_baud_combo.configure(width=baud_chars)
+            self.upload_speed_combo.configure(width=upload_spd_chars)
+        except Exception:
+            pass
+
+        # Tighten the controls-bar and options-bar horizontal padding as
+        # the window narrows, so the shrunk widgets above actually have
+        # the extra room to make a difference instead of it being eaten
+        # by fixed gutters.
+        try:
+            ctrl_padx = 0
+            self.ctrl_row_top.master.pack_configure(padx=ctrl_padx)
+            group_gap = (
+                (0, round(4 * display_scale))
+                if width < 700 else (0, round(8 * display_scale))
+            )
+            for grp in (self.board_group, self.port_group, self.upload_spd_group):
+                grp.pack_configure(padx=group_gap)
+        except Exception:
+            pass
+
+        # On very narrow windows the UPLOAD SPD label is the single
+        # biggest fixed-width item in the bar (10 characters where BOARD/
+        # PORT/BAUD are 4-5); abbreviate it once real estate gets tight
+        # rather than letting it force everything else back into overflow.
+        try:
+            lbl_upload_spd_text = "SPD" if width < 700 else "UPLOAD SPD"
+            self._lbl_upload_spd.configure(text=lbl_upload_spd_text)
+        except Exception:
+            pass
+
+        # Project names used to push the title-bar actions out of view after
+        # shrinking a window on a large monitor.
+        try:
+            self._update_sketch_marquee()
+        except Exception:
+            pass
+
+        try:
+            if width < 1000:
+                self.lbl_sketch.pack_forget()
+                self.lbl_app_title.configure(
+                    text="⚡ MCU" if width < 520 else (
+                        "⚡ MCU Flasher" if width < 680 else "⚡ MCU Flasher by Naph"
+                    )
+                )
+                self.btn_download_mgr.configure(text="↓", width=3)
+            else:
+                if not self.lbl_sketch.winfo_ismapped():
+                    self.lbl_sketch.pack(side=tk.LEFT, after=self.lbl_sketch_icon)
+                self.lbl_app_title.configure(text="⚡ MCU Flasher by Naph")
+                self.btn_download_mgr.configure(width=0)
+        except Exception:
+            pass
+
+        # Dynamic reflow of Title Bar elements based on width
+        try:
+            if width < 1150:
+                # Compact half-screen mode. Actions remain in the title row;
+                # only their contents collapse into Compile/Upload/Actions.
+                # 1. Unpack from their wide-mode container frames
+                self.actions_frame.pack_forget()
+                self.btn_compile.pack_forget()
+                self.btn_upload.pack_forget()
+                self.btn_settings.pack_forget()
+                
+                # 2. Pack Compile, Upload on top_compact_inner (same row on top)
+                detached_compact = bool(getattr(self, "editor_detached", False))
+                self.btn_compile.pack_forget()
+                self.btn_upload.pack_forget()
+                self._actions_dropdown_btn.pack_forget()
+                if detached_compact:
+                    # The detached editor owns the complete action toolbar in
+                    # this exact mode; leave no duplicate actions in the GUI.
+                    self.top_compact_actions.pack_forget()
+                    self._close_actions_dropdown()
+                else:
+                    self.btn_compile.pack(in_=self.top_compact_inner, side=tk.LEFT, padx=3)
+                    self.btn_upload.pack(in_=self.top_compact_inner, side=tk.LEFT, padx=3)
+                    self._actions_dropdown_btn.pack(in_=self.top_compact_inner, side=tk.LEFT, padx=(6, 3))
+                    compact_action_width = 12 if width >= 900 else (9 if width >= 650 else 7)
+                    self.btn_compile.configure(width=compact_action_width)
+                    self.btn_upload.configure(width=compact_action_width)
+                    self._actions_dropdown_btn.configure(width=compact_action_width)
+                    if self.title_row_bottom.winfo_ismapped():
+                        self.title_row_bottom.pack_forget()
+                    self.top_compact_actions.pack(
+                        in_=self.title_row_top, side=tk.LEFT, fill=tk.BOTH,
+                        expand=True
+                    )
+
+                # 3. Clean up inner_actions (unpacking actions label and Compile/Upload buttons so they don't appear in the bottom actions row)
+                self.lbl_actions_title.pack_forget()
+                
+                # Settings button stays in options row
+                self.btn_settings.pack(in_=self.opt_buttons_frame, side=tk.LEFT, padx=(0, 8))
+                self.btn_settings.configure(font=self.font_btn, width=0)
+            else:
+                # Wide Title Bar mode: Put action buttons in the same row as logo and sketch path, settings in options bar
+                if self.title_row_bottom.winfo_ismapped():
+                    self.title_row_bottom.pack_forget()
+                if self.top_compact_actions.winfo_ismapped():
+                    self.top_compact_actions.pack_forget()
+                
+                self.btn_compile.pack_forget()
+                self.btn_upload.pack_forget()
+                self._actions_dropdown_btn.pack_forget()
+                self._close_actions_dropdown()
+                self.btn_settings.pack_forget()
+                
+                # Unpack everything in inner_actions so we can pack them in the correct original order
+                self.lbl_actions_title.pack_forget()
+                self.btn_stop.pack_forget()
+                self.btn_clean.pack_forget()
+                self.title_divider.pack_forget()
+                self.btn_save.pack_forget()
+                self.btn_save_all.pack_forget()
+                self.btn_reload_file.pack_forget()
+                self.btn_modify_files.pack_forget()
+                
+                # Repack in inner_actions (correct wide-mode order)
+                self.lbl_actions_title.pack(in_=self.inner_actions, side=tk.LEFT, padx=(0, 8))
+                self.btn_compile.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_upload.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_compile.configure(width=0)
+                self.btn_upload.configure(width=0)
+                self._actions_dropdown_btn.configure(width=0)
+                self.btn_stop.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_clean.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.title_divider.pack(in_=self.inner_actions, side=tk.LEFT, padx=8)
+                self.btn_save.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_save_all.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_reload_file.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+                self.btn_modify_files.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+
+                if getattr(self, "editor_detached", False):
+                    # The detached editor is the sole home for actions.
+                    self.actions_frame.pack_forget()
+                else:
+                    self.actions_frame.pack(in_=self.title_row_top, side=tk.LEFT, fill=tk.BOTH, expand=True)
+                
+                # Repack btn_settings back to options frame and set standard font
+                self.btn_settings.pack(in_=self.opt_buttons_frame, side=tk.LEFT, padx=(0, 8))
+                self.btn_settings.configure(font=self.font_btn, width=0)
+        except Exception:
+            pass
+
+        self._sync_detached_compact_actions(width)
+
+        # Dynamic reflow of Controls Bar elements based on width
+        try:
+            # Strictly one row: Board, Port, Upload Speed, and Options never
+            # move vertically. Narrow layouts shrink/collapse their contents.
+            self.right_group.pack_forget()
+            if self.ctrl_row_bottom.winfo_ismapped():
+                self.ctrl_row_bottom.pack_forget()
+            self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT)
+
+            # OPTIONS title centered above, content in one row below
+            self.lbl_options_title.pack_forget()
+            self.opt_row.pack_forget()
+            self.lbl_options_title.pack(side=tk.TOP, pady=(0, 2))
+            self.opt_row.pack(side=tk.TOP)
+
+            # Checkboxes always visible
+            self.opt_checkboxes_frame.pack_forget()
+            self.opt_checkboxes_frame.pack(side=tk.LEFT, padx=(0, 8))
+
+            # On 1366x768-class displays the full names crowd the controls
+            # bar. Keep the concise names there (and on manually narrowed
+            # windows), while larger displays retain the descriptive labels.
+            self.cb_timestamp.pack_forget()
+            self.cb_skip_compile.pack_forget()
+            use_short_labels = width < 820
+            if use_short_labels:
+                self.cb_timestamp.configure(text="TS")
+                self.cb_skip_compile.configure(text="Skip")
+            else:
+                self.cb_timestamp.configure(text="Time Stamp")
+                self.cb_skip_compile.configure(text="Skip Compile")
+            self.cb_timestamp.pack(side=tk.LEFT, padx=(0, 8))
+            self.cb_skip_compile.pack(side=tk.LEFT, padx=(0, 8))
+
+            compact_buttons = width < 1200
+            if compact_buttons:
+                # Compact buttons: collapse option buttons into a dropdown trigger
+                self.opt_buttons_frame.pack_forget()
+                self._opt_dropdown_btn.pack_forget()
+                self._opt_dropdown_btn.pack(in_=self.opt_row, side=tk.LEFT, padx=(4, 0))
+            else:
+                # Wide buttons: show all option buttons inline
+                self._opt_dropdown_btn.pack_forget()
+                self._close_options_dropdown()
+                self.opt_buttons_frame.pack_forget()
+                self.opt_buttons_frame.pack(side=tk.LEFT)
+        except Exception:
+            pass
+
+        # Dynamic adjustments of Serial Monitor header
+        try:
+            if width < 950:
+                # Hide Serial Monitor title label and make checkbox text compact
+                self.lbl_serial_monitor_title.pack_forget()
+                self.cb_ansi_clear.configure(text="Clear-scr")
+            else:
+                # Restore Serial Monitor title label and normal checkbox text
+                if not self.lbl_serial_monitor_title.winfo_ismapped():
+                    self.lbl_serial_monitor_title.pack_forget()
+                    self.btn_reset_mcu.pack_forget()
+                    self.btn_pause_serial.pack_forget()
+                    self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+                    self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
+                    self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
+                self.cb_ansi_clear.configure(text="Clear-screen")
+        except Exception:
+            pass
+
+        # Keep every action in one row, but shorten surrounding title-bar
+        # content and the action captions before there is any clipping.
+        try:
+            if self.title_subtitle_label is not None:
+                if compact:
+                    self.title_subtitle_label.pack_forget()
+                elif not self.title_subtitle_label.winfo_ismapped():
+                    self.title_subtitle_label.pack(side=tk.LEFT, pady=(4, 0))
+
+            if getattr(self, "_action_compact_mode", None) != compact:
+                self._action_compact_mode = compact
+                if compact:
+                    labels = {
+                        "btn_compile": "Compile", "btn_upload": "Upload",
+                        "btn_stop": "Stop", "btn_clean": "Clean",
+                        "btn_save": "Save", "btn_save_all": "Save+",
+                        "btn_reload_file": "Reload", "btn_modify_files": "Modify",
+                    }
+                    self.btn_download_mgr.configure(text="↓" if width < 1000 else "Download")
+                else:
+                    labels = {
+                        "btn_compile": "Compile", "btn_upload": "Upload",
+                        "btn_stop": "Stop", "btn_clean": "Clean",
+                        "btn_save": "Save", "btn_save_all": "Save All",
+                        "btn_reload_file": "Reload", "btn_modify_files": "Modify",
+                    }
+                    self.btn_download_mgr.configure(text="Download Boards/Libraries")
+                for attr, text in labels.items():
+                    getattr(self, attr).configure(text=text)
+        except Exception:
+            pass
+
+        # A monitor needs space for its tab header, toolbar, text area, and
+        # serial-send row.  Keep both panes above those practical floors.
+        if height < 560:
+            editor_min, monitor_min = 72, 105
+        elif height < 720:
+            editor_min, monitor_min = 100, 145
+        else:
+            editor_min, monitor_min = self._editor_minsize, self._bottom_minsize
+        try:
+            if getattr(self, "editor_pane_visible", True):
+                self.main_pane.paneconfigure(
+                    self.editor_frame, minsize=round(editor_min * display_scale)
+                )
+            if getattr(self, "monitors_pane_visible", True):
+                self.main_pane.paneconfigure(
+                    self.bottom_frame, minsize=round(monitor_min * display_scale)
+                )
+            if getattr(self, "_ai_side_visible", False):
+                ai_min = round(220 * display_scale)
+                main_min = round(300 * display_scale)
+                ai_width = max(
+                    ai_min,
+                    min(int(actual_width * 0.44), max(ai_min, actual_width - main_min)),
+                )
+                self.h_split_pane.paneconfigure(self.ai_side_container, width=ai_width)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────
+    # OPTIONS DROPDOWN (compact mode)
+    # ──────────────────────────────────────────────────────────
+    def _toggle_options_dropdown(self):
+        """Toggle a popup with option buttons for compact mode."""
+        if self._opt_dropdown_win is not None:
+            self._close_options_dropdown()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.configure(bg=Theme.BORDER)
+        win.attributes("-topmost", True)
+
+        inner = tk.Frame(win, bg=Theme.BG_MID, padx=8, pady=6)
+        inner.pack(padx=1, pady=1)
+
+        # Build buttons with current labels from the real buttons
+        entries = []
+        if sys.platform == "win32" and win32gui is not None:
+            detached = getattr(self, "editor_detached", False)
+            if detached:
+                det_bg, det_bgh = "#e67e22", "#d35400"
+            else:
+                det_bg, det_bgh = "#2d7d46", "#38a058"
+            entries.append((self.btn_detach_editor.cget("text"),
+                            self._toggle_editor_detachment, det_bg, det_bgh))
+        entries.append((self.btn_toggle_editor.cget("text"), self._toggle_editor_pane,
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+        entries.append((self.btn_toggle_monitors.cget("text"),
+                        self._toggle_monitors_pane,
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+        entries.append(("⚙ Settings", self._open_settings,
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+        
+        if self.ai_controller:
+            ai_label = "🤖 AI Assistant"
+            ai_bg, ai_bgh = Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
+            if self.ai_controller.running_handle:
+                ai_label = "🔴 Close AI"
+                ai_bg, ai_bgh = "#d13438", "#a80000"
+
+            entries.append((ai_label, self.ai_controller.toggle_ai, ai_bg, ai_bgh))
+
+        for label, action, bg_c, bg_h in entries:
+            def make_cb(a=action):
+                def cb():
+                    self._close_options_dropdown()
+                    a()
+                return cb
+            btn = tk.Button(
+                inner, text=label, command=make_cb(),
+                font=self.font_btn, fg=Theme.TEXT_BRIGHT, bg=bg_c,
+                activebackground=bg_h, activeforeground=Theme.TEXT_BRIGHT,
+                relief=tk.FLAT, borderwidth=0, padx=self._btn_padx, pady=self._btn_pady, cursor="hand2",
+                anchor=tk.CENTER,
+            )
+            btn.pack(fill=tk.X, pady=2)
+            btn.bind("<Enter>", lambda e, b=btn, c=bg_h: b.configure(bg=c))
+            btn.bind("<Leave>", lambda e, b=btn, c=bg_c: b.configure(bg=c))
+
+        # Position below the dropdown trigger button
+        self.root.update_idletasks()
+        bx = self._opt_dropdown_btn.winfo_rootx()
+        by = (self._opt_dropdown_btn.winfo_rooty()
+              + self._opt_dropdown_btn.winfo_height() + 2)
+        win.update_idletasks()
+        pw = win.winfo_reqwidth()
+        
+        # Keep dropdown inside the main window boundaries on the right
+        rx = self.root.winfo_rootx() + self.root.winfo_width()
+        if bx + pw > rx:
+            bx = max(self.root.winfo_rootx(), rx - pw - 10) # 10px padding from right window edge
+            
+        win.geometry(f"+{bx}+{by}")
+
+        self._opt_dropdown_win = win
+
+        # Close when focus leaves the popup
+        win.bind("<FocusOut>",
+                 lambda e: self.root.after(120, self._maybe_close_dropdown))
+        win.focus_set()
+
+    def _maybe_close_dropdown(self):
+        """Close dropdown if focus moved outside it."""
+        if self._opt_dropdown_win is None:
+            return
+        try:
+            fw = self.root.focus_get()
+            if fw is None or not str(fw).startswith(
+                    str(self._opt_dropdown_win)):
+                self._close_options_dropdown()
+        except Exception:
+            self._close_options_dropdown()
+
+    def _close_options_dropdown(self):
+        """Destroy the options dropdown popup."""
+        if self._opt_dropdown_win is not None:
+            try:
+                self._opt_dropdown_win.destroy()
+            except Exception:
+                pass
+            self._opt_dropdown_win = None
+
+    # ACTIONS DROPDOWN (compact mode)
+    def _toggle_actions_dropdown(self):
+        """Show the non-primary actions that are collapsed in compact mode."""
+        if self._actions_dropdown_win is not None:
+            self._close_actions_dropdown()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.configure(bg=Theme.BORDER)
+        win.attributes("-topmost", True)
+        inner = tk.Frame(win, bg=Theme.BG_MID, padx=8, pady=6)
+        inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        entries = [
+            (self.btn_stop, Theme.BTN_STOP, Theme.BTN_STOP_H),
+            (self.btn_clean, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            (self.btn_save, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
+            (self.btn_save_all, Theme.BTN_FULL, Theme.BTN_FULL_H),
+            (self.btn_reload_file, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            (self.btn_modify_files, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H),
+        ]
+        for source, bg_c, bg_h in entries:
+            def invoke(button=source):
+                self._close_actions_dropdown()
+                if str(button.cget("state")) != str(tk.DISABLED):
+                    button.invoke()
+            btn = tk.Button(inner, text=source.cget("text"), command=invoke,
+                            font=self.font_btn, fg=Theme.TEXT_BRIGHT, bg=bg_c,
+                            activebackground=bg_h, activeforeground=Theme.TEXT_BRIGHT,
+                            relief=tk.FLAT, borderwidth=0, padx=self._btn_padx, pady=self._btn_pady,
+                            cursor="hand2", anchor=tk.CENTER)
+            if str(source.cget("state")) == str(tk.DISABLED):
+                btn.configure(state=tk.DISABLED)
+            btn.pack(fill=tk.X, pady=2)
+            btn.bind("<Enter>", lambda e, b=btn, c=bg_h: b.configure(bg=c))
+            btn.bind("<Leave>", lambda e, b=btn, c=bg_c: b.configure(bg=c))
+
+        self.root.update_idletasks()
+        x = self._actions_dropdown_btn.winfo_rootx()
+        y = self._actions_dropdown_btn.winfo_rooty() + self._actions_dropdown_btn.winfo_height() + 2
+        btn_w = self._actions_dropdown_btn.winfo_width()
+
+        win.update_idletasks()
+        win_h = win.winfo_reqheight()
+
+        # Keep dropdown inside the main window boundaries on the right
+        rx = self.root.winfo_rootx() + self.root.winfo_width()
+        if x + btn_w > rx:
+            x = max(self.root.winfo_rootx(), rx - btn_w - 10)
+
+        win.geometry(f"{btn_w}x{win_h}+{max(self.root.winfo_rootx(), x)}+{y}")
+        self._actions_dropdown_win = win
+        win.bind("<FocusOut>", lambda e: self.root.after(120, self._maybe_close_actions_dropdown))
+        win.focus_set()
+
+    def _maybe_close_actions_dropdown(self):
+        if self._actions_dropdown_win is None:
+            return
+        try:
+            focus = self.root.focus_get()
+            if focus is None or not str(focus).startswith(str(self._actions_dropdown_win)):
+                self._close_actions_dropdown()
+        except Exception:
+            self._close_actions_dropdown()
+
+    def _close_actions_dropdown(self):
+        if self._actions_dropdown_win is not None:
+            try:
+                self._actions_dropdown_win.destroy()
+            except Exception:
+                pass
+            self._actions_dropdown_win = None
+
+    def _apply_monitor_font_size(self, size: int):
+        """Apply one readable font size to Build, Serial, and Syntax tabs."""
+        size = max(8, min(24, int(size)))
+        self.monitor_font_size = size
+        self.monitor_font.configure(size=size)
+        self.monitor_font_bold.configure(size=size)
+        self.monitor_font_header.configure(size=size + 1)
+        if hasattr(self, "monitor_font_large_bold") and self.monitor_font_large_bold:
+            self.monitor_font_large_bold.configure(size=size + 2)
+        self.monitor_heading_font.configure(size=size)
+        try:
+            ttk.Style().configure("Syntax.Treeview", font=self.monitor_font)
+            ttk.Style().configure("Syntax.Treeview.Heading", font=self.monitor_heading_font)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────
+    # CONSOLE OUTPUT
+    # ──────────────────────────────────────────────────────────
+    def _toggle_timestamps(self):
+        show = self.timestamp_var.get()
+        self.console.tag_configure("timestamp", elide=not show)
+        self.serial_console.tag_configure("timestamp", elide=not show)
+        if self.console_autoscroll_var.get():
+            self.console.see(tk.END)
+        if self.serial_autoscroll_var.get():
+            self.serial_console.see(tk.END)
+
+    def _append(self, text: str, tag: str = "", newline: bool = True):
+        """Append text to console (thread-safe)."""
+        def _do():
+            self.console.configure(state=tk.NORMAL)
+            if newline and text.strip():
+                ts = datetime.now().strftime("%H:%M:%S")
+                self.console.insert(tk.END, f"[{ts}] ", "timestamp")
+            self.console.insert(tk.END, text + ("\n" if newline else ""), tag)
+            total_lines = int(self.console.index("end-1c").split(".")[0])
+            if total_lines > 2000:
+                self.console.delete("1.0", f"{total_lines - 2000 + 1}.0")
+            self.console.configure(state=tk.DISABLED)
+            if self.console_autoscroll_var.get():
+                self.console.see(tk.END)
+        self.root.after(0, _do)
+
+    def _append_segments(self, segments, newline: bool = True):
+        """Append a single line built from multiple (text, tag) segments,
+        e.g. a dim label followed by a bright value, sharing one timestamp.
+        Thread-safe, mirrors _append()."""
+        def _do():
+            self.console.configure(state=tk.NORMAL)
+            has_content = any(seg_text.strip() for seg_text, _ in segments)
+            if newline and has_content:
+                ts = datetime.now().strftime("%H:%M:%S")
+                self.console.insert(tk.END, f"[{ts}] ", "timestamp")
+            for seg_text, seg_tag in segments:
+                self.console.insert(tk.END, seg_text, seg_tag)
+            if newline:
+                self.console.insert(tk.END, "\n")
+            total_lines = int(self.console.index("end-1c").split(".")[0])
+            if total_lines > 2000:
+                self.console.delete("1.0", f"{total_lines - 2000 + 1}.0")
+            self.console.configure(state=tk.DISABLED)
+            if self.autoscroll_var.get():
+                self.console.see(tk.END)
+        self.root.after(0, _do)
+
+    def _console_box_columns(self, min_cols: int = 50, default_cols: int = 100) -> int:
+        """Return how many monospace character columns actually fit on one
+        visual line of the build console right now, so boxed panels (like
+        the chip info panel) can size themselves to the window instead of
+        being cut mid-line by the console's own word-wrap.
+
+        Accounts for the console's left/right padding and the width of the
+        "[HH:MM:SS] " timestamp prefix that _append()/_append_segments()
+        insert before every line. Falls back to default_cols if the widget
+        hasn't been drawn yet (winfo_width() not yet meaningful)."""
+        try:
+            self.console.update_idletasks()
+            widget_px = self.console.winfo_width()
+            if widget_px <= 1:
+                return default_cols
+            padx = int(self.console.cget("padx") or 0)
+            char_px = self.font_mono.measure("0")
+            if char_px <= 0:
+                return default_cols
+            ts_px = self.font_mono.measure("[00:00:00] ")
+            usable_px = widget_px - (padx * 2) - ts_px - 4  # small safety margin
+            cols = usable_px // char_px
+            return max(int(cols), min_cols)
+        except Exception:
+            return default_cols
+
+    def _append_progress(self, text: str, tag: str = "", action_type: str = ""):
+        """Append progress line, replacing the previous line only if it belongs to the SAME active action and isn't completed (100%)."""
+        def _do():
+            self.console.configure(state=tk.NORMAL)
+            last_line = self.console.get("end-2c linestart", "end-2c lineend")
+            last_low = last_line.lower()
+
+            act_low = action_type.lower() if action_type else ""
+
+            # If switching to unpacking and previous line was downloading < 100%, finalize downloading to 100% first
+            if act_low == "unpacking" and "downloading" in last_low and "100%" not in last_line:
+                full_bar = "\u25b0" * 30
+                done_dl = f"  ✔ Downloading  {full_bar}  100%"
+                ts_match = re.match(r'^\[\d+:\d+:\d+\]\s*', last_line)
+                ts_prefix = ts_match.group(0) if ts_match else ""
+                self.console.delete("end-2c linestart", "end-1c")
+                self.console.insert(tk.END, ts_prefix, "timestamp")
+                self.console.insert(tk.END, done_dl + "\n", "success")
+                last_line = done_dl
+                last_low = done_dl.lower()
+
+            same_action = (act_low in last_low) if act_low else ("downloading" in last_low or "unpacking" in last_low)
+            is_completed = ("100%" in last_line or "✔" in last_line)
+
+            if same_action and not is_completed:
+                ts_match = re.match(r'^\[\d+:\d+:\d+\]\s*', last_line)
+                ts_prefix = ts_match.group(0) if ts_match else ""
+                
+                self.console.delete("end-2c linestart", "end-1c")
+                self.console.insert(tk.END, ts_prefix, "timestamp")
+                self.console.insert(tk.END, text + "\n", tag)
+            else:
+                ts = datetime.now().strftime("%H:%M:%S")
+                self.console.insert(tk.END, f"[{ts}] ", "timestamp")
+                self.console.insert(tk.END, text + "\n", tag)
+
+            total_lines = int(self.console.index("end-1c").split(".")[0])
+            if total_lines > 2000:
+                self.console.delete("1.0", f"{total_lines - 2000 + 1}.0")
+            self.console.configure(state=tk.DISABLED)
+            if self.console_autoscroll_var.get():
+                self.console.see(tk.END)
+        self.root.after(0, _do)
+
+    def _append_connecting_progress(self, current: int, total: int, bar_width: int = 30,
+                                    connected: bool = False, force_new: bool = False):
+        """Render a live progress bar in the console, replacing the previous
+        connecting-bar line in place on every tick/retry.
+
+        While attempts are still in flight the line reads
+        '🔌 Connecting [ █████████░░░░░░░░░░░░░░░░░░░░░ ] | 3/10' (magenta,
+        with the BOOT hint on retries).  Only when the chip has ACTUALLY
+        synced (esptool uploaded its stub) should `connected=True` be passed,
+        re-rendering the same line as '✔ Connected [ ... ] | 3/10' in green."""
+        current = max(0, min(total, current))
+        if total > 0:
+            multiplier = max(1, round(bar_width / total))
+            width = total * multiplier
+        else:
+            width = bar_width
+            multiplier = 1
+        filled = current * multiplier
+        bar = "\u2588" * filled + "\u2591" * max(0, width - filled)
+
+        def _do():
+            self.console.configure(state=tk.NORMAL)
+            total_lines_cnt = int(self.console.index("end-1c").split(".")[0])
+            found_line_idx = None
+            found_line_text = ""
+            # The bar line can sit far above the current position by the time
+            # it is re-rendered: between attempts and the flip moment, the
+            # chip-info box + config block print ~15 lines.  Scan a wide
+            # window (200) so we always replace the original bar in place
+            # instead of appending a duplicate "Connected" line.
+            if not force_new:
+                for check_idx in range(total_lines_cnt, max(0, total_lines_cnt - 200), -1):
+                    line_str = self.console.get(f"{check_idx}.0", f"{check_idx}.end")
+                    if re.search(r'(?:connecting|connected)\s*\[.*\]\s*\|\s*\d+/\d+', line_str.lower()):
+                        found_line_idx = check_idx
+                        found_line_text = line_str
+                        break
+
+            if found_line_idx is not None:
+                ts_match = re.match(r'^(\[\d+:\d+:\d+\])\s*', found_line_text)
+                ts_prefix = (ts_match.group(1) + " ") if ts_match else ""
+                self.console.delete(f"{found_line_idx}.0", f"{found_line_idx + 1}.0")
+                ts_to_use = ts_prefix
+                # Re-insert the re-rendered line at the ORIGINAL position —
+                # never at tk.END, or the bar would jump below whatever has
+                # printed since (chip-info box, config block, ...).  Use a
+                # right-gravity Tk MARK as the insertion point: a fixed index
+                # like "N.0" never advances (fragments come out reversed),
+                # and manual column math breaks on wide emoji — 🔌 occupies
+                # 2 widget columns while len() counts 1, so positions drift
+                # and separator spaces get eaten.  A mark follows every
+                # insert exactly, keeping order and columns correct.
+                self.console.mark_set("_prog_ins_mark", f"{found_line_idx}.0")
+                insert_mark = "_prog_ins_mark"
+            else:
+                ts = datetime.now().strftime("%H:%M:%S")
+                ts_to_use = f"[{ts}] "
+                insert_mark = None
+
+            def _ins(text, tag):
+                idx = insert_mark if insert_mark is not None else tk.END
+                self.console.insert(idx, text, tag)
+
+            _ins(ts_to_use, "timestamp")
+            if connected:
+                _ins("  ✔ ", "success")
+                _ins("Connected ", ("bold", "success"))
+                _ins(f"[ {bar} ]", "success_bold_lg")
+                _ins(f" | {current}/{total}", "success")
+            else:
+                _ins("  🔌 ", "magenta")
+                _ins("Connecting ", ("bold", "magenta"))
+                _ins(f"[ {bar} ]", "magenta_bold_lg")
+                _ins(f" | {current}/{total}", "magenta")
+                if current > 1:
+                    _ins(" >>  ", "magenta")
+                    _ins("💡 Please hold 'BOOT' button on MCU physical board", ("bold", "orange"))
+            _ins("\n", "")
+            if insert_mark is not None:
+                try:
+                    self.console.mark_unset(insert_mark)
+                except Exception:
+                    pass
+
+            total_lines = int(self.console.index("end-1c").split(".")[0])
+            if total_lines > 2000:
+                self.console.delete("1.0", f"{total_lines - 2000 + 1}.0")
+            self.console.configure(state=tk.DISABLED)
+            if self.console_autoscroll_var.get():
+                self.console.see(tk.END)
+        self.root.after(0, _do)
+
+    def _append_upload_progress(self, label: str, stage: int, stage_total: int,
+                                percent: float, written: int | None = None,
+                                total: int | None = None,
+                                force_new: bool = False) -> None:
+        """Render one responsive, in-place firmware flashing row.
+
+        esptool may emit dozens of percentage rows for a single image.  The
+        console keeps one live row and replaces it in place, retaining the
+        original timestamp.  A new upload passes ``force_new=True`` once so
+        an earlier upload's completed row can never be overwritten.
+        """
+        try:
+            available_cols = self._console_box_columns(default_cols=105, min_cols=45)
+        except Exception:
+            available_cols = 105
+
+        # Byte counters are valuable on normal-width windows, but the bar and
+        # percentage take priority in portrait/narrow responsive layouts.
+        show_bytes = written is not None and total is not None and available_cols >= 88
+        bytes_suffix = (
+            f" | {int(written):,}/{int(total):,} bytes" if show_bytes else ""
+        )
+        status = "✔ Flashed" if float(percent) >= 99.95 else "⚡ Flashing"
+        fixed_width = len(
+            f"  {status} [{stage}/{stage_total}] {label} [  ] | {float(percent):.1f}%"
+            + bytes_suffix
+        )
+        bar_width = min(30, max(8, available_cols - fixed_width - 2))
+        row = _format_upload_progress_row(
+            label, stage, stage_total, percent,
+            written if show_bytes else None,
+            total if show_bytes else None,
+            bar_width=bar_width,
+        )
+
+        def _do():
+            self.console.configure(state=tk.NORMAL)
+            total_lines_cnt = int(self.console.index("end-1c").split(".")[0])
+            found_line_idx = None
+            found_line_text = ""
+            if not force_new:
+                for check_idx in range(total_lines_cnt, max(0, total_lines_cnt - 250), -1):
+                    line_str = self.console.get(f"{check_idx}.0", f"{check_idx}.end")
+                    if re.search(r"(?:flashing|flashed)\s+\[\d+/\d+\]", line_str.lower()):
+                        found_line_idx = check_idx
+                        found_line_text = line_str
+                        break
+
+            if found_line_idx is not None:
+                ts_match = re.match(r"^(\[\d+:\d+:\d+\])\s*", found_line_text)
+                ts_prefix = (ts_match.group(1) + " ") if ts_match else ""
+                self.console.delete(f"{found_line_idx}.0", f"{found_line_idx + 1}.0")
+                self.console.mark_set("_upload_prog_ins_mark", f"{found_line_idx}.0")
+                insert_at = "_upload_prog_ins_mark"
+            else:
+                ts_prefix = f"[{datetime.now().strftime('%H:%M:%S')}] "
+                insert_at = tk.END
+
+            self.console.insert(insert_at, ts_prefix, "timestamp")
+            self.console.insert(
+                insert_at, row + "\n",
+                "success" if float(percent) >= 99.95 else "magenta",
+            )
+            if found_line_idx is not None:
+                try:
+                    self.console.mark_unset("_upload_prog_ins_mark")
+                except Exception:
+                    pass
+
+            total_lines = int(self.console.index("end-1c").split(".")[0])
+            if total_lines > 2000:
+                self.console.delete("1.0", f"{total_lines - 2000 + 1}.0")
+            self.console.configure(state=tk.DISABLED)
+            if self.console_autoscroll_var.get():
+                self.console.see(tk.END)
+
+        self.root.after(0, _do)
+
+
+    def _append_notif(
+        self,
+        text: str,
+        tag: str = "",
+        newline: bool = True,
+        category: str | None = None,
+        title: str | None = None,
+        persist: bool = True
+    ):
+        """Append text to the Notifications tab and persist to dbs_notif.json (thread-safe)."""
+        def _do():
+            now_dt = datetime.now()
+            dt_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Determine category & level if auto-detecting
+            cat = category
+            if not cat:
+                low_text = text.lower()
+                if "board" in low_text or "framework" in low_text:
+                    cat = "board_install"
+                elif "librar" in low_text:
+                    cat = "library_install"
+                elif "usb" in low_text or "connected" in low_text:
+                    cat = "device"
+                elif tag == "error" or "error" in low_text or "fail" in low_text:
+                    cat = "error"
+                else:
+                    cat = "system"
+
+            lvl = "info"
+            if tag in ("success", "info", "warning", "error", "system", "header"):
+                lvl = tag
+            elif "✖" in text or "error" in text.lower() or "fail" in text.lower():
+                lvl = "error"
+            elif "⚠" in text or "warn" in text.lower():
+                lvl = "warning"
+            elif "✔" in text or "success" in text.lower():
+                lvl = "success"
+
+            # Check if category filter matches current view
+            curr_filter = getattr(self, "_notif_filter_var", None)
+            filter_val = curr_filter.get() if curr_filter else "All"
+            should_display = True
+            if filter_val == "📦 Boards & Libraries" and cat not in ("board_install", "library_install"):
+                should_display = False
+            elif filter_val == "🔌 USB Devices" and cat != "device":
+                should_display = False
+            elif filter_val == "✖ Errors" and lvl != "error":
+                should_display = False
+
+            if should_display:
+                self.notif_console.configure(state=tk.NORMAL)
+                if newline and text.strip():
+                    self.notif_console.insert(tk.END, f"[{dt_str}] ", "timestamp")
+                self.notif_console.insert(tk.END, text + ("\n" if newline else ""), tag or lvl or "info")
+                total_lines = int(self.notif_console.index("end-1c").split(".")[0])
+                if total_lines > 1500:
+                    self.notif_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
+                self.notif_console.configure(state=tk.DISABLED)
+                self.notif_console.see(tk.END)
+
+            # Persist to database in background
+            if persist and text.strip():
+                def _bg_persist():
+                    try:
+                        dbs_create.add_notification(
+                            category=cat,
+                            level=lvl,
+                            title=title or text.strip()[:50],
+                            message=text.strip(),
+                        )
+                    except Exception:
+                        pass
+                threading.Thread(target=_bg_persist, daemon=True).start()
+
+        self.root.after(0, _do)
+
+    def _load_persistent_notifications(self, category_filter: str | None = None):
+        """Load and display saved notifications from src/dbs/dbs_notif.json."""
+        def _do():
+            try:
+                cat_query = None
+                lvl_query = None
+                if category_filter == "🔌 USB Devices":
+                    cat_query = "device"
+                elif category_filter == "✖ Errors":
+                    lvl_query = "error"
+
+                records = dbs_read.get_notifications(category=cat_query, level=lvl_query, limit=200)
+
+                if category_filter == "📦 Boards & Libraries":
+                    records = [r for r in records if r.get("category") in ("board_install", "library_install")]
+
+                # Oldest first for chronological log list
+                records = list(reversed(records))
+
+                self.notif_console.configure(state=tk.NORMAL)
+                self.notif_console.delete("1.0", tk.END)
+
+                if not records:
+                    self.notif_console.insert(tk.END, "  ℹ No saved notifications recorded yet.\n", "dim")
+                else:
+                    for r in records:
+                        date_str = r.get("date", "")
+                        time_str = r.get("time", "")
+                        ts_display = f"{date_str} {time_str}".strip() or r.get("timestamp", "")
+                        msg = r.get("message", "")
+                        lvl = r.get("level", "info")
+                        tag = lvl if lvl in ("success", "info", "warning", "error") else "info"
+
+                        self.notif_console.insert(tk.END, f"[{ts_display}] ", "timestamp")
+                        self.notif_console.insert(tk.END, f"{msg}\n", tag)
+
+                self.notif_console.configure(state=tk.DISABLED)
+                self.notif_console.see(tk.END)
+            except Exception as e:
+                print(f"[MCU Flasher] Error loading persistent notifications: {e}")
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _append_tagged_line(self, line: str, is_newline: bool = True):
+        """Parse and color-code a serial monitor line → serial panel.
+        If is_newline is True, the line ends with a newline and we're at the
+        start of a new line. If False, it's a partial line (e.g., progress dots)
+        that should be displayed immediately without a timestamp.
+        """
+        low = line.lower()
+        if "error" in low or "fatal" in low or "fail" in low:
+            tag = "error"
+        elif "warning" in low or "warn" in low:
+            tag = "warning"
+        elif any(k in low for k in ["ok", "success", "done", "ready", "established"]):
+            tag = "success"
+        elif "[debug]" in low:
+            tag = "dim"
+        elif line.startswith("[") and "]" in line:
+            tag = "system"
+        else:
+            tag = ""
+        with self._serial_display_lock:
+            self._serial_display_queue.append((line, tag, is_newline))
+            if self._serial_display_flush_scheduled:
+                return
+            self._serial_display_flush_scheduled = True
+        # A very short coalescing window dramatically reduces Tk work on
+        # chatty devices while remaining indistinguishable to a user.
+        self.root.after(25, self._flush_tagged_serial_lines)
+
+    def _flush_tagged_serial_lines(self):
+        """Flush queued device output in one Tk Text-widget transaction.
+        Handles both complete lines (with newlines) and partial chunks
+        (e.g., progress dots) for real-time display.
+        """
+        with self._serial_display_lock:
+            lines = self._serial_display_queue
+            self._serial_display_queue = []
+            self._serial_display_flush_scheduled = False
+        if not lines:
+            return
+
+        try:
+            self.serial_console.configure(state=tk.NORMAL)
+            for text, tag, is_newline in lines:
+                clean_text = text
+                if getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get():
+                    if ANSI_CLEAR_RE.search(clean_text):
+                        self.serial_console.delete("1.0", tk.END)
+                        self._serial_at_line_start = True
+                        clean_text = ANSI_CLEAR_RE.sub("", clean_text)
+                
+                clean_text = ANSI_CSI_RE.sub("", clean_text)
+                if not clean_text and not is_newline:
+                    continue
+
+                if self._serial_at_line_start and clean_text:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    self.serial_console.insert(tk.END, f"[{ts}] ", "timestamp")
+                self.serial_console.insert(tk.END, clean_text + ("\n" if is_newline else ""), tag)
+                if is_newline:
+                    self._serial_at_line_start = True
+                else:
+                    self._serial_at_line_start = False
+            total_lines = int(self.serial_console.index("end-1c").split(".")[0])
+            if total_lines > 1500:
+                self.serial_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
+            self.serial_console.configure(state=tk.DISABLED)
+            if self.serial_autoscroll_var.get():
+                self.serial_console.see(tk.END)
+        except tk.TclError:
+            # The window can be closing while a monitor worker flushes.
+            pass
+
+    def _clear_console(self):
+        self.console.configure(state=tk.NORMAL)
+        self.console.delete("1.0", tk.END)
+        self.console.configure(state=tk.DISABLED)
+
+    def _clear_console_if_action_enabled(self):
+        """Clear the Build Console if 'Clear Screen on Action' is enabled."""
+        if getattr(self, "clear_build_console_on_action_var", None) and self.clear_build_console_on_action_var.get():
+            self._clear_console()
+
+    def _clear_serial_console(self):
+        with self._serial_display_lock:
+            self._serial_display_queue = []
+        self._serial_at_line_start = True
+        def _do():
+            self.serial_console.configure(state=tk.NORMAL)
+            self.serial_console.delete("1.0", tk.END)
+            self.serial_console.configure(state=tk.DISABLED)
+        self.root.after(0, _do)
+
+    def _append_serial(self, text: str, tag: str = "", newline: bool = True):
+        """Append a manual/status line (connect, reset, pause, send, errors)
+        to the Serial Monitor panel (thread-safe). This is distinct from
+        _append_tagged_line(), which queues live device output — status
+        lines from button actions go straight to the widget so they show
+        up immediately rather than waiting on the flush timer."""
+        def _do():
+            try:
+                self.serial_console.configure(state=tk.NORMAL)
+                if not getattr(self, "_serial_at_line_start", True):
+                    self.serial_console.insert(tk.END, "\n")
+                    self._serial_at_line_start = True
+                if newline and text.strip():
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    self.serial_console.insert(tk.END, f"[{ts}] ", "timestamp")
+                self.serial_console.insert(tk.END, text + ("\n" if newline else ""), tag)
+                if newline:
+                    self._serial_at_line_start = True
+                total_lines = int(self.serial_console.index("end-1c").split(".")[0])
+                if total_lines > 1500:
+                    self.serial_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
+                self.serial_console.configure(state=tk.DISABLED)
+                if self.serial_autoscroll_var.get():
+                    self.serial_console.see(tk.END)
+            except tk.TclError:
+                # Window can be closing while this fires.
+                pass
+        self.root.after(0, _do)
+
+    def _toggle_serial_pause(self):
+        """Pause/resume the Serial Monitor's live display. While paused, the
+        port keeps being read in the background (so nothing backs up or
+        drops the connection) — only the printing to the panel is held
+        back. Anything that arrives while paused is not queued or replayed;
+        it simply isn't shown, and display picks back up on resume."""
+        self._monitor_paused = not self._monitor_paused
+        if self._monitor_paused:
+            self.btn_pause_serial.config(text="▶ Resume")
+            self._append_serial("  ⏸ Serial monitoring paused — the port is still connected.", "dim")
+        else:
+            self.btn_pause_serial.config(text="⏸ Pause")
+            self._append_serial("  ▶ Serial monitoring resumed.", "dim")
+
+    def _send_serial(self, event=None):
+        """Send the text in the serial input box to the connected board,
+        appending the selected line ending, then clear the input box."""
+        text = self.serial_input.get()
+        if not text:
+            return "break" if event else None
+
+        if not (self.serial_conn and self.serial_conn.is_open) or not self.serial_running:
+            self._append_serial("  ✖ Not connected — open the Serial Monitor first.", "error")
+            self.serial_input.delete(0, tk.END)
+            return "break" if event else None
+
+        ending_map = {
+            "None": "",
+            "\\n": "\n",
+            "\\r": "\r",
+            "\\r\\n": "\r\n",
+        }
+        ending = ending_map.get(self.line_ending_var.get(), "\r\n")
+
+        try:
+            self.serial_conn.write((text + ending).encode("utf-8", errors="replace"))
+            self._append_serial(f"  » {text}", "dim")
+        except Exception as exc:
+            self._append_serial(f"  ✖ Send failed: {exc}", "error")
+            self.serial_input.delete(0, tk.END)
+            return "break" if event else None
+
+        self.serial_input.delete(0, tk.END)
+        return "break" if event else None
+
+    def _set_status(self, text: str, color: str = Theme.TEXT_DIM):
+        if getattr(self, "_last_status_text", None) == text and getattr(self, "_last_status_color", None) == color:
+            return
+        self._last_status_text = text
+        self._last_status_color = color
+        def _do():
+            if hasattr(self, "status_label") and self.status_label.winfo_exists():
+                self.status_label.configure(text=text, fg=color)
+        self.root.after(0, _do)
+
+    def _update_editor_info(self, cursor_pos: str = None):
+        """Update the editor statistics label at the bottom right of the GUI status bar."""
+        if not hasattr(self, "editor_info_label") or not self.editor_info_label.winfo_exists():
+            return
+
+        mode = getattr(self, "editor_mode", "default")
+        
+        # 1. Scan source files to count files and total lines of code
+        files_count = 0
+        total_project_lines = 0
+        try:
+            if hasattr(self, "sketch_dir_path") and self.sketch_dir_path and self.sketch_dir_path.exists():
+                source_files = []
+                for ext in ["*.ino", "*.cpp", "*.h", "*.c", "*.txt"]:
+                    source_files.extend(self.sketch_dir_path.glob(ext))
+                files_count = len(source_files)
+                for f in source_files:
+                    try:
+                        content = f.read_text(encoding="utf-8", errors="replace")
+                        total_project_lines += len(content.splitlines())
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if mode == "default":
+            # For default editor, we can query active tab cursor/lines
+            tabs_count = 0
+            active_info = ""
+            try:
+                if hasattr(self, "editor_notebook") and self.editor_notebook.winfo_exists():
+                    tabs_count = self.editor_notebook.index("end")
+                    active_tab = self.editor_notebook.select()
+                    if active_tab and active_tab in self.editor_tab_data:
+                        t_data = self.editor_tab_data[active_tab]
+                        text_widget = t_data["text"]
+                        
+                        if cursor_pos is None:
+                            pos = text_widget.index(tk.INSERT)
+                            ln, col = pos.split(".")
+                            cursor_pos = f"Ln {ln}, Col {int(col)+1}"
+                        
+                        active_lines = int(text_widget.index("end-1c").split(".")[0])
+                        active_info = f" | {cursor_pos} ({active_lines} lines)"
+            except Exception:
+                pass
+            
+            txt = f"Editor: Default | Tabs: {tabs_count}{active_info}"
+        elif mode == "monaco":
+            active_info = ""
+            if hasattr(self, "editor_api") and self.editor_api and self.editor_api.active_file_path:
+                try:
+                    p = Path(self.editor_api.active_file_path)
+                    if p.exists():
+                        lines_count = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
+                        active_info = f" | {p.name} ({lines_count} lines)"
+                except Exception:
+                    pass
+            txt = f"Editor: Monaco | Files: {files_count}{active_info}"
+        else:
+            txt = ""
+
+        def _do():
+            self.editor_info_label.configure(text=txt)
+        self.root.after(0, _do)
+
+    def _set_serial_status(self, connected: bool):
+        def _do():
+            if connected:
+                self.serial_status.configure(text="● Connected", fg=Theme.GREEN)
+            else:
+                self.serial_status.configure(text="● Disconnected", fg=Theme.RED)
+        self.root.after(0, _do)
+
+    def _set_buttons_busy(self, busy: bool):
+        """Disable/enable action buttons during operations (legacy helper).
+        Delegates to _set_buttons_state with operation='any'."""
+        self._set_buttons_state(busy, operation="any")
+
+    def _set_buttons_state(self, busy: bool, operation: str = "any"):
+        self._active_operation = operation if busy else None
+        def _do():
+            if busy:
+                
+                self.btn_compile.configure(state=tk.DISABLED)
+                self.btn_upload.configure(state=tk.DISABLED)
+                self.btn_new_project.configure(state=tk.DISABLED)
+                self.btn_settings.configure(state=tk.DISABLED)
+                if hasattr(self, "btn_reset_mcu") and self.btn_reset_mcu:
+                    try:
+                        if operation in ("upload", "flash", "reset"):
+                            self.btn_reset_mcu.configure(state=tk.DISABLED)
+                        else:
+                            can_reset = bool(self.board_var.get()) and self._is_board_recognized()
+                            self.btn_reset_mcu.configure(state=tk.NORMAL if can_reset else tk.DISABLED)
+                    except Exception:
+                        pass
+
+                self.board_combo.configure(state="disabled")
+                self.port_combo.configure(state="disabled")
+                if hasattr(self, "serial_baud_combo"):
+                    if operation in ("upload", "flash", "reset"):
+                        self.serial_baud_combo.configure(state="disabled")
+                    else:
+                        self.serial_baud_combo.configure(state="readonly")
+                self.upload_speed_combo.configure(state="disabled")
+                self.btn_clean.configure(state=tk.DISABLED)
+
+                # STOP: enabled during compile and upload phase 1 (building only,
+                # safe to cancel). DISABLED during flash/reset (direct flash write
+                # — brick risk) and generic fallback.
+                if operation in ("compile", "upload"):
+                    self.btn_stop.configure(state=tk.NORMAL)
+                    if hasattr(self, "bottom_notebook"):
+                        self.bottom_notebook.tab(1, state="normal")
+                        self.bottom_notebook.select(0)  # Switch to Build Console
+                elif operation in ("flash", "reset"):
+                    self.btn_stop.configure(state=tk.DISABLED)
+                    if hasattr(self, "bottom_notebook"):
+                        self.bottom_notebook.tab(1, state="disabled")
+                        self.bottom_notebook.select(0)
+                        self._set_window_closable(False)
+                else:
+                    self.btn_stop.configure(state=tk.DISABLED)
+
+                self.lbl_sketch.configure(cursor="arrow")
+
+                # Visual label so the user knows which op is active
+                is_compact = getattr(self, "_action_compact_mode", False)
+                if operation == "compile":
+                    self.btn_compile.configure(text="Compiling..." if is_compact else "⚙ Compiling...")
+                    self.btn_upload.configure(text="Upload" if is_compact else "⚡ Upload")
+                elif operation in ("upload", "flash"):
+                    self.btn_compile.configure(text="Compile" if is_compact else "⚙ Compile")
+                    self.btn_upload.configure(text="Uploading..." if is_compact else "⡿ Uploading...")
+                elif operation == "reset":
+                    self.btn_compile.configure(text="Compile" if is_compact else "⚙ Compile")
+                    self.btn_upload.configure(text="Resetting..." if is_compact else "⡿ Resetting...")
+                elif operation == "clean":
+                    self.btn_compile.configure(text="Compile" if is_compact else "⚙ Compile")
+                    self.btn_upload.configure(text="Upload" if is_compact else "⚡ Upload")
+                    self.btn_clean.configure(text="Cleaning..." if is_compact else "🧹 Cleaning...")
+            else:
+                self._framework_download_active = False
+                is_compact = getattr(self, "_action_compact_mode", False)
+                self.btn_compile.configure(state=tk.NORMAL, text="Compile" if is_compact else "⚙ Compile")
+                self.btn_upload.configure(state=tk.NORMAL, text="Upload" if is_compact else "⚡ Upload")
+                self.btn_new_project.configure(state=tk.NORMAL)
+                self.btn_settings.configure(state=tk.NORMAL)
+                self.btn_stop.configure(state=tk.DISABLED, text="Stop" if is_compact else "■ Stop")
+                if hasattr(self, "btn_reset_mcu") and self.btn_reset_mcu:
+                    try:
+                        can_reset = bool(self.board_var.get()) and self._is_board_recognized()
+                        self.btn_reset_mcu.configure(state=tk.NORMAL if can_reset else tk.DISABLED)
+                    except Exception:
+                        pass
+                if hasattr(self, "bottom_notebook"):
+                    # If the tab was disabled (i.e. we just finished an
+                    # upload or reset that locked it), decide where the
+                    # selection should land now that it's unlocking:
+                    #   - if something requested a specific tab (e.g. a
+                    #     successful upload wants to jump to Serial Monitor),
+                    #     honor that one-shot request.
+                    #   - otherwise force it back to Build Console explicitly
+                    #     rather than trusting Tk to leave the current
+                    #     selection alone when a previously-disabled tab
+                    #     flips back to "normal".
+                    was_locked = self.bottom_notebook.tab(1, "state") == "disabled"
+                    self.bottom_notebook.tab(1, state="normal")
+                    target_tab = self._focus_tab_on_unlock
+                    self._focus_tab_on_unlock = None  # one-shot, always consume
+                    if target_tab is not None:
+                        self.bottom_notebook.select(target_tab)
+                    elif was_locked:
+                        self.bottom_notebook.select(0)
+                
+                # Re-enable board/ports/baud selection
+                self.board_combo.configure(state="readonly")
+                self.port_combo.configure(state="readonly")
+                if hasattr(self, "serial_baud_combo"):
+                    self.serial_baud_combo.configure(state="readonly")
+                
+                # If board is AVR, keep upload speed combo disabled, else readonly
+                board_name = self.board_var.get()
+                board_info = SUPPORTED_BOARDS.get(board_name, {})
+                is_avr = (board_info.get("platform", "") == "atmelavr")
+                if is_avr:
+                    self.upload_speed_combo.configure(state="disabled")
+                else:
+                    self.upload_speed_combo.configure(state="readonly")
+                    
+                self.btn_clean.configure(state=tk.NORMAL, text="Clean" if is_compact else "🧹 Clean")
+                
+                self.lbl_sketch.configure(cursor="hand2")
+                
+                # Always safe to restore closability once we're back to idle
+                self._set_window_closable(True)
+
+                # The block above unconditionally re-enabled Compile/Upload;
+                # re-apply the board-selected (and, for Upload, hardware-
+                # recognized) gating now that is_busy is back to False.
+                self._update_hardware_action_buttons()
+                
+        self.root.after(0, _do)
+
+    def _toggle_editor_pane(self):
+        """Show/hide the embedded code editor pane. When hidden, the
+        Monitors pane (Build/Serial notebook) expands to fill the space.
+
+        Both toggle buttons stay enabled at all times. If Editor is the only
+        pane currently visible (Monitors already hidden), hiding it swaps
+        panes instead of being blocked: Editor hides and Monitors reappears,
+        so the window is never left blank."""
+        if self.editor_pane_visible:
+            self.main_pane.forget(self.editor_frame)
+            self.editor_pane_visible = False
+            self.btn_toggle_editor.configure(text="🗖 Show Editor")
+            self._set_embedded_editor_visible(False)
+            if not self.monitors_pane_visible:
+                # Editor was the last visible pane — bring Monitors back
+                # so the window never goes blank.
+                self.main_pane.add(self.bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
+                self.monitors_pane_visible = True
+                self.btn_toggle_monitors.configure(text="🗖 Hide Monitors")
+        else:
+            if self.monitors_pane_visible:
+                self.main_pane.add(self.editor_frame, before=self.bottom_frame,
+                                    minsize=self._editor_minsize, height=self._editor_height)
+            else:
+                self.main_pane.add(self.editor_frame, minsize=self._editor_minsize, height=self._editor_height)
+            self.editor_pane_visible = True
+            self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+            self._set_embedded_editor_visible(True)
+        self._update_pane_toggle_buttons()
+
+    def _toggle_monitors_pane(self):
+        """Show/hide the Monitors pane (Build Console / Serial Monitor
+        notebook). When hidden, the code editor expands to fill the space.
+
+        Both toggle buttons stay enabled at all times. If Monitors is the
+        only pane currently visible (Editor already hidden), hiding it swaps
+        panes instead of being blocked: Monitors hides and Editor reappears,
+        so the window is never left blank."""
+        if self.monitors_pane_visible:
+            self.main_pane.forget(self.bottom_frame)
+            self.monitors_pane_visible = False
+            self.btn_toggle_monitors.configure(text="🗖 Show Monitors")
+            if not self.editor_pane_visible:
+                # Monitors was the last visible pane — bring Editor back
+                # so the window never goes blank.
+                self.main_pane.add(self.editor_frame, minsize=self._editor_minsize, height=self._editor_height)
+                self.editor_pane_visible = True
+                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+                self._set_embedded_editor_visible(True)
+        else:
+            if self.editor_pane_visible:
+                self.main_pane.add(self.bottom_frame, after=self.editor_frame,
+                                    minsize=self._bottom_minsize, height=self._bottom_height)
+            else:
+                self.main_pane.add(self.bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
+            self.monitors_pane_visible = True
+            self.btn_toggle_monitors.configure(text="🗖 Hide Monitors")
+        self._update_pane_toggle_buttons()
+
+    def _update_pane_toggle_buttons(self):
+        """Both toggle buttons remain clickable at all times — neither pane
+        can ever be permanently locked out, since hiding the last remaining
+        pane now swaps to the other one instead of being blocked."""
+        self.btn_toggle_editor.configure(state=tk.NORMAL)
+        self.btn_toggle_monitors.configure(state=tk.NORMAL)
+
+    def _toggle_editor_detachment(self):
+        if getattr(self, "editor_detached", False):
+            self._attach_editor()
+        else:
+            self._detach_editor()
+
+    def _detach_editor(self):
+        mode = getattr(self, "editor_mode", "default")
+        if mode == "monaco":
+            if not sys.platform == "win32" or win32gui is None:
+                return
+            hwnd = getattr(self, "_editor_hwnd", None)
+            if not hwnd:
+                self._append("  ⚠ Code editor is not loaded yet.", "warning")
+                return
+            
+            # Save original styles before stripping, if not done already
+            if not hasattr(self, "_original_editor_style") or getattr(self, "_original_editor_style", None) is None:
+                try:
+                    self._original_editor_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                    self._original_editor_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                except Exception:
+                    pass
+
+            # Save timestamp for grace period in _poll_detached_window
+            self._detach_timestamp = time.time()
+
+            # 1. Reparent to desktop (0)
+            try:
+                win32gui.SetParent(hwnd, 0)
+            except Exception:
+                pass
+            
+            # 2. Restore styles
+            if getattr(self, "_original_editor_style", None) is not None:
+                try:
+                    win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, self._original_editor_style)
+                    win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, self._original_editor_ex_style)
+                except Exception:
+                    pass
+            
+            # 3. Ensure webview control visibility
+            try:
+                if hasattr(self, "editor_window") and self.editor_window:
+                    self.editor_window.show()
+            except Exception:
+                pass
+
+            # 4. Set position and size to make it visible (centered over main window)
+            try:
+                parent_x = self.root.winfo_x()
+                parent_y = self.root.winfo_y()
+                parent_w = self.root.winfo_width()
+                parent_h = self.root.winfo_height()
+                w, h = 1000, 700
+                x = parent_x + (parent_w - w) // 2
+                y = parent_y + (parent_h - h) // 2
+                win32gui.SetWindowPos(
+                    hwnd, 0, max(0, x), max(0, y), w, h,
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_SHOWWINDOW
+                )
+            except Exception:
+                pass
+                
+            self._editor_embedded = False
+            self.editor_detached = True
+            self._update_detach_button_style()
+            
+            # 6. Show placeholder in main GUI editor frame
+            self._show_detached_placeholder()
+            
+            # 7. Start polling to re-attach if closed
+            self._poll_detached_window()
+            
+        else: # default editor
+            if not hasattr(self, "editor_content_frame") or not self.editor_content_frame:
+                return
+            
+            # Backup default editor state
+            self._backup_default_editor_state()
+            
+            # Destroy old editor widgets in main window
+            try:
+                self.editor_content_frame.destroy()
+            except Exception:
+                pass
+            self.editor_content_frame = None
+            
+            # Show the "Editor Detached" placeholder in the MAIN window now,
+            # while editor_content_frame is still None. This must happen
+            # BEFORE _build_editor_default() is called below, because that
+            # call reassigns self.editor_content_frame to point at the new
+            # Toplevel's own content frame (it's shared code for both the
+            # main window and the popped-out window). If we called
+            # _show_detached_placeholder() afterwards instead, it would
+            # pack_forget() the freshly-built Toplevel content rather than
+            # the old main-window content — leaving the detached window
+            # blank while looking fine when re-attached.
+            self.editor_detached = True
+            self._update_detach_button_style()
+            
+            # Ensure the editor pane is visible so the placeholder appears
+            if not self.editor_pane_visible:
+                self.main_pane.add(self.editor_frame, minsize=self._editor_minsize, height=self._editor_height)
+                self.editor_pane_visible = True
+                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+            
+            self._show_detached_placeholder()
+            
+            # 1. Create Toplevel — independent standalone window with maximize/restore
+            self.default_editor_toplevel = tk.Toplevel(self.root)
+            self.default_editor_toplevel.title("MCU Flasher — Code Editor")
+            self.default_editor_toplevel.configure(bg=Theme.BG_DARKEST)
+            self.default_editor_toplevel.resizable(True, True)
+            self.default_editor_toplevel.minsize(500, 350)
+
+            # Set window icon if available
+            try:
+                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+                if icon_path.exists():
+                    self.default_editor_toplevel.iconbitmap(str(icon_path))
+            except Exception:
+                pass
+
+            # Center the toplevel
+            center_toplevel(self.default_editor_toplevel, self.root, 1000, 700)
+
+            # Rebuild default editor notebook inside the new Toplevel
+            self._build_detached_editor_toolbar(self.default_editor_toplevel)
+            self._build_editor_default(self.default_editor_toplevel)
+
+            # Map the window — no deiconify/lift/focus_force needed for a
+            # normal Toplevel; those are for popup dialogs that start withdrawn.
+            self.default_editor_toplevel.update()
+
+            # Bind close event to re-attach
+            self.default_editor_toplevel.protocol("WM_DELETE_WINDOW", self._attach_editor)
+
+        self.root.after_idle(self._apply_dynamic_button_scale)
+        self._append("  ✓ Code editor detached to separate window.", "success")
+
+    def _attach_editor(self):
+        mode = getattr(self, "editor_mode", "default")
+        if mode == "monaco":
+            if not sys.platform == "win32" or win32gui is None:
+                return
+            hwnd = getattr(self, "_editor_hwnd", None)
+            if not hwnd:
+                return
+                
+            # Hide placeholder
+            if hasattr(self, "_editor_placeholder"):
+                self._editor_placeholder.place_forget()
+                
+            # 1. Reparent back to editor frame
+            try:
+                frame = self._editor_embed_frame
+                frame.update_idletasks()
+                frame.update()
+                tk_hwnd = frame.winfo_id()
+                
+                # Set WS_CLIPCHILDREN on parent Tk frame to isolate child rendering
+                tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
+
+                # Strip styles again to embed
+                style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                           win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                           win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+                style |= win32con.WS_CHILD
+                win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                              win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+                ex_style |= win32con.WS_EX_TOOLWINDOW
+                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+                win32gui.SetParent(hwnd, tk_hwnd)
+                
+                # Resize — flush pending Tk geometry before measuring
+                frame.update_idletasks()
+                w = max(frame.winfo_width(), 50)
+                h = max(frame.winfo_height(), 50)
+                win32gui.SetWindowPos(
+                    hwnd, 0, 0, 0, w, h,
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
+                )
+            except Exception:
+                pass
+                
+            self._editor_embedded = True
+            self.editor_detached = False
+            self._update_detach_button_style()
+
+            # Let Tk's layout settle, then sync the editor size one more time
+            self.root.after(200, lambda: self._resize_embedded_editor())
+            
+        else: # default editor
+            # Backup default editor state from Toplevel window
+            self._backup_default_editor_state()
+            
+            if hasattr(self, "default_editor_toplevel") and self.default_editor_toplevel:
+                try:
+                    self.default_editor_toplevel.destroy()
+                except Exception:
+                    pass
+                self.default_editor_toplevel = None
+                
+            if hasattr(self, "editor_content_frame") and self.editor_content_frame:
+                try:
+                    self.editor_content_frame.destroy()
+                except Exception:
+                    pass
+                self.editor_content_frame = None
+                
+            if hasattr(self, "_default_placeholder_frame"):
+                try:
+                    self._default_placeholder_frame.destroy()
+                except Exception:
+                    pass
+                self._default_placeholder_frame = None
+
+            # Ensure the editor pane is visible in the main window so the
+            # rebuilt editor container is actually shown. _detach_editor
+            # already guarantees this on the way out, but _attach_editor can
+            # fire from a Toplevel close callback after the pane was hidden
+            # mid-session — without this check the editor rebuilds into a
+            # frame that is no longer mapped inside main_pane and silently
+            # vanishes.
+            if not self.editor_pane_visible:
+                self.main_pane.add(self.editor_frame, minsize=self._editor_minsize, height=self._editor_height)
+                self.editor_pane_visible = True
+                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+
+            # Rebuild default editor inside the main window editor_frame
+            self._build_editor_default(self.editor_frame)
+            self.editor_detached = False
+            self._update_detach_button_style()
+
+            # When both panes were hidden at the time of re-attach, toggle
+            # buttons may be stale. Update them now so the user can operate
+            # the editor they just recovered.
+            self._update_pane_toggle_buttons()
+            
+        self.root.after_idle(self._apply_dynamic_button_scale)
+        self._append("  ✓ Code editor re-attached to the main window.", "success")
+
+    def _build_detached_editor_toolbar(self, parent):
+        """Add action controls to a detached Default editor window.
+
+        Tk does not allow existing widgets to be re-parented into a sibling
+        Toplevel.  These buttons call the same actions as their main-window
+        counterparts, so the detached editor remains fully usable.
+        """
+        bar = tk.Frame(parent, bg=Theme.BG_DARK, padx=8, pady=6)
+        bar.pack(fill=tk.X)
+        tk.Label(bar, text="ACTIONS", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARK).pack(side=tk.LEFT, padx=(0, 6))
+        actions = [
+            ("Compile", self._do_compile, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
+            ("Upload", self._do_upload, Theme.BTN_FULL, Theme.BTN_FULL_H),
+            ("Stop", self._do_stop, Theme.BTN_STOP, Theme.BTN_STOP_H),
+            ("Clean", self._do_clean, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            ("Save", self._trigger_save, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
+            ("Save All", self._trigger_save_all, Theme.BTN_FULL, Theme.BTN_FULL_H),
+            ("Reload", self._reload_current_editor_file, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            ("Modify", self._open_modify_files_dialog, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H),
+        ]
+        for index, (label, command, bg, hover) in enumerate(actions):
+            if index == 4:
+                tk.Frame(bar, bg=Theme.BORDER, width=2, height=22).pack(
+                    side=tk.LEFT, padx=7
+                )
+            self._make_btn(bar, label, command, bg, hover, font=self.font_label).pack(side=tk.LEFT, padx=2)
+        self._detached_editor_toolbar = bar
+        self._sync_detached_compact_actions()
+
+    def _sync_detached_compact_actions(self, width=None):
+        """Put actions in the detached editor whenever it is detached."""
+        if width is None:
+            try:
+                width = self.root.winfo_width()
+            except Exception:
+                width = 0
+        active = bool(getattr(self, "editor_detached", False))
+
+        # Default editor: its detached window is Tk, so show/hide its local
+        # toolbar directly.
+        toolbar = getattr(self, "_detached_editor_toolbar", None)
+        try:
+            if toolbar and toolbar.winfo_exists():
+                if active and not toolbar.winfo_ismapped():
+                    toolbar.pack(fill=tk.X, before=getattr(self, "editor_content_frame", None))
+                elif not active and toolbar.winfo_ismapped():
+                    toolbar.pack_forget()
+        except Exception:
+            pass
+
+        # Monaco is a native WebView window. Its page owns an equivalent bar
+        # and calls EditorApi.run_action(), keeping the controls in the actual
+        # detached editor window rather than in a separate helper window.
+        if getattr(self, "editor_mode", "default") == "monaco":
+            try:
+                if hasattr(self, "editor_window") and self.editor_window:
+                    self.editor_window.evaluate_js(
+                        "window.setDetachedActionBar && window.setDetachedActionBar(" +
+                        ("true" if active else "false") + ")"
+                    )
+            except Exception:
+                pass
+
+    def _show_detached_placeholder(self):
+        # Clear/hide any existing widgets in editor_frame except the placeholder
+        if hasattr(self, "editor_content_frame") and self.editor_content_frame:
+            self.editor_content_frame.pack_forget()
+            
+        # If we are in Monaco mode, we have self._editor_placeholder
+        # Let's show it with the detach/attach label (no redundant button!)
+        if hasattr(self, "_editor_placeholder"):
+            self._editor_placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+            self._editor_status_lbl.configure(text="📝 Editor Detached")
+            self._editor_desc_lbl.configure(text="The code editor is running in a separate window.")
+            self._editor_fallback_btn.pack_forget()
+            self._stop_editor_spinner()
+            if hasattr(self, "_editor_spinner_canvas"):
+                self._editor_spinner_canvas.pack_forget()
+        else:
+            # For default editor, let's create a temporary placeholder frame if not exists
+            if not hasattr(self, "_default_placeholder_frame"):
+                placeholder = tk.Frame(self.editor_frame, bg=Theme.BG_DARKEST)
+                self._default_placeholder_frame = placeholder
+                
+                status_lbl = tk.Label(
+                    placeholder,
+                    text="📝 Editor Detached",
+                    font=tkfont.Font(family="Montserrat", size=16, weight="bold"),
+                    fg=Theme.CYAN, bg=Theme.BG_DARKEST
+                )
+                status_lbl.pack(pady=10)
+                
+                desc_lbl = tk.Label(
+                    placeholder,
+                    text="The code editor is running in a separate window.",
+                    font=tkfont.Font(family="Montserrat", size=10),
+                    fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+                )
+                desc_lbl.pack(pady=5)
+                
+            self._default_placeholder_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+    def _poll_detached_window(self):
+        if not getattr(self, "editor_detached", False) or not self._editor_hwnd:
+            return
+        # Grace period: allow 1.5s after detaching before checking visibility
+        detach_time = getattr(self, "_detach_timestamp", 0)
+        if time.time() - detach_time < 1.5:
+            self.root.after(300, self._poll_detached_window)
+            return
+        try:
+            import win32gui
+            if not win32gui.IsWindowVisible(self._editor_hwnd):
+                # The user hid/closed the detached window — re-attach it!
+                self._attach_editor()
+                return
+        except Exception:
+            pass
+        self.root.after(500, self._poll_detached_window)
+
+    def _update_detach_button_style(self):
+        if not hasattr(self, "btn_detach_editor") or not self.btn_detach_editor.winfo_exists():
+            return
+            
+        detached = getattr(self, "editor_detached", False)
+        if detached:
+            # DETACHED Mode -> orange background, white text
+            bg_color = "#e67e22"        # Orange
+            bg_hover = "#d35400"        # Darker Orange
+            text = "🗗 Attach Editor"
+        else:
+            # ATTACHED Mode -> green background, white text
+            bg_color = "#2d7d46"        # Green
+            bg_hover = "#38a058"        # Darker Green
+            text = "🗗 Detach Editor"
+            
+        # Configure button
+        self.btn_detach_editor.configure(
+            image="",
+            text=text,
+            bg=bg_color,
+            fg="#ffffff",
+            activebackground=bg_hover,
+            activeforeground="#ffffff",
+            compound=tk.NONE
+        )
+        
+        # Re-bind hover events for solid colors
+        self.btn_detach_editor.bind("<Enter>", lambda e, c=bg_hover: self.btn_detach_editor.configure(bg=c))
+        self.btn_detach_editor.bind("<Leave>", lambda e, c=bg_color: self.btn_detach_editor.configure(bg=c))
+
+    def _print_welcome(self):
+        self._append("=" * 56, "header")
+        self._append("⚡ MCU Flasher by Naph — ESP32 Upload & Monitor (PIO)", "header")
+        self._append("=" * 56, "header")
+        self._append("")
+        # Kick off a project-folder scan immediately so the user sees
+        # detected libs, ini status, and source files right on startup.
+        self._on_folder_changed()
+
+    # ──────────────────────────────────────────────────────────
+    # PORT MANAGEMENT
+    def _run_bg_task(self, task_func, *args, on_success=None, on_error=None):
+        """Submit a task to the central ThreadPoolExecutor.
+        Executes when CPU is ready, keeping the UI thread 100% smooth.
+        Callbacks are marshaled back to the main UI thread via root.after().
+        """
+        def _worker():
+            try:
+                result = task_func(*args)
+                if on_success and callable(on_success):
+                    if hasattr(self, "root") and self.root and self.root.winfo_exists():
+                        self.root.after(0, lambda: on_success(result))
+                return result
+            except Exception as exc:
+                if on_error and callable(on_error):
+                    if hasattr(self, "root") and self.root and self.root.winfo_exists():
+                        self.root.after(0, lambda: on_error(exc))
+                return None
+
+        if hasattr(self, "_bg_executor") and self._bg_executor:
+            try:
+                return self._bg_executor.submit(_worker)
+            except Exception:
+                pass
+        import threading
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        return t
+
+    # ──────────────────────────────────────────────────────────
+    def _save_selected_port(self, port_name: str | None):
+        """Save the currently selected COM port in the instance config asynchronously on thread pool."""
+        def _do_save():
+            try:
+                config = load_gui_config()
+                config["selected_port"] = port_name or ""
+                save_gui_config(config)
+            except Exception:
+                pass
+        self._run_bg_task(_do_save)
+
+    def _refresh_ports(self, force_select_port=None, called_from_hotplug=False):
+        """Scan serial ports and update the combobox, hiding ports that
+        another live instance already has selected.
+        If force_select_port is specified, it will select that port immediately.
+        """
+        ports = serial.tools.list_ports.comports()
+
+        # Computed once and reused for the whole pass, so the dropdown
+        # contents, current-selection check, and auto-select fallback all
+        # agree on the same snapshot of what's taken. This instance's own
+        # claimed port is never in here (get_occupied_ports() excludes
+        # _INSTANCE_ID), so it can never hide itself from its own dropdown.
+        occupied_ports = get_occupied_ports()
+        visible_ports = []
+        for p in ports:
+            if p.device in occupied_ports:
+                continue
+            desc = (p.description or "").lower()
+            hwid = (p.hwid or "").lower()
+            
+            # Filter out standard Bluetooth serial links to avoid COM name collision/overlap
+            if "bluetooth" in desc or "bthenum" in hwid:
+                continue
+            visible_ports.append(p)
+
+        port_list = [f"{p.device}  -  {p.description or ''}" for p in visible_ports]
+
+        # Update last-known port set for hotplug detection. This tracks the
+        # *physical* device set (not the occupancy-filtered view) using (device, hwid)
+        # tuples so that port name collisions (e.g. sharing COM3) are detected properly.
+        self._last_known_ports = {(p.device, p.hwid or "") for p in ports}
+
+        self.port_combo["values"] = port_list
+
+        # If the dropdown popup is currently visible AND we are handling a hotplug event,
+        # dismiss and re-post it so the user sees the updated list without having to close/reopen.
+        if called_from_hotplug:
+            try:
+                popdown_name = self.port_combo.tk.call("ttk::combobox::PopdownWindow", str(self.port_combo))
+                popdown = self.root.nametowidget(popdown_name)
+                if popdown.winfo_ismapped():
+                    self.port_combo.event_generate('<Escape>')
+                    self.root.after(30, lambda: self.port_combo.event_generate('<Button-1>'))
+            except Exception:
+                pass
+
+        # Check if the current selection is still connected, visible, and valid
+        current_val = self.port_var.get()
+        current_device = ""
+        if current_val:
+            match = re.match(r"(COM\d+|/dev/\S+)", current_val)
+            current_device = match.group(1) if match else current_val.split()[0]
+
+        # If a force_select_port is requested (e.g. newly plugged known MCU on hotplug), select it immediately
+        if force_select_port:
+            for p in visible_ports:
+                if p.device == force_select_port:
+                    target_val = f"{p.device}  -  {p.description or ''}"
+                    self.port_combo.set(target_val)
+                    self._save_selected_port(p.device)
+                    self._board_port_confirmed = False
+                    self._update_hardware_action_buttons()
+                    self._auto_select_board(show_msg=False)
+                    if p.device and not self._port_is_avr_only():
+                        threading.Thread(
+                            target=self._auto_detect_board_from_port,
+                            args=(p.device,),
+                            daemon=True,
+                        ).start()
+                    return
+
+        is_current_valid = False
+        if current_val:
+            if current_val in port_list and current_device.upper() != "COM1":
+                is_current_valid = True
+            elif current_val in port_list and current_device.upper() == "COM1":
+                # Only keep COM1 if user manually selected it and no other MCU port is present
+                has_other_mcu = False
+                mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
+                for p in visible_ports:
+                    if p.device.upper() != "COM1":
+                        combined = f"{p.description} {p.hwid}".lower()
+                        if any(kw in combined for kw in mcu_keywords):
+                            has_other_mcu = True
+                            break
+                if not has_other_mcu:
+                    is_current_valid = True
+
+        if is_current_valid:
+            # Current selection is still valid, keep it and update config
+            self._save_selected_port(current_device)
+            self._auto_select_board(show_msg=False)
+            if current_device and current_device.upper() != "COM1" and not self._port_is_avr_only():
+                threading.Thread(
+                    target=self._auto_detect_board_from_port,
+                    args=(current_device,),
+                    daemon=True,
+                ).start()
+            return
+
+        # If the current selection is invalid, empty, or was just hidden:
+        # Select a new one from what's still visible (strictly EXCLUDING COM1)
+        unoccupied_ports = visible_ports
+
+        mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
+        auto_port = None
+        auto_port_device = None
+
+        # 1. Search for MCU port first (excluding COM1)
+        for p in unoccupied_ports:
+            if p.device.upper() == "COM1":
+                continue
+            combined = f"{p.description} {p.hwid}".lower()
+            if any(kw in combined for kw in mcu_keywords):
+                auto_port = f"{p.device}  —  {p.description}"
+                auto_port_device = p.device
+                break
+
+        # 2. Search for any non-COM1 port if no MCU port found
+        if not auto_port:
+            for p in unoccupied_ports:
+                if p.device.upper() != "COM1":
+                    auto_port = f"{p.device}  —  {p.description}"
+                    auto_port_device = p.device
+                    break
+
+        if auto_port:
+            self.port_combo.set(auto_port)
+            self._save_selected_port(auto_port_device)
+            self._board_port_confirmed = False
+            self._update_hardware_action_buttons()
+            self._auto_select_board(show_msg=False)
+
+            if auto_port_device and auto_port_device.upper() != "COM1" and not self._port_is_avr_only():
+                threading.Thread(
+                    target=self._auto_detect_board_from_port,
+                    args=(auto_port_device,),
+                    daemon=True,
+                ).start()
+        else:
+            self.port_combo.set("")
+            self.port_var.set("")
+            self._save_selected_port("")
+            self._board_port_confirmed = False
+            self._update_hardware_action_buttons()
+
+    def _start_port_polling(self):
+        """Start a dedicated background thread to monitor serial ports in real-time
+        for USB hotplug, MCU disconnections, and instance port occupancy changes."""
+        self._last_known_occupied_ports: set[str] = get_occupied_ports()
+        self._port_poll_active = True
+
+        def _poll_thread_worker():
+            poll_ticks = 0
+            while getattr(self, "_port_poll_active", True):
+                try:
+                    cpus = os.cpu_count() or 4
+                    poll_interval = 1.2 if cpus <= 4 else 0.8
+                    time.sleep(poll_interval)
+                    poll_ticks += 1
+
+                    current_ports = {(p.device, p.hwid or "") for p in serial.tools.list_ports.comports()}
+                    hardware_changed = current_ports != getattr(self, "_last_known_ports", set())
+
+                    # Check occupancy when hardware changes or every ~3.6s
+                    occupancy_changed = False
+                    current_occupied = getattr(self, "_last_known_occupied_ports", set())
+                    if hardware_changed or (poll_ticks % 3 == 0):
+                        current_occupied = get_occupied_ports()
+                        occupancy_changed = current_occupied != getattr(self, "_last_known_occupied_ports", set())
+
+                    if hardware_changed or occupancy_changed:
+                        try:
+                            self.root.after(0, self._handle_port_change, current_ports, current_occupied)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    try:
+                        self.root.after(0, lambda: self._append_notif(f"  ✖ Port poll thread error: {e}", "error"))
+                    except Exception:
+                        pass
+
+
+        self._port_poll_thread = threading.Thread(target=_poll_thread_worker, name="RealtimePortMonitorThread", daemon=True)
+        self._port_poll_thread.start()
+
+    def _handle_port_change(self, current_ports, current_occupied):
+        """Handle serial port additions, removals, and occupancy changes on the main Tk thread."""
+        try:
+            old = self._last_known_ports  # Set of (device, hwid)
+            
+            # Map them back to devices to detect added/removed COM ports
+            old_devices = {dev for dev, hwid in old}
+            new_devices = {dev for dev, hwid in current_ports}
+            
+            added_devs = new_devices - old_devices
+            removed_devs = old_devices - new_devices
+
+            # Check if any of the added devices is a known MCU
+            has_new_known_mcu = False
+            new_mcu_device = None
+            if added_devs:
+                mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
+                ports_info = serial.tools.list_ports.comports()
+                for p in ports_info:
+                    if p.device in added_devs:
+                        combined = f"{p.description} {p.hwid}".lower()
+                        if any(kw in combined for kw in mcu_keywords):
+                            has_new_known_mcu = True
+                            new_mcu_device = p.device
+                            break
+            
+            self._last_known_occupied_ports = current_occupied
+            self._last_known_ports = current_ports
+
+            if added_devs:
+                for p in added_devs:
+                    self._append_notif(f"  🔌 USB device connected: {p}", "success")
+            if removed_devs:
+                for p in removed_devs:
+                    self._append_notif(f"  ⚠ USB device disconnected: {p}", "warning")
+
+            current_port = self._get_port()
+
+            # If the currently selected/monitored port was disconnected:
+            if removed_devs and current_port and (current_port in removed_devs or current_port not in new_devices):
+                # Stop active serial monitor connection immediately
+                self._monitor_should_run = False
+                self.serial_running = False
+                if self.serial_conn and self.serial_conn.is_open:
+                    try:
+                        self.serial_conn.close()
+                    except Exception:
+                        pass
+                self._set_serial_status(False)
+                self._board_port_confirmed = False
+                self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
+
+            # Auto-switch to newly connected MCU only if current port is not valid/recognized
+            is_recognized = getattr(self, "_board_port_confirmed", False) and current_port and current_port.upper() != "COM1" and current_port in new_devices
+            
+            force_select_port = None
+            if has_new_known_mcu and not is_recognized:
+                force_select_port = new_mcu_device
+
+            self._refresh_ports(force_select_port=force_select_port, called_from_hotplug=True)
+
+            # If a new device appeared, auto-start monitor on it with hardware reset so setup() is captured
+            if added_devs and not self.serial_running:
+                self._manual_reset_pending = True
+                self._schedule_auto_start_monitor(500)
+
+        except Exception as e:
+            self._append_notif(f"  ✖ Error handling port change: {e}", "error")
+
+    def _start_marquee(self):
+        delay_ms = 800  # Default to slow poll if nothing is scrolling
+        
+        # 1. Port marquee
+        try:
+            if self.port_combo.winfo_exists():
+                pos = self.port_combo.xview()
+                if pos[0] == 0.0 and pos[1] >= 0.999:
+                    self._marquee_dir = 1
+                    self._marquee_pause = 0
+                else:
+                    if getattr(self, '_marquee_pause', 0) > 0:
+                        self._marquee_pause -= 1
+                    else:
+                        if pos[1] >= 0.999:
+                            self._marquee_dir = -1
+                            self._marquee_pause = 8  # pause at end
+                        elif pos[0] <= 0.0:
+                            self._marquee_dir = 1
+                            self._marquee_pause = 8  # pause at start
+                            
+                        self.port_combo.xview_scroll(self._marquee_dir, "units")
+                    delay_ms = 150
+        except Exception:
+            pass
+
+        # 2. Board marquee (only if not currently focused by user)
+        try:
+            if hasattr(self, 'board_combo') and self.board_combo.entry.winfo_exists():
+                if self.root.focus_get() != self.board_combo.entry:
+                    pos = self.board_combo.entry.xview()
+                    if pos[0] == 0.0 and pos[1] >= 0.999:
+                        self._board_marquee_dir = 1
+                        self._board_marquee_pause = 0
+                    else:
+                        if getattr(self, '_board_marquee_pause', 0) > 0:
+                            self._board_marquee_pause -= 1
+                        else:
+                            if pos[1] >= 0.999:
+                                self._board_marquee_dir = -1
+                                self._board_marquee_pause = 8  # pause at end
+                            elif pos[0] <= 0.0:
+                                self._board_marquee_dir = 1
+                                self._board_marquee_pause = 8  # pause at start
+                                
+                            self.board_combo.entry.xview_scroll(self._board_marquee_dir, "units")
+                        delay_ms = 150
+        except Exception:
+            pass
+
+        self.root.after(delay_ms, self._start_marquee)
+
+    # ── Custom filterable dropdown (replaces ttk.Combobox for board select) ──
+    #
+    # Three rounds of patching ttk::combobox::Post's focus-grab timing
+    # (ismapped-guard, then debounce, then after_idle refocus) produced
+    # zero observable change to the reported symptom -- not "improved",
+    # not "different", literally unchanged each time. That's a strong
+    # signal the theory of the mechanism was wrong, not that the next
+    # timing tweak will land. Compounding that: there's no tkinter or
+    # network access in the environment these fixes were authored in, so
+    # every one of those three attempts was reasoning about Tk's internal
+    # event queue without ever being able to watch it run -- exactly the
+    # situation where switching strategy beats a fourth guess.
+    #
+    # This replaces ttk.Combobox + Post entirely with a plain tk.Entry
+    # (for typing) and a manually-managed tk.Toplevel popup (for the
+    # filtered list), wired with ordinary Python event bindings only.
+    # There is no Post call anywhere in this replacement, so Post's
+    # internal focus grab -- whatever it actually does on this platform,
+    # which was never confirmed -- cannot run, and cannot fight for focus
+    # with the entry. The class still drives self.board_var (a
+    # tk.StringVar) on every change and still calls _on_board_changed()
+    # on confirmed selection, so all ~25 other call sites in this file
+    # that read self.board_var.get() need no changes.
+    def _build_board_dropdown(self, parent):
+        """Constructs the clean board textfield + 🔍 Search Button (no combobox arrowdown)."""
+        initial_board = ""
+        self.board_var = tk.StringVar(value=initial_board)
+        self._last_valid_board = initial_board
+
+        self.board_entry = tk.Entry(
+            parent,
+            textvariable=self.board_var,
+            width=26,
+            justify="center",
+            font=self.font_mono_sm,
+            bg=Theme.BG_DARKEST,
+            fg=Theme.TEXT_BRIGHT,
+            readonlybackground=Theme.BG_DARKEST,
+            disabledbackground=Theme.BG_DARKEST,
+            disabledforeground=Theme.TEXT_DIM,
+            relief=tk.FLAT,
+            state="readonly",
+            cursor="arrow",
+            highlightthickness=1,
+            highlightbackground=Theme.BORDER,
+            highlightcolor=Theme.CYAN,
+        )
+        pady_val = getattr(self, "_btn_pady", 3)
+        self.board_entry.pack(side=tk.LEFT, padx=(0, 4), fill=tk.BOTH, expand=True, ipady=pady_val)
+
+        # Alias for backward compatibility with external references
+        self.board_entry.entry = self.board_entry
+        self.board_combo = self.board_entry
+
+        self.board_entry.bind("<Button-1>", lambda e: safe_reclaim_os_focus(self.board_entry), add="+")
+
+        btn_search_board = self._make_btn(
+            parent, "🔍", self._open_board_search_dialog,
+            Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_mono_sm
+        )
+        btn_search_board.pack(side=tk.LEFT, fill=tk.Y)
+
+    def _open_board_search_dialog(self):
+        if getattr(self, "board_entry", None) and str(self.board_entry.cget("state")) == "disabled":
+            return
+        dlg = BoardSearchDialog(
+            self.root,
+            current_board=self.board_var.get(),
+            board_list=SUPPORTED_BOARDS.keys(),
+            on_select_callback=self._select_board_from_dialog
+        )
+        safe_reclaim_os_focus(dlg.search_ent)
+
+    def _select_board_from_dialog(self, selected_board):
+        if selected_board == self.board_var.get():
+            return
+        self.board_var.set(selected_board)
+        self._on_board_changed()
+
+    def _on_board_changed(self):
+        """Handle board selection change."""
+        old_board = getattr(self, "_last_valid_board", "")
+        board_name = self.board_var.get()
+
+        if old_board and old_board == board_name:
+            return
+
+        self._last_valid_board = board_name
+
+        if not board_name:
+            # Nothing selected (yet) — nothing to configure or report.
+            self._board_changed_no_port_msg = None
+            self._update_hardware_action_buttons()
+            return
+
+        if old_board and old_board != board_name:
+            self._board_changed_no_port_msg = f"Board Changed: {old_board} >>> {board_name} | No port selected!"
+            self._append_notif(f"  🔀 Board changed: \"{old_board}\" → \"{board_name}\"", "info")
+        else:
+            self._board_changed_no_port_msg = None
+            if not old_board:
+                self._append_notif(f"  >>> Board set to \"{board_name}\" <<<", "success")
+
+        self._set_status(f"Board changed to {board_name}", Theme.CYAN)
+
+        # Configure UPLOAD SPD based on platform:
+        #   - AVR (Arduino Uno): force 115200 and lock the combobox (disabled)
+        #   - ESP32: set to stable high speed (460800) and keep combobox editable
+        #   - Others: just show the combobox normally
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        platform = board_info.get("platform", "")
+        is_avr = (platform == "atmelavr")
+        is_esp32 = (platform == "espressif32")
+        if is_avr:
+            self.upload_speed_var.set("115200")
+            self.upload_speed_combo.configure(state="disabled")
+        else:
+            if is_esp32:
+                self.upload_speed_var.set("460800")
+            self.upload_speed_combo.configure(state="readonly")
+
+        self._restart_monitor(f"board → {board_name}")
+        self._update_skip_compile_state()
+        self._update_hardware_action_buttons()
+
+        # Remember this (port -> board) pairing for next time, as long as a
+        # real physical port is currently selected. Harmless to re-write the
+        # same value every time this fires.
+        port_device = self._extract_port_device(self.port_var.get())
+        if port_device:
+            remember_port_board(port_device, board_name)
+
+    def _on_port_changed(self):
+        """Handle port selection change — stop the current monitor,
+        reconnect on the new port, and kick off esptool chip detection."""
+        port_label = self.port_var.get()
+        self._board_port_confirmed = False
+        self._update_hardware_action_buttons()
+        if not port_label:
+            self._save_selected_port("")
+            self._set_status("Port cleared", Theme.CYAN)
+            self._restart_monitor("port cleared")
+            return
+
+        # Extract just the device name for the status message
+        match = re.match(r"(COM\d+|/dev/\S+)", port_label)
+        port_name = match.group(1) if match else port_label.split()[0]
+        
+        # Check if another window is already using this port
+        owner_pid = port_occupied_owner(port_name)
+        if owner_pid:
+            if self.root.winfo_exists():
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Port In Use",
+                    f"Port '{port_name}' is currently in use by another MCU Flasher window (PID {owner_pid}).\n\n"
+                    "This window cannot connect to or control a port when it is used by another instance.",
+                    parent=self.root,
+                )
+            self._save_selected_port("")
+            self.port_var.set("")
+            self._set_status(f"Port {port_name} in use by PID {owner_pid}", Theme.YELLOW)
+            self._restart_monitor("port occupied by another window")
+            return
+
+        # Save to config
+        self._save_selected_port(port_name)
+
+        self._set_status(f"Port changed to {port_name}", Theme.CYAN)
+        self._restart_monitor(f"port → {port_name}")
+        
+        # Fast local auto-select based on project files + port chip description
+        self._auto_select_board(show_msg=True)
+
+        # Only skip the esptool probe when the port's chip is confirmed
+        # AVR-only (e.g. CH340/CH341). For anything else — including cases
+        # where the static heuristic above guessed wrong and left the board
+        # on "Arduino Uno" — let esptool make the real determination.
+        if self._port_is_avr_only() or not port_name:
+            return
+            
+        # Kick off chip auto-detection in background — non-blocking
+        threading.Thread(
+            target=self._auto_detect_board_from_port,
+            args=(port_name,),
+            daemon=True,
+        ).start()
+
+    def _detect_board_from_descriptor(self, port: str) -> str | None:
+        """Inspect USB descriptor strings (VID/PID, Product, Manufacturer, Description)
+        to identify board type without opening or resetting the serial port.
+        """
+        try:
+            for candidate in serial.tools.list_ports.comports():
+                if candidate.device.upper() == port.upper():
+                    text = f"{candidate.description or ''} {candidate.product or ''} {candidate.manufacturer or ''} {candidate.hwid or ''}".lower()
+                    
+                    if any(k in text for k in ["usb-enhanced", "enhanced-serial", "ch343", "ch342", "ch9102", "esp32-s3", "esp32s3"]):
+                        return find_board_for_platform("espressif32", variant_hint="esp32s3") or "ESP32-S3 Dev Module"
+                    elif any(k in text for k in ["silicon labs", "cp210"]):
+                        return find_board_for_platform("espressif32", variant_hint="esp32dev") or "ESP32 Dev Module"
+                    elif "esp32-c3" in text or "esp32c3" in text:
+                        return find_board_for_platform("espressif32", variant_hint="esp32c3") or "ESP32-C3 Dev Module"
+                    elif "esp32-s2" in text or "esp32s2" in text:
+                        return find_board_for_platform("espressif32", variant_hint="esp32s2") or "ESP32-S2 Dev Module"
+                    elif "esp32" in text:
+                        return find_board_for_platform("espressif32", variant_hint="esp32") or "ESP32 Dev Module"
+                    elif "esp8266" in text or "nodemcu" in text:
+                        return find_board_for_platform("espressif8266") or "NodeMCU 1.0 (ESP-12E Module)"
+                    elif "uno" in text or "atmega328" in text:
+                        return find_board_for_platform("atmelavr") or "Arduino Uno"
+                    
+                    # Check downloaded board USB VID/PIDs
+                    if candidate.vid is not None and candidate.pid is not None:
+                        if (candidate.vid, candidate.pid) in DOWNLOADED_BOARD_USB_IDS:
+                            matched_board = DOWNLOADED_BOARD_USB_IDS[(candidate.vid, candidate.pid)]
+                            if matched_board in SUPPORTED_BOARDS:
+                                return matched_board
+                    break
+        except Exception:
+            pass
+        return None
+
+    def _auto_detect_board_from_port(self, port: str, _attempt: int = 1, _max_attempts: int = 4):
+        """Background worker: probe *port* to auto-select board safely.
+
+        Prioritizes non-disruptive USB descriptor matching so already-running
+        MCUs attached at startup are never reset or interrupted by esptool.
+        """
+        if port_occupied_owner(port):
+            return
+
+        # Compilation owns the machine while it runs; don't compete with it
+        # through esptool probes or retry timers.
+        if self._compile_background_lock.is_set():
+            return
+
+        # Bail out early if the user has since switched to a different
+        # port — no point continuing to retry probing a stale target.
+        if self._extract_port_device(self.port_var.get()) != port:
+            return
+
+        # 1. Non-disruptive USB Descriptor Check (Fast, zero-reset)
+        descriptor_board = self._detect_board_from_descriptor(port)
+        if descriptor_board:
+            def _apply_desc():
+                if self.board_var.get() != descriptor_board and descriptor_board in SUPPORTED_BOARDS:
+                    self.board_var.set(descriptor_board)
+                    self._on_board_changed()
+                    self._append(
+                        f"  🔌 Auto-detected board on {port}: \"{descriptor_board}\"",
+                        "info",
+                    )
+                self._board_port_confirmed = True
+                self._update_hardware_action_buttons()
+            self.root.after(0, _apply_desc)
+            return
+
+        # 2. Non-disruptive fallback: do NOT run esptool live probes on port selection/startup.
+        # Live esptool probing toggles DTR/RTS into ROM bootloader mode and forces a hardware reset.
+        # Arduino IDE never probes chips with esptool on startup — it relies strictly on USB descriptors,
+        # remembered board history, and sketch auto-selection so already-running MCUs are never reset.
+        def _non_disruptive_fallback():
+            self._auto_select_board(show_msg=True)
+            self._board_port_confirmed = True
+            self._update_hardware_action_buttons()
+            self._schedule_auto_start_monitor(50)
+        self.root.after(0, _non_disruptive_fallback)
+
+    def _on_baud_changed(self):
+        """Handle baud rate selection change."""
+        baud = self.baud_var.get()
+        self._set_status(f"Baud rate changed to {baud}", Theme.CYAN)
+        # Also sync the serial monitor tab baud var
+        if hasattr(self, "serial_baud_var"):
+            self.serial_baud_var.set(baud)
+        self._restart_monitor(f"baud → {baud}")
+
+    def _on_serial_baud_changed(self):
+        """Handle serial monitor tab baud rate change."""
+        baud = self.serial_baud_var.get()
+        self._set_status(f"Serial monitor baud rate: {baud}", Theme.CYAN)
+        # Also sync the main baud var
+        self.baud_var.set(baud)
+        self._restart_monitor(f"baud → {baud}")
+
+    def _on_upload_speed_changed(self):
+        """Handle upload speed selection change — updates platformio.ini asynchronously on thread pool when CPU is ready."""
+        speed = self.upload_speed_var.get()
+
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_avr = (board_info.get("platform", "") == "atmelavr")
+        if is_avr and speed != "115200":
+            self._append(
+                f"  ⚠ {board_name} (AVR) requires upload_speed = 115200 — ignoring {speed}.",
+                "warning",
+            )
+            self.upload_speed_var.set("115200")
+            speed = "115200"
+
+        self._set_status(f"Upload speed changed to {speed}", Theme.CYAN)
+
+        def _update_ini_task():
+            ini_path = self.sketch_dir_path / "platformio.ini"
+            if ini_path.exists():
+                content = ini_path.read_text(encoding="utf-8")
+                if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
+                    content = re.sub(
+                        r"^upload_speed\s*=.*",
+                        f"upload_speed = {speed}",
+                        content,
+                        flags=re.MULTILINE,
+                    )
+                else:
+                    content = re.sub(
+                        r"(\[env:[^\]]*\]\n)",
+                        r"\1" + f"upload_speed = {speed}\n",
+                        content,
+                        count=1,
+                    )
+                self._force_write_text(ini_path, content)
+                return speed
+            return None
+
+        def _on_done(res):
+            if res:
+                self._append(f"  ⚙  upload_speed set to {res} in platformio.ini", "info")
+
+        def _on_err(exc):
+            self._append(f"  ⚠ Could not update upload_speed in platformio.ini: {exc}", "warning")
+
+        self._run_bg_task(_update_ini_task, on_success=_on_done, on_error=_on_err)
+
+    def _auto_select_board(self, show_msg: bool = True) -> str | None:
+        """If this physical port has a board type on record from a previous
+        session (see remember_port_board / get_remembered_board_for_port),
+        select it immediately instead of waiting on the slower esptool
+        probe. The probe (kicked off alongside this call by the caller)
+        remains authoritative and will correct this guess if the hardware
+        on the port has changed since it was last remembered."""
+        port_device = self._extract_port_device(self.port_var.get())
+        if not port_device:
+            return None
+
+        remembered = get_remembered_board_for_port(port_device)
+        if not remembered or remembered not in SUPPORTED_BOARDS:
+            return None
+
+        if self.board_var.get() == remembered:
+            return remembered  # already selected — nothing to do
+
+        self.board_var.set(remembered)
+        self._on_board_changed()
+        if show_msg:
+            self._append(
+                f"  🧠 Remembered board for {port_device}: \"{remembered}\" (used last time on this port)",
+                "info"
+            )
+        return remembered
+
+    def _get_usb_chip_board_families(self) -> dict:
+        """Dynamically build the USB-to-board family mapping based on installed platforms."""
+        installed_platforms = {info.get("platform", "") for info in SUPPORTED_BOARDS.values()}
+        installed_platforms.discard("")
+
+        # Fallback to standard ones if empty
+        if not installed_platforms:
+            installed_platforms = {"espressif32", "espressif8266", "atmelavr"}
+
+        esp_platforms = {p for p in installed_platforms if "espressif" in p or "esp" in p}
+        avr_platforms = {p for p in installed_platforms if "atmel" in p or "avr" in p}
+
+        if not esp_platforms:
+            esp_platforms = {"espressif32", "espressif8266"} & installed_platforms or {"espressif32"}
+        if not avr_platforms:
+            avr_platforms = {"atmelavr"} & installed_platforms or {"atmelavr"}
+
+        all_known = esp_platforms | avr_platforms | installed_platforms
+
+        return {
+            "ch340":        (all_known, "CH340 (Arduino/ESP USB-serial)"),
+            "ch341":        (all_known, "CH341 (Arduino/ESP USB-serial)"),
+            "ch343":        (all_known, "CH343 (USB-Enhanced-SERIAL)"),
+            "ch342":        (all_known, "CH342 (USB-serial)"),
+            "cp210":        (all_known, "CP210x (Silicon Labs USB-serial)"),
+            "silicon labs": (all_known, "Silicon Labs CP210x (USB-serial)"),
+            "ch9102":       (all_known, "CH9102 (ESP32 USB-serial)"),
+            "ftdi":         (all_known, "FTDI (generic USB-serial)"),
+            "prolific":     (all_known, "Prolific USB-serial"),
+            "pl2303":       (all_known, "PL2303 USB-serial"),
+            "wch":          (all_known, "WCH USB-serial (generic)"),
+            "esp32-s3":     (esp_platforms, "ESP32-S3 Native USB"),
+            "esp32s3":      (esp_platforms, "ESP32-S3 Native USB"),
+            "esp32-c3":     (esp_platforms, "ESP32-C3 Native USB"),
+            "esp32c3":      (esp_platforms, "ESP32-C3 Native USB"),
+            "esp32-c6":     (esp_platforms, "ESP32-C6 Native USB"),
+            "esp32-s2":     (esp_platforms, "ESP32-S2 Native USB"),
+            "jtag":         (esp_platforms, "USB JTAG/serial debug unit"),
+            "usb bridge":   (esp_platforms, "ESP32 USB Bridge"),
+            "usb serial":   (all_known, "USB Serial (generic/CDC)"),
+            "usb-to-serial":(all_known, "USB-to-Serial (generic)"),
+            "usb to serial":(all_known, "USB to Serial (generic)"),
+            "communications port": (all_known, "Communications Port"),
+            "esp32":        (esp_platforms, "ESP32 Device"),
+            "esp8266":      (installed_platforms, "ESP8266 Device"),
+            "com":          (all_known, "COM Port (Serial)"),
+        }
+
+    def _detect_port_chip(self) -> tuple[str, set, str] | None:
+        """Identify which known USB-serial chip the selected port reports,
+        if any. Returns (matched_keyword, allowed_platforms_set, human_label)
+        or None if the port description doesn't match any known chip."""
+        port = self._get_port()
+        if not port:
+            return None
+
+        search_targets = [self.port_var.get().lower(), port.lower()]
+        try:
+            for candidate in serial.tools.list_ports.comports():
+                if candidate.device.upper() == port.upper():
+                    if candidate.description:
+                        search_targets.append(candidate.description.lower())
+                    if candidate.manufacturer:
+                        search_targets.append(candidate.manufacturer.lower())
+                    if candidate.hwid:
+                        search_targets.append(candidate.hwid.lower())
+                    break
+        except Exception:
+            pass
+
+        full_text = " ".join(search_targets)
+        families = self._get_usb_chip_board_families()
+
+        for keyword, (allowed_platforms, label) in families.items():
+            if keyword == "com":
+                continue
+            if keyword in full_text:
+                return (keyword, allowed_platforms, label)
+
+        if re.match(r"^(COM\d+|/dev/\S+)", port, re.IGNORECASE):
+            installed_platforms = {info.get("platform", "") for info in SUPPORTED_BOARDS.values()} - {""}
+            if not installed_platforms:
+                installed_platforms = {"espressif32", "espressif8266", "atmelavr"}
+            return ("com", installed_platforms, f"Serial Port ({port})")
+
+        return None
+
+    def _port_is_avr_only(self) -> bool:
+        """True only when the selected port's USB-serial chip is one that can
+        NEVER be an ESP board (e.g. classic CH340/CH341 on a Uno/Nano clone).
+        """
+        chip = self._detect_port_chip()
+        if not chip:
+            return False
+        keyword, allowed_platforms, _label = chip
+        esp_platforms = {"espressif32", "espressif8266"}
+        return not (allowed_platforms & esp_platforms)
+
+    def _is_board_recognized(self) -> bool:
+        """True only once we have genuine confirmation of what's attached.
+        However, we now disregard the 'unrecognized port' block to allow the user
+        to compile/upload/reset to any selected port.
+        """
+        if not self.port_var.get():
+            return False
+        return True
+
+    def _update_hardware_action_buttons(self):
+        """Compile only needs a board *type* selected — it never talks to
+        the physical port, so it's gated on board_var alone. Upload and the
+        hardware Reset button additionally need the board on the selected
+        port to actually be recognized."""
+        if self.is_busy:
+            return  # the running operation's own state machine owns button states right now
+        board_selected = bool(self.board_var.get())
+
+        btn_compile = getattr(self, "btn_compile", None)
+        if btn_compile is not None:
+            try:
+                btn_compile.configure(state=tk.NORMAL if board_selected else tk.DISABLED)
+            except Exception:
+                pass
+
+        state = tk.NORMAL if (board_selected and self._is_board_recognized()) else tk.DISABLED
+        for attr in ("btn_upload", "btn_reset_mcu"):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                try:
+                    btn.configure(state=state)
+                except Exception:
+                    pass
+
+    def _is_native_usb_port(self) -> bool:
+        port_label = self.port_var.get().lower()
+        if not port_label:
+            return False
+        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native"]
+        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "uart", "wch"]
+        has_native = any(k in port_label for k in native_keywords)
+        has_uart = any(k in port_label for k in uart_keywords)
+        return has_native and not has_uart
+
+    def _is_valid_port(self) -> bool:
+        """Check if the selected port's USB-serial chip is actually sold
+        with the currently-selected board's platform."""
+        if getattr(self, "_board_port_confirmed", False):
+            return True
+        val = self.port_var.get().lower()
+        if not val:
+            return False
+        if "communications port" in val or val.strip() == "com1":
+            return False
+
+        board_name = self.board_var.get()
+        if not board_name or board_name not in SUPPORTED_BOARDS:
+            return True
+
+        chip = self._detect_port_chip()
+        if chip is None:
+            generic_keywords = ["usb serial", "usb-serial", "uart", "usb", "serial", "jtag", "bridge"]
+            return any(kw in val for kw in generic_keywords)
+
+        _keyword, allowed_platforms, _label = chip
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        board_platform = board_info.get("platform", "")
+        return board_platform in allowed_platforms
+
+    def _port_mismatch_reason(self) -> str:
+        """Build a human-readable explanation of why the selected port
+        doesn't match the selected board, for error messages."""
+        board_name = self.board_var.get()
+        chip = self._detect_port_chip()
+        if chip is None:
+            return "port doesn't match any recognized USB-serial chip for this board"
+        _keyword, allowed_platforms, label = chip
+        platform_labels = {
+            "atmelavr": "Arduino AVR",
+            "espressif32": "ESP32",
+            "espressif8266": "ESP8266"
+        }
+        allowed = " or ".join(platform_labels.get(p, p) for p in sorted(allowed_platforms))
+        return f"{label} detected — that's a {allowed} board, not \"{board_name}\""
+
+    def _unrecognized_mcu_port_warning(self, port: str) -> str | None:
+        """Return a warning when *port* cannot be identified as an installed MCU.
+
+        ``SUPPORTED_BOARDS`` is built from the board packages downloaded by
+        arduino_lib_req.py. A port is known only if its USB descriptor maps to
+        one of those installed board platforms, or esptool has confirmed it.
+        The monitor remains available for manual/legacy serial devices.
+        """
+        if getattr(self, "_board_port_confirmed", False):
+            return None
+
+        port_label = self.port_var.get()
+        descriptor = port_label
+        port_info = None
+        try:
+            for candidate in serial.tools.list_ports.comports():
+                if candidate.device.upper() == port.upper():
+                    port_info = candidate
+                    descriptor = candidate.description or port_label
+                    break
+        except Exception:
+            pass
+
+        # Preferred evidence: an exact VID/PID pair declared in a boards.txt
+        # file from a package the user actually downloaded.
+        if port_info is not None and port_info.vid is not None and port_info.pid is not None:
+            if (port_info.vid, port_info.pid) in DOWNLOADED_BOARD_USB_IDS:
+                return None
+
+        # Some clone boards expose only their USB-serial bridge VID/PID, not
+        # the board VID/PID in boards.txt. Keep the descriptor fallback for
+        # those legitimate devices.
+        installed_platforms = {
+            info.get("platform", "") for info in SUPPORTED_BOARDS.values()
+        } - {""}
+        chip = self._detect_port_chip()
+        if chip is not None and (chip[1] & installed_platforms):
+            return None
+
+        signature = (port.upper(), descriptor.lower())
+        if signature in self._warned_unrecognized_port_signatures:
+            return None
+        self._warned_unrecognized_port_signatures.add(signature)
+
+        if chip is None:
+            reason = f'it reports as "{descriptor}" and has no known USB-microcontroller signature'
+        else:
+            reason = "its USB signature does not match any board platform currently installed"
+        return (
+            f"  Warning: {port} is not recognized as a microcontroller port from "
+            f"the installed Download Boards/Libraries definitions - {reason}. "
+            "COM1 is commonly a built-in PC serial port.\n"
+            "  💡 Note: The board definition for this MCU might not be downloaded yet. "
+            "You can download it using the Download Manager (src/libs/arduino_lib_req.py)."
+        )
+
+    def _extract_port_device(self, port_label: str) -> str:
+        """Pull just the device name (e.g. 'COM16') out of a port combobox
+        label like 'COM16  —  Silicon Labs CP210x...'. Unlike _get_port(),
+        this never logs an error for an empty/missing label — it's used for
+        passive lookups (e.g. the remembered port→board cache) where a
+        blank port is completely normal and shouldn't be reported."""
+        if not port_label:
+            return ""
+        match = re.match(r"(COM\d+|/dev/\S+)", port_label)
+        return match.group(1) if match else port_label.split()[0]
+
+    def _get_port(self) -> str | None:
+        """Extract COM port name from the combobox."""
+        val = self.port_var.get()
+        if not val or val.startswith("─"):
+            return None
+        # Extract COMx from "COM8  —  Silicon Labs..."
+        match = re.match(r"(COM\d+|/dev/\S+)", val)
+        return match.group(1) if match else val.split()[0]
+
+    # ──────────────────────────────────────────────────────────
+    # ACTIONS
+    # ──────────────────────────────────────────────────────────
+    def _perform_clean(self) -> tuple[list[str], list[str]]:
+        """Core clean execution: delete all build artifacts, temporary directories, and generated configs, leaving only sketch source files."""
+        sketch = self.sketch_dir_path
+        removed: list[str] = []
+        errors:  list[str] = []
+
+        targets = [
+            sketch / ".pio",
+            sketch / "src",
+            sketch / "platformio.ini",
+            sketch / "build_artifacts",
+            sketch / ".build_artifacts",
+            sketch / ".mcu_gui_cache.json",
+            sketch / ".mcu_flash_syntax_errors.json",
+            sketch / ".ai_edit_signal",
+            sketch / ".vscode",
+            sketch / ".clangd",
+            sketch / ".cache",
+            sketch / "_temp",
+        ]
+
+        for target in targets:
+            if not target.exists():
+                continue
+            try:
+                if robust_rmtree(target):
+                    removed.append(target.name)
+            except Exception as exc:
+                errors.append(f"{target.name}: {exc}")
+
+        # Reset compile-state tracking so the next build starts clean
+        self._last_compiled_board = None
+        self._compile_cache_by_board = {}
+        self._build_metadata_by_board = {}
+        return removed, errors
+
+    def _perform_clean_current_board(self) -> tuple[list[str], list[str]]:
+        """Clean only the CURRENTLY selected board's own build output —
+        .pio/build/<env> and .pio/libdeps/<env> — leaving every other
+        board's cached build (and the shared toolchain/platform packages)
+        untouched. This is what runs automatically before every actual
+        recompile, so a fresh build always starts clean for that board
+        without throwing away a different board's build when you switch
+        back and forth."""
+        sketch = self.sketch_dir_path
+        env_name = self._pio_env_name()
+        removed: list[str] = []
+        errors: list[str] = []
+
+        targets = [
+            sketch / ".pio" / "build" / env_name,
+            sketch / ".pio" / "libdeps" / env_name,
+            sketch / ".pio" / "cache" / env_name,
+            SCRIPT_DIR / ".pio_cache" / env_name,
+        ]
+        for target in targets:
+            if not target.exists():
+                continue
+            try:
+                if robust_rmtree(target):
+                    removed.append(f"{target.parent.name}/{target.name}")
+            except Exception as exc:
+                errors.append(f"{target.parent.name}/{target.name}: {exc}")
+
+        # This board no longer has a valid cached hash once its build is wiped.
+        board_name = self.board_var.get()
+        if board_name:
+            self._compile_cache_by_board.pop(board_name, None)
+            self._build_metadata_by_board.pop(board_name, None)
+        return removed, errors
+
+    def _has_cleanable_targets(self) -> bool:
+        """Return True if any build artifacts or generated files exist that Clean would remove."""
+        sketch = self.sketch_dir_path
+        targets = [
+            sketch / ".pio",
+            sketch / "src",
+            sketch / "platformio.ini",
+            sketch / "build_artifacts",
+            sketch / ".build_artifacts",
+            sketch / ".mcu_gui_cache.json",
+            sketch / ".mcu_flash_syntax_errors.json",
+            sketch / ".ai_edit_signal",
+            sketch / ".vscode",
+            sketch / ".clangd",
+            sketch / ".cache",
+            sketch / "_temp",
+        ]
+        return any(t.exists() for t in targets)
+
+    def _show_toast(self, message: str, duration_ms: int = 2500):
+        """Show a floating borderless toast notification centered over the main window that auto-dismisses."""
+        try:
+            toast = tk.Toplevel(self.root)
+            toast.overrideredirect(True)
+            toast.configure(bg=Theme.BG_DARK)
+            toast.attributes("-topmost", True)
+
+            # Semi-transparent on Windows
+            try:
+                toast.attributes("-alpha", 0.92)
+            except Exception:
+                pass
+
+            # Build content
+            outer = tk.Frame(toast, bg=Theme.CYAN, padx=1, pady=1)
+            outer.pack(fill=tk.BOTH, expand=True)
+            inner = tk.Frame(outer, bg=Theme.BG_DARK, padx=16, pady=10)
+            inner.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(
+                inner, text=message,
+                font=self.font_label, fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARK,
+                justify=tk.CENTER, wraplength=350,
+            ).pack()
+
+            # Position: center over the main window
+            toast.update_idletasks()
+            tw = toast.winfo_reqwidth()
+            th = toast.winfo_reqheight()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            x = rx + (rw - tw) // 2
+            y = ry + (rh - th) // 2
+            toast.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+            # Auto-dismiss
+            def _fade_out(alpha=0.92):
+                try:
+                    if alpha <= 0.1:
+                        toast.destroy()
+                        return
+                    toast.attributes("-alpha", alpha)
+                    toast.after(40, lambda: _fade_out(alpha - 0.08))
+                except Exception:
+                    pass
+
+            toast.after(duration_ms, _fade_out)
+            # Allow click-to-dismiss
+            toast.bind("<Button-1>", lambda e: toast.destroy())
+        except Exception:
+            pass
+
+    def _update_clean_button_state(self):
+        """Enable or disable the Clean button based on whether there are cleanable targets."""
+        try:
+            is_compact = getattr(self, "_action_compact_mode", False)
+            if self._has_cleanable_targets():
+                self.btn_clean.configure(state=tk.NORMAL, text="Clean" if is_compact else "🧹 Clean")
+            else:
+                self.btn_clean.configure(state=tk.DISABLED, text="Clean" if is_compact else "🧹 Clean")
+        except Exception:
+            pass
+
+    def _do_clean(self, on_complete=None):
+        """Delete all generated/cached files, keeping only source files.
+
+        Removes:
+          • .pio/          — PlatformIO build cache, toolchain downloads, libdeps
+          • src/           — frozen PlatformIO copies of sketch files
+          • platformio.ini — regenerated fresh on next compile/upload
+
+        Keeps everything else (*.ino, *.cpp, *.h, *.c, and any user files).
+        Safe to call at any time (not during a busy operation).
+        """
+        if self.is_busy:
+            self._set_status("Busy — stop the current operation first", Theme.RED)
+            return
+
+        # Fast-path: nothing to clean — show toast and disable button
+        if not self._has_cleanable_targets():
+            self._show_toast("🧹  Project is already clean\nNothing to remove.")
+            self._update_clean_button_state()
+            return
+
+        self._clean_retry_in_progress = True
+        self.is_busy = True
+        self._stop_requested = False
+        self._op_session_id += 1
+        self._set_buttons_state(True, operation="clean")
+        self._set_status("Cleaning build cache...", Theme.GREEN)
+        self._append("")
+        self._append("  🧹 CLEANING PROJECT...", "header")
+
+        def _bg_clean():
+            try:
+                removed, errors = self._perform_clean()
+
+                def _done():
+                    if removed:
+                        self._append(f"  ✔ Removed: {', '.join(removed)}", "success")
+                    else:
+                        self._append("  Nothing to remove — project already clean.", "info")
+                    if errors:
+                        for e in errors:
+                            self._append(f"  ⚠ Could not remove {e}", "warning")
+                    self._append("  Ready. Compile or Upload to rebuild from scratch.", "dim")
+                    self._set_status("Project cleaned — ready to rebuild", Theme.GREEN)
+                    
+                    # Uncheck and disable "Skip recompile"
+                    self.skip_compile_var.set(False)
+                    try:
+                        self.cb_skip_compile.configure(state=tk.DISABLED)
+                    except Exception:
+                        pass
+                    
+                    if on_complete:
+                        self.is_busy = False
+                        on_complete()
+                    else:
+                        self.is_busy = False
+                        self._set_buttons_state(False)
+                        # Disable Clean button since we just cleaned everything
+                        self._update_clean_button_state()
+
+                self.root.after(0, _done)
+            except Exception as exc:
+                def _error():
+                    self._append(f"  ✖ Internal error during clean: {exc}", "error")
+                    self._set_status("Clean FAILED", Theme.RED)
+                    self.is_busy = False
+                    self._set_buttons_state(False)
+                self.root.after(0, _error)
+
+        threading.Thread(target=_bg_clean, daemon=True).start()
+
+    def _do_clean_then_compile(self):
+        """Clean the build cache and immediately start a fresh compile."""
+        self._clean_retry_in_progress = True
+        self._do_clean(on_complete=self._do_compile)
+
+    def _block_action_for_pending_ai_review(self, action_name):
+        editor_api = getattr(self, "editor_api", None)
+        if not editor_api:
+            return False
+        journal_error = (
+            editor_api.get_ai_review_journal_error()
+            if hasattr(editor_api, "get_ai_review_journal_error") else ""
+        )
+        if journal_error:
+            self._append_notif(
+                f"  {action_name} paused: the AI review journal needs recovery.",
+                "error",
+                category="system",
+                title="AI review journal error",
+            )
+            return True
+        controller = getattr(self, "ai_controller", None)
+        if controller and hasattr(controller, "collect_unreported_edits"):
+            try:
+                for edit in controller.collect_unreported_edits():
+                    path, before, after, before_exists, after_exists = edit
+                    queue_result = editor_api.queue_ai_edit_snapshot(
+                        path, before, after, before_exists, after_exists
+                    )
+                    if queue_result == "cancelled" and getattr(self, "editor_window", None):
+                        self.editor_window.evaluate_js(
+                            "onAiReviewCancelled("
+                            f"{json.dumps(str(path))}, {json.dumps(bool(after_exists))})"
+                        )
+                    if queue_result and queue_result != "cancelled" and getattr(self, "editor_window", None):
+                        self.editor_window.evaluate_js(
+                            f"reloadActiveFileWithDiff({json.dumps(str(path))})"
+                        )
+            except Exception as exc:
+                self._append_notif(
+                    f"  {action_name} paused: AI edit verification failed ({exc}).",
+                    "warning",
+                    category="system",
+                    title="AI approval check failed",
+                )
+                return True
+        if not editor_api.has_any_pending_ai_edits():
+            return False
+        reviews = editor_api.get_ai_edit_reviews()
+        count = len(reviews)
+        noun = "edit" if count == 1 else "edits"
+        self._append_notif(
+            f"  {action_name} paused: review {count} pending AI {noun} first.",
+            "warning",
+            category="system",
+            title="AI approval required",
+        )
+        if reviews and getattr(self, "editor_window", None):
+            try:
+                review_path = reviews[0].get("path", "")
+                self.editor_window.evaluate_js(
+                    f"reloadActiveFileWithDiff({json.dumps(review_path)})"
+                )
+            except Exception:
+                pass
+        return True
+
+    def _do_compile(self):
+        if self.is_busy:
+            # Auto-recover: if no subprocess is actually running, clear stale busy flag
+            if not self.process or self.process.poll() is not None:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._append("  ℹ Stale busy state cleared — proceeding with compile.", "info")
+            else:
+                return
+
+        if self._block_action_for_pending_ai_review("Compile"):
+            return
+
+        # Auto-save editor files before compiling so the compiler sees the latest source.
+        if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
+            try:
+                self._save_all_editor_files()
+            except Exception:
+                pass
+
+        if not self.board_var.get():
+            self._append_notif("  ✖ Compile failed: No board selected! Choose a board before compiling.", "warning")
+            return
+
+        # Pre-check: detect board/sketch mismatch so _run_compile can display the warning
+        # inside the COMPILING section header (not before it).
+        compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+        selected_board = self.board_var.get()
+        self._board_mismatch_detected = (
+            bool(compat_boards) and selected_board not in compat_boards
+        )
+        # Store reasons so _run_compile can emit them after the COMPILING header
+        self._pending_compat_reasons = compat_reasons if compat_reasons else []
+
+        # Auto-detect and set correct board before compilation begins
+        self._auto_select_board(show_msg=True)
+
+        if self._block_action_for_pending_ai_review("Compile"):
+            return
+
+        self._clear_console_if_action_enabled()
+        self.is_busy = True
+        self._compile_background_lock.set()
+        self._set_buttons_state(True, operation="compile")
+
+        # ── Smart compile check ──────────────────────────────────────────────
+        # "Skip recompile" checkbox behaviour:
+        #   UNCHECKED → always recompile, no cache check at all.
+        #   CHECKED   → skip recompile if (a) a prior build exists on disk AND
+        #               (b) sources/board haven't changed since that build.
+        #               If no prior build exists, compile normally even when checked.
+        if self.skip_compile_var.get():
+            if self._has_prior_build():
+                recompile_needed, reason = self._needs_recompile()
+                if not recompile_needed:
+                    self._append("")
+                    self._append("=" * 50, "header")
+                    self._append("  ⚙  COMPILE CHECK", "header")
+                    self._append("=" * 50, "header")
+                    self._append("")
+                    self._append("  ✔ Already compiled — sources unchanged.", "success")
+                    self._append("  No recompilation needed. Cached build is up-to-date.", "dim")
+                    self._append("  (Uncheck 'Skip recompile' or edit a source file to force rebuild)", "dim")
+                    self._set_status("Compile skipped — sources unchanged", Theme.GREEN)
+                    self.is_busy = False
+                    self._compile_background_lock.clear()
+                    self._set_buttons_state(False)
+                    return
+                # Prior build exists but sources changed — fall through to recompile
+            # No prior build at all — fall through to compile normally
+
+        def _safe_compile():
+            try:
+                self._run_compile()
+            except Exception as e:
+                import traceback
+                try:
+                    with open("error_log.txt", "w", encoding="utf-8") as f:
+                        traceback.print_exc(file=f)
+                except Exception:
+                    pass
+                self._append(f"  ✖ Internal error in compile thread: {e}", "error")
+                self._set_status("Compile FAILED", Theme.RED)
+            finally:
+                # Guarantee busy state is always cleared, even on unhandled exceptions
+                self.is_busy = False
+                self._compile_background_lock.clear()
+                self._set_buttons_state(False)
+
+        threading.Thread(target=_safe_compile, daemon=True).start()
+
+    def _do_upload(self):
+        if self.is_busy:
+            # Auto-recover: if no subprocess is actually running, clear stale busy flag
+            if not self.process or self.process.poll() is not None:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._append("  ℹ Stale busy state cleared — proceeding with upload.", "info")
+            else:
+                return
+
+        if self._block_action_for_pending_ai_review("Upload"):
+            return
+
+        # Auto-save editor files before uploading so the compiler sees the latest source.
+        if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
+            try:
+                self._save_all_editor_files()
+            except Exception:
+                pass
+        port = self._get_port()
+        if not port:
+            self._append_notif("  ✖ Upload failed: No serial port selected! Please select a port.", "warning")
+            return
+
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append_notif(f"  ✖ Upload rejected: Port '{port}' is currently in use by another window (PID {owner_pid}).", "error")
+            if self.root.winfo_exists():
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Port In Use",
+                    f"Cannot upload to '{port}' because it is in use by another MCU Flasher window (PID {owner_pid}).",
+                    parent=self.root,
+                )
+            return
+
+        if not self.board_var.get():
+            self._append_notif("  ✖ Upload failed: No board selected! Choose a board before uploading.", "warning")
+            return
+
+        if not self._is_board_recognized():
+            self._append("  ✖ Upload rejected: board on this port hasn't been recognized yet.", "error")
+            return
+
+        # Auto-detect and set correct board before upload mismatch guard check
+        self._auto_select_board(show_msg=True)
+
+        if not self._is_valid_port():
+            self._append(f"  ✖ Upload rejected: {self._port_mismatch_reason()}.", "error")
+            return
+
+        if self._block_action_for_pending_ai_review("Upload"):
+            return
+
+        self._clear_console_if_action_enabled()
+
+        def _safe_run():
+            try:
+                self._run_upload(port)
+            except Exception as e:
+                import traceback
+                try:
+                    with open("error_log.txt", "w", encoding="utf-8") as f:
+                        traceback.print_exc(file=f)
+                except Exception:
+                    pass
+                self._set_status("Upload FAILED", Theme.RED)
+                self._append(f"  ✖ Internal error in upload thread: {e}", "error")
+            finally:
+                self.is_busy = False
+                self._compile_background_lock.clear()
+                self._set_buttons_busy(False)
+                self._set_buttons_state(False)
+
+
+        self.is_busy = True
+        self._set_buttons_state(True, operation="upload")
+        threading.Thread(target=_safe_run, daemon=True).start()
+
+    def _schedule_auto_start_monitor(self, delay_ms: int):
+        """Schedule _auto_start_monitor while canceling any previously scheduled attempts."""
+        if getattr(self, "_auto_start_after_id", None):
+            try:
+                self.root.after_cancel(self._auto_start_after_id)
+            except Exception:
+                pass
+        self._auto_start_after_id = self.root.after(delay_ms, self._auto_start_monitor)
+
+    def _auto_start_monitor(self):
+        """Start serial monitor if a port is selected and not already running."""
+        if self.is_busy and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"):
+            return
+        if self.serial_thread and self.serial_thread.is_alive():
+            # Previous thread is still cleaning up/closing the port.
+            # Reschedule and check again shortly to prevent port access clashes.
+            self._schedule_auto_start_monitor(100)
+            return
+        if self.serial_running:
+            return
+        # Check silently — this is a routine background check (fires on
+        # startup, after loading a project, after switching boards, etc.)
+        # and it's completely normal for no port to be selected yet at
+        # those times. _get_port() itself always logs "No port selected!"
+        # as an error, which is correct for user-initiated actions (Upload,
+        # Reset...) but was noisy and misleading here, since it made a
+        # totally expected "nothing plugged in yet" state look like a
+        # failure right in the middle of the project-load log.
+        port_raw = self.port_var.get()
+        self._board_changed_no_port_msg = None
+        if not port_raw or port_raw.startswith("─"):
+            return
+        port = self._get_port()
+        if not port:
+            return
+        if not SUPPORTED_BOARDS:
+            err_msg = "No boards are currently installed."
+            if self._last_monitor_error != err_msg:
+                self._last_monitor_error = err_msg
+                self._append_notif("  ✖ Monitor blocked: No boards are currently installed.", "error")
+                self._append_notif("    Please download a board framework first via the 'Download Boards/Libraries' manager.", "error")
+            return
+        # NOTE: unlike Upload, the Serial Monitor doesn't care whether the
+        # selected board *type* matches the chip actually on this port —
+        # it just opens the raw serial port at the chosen baud rate, so any
+        # MCU attached can be monitored regardless of the board dropdown.
+        self._last_monitor_error = "" # Clear error since it started successfully!
+        self._monitor_should_run = True
+        self.serial_running = True  # Prevent duplicate thread spawns
+        baud = int(self.baud_var.get())
+        self.serial_thread = threading.Thread(target=self._run_monitor, args=(port, baud), daemon=True)
+        self.serial_thread.start()
+
+    def _do_stop(self):
+        """Stop compile/upload process (does NOT stop serial monitor)."""
+        self._stop_requested = True
+        session_id = getattr(self, "_op_session_id", 0)
+        if self.process and self.process.poll() is None:
+            self.btn_stop.configure(text="■ Stopping...", state=tk.DISABLED)
+            self._set_status("Stopping process...", Theme.YELLOW)
+            proc_to_kill = self.process
+            
+            def _kill():
+                try:
+                    if sys.platform == "win32":
+                        import subprocess
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc_to_kill.pid)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+                    else:
+                        proc_to_kill.kill()
+                    self._append("  ■ Process killed.", "warning")
+                except Exception as e:
+                    self._append(f"  ⚠ Failed to stop process: {e}", "warning")
+                # ── Failsafe: if the background thread doesn't clear is_busy
+                # within 5 seconds after the process was killed, force-clear it
+                # so the UI never gets permanently stuck — but ONLY if no new
+                # operation session has started in the meantime.
+                time.sleep(5)
+                if self.is_busy and getattr(self, "_op_session_id", 0) == session_id:
+                    self.is_busy = False
+                    self._set_buttons_state(False)
+                    self._set_status("Stopped (failsafe)", Theme.YELLOW)
+                    self._append("  ⚠ Busy state cleared by failsafe timer.", "warning")
+
+            threading.Thread(target=_kill, daemon=True).start()
+        elif self.is_busy:
+            # Process is already dead but is_busy is stuck — clear it immediately
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_status("Ready", Theme.GREEN)
+            self._append("  ℹ Busy state was stale — cleared.", "info")
+
+    def _pause_monitor(self) -> bool:
+        """Pause serial monitor temporarily for uploading."""
+        was_running = self.serial_running or getattr(self, "_monitor_should_run", False)
+        self._monitor_should_run = False
+        self.serial_running = False
+        if self.serial_conn:
+            try:
+                if self.serial_conn.is_open:
+                    self.serial_conn.close()
+            except Exception:
+                pass
+        if self.serial_thread and self.serial_thread.is_alive():
+            self.serial_thread.join(timeout=0.6)
+        self._set_serial_status(False)
+        if was_running:
+            self._append_notif("  ⏸ Paused for upload…", "dim")
+        return was_running
+
+    def _resume_monitor(self):
+        """Resume serial monitor after upload completes, triggering MCU reset so setup() output is captured."""
+        if not self._monitor_should_run:
+            return
+        self._manual_reset_pending = True
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_avr = (board_info.get("platform", "") == "atmelavr")
+        delay = 0.3 if is_avr else 0.4
+        time.sleep(delay)
+
+        self._schedule_auto_start_monitor(0)
+
+    def _restart_monitor(self, reason: str):
+        """Stop and relaunch the serial monitor with the current port/baud.
+        Used when a setting that affects the monitor connection changes
+        (baud rate, board selection, port selection) while the monitor
+        is connected or idle."""
+        def _do():
+            was_running = self.serial_running
+            self.serial_running = False
+            if self.serial_conn and self.serial_conn.is_open:
+                try:
+                    self.serial_conn.close()
+                except Exception:
+                    pass
+            if self.serial_thread and self.serial_thread.is_alive():
+                self.serial_thread.join(timeout=1.0)
+            if was_running:
+                self._append_notif(f"  ↻ Restarting monitor — {reason}…", "dim")
+                # Separator so the new session is visually distinct
+                self._append_notif("─" * 40, "dim")
+            # Auto Clear serial monitor when connecting, if enabled
+            if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+                self._clear_serial_console()
+            self._schedule_auto_start_monitor(100)
+        self.root.after(0, _do)
+
+    def _open_sketch_in_explorer(self):
+        """Open the current project folder in Windows File Explorer."""
+        try:
+            if self.sketch_dir_path and self.sketch_dir_path.is_dir():
+                import os
+                os.startfile(str(self.sketch_dir_path))
+            else:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "Folder Not Found",
+                    f"Project folder not found or missing:\n{self.sketch_dir_path}",
+                    parent=self.root,
+                )
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Cannot Open Folder",
+                f"Failed to open folder in Explorer:\n{e}",
+                parent=self.root,
+            )
+
+    def _select_sketch_folder(self):
+        """Right-click on project title / icon: directly open the file/sketch picker (showing files inside folders)."""
+        if self.is_busy:
+            return
+        from tkinter import filedialog, messagebox
+        init_dir = str(self.sketch_dir_path) if self.sketch_dir_path.exists() else str(Path.home())
+
+        selected = filedialog.askopenfilename(
+            initialdir=init_dir,
+            title="Select Sketch / Project File (.ino, .cpp, .h, platformio.ini)",
+            parent=self.root,
+            filetypes=[
+                ("Project Files & Sketches (*.ino, *.cpp, *.h)", "*.ino;*.cpp;*.h;*.hpp;platformio.ini;*.txt"),
+                ("Arduino Sketches (*.ino)", "*.ino"),
+                ("C/C++ Source & Headers (*.cpp, *.h)", "*.cpp;*.h;*.hpp"),
+                ("All Files (*.*)", "*.*")
+            ]
+        )
+        if selected:
+            p = Path(selected)
+            new_path = p.parent if p.is_file() else p
+            if new_path.name.lower() == "src" and (new_path.parent / "platformio.ini").exists():
+                new_path = new_path.parent
+            if new_path.resolve() != self.sketch_dir_path.resolve():
+                owner_pid = folder_lock_owner(new_path)
+                if owner_pid is not None:
+                    messagebox.showerror(
+                        "Project In Use",
+                        f"This project folder is already open in another MCU Flasher window "
+                        f"(PID {owner_pid}):\n{new_path}\n\n"
+                        "Close that window first, or choose a different project.",
+                        parent=self.root
+                    )
+                    return
+
+                if not _validate_and_scaffold_ino(self.root, new_path):
+                    return
+
+                self.sketch_dir_path = new_path
+                config = load_gui_config()
+                config["last_sketch_dir"] = str(self.sketch_dir_path)
+                save_gui_config(config)
+                self._on_folder_changed()
+            else:
+                messagebox.showinfo(
+                    "Project Active",
+                    "✔ This project is already currently active.",
+                    parent=self.root
+                )
+
+    def _new_project(self):
+        """Open the project selector dialog mid-session.
+        On success, switches the active sketch folder to the chosen or
+        freshly scaffolded project — same effect as startup project selection."""
+        if self.is_busy:
+            return
+        dlg = ProjectSelectorDialog(self.root, str(self.sketch_dir_path))
+        project_dir = dlg.run()
+        if project_dir:
+            if project_dir.resolve() != self.sketch_dir_path.resolve():
+                # When another task is already live, let the user decide
+                # whether this project replaces the current task or deserves
+                # an explicitly independent window.  The latter gets its own
+                # PID-scoped config/editor state and cannot be created by an
+                # accidental VBS relaunch.
+                data = _load_raw_config()
+                alive = _get_alive_pid_create_times()
+                other_ids = [pid for pid, inst in data.get("instances", {}).items()
+                             if pid != _INSTANCE_ID and _instance_is_alive(pid, inst, alive)]
+                if self.root.winfo_exists():
+                    from tkinter import messagebox
+                    run_here = messagebox.askyesno(
+                        "Open Project",
+                        f"Current task ID: {_INSTANCE_ID}"
+                        + (f"\nOther running task(s): {', '.join(other_ids)}" if other_ids else "")
+                        + "\n\n"
+                        f"Do you want to open '{project_dir.name}' on another window?\n\n"
+                        "Yes = open an independent window\nNo = use this window",
+                        parent=self.root,
+                    )
+                    if run_here:
+                        try:
+                            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                            proc = subprocess.Popen(
+                                [sys.executable, str(Path(__file__).resolve()), "--from-bootstrap",
+                                 "--new-window", "--project", str(project_dir)],
+                                cwd=str(SCRIPT_DIR), creationflags=flags,
+                            )
+                            messagebox.showinfo(
+                                "Independent Task Started",
+                                f"Project: {project_dir.name}\nTask ID: {proc.pid}\n\n"
+                                "This window remains on its current project.",
+                                parent=self.root,
+                            )
+                        except Exception as exc:
+                            messagebox.showerror("Cannot Open New Window", str(exc), parent=self.root)
+                        return
+                self.sketch_dir_path = project_dir
+                config = load_gui_config()
+                config["last_sketch_dir"] = str(self.sketch_dir_path)
+                save_gui_config(config)
+                self._on_folder_changed()
+            else:
+                from tkinter import messagebox
+                messagebox.showinfo(
+                    "Project Active",
+                    "✔ This project is already currently active.",
+                    parent=self.root
+                )
+
+        self.is_busy = False
+        self._set_buttons_busy(False)
+
+    def _open_modify_files_dialog(self):
+        """Open a tabbed modal for managing project source files:
+          • Add    — create a new blank file (.ino / .h / .cpp / .txt only)
+          • Rename — rename an existing project file
+          • Delete — permanently remove an existing project file
+
+        Renaming/deleting operates on whatever's currently on disk in the
+        sketch folder (so it also covers .c files placed there manually).
+        Any successful action refreshes the open editor tabs immediately.
+        """
+        if self.is_busy:
+            return
+        if not self.sketch_dir_path or not self.sketch_dir_path.exists():
+            from tkinter import messagebox
+            messagebox.showerror(
+                "No Project Folder",
+                "No active project folder to modify.",
+                parent=self.root
+            )
+            return
+
+        from tkinter import messagebox
+
+        ALLOWED_NEW_EXTS = (".ino", ".h", ".cpp", ".txt")
+        LISTABLE_GLOBS = ("*.ino", "*.h", "*.cpp", "*.c", "*.txt")
+        INVALID_CHARS = '\\/:*?"<>|'
+
+        def _list_project_files():
+            names = []
+            for pattern in LISTABLE_GLOBS:
+                names.extend(f.name for f in self.sketch_dir_path.glob(pattern))
+            return sorted(names)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Modify Project Files")
+        dlg.configure(bg=Theme.BG_DARKEST)
+        dlg.resizable(False, False)
+        
+        # Set window icon if available
+        try:
+            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            if icon_path.exists():
+                dlg.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        center_toplevel(dlg, self.root, 460, 400)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        dlg_title_font = tkfont.Font(family="Montserrat", size=13, weight="bold")
+        dlg_btn_font = tkfont.Font(family="Montserrat", size=10, weight="bold")
+        dlg_action_font = tkfont.Font(family="Montserrat", size=11, weight="bold")
+
+        tk.Label(
+            dlg, text="Modify Project Files", font=dlg_title_font,
+            fg=Theme.CYAN, bg=Theme.BG_DARKEST
+        ).pack(pady=(14, 10))
+
+        # ── Sub-tab bar (Add / Rename / Delete) ─────────────────────────
+        tab_bar = tk.Frame(dlg, bg=Theme.BG_DARKEST)
+        tab_bar.pack(fill=tk.X, padx=20)
+
+        body = tk.Frame(dlg, bg=Theme.BG_DARKEST)
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(12, 0))
+
+        err_lbl = tk.Label(
+            dlg, text="", font=self.font_label, fg=Theme.RED, bg=Theme.BG_DARKEST,
+            wraplength=400, justify=tk.CENTER
+        )
+        err_lbl.pack(pady=(8, 0))
+
+        current_tab = ["add"]
+        frames = {}
+        tab_btns = {}
+
+        def _clear_err():
+            err_lbl.config(text="")
+
+        # ── Add sub-panel ────────────────────────────────────────────────
+        add_frame = tk.Frame(body, bg=Theme.BG_DARKEST)
+        frames["add"] = add_frame
+
+        tk.Label(
+            add_frame,
+            text="Enter a filename with one of these extensions:\n.ino   .h   .cpp   .txt",
+            font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+            justify=tk.CENTER
+        ).pack(pady=(10, 10))
+
+        add_name_var = tk.StringVar(value="")
+        add_entry = tk.Entry(
+            add_frame, textvariable=add_name_var, font=self.font_mono,
+            bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            insertbackground=Theme.CYAN, borderwidth=0,
+            highlightthickness=1, highlightcolor=Theme.CYAN_DIM,
+            highlightbackground=Theme.BORDER, justify=tk.CENTER,
+        )
+        add_entry.pack(fill=tk.X, ipady=5)
+
+        # ── Browse separator ──────────────────────────────────────────────
+        sep_row = tk.Frame(add_frame, bg=Theme.BG_DARKEST)
+        sep_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Frame(sep_row, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+        tk.Label(
+            add_frame,
+            text="— or —",
+            font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+        ).pack(pady=(4, 0))
+
+        tk.Button(
+            add_frame,
+            text="📂  Browse & Copy Existing File…",
+            font=self.font_label,
+            bg=Theme.BTN_CLEAR, fg=Theme.TEXT_BRIGHT,
+            activebackground=Theme.BTN_CLEAR_H,
+            activeforeground=Theme.TEXT_BRIGHT,
+            relief=tk.FLAT, cursor="hand2", bd=0,
+            command=lambda: _do_add_browse(),
+        ).pack(pady=(4, 0), ipadx=6, ipady=4)
+
+        def _do_add_browse():
+            from tkinter import filedialog
+            import shutil as _shutil
+            src = filedialog.askopenfilename(
+                title="Select a file to add to the project",
+                filetypes=[("Sketch/Header/Text files", "*.ino *.cpp *.h *.txt"),
+                           ("All files", "*.*")],
+                parent=dlg,
+            )
+            if not src:
+                return
+            src_path = Path(src)
+            if src_path.suffix.lower() not in ALLOWED_NEW_EXTS:
+                err_lbl.config(text="Only .ino, .h, .cpp, .txt are allowed.")
+                return
+            dest = self.sketch_dir_path / src_path.name
+            if dest.resolve() == src_path.resolve():
+                err_lbl.config(text="That file is already in the project folder.")
+                return
+            if dest.exists():
+                overwrite = messagebox.askyesno(
+                    "File Already Exists",
+                    f"\"{src_path.name}\" already exists in the project folder.\n\n"
+                    "Overwrite it with the selected file?",
+                    parent=dlg,
+                )
+                if not overwrite:
+                    return
+            try:
+                _shutil.copy2(str(src_path), str(dest))
+            except Exception as e:
+                err_lbl.config(text=f"Could not copy file: {e}")
+                return
+            self._append(f"  ➕ Added file to project (copied): {src_path.name}", "success")
+            _refresh_editor()
+            dlg.destroy()
+
+        def _do_add():
+
+            name = add_name_var.get().strip()
+            if not name:
+                err_lbl.config(text="Please enter a filename.")
+                return
+            if any(c in name for c in INVALID_CHARS) or name in (".", ".."):
+                err_lbl.config(text="Filename contains invalid characters.")
+                return
+
+            suffix = Path(name).suffix.lower()
+            if suffix not in ALLOWED_NEW_EXTS:
+                err_lbl.config(text="Only .ino, .h, .cpp, .txt are allowed.")
+                return
+            if not Path(name).stem:
+                err_lbl.config(text="Please enter a name before the extension.")
+                return
+
+            dest = self.sketch_dir_path / name
+            if dest.exists():
+                overwrite = messagebox.askyesno(
+                    "File Already Exists",
+                    f"\"{name}\" already exists in the project folder.\n\n"
+                    "Overwrite it with a blank file?",
+                    parent=dlg
+                )
+                if not overwrite:
+                    return
+
+            try:
+                dest.write_text("", encoding="utf-8")
+            except Exception as e:
+                err_lbl.config(text=f"Could not create file: {e}")
+                return
+
+            self._append(f"  ➕ Added file to project: {name}", "success")
+            _refresh_editor()
+            dlg.destroy()
+
+        # ── Rename sub-panel ─────────────────────────────────────────────
+        rename_frame = tk.Frame(body, bg=Theme.BG_DARKEST)
+        frames["rename"] = rename_frame
+
+        tk.Label(
+            rename_frame, text="Select a file to rename:", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor=tk.W
+        ).pack(fill=tk.X, pady=(10, 4))
+
+        rename_select_var = tk.StringVar()
+        rename_combo = ttk.Combobox(
+            rename_frame, textvariable=rename_select_var, state="readonly",
+            font=self.font_label, values=_list_project_files()
+        )
+        rename_combo.pack(fill=tk.X)
+
+        tk.Label(
+            rename_frame, text="New filename:", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor=tk.W
+        ).pack(fill=tk.X, pady=(14, 4))
+
+        rename_new_var = tk.StringVar()
+        rename_entry = tk.Entry(
+            rename_frame, textvariable=rename_new_var, font=self.font_mono,
+            bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            insertbackground=Theme.CYAN, borderwidth=0,
+            highlightthickness=1, highlightcolor=Theme.CYAN_DIM,
+            highlightbackground=Theme.BORDER, justify=tk.CENTER,
+        )
+        rename_entry.pack(fill=tk.X, ipady=5)
+
+        def _on_rename_select(event=None):
+            # Pre-fill the new-name box with the current name so the user
+            # only has to tweak part of it.
+            if rename_select_var.get():
+                rename_new_var.set(rename_select_var.get())
+        rename_combo.bind("<<ComboboxSelected>>", _on_rename_select)
+
+        def _do_rename():
+            old_name = rename_select_var.get()
+            if not old_name:
+                err_lbl.config(text="Please select a file to rename.")
+                return
+            new_name = rename_new_var.get().strip()
+            if not new_name:
+                err_lbl.config(text="Please enter a new filename.")
+                return
+            if any(c in new_name for c in INVALID_CHARS) or new_name in (".", ".."):
+                err_lbl.config(text="Filename contains invalid characters.")
+                return
+
+            suffix = Path(new_name).suffix.lower()
+            if suffix not in ALLOWED_NEW_EXTS:
+                err_lbl.config(text="Only .ino, .h, .cpp, .txt are allowed.")
+                return
+            if not Path(new_name).stem:
+                err_lbl.config(text="Please enter a name before the extension.")
+                return
+
+            src = self.sketch_dir_path / old_name
+            dest = self.sketch_dir_path / new_name
+
+            if not src.exists():
+                err_lbl.config(text="Selected file no longer exists.")
+                return
+            try:
+                same_file = src.resolve() == dest.resolve()
+            except Exception:
+                same_file = old_name == new_name
+            if same_file:
+                err_lbl.config(text="New name is the same as the current name.")
+                return
+            if dest.exists():
+                err_lbl.config(text=f"\"{new_name}\" already exists.")
+                return
+
+            confirm = messagebox.askyesno(
+                "Rename File",
+                f"Rename \"{old_name}\" to \"{new_name}\"?\n\n"
+                "Any unsaved changes open in its editor tab will be lost.",
+                parent=dlg
+            )
+            if not confirm:
+                return
+
+            try:
+                src.rename(dest)
+            except Exception as e:
+                err_lbl.config(text=f"Could not rename file: {e}")
+                return
+
+            self._append(f"  ✎ Renamed file: {old_name} → {new_name}", "success")
+            _refresh_editor()
+            dlg.destroy()
+
+        # ── Delete sub-panel ─────────────────────────────────────────────
+        delete_frame = tk.Frame(body, bg=Theme.BG_DARKEST)
+        frames["delete"] = delete_frame
+
+        tk.Label(
+            delete_frame, text="Select a file to remove from the project:",
+            font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor=tk.W
+        ).pack(fill=tk.X, pady=(10, 4))
+
+        delete_select_var = tk.StringVar()
+        delete_combo = ttk.Combobox(
+            delete_frame, textvariable=delete_select_var, state="readonly",
+            font=self.font_label, values=_list_project_files()
+        )
+        delete_combo.pack(fill=tk.X)
+
+        tk.Label(
+            delete_frame,
+            text="This permanently deletes the file from disk\nand closes its tab in the editor.",
+            font=self.font_label, fg=Theme.ORANGE, bg=Theme.BG_DARKEST, justify=tk.CENTER
+        ).pack(pady=(16, 0))
+
+        def _do_delete():
+            name = delete_select_var.get()
+            if not name:
+                err_lbl.config(text="Please select a file to delete.")
+                return
+            target = self.sketch_dir_path / name
+            if not target.exists():
+                err_lbl.config(text="Selected file no longer exists.")
+                return
+
+            confirm = messagebox.askyesno(
+                "Delete File",
+                f"Permanently delete \"{name}\"?\n\nThis cannot be undone.",
+                parent=dlg
+            )
+            if not confirm:
+                return
+
+            try:
+                target.unlink()
+            except Exception as e:
+                err_lbl.config(text=f"Could not delete file: {e}")
+                return
+
+            self._append(f"  🗑 Removed file from project: {name}", "warning")
+            _refresh_editor()
+            dlg.destroy()
+
+        def _refresh_editor():
+            if callable(getattr(self, "_load_editor_files", None)):
+                self._load_editor_files()
+            try:
+                self._update_skip_compile_state()
+            except Exception:
+                pass
+
+        ACTIONS = {
+            "add":    ("Add",    Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, _do_add),
+            "rename": ("Rename", Theme.BTN_UPLOAD,  Theme.BTN_UPLOAD_H,  _do_rename),
+            "delete": ("Delete", Theme.BTN_STOP,     Theme.BTN_STOP_H,   _do_delete),
+        }
+
+        def _do_cancel():
+            dlg.destroy()
+
+        # ── Bottom Cancel / dynamic action button ───────────────────────
+        btn_row = tk.Frame(dlg, bg=Theme.BG_DARKEST)
+        btn_row.pack(pady=(16, 14))
+
+        btn_cancel = tk.Button(
+            btn_row, text="Cancel", command=_do_cancel,
+            font=dlg_action_font, fg=Theme.TEXT_BRIGHT, bg=Theme.BTN_STOP,
+            activebackground=Theme.BTN_STOP_H, activeforeground=Theme.TEXT_BRIGHT,
+            relief=tk.FLAT, borderwidth=0, padx=20, pady=8, width=10, cursor="hand2",
+        )
+        btn_cancel.pack(side=tk.LEFT, padx=8)
+        btn_cancel.bind("<Enter>", lambda e: btn_cancel.configure(bg=Theme.BTN_STOP_H))
+        btn_cancel.bind("<Leave>", lambda e: btn_cancel.configure(bg=Theme.BTN_STOP))
+
+        btn_action = tk.Button(
+            btn_row, text="Add", command=_do_add,
+            font=dlg_action_font, fg=Theme.TEXT_BRIGHT, bg=Theme.BTN_COMPILE,
+            activebackground=Theme.BTN_COMPILE_H, activeforeground=Theme.TEXT_BRIGHT,
+            relief=tk.FLAT, borderwidth=0, padx=20, pady=8, width=10, cursor="hand2",
+        )
+        btn_action.pack(side=tk.LEFT, padx=8)
+        btn_action._bg_idle = Theme.BTN_COMPILE
+        btn_action._bg_hover = Theme.BTN_COMPILE_H
+        btn_action.bind("<Enter>", lambda e: btn_action.configure(bg=btn_action._bg_hover))
+        btn_action.bind("<Leave>", lambda e: btn_action.configure(bg=btn_action._bg_idle))
+
+        def _switch(which):
+            current_tab[0] = which
+            for f in frames.values():
+                f.pack_forget()
+            frames[which].pack(fill=tk.BOTH, expand=True)
+            _clear_err()
+
+            for key, btn in tab_btns.items():
+                btn.configure(bg=Theme.BTN_FULL if key == which else Theme.BTN_CLEAR)
+
+            text, bg, bg_hover, cmd = ACTIONS[which]
+            btn_action.configure(text=text, bg=bg, activebackground=bg_hover, command=cmd)
+            btn_action._bg_idle = bg
+            btn_action._bg_hover = bg_hover
+
+        tab_btns["add"] = self._make_btn(
+            tab_bar, "➕ Add", lambda: _switch("add"), Theme.BTN_FULL, Theme.BTN_FULL_H, font=dlg_btn_font
+        )
+        tab_btns["add"].pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3))
+
+        tab_btns["rename"] = self._make_btn(
+            tab_bar, "✎ Rename", lambda: _switch("rename"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=dlg_btn_font
+        )
+        tab_btns["rename"].pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+
+        tab_btns["delete"] = self._make_btn(
+            tab_bar, "🗑 Delete", lambda: _switch("delete"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=dlg_btn_font
+        )
+        tab_btns["delete"].pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0))
+
+        dlg.bind("<Escape>", lambda e: _do_cancel())
+        dlg.protocol("WM_DELETE_WINDOW", _do_cancel)
+        add_entry.bind("<Return>", lambda e: _do_add())
+        rename_entry.bind("<Return>", lambda e: _do_rename())
+
+        _switch("add")
+        add_entry.focus_set()
+
+    def _save_active_folder(self, folder_path):
+        """Save the currently active sketch folder in the instance config,
+        so other windows can see (and avoid) it via get_occupied_folders().
+        Mirrors _save_selected_port()."""
+        try:
+            config = load_gui_config()
+            config["active_sketch_dir"] = str(Path(folder_path).resolve()) if folder_path else ""
+            save_gui_config(config)
+        except Exception:
+            pass
+
+    def _on_folder_changed(self):
+        """Called whenever sketch_dir_path is set to a new folder.
+        Updates the UI label, invalidates the compile cache, then scans
+        includes in a background thread so the console gets an instant
+        project-summary report."""
+        self._dispose_active_ai_assistant()
+        if getattr(self, "ai_controller", None) and hasattr(
+            self.ai_controller, "reset_monitoring_state"
+        ):
+            self.ai_controller.reset_monitoring_state()
+        if getattr(self, "editor_api", None):
+            try:
+                self.editor_api.bind_project(self.sketch_dir_path)
+                if getattr(self, "editor_window", None):
+                    self.editor_window.evaluate_js(
+                        "if (window.resetAiReviewForProject) window.resetAiReviewForProject();"
+                    )
+            except Exception as exc:
+                print(f"[MCU Flasher] Could not bind AI review journal: {exc}")
+        self._clear_console()
+        self._clear_serial_console()
+        self._sketch_marquee_idx = 0
+        self._sketch_marquee_dir = 1
+        self._update_sketch_marquee()
+        self._set_status(f"Project: {self.sketch_dir_path.name}", Theme.CYAN)
+        self._save_active_folder(self.sketch_dir_path)
+        try:
+            heal_platformio_ini_symlinks_and_dirs(self.sketch_dir_path / "platformio.ini", self.sketch_dir_path)
+            hide_internal_project_metadata(self.sketch_dir_path)
+        except Exception:
+            pass
+        if hasattr(self, "_load_editor_files"):
+                try:
+                    self._load_editor_files()
+                except Exception:
+                    pass
+
+        try:
+            add_recent_project(str(self.sketch_dir_path))
+        except Exception:
+            pass
+        
+        # Auto-detect and set correct board based on new project files.
+        # If a port is already selected, re-run the esptool probe so that
+        # switching projects (without unplugging) still picks the right board
+        # (e.g. going from Arduino R3 → ESP32-S3 with the same port connected).
+        port = self.port_var.get()
+        if port and not port.startswith("─"):
+            threading.Thread(
+                target=self._auto_detect_board_from_port,
+                args=(port,),
+                daemon=True,
+            ).start()
+        else:
+            self._auto_select_board(show_msg=True)
+
+        self._compat_warnings_approved_hash = None
+        self._load_compile_cache()
+        self._update_skip_compile_state()
+
+        threading.Thread(target=self._report_project_includes, daemon=True).start()
+
+        self._update_editor_info()
+
+    def _is_framework_downloaded(self, board_name: str = None) -> bool:
+        """Check if the core framework and toolchains for the board's platform are installed."""
+        if not board_name:
+            board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        platform = board_info.get("platform", "espressif32")
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR", str(Path.home() / ".platformio"))
+        
+        # Strategy 1: Direct fast filesystem check on packages directories
+        candidate_pkg_dirs = [
+            Path(pio_core_dir) / "packages",
+            Path(os.path.expanduser("~")) / ".platformio" / "packages",
+        ]
+        for pkg_dir in candidate_pkg_dirs:
+            if pkg_dir.exists():
+                try:
+                    if platform == "espressif32":
+                        if any("framework-arduinoespressif32" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
+                            return True
+                    elif platform == "atmelavr":
+                        if any("framework-arduino-avr" in p.name.lower() or "toolchain-atmelavr" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
+                            return True
+                    elif platform == "espressif8266":
+                        if any("framework-arduinoespressif8266" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
+                            return True
+                except Exception:
+                    pass
+
+        # Strategy 2: Call helper from bootstrap
+        if _platform_already_installed:
+            try:
+                if _platform_already_installed(pio_core_dir, platform):
+                    return True
+            except Exception:
+                pass
+        return True
+
+    def _mark_env_just_created(self, board_name: str = None):
+        """Mark an environment as newly created so compile won't be skipped until first successful build."""
+        if not hasattr(self, "_just_created_envs") or not isinstance(self._just_created_envs, set):
+            self._just_created_envs = set()
+        env = board_name or self._pio_env_name()
+        self._just_created_envs.add(env)
+        if board_name:
+            self._just_created_envs.add(board_name)
+        try:
+            self._save_compile_cache()
+        except Exception:
+            pass
+
+    def _save_compile_cache(self):
+        """Snapshot source hashes after a successful compile and save to disk,
+        keyed by board so each board keeps its own independent cache entry."""
+        self._compile_cache_hash = self._hash_sources()
+        self._last_compiled_board = self.board_var.get()
+        if self._last_compiled_board:
+            self._compile_cache_by_board[self._last_compiled_board] = self._compile_cache_hash
+        if not hasattr(self, "_just_created_envs") or not isinstance(self._just_created_envs, set):
+            self._just_created_envs = set()
+        # Remove current env / board from newly created envs since compilation succeeded
+        self._just_created_envs.discard(self._pio_env_name())
+        if self._last_compiled_board:
+            self._just_created_envs.discard(self._last_compiled_board)
+        try:
+            cache_data = {
+                # Legacy single-slot fields kept for backward compatibility
+                # with any older cache file / external readers.
+                "hash": self._compile_cache_hash,
+                "board": self._last_compiled_board,
+                "boards": self._compile_cache_by_board,
+                "build_metadata": getattr(self, "_build_metadata_by_board", {}),
+                "just_created_envs": list(self._just_created_envs),
+            }
+            cache_path = self._get_cache_file_path()
+            ensure_file_writable(cache_path)
+            cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
+            hide_hidden_attribute(cache_path)
+        except Exception:
+            pass
+        self._set_symbol_cache_compiled_state(True)
+
+    def _load_compile_cache(self):
+        """Load the compile cache from disk."""
+        try:
+            cache_file = self._get_cache_file_path()
+            if cache_file.exists():
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                self._compile_cache_hash = data.get("hash")
+                self._last_compiled_board = data.get("board")
+                self._compile_cache_by_board = data.get("boards") or {}
+                self._build_metadata_by_board = data.get("build_metadata") or {}
+                self._just_created_envs = set(data.get("just_created_envs") or [])
+                # Migrate an old single-slot cache file (no "boards" key yet)
+                # into the per-board dict so it isn't silently discarded.
+                if not self._compile_cache_by_board and self._last_compiled_board and self._compile_cache_hash:
+                    self._compile_cache_by_board = {self._last_compiled_board: self._compile_cache_hash}
+                if self._has_prior_build():
+                    recompile_needed, _ = self._needs_recompile()
+                    if not recompile_needed:
+                        self._set_symbol_cache_compiled_state(True)
+            else:
+                self._compile_cache_hash = None
+                self._last_compiled_board = None
+                self._compile_cache_by_board = {}
+                self._build_metadata_by_board = {}
+                self._just_created_envs = set()
+        except Exception:
+            self._compile_cache_hash = None
+            self._last_compiled_board = None
+            self._compile_cache_by_board = {}
+            self._build_metadata_by_board = {}
+            self._just_created_envs = set()
+
+    def _capture_build_metadata(self, output_lines: list[str]) -> None:
+        """Remember exact PlatformIO summary rows for the current build.
+
+        ``firmware.bin`` size alone cannot reproduce PlatformIO's Flash value,
+        and it contains no RAM information.  Capturing the authoritative rows
+        at compile time is both exact and essentially free.
+        """
+        board_name = self.board_var.get()
+        if not board_name:
+            return
+        captured: dict[str, str] = {}
+        for raw in output_lines:
+            line = _strip_terminal_escapes(raw)
+            low = line.lower()
+            if low.startswith("debug:") and "debug" not in captured:
+                captured["debug"] = line
+            elif low.startswith("ram:") and "ram" not in captured:
+                captured["ram"] = line
+            elif low.startswith("flash:") and "flash" not in captured:
+                captured["flash"] = line
+        if not captured:
+            return
+
+        entry: dict = {
+            **captured,
+            "env_name": self._pio_env_name(),
+            "source_hash": self._hash_sources(),
+        }
+        try:
+            firmware = (
+                self.sketch_dir_path / ".pio" / "build" /
+                self._pio_env_name() / "firmware.bin"
+            )
+            stat = firmware.stat()
+            entry["firmware_size"] = stat.st_size
+            entry["firmware_mtime_ns"] = stat.st_mtime_ns
+        except OSError:
+            pass
+        if not hasattr(self, "_build_metadata_by_board"):
+            self._build_metadata_by_board = {}
+        self._build_metadata_by_board[board_name] = entry
+
+    def _needs_recompile(self) -> tuple[bool, str]:
+        """Return (needs_recompile, reason_string).
+        False  → binary is up-to-date for the CURRENTLY selected board, safe to skip compile.
+        True   → sources changed, framework missing, env just created, board never compiled,
+                 or firmware binary missing from disk (e.g. cleaned manually or by board switch)."""
+        board_name = self.board_var.get()
+        env_name = self._pio_env_name()
+
+        # 1. Check if board framework is downloaded
+        if not self._is_framework_downloaded(board_name):
+            return True, "core framework / toolchain for board is not downloaded yet"
+
+        # 2. Check if environment was just created
+        if hasattr(self, "_just_created_envs") and (env_name in self._just_created_envs or board_name in self._just_created_envs):
+            return True, "environment was just created — initial compilation required"
+
+        # 3. Check if a compiled firmware binary actually exists on disk for this board.
+        #    The hash cache may say "sources unchanged" from a previous session, but if
+        #    the .pio directory was cleaned (or this is a different machine), the binary
+        #    is gone and we must recompile regardless.
+        if not self._has_prior_build():
+            return True, "no firmware binary found for this board (build folder may have been cleaned)"
+
+        cached_hash = self._compile_cache_by_board.get(board_name)
+        if cached_hash is None:
+            return True, "no previous compile for this board"
+        current = self._hash_sources()
+        if current != cached_hash:
+            return True, "source files have changed since this board was last compiled"
+        return False, "sources unchanged"
+
+    def _report_project_includes(self):
+        """Background task: scan includes in the new folder and print a summary."""
+        hide_internal_project_metadata(self.sketch_dir_path)
+        self._append("")
+        self._append("=" * 50, "header")
+        self._append(f"  📁  PROJECT LOADED", "header")
+        self._append("=" * 50, "header")
+        self._append(f"  Path : {self.sketch_dir_path}", "dim")
+
+        # ── Drive / volume health report ──────────────────────────────────
+        # Sketches may live on any volume type (NTFS, exFAT, FAT32, flash
+        # drives, external disks, network shares).  Surface the facts that
+        # actually affect compile/upload reliability so users on problem
+        # volumes get an immediate, actionable hint instead of a cryptic
+        # failure later.
+        try:
+            fs_name, type_label = get_volume_info(self.sketch_dir_path)
+            writable = is_volume_writable(self.sketch_dir_path)
+            if fs_name or type_label:
+                self._append(f"  💾 Drive : {fs_name or '?'} ({type_label or '?'})", "dim")
+            if not writable:
+                self._append(
+                    "  ✖ Volume is write-protected or read-only — compiling and "
+                    "uploading will FAIL. Check the USB drive's lock switch or "
+                    "its read-only status.",
+                    "error",
+                )
+            elif fs_name.upper() in ("EXFAT", "FAT32", "FAT", "FAT16", "FAT12"):
+                self._append(
+                    "  ℹ Flash/external drive (FAT/exFAT) detected: builds run "
+                    "slower than on an internal disk, and stale .pio caches may "
+                    "need extra clean passes. This is normal for removable media.",
+                    "info",
+                )
+            if sys.platform == "win32":
+                import ctypes
+                _probe = self.sketch_dir_path / "platformio.ini"
+                if not _probe.exists():
+                    _probe = self.sketch_dir_path
+                _a = ctypes.windll.kernel32.GetFileAttributesW(str(_probe))
+                if _a != -1 and (_a & 0x1000):  # FILE_ATTRIBUTE_OFFLINE
+                    self._append(
+                        "  ⚠ Sketch is inside a cloud-synced folder (OneDrive/"
+                        "Dropbox placeholder files). Copy it to a local or USB "
+                        "drive for reliable builds.",
+                        "warning",
+                    )
+        except Exception:
+            pass
+
+        ini_path = self.sketch_dir_path / "platformio.ini"
+        if ini_path.exists():
+            self._append("  ✔ platformio.ini found", "success")
+        else:
+            self._append("  ⚠ No platformio.ini — will be created on first compile", "warning")
+
+        # Scan source files
+        source_files = []
+        for ext in ["*.ino", "*.cpp", "*.h", "*.c", "*.txt"]:
+            source_files.extend(self.sketch_dir_path.glob(ext))
+
+        if not source_files:
+            self._append("  ⚠ No .ino / .cpp / .h / .c / .txt files found in this folder", "warning")
+            self._append("")
+            return
+
+        self._append(f"  Source files ({len(source_files)}):", "dim")
+        for f in sorted(source_files):
+            self._append(f"    • {f.name}", "dim")
+
+        # Detect libraries from includes
+        # Read once: on slower storage, repeatedly reopening platformio.ini
+        # for every dependency is needlessly expensive.
+        ini_text = ""
+        if ini_path.exists():
+            try:
+                ini_text = ini_path.read_text(encoding="utf-8", errors="replace").lower()
+            except OSError:
+                pass
+
+        detected = self._scan_includes_for_libs()
+        if detected:
+            self._append(f"  Detected lib dependencies ({len(detected)}):", "info")
+            for lib in detected:
+                # Check whether each one is already listed in platformio.ini
+                # Strip symlink:// prefix for comparison and display
+                lib_for_check = lib.replace("symlink://", "") if lib.startswith("symlink://") else lib
+                base = lib_for_check.split('/')[-1].split('@')[0].strip()
+                in_ini = base.lower() in ini_text
+                status_icon = "✔" if in_ini else "+"
+                status_color = "success" if in_ini else "warning"
+                display_lib = lib_for_check.split('/')[-1] if '/' in lib_for_check else lib_for_check
+                self._append(f"    {status_icon} {display_lib}  (symlink)", status_color)
+            if ini_path.exists():
+                missing = [
+                    lib for lib in detected
+                    if lib.split('/')[-1].split('@')[0].strip().lower()
+                    not in ini_text
+                ]
+                if missing:
+                    self._append(
+                        f"  ⚠ {len(missing)} dep(s) not yet in platformio.ini"
+                        " — will be added automatically on compile.", "warning"
+                    )
+                else:
+                    self._append("  ✔ All detected deps already in platformio.ini", "success")
+        else:
+            self._append("  No known library #includes detected", "dim")
+
+        self._append("")
+        self._append("  Ready. Click an action to begin.", "info")
+
+        port_raw = self.port_var.get()
+        board_raw = self.board_var.get()
+        no_port = not port_raw or port_raw.startswith("─")
+        no_board = not board_raw
+        if no_port and no_board:
+            self._append_notif("  ✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.", "warning")
+        elif no_port:
+            self._append_notif("  ✖ No port selected — plug in your device and pick a port to enable Upload/Monitor.", "warning")
+        elif no_board:
+            self._append_notif("  ✖ No board selected — choose a board to enable Compile/Upload.", "warning")
+
+        self._append("")
+        self._set_status(f"Project ready — {self.sketch_dir_path.name}", Theme.GREEN)
+
+    # ──────────────────────────────────────────────────────────
+    # COMPILE CACHE
+    # ──────────────────────────────────────────────────────────
+    def _get_cache_file_path(self) -> Path:
+        return get_project_temp_file(self.sketch_dir_path, ".mcu_gui_cache.json")
+
+    def _hash_sources(self) -> str:
+        """Return a single MD5 digest over the content of every source file
+        in the current sketch folder (.ino, .cpp, .h, .c) and platformio.ini.
+        Also factors in the currently selected board.
+        Files are sorted by name so the hash is order-stable."""
+        h = hashlib.md5()
+        h.update(self.board_var.get().encode())
+        source_files = []
+        for ext in ["*.ino", "*.cpp", "*.h", "*.c", "platformio.ini"]:
+            source_files.extend(self.sketch_dir_path.glob(ext))
+        for f in sorted(source_files):
+            try:
+                h.update(f.name.encode())                    # include filename
+                h.update(f.read_bytes())                     # include content
+            except Exception:
+                pass
+        return h.hexdigest()
+
+    def _set_symbol_cache_compiled_state(self, is_compiled: bool):
+        """Enable or disable symbol hover/click navigation based on backend build compilation state."""
+        self._project_compiled_cache_active = is_compiled
+        # Sync to Monaco webview (pywebview window is self.editor_window)
+        if hasattr(self, "editor_window") and self.editor_window:
+            try:
+                js_val = "true" if is_compiled else "false"
+                self.editor_window.evaluate_js(f"window.setProjectCompiledState({js_val});")
+            except Exception:
+                pass
+
+    def _update_skip_compile_state(self):
+        """Auto-detect if the project was already compiled.
+        If yes, enable the 'Skip recompile' checkbox and check it.
+        If no, disable the checkbox and uncheck it."""
+        if not hasattr(self, "cb_skip_compile"):
+            return
+        if self._has_prior_build():
+            needs_recompile, reason = self._needs_recompile()
+            if not needs_recompile:
+                self.skip_compile_var.set(True)
+                self.cb_skip_compile.configure(state=tk.NORMAL)
+                return
+        self.skip_compile_var.set(False)
+        self.cb_skip_compile.configure(state=tk.DISABLED)
+
+    def _has_prior_build(self) -> bool:
+        """Return True if a compiled firmware binary exists for the CURRENTLY
+        selected board specifically. Used by the Skip-recompile logic to guard
+        against skipping a never-built project. Each board gets its own
+        .pio/build/<env> folder (see _pio_env_name), so this only reports
+        True when THIS board has actually been built before — a different
+        board's cached build won't false-positive this check."""
+        env_name = self._pio_env_name()
+        build_dir = self.sketch_dir_path / ".pio" / "build" / env_name
+        artifacts_dir = self.sketch_dir_path / "build_artifacts" / env_name
+
+        # Auto-restore from project build_artifacts if .pio build folder was cleaned/deleted
+        if not (build_dir.exists() and ((build_dir / "firmware.elf").exists() or (build_dir / "firmware.hex").exists() or (build_dir / "firmware.bin").exists())):
+            if artifacts_dir.exists():
+                try:
+                    import shutil
+                    build_dir.mkdir(parents=True, exist_ok=True)
+                    for f in artifacts_dir.glob("*"):
+                        if f.is_file():
+                            shutil.copy2(f, build_dir / f.name)
+                except Exception:
+                    pass
+
+        return (
+            build_dir.exists() and (
+                (build_dir / "firmware.elf").exists() or
+                (build_dir / "firmware.hex").exists() or
+                (build_dir / "firmware.bin").exists()
+            )
+        )
+
+    # ──────────────────────────────────────────────────────────
+    # COMPILE
+    # ──────────────────────────────────────────────────────────
+    def _get_installed_libraries_map(self) -> tuple[dict[str, str], dict[str, str]]:
+        """Scan our downloaded libraries directory for installed libraries and header files.
+
+        Returns
+        -------
+        libs_map   : normalized_name -> local install_dir path
+        header_map : header_filename -> local install_dir path
+        """
+        libs_map = {}
+        header_map = {}
+
+        def normalize(name: str) -> str:
+            return "".join(c for c in name.lower() if c.isalnum())
+
+        download_dir = _get_download_dir()
+
+        libs_dir = Path(download_dir) / "Libs"
+        if not libs_dir.exists():
+            return libs_map, header_map
+
+        # Scan each subdirectory in Libs
+        try:
+            for item in libs_dir.iterdir():
+                if item.is_dir():
+                    # Auto-heal double nested folder if present
+                    try:
+                        subdirs = [p for p in item.iterdir() if p.is_dir()]
+                        files = [p for p in item.iterdir() if p.is_file()]
+                        if len(subdirs) == 1 and len(files) == 0:
+                            nested = subdirs[0]
+                            import shutil
+                            for nested_item in nested.iterdir():
+                                shutil.move(str(nested_item), str(item))
+                            nested.rmdir()
+                    except Exception:
+                        pass
+
+                    lib_path = str(item).replace("\\", "/")
+                    lib_name = item.name
+                    
+                    # Try reading library.properties for correct library name if exists
+                    props = item / "library.properties"
+                    if props.exists():
+                        try:
+                            content = props.read_text(encoding="utf-8", errors="replace")
+                            for line in content.splitlines():
+                                if line.startswith("name="):
+                                    lib_name = line.split("=", 1)[1].strip()
+                                    break
+                        except Exception:
+                            pass
+                            
+                    slug = "symlink://" + lib_path
+                    libs_map[normalize(lib_name)] = slug
+                    
+                    # Scan headers in the root directory and inside 'src'
+                    search_dirs = [item, item / "src"]
+                    for s_dir in search_dirs:
+                        if s_dir.exists() and s_dir.is_dir():
+                            for h_file in s_dir.glob("*.h"):
+                                header_map[h_file.name] = slug
+                                # Also map sub-directory headers (e.g. NimBLEDevice.h inside src/)
+                                for h_file_deep in s_dir.rglob("*.h"):
+                                    header_map[h_file_deep.name] = slug
+        except Exception as e:
+            self._append(f"  ⚠ Error scanning downloaded libraries: {e}", "warning")
+
+        old_libs = getattr(self, "_known_installed_libs", None)
+        current_lib_names = set(libs_map.keys())
+        if old_libs is not None:
+            added_libs = current_lib_names - old_libs
+            for lib_norm in added_libs:
+                display_name = lib_norm.upper() if len(lib_norm) <= 5 else lib_norm.title()
+                self._append_notif(
+                    f"  📚 New Library Installed: \"{display_name}\"",
+                    tag="success",
+                    category="library_install",
+                    title="Library Installed"
+                )
+        self._known_installed_libs = current_lib_names
+
+        return libs_map, header_map
+
+    def _get_core_headers(self, platform: str) -> set[str]:
+        """Dynamically detect built-in headers for the selected platform
+        by scanning the platform core files in the Boards directory.
+        """
+        core_headers = {
+            # Standard C / C++ library
+            "vector", "string", "map", "set", "list", "algorithm", "cmath",
+            "cstdio", "cstdlib", "cstring", "iostream", "sstream", "memory",
+            "utility", "stdint.h", "stdlib.h", "string.h", "math.h", "stdio.h",
+            "stdbool.h", "time.h", "limits.h", "assert.h", "stddef.h",
+            "stdarg.h", "ctype.h", "inttypes.h", "cstdint", "cstddef", "climits",
+            "arduino.h", "pins_arduino.h", "pgmspace.h",
+        }
+
+        download_dir = _get_download_dir()
+
+        boards_path = Path(download_dir) / "Boards"
+        if not boards_path.is_dir():
+            return core_headers
+
+        platform_dirs = []
+        for p in boards_path.glob("**/boards.txt"):
+            parent_dir = p.parent
+            parent_name = parent_dir.name.lower()
+            
+            p_platform = None
+            if "esp32" in parent_name:
+                p_platform = "espressif32"
+            elif "esp8266" in parent_name:
+                p_platform = "espressif8266"
+            elif "avr" in parent_name or "uno" in parent_name:
+                p_platform = "atmelavr"
+                
+            if p_platform == platform:
+                platform_dirs.append(parent_dir)
+
+        for p_dir in platform_dirs:
+            # 1. Scan cores/
+            cores_dir = p_dir / "cores"
+            if cores_dir.exists() and cores_dir.is_dir():
+                for h_file in cores_dir.rglob("*.h"):
+                    core_headers.add(h_file.name.lower())
+                    try:
+                        rel = h_file.relative_to(cores_dir)
+                        core_headers.add(rel.as_posix().lower())
+                    except Exception:
+                        pass
+
+            # 2. Scan libraries/
+            libs_dir = p_dir / "libraries"
+            if libs_dir.exists() and libs_dir.is_dir():
+                for h_file in libs_dir.rglob("*.h"):
+                    core_headers.add(h_file.name.lower())
+                    try:
+                        parts = h_file.relative_to(libs_dir).parts
+                        if len(parts) > 1:
+                            lib_root = libs_dir / parts[0]
+                            if (lib_root / "src").exists():
+                                try:
+                                    core_headers.add(h_file.relative_to(lib_root / "src").as_posix().lower())
+                                except Exception:
+                                    pass
+                            try:
+                                core_headers.add(h_file.relative_to(lib_root).as_posix().lower())
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+        return core_headers
+
+    def _scan_includes_for_libs(self) -> list[str]:
+        """Scan sketch files for #include statements and resolve them against
+        whatever libraries are actually installed on this machine via arduino-cli.
+        No hardcoded library table — the CLI output is the single source of truth.
+        """
+        # Resolve board platform
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        platform = board_info.get("platform", "espressif32")
+        
+        # Headers that are part of the core platform or standard library —
+        # they never need a lib_deps entry.
+        CORE_HEADERS = self._get_core_headers(platform)
+
+        detected_libs: list[str] = []
+        if not self.sketch_dir_path.exists():
+            return detected_libs
+
+        # Collect local project header filenames so we don't chase them as libs
+        local_files: set[str] = set()
+        try:
+            for f in self.sketch_dir_path.rglob("*"):
+                if f.is_file():
+                    if any(p.startswith(".") for p in
+                           f.relative_to(self.sketch_dir_path).parts):
+                        continue
+                    local_files.add(f.name.lower())
+        except Exception:
+            pass
+
+        # Ask arduino-cli once for everything installed on this machine
+        installed_libs_map, installed_header_map = self._get_installed_libraries_map()
+
+        def normalize(name: str) -> str:
+            return "".join(c for c in name.lower() if c.isalnum())
+
+        for ext in ["*.ino", "*.cpp", "*.h", "*.c"]:
+            for file_path in self.sketch_dir_path.glob(ext):
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                for header in re.findall(r'#include\s*[<"]([^>"]+)[>"]', content):
+                    h_lower = header.lower()
+
+                    # Skip core/stdlib headers and local project files
+                    if h_lower in CORE_HEADERS:
+                        continue
+                    if h_lower.startswith("esp_") or h_lower.startswith("driver/") or h_lower.startswith("soc/") or h_lower.startswith("hal/") or h_lower.startswith("freertos/") or h_lower.startswith("rom/") or h_lower.startswith("lwip/") or h_lower.startswith("mbedtls/"):
+                        continue
+                    if not h_lower.endswith(".h"):
+                        continue
+                    if h_lower in local_files:
+                        continue
+
+                    # 1. Exact header match from provides_includes (most reliable)
+                    slug = installed_header_map.get(header)
+
+                    # 2. Normalised name match (handles case variation)
+                    if not slug:
+                        slug = installed_libs_map.get(normalize(header[:-2]))
+
+                    if slug and slug not in detected_libs:
+                        detected_libs.append(slug)
+
+        return detected_libs
+
+    def _verify_board_variant_exists(self, p_platform: str, p_board: str) -> tuple[bool, str]:
+        """Verify the installed framework package actually contains the
+        pin-mapping header (pins_arduino.h) this board needs.
+
+        Fully dynamic: reads PlatformIO's own board JSON manifest
+        (<core_dir>/platforms/<platform>/boards/<board>.json) to find the
+        board's declared 'variant', then checks every installed
+        framework-* package for that variant's pins_arduino.h. Nothing
+        board/platform-specific is hardcoded — this works the same for
+        an ESP32-S3, an ESP8266, a Cardputer, or a board that doesn't
+        exist yet.
+
+        Returns (ok, variant_name). ok=True whenever we can't positively
+        confirm a problem (missing manifest, no 'variant' key, platform
+        not installed yet, etc.) — this check must never block a compile
+        just because it wasn't able to look something up.
+        """
+        try:
+            core_dir_str = os.environ.get("PLATFORMIO_CORE_DIR")
+            if not core_dir_str:
+                return True, ""
+            core_dir = Path(core_dir_str)
+
+            board_json = core_dir / "platforms" / p_platform / "boards" / f"{p_board}.json"
+            if not board_json.exists():
+                return True, ""  # nothing to verify against
+
+            data = json.loads(board_json.read_text(encoding="utf-8", errors="replace"))
+            variant = (data.get("build") or {}).get("variant")
+            if not variant:
+                return True, ""  # this board/platform doesn't use per-board variants
+
+            packages_dir = core_dir / "packages"
+            if not packages_dir.is_dir():
+                return True, ""
+
+            # Check if the framework package for this specific platform is installed yet.
+            # If not, let PlatformIO download it automatically during the first compile.
+            platform_keyword = p_platform.lower()
+            if platform_keyword.startswith("atmel"):
+                platform_keyword = platform_keyword[5:]  # e.g., "atmelavr" -> "avr"
+            
+            framework_installed = False
+            for d in packages_dir.glob("framework-*"):
+                if platform_keyword in d.name.lower():
+                    framework_installed = True
+                    break
+            
+            if not framework_installed:
+                return True, ""  # not installed yet, let PlatformIO handle it
+
+            # Search every installed framework-* package rather than assuming
+            # which specific package name provides variants for this platform.
+            found = any(packages_dir.glob(f"framework-*/variants/{variant}/pins_arduino.h"))
+            return (True, "") if found else (False, variant)
+        except Exception:
+            return True, ""  # never block a compile due to our own check failing
+
+    def _attempt_framework_repair(self, pio_path: list[str], p_platform: str) -> bool:
+        """Force PlatformIO to reinstall the given platform + framework
+        package via its own CLI. p_platform is whatever the resolved
+        board actually specifies — never a hardcoded platform name — so
+        this repairs any corrupted/incomplete platform, not just ESP32."""
+        self._append(f"  🔄 Reinstalling '{p_platform}' platform (this can take a few minutes)...", "info")
+        try:
+            result = subprocess.run(
+                pio_path + ["platform", "install", p_platform, "--force"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            for line in (result.stdout or "").splitlines():
+                if line.strip():
+                    self._append(f"    {line}", "dim")
+            if result.returncode != 0:
+                for line in (result.stderr or "").splitlines():
+                    if line.strip():
+                        self._append(f"    {line}", "error")
+                return False
+            return True
+        except Exception as e:
+            self._append(f"  ✖ Repair attempt failed: {e}", "error")
+            return False
+
+    def _resolve_board_info(self) -> dict:
+        """Resolve the currently selected board name to its PlatformIO
+        platform/board/framework info, with the same stale-name fallback
+        used everywhere else. Centralized here so every caller (ini
+        generation, framework-repair check, etc.) stays in sync instead
+        of re-implementing the fallback logic — nothing about a specific
+        board/platform is hardcoded, it's whatever SUPPORTED_BOARDS
+        (populated dynamically from disk) currently contains.
+        """
+        board_name = self.board_var.get()
+        # SUPPORTED_BOARDS["ESP32 Dev Module"] used to be a safe literal
+        # fallback because that key was hardcoded and always present.
+        # Now that ESP32/S3/8266 entries come purely from disk discovery
+        # (load_dynamic_boards), that key may not exist at all -- e.g. on
+        # a fresh install before "Download Boards/Libraries" has ever
+        # been run. Fall back to whatever board info IS actually
+        # available instead of a name that's no longer guaranteed to be
+        # there: prefer any board other than Arduino Uno first (since an
+        # unrecognized board_name during normal use is far more likely
+        # to be a slightly-stale ESP-family name than a stale Uno one),
+        # then Arduino Uno itself as the final guaranteed-present fallback.
+        if board_name in SUPPORTED_BOARDS:
+            return SUPPORTED_BOARDS[board_name]
+        elif SUPPORTED_BOARDS:
+            return next(iter(SUPPORTED_BOARDS.values()))
+        else:
+            return {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
+
+    def _pio_env_name(self, board_name: str | None = None) -> str:
+        """Stable PlatformIO [env:...] name / .pio/build subfolder for a
+        given board. Each board gets its own slug-based env name so their
+        compiled outputs (and lib deps) live in separate .pio/build/<id>
+        and .pio/libdeps/<id> folders instead of overwriting each other —
+        switching boards and back no longer throws away the other board's
+        build."""
+        name = board_name if board_name is not None else self.board_var.get()
+        if not name:
+            return "mcu_flash"
+        slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
+        return f"mcu_flash_{slug}" if slug else "mcu_flash"
+
+    def _ensure_platformio_ini(self) -> bool:
+        """Ensure platformio.ini exists and has all required library dependencies."""
+        ini_path = self.sketch_dir_path / "platformio.ini"
+
+        board_info = self._resolve_board_info()
+        p_platform = board_info["platform"]
+        p_board = board_info["board"]
+        p_framework = board_info["framework"]
+        
+        # 1. Scan for required libraries based on includes
+        detected_libs = self._scan_includes_for_libs()
+        
+        # Check if WiFiProv / BLE / large-stack libraries are used, OR if the
+        # board is an ESP32 / ESP32-S3 (which benefits from huge_app by default).
+        # WiFiProv.h is ESP32-only and requires wifi_provisioning headers that
+        # do not exist on ESP8266 — so we also gate huge_app on ESP32 platforms.
+        _LARGE_STACK_HEADERS = {
+            "WiFiProv.h",
+            "wifi_provisioning/manager.h",
+            "wifi_provisioning/scheme_softap.h",
+            "wifi_provisioning/scheme_ble.h",
+            "BLEDevice.h",
+            "SimpleBLE.h",
+            "BluetoothSerial.h",
+        }
+        needs_huge_app = False
+        # Default huge_app for ESP32 / ESP32-S3 boards — their base firmware
+        # already consumes most of the default 1.25 MB app partition, and any
+        # WiFiProv / BLE sketch will overflow it at link time.
+        if p_platform == "espressif32":
+            needs_huge_app = True
+        # Also scan source files in case the board is not yet selected but the
+        # headers make the intent clear.
+        if not needs_huge_app and self.sketch_dir_path.exists():
+            for ext in ["*.ino", "*.cpp", "*.h", "*.c"]:
+                for file_path in self.sketch_dir_path.glob(ext):
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+                        if any(h in content for h in _LARGE_STACK_HEADERS):
+                            needs_huge_app = True
+                            break
+                    except Exception:
+                        pass
+                if needs_huge_app:
+                    break
+        
+        # 2. Get Arduino user libraries directory from local settings
+        arduino_lib_dir = ""
+        try:
+            download_dir = _get_download_dir()
+            arduino_lib_dir = os.path.join(download_dir, "Libs").replace("\\", "/")
+        except Exception:
+            pass
+        
+        if not ini_path.exists():
+            self._append(f"  📝 platformio.ini not found in {self.sketch_dir_path}.", "warning")
+            self._append("  Creating a default platformio.ini with detected dependencies...", "info")
+            
+            lib_deps_str = ""
+            if detected_libs:
+                lib_deps_str = "\nlib_deps =\n" + "\n".join(f"    {lib}" for lib in detected_libs)
+                
+            lib_extra_dirs_str = f"\nlib_extra_dirs = {arduino_lib_dir}" if arduino_lib_dir else ""
+
+            # ESP32-S3 requires extra build flags for USB-Serial to work correctly.
+            # Without these the Serial monitor is silent even when the sketch runs.
+            #   -DARDUINO_USB_MODE=1        → use TinyUSB (not ROM CDC)
+            #   -DARDUINO_USB_CDC_ON_BOOT=1 → enable CDC-over-USB on boot
+            # board_build.flash_mode = dio is required on most S3 modules;
+            # qio can cause boot loops on boards that don't support it.
+            
+            build_flags_list = [
+                "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
+                "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
+                "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1"
+            ]
+            
+            s3_extra = ""
+            _uspd = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+            # Arduino Uno's optiboot/stk500 bootloader only syncs at 115200 baud.
+            # The upload_speed combobox is meant for esptool boards (ESP32/S3/8266) —
+            # honoring a higher value here makes avrdude retry sync for ~100s before
+            # giving up with "Error 1" / "avrdude: stk500_recv(): programmer is not
+            # responding". Force the bootloader-correct speed for AVR instead.
+            if p_board == "uno":
+                _uspd = "115200"
+            upload_speed_line = f"\nupload_speed = {_uspd}"
+            flash_size = board_info.get("flash_size")
+            has_psram = board_info.get("psram")
+            if has_psram:
+                build_flags_list.extend([
+                    "-D BOARD_HAS_PSRAM",
+                    "-mfix-esp32-psram-cache-issue"
+                ])
+
+            if is_s3_board(p_board):
+                is_native = self._is_native_usb_port()
+                upload_speed_line = "" if is_native else f"\nupload_speed = {_uspd}"
+                if is_native:
+                    build_flags_list.extend([
+                        "-DARDUINO_USB_MODE=1",
+                        "-DARDUINO_USB_CDC_ON_BOOT=1"
+                    ])
+                s3_extra = (
+                    f"\nupload_protocol = esptool"
+                    f"\nboard_build.flash_mode = dio"
+                )
+
+            build_flags_str = "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags_list)
+            partition_str = "board_build.partitions = huge_app.csv\n" if needs_huge_app else ""
+
+            # Build the [env:mcu_flash] body line-by-line so no key ever gets
+            # concatenated onto the tail of another key's value line.
+            env_lines: list[str] = [
+                f"platform = {p_platform}",
+                f"board = {p_board}",
+                f"framework = {p_framework}",
+                "monitor_speed = 115200",
+            ]
+            if flash_size:
+                env_lines.append(f"board_build.flash_size = {flash_size}")
+                env_lines.append(f"board_upload.flash_size = {flash_size}")
+            if has_psram:
+                env_lines.append("board_build.arduino.memory_type = qio_opi")
+
+            # upload_speed only for non-native-USB boards (upload_speed_line is
+            # "\nupload_speed = {speed}" when set, "" when skipped)
+            if upload_speed_line:
+                env_lines.append(f"upload_speed = {_uspd}")
+            if s3_extra:
+                # s3_extra is "\nupload_protocol = esptool\nboard_build.flash_mode = dio"
+                for extra_line in s3_extra.strip().splitlines():
+                    env_lines.append(extra_line.strip())
+            env_lines.append(build_flags_str)
+            if lib_extra_dirs_str:
+                env_lines.append(f"lib_extra_dirs = {arduino_lib_dir}")
+            if lib_deps_str:
+                env_lines.append(lib_deps_str.strip())
+            if partition_str:
+                env_lines.append(partition_str.strip())
+
+            # Join with a blank line between every key block so Python's
+            # configparser never treats build_flags' indented -D lines as a
+            # multi-line continuation of board_build.flash_mode.  A blank line
+            # always terminates a multi-line value in configparser semantics.
+            env_body = "\n\n".join(env_lines)
+
+            content = f"""; PlatformIO Project Configuration File
+; Generated automatically by MCU Flasher by Naph
+
+[platformio]
+default_envs = {self._pio_env_name()}
+
+[env:{self._pio_env_name()}]
+{env_body}
+"""
+            try:
+                self._force_write_text(ini_path, content)
+                hide_internal_project_metadata(self.sketch_dir_path)
+                self._append("  ✔ Created default platformio.ini successfully.", "success")
+                self._append_notif(
+                    f"  📄 platformio.ini created for {self.board_var.get()} in {self.sketch_dir_path}",
+                    tag="success", category="pio_ini", title="platformio.ini Created"
+                )
+                if detected_libs:
+                    self._append(f"  Detected libraries: {', '.join(detected_libs)}", "info")
+                return True
+            except Exception as e:
+                self._append(f"  ✖ Failed to create platformio.ini: {e}", "error")
+                return False
+        else:
+            # platformio.ini already exists. Validate and heal it first, then update.
+            try:
+                ensure_file_writable(ini_path)
+                if heal_platformio_ini_symlinks_and_dirs(ini_path, self.sketch_dir_path):
+                    self._append("  ✔ Auto-healed stale library paths/symlinks in platformio.ini for current device.", "success")
+                content = ini_path.read_text(encoding="utf-8", errors="replace")
+                old_content = content
+
+
+                # ── Per-board env rename ────────────────────────────────────────
+                # The ini historically kept editing platform=/board= in place
+                # inside the SAME [env:mcu_flash] section no matter which board
+                # was selected, so every board switch overwrote one shared
+                # .pio/build/mcu_flash folder. Instead, rename the section (and
+                # default_envs) to this board's own env name so its build
+                # output lives in its own .pio/build/<env> folder and a
+                # previously-built board's folder is left untouched on disk.
+                target_env = self._pio_env_name()
+                _env_hdr_match = re.search(r"^\[env:([^\]]*)\]", content, re.MULTILINE)
+                if _env_hdr_match and _env_hdr_match.group(1) != target_env:
+                    old_env = _env_hdr_match.group(1)
+                    content = re.sub(
+                        rf"^\[env:{re.escape(old_env)}\]",
+                        f"[env:{target_env}]",
+                        content, count=1, flags=re.MULTILINE
+                    )
+                    content = re.sub(
+                        r"^default_envs\s*=.*",
+                        f"default_envs = {target_env}",
+                        content, count=1, flags=re.MULTILINE
+                    )
+
+                # ── Corruption guard ───────────────────────────────────────────
+                # A previously malformed ini may have bare build-flag lines
+                # injected immediately after [env:...] (no key = value format),
+                # or monitor_speed whose value trails into build_flags text,
+                # or -D / -I / -W lines that appear in the file but have no
+                # preceding "build_flags =" key to own them.
+                # Detect any of these symptoms and regenerate from scratch.
+                _env_hdr_junk = re.compile(
+                    r"^\[env:[^\]]*\]\s*\n(?:[ \t]+-[^\n]+\n)+", re.MULTILINE
+                )
+                _monitor_junk = re.compile(
+                    r"^monitor_speed\s*=\s*\d+\s*\n[ \t]+-D\s", re.MULTILINE
+                )
+                # Orphaned flag lines: a -D/-I/-W/-O line at column 0 (no indent)
+                # means a flag escaped from build_flags entirely.
+                # NOTE: indented -D lines under build_flags are VALID and must NOT be
+                # flagged — the old check caused false positives when upload_speed or
+                # any other key appeared immediately before the build_flags block.
+                # The _missing_build_flags check below already catches the case where
+                # -D lines exist but build_flags is absent.
+                _orphan_flags = re.compile(
+                    r"^-[DIWOfdm]", re.MULTILINE
+                )
+                # -D lines present but build_flags key is completely absent
+                _has_defines     = bool(re.search(r"^\s+-D\s", content, re.MULTILINE))
+                _has_build_flags = bool(re.search(r"^build_flags\s*=", content, re.MULTILINE))
+                _missing_build_flags = _has_defines and not _has_build_flags
+                _has_platform = bool(re.search(r"^platform\s*=", content, re.MULTILINE))
+                _has_board    = bool(re.search(r"^board\s*=",    content, re.MULTILINE))
+                if (
+                    _env_hdr_junk.search(content)
+                    or _monitor_junk.search(content)
+                    or _orphan_flags.search(content)
+                    or _missing_build_flags
+                    or not (_has_platform and _has_board)
+                ):
+                    self._append("  ⚠ platformio.ini is malformed — regenerating from scratch.", "warning")
+                    ini_path.unlink(missing_ok=True)
+                    # Also wipe the stale build cache — it was compiled against the
+                    # wrong board/flags and will cause "no input files" on next build.
+                    _stale_build = self.sketch_dir_path / ".pio" / "build" / target_env
+                    if _stale_build.exists():
+                        if robust_rmtree(_stale_build):
+                            self._append(f"  🗑 Cleared stale build cache (.pio/build/{target_env}).", "warning")
+                    return self._ensure_platformio_ini()
+
+                # Remove src_dir=. if present.  With src_dir=., PlatformIO's
+                # InoToCPPConverter writes the intermediate .ino.cpp into the
+                # sketch root, but SCons expects it under .pio/build/<env>/src/.
+                # The mismatch leaves g++ with no input file.  Dropping src_dir
+                # lets PlatformIO use its default (src/), which the GUI keeps
+                # synced below via _sync_src_dir().
+                content = re.sub(r"^src_dir\s*=.*\n?", "", content, flags=re.MULTILINE)
+
+                # Update platform and board
+                if re.search(r"^platform\s*=", content, re.MULTILINE):
+                    content = re.sub(r"^platform\s*=.*", f"platform = {p_platform}", content, flags=re.MULTILINE)
+                if re.search(r"^board\s*=", content, re.MULTILINE):
+                    content = re.sub(r"^board\s*=.*", f"board = {p_board}", content, flags=re.MULTILINE)
+
+                # Update upload_speed based on board type
+                if p_board == "uno":
+                    if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
+                        content = re.sub(r"^upload_speed\s*=.*", "upload_speed = 115200", content, flags=re.MULTILINE)
+                    else:
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            r"\1upload_speed = 115200\n",
+                            content, count=1
+                        )
+                elif is_s3_board(p_board) and self._is_native_usb_port():
+                    # Native USB removes upload_speed below, so we do nothing here
+                    pass
+                else:
+                    current_speed = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+                    if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
+                        content = re.sub(r"^upload_speed\s*=.*", f"upload_speed = {current_speed}", content, flags=re.MULTILINE)
+                    else:
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            rf"\1upload_speed = {current_speed}\n",
+                            content, count=1
+                        )
+                    
+                if arduino_lib_dir:
+                    if re.search(r"^lib_extra_dirs\s*=", content, re.MULTILINE):
+                        content = re.sub(r"^lib_extra_dirs\s*=.*$", f"lib_extra_dirs = {arduino_lib_dir}", content, flags=re.MULTILINE)
+                    else:
+                        if not content.endswith("\n"):
+                            content += "\n"
+                        content += f"lib_extra_dirs = {arduino_lib_dir}\n"
+
+                # Ensure Arduino core v3 compatibility defines are present in build_flags.
+                # These work around an ESP32 Arduino-core v3 API rename in WiFiProv —
+                # they don't exist on AVR and must never be injected for Uno/atmelavr.
+                if p_platform == "espressif32":
+                    compat_flags = [
+                        "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
+                        "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
+                        "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1"
+                    ]
+                    existing_build_flags = re.search(r"^build_flags\s*=", content, re.MULTILINE)
+                    if existing_build_flags:
+                        # Append any missing flags to the existing build_flags block
+                        for flag in compat_flags:
+                            if flag not in content:
+                                content = re.sub(
+                                    r"(^build_flags\s*=.*(?:\n[ \t]+\S.*)*)",
+                                    lambda m, f=flag: m.group(0).rstrip() + f"\n    {f}",
+                                    content, count=1, flags=re.MULTILINE
+                                )
+                    else:
+                        # No build_flags at all — append at end of file
+                        flags_block = "build_flags =\n" + "".join(f"    {f}\n" for f in compat_flags)
+                        if not content.endswith("\n"):
+                            content += "\n"
+                        content += flags_block
+                else:
+                    # Non-ESP32 board (e.g. Arduino Uno) — strip these defines out
+                    # if a previously-generated ini already has them, since they
+                    # only existed there because of this same unconditional-inject bug.
+                    for _flag in (
+                        "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
+                        "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
+                        "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1",
+                    ):
+                        content = content.replace(f"    {_flag}\n", "")
+                    # If that emptied out the build_flags block entirely, drop the key too.
+                    # The negative lookahead prevents stripping `build_flags =` when
+                    # indented continuation lines (the actual flags) follow on the next line.
+                    content = re.sub(r"^build_flags[ \t]*=[ \t]*$(?:\n[ \t]*$)*(?!\n[ \t]+\S)", "", content, flags=re.MULTILINE)
+
+                # Ensure huge_app.csv partitions are selected when needed to accommodate larger libraries
+                if needs_huge_app:
+                    if not re.search(r"^board_build\.partitions\s*=", content, re.MULTILINE):
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            r"\1board_build.partitions = huge_app.csv\n",
+                            content, count=1
+                        )
+
+                # Inject ESP32-S3 required build flags if missing.
+                # These are needed for USB-Serial (Serial monitor) to work and
+                # to avoid boot loops caused by wrong flash mode on S3 modules.
+                if is_s3_board(p_board):
+                    is_native = self._is_native_usb_port()
+                    if is_native:
+                        s3_flags = ["-DARDUINO_USB_MODE=1", "-DARDUINO_USB_CDC_ON_BOOT=1"]
+                        existing_build_flags = re.search(r"^build_flags\s*=", content, re.MULTILINE)
+                        if existing_build_flags:
+                            # Append any missing flags to the existing build_flags block
+                            for flag in s3_flags:
+                                if flag not in content:
+                                    content = re.sub(
+                                        r"(^build_flags\s*=.*(?:\n[ \t]+\S.*)*)",
+                                        lambda m, f=flag: m.group(0).rstrip() + f"\n    {f}",
+                                        content, count=1, flags=re.MULTILINE
+                                    )
+                        else:
+                            # No build_flags at all — add the whole block after [env:...]
+                            flags_block = (
+                                "build_flags =\n"
+                                "    -DARDUINO_USB_MODE=1\n"
+                                "    -DARDUINO_USB_CDC_ON_BOOT=1\n"
+                            )
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                r"\1" + flags_block,
+                                content, count=1
+                            )
+                    else:
+                        # Remove USB CDC build flags to ensure Serial goes to the hardware UART port (CH343/CP2102)
+                        content = re.sub(r"^[ \t]*-DARDUINO_USB_MODE=.*\n?", "", content, flags=re.MULTILINE)
+                        content = re.sub(r"^[ \t]*-DARDUINO_USB_CDC_ON_BOOT=.*\n?", "", content, flags=re.MULTILINE)
+                        # If build_flags block is empty, clean it up.
+                        # The negative lookahead prevents stripping `build_flags =` when
+                        # indented continuation lines (the actual flags) follow on the next line.
+                        content = re.sub(r"^build_flags[ \t]*=[ \t]*$(?:\n[ \t]*$)*(?!\n[ \t]+\S)", "", content, flags=re.MULTILINE)
+                    if not re.search(r"^board_build\.flash_mode\s*=", content, re.MULTILINE):
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            r"\1board_build.flash_mode = dio\n",
+                            content, count=1
+                        )
+                    # Inject or remove PSRAM configurations based on selected board properties
+                    if board_info.get("psram"):
+                        if not re.search(r"^board_build\.arduino\.memory_type\s*=", content, re.MULTILINE):
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                r"\1board_build.arduino.memory_type = qio_opi\n",
+                                content, count=1
+                            )
+                        else:
+                            content = re.sub(r"^board_build\.arduino\.memory_type\s*=.*", "board_build.arduino.memory_type = qio_opi", content, flags=re.MULTILINE)
+                        
+                        existing_build_flags = re.search(r"^build_flags\s*=", content, re.MULTILINE)
+                        psram_flags = ["-D BOARD_HAS_PSRAM", "-mfix-esp32-psram-cache-issue"]
+                        if existing_build_flags:
+                            for flag in psram_flags:
+                                if flag not in content:
+                                    content = re.sub(
+                                        r"(^build_flags\s*=.*(?:\n[ \t]+\S.*)*)",
+                                        lambda m, f=flag: m.group(0).rstrip() + f"\n    {f}",
+                                        content, count=1, flags=re.MULTILINE
+                                    )
+                        else:
+                            flags_block = "build_flags =\n" + "".join(f"    {f}\n" for f in psram_flags)
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                r"\1" + flags_block,
+                                content, count=1
+                            )
+                    else:
+                        # Actively remove board_build.arduino.memory_type if it is set to qio_opi to prevent boot loops on modules without Octal PSRAM
+                        content = re.sub(r"^board_build\.arduino\.memory_type\s*=\s*qio_opi\s*$", "", content, flags=re.MULTILINE)
+                        content = re.sub(r"^[ \t]*-D\s*BOARD_HAS_PSRAM\n?", "", content, flags=re.MULTILINE)
+                        content = re.sub(r"^[ \t]*-mfix-esp32-psram-cache-issue\n?", "", content, flags=re.MULTILINE)
+
+                    # Inject or remove custom flash size configuration based on board info
+                    flash_size = board_info.get("flash_size")
+                    if flash_size:
+                        if not re.search(r"^board_build\.flash_size\s*=", content, re.MULTILINE):
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                f"\\1board_build.flash_size = {flash_size}\nboard_upload.flash_size = {flash_size}\n",
+                                content, count=1
+                            )
+                        else:
+                            content = re.sub(r"^board_build\.flash_size\s*=.*", f"board_build.flash_size = {flash_size}", content, flags=re.MULTILINE)
+                            content = re.sub(r"^board_upload\.flash_size\s*=.*", f"board_upload.flash_size = {flash_size}", content, flags=re.MULTILINE)
+                    else:
+                        content = re.sub(r"^board_build\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
+                        content = re.sub(r"^board_upload\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
+
+                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures)
+                    # and remove upload_resetmethod.
+                    if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
+                        content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
+                    elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            r"\1upload_protocol = esptool\n",
+                            content, count=1
+                        )
+                    # Remove upload_resetmethod as it is JTAG-specific
+                    content = re.sub(r"^upload_resetmethod\s*=.*\n?", "", content, flags=re.MULTILINE)
+                    # Remove upload_speed for native USB — baud rate is irrelevant
+                    # and can interfere with the USB reset signaling.
+                    content = re.sub(r"^upload_speed\s*=.*\n?", "", content, flags=re.MULTILINE)
+
+                def _lib_key(slug: str) -> str:
+                    # 'dhrubasaha08/DHT11 @ ^2.1.0'                       -> 'dht11'
+                    # 'symlink://C:/Users/.../DHT11'                       -> 'dht11'
+                    # 'C:/Users/napht/Documents/Arduino/libraries/DHT11'  -> 'dht11'
+                    # Strip symlink:// prefix before extracting the key
+                    s = slug
+                    if s.startswith("symlink://"):
+                        s = s[len("symlink://"):]
+                    tail = s.replace("\\", "/").rstrip("/").split("/")[-1]
+                    tail = tail.split("@")[0].strip()
+                    return tail.lower()
+
+                lib_deps_block_re = re.compile(r"^lib_deps\s*=[ \t]*\n?(?:[ \t]+\S.*\n?)*", re.MULTILINE)
+                existing_match = lib_deps_block_re.search(content)
+                old_entries = []
+                if existing_match:
+                    for line in existing_match.group(0).splitlines()[1:]:
+                        s = line.strip()
+                        if s:
+                            old_entries.append(s)
+
+                old_keys = {_lib_key(e) for e in old_entries}
+                new_keys = {_lib_key(e) for e in detected_libs}
+
+                # ── Cross-device symlink stale check ────────────────────────
+                # _lib_key() normalises both old and new to the same basename,
+                # so two entries that LOOK identical (same library name) but
+                # point to DIFFERENT machines would pass the key comparison
+                # unchanged and leave the foreign C:/Users/Admin/… path in the
+                # file.  Fix: if ANY existing symlink:// entry points to a
+                # directory that does NOT exist on this machine, force a full
+                # rebuild so detected_libs (which uses THIS machine's paths) is
+                # written instead.
+                _has_stale_symlink = any(
+                    e.startswith("symlink://") and not Path(e[len("symlink://"):]).exists()
+                    for e in old_entries
+                )
+
+                rebuild_needed = _has_stale_symlink or (old_keys != new_keys) or any(
+                    e not in detected_libs for e in old_entries if _lib_key(e) in new_keys
+                )
+
+
+                if rebuild_needed:
+                    if detected_libs:
+                        new_block = "lib_deps =\n" + "\n".join(f"    {lib}" for lib in detected_libs) + "\n"
+                    else:
+                        new_block = ""
+
+                    if existing_match:
+                        content = lib_deps_block_re.sub(new_block, content, count=1)
+                    elif new_block:
+                        if not content.endswith("\n"):
+                            content += "\n"
+                        content += "\n" + new_block
+
+                    stale = [e for e in old_entries if _lib_key(e) in old_keys - new_keys]
+                    added = [lib for lib in detected_libs if _lib_key(lib) in new_keys - old_keys]
+                    if _has_stale_symlink:
+                        stale_paths = [e for e in old_entries if e.startswith("symlink://") and not Path(e[len("symlink://"):]).exists()]
+                        for sp in stale_paths:
+                            self._append(f"  🔄 Auto-healing foreign library path → adapting to this device:", "warning")
+                            self._append(f"     From: {sp}", "dim")
+                        # Show what it was healed to
+                        for lib in detected_libs:
+                            self._append(f"     To  : {lib}", "success")
+                    if stale:
+                        self._append(f"  📝 Removing stale/incorrect dependencies: {', '.join(stale)}", "warning")
+                    if added:
+                        self._append(f"  📝 Adding dependencies: {', '.join(added)}", "warning")
+                    self._append("  Rebuilding lib_deps in platformio.ini...", "info")
+
+
+
+                if content != old_content:
+                    self._force_write_text(ini_path, content)
+                    if "upload_protocol = esptool" in content and "upload_protocol = esptool" not in old_content:
+                        pio_dir = self.sketch_dir_path / ".pio"
+                        if pio_dir.exists():
+                            if robust_rmtree(pio_dir):
+                                self._append("  📝 Cleared SCons build cache (.pio) to apply the new serial upload protocol.", "info")
+                    if _has_stale_symlink and target_env:
+                        libdeps_dir = self.sketch_dir_path / ".pio" / "libdeps" / target_env
+                        if libdeps_dir.exists():
+                            if robust_rmtree(libdeps_dir):
+                                self._append("  📝 Cleared stale .pio/libdeps cache (cross-device library paths healed).", "info")
+                else:
+                    pass
+                if rebuild_needed or (arduino_lib_dir and "lib_extra_dirs" in content):
+                    self._append("  ✔ Updated platformio.ini successfully.", "success")
+                return True
+            except Exception as e:
+                self._append(f"  ⚠ Failed to inspect/update existing platformio.ini: {e}", "warning")
+                return True
+
+    def _force_write_text(self, path: Path, content: str, attempts: int = 6, delay: float = 0.15) -> bool:
+        """Write text to `path`, forcing past transient Windows locks/read-only flags.
+
+        Retries through the common causes of WinError 5 / Errno 13 on files like
+        platformio.ini: another process briefly holding a handle (editor, PlatformIO
+        language server, OneDrive sync, AV scan) or a stale read-only attribute.
+        Failures are swallowed after the final attempt — callers treat this as
+        best-effort and shouldn't surface retry mechanics to the user.
+        """
+        last_exc = None
+        for i in range(attempts):
+            try:
+                ensure_file_writable(path)
+                path.write_text(content, encoding="utf-8")
+                return True
+            except Exception as e:
+                last_exc = e
+                time.sleep(delay * (i + 1))
+        return False
+
+    def _check_libraries_installed(self) -> bool:
+        """Query arduino-cli for installed libraries and check if required ones are missing."""
+        cli_path = find_arduino_cli_executable()
+        if not cli_path:
+            self._append("  ✖ Arduino-CLI not found on the computer!", "error")
+            self._append("  Please install Arduino-CLI first.", "info")
+            return False
+
+        # 1. Query installed libraries map from arduino-cli
+        installed_libs_map, installed_header_map = self._get_installed_libraries_map()
+
+        # 2. Extract includes from sketch files
+        required_headers = []
+        if self.sketch_dir_path.exists():
+            for ext in ["*.ino", "*.cpp", "*.h", "*.c"]:
+                for file_path in self.sketch_dir_path.glob(ext):
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+                        includes = re.findall(r'#include\s*[<"]([^>"]+)[>"]', content)
+                        for header in includes:
+                            if header not in required_headers:
+                                required_headers.append(header)
+                    except Exception:
+                        pass
+
+        # Builtin/standard libraries to ignore
+        BUILTIN_AND_STD = {
+            # Standard C/C++ headers
+            "vector", "string", "map", "set", "list", "algorithm", "cmath", "cstdio", "cstdlib",
+            "cstring", "iostream", "sstream", "memory", "utility", "stdint.h", "stdlib.h",
+            "string.h", "math.h", "stdio.h", "stdbool.h", "time.h", "limits.h", "assert.h",
+            "stddef.h", "stdarg.h", "ctype.h", "inttypes.h", "cstdint", "cstddef", "climits",
+            # Arduino/ESP32 core standard builtins
+            "arduino.h", "wifi.h", "wire.h", "spi.h", "fs.h", "sd.h", "bledevice.h",
+            "update.h", "webserver.h", "wificlient.h", "wificlientsecure.h", "ticker.h",
+            "spiffs.h", "littlefs.h", "eeprom.h", "preferences.h", "soc/soc.h",
+            "driver/adc.h", "esp_adc_cal.h", "soc/rtc_cntl_reg.h", "pgmspace.h",
+            "freertos/freertos.h", "freertos/task.h", "esp_system.h", "esp_spi_flash.h",
+            "esp_partition.h", "esp_ota_ops.h", "nvs_flash.h", "nvs.h", "pins_arduino.h",
+            "esp_bt.h", "esp_bt_main.h", "esp_gap_ble_api.h", "esp_gatts_api.h",
+            "esp_gatt_common_api.h", "esp_bt_device.h", "esp_gap_bt_api.h",
+            "hardwareserial.h",
+            # softwareserial.h is NOT in CORE_HEADERS: on ESP32/ESP8266 it
+            # requires the EspSoftwareSerial lib_dep — let the scanner find it.
+            "sd_mmc.h", "wifiap.h",
+            "wifimulti.h", "wifiscan.h", "wifiserver.h", "ethernet.h", "client.h",
+            "server.h", "stream.h", "print.h", "printable.h", "wstring.h",
+            "ipaddress.h", "ipv6address.h", "wifiudp.h",
+            "wifiprov.h", "netbios.h", "espmdns.h", "simpleble.h", "bluetoothserial.h", "httpclient.h",
+            # ESP32 specific / built-in standard sub-headers
+            "http_client.h", "wifiudp.h", "dnsserver.h", "esp_wifi.h", "esp_event.h",
+            "esp_log.h", "lwip/err.h", "lwip/sockets.h", "lwip/sys.h", "lwip/netdb.h",
+            "lwip/dns.h", "mbedtls/aes.h", "mbedtls/entropy.h", "mbedtls/ctr_drbg.h",
+            "mbedtls/md.h", "mbedtls/sha256.h", "rom/ets_sys.h", "esp_sleep.h",
+            "hal/gpio_hal.h", "driver/gpio.h", "driver/ledc.h", "driver/uart.h",
+            "driver/spi_master.h", "driver/i2c.h", "driver/timer.h", "driver/pcnt.h",
+            "driver/mcpwm.h", "driver/rmt.h", "driver/pulse_cnt.h", "driver/sdspi_host.h",
+            "driver/sdmmc_host.h", "sdmmc_cmd.h", "esp_vfs.h", "esp_vfs_fat.h",
+            "fatfs_vfs.h", "ff.h", "diskio.h", "esp_spiffs.h", "esp_littlefs.h",
+            "esp_camera.h", "fd_forward.h", "fr_forward.h", "image_util.h"
+        }
+
+        # Override mappings from header file to library name (internal key format for matching)
+        HEADER_TO_LIB_NAME = {
+            "ESP32Servo.h": "ESP32Servo",
+            "FastAccelStepper.h": "FastAccelStepper",
+            "HX711.h": "HX711",
+            "NimBLEDevice.h": "NimBLE-Arduino",
+            "OneWire.h": "OneWire",
+            "DallasTemperature.h": "DallasTemperature",
+            "Adafruit_Sensor.h": "Adafruit Unified Sensor",
+            "DHT.h": "DHT sensor library",
+            "PubSubClient.h": "PubSubClient",
+            "ArduinoJson.h": "ArduinoJson",
+            "TFT_eSPI.h": "TFT_eSPI",
+            "TinyGsmClient.h": "TinyGSM",
+            "FirebaseESP32.h": "Firebase ESP32 Client",
+            "addons/TokenHelper.h": "Firebase ESP32 Client",
+            "addons/RTDBHelper.h": "Firebase ESP32 Client",
+        }
+
+        # Collect local files to avoid false alarms on local headers
+        local_files = []
+        try:
+            for f in self.sketch_dir_path.rglob("*"):
+                if f.is_file():
+                    # Skip files in hidden directories (like .pio or .git)
+                    if any(part.startswith(".") for part in f.relative_to(self.sketch_dir_path).parts):
+                        continue
+                    local_files.append(f.name.lower())
+        except Exception:
+            pass
+
+        missing_libs = []
+        def normalize_lib_name(name: str) -> str:
+            return "".join(c for c in name.lower() if c.isalnum())
+
+        for header in required_headers:
+            h_lower = header.lower()
+            # Skip C++ standard libraries, built-in ESP32 core libraries, and local files
+            if h_lower in BUILTIN_AND_STD:
+                continue
+            if h_lower.startswith("esp_") or h_lower.startswith("driver/") or h_lower.startswith("soc/") or h_lower.startswith("hal/") or h_lower.startswith("freertos/") or h_lower.startswith("rom/") or h_lower.startswith("lwip/") or h_lower.startswith("mbedtls/"):
+                continue
+            if not h_lower.endswith(".h") or h_lower in local_files:
+                continue
+
+            # Determine the display name and search key
+            lib_display_name = HEADER_TO_LIB_NAME.get(header, header[:-2]) # remove .h if not in override map
+            norm_key = normalize_lib_name(lib_display_name)
+            
+            # Check if this library is in the list of installed libraries
+            if header in installed_header_map:
+                continue
+
+            if norm_key not in installed_libs_map:
+                # Also try checking if the header itself without .h matches (just in case of overrides mismatch)
+                alt_norm_key = normalize_lib_name(header[:-2])
+                if alt_norm_key not in installed_libs_map:
+                    missing_libs.append((lib_display_name, header))
+
+        if missing_libs:
+            self._append("  ✖ Cannot compile: Missing required Arduino libraries!", "error")
+            for lib_name, header in missing_libs:
+                self._append(f"    • Library '{lib_name}' is not installed (required by #include <{header}>)", "warning")
+            self._append("  Please install the missing libraries via the Download Boards/Libraries manager at the top-right of the window.", "info")
+            return False
+
+        return True
+
+    def _validate_entry_points(self) -> bool:
+        """Check that the project defines setup() and loop() exactly once.
+
+        Arduino/ESP32 compiles all .ino files in the sketch folder into a
+        single translation unit, so across the entire set of .ino files there
+        must be EXACTLY ONE setup() and EXACTLY ONE loop().
+
+        Rules:
+        • Project-wide (all .ino files combined): exactly 1 setup(), 1 loop().
+          - 0 of either  → error: missing entry point.
+          - 2+ of either → error: duplicate definition, linker will reject it.
+        • .cpp / .c files: checked project-wide only when no .ino files exist
+          (pure C++ PlatformIO project).
+        • .h files: never required to carry these; ignored for entry-point check.
+        • A completely blank file (or whitespace-only) is flagged as a warning
+          regardless of type.
+        """
+        # Matches a function *definition* (has opening brace), not a forward
+        # declaration.  Allows optional whitespace everywhere.
+        SETUP_RE = re.compile(r'\bvoid\s+setup\s*\(\s*\)\s*\{', re.MULTILINE)
+        LOOP_RE  = re.compile(r'\bvoid\s+loop\s*\(\s*\)\s*\{', re.MULTILINE)
+
+        ino_files = sorted(self.sketch_dir_path.glob("*.ino"))
+        cpp_files = sorted(self.sketch_dir_path.glob("*.cpp"))
+        c_files   = sorted(self.sketch_dir_path.glob("*.c"))
+        h_files   = sorted(self.sketch_dir_path.glob("*.h"))
+
+        all_source = ino_files + cpp_files + c_files + h_files
+
+        if not all_source:
+            self._append("  ✖ No source files found in project folder.", "error")
+            return False
+
+        # ── Read all files ───────────────────────────────────────────────────
+        file_contents: dict[Path, str] = {}
+        blank_files:   list[Path]      = []
+
+        for f in all_source:
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                self._append(f"  ⚠ Could not read {f.name}: {e}", "warning")
+                continue
+            file_contents[f] = text
+            if not text.strip():
+                blank_files.append(f)
+
+        # Warn about blank files (informational, not a hard stop on its own)
+        for bf in blank_files:
+            self._append(f"  ⚠ {bf.name} is empty — no code inside.", "warning")
+
+        problems_found = False
+
+        # ── .ino path: count definitions across ALL .ino files combined ──────
+        if ino_files:
+            # Track which file each definition lives in for useful error messages
+            setup_owners: list[str] = []
+            loop_owners:  list[str] = []
+
+            for f in ino_files:
+                text = file_contents.get(f, "")
+                if SETUP_RE.search(text):
+                    setup_owners.append(f.name)
+                if LOOP_RE.search(text):
+                    loop_owners.append(f.name)
+
+            # ── setup() ─────────────────────────────────────────────────────
+            if len(setup_owners) == 0:
+                problems_found = True
+                self._append("  ✖ No void setup() {} found in any .ino file.", "error")
+                self._append(
+                    "     Arduino requires exactly one setup() across all sketch files.",
+                    "warning"
+                )
+                self._append("     Add this to your main .ino file:", "info")
+                self._append("       void setup() { }", "dim")
+
+            elif len(setup_owners) > 1:
+                problems_found = True
+                self._append(
+                    f"  ✖ void setup() defined in {len(setup_owners)} files — only one is allowed:",
+                    "error"
+                )
+                for fname in setup_owners:
+                    self._append(f"       • {fname}", "warning")
+                self._append(
+                    "     Remove setup() from all but one file.", "info"
+                )
+
+            # ── loop() ──────────────────────────────────────────────────────
+            if len(loop_owners) == 0:
+                problems_found = True
+                self._append("  ✖ No void loop() {} found in any .ino file.", "error")
+                self._append(
+                    "     Arduino requires exactly one loop() across all sketch files.",
+                    "warning"
+                )
+                self._append("     Add this to your main .ino file:", "info")
+                self._append("       void loop()  { }", "dim")
+
+            elif len(loop_owners) > 1:
+                problems_found = True
+                self._append(
+                    f"  ✖ void loop() defined in {len(loop_owners)} files — only one is allowed:",
+                    "error"
+                )
+                for fname in loop_owners:
+                    self._append(f"       • {fname}", "warning")
+                self._append(
+                    "     Remove loop() from all but one file.", "info"
+                )
+
+            # All good — show confirmation
+            if not problems_found:
+                owner_set = set(setup_owners) | set(loop_owners)
+                owners_str = ", ".join(sorted(owner_set))
+                ino_count  = len(ino_files)
+                self._append(
+                    f"  ✔ Entry points OK — setup()/loop() found in: {owners_str}"
+                    + (f"  ({ino_count} .ino files total)" if ino_count > 1 else ""),
+                    "success"
+                )
+                self._append_notif(
+                    f"  ✔ Entry points OK — setup()/loop() found in: {owners_str}",
+                    tag="success", category="entry_points", title="Entry Points Verified"
+                )
+
+        # ── Pure C++/C path (no .ino files) ─────────────────────────────────
+        else:
+            cpp_c_files   = cpp_files + c_files
+            all_cpp_text  = "\n".join(file_contents.get(f, "") for f in cpp_c_files)
+            project_has_setup = bool(SETUP_RE.search(all_cpp_text))
+            project_has_loop  = bool(LOOP_RE.search(all_cpp_text))
+
+            if not project_has_setup or not project_has_loop:
+                problems_found = True
+                missing = []
+                if not project_has_setup:
+                    missing.append("void setup() {}")
+                if not project_has_loop:
+                    missing.append("void loop() {}")
+                self._append(
+                    f"  ✖ Project is missing: {', '.join(missing)}", "error"
+                )
+                self._append(
+                    "     No .ino file found; Arduino entry points must be defined "
+                    "in a .cpp or .c source file.", "warning"
+                )
+
+        if problems_found:
+            self._append("")
+            self._append("  ✖ Fix the issues above before compiling.", "error")
+            return False
+
+        return True
+
+    def _sync_src_dir(self) -> None:
+        """Freeze sketch sources into ``sketch_dir/src/`` for PlatformIO.
+
+        PlatformIO's default src_dir is 'src/'.  We abandoned src_dir=. because
+        InoToCPPConverter writes the intermediate .ino.cpp next to the .ino,
+        but SCons looks for it under .pio/build/<env>/src/ — a path mismatch that
+        causes 'no input files' from g++.  Using the default src/ layout fixes
+        that: PlatformIO finds the .ino in src/, writes .ino.cpp there, and SCons
+        correctly variant-copies it into the build tree.
+
+        Each source is an independent copy, never a hard link.  That isolation is
+        important for AI review: once this method returns, an OpenCode write to the
+        original cannot mutate PlatformIO's input halfway through a build.  The
+        caller brackets this copy with synchronous approval scans so a write before
+        or during the freeze is reviewed before PlatformIO starts.
+
+        Files are copied to a temporary sibling and atomically replaced so a stale
+        hard link left by an older app version is broken without exposing a partial
+        destination.  Entries with no matching source are removed as before.
+        """
+        src_dir = self.sketch_dir_path / "src"
+        src_dir.mkdir(exist_ok=True)
+        hide_hidden_attribute(src_dir)
+
+        sketch_files: dict[str, Path] = {}
+        for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
+            for f in self.sketch_dir_path.glob(ext):
+                sketch_files[f.name] = f
+
+        # Replace every current source with an independent point-in-time copy.
+        # Always replacing also upgrades legacy src/ hard links created by older
+        # releases; merely comparing mtimes/inodes would leave those links live.
+        for name, src_path in sketch_files.items():
+            unhide_hidden_attribute(src_path)
+            dst_path = src_dir / name
+            file_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{name}.freeze-", suffix=".tmp", dir=str(src_dir)
+            )
+            os.close(file_descriptor)
+            temporary_path = Path(temporary_name)
+            try:
+                import shutil as _sh
+                _sh.copy2(src_path, temporary_path)
+                ensure_file_writable(dst_path)
+                os.replace(temporary_path, dst_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+
+        # Remove any stale entries that no longer have a source file
+        for dst_path in list(src_dir.iterdir()):
+            if dst_path.name not in sketch_files:
+                try:
+                    dst_path.unlink()
+                except OSError:
+                    pass
+
+        # ── Interrupted-compile recovery ──────────────────────────────────
+        # After a mid-compile kill PlatformIO may leave behind:
+        #   (a) .ino.cpp MISSING  + .sconsign.dblite PRESENT
+        #       → SCons trusts its cache, skips InoToCPPConverter, g++ gets no input
+        #   (b) .ino.cpp PRESENT but corrupt/partial
+        #       → g++ produces "Error 1" with no error message at ~1.7 s
+        #
+        # The correct trigger is: .sconsign.dblite exists BUT a corresponding
+        # .ino.cpp is absent — that combination is only possible after a kill.
+        # On a clean first-run neither file exists, so we do nothing.
+        # On a normal re-compile both exist and are consistent — also do nothing.
+        # Only the mismatched state (db present, cpp absent) needs recovery.
+        #
+        # Recovery: delete the stale .sconsign.dblite so SCons rebuilds its
+        # dependency graph from scratch, and delete any partial .ino.cpp so
+        # InoToCPPConverter regenerates it cleanly.
+        sconsign = (
+            self.sketch_dir_path / ".pio" / "build" / self._pio_env_name() / ".sconsign.dblite"
+        )
+        ino_files = [f for f in sketch_files.values() if f.suffix == ".ino"]
+        interrupted = sconsign.exists() and any(
+            not (src_dir / (f.name + ".cpp")).exists() for f in ino_files
+        )
+        if interrupted:
+            # Wipe the stale SCons signature DB
+            try:
+                sconsign.unlink()
+            except OSError:
+                pass
+            # Delete any partial/corrupt .ino.cpp files left in src/
+            for f in list(src_dir.iterdir()):
+                if f.suffix == ".cpp" and f.stem.endswith(".ino"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+
+    def _freeze_build_sources_at_boundary(self, action_name: str) -> bool:
+        """Stage immutable build inputs between two synchronous AI scans.
+
+        The first scan catches writes that arrived while the worker was doing
+        setup.  The second catches a write racing the copy itself.  A write after
+        the second scan is harmless to this operation because ``src/`` no longer
+        shares storage with the editable project files.
+        """
+        if self._block_action_for_pending_ai_review(action_name):
+            return False
+        self._sync_src_dir()
+        if self._block_action_for_pending_ai_review(action_name):
+            return False
+        return True
+
+    def _run_compile(self, is_upload: bool = False) -> bool:
+        self._stop_requested = False
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        is_clean_retry = getattr(self, "_clean_retry_in_progress", False)
+        self._clean_retry_in_progress = False
+        self._run_manual_syntax_check()
+        ensure_platformio_penv_with_hook()
+
+        self.is_busy = True
+        self._framework_download_active = False
+        self._set_buttons_state(True, operation="compile")
+        self._set_status("Compiling...", Theme.YELLOW)
+
+        self._append("")
+        self._append("=" * 50, "header")
+        self._append("  ⚙  COMPILING (PlatformIO)", "header")
+        self._append("=" * 50, "header")
+        self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
+        self._append(f"  Tool   : PlatformIO Core", "dim")
+        self._append("")
+
+        if is_upload and not self.skip_compile_var.get():
+            self._append("  🔄 Skip recompile unchecked — recompiling before upload.", "info")
+
+        # Clean compile directory only when switching board targets to keep
+        # incremental builds fast.  Each board's build lives in its own
+        # .pio/build/<env> folder (see _pio_env_name), so switching back
+        # to a previously-compiled board reuses its cached objects — no
+        # full rebuild needed.  We only wipe the new board's folder when
+        # it has NEVER been built before (no firmware binary on disk).
+        current_board = self.board_var.get()
+        if self._last_compiled_board != current_board:
+            if self._has_prior_build():
+                # This board was already compiled in a previous session —
+                # keep its cached build for fast incremental compilation.
+                self._append("  ♻ Board switch — reusing cached build for this board.", "info")
+                self._append("  ℹ Incremental build enabled (only changed files will recompile).", "info")
+            else:
+                removed, clean_errors = self._perform_clean_current_board()
+                self._append("  🧹 Clean (pre-compile due to board switch)", "header")
+                if removed:
+                    self._append(f"  Removed: {', '.join(removed)}", "success")
+                    self._append_notif(
+                        f"  🧹 Pre-compile clean: removed {len(removed)} build artifact(s) (board switched to {current_board})",
+                        tag="info", category="clean", title="Build Cache Cleared"
+                    )
+                else:
+                    self._append("  Nothing to remove — this board already clean.", "info")
+                    self._append_notif(
+                        f"  🧹 Pre-compile clean: nothing to remove — {current_board} already clean.",
+                        tag="dim", category="clean", title="Build Cache Already Clean"
+                    )
+                for e in clean_errors:
+                    self._append(f"  ⚠ Could not remove {e}", "warning")
+        else:
+            self._append("  ℹ Keeping cached build directories (incremental build enabled).", "info")
+
+        if not self._ensure_platformio_ini():
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_status("Error: platformio.ini missing", Theme.RED)
+            return False
+
+        # Check if all required libraries are installed on the computer
+        if not self._check_libraries_installed():
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_status("Error: Missing libraries", Theme.RED)
+            return False
+
+        # Validate that setup() and loop() are defined (catches blank/incomplete files)
+        if not self._validate_entry_points():
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_status("Error: Missing setup() / loop()", Theme.RED)
+            return False
+
+        # Emit compatibility notice inside the COMPILING section
+        pending_compat = getattr(self, "_pending_compat_reasons", [])
+        if pending_compat:
+            self._append("  ℹ Compatibility Notice — board/sketch details detected", "dim")
+            for r in pending_compat:
+                self._append(f"    ℹ {r}", "dim")
+            self._append("")
+            self._pending_compat_reasons = []  # consumed
+
+
+        pio_path = find_pio_executable()
+        if not pio_path:
+            self._append("  ⚠ PlatformIO not found — installing automatically...", "warning")
+            self._set_status("Installing PlatformIO...", Theme.YELLOW)
+            pio_path = ensure_platformio()
+            if not pio_path:
+                self._append("  ✖ Failed to install PlatformIO!", "error")
+                self._append("  Try manually: pip install platformio", "info")
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                self._set_status("Error: PlatformIO not found", Theme.RED)
+                return False
+            self._append(f"  ✔ PlatformIO installed: {' '.join(pio_path)}", "success")
+
+        # ── Self-heal: verify the framework package actually has this
+        # board's pin-mapping file before we spend time compiling only to
+        # hit "pins_arduino.h: No such file" deep into the build. Fully
+        # dynamic — reads the board's own manifest, no board/platform
+        # names hardcoded here.
+        board_info = self._resolve_board_info()
+        variant_ok, missing_variant = self._verify_board_variant_exists(
+            board_info["platform"], board_info["board"]
+        )
+        if not variant_ok:
+            self._append(
+                f"  ⚠ Framework package looks incomplete — missing pin-mapping for variant '{missing_variant}'.",
+                "warning"
+            )
+            self._append("  This usually means a previous framework download was interrupted or corrupted.", "dim")
+            if self._attempt_framework_repair(pio_path, board_info["platform"]):
+                variant_ok, _ = self._verify_board_variant_exists(
+                    board_info["platform"], board_info["board"]
+                )
+                if variant_ok:
+                    self._append("  ✔ Framework repaired successfully — continuing compile.", "success")
+                else:
+                    self._append(
+                        "  ✖ Repair did not resolve the issue — the installed platform may not "
+                        "support this board/variant.", "error"
+                    )
+                    self.is_busy = False
+                    self._set_buttons_state(False)
+                    self._set_status("Error: framework repair failed", Theme.RED)
+                    return False
+            else:
+                self._append("  ✖ Automatic repair failed. Try deleting the platform's package folder manually and recompiling.", "error")
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._set_status("Error: framework repair failed", Theme.RED)
+                return False
+
+        jobs = self._get_cpu_cores_jobs()
+        logical_processors = max(1, os.cpu_count() or jobs)
+        reserved_processors = _system_reserved_cpu_count(logical_processors)
+        reserved_word = "Processor" if reserved_processors == 1 else "Processors"
+        text_part = f"⚡ Running Parallel Compilation on {jobs} Logical Processors"
+        inner_w = max(73, len(text_part) + 4)
+
+        top = " ╔" + "═" * inner_w + "╗"
+        mid = "   " + text_part.center(inner_w)
+        bot = " ╚" + "═" * inner_w + "╝"
+
+        self._append("")
+        self._append(top, "header")
+        self._append(mid, "header")
+        self._append(bot, "header")
+        self._append(
+            f">>> System Reserved — {reserved_processors} Logical {reserved_word} <<<",
+            "dim",
+        )
+        self._append("")
+
+        # The pre-compile clean above already wiped this board's own
+        # .pio/build/<env>, so this is always effectively a fresh build for
+        # whichever board is currently selected — other boards' cached
+        # builds are untouched and will be picked up as-is if/when you
+        # switch back to them with an unchanged sketch.
+        self._append("  ℹ Fresh build for this board.", "info")
+        self._append("    PlatformIO will build the core framework from scratch, which takes longer.", "dim")
+        self._append("    Subsequent uploads without source changes can reuse it.", "dim")
+        self._append("")
+
+        # Freeze sketch files into src/ so PlatformIO uses its default src_dir.
+        # Without this, src_dir=. causes InoToCPPConverter to write .ino.cpp
+        # into the sketch root while SCons expects it under .pio/build/<env>/src/,
+        # resulting in g++ receiving no input file.  The boundary helper also
+        # closes the AI-review race immediately before PlatformIO is launched.
+        boundary_action = "Upload" if is_upload else "Compile"
+        if not self._freeze_build_sources_at_boundary(boundary_action):
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_status(f"{boundary_action} paused for AI review", Theme.YELLOW)
+            return False
+
+        env_name = self._pio_env_name()
+        cmd = pio_path + [
+            "run",
+            "-e", env_name,
+            "-j", str(jobs)
+        ]
+
+        self._append("  ⚙ Initializing PlatformIO build engine & dependency tree...", "purple_header")
+        self._append("    SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...", "purple_dim")
+        self._set_status("Initializing PlatformIO build engine...", Theme.YELLOW)
+
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+        env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
+        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PYTHONDONTWRITEBYTECODE"] = "0"
+        env["SCONSFLAGS"] = f"-j{jobs}"
+        cache_dir = SCRIPT_DIR / ".pio_cache" / env_name
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            env["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir)
+        except Exception:
+            pass
+
+        # Normal process priority keeps Tk, WebView2, USB handling, and the
+        # serial reader responsive while compiler workers are busy.
+        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+        hide_internal_project_metadata(self.sketch_dir_path)
+
+        try:
+            self.process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
+                creationflags=creation_flags,
+                cwd=str(self.sketch_dir_path),
+                env=env,
+            )
+        except FileNotFoundError:
+            self._append("  ✖ PlatformIO executable not found at: " + ' '.join(pio_path), "error")
+            self._append("  Try manually: pip install platformio", "info")
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_status("Error: PlatformIO not found", Theme.RED)
+            return False
+
+        output_lines = []
+        line_count = 0
+        compile_start = time.time()
+        _build_start   = [None]   # set to time.time() the instant framework download finishes
+        spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        was_killed = False
+
+        # Read the merged stdout+stderr stream via a queue so the main
+        # loop can process lines with a timeout (for the spinner).
+        # stderr=subprocess.STDOUT ensures GCC diagnostics are never lost.
+        import queue as _queue
+        import threading as _threading
+
+        _line_queue: _queue.Queue = _queue.Queue()
+
+        def _reader(stream, q):
+            try:
+                for line in iter(stream.readline, ''):
+                    if line:
+                        q.put(line)
+            except Exception:
+                pass
+            finally:
+                q.put(None)  # sentinel
+
+        _t_out = _threading.Thread(target=_reader, args=(self.process.stdout, _line_queue), daemon=True)
+        _t_out.start()
+
+        # ── Spinner thread ────────────────────────────────────────────────────
+        # Drive the spinner from a dedicated timer thread so it keeps ticking
+        # even when GCC produces no output for several seconds (e.g. during
+        # LTO, framework archive linking, or slow first-time builds).
+        _spinner_active = [True]
+        _spin_frame     = [0]
+
+        def _spin_loop():
+            while _spinner_active[0] and not getattr(self, "_stop_requested", False):
+                if getattr(self, "_framework_download_active", False):
+                    elapsed = int(time.time() - compile_start)
+                    frame   = spinner[_spin_frame[0] % len(spinner)]
+                    _spin_frame[0] += 1
+                    self._set_status(
+                        f"{frame} Downloading Framework... ({elapsed}s elapsed)",
+                        Theme.YELLOW,
+                    )
+                else:
+                    # Only show the pure build timer — downloading is done and accounted for
+                    build_elapsed = int(time.time() - (_build_start[0] or compile_start))
+                    frame   = spinner[_spin_frame[0] % len(spinner)]
+                    _spin_frame[0] += 1
+                    self._set_status(
+                        f"{frame} Compiling... ({build_elapsed}s)",
+                        Theme.YELLOW,
+                    )
+                time.sleep(0.2)
+
+        _spin_thread = _threading.Thread(target=_spin_loop, daemon=True)
+        _spin_thread.start()
+
+        _sentinels_remaining = 1           # only one reader thread (merged stdout+stderr)
+        _process_exited_at = None          # timestamp when we first see poll()!=None
+
+        _in_error_block = [False]
+        _error_block_type = ["error"]
+
+        _tool_dl_active = [False]
+        _tool_dl_start = [None]
+        _tool_dl_total = [0.0]
+
+        _first_divider_printed = [False]
+        _has_intermediate_content = [False]
+        _init_divider_closed = [False]
+
+        # Tracks the last displayed SCons progress text so consecutive identical
+        # lines (PlatformIO emits one "Archiving <lib>.a" per library, and both
+        # "Checking size" + "Retrieving maximum program size") don't show up as
+        # repeated redundant rows in the console.
+        _last_progress_text = [None]
+
+        # One-time hint flag for PlatformIO's non-fatal build-cache clean
+        # failures (WinError 145 etc.) — see is_nonfatal_pio_clean_report.
+        _clean_warn_shown = [False]
+
+        def _maybe_close_init_divider():
+            if _first_divider_printed[0] and _has_intermediate_content[0] and not _init_divider_closed[0]:
+                _init_divider_closed[0] = True
+                self._append("  ──────────────────────────────────────────────────", "purple_dim")
+
+        def _classify_and_display(stripped):
+            """Classify a single PlatformIO / GCC output line and display it using a stateful parser."""
+            low = stripped.lower()
+
+            # When a board mismatch was detected pre-compile, suppress all
+            # error / warning / context noise — only let progress lines through.
+            if getattr(self, '_board_mismatch_detected', False):
+                # Still show SCons progress (Compiling, Building, Linking, result)
+                if any(kw in low for kw in ('compiling', 'building', 'linking',
+                                             'archiving', 'took')):
+                    pass  # fall through to normal progress handling below
+                else:
+                    return  # suppress everything else
+
+            # Patterns that indicate a real linker/compiler error even without
+            # the word "error" in the line (e.g. ld's "undefined reference to")
+            LINKER_ERROR_HINTS = (
+                "undefined reference to",
+                "multiple definition of",
+                "cannot find -l",
+                "undefined symbol",
+                "duplicate symbol",
+                "ld returned",
+                "collect2",
+                "overflowed by",
+                "will not fit in region",
+                "relocation truncated",
+                "ld.exe:",
+                "ld:",
+                "section `",
+                "region `",
+            )
+            is_linker_error = any(hint in low for hint in LINKER_ERROR_HINTS)
+
+            # GCC/Clang diagnostic format: <file>:<line>:<col>: error: <msg>
+            is_gcc_diagnostic = bool(re.search(r':\d+:\d+:\s+(error|warning|note|fatal error)\s*:', low))
+
+            # ── SCons make-error wrapper: "*** [...] Error N" ─────────────────
+            is_scons_wrapper = bool(re.search(r'^\*\*\*\s+\[', stripped))
+
+            # SCons or PlatformIO administrative/progress markers that should terminate
+            # a compiler error tracking block.
+            is_scons_progress = (
+                "compiling" in low or
+                "archiving" in low or
+                "linking" in low or
+                "building" in low or
+                "checking size" in low or
+                "retrieving maximum" in low or
+                "took" in low or
+                low.startswith("platform:") or
+                low.startswith("hardware:") or
+                low.startswith("package") or
+                low.startswith("embedded") or
+                low.startswith("configuration") or
+                low.startswith("sdk") or
+                "ram:" in low or
+                "flash:" in low or
+                stripped.startswith("===") or
+                stripped.startswith("---") or
+                is_scons_wrapper
+            )
+
+            if is_scons_progress or "has been installed" in low:
+                _in_error_block[0] = False
+                if _tool_dl_active[0]:
+                    if _tool_dl_start[0] is not None:
+                        _tool_dl_total[0] += (time.time() - _tool_dl_start[0])
+                    _tool_dl_active[0] = False
+                    _tool_dl_start[0] = None
+                # Real build progress (compiling/linking/archiving/building/took)
+                # means the download/install phase is over. Clear the flag so the
+                # status bar and spinner switch back to "Compiling..." instead of
+                # staying stuck on "Framework Downloading/Installing...".
+                if getattr(self, "_framework_download_active", False):
+                    self._framework_download_active = False
+                    # Start the pure-build timer NOW — from this point forward
+                    # only actual code compilation/linking is running.
+                    if _build_start[0] is None:
+                        _build_start[0] = time.time()
+                    try:
+                        self.btn_stop.configure(state=tk.NORMAL)
+                    except Exception:
+                        pass
+
+            # Context headers indicate where the error occurred (e.g., function, file stack)
+            is_context_header = (
+                "in function" in low or
+                "in member function" in low or
+                "in constructor" in low or
+                "in destructor" in low or
+                "at global scope" in low or
+                "in file included from" in low or
+                low.startswith("from ") or
+                low.startswith("in file included")
+            )
+
+            if is_gcc_diagnostic or is_context_header:
+                _in_error_block[0] = True
+                if "warning" in low and "error" not in low:
+                    _error_block_type[0] = "warning"
+                elif "note" in low:
+                    _error_block_type[0] = "info"
+                else:
+                    _error_block_type[0] = "error"
+
+            # Show meaningful lines to user
+            if is_nonfatal_pio_clean_report(stripped):
+                # PlatformIO's rmtree retry report (e.g. "[WinError 145] The
+                # directory is not empty") — non-fatal, build continues.
+                _in_error_block[0] = False
+                self._append(f"  ⚠ {stripped}", "warning")
+                if not _clean_warn_shown[0]:
+                    _clean_warn_shown[0] = True
+                    self._append(
+                        "  ℹ Non-fatal: a stale build cache could not be fully cleaned "
+                        "(file in use or antivirus scan). PlatformIO will continue and "
+                        "rebuild the affected parts automatically.",
+                        "info",
+                    )
+            elif is_linker_error:
+                self._append(f"  ✖ {stripped}", "error")
+                _in_error_block[0] = False
+            elif is_gcc_diagnostic:
+                if _error_block_type[0] == "info":
+                    self._append(f"  ℹ {stripped}", "info")
+                elif _error_block_type[0] == "warning":
+                    self._append(f"  ⚠ {stripped}", "warning")
+                else:
+                    self._append(f"  ✖ {stripped}", "error")
+            elif _in_error_block[0]:
+                # Indent non-header context/caret/code lines for cleaner hierarchy
+                prefix = "    " if is_context_header else "      "
+                self._append(f"{prefix}{stripped}", _error_block_type[0])
+            elif is_scons_wrapper:
+                pass  # swallow — SCons wrapper contains no diagnostic detail
+            elif "error" in low and "werror" not in low:
+                self._append(f"  ✖ {stripped}", "error")
+            elif "warning" in low:
+                self._append(f"  ⚠ {stripped}", "warning")
+            elif any(kw in low for kw in ("tool manager:", "platform manager:", "library manager:", "downloading", "unpacking", "installing", "removing", "processing")):
+                # "Library Manager:" lines just mean PlatformIO is syncing this
+                # project's lib_deps (ESP32Servo, NimBLE-BLE, HX711, etc.) from
+                # the local Libs folder into .pio/libdeps. That's a normal,
+                # fast, purely-local copy that happens on basically every
+                # compile once a project has any lib_deps — it is NOT touching
+                # the core framework/toolchain, so it should not trip the
+                # "do NOT stop the compile" safety banner. Only Tool Manager
+                # (toolchains/compilers) and Platform Manager (framework/board
+                # packages) downloads are the risky, network-heavy operations
+                # that banner is meant to protect against.
+                is_library_manager_line = "library manager:" in low
+                is_core_framework_event = (
+                    "tool manager:" in low or "platform manager:" in low
+                )
+
+                # Log notifications for auto-installed/linked libraries or framework tools
+                if is_library_manager_line and ("installing" in low or "linking" in low):
+                    installed_item = line.split("installing")[-1].split("linking")[-1].strip()
+                    verb = "Linked" if ("symlink" in low or "linking" in low or "installing" in low) else "Installed"
+                    self._append_notif(
+                        f"  📚 PlatformIO Auto-{verb} Library: {installed_item}",
+                        tag="success", category="library_install", title=f"Library {verb}"
+                    )
+                elif is_core_framework_event and ("installing" in low or "downloading" in low):
+                    installed_item = line.split(":")[-1].strip()
+                    self._append_notif(
+                        f"  📦 PlatformIO Auto-Installed Core Tool/Framework: {installed_item}",
+                        tag="info", category="board_install", title="Board/Framework Tool Installed"
+                    )
+
+                # Check if we should activate framework download safety mode & timing tracker
+                if is_core_framework_event:
+                    if not _tool_dl_active[0]:
+                        _tool_dl_active[0] = True
+                        _tool_dl_start[0] = time.time()
+                    if not getattr(self, "_framework_download_active", False):
+                        self._framework_download_active = True
+                        self._append("", "")
+                        self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+                        self._append("  ⚠ CRITICAL: Preparing/Installing core framework & toolchain packages...", "warning")
+                        self._append("    This might take a while and is highly important. Please do NOT stop the compile", "info")
+                        self._append("    or close the app to prevent PlatformIO core/toolchain corruption.", "warning")
+                        self._append("    Notice: One-time setup of core framework packages (~760 MB) may take up", "info")
+                        self._append("    to 5 minutes even on a stable internet connection.", "info")
+                        self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+                        self._append("", "")
+                        
+                        # Disable the stop button to prevent interruption
+                        self.btn_stop.configure(state=tk.DISABLED)
+                elif is_library_manager_line:
+                    _has_intermediate_content[0] = True
+                    if not _first_divider_printed[0]:
+                        _first_divider_printed[0] = True
+                        self._append("  ──────────────────────────────────────────────────", "purple_dim")
+                    # Replace 'Installing' with 'Linking' and 'installed' with 'linked' for Library Manager lines
+                    formatted_lib_line = stripped
+                    formatted_lib_line = re.sub(r'\bInstalling\b', 'Linking', formatted_lib_line)
+                    formatted_lib_line = re.sub(r'\binstalling\b', 'linking', formatted_lib_line)
+                    formatted_lib_line = re.sub(r'\bhas been installed\b', 'has been linked', formatted_lib_line, flags=re.IGNORECASE)
+                    formatted_lib_line = re.sub(r'\bInstalled\b', 'Linked', formatted_lib_line)
+                    # Quiet, informational only — no critical banner, no stop-button lock.
+                    self._append(f"    {formatted_lib_line}", "info")
+                    return
+
+                # Format progress bar nicely
+                if "downloading" in low or "unpacking" in low:
+                    pcts = re.findall(r'(\d+)%', stripped)
+                    if pcts:
+                        pct = int(pcts[-1])
+                        filled = int(pct / 100 * 30)
+                        bar = "\u25b0" * filled + "\u25b1" * (30 - filled)
+                        act_name = "Downloading" if "downloading" in low else "Unpacking"
+                        icon = "✔ " if pct >= 100 else "  "
+                        progress_text = f"  {icon}{act_name:<11}  {bar}  {pct:3d}%"
+                        self._append_progress(progress_text, "success", action_type=act_name)
+                        return
+
+                if stripped.startswith("Processing") or ("processing " in low and "(" in low):
+                    self._append(f"    {stripped}", "purple")
+                    if not _first_divider_printed[0]:
+                        _first_divider_printed[0] = True
+                        self._append("  ──────────────────────────────────────────────────", "purple_dim")
+            elif is_scons_progress:
+                if any(kw in low for kw in ("compiling", "building", "linking", "archiving", "checking size", "took")):
+                    _maybe_close_init_divider()
+                _prog_text = None
+                _prog_tag = "dim"
+                if "linking" in low:
+                    _prog_text, _prog_tag = "  🔗 Linking...", "dim"
+                elif "checking size" in low or "retrieving maximum" in low:
+                    _prog_text, _prog_tag = "  📏 Checking firmware size...", "dim"
+                elif "compiling" in low:
+                    match = re.search(r'compiling\s+(.+)$', low)
+                    if match:
+                        filename = Path(match.group(1)).name
+                        _prog_text = f"  ⚙ Compiling {filename}..."
+                        _prog_tag = "info"
+                    else:
+                        _prog_text = f"  ⚙ {stripped}"
+                        _prog_tag = "info"
+                elif "archiving" in low:
+                    _prog_text, _prog_tag = "  📦 Archiving...", "dim"
+                elif "building" in low:
+                    _prog_text, _prog_tag = "  ⚙ Building...", "info"
+                elif "took" in low and ("success" in low or "failed" in low):
+                    _prog_text = f"  {stripped}"
+                    _prog_tag = "success" if "success" in low else "error"
+
+                if _prog_text is None:
+                    return
+                # Suppress consecutive duplicate progress rows
+                if _prog_text == _last_progress_text[0]:
+                    return
+                _last_progress_text[0] = _prog_text
+                self._append(_prog_text, _prog_tag)
+
+        while _sentinels_remaining > 0:
+            try:
+                line = _line_queue.get(timeout=0.1)
+            except _queue.Empty:
+                # After the process exits, give the reader threads a generous
+                # window to flush any remaining data (especially stderr which
+                # may contain the actual GCC error messages).  Only bail out
+                # after 5 s of no new data post-exit.
+                if self.process.poll() is not None:
+                    if _process_exited_at is None:
+                        _process_exited_at = time.time()
+                    elif time.time() - _process_exited_at > 5:
+                        break
+                continue
+
+            if line is None:
+                _sentinels_remaining -= 1
+                continue
+
+            # Reset the post-exit timer whenever we receive real data,
+            # so we wait a full 5 s after the *last* line, not after exit.
+            _process_exited_at = None
+
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            output_lines.append(stripped)
+            line_count += 1
+            _classify_and_display(stripped)
+
+        # Wait for reader thread to finish flushing any remaining data.
+        _t_out.join(timeout=5)
+
+        # ── Drain any lines that arrived after the main loop exited ──────────
+        # This catches late-arriving stderr content (GCC error messages) that
+        # the reader threads enqueued after we broke out of the loop above.
+        while not _line_queue.empty():
+            try:
+                line = _line_queue.get_nowait()
+            except _queue.Empty:
+                break
+            if line is None:
+                continue
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            output_lines.append(stripped)
+            _classify_and_display(stripped)
+
+        _maybe_close_init_divider()
+
+        # Stop the spinner thread before reading the final return code
+        _spinner_active[0] = False
+        _spin_thread.join(timeout=1)
+
+        self.process.wait()
+        if _tool_dl_active[0] and _tool_dl_start[0] is not None:
+            _tool_dl_total[0] += (time.time() - _tool_dl_start[0])
+            _tool_dl_active[0] = False
+
+        total_sec    = round(time.time() - compile_start, 1)
+        tool_dl_sec  = round(_tool_dl_total[0], 1)
+        if _build_start[0] is not None:
+            # Precise build time: only counts from when actual code build started
+            build_sec = max(0.0, round(time.time() - _build_start[0], 1))
+            # Adjust to not exceed total (edge-case guard)
+            build_sec = min(build_sec, total_sec)
+        else:
+            # No framework was downloaded — entire time was code build
+            build_sec = max(0.0, round(total_sec - tool_dl_sec, 1))
+
+        # Check if killed by user (returncode is negative on SIGTERM/SIGKILL, or _stop_requested set)
+        rc = self.process.returncode
+        was_killed = getattr(self, "_stop_requested", False) or (sys.platform != "win32" and rc < 0)
+
+
+        if rc == 0:
+            self._capture_build_metadata(output_lines)
+            # Show advanced memory usage summary
+            for line in output_lines:
+                if "ram:" in line.lower() or "flash:" in line.lower():
+                    self._append(f"  {line.strip()}", "success")
+            self._append("")
+
+            if tool_dl_sec >= 1.5:
+                breakdown_fields = [
+                    ("Framework & Tool Download", f"{tool_dl_sec}s"),
+                    ("Code Build & Compilation", f"{build_sec}s"),
+                    ("Total Elapsed Time", f"{total_sec}s"),
+                ]
+                self._print_info_box("Compilation Time Breakdown", breakdown_fields)
+                self._append(f"  ✔ Compilation successful! (Build: {build_sec}s | Tools Download: {tool_dl_sec}s | Total: {total_sec}s)", "success")
+                self._set_status(f"Compile OK (Build: {build_sec}s, Tools: {tool_dl_sec}s)", Theme.GREEN)
+            else:
+                breakdown_fields = [
+                    ("Code Build & Compilation", f"{build_sec}s"),
+                    ("Total Elapsed Time", f"{total_sec}s"),
+                ]
+                self._print_info_box("Compilation Time Breakdown", breakdown_fields)
+                self._append(f"  ✔ Compilation successful! ({total_sec}s)", "success")
+                self._set_status(f"Compile OK ({total_sec}s)", Theme.GREEN)
+
+            # ── Board compatibility label ───────────────────────────────────
+            compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+            compat_label = _format_compat_label(compat_boards)
+            self._append("")
+            self._append("  " + "─" * 48, "dim")
+            self._append(f"  [COMPATIBLE DEVICES]  {compat_label}", "system")
+            if not compat_reasons and len(compat_boards) == len(SUPPORTED_BOARDS):
+                self._append(
+                    "    ℹ No platform-specific APIs detected — "
+                    "likely portable across all supported boards.", "dim"
+                )
+            self._append("  " + "─" * 48, "dim")
+
+            # ── Check for Selected Board Hardware Compatibility ─────────────
+            selected_board_name = self.board_var.get()
+            gpio_analysis = _analyze_gpio_compatibility(self.sketch_dir_path)
+            
+            if selected_board_name in gpio_analysis.get("excluded", set()):
+                bad_hits = gpio_analysis.get("pin_hits", {}).get(selected_board_name, [])
+                bad_pins = sorted({pin for pin, _ in bad_hits})
+                if bad_pins:
+                    pins_formatted = ", ".join(f"GPIO {p}" for p in bad_pins)
+                    is_s3_selected = "s3" in selected_board_name.lower()
+                    max_gpio = 48 if is_s3_selected else 39
+                    
+                    self._append("")
+                    self._append("  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "severe_alert")
+                    self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                    self._append("  CRITICAL HARDWARE INCOMPATIBILITY DETECTED ON SELECTED BOARD!", "severe_alert")
+                    self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                    self._append(f"  SELECTED BOARD : {selected_board_name.upper()}", "severe_alert")
+                    self._append(f"  INVALID GPIO(S): {pins_formatted.upper()} IS OUT OF HARDWARE RANGE (MAX VALID: GPIO {max_gpio})!", "severe_alert")
+                    self._append("  ", "severe_alert")
+                    self._append("  THE COMPILER SUCCEEDED BUT THIS CODE WILL NOT WORK AT RUNTIME ON THIS BOARD!", "severe_alert")
+                    self._append(f"  {selected_board_name.upper()} DOES NOT HAVE {pins_formatted.upper()} CONNECTED OR ACCESSIBLE ON THIS CHIP/BOARD VARIANT!", "severe_alert")
+                    self._append("  ", "severe_alert")
+                    self._append("  BOARD PINOUT VARIANT CONSIDERATIONS (30-PIN / 38-PIN / 44-PIN BOARDS):", "severe_alert")
+                    self._append("  - ESP32 DEV MODULE (30-PIN & 38-PIN BOARDS): HARDWARE GPIO RANGE IS 0-39 (MAX GPIO 39).", "severe_alert")
+                    self._append("  - ESP32-S3 DEV MODULE (38-PIN & 44-PIN BOARDS): HARDWARE GPIO RANGE IS 0-48 (MAX GPIO 48).", "severe_alert")
+                    self._append("    NOTE: ON 38-PIN ESP32-S3 VARIANTS, HIGHER PINS (GPIO 45-48) & PSRAM PINS (GPIO 26-32)", "severe_alert")
+                    self._append("    MAY NOT BE BROKEN OUT TO PHYSICAL HEADERS OR MAY BE USED BY ONBOARD NEOPIXEL/FLASH.", "severe_alert")
+                    self._append("  ", "severe_alert")
+                    self._append("  RECOMMENDED ACTION:", "severe_alert")
+                    self._append("  - CHANGE THE PIN IN YOUR CODE TO AN ACCESSIBLE GPIO (E.G., GPIO 2, 4, 16, 17), OR", "severe_alert")
+                    self._append("  - SWITCH SELECTED BOARD TO ESP32-S3 DEV MODULE IF YOUR PHYSICAL BOARD USES AN S3 CHIP!", "severe_alert")
+                    self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                    self._append("  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "severe_alert")
+                    self._append("")
+
+                    def _show_severe_gpio_popup(b_name=selected_board_name, p_str=pins_formatted, m_gpio=max_gpio):
+                        from tkinter import messagebox
+                        msg = (
+                            f"CRITICAL HARDWARE INCOMPATIBILITY DETECTED!\n\n"
+                            f"Selected Board : {b_name}\n"
+                            f"Invalid GPIO(s) : {p_str} (Out of hardware range 0–{m_gpio})\n\n"
+                            f"The code compiled successfully, but it will NOT work on your {b_name} board at runtime!\n"
+                            f"{b_name} does not have {p_str} connected or accessible on this chip.\n\n"
+                            f"RECOMMENDED ACTION:\n"
+                            f"• Change the pin number in your code to a valid GPIO (e.g., GPIO 2 or GPIO 4).\n"
+                            f"• OR switch the selected board to ESP32-S3 Dev Module if using an ESP32-S3 board."
+                        )
+                        messagebox.showwarning(
+                            "Critical Hardware Incompatibility — MCU Flasher",
+                            msg,
+                            parent=self.root
+                        )
+                    self.root.after(100, _show_severe_gpio_popup)
+
+            self._save_compile_cache()  # snapshot so upload can skip recompile
+            # Automatically back up compiled binary artifacts into project folder build_artifacts/
+            try:
+                build_dir = self.sketch_dir_path / ".pio" / "build" / self._pio_env_name()
+                artifacts_dir = self.sketch_dir_path / "build_artifacts" / self._pio_env_name()
+                if build_dir.exists():
+                    import shutil
+                    artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    for pattern in ["bootloader.bin", "partitions.bin", "firmware.bin", "firmware.elf", "firmware.hex"]:
+                        for f in build_dir.glob(pattern):
+                            shutil.copy2(f, artifacts_dir / f.name)
+                    self._append(f"  💾 Saved build artifacts (bootloader, partitions, firmware) to {artifacts_dir.name}/", "dim")
+            except Exception:
+                pass
+
+            # Automatically update the Skip Compile checkbox on successful compilation
+            self.root.after(0, self._update_skip_compile_state)
+        elif was_killed:
+            self._append("")
+            self._append("  ■ Compilation stopped by user.", "warning")
+            self._set_status("Compile stopped", Theme.YELLOW)
+            if current_board:
+                self._last_compiled_board = current_board
+            self.root.after(0, self._update_skip_compile_state)
+        else:
+            self.root.after(0, self._update_skip_compile_state)
+            self._append("")
+            self._append(f"  ✖ Compilation FAILED after {total_sec}s:", "error")
+
+            # Parse compiler error lines
+            parsed_errors = []
+            error_lines = []
+            # Regex handles Windows absolute/relative paths and error/warning/note severity levels
+            err_pattern = re.compile(
+                r'^(?:([a-zA-Z]:[\\/][^:]+)|([^:]+)):(\d+):(\d+):\s+(fatal\s+error|error|warning|note):\s+(.+)$',
+                re.IGNORECASE
+            )
+            for line in output_lines:
+                match = err_pattern.match(line.strip())
+                if match:
+                    file_path = match.group(1) or match.group(2)
+                    line_num = match.group(3)
+                    col_num = match.group(4)
+                    error_type = match.group(5)
+                    error_msg = match.group(6)
+                    try:
+                        file_name = Path(file_path).name
+                    except Exception:
+                        file_name = file_path
+                    parsed_errors.append({
+                        "file": file_name,
+                        "line": line_num,
+                        "col": col_num,
+                        "type": error_type,
+                        "msg": error_msg
+                    })
+
+            if parsed_errors:
+                # Group by file name and deduplicate identical compilation issues
+                errors_by_file = {}
+                seen_issues = set()
+                for err in parsed_errors:
+                    severity = err["type"].lower().strip()
+                    # Deduplicate based on file name, line, column, severity, and message content
+                    key = (err["file"], err["line"], err["col"], severity, err["msg"].strip())
+                    if key in seen_issues:
+                        continue
+                    seen_issues.add(key)
+                    errors_by_file.setdefault(err["file"], []).append(err)
+
+                # ── Check if this is a board-mismatch rather than a real code bug ──
+                try:
+                    compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+                    selected_board = self.board_var.get()
+                    is_board_mismatch = bool(compat_boards) and selected_board not in compat_boards
+                except Exception:
+                    is_board_mismatch = False
+                    compat_boards = set()
+
+                if is_board_mismatch:
+                    # ── Board mismatch: show a single, clear message ──
+                    # Summarise by platform family instead of listing 200+ board names
+                    _platforms = {
+                        SUPPORTED_BOARDS.get(b, {}).get("platform", "")
+                        for b in compat_boards
+                    }
+                    _plat_labels = {
+                        "espressif32": "ESP32-family",
+                        "espressif8266": "ESP8266-family",
+                        "atmelavr": "Arduino AVR (Uno, Nano, Mega …)",
+                    }
+                    family_names = sorted(
+                        _plat_labels.get(p, p) for p in _platforms if p
+                    )
+                    compat_summary = ", ".join(family_names) if family_names else "other boards"
+                    self._append("")
+                    self._append("  ⚠ This sketch is NOT compatible with the selected board.", "warning")
+                    self._append(f"     Selected board : {selected_board}", "warning")
+                    self._append(f"     Compatible with: {compat_summary}", "info")
+                    self._append("")
+                    self._append("  💡 Please select a compatible board and try again.", "info")
+                else:
+                    # ── Real code issues: show the detailed per-file listing ──
+                    # Pick header color: red only if real errors exist, yellow for warnings-only
+                    has_real_errors = any(
+                        "error" in e["type"].lower() and "warning" not in e["type"].lower()
+                        for e in parsed_errors
+                    )
+                    header_tag = "error" if has_real_errors else "warning"
+                    self._append("⚠️  ISSUES LISTED BY FILE:", header_tag)
+                    self._append("─" * 50, header_tag)
+
+                    for file_name, errs in errors_by_file.items():
+                        self._append(f"  📁 {file_name}", "warning")
+                        for err in errs:
+                            severity = err["type"].lower().strip()
+                            tag = "info" if "note" in severity else ("warning" if "warning" in severity else "error")
+                            bullet = "•" if tag == "error" else ("⚠" if tag == "warning" else "ℹ")
+                            self._append(f"     {bullet} Line {err['line']} (Col {err['col']}): {severity} — {err['msg']}", tag)
+                    self._append("─" * 50, header_tag)
+            else:
+                self._append("─" * 50, "error")
+                # Show actual error lines — GCC diagnostics + linker errors.
+                # Explicitly exclude bare SCons make-error wrappers like
+                #   "*** [.pio/build/.../foo.o] Error 1"
+                # because those contain "error" but are NOT the real compiler
+                # message — the actual g++ diagnostic appeared earlier and
+                # showing only the wrapper hides the root cause from the user.
+                LINKER_HINTS = (
+                    "undefined reference to",
+                    "multiple definition of",
+                    "cannot find -l",
+                    "undefined symbol",
+                    "duplicate symbol",
+                    "ld returned",
+                    "collect2",
+                    "overflowed by",
+                    "will not fit in region",
+                    "relocation truncated",
+                    "ld.exe:",
+                    "ld:",
+                    "section `",
+                    "region `",
+                    "packageexception",
+                    "not a directory",
+                    "cannot create a symbolic link",
+                    "exception:",
+                )
+
+                _scons_re = re.compile(r'^\*\*\*\s+\[')
+                _gcc_context_re = re.compile(r'^\s*\d*\s*\|(?!--)')
+                error_lines = [
+                    l for l in output_lines
+                    if (
+                        # GCC/Clang diagnostic: file:line:col: error/note: msg
+                        bool(re.search(r':\d+:\d+:\s+(error|fatal error|note)\s*:', l, re.IGNORECASE))
+                        # Linker errors (no file:line:col prefix)
+                        or any(hint in l.lower() for hint in LINKER_HINTS)
+                        # GCC source-context lines (source, carets, suggestions)
+                        or bool(_gcc_context_re.match(l.strip()))
+                        # Generic "error" lines, but NOT SCons *** [...] Error N wrappers
+                        or ("error" in l.lower() and "werror" not in l.lower()
+                            and not _scons_re.match(l.strip()))
+                    )
+                ]
+                if error_lines:
+                    for line in error_lines[-20:]:
+                        self._append(f"  {line}", "error")
+                else:
+                    # Nothing matched — dump raw tail so user sees something useful
+                    error_lines = [l for l in output_lines[-20:] if l.strip()]
+                    for line in error_lines:
+                        self._append(f"  {line}", "error")
+                self._append("─" * 50, "error")
+
+            self._set_status("Compile FAILED", Theme.RED)
+
+            if parsed_errors:
+                # If there are syntax/compilation issues in files, do NOT prompt for clean build cache
+                self.is_busy = False
+                self._set_buttons_busy(False)
+            else:
+                # Detect the "silent Error 1" pattern (no real compiler diagnostics, only
+                # SCons wrapper lines) — this is the signature of a stale board-switch build
+                # cache.  When uploading, retry automatically with a full .pio wipe so the
+                # user never sees a silent dead-end after switching boards.
+                _has_build_activity = any("linking" in l.lower() or "compiling" in l.lower() or "building" in l.lower() for l in output_lines)
+                _is_silent_error = not error_lines and not _has_build_activity and not was_killed
+                if is_upload and _is_silent_error and not is_clean_retry:
+                    self._append(
+                        "  ⚠ First compile attempt produced no diagnostic output — retrying with "
+                        "a full clean (likely stale board-switch cache)…",
+                        "warning"
+                    )
+                    # Wipe the entire .pio directory (not just build/libdeps) to clear
+                    # SCons dependency graph + any partially-installed package metadata.
+                    pio_dir = self.sketch_dir_path / ".pio"
+                    if pio_dir.exists():
+                        import shutil as _sr_shutil
+                        try:
+                            _sr_shutil.rmtree(str(pio_dir), ignore_errors=True)
+                            self._append("  ♻ Full .pio directory cleared.", "dim")
+                        except Exception as _e:
+                            self._append(f"  ⚠ Could not clear .pio: {_e}", "warning")
+                    # Reset busy state so _run_compile can reset it properly on re-entry
+                    self.is_busy = False
+                    self._set_buttons_busy(False)
+                    self._clean_retry_in_progress = True
+                    # Return None to signal "please retry" to _run_upload
+                    return None  # type: ignore[return-value]
+                elif is_clean_retry:
+                    # We ALREADY performed a clean build for this compilation attempt!
+                    # Do NOT offer clean-and-recompile again to prevent an infinite loop.
+                    self._append("  ℹ Project was already cleaned before this compilation attempt.", "info")
+                    self._append("  ⚠ Automatic clean-and-recompile skipped to prevent an infinite build loop.", "warning")
+                    self._append("  💡 Clean build failed. Common causes to check:", "info")
+                    self._append("     1. Locked files (OneDrive syncing, antivirus scanning .pio/build)", "dim")
+                    self._append("     2. Library symbol mismatch or missing dependencies in platformio.ini", "dim")
+                    self._append("     3. Incorrect board variant selected for this sketch", "dim")
+                    self.is_busy = False
+                    self._set_buttons_busy(False)
+                else:
+                    # Offer clean + recompile via a messagebox on the main thread since it's likely a tool/cache error.
+                    # The dialog callback owns is_busy / _set_buttons_busy for this path.
+                    def _ask_clean_recompile():
+                        from tkinter import messagebox
+                        if messagebox.askyesno(
+                            "Compilation Failed",
+                            "Compilation failed.\n\nClean the build cache and recompile?",
+                            icon="warning",
+                            parent=self.root,
+                        ):
+                            self.is_busy = False
+                            self._set_buttons_busy(False)
+                            self._clean_retry_in_progress = True
+                            self._do_clean_then_compile()
+                        else:
+                            self.is_busy = False
+                            self._set_buttons_busy(False)
+                    self.root.after(0, _ask_clean_recompile)
+            return rc == 0
+
+        hide_internal_project_metadata(self.sketch_dir_path)
+        self.process = None
+        if not is_upload or rc != 0:
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_buttons_state(False)
+        return rc == 0
+
+
+    # ──────────────────────────────────────────────────────────
+    # CHIP INFO PROBE
+    # ──────────────────────────────────────────────────────────
+    def _probe_chip_info(self, port: str) -> None:
+        """Connect to the chip via esptool and print hardware info to the
+        build console.  Called just before PlatformIO's upload so the port
+        is free (monitor already paused).  Never raises — failures are shown
+        as a warning and upload continues normally."""
+        esp = None
+        try:
+            # pyrefly: ignore [missing-import]
+            import esptool
+
+            # esptool ≥ 4.x exposes get_default_connected_device(); older
+            # versions don't.  Fall back gracefully when it's absent.
+            if not hasattr(esptool, "get_default_connected_device"):
+                self._append("  ⚠ esptool version too old for chip probe (need ≥ 4.x).", "warning")
+                return
+
+            # One-shot retry on the initial connect: a failure here right
+            # after the monitor port was closed is often a transient
+            # reset-timing hiccup (corrupted DTR/RTS pulse from reopening
+            # the port too quickly) rather than a real hardware problem —
+            # give it a second chance before giving up.
+            try:
+                esp = esptool.get_default_connected_device(
+                    serial_list=[port],
+                    port=port,
+                    connect_attempts=3,
+                    initial_baud=115200,
+                )
+            except Exception:
+                time.sleep(0.5)
+                esp = esptool.get_default_connected_device(
+                    serial_list=[port],
+                    port=port,
+                    connect_attempts=3,
+                    initial_baud=115200,
+                )
+
+            # Upload the stub firmware so that flash-access commands
+            # (detect_flash_size / flash_id) are available.  Without the stub
+            # those calls silently fail on most ESP32 variants because the ROM
+            # loader doesn't implement the underlying SPI commands.
+            # run_stub() returns the stub object; fall back to the ROM loader
+            # if it's unavailable (very old esptool or unsupported chip rev).
+            try:
+                esp = esp.run_stub()
+            except Exception:
+                pass  # keep the ROM-loader object and try anyway
+
+            chip_model = getattr(esp, "CHIP_NAME", "Unknown")
+
+            try:
+                features = ", ".join(esp.get_chip_features())
+            except Exception:
+                features = "N/A"
+
+            try:
+                mac_bytes = esp.read_mac()
+                mac = ":".join(f"{b:02X}" for b in mac_bytes)
+            except Exception:
+                mac = "N/A"
+
+            try:
+                crystal = esp.get_crystal_freq()
+                crystal_str = f"{crystal} MHz"
+            except Exception:
+                crystal_str = "N/A"
+
+            try:
+                # In esptool 5.x, flash size is read via esptool.cmds.detect_flash_size(esp),
+                # a module-level function (NOT a method on esp).
+                # It requires attach_flash(esp) first to enable SPI access on the stub.
+                # Fallback: esp.flash_id() returns a 24-bit int where bits[23:16] are
+                # the capacity/size_id looked up in DETECTED_FLASH_SIZES.
+                # bits[7:0] are the vendor ID — the old code read the wrong byte.
+                flash_str = "N/A"
+                try:
+                    # pyrefly: ignore [missing-import]
+                    from esptool.cmds import detect_flash_size, attach_flash
+                    attach_flash(esp)                 # arms SPI flash access on stub
+                    detected = detect_flash_size(esp) # returns e.g. "8MB" or None
+                    if detected:
+                        flash_str = detected
+                except Exception:
+                    pass
+
+                if flash_str == "N/A":
+                    # Fallback: decode JEDEC size_id from bits[23:16] of flash_id()
+                    try:
+                        # pyrefly: ignore [missing-import]
+                        from esptool.cmds import DETECTED_FLASH_SIZES
+                        raw = esp.flash_id()
+                        size_id = (raw >> 16) & 0xFF   # capacity byte is the HIGH byte
+                        flash_str = DETECTED_FLASH_SIZES.get(size_id, "N/A")
+                    except Exception:
+                        pass
+            except Exception:
+                flash_str = "N/A"
+
+            # ── Print to build console as a boxed info panel ───────────────
+            self._print_chip_info_box(chip_model, [
+                ("Chip Model",  chip_model),
+                ("Features",    features),
+                ("MAC Address", mac),
+                ("Crystal",     crystal_str),
+                ("Flash Size",  flash_str),
+            ])
+
+        except Exception as e:
+            self._append(f"  ⚠ Chip probe failed: {e}", "warning")
+            self._append("  (Continuing with upload anyway...)", "dim")
+        finally:
+            if esp is not None:
+                try:
+                    esp._port.close()
+                except Exception:
+                    pass
+            # Same port-release race as before the probe: give Windows a
+            # moment to fully free the handle before PlatformIO's esptool
+            # subprocess reopens it for the actual upload.
+            time.sleep(0.3)
+
+    def _print_info_box(self, title: str, fields: list[tuple[str, str]]) -> None:
+        """
+        Render a boxed information panel into the build console using double-line border.
+        """
+        if not fields:
+            return
+        label_width = max(len(label) for label, _ in fields)
+        label_col_width = label_width + 3  # "label" + " : "
+
+        available_cols = self._console_box_columns()
+        max_inner_width = max(available_cols - 4, label_col_width + 10, len(title))
+        value_max_width = max(max_inner_width - label_col_width, 10)
+
+        rows = []  # list of (label_field, value_chunk) — one per physical line
+        for label, value in fields:
+            chunks = textwrap.wrap(str(value), value_max_width) or [""]
+            for i, chunk in enumerate(chunks):
+                label_field = f"{label:<{label_width}} : " if i == 0 else " " * label_col_width
+                rows.append((label_field, chunk))
+
+        inner_width = max(len(title), max(len(lf) + len(v) for lf, v in rows))
+
+        top    = "╔" + "═" * (inner_width + 2) + "╗"
+        title_row = "║ " + title.center(inner_width) + " ║"
+        sep    = "╠" + "═" * (inner_width + 2) + "╣"
+        bottom = "╚" + "═" * (inner_width + 2) + "╝"
+
+        self._append("")
+        self._append(top, "purple_header")
+        self._append(title_row, "purple_header")
+        self._append(sep, "purple_header")
+        for label_field, value_chunk in rows:
+            value_field = value_chunk.ljust(inner_width - len(label_field))
+            self._append_segments([
+                ("║ ", "purple_header"),
+                (label_field, "purple_info"),
+                (value_field, "purple_value"),
+                (" ║", "purple_header"),
+            ])
+        self._append(bottom, "purple_header")
+        self._append("")
+
+    def _print_chip_info_box(self, chip_model: str, fields: list[tuple[str, str]]) -> None:
+        """Render a boxed chip-info panel into the build console."""
+        self._print_info_box(f"{chip_model} Information", fields)
+
+    # ──────────────────────────────────────────────────────────
+    # UPLOAD
+    # ──────────────────────────────────────────────────────────
+    def _run_upload(self, port: str) -> bool:
+        self._stop_requested = False
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        self._current_op_phase = "compiling"
+        self._active_reset_kind = None
+        self._set_window_closable(True)
+
+        # ── Smart compile check (upload path) ──────────────────────────────
+        need_compile = True
+        if self.skip_compile_var.get() and self._has_prior_build():
+            recompile_needed, reason = self._needs_recompile()
+            if not recompile_needed:
+                self._append("")
+                self._append("  ✔ Sources unchanged — skipping recompile", "success_bold_lg")
+                self._set_status("Sources up-to-date, uploading...", Theme.CYAN)
+                need_compile = False
+            else:
+                self._append("")
+                self._append(f"  🔄 Recompile needed ({reason})", "warning")
+        elif not self.skip_compile_var.get():
+            pass
+
+        if need_compile:
+            compile_result = self._run_compile(is_upload=True)
+            if compile_result is None:
+                # Silent-error auto-retry: _run_compile wiped .pio, retry compile once.
+                self._append("  🔄 Retrying compilation after full clean…", "info")
+                compile_result = self._run_compile(is_upload=True)
+            if not compile_result:
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                self._set_buttons_state(False)
+                return False
+        else:
+            # A cached-build upload still needs an isolated src/ tree.  Older
+            # releases may have left hard links there, and PlatformIO's
+            # compatibility uploader is allowed to inspect/rebuild the project.
+            if not self._freeze_build_sources_at_boundary("Upload"):
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                self._set_buttons_state(False)
+                self._set_status("Upload paused for AI review", Theme.YELLOW)
+                return False
+
+
+        # ── Sketch-vs-board compatibility guard (run before starting upload timer) ──
+        selected_board = self.board_var.get()
+        compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+        
+        has_warnings = False
+        warnings_list = []
+        if compat_boards and selected_board not in compat_boards:
+            has_warnings = True
+            compat_label = _format_compat_label(compat_boards)
+            warnings_list.append(f"Selected board \"{selected_board}\" is not officially supported by this sketch.")
+            warnings_list.append(f"This sketch is only compatible with: {compat_label}")
+        
+        current_hash = self._hash_sources()
+        if compat_reasons and self._compat_warnings_approved_hash != current_hash:
+            relevant_reasons = []
+            for r in compat_reasons:
+                if selected_board in compat_boards:
+                    # If the selected board is compatible, only keep actual warnings (starting with ⚠)
+                    # that are relevant to this board type
+                    if r.startswith("⚠"):
+                        board_prefix = selected_board.split()[0].lower()
+                        if board_prefix in r.lower() or selected_board.lower() in r.lower():
+                            relevant_reasons.append(r)
+                else:
+                    # If selected board is not compatible, all reasons are relevant
+                    relevant_reasons.append(r)
+            
+            if relevant_reasons:
+                has_warnings = True
+                for r in relevant_reasons:
+                    warnings_list.append(r)
+
+        if has_warnings:
+            self._set_status("Waiting for compatibility confirmation...", Theme.YELLOW)
+            # Show interactive confirmation dialog box (thread-safe on Windows)
+            proceed = [None]
+            def _prompt():
+                reasons_text = "\n".join(f"- {r}" for r in warnings_list)
+                from tkinter import messagebox
+                msg = (
+                    f"Warning: This project has compatibility warnings/exclusions:\n\n"
+                    f"{reasons_text}\n\n"
+                    "It may be dangerous to proceed and could affect MCU operation.\n"
+                    "Do you still want to proceed with the upload?"
+                )
+                proceed[0] = messagebox.askyesno(
+                    "Compatibility Warning",
+                    msg,
+                    icon="warning",
+                    parent=self.root
+                )
+            self.root.after(0, _prompt)
+            while proceed[0] is None:
+                time.sleep(0.05)
+                
+            if not proceed[0]:
+                # Log warnings to the console ONLY upon cancellation so the user knows why it was stopped
+                self._append("", "")
+                self._append("  ℹ Compatibility Notice — board/sketch details detected", "dim")
+                for reason in warnings_list:
+                    self._append(f"    ℹ {reason}", "dim")
+                self._append("", "")
+                self._append("  ℹ Upload cancelled by user.", "info")
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._set_status("Upload cancelled by user", Theme.YELLOW)
+                return False
+            
+            if compat_reasons:
+                self._compat_warnings_approved_hash = current_hash
+
+        # One last synchronous check is the upload-side execution boundary.
+        # Sources staged above are frozen, so an edit after this check cannot
+        # change either the compiled binaries or PlatformIO's src/ inputs.
+        if self._block_action_for_pending_ai_review("Upload"):
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_buttons_state(False)
+            self._set_status("Upload paused for AI review", Theme.YELLOW)
+            return False
+
+        # Release the serial monitor only after compilation, scanning, and
+        # user confirmation are complete. The uploader is fired immediately
+        # from here, minimizing the manual BOOT-button hold window.
+        was_monitoring = self._pause_monitor()
+        if was_monitoring and sys.platform == "win32":
+            # Windows USB-serial drivers can retain the handle briefly after
+            # the monitor thread closes it. This happens before the BOOT
+            # prompt, so it improves reliability without lengthening the
+            # user's button-hold window.
+            time.sleep(0.30)
+        # ─────────────────────────────────────────────────────────────────────────
+
+        # ── Upload spinner thread ───────────────────────────────────────────────────
+        # Phase-ordered display: each distinct upload step gets a numbered label
+        # so the user always knows where they are in the pipeline.
+        # Phases in order: 1 Connecting → 2 Erasing → 3 Writing → 4 Verifying → 5 Resetting
+        _UPLOAD_PHASES = [
+            ("Initialising",  "Starting PlatformIO uploader..."),
+            ("Connecting",    "Connecting to board..."),
+            ("Erasing",       "Erasing flash memory..."),
+            ("Writing",       "Writing firmware to flash..."),
+            ("Verifying",     "Verifying written data..."),
+            ("Resetting",     "Resetting board..."),
+            ("Done",          "Upload complete"),
+        ]
+        _PHASE_KEYS = [p[0] for p in _UPLOAD_PHASES]
+        _upload_phase_idx = [0]   # index into _UPLOAD_PHASES
+        _upload_active    = [True]
+        _upload_frame     = [0]
+        _upload_start     = time.time()
+        _upload_spinner   = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        def _set_upload_phase(key: str):
+            """Advance to a named phase, never going backwards."""
+            if key in _PHASE_KEYS:
+                idx = _PHASE_KEYS.index(key)
+                if idx > _upload_phase_idx[0]:
+                    _upload_phase_idx[0] = idx
+                    # Clear connection timeout once we move past Connecting
+                    if key in ("Erasing", "Writing", "Verifying", "Resetting", "Done"):
+                        nonlocal _connecting_since
+                        _connecting_since = None
+
+        def _upload_spin_loop():
+            while _upload_active[0] and not getattr(self, "_stop_requested", False):
+                idx     = _upload_phase_idx[0]
+                key, label = _UPLOAD_PHASES[idx]
+                # When in Connecting phase, let the connection retry watchdog render status
+                if key == "Connecting":
+                    time.sleep(0.2)
+                    continue
+                elapsed = int(time.time() - _upload_start)
+                frame   = _upload_spinner[_upload_frame[0] % len(_upload_spinner)]
+                _upload_frame[0] += 1
+                visible_total = len(_UPLOAD_PHASES) - 2   # 5
+                visible_step  = max(0, idx - 1)           # 0-based relative to step 1
+                step_str      = f"[{visible_step}/{visible_total}] " if visible_step > 0 else ""
+                self._set_status(
+                    f"{frame} {step_str}{label} ({elapsed}s)",
+                    Theme.MAGENTA,
+                )
+                time.sleep(0.2)
+
+        import threading as _threading_up
+        _upload_spin_thread = _threading_up.Thread(target=_upload_spin_loop, daemon=True)
+        _upload_spin_thread.start()
+
+        self.is_busy = True
+        self._set_buttons_state(True, operation="flash")
+        self._set_status(f"Uploading to {port}...", Theme.MAGENTA)
+
+        self._append("")
+        self._append("=" * 50, "header")
+        self._append("  ⬆  UPLOADING (PlatformIO)", "header")
+        self._append("=" * 50, "header")
+        upload_speed = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+        self._append(f"  Port : {port} | Upload Speed : {upload_speed}", "port_highlight")
+        if self._detect_port_chip() is None and not getattr(self, "_board_port_confirmed", False):
+            self._append("  ⚠ Unrecognized USB-serial port — proceeding anyway.", "warning")
+
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_avr = (board_info.get("platform", "") == "atmelavr")
+
+        # Fast ESP upload: compilation has already produced the exact images
+        # PlatformIO would pass to esptool. Invoke esptool directly so its
+        # internal connection loop starts immediately and keeps polling while
+        # BOOT is held, without another SCons dependency scan.
+        fast_bins = None
+        if not is_avr and board_info.get("platform") in ("espressif32", "espressif8266"):
+            fast_bins = self._locate_soft_reset_fast_binaries(
+                self.sketch_dir_path,
+                board_name,
+                board_info.get("platform", ""),
+                env_name=self._pio_env_name(),
+                upload_speed=upload_speed,
+            )
+
+        fast_upload_attempted = False
+        if fast_bins is not None and not getattr(self, "_fast_upload_disabled_reason", None):
+            fast_upload_attempted = True
+            if is_s3_board(board_info.get("board", "")) and self._is_native_usb_port():
+                fast_bins["before"] = "usb-reset"
+            self._append("  ⚡ Fast upload: polling the bootloader now…", "info")
+            self._set_status("Connecting to bootloader now…", Theme.MAGENTA)
+            self._current_op_phase = "flashing"
+            self._set_window_closable(False)
+            fast_ok, fast_error = self._soft_reset_esptool_write(
+                fast_bins, port, phase_callback=_set_upload_phase
+            )
+            if fast_ok:
+                self._fast_upload_failure_count = 0
+                _set_upload_phase("Done")
+                _upload_active[0] = False
+                _upload_spin_thread.join(timeout=1)
+                self._append("")
+                self._append(f"  ✔ Upload successful! {board_name} is running…", "success")
+                self._set_status(f"Upload OK — {board_name} running", Theme.GREEN)
+                self.root.after(0, self._update_skip_compile_state)
+                self._focus_tab_on_unlock = 1
+                self.is_busy = False
+                self._current_op_phase = None
+                self._set_buttons_busy(False)
+                self._set_window_closable(True)
+                if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+                    self._clear_serial_console()
+                self._manual_reset_pending = True
+                self._monitor_should_run = True
+                self._resume_monitor()
+                return True
+            # Compatibility fallback is expected on boards/drivers that need
+            # PlatformIO's managed uploader. Keep the console clean; detailed
+            # diagnostics are written by _soft_reset_esptool_write().
+            tool_failure_tokens = (
+                "application control", "winerror 4551", "invalid choice",
+                "blocked this file", "unrecognized arguments", "no module named",
+            )
+            self._fast_upload_failure_count = (
+                getattr(self, "_fast_upload_failure_count", 0) + 1
+            )
+            if (any(token in str(fast_error or "").lower() for token in tool_failure_tokens)
+                    or self._fast_upload_failure_count >= 2):
+                self._fast_upload_disabled_reason = fast_error or "fast uploader unavailable"
+            self._set_status("Using PlatformIO compatibility uploader…", Theme.MAGENTA)
+            self._current_op_phase = "compiling"
+            self._set_window_closable(True)
+
+        # NOTE: we deliberately do NOT run a separate esptool chip-info probe
+        # here anymore. It used to open its own esptool connection (connect,
+        # upload the stub flasher, read flash size/MAC/crystal) purely to
+        # print a pretty info box, then close the port and hand it to
+        # PlatformIO's own upload — which immediately reconnects and does the
+        # exact same handshake again. That's two full reset+reconnect cycles
+        # per upload instead of one. On boards with native USB (e.g. this
+        # ESP32-S3), each reset pulse can cause the port to re-enumerate,
+        # so the extra round trip was also a real source of intermittent
+        # "failed to connect" upload issues, not just wasted time.
+        # PlatformIO's own upload output already contains the same chip
+        # info (Chip is ..., Features:, Crystal is ..., flash size) — it's
+        # just filtered out below as noise instead of boxed up nicely.
+
+        pio_path = find_pio_executable()
+        if not pio_path:
+            self._append("  ⚠ PlatformIO not found — installing automatically...", "warning")
+            self._set_status("Installing PlatformIO...", Theme.YELLOW)
+            pio_path = ensure_platformio()
+            if not pio_path:
+                self._append("  ✖ Failed to install PlatformIO!", "error")
+                self._append("  Try manually: pip install platformio", "info")
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                return False
+            self._append(f"  ✔ PlatformIO installed: {' '.join(pio_path)}", "success")
+
+        env_name = self._pio_env_name()
+        jobs = self._get_cpu_cores_jobs()
+        cmd = pio_path + [
+            "run",
+            "-e", env_name,
+            "-t", "upload",
+            "-j", str(jobs),
+            "--upload-port", port
+        ]
+
+        import os
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+        env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
+        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PYTHONDONTWRITEBYTECODE"] = "0"
+        env["SCONSFLAGS"] = f"-j{jobs}"
+        cache_dir = SCRIPT_DIR / ".pio_cache" / env_name
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            hide_hidden_attribute(SCRIPT_DIR / ".pio_cache")
+            env["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir)
+        except Exception:
+            pass
+
+        hide_internal_project_metadata(self.sketch_dir_path)
+
+        try:
+            self.process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                cwd=str(self.sketch_dir_path),
+                env=env,
+            )
+        except FileNotFoundError:
+            self._append("  ✖ PlatformIO executable not found at: " + ' '.join(pio_path), "error")
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            return False
+
+        last_pct = -1
+        img_count = 0
+        has_jtag_error = False
+        has_port_busy_error = False
+        output_lines: list[str] = []  # full raw output, used to detect "wrong boot mode" /
+                                       # "failed to connect" signatures for the connect-retry loop
+
+
+        # ── Chip-info capture ────────────────────────────────────────────────
+        # PlatformIO's own esptool invocation already prints chip model,
+        # features, crystal, MAC, and chip size while it connects — we used
+        # to open a second, separate esptool connection just to redisplay
+        # this same info in a specular box, which meant every upload did two full
+        # connect/reset handshakes with the chip. Instead we harvest these
+        # fields straight out of the single upload connection PlatformIO is
+        # already making, and show the box once they're all in.
+        _chip_info: dict[str, str] = {}
+        _chip_info_shown = [False]
+        _connected_logged = [False]
+        _connected_bar_flipped = [False]  # progress line re-rendered as green "✔ Connected"
+
+        # Lines that would normally print BEFORE the chip-info box (build
+        # stats, protocol config, connection status) are held here instead,
+        # so the box can appear right under the "Port :" line — matching
+        # where the user actually wants to see it — with everything else
+        # flushed once the box is shown. For AVR boards there is no chip-
+        # info box, so buffering is skipped entirely and lines print
+        # immediately as before.
+        _pending_pre_box: list = []
+
+        def _buffered_append(text: str, tag: str = ""):
+            # Always log connection status and live progress immediately so user sees activity
+            if is_avr or _chip_info_shown[0] or any(k in text.lower() for k in ("connect", "attempting", "connected")):
+                self._append(text, tag)
+            else:
+                # Deduplicate: PlatformIO reprints the identical protocol-config
+                # block (DEBUG/RAM/Flash/Configuring/AVAILABLE/CURRENT) on every
+                # connect attempt.  Keep only the first copy; it gets replayed
+                # once when the attempt concludes (chip box on success, summary
+                # on failure) instead of spamming the console each retry.
+                if any(t == text for t, _tag in _pending_pre_box):
+                    return
+                _pending_pre_box.append((text, tag))
+
+        def _maybe_show_chip_info_box(force: bool = False):
+            if not _chip_info_shown[0]:
+                model = _chip_info.get("Chip Model") or (self.board_var.get() if force else None)
+                if model or force:
+                    display_model = model or self.board_var.get()
+                    if _chip_info.get("Features"):
+                        _chip_info["Features"] = _enrich_chip_features(
+                            display_model, _chip_info["Features"]
+                        )
+                    if "Flash Size" not in _chip_info:
+                        configured_flash = board_info.get("flash_size")
+                        if configured_flash:
+                            _chip_info["Flash Size"] = f"{configured_flash} (configured, not auto-detected)"
+                    self._print_chip_info_box(display_model, list(_chip_info.items()))
+                    _chip_info_shown[0] = True
+                    for _text, _tag in _pending_pre_box:
+                        self._append(_text, _tag)
+                    _pending_pre_box.clear()
+
+        def _flip_to_connected_bar():
+            """Re-render the last progress line as a green '✔ Connected' bar —
+            called ONLY once esptool has actually synced with the chip (stub
+            uploaded / erase begun).  While attempts are still in flight the
+            line keeps its magenta '🔌 Connecting' look."""
+            if not is_avr and not _connected_bar_flipped[0]:
+                _connected_bar_flipped[0] = True
+                self._append_connecting_progress(
+                    _connect_retry_count + 1, _MAX_CONNECT_RETRIES, connected=True
+                )
+
+        def _mark_flashing_active():
+            if getattr(self, "_current_op_phase", "") != "flashing":
+                self._current_op_phase = "flashing"
+                self._set_window_closable(False)
+
+        compatibility_progress_state = self._new_upload_progress_state(fast_bins)
+
+        def _before_compatibility_progress():
+            _mark_flashing_active()
+            _maybe_show_chip_info_box(force=True)
+            _flip_to_connected_bar()
+
+        # ── Queue-based reader (same pattern as _run_compile) ─────────────
+        # The upload subprocess (PlatformIO → esptool) can hang indefinitely
+        # if the chip stops responding (e.g. ESP32-S3 needs manual BOOT press).
+        # A blocking for-line-in-iter(readline) loop would freeze the entire
+        # GUI forever in that case.  Instead we read via a daemon thread +
+        # Queue with a 0.1 s timeout so we can detect process exit, honour
+        # the Stop button, and drain late-arriving output after the process
+        # terminates.
+        import queue as _queue
+        import threading as _threading
+
+        _line_queue: _queue.Queue = _queue.Queue()
+
+        def _reader(stream, q):
+            try:
+                for line in iter(stream.readline, ''):
+                    if line:
+                        q.put(line)
+            except Exception:
+                pass
+            finally:
+                q.put(None)  # sentinel
+
+        _t_out = _threading.Thread(target=_reader, args=(self.process.stdout, _line_queue), daemon=True)
+        _t_out.start()
+
+        _sentinels_remaining = 1
+        _process_exited_at = None
+        _connecting_since = None  # disarmed — armed once esptool reaches the connection stage
+
+        # ── Connection timeout ──────────────────────────────────────────
+        # ESP32-S3 / native-USB boards can hang esptool indefinitely if the
+        # chip doesn't enter bootloader mode (e.g. user forgot to press BOOT).
+        # If the process stays stuck in the "Connecting" phase without
+        # syncing after _CONNECT_TIMEOUT seconds, we kill it and try the next
+        # attempt instead of long freezing.
+        #
+        # IMPORTANT: the watchdog stays DISARMED until esptool actually
+        # reaches the connection stage (PlatformIO prints "Looking for upload
+        # port" / "Serial port" / "Connecting..." then).  Everything before
+        # that — PlatformIO's silent build-cache clean at startup (triggered
+        # by the GUI's platformio.ini rewrite changing project.checksum),
+        # which can take several seconds on slow/removable volumes — must
+        # never be killed by this watchdog, or every attempt dies before the
+        # chip is even addressed.
+        _CONNECT_TIMEOUT = 5  # seconds
+
+        _timeout_triggered = [False]
+
+        # ── Connection retry state ──────────────────────────────────────
+        # When esptool fails with "Wrong boot mode" / "Failed to connect",
+        # we retry the upload subprocess up to MAX_CONNECT_RETRIES times
+        # instead of giving up immediately. Each retry restarts the Popen
+        _CONNECT_FAIL_SIGNATURES = (
+            "wrong boot mode", "failed to connect",
+            "no serial data received", "timed out waiting for packet",
+            "device not found", "permissionerror", "access is denied",
+            "port is busy", "could not open port", "permission denied",
+            "connection timed out", "timed out after", "not responding",
+        )
+
+        # Each PlatformIO retry incurs a full SCons/project scan. The fast
+        # esptool path above performs the rapid connection polling; keep this
+        # compatibility fallback bounded.
+        _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+        _connect_retry_count = 0
+        _last_dot_update = [0.0]
+        _connection_dot_count = [0]
+
+        # ── Print the initial "Connecting..." line proactively ───────────
+        # This shows BEFORE esptool's first output, so the user knows
+        # immediately that a connection attempt is in progress and can
+        # press the BOOT button on their board.
+        if not is_avr:
+            self._append_connecting_progress(1, _MAX_CONNECT_RETRIES)
+            _connected_logged[0] = True
+            _set_upload_phase("Connecting")
+
+        while True:
+            while _sentinels_remaining > 0:
+                try:
+                    line = _line_queue.get(timeout=0.1)
+                except _queue.Empty:
+                    # ── Animate the "Connecting....." dot count in the status bar ──
+                    if (not is_avr and _upload_phase_idx[0] <= _PHASE_KEYS.index("Connecting")
+                            and time.time() - _last_dot_update[0] > 0.8):
+                        _last_dot_update[0] = time.time()
+                        dots = max(3, (_connection_dot_count[0] % 10) + 1)
+                        _connection_dot_count[0] = dots
+                        dot_str = "." * dots
+                        self._set_status(
+                            f"Connecting{dot_str} ({_connect_retry_count + 1}/{_MAX_CONNECT_RETRIES})",
+                            Theme.MAGENTA,
+                        )
+
+                    # After the process exits, give the reader thread a generous
+                    # window to flush any pending data. Only bail after 5 s of
+                    # no new data post-exit.
+                    if self.process.poll() is not None:
+                        if _process_exited_at is None:
+                            _process_exited_at = time.time()
+                        elif time.time() - _process_exited_at > 5:
+                            break
+                    # Allow the Stop button to interrupt a hung upload
+                    if getattr(self, "_stop_requested", False):
+                        break
+                    # Connection timeout: if we've been stuck in "Connecting"
+                    # phase for too long with no output, kill the process.
+                    if (_connecting_since is not None
+                            and _upload_phase_idx[0] <= _PHASE_KEYS.index("Connecting")
+                            and time.time() - _connecting_since > _CONNECT_TIMEOUT):
+                        _timeout_triggered[0] = True
+                        # No console noise here — the progress bar increment
+                        # already tells the user the attempt failed.  The
+                        # captured protocol-config block and the real error
+                        # are replayed once at the end of the retry loop.
+                        try:
+                            self.process.kill()
+                        except Exception:
+                            pass
+                        break
+                    continue
+
+                if line is None:
+                    _sentinels_remaining -= 1
+                    continue
+
+                # Reset the post-exit timer whenever we receive real data
+                _process_exited_at = None
+
+                stripped = line.rstrip()
+                if not stripped:
+                    continue
+                output_lines.append(stripped)
+                low = stripped.lower()
+
+                # Arm the connection watchdog only once the upload has really
+                # reached the serial/connection stage.  Earlier output (PIO
+                # banner, build-cache clean retries, SCons checks) is silent
+                # or slow on removable drives and must not count against the
+                # connect timeout.
+                if _connecting_since is None and (
+                    "looking for upload port" in low
+                    or "serial port" in low
+                    or "connecting" in low
+                ):
+                    _connecting_since = time.time()
+
+                if any(x in low for x in ("error", "failed", "unable", "cannot")) and any(x in low for x in ("esp_usb_jtag", "openocd", "jtag")):
+                    has_jtag_error = True
+                if any(x in low for x in ("permissionerror", "access is denied", "port is busy", "could not open port", "permission denied")):
+                    has_port_busy_error = True
+
+                # Opportunistic chip-info capture
+                if not is_avr:
+                    m = re.search(r'chip (?:is|type)\s*:?\s+(.+)$', stripped, re.IGNORECASE)
+                    if m:
+                        _chip_info["Chip Model"] = m.group(1).strip()
+                    m = re.search(r'features\s*:\s*(.+)$', stripped, re.IGNORECASE)
+                    if m:
+                        _chip_info["Features"] = m.group(1).strip()
+                    m = re.search(r'crystal (?:is|frequency)\s*:?\s+(.+)$', stripped, re.IGNORECASE)
+                    if m:
+                        _chip_info["Crystal"] = m.group(1).strip()
+                    m = re.search(r'^\s*mac\s*:\s*(.+)$', stripped, re.IGNORECASE)
+                    if m:
+                        _chip_info["MAC Address"] = m.group(1).strip()
+                    m = re.search(r'(?:auto-detected\s+)?flash size\s*:\s*(.+)$', stripped, re.IGNORECASE)
+                    if m:
+                        _chip_info["Flash Size"] = m.group(1).strip()
+
+                # ── PlatformIO build-info lines (shown for all boards) ──────────
+                if low.startswith("platform:"):
+                    continue
+                if low.startswith("hardware:"):
+                    continue
+                if low.startswith("debug:"):
+                    _buffered_append(f"  {stripped}", "dim")
+                    continue
+                if "ram:" in low or "flash:" in low:
+                    _buffered_append(f"  {stripped}", "success")
+                    continue
+                # Upload protocol config lines
+                if re.match(r"\s*(configuring upload protocol|available:|current:)", low):
+                    _buffered_append(f"  {stripped}", "dim")
+                    continue
+                # PIO result line  "=== [SUCCESS] Took X.XX seconds ==="
+                pio_result = re.search(r'=+\s*\[(SUCCESS|FAILED)\]\s*Took\s*([\d.]+)\s*seconds', stripped, re.IGNORECASE)
+                if pio_result:
+                    verdict = pio_result.group(1).upper()
+                    secs    = pio_result.group(2)
+                    if verdict == "SUCCESS":
+                        self._append(f"  {stripped}", "success")
+                    else:
+                        can_retry = (not is_avr and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
+                        if not can_retry:
+                            self._append(f"  {stripped}", "error")
+                    continue
+
+                # Transform esptool's many raw Writing/Wrote rows into the
+                # same single responsive progress row used by the fast path.
+                if (not is_avr and self._consume_esptool_upload_progress(
+                        compatibility_progress_state, stripped,
+                        before_progress=_before_compatibility_progress,
+                        phase_callback=_set_upload_phase)):
+                    continue
+
+                # ── Suppress low-level protocol noise ───────────────────────────
+                _NOISE = (
+                    "auto-detected:", "chip is", "chip type:", "features:",
+                    "crystal is", "crystal frequency:", "mac:",
+                    "uploading stub", "running stub", "stub running",
+                    "changing baud", "compressed", "leaving...",
+                    "warning: espcomm", "esptool.py v", "serial port",
+                    "v2.", "v3.", "v4.", "v5.",   # version lines
+                )
+
+                if any(n in low for n in _NOISE):
+                    # Still advance phase silently from noise lines
+                    if "erasing" in low or "erase" in low:
+                        _set_upload_phase("Erasing")
+                        _mark_flashing_active()
+                    elif "writing" in low:
+                        _set_upload_phase("Writing")
+                        _mark_flashing_active()
+                    elif "verifying" in low or "hash" in low:
+                        _set_upload_phase("Verifying")
+                    elif "leaving" in low or "hard reset" in low:
+                        _set_upload_phase("Resetting")
+                    continue
+
+                if is_avr:
+                    # avrdude output — map to clean structured lines
+                    if "avr device initialized" in low or "device signature" in low:
+                        _set_upload_phase("Connecting")
+                        self._append("  🔌 Connected to Arduino Uno", "system")
+                    elif "writing flash" in low or "writing eeprom" in low:
+                        _set_upload_phase("Writing")
+                    elif "verifying flash" in low or "verifying eeprom" in low:
+                        _set_upload_phase("Verifying")
+                    elif "avrdude done" in low or "bytes of flash" in low or "bytes written" in low:
+                        _set_upload_phase("Done")
+                        self._append(f"  {stripped}", "success")
+                    elif "error" in low or "failed" in low:
+                        self._append(f"  {stripped}", "error")
+                else:
+                    # ESP boards
+                    if "connecting" in low:
+                        _set_upload_phase("Connecting")
+                        _mark_flashing_active()
+                        if not _connected_logged[0]:
+                            self._append("", "")
+                            self._append("  🔌 Attempting to connect to ESP board...", "info")
+                            _connected_logged[0] = True
+                        if _connecting_since is None:
+                            _connecting_since = time.time()
+                    elif "stub running" in low or "running stub" in low or "uploading stub" in low:
+                        _set_upload_phase("Connecting")
+                        _mark_flashing_active()
+                        if not _connected_logged[0]:
+                            self._append("", "")
+                            self._append("  🔌 Attempting to connect to ESP board...", "info")
+                            _connected_logged[0] = True
+                        _maybe_show_chip_info_box()
+                        _flip_to_connected_bar()
+                    elif "erasing" in low:
+                        _mark_flashing_active()
+                        if _upload_phase_idx[0] <= _PHASE_KEYS.index("Connecting"):
+                            _maybe_show_chip_info_box(force=True)
+                        _flip_to_connected_bar()
+                        _set_upload_phase("Erasing")
+                    elif re.search(r'\d+\s*%', stripped):
+                        _mark_flashing_active()
+                        if _upload_phase_idx[0] <= _PHASE_KEYS.index("Connecting"):
+                            _maybe_show_chip_info_box(force=True)
+                        _flip_to_connected_bar()
+                        _set_upload_phase("Writing")
+                    elif "verifying" in low:
+                        _set_upload_phase("Verifying")
+                    elif "hard resetting" in low:
+                        _set_upload_phase("Resetting")
+                        _maybe_show_chip_info_box()
+                        _buffered_append(f"  {stripped}", "success")
+                    elif "wrote" in low or ("success" in low and "image" not in low):
+                        _set_upload_phase("Done")
+                        self._append(f"  {stripped}", "success")
+                    elif "successfully created" in low and "image" in low:
+                        chip_match = re.search(r'successfully created (\w+) image', low)
+                        chip_name = chip_match.group(1).upper() if chip_match else "MCU"
+                        img_count += 1
+                        label = "Bootloader" if img_count == 1 else "Application"
+                        self._append(f"  ✔ Successfully created {chip_name} image ({label})", "success")
+                    elif is_nonfatal_pio_clean_report(stripped):
+                        self._append(f"  ⚠ {stripped}", "warning")
+                    elif "error" in low or "failed" in low:
+                        is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
+                        can_retry = (not is_avr and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
+                        if not (is_conn_sig and can_retry):
+                            self._append(f"  {stripped}", "error")
+
+            # Drain any lines that arrived after the main loop exited
+            while not _line_queue.empty():
+                try:
+                    line = _line_queue.get_nowait()
+                except _queue.Empty:
+                    break
+                if line is None:
+                    continue
+                stripped = line.rstrip()
+                if not stripped:
+                    continue
+                output_lines.append(stripped)
+                low = stripped.lower()
+                if (not is_avr and self._consume_esptool_upload_progress(
+                        compatibility_progress_state, stripped,
+                        before_progress=_before_compatibility_progress,
+                        phase_callback=_set_upload_phase)):
+                    continue
+                if is_nonfatal_pio_clean_report(stripped):
+                    self._append(f"  ⚠ {stripped}", "warning")
+                elif "error" in low or "failed" in low:
+                    is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
+                    can_retry = (not is_avr and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
+                    if not (is_conn_sig and can_retry):
+                        self._append(f"  {stripped}", "error")
+                elif "success" in low or "wrote" in low or "hard resetting" in low:
+                    self._append(f"  {stripped}", "success")
+
+            _t_out.join(timeout=5)
+            self.process.wait()
+            rc = self.process.returncode
+
+            # ── Retry on connection failure ──────────────────────────────────
+            joined = " ".join(line.rstrip().lower() for line in output_lines)
+            is_conn_failure = (not is_avr and rc != 0 and (_timeout_triggered[0] or any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES)))
+
+            if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
+                _connect_retry_count += 1
+                _timeout_triggered[0] = False
+                _connected_bar_flipped[0] = False  # next connect must re-flip to green
+                retry_dots = "." * (4 + _connect_retry_count)
+
+                if any(x in joined for x in ("permissionerror", "access is denied", "port is busy", "could not open port", "permission denied")):
+                    time.sleep(0.2)
+
+
+                self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+
+                self._set_status(
+                    f"Connecting{retry_dots} ({_connect_retry_count + 1}/{_MAX_CONNECT_RETRIES})",
+                    Theme.MAGENTA,
+                )
+
+                # Restart the upload subprocess with the same command.
+                try:
+                    self.process = subprocess.Popen(
+                        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, encoding="utf-8", errors="replace",
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        cwd=str(self.sketch_dir_path),
+                        env=env,
+                    )
+                except Exception:
+                    break
+
+                # Reset state for the retried subprocess.
+                # NOTE: _pending_pre_box is intentionally NOT cleared — the
+                # protocol-config block captured on the first attempt is deduped
+                # and replayed once when the upload concludes.
+                output_lines.clear()
+                _line_queue = _queue.Queue()
+                _t_out = _threading.Thread(target=_reader, args=(self.process.stdout, _line_queue), daemon=True)
+                _t_out.start()
+                _sentinels_remaining = 1
+                _process_exited_at = None
+                _connecting_since = None  # disarm — re-armed by the connection-stage marker
+                continue
+            else:
+                # rc != 0 and no retry left.  Leave _pending_pre_box intact —
+                # it is replayed once, with RAM/Flash recolored red, by the
+                # failure summary below (after the actual error message).
+                break
+
+        # Stop the spinner (retry loop is done).
+        _upload_active[0] = False
+        _upload_spin_thread.join(timeout=1)
+
+        ok = rc == 0
+
+        if ok:
+            self._append("")
+            board_label = self.board_var.get()
+            self._append(f"  ✔ Upload successful! {board_label} is running...", "success")
+            self._set_status(f"Upload OK — {board_label} running", Theme.GREEN)
+            
+            # Enable and check Skip Compile after successful compile and upload
+            self.root.after(0, self._update_skip_compile_state)
+
+            # Jump to the Serial Monitor tab once the lock clears below, so
+            # the user immediately sees the board's fresh boot output.
+            self._focus_tab_on_unlock = 1
+        else:
+
+            self._append("")
+            # Show the actual error that ended the retry loop (the progress bar
+            # already communicated the failed attempts, so only the final
+            # verdict + real reason are printed here).
+            if _timeout_triggered[0]:
+                self._append(
+                    f"  ✖ Failed to connect to ESP32 on {port} — no response "
+                    f"after {_MAX_CONNECT_RETRIES} attempts. "
+                    f"MCU needs to be on 'download_mode' state.",
+                    "error",
+                )
+            # Replay the captured protocol-config block once, right after the
+            # error.  RAM/Flash usage lines turn RED on failure (the success
+            # path colors them GREEN when the chip-info box flushes the block).
+            if _pending_pre_box:
+                for _text, _tag in _pending_pre_box:
+                    if _tag == "success" and ("ram:" in _text.lower() or "flash:" in _text.lower()):
+                        self._append(_text, "error")
+                    else:
+                        self._append(_text, _tag)
+                _pending_pre_box.clear()
+            self._append("")
+            if _timeout_triggered[0]:
+                self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
+                self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
+                self._append("")
+            self._append("  ✖ Upload FAILED.", "error")
+            if has_port_busy_error:
+                self._append(f"  💡 Port '{port}' is in use by another program (e.g. Serial Monitor, PuTTY, Arduino IDE, or Python).", "info")
+                self._append("  💡 Solution: Close any other app using this port or unplug & replug your USB cable.", "info")
+            self._set_status("Upload FAILED", Theme.RED)
+            
+            # Update Skip Compile on failure
+            self.root.after(0, self._update_skip_compile_state)
+
+            if has_jtag_error:
+                pio_dir = self.sketch_dir_path / ".pio"
+                if pio_dir.exists():
+                    if robust_rmtree(pio_dir):
+                        self._append("  📝 Cleared SCons build cache (.pio) to resolve the JTAG config conflict.", "warning")
+                        self._append("  👉 Please click UPLOAD again! It will now compile and upload cleanly over serial.", "info")
+                    else:
+                        self._append(f"  ⚠ Failed to auto-clear .pio folder: {pio_dir}", "warning")
+
+        self.is_busy = False
+        self._current_op_phase = None
+        self._set_buttons_busy(False)
+        self._set_window_closable(True)
+        
+        # Resume the monitor on successful upload (triggering hardware reset so setup() output is captured)
+        if ok:
+            if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+                self._clear_serial_console()
+            self._manual_reset_pending = True
+            self._monitor_should_run = True
+            self._resume_monitor()
+        elif was_monitoring:
+            # If upload failed, but we were monitoring, resume the monitor
+            self._resume_monitor()
+
+        return ok
+
+    def _trigger_actual_board_reset(self, port: str):
+        """Briefly open the port and toggle DTR/RTS to trigger a hardware reset."""
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append(f"  ⚠ Hardware reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            return
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_uno = (board_info.get("platform", "") == "atmelavr")
+        self._append(f"  🔄 Triggering hardware reset on {port}...", "info")
+        try:
+            # 1. Native USB-CDC (ESP32-S3) 1200-baud touch reset fallback
+            if not is_uno and self._is_native_usb_port():
+                try:
+                    with serial.Serial(port, baudrate=1200, timeout=0.1) as c1200:
+                        c1200.dtr = False
+                        c1200.rts = True
+                        time.sleep(0.1)
+                        c1200.rts = False
+                        c1200.dtr = False
+                except Exception:
+                    pass
+                time.sleep(0.3)
+
+            # 2. Standard esptool.py DTR/RTS hardware reset pulse
+            with serial.Serial(port, baudrate=115200, timeout=0.1, dsrdtr=False, rtscts=False) as conn:
+                if is_uno:
+                    conn.dtr = False
+                    time.sleep(0.05)
+                    conn.dtr = True
+                    time.sleep(0.05)
+                    conn.dtr = False
+                else:
+                    # Official esptool hard_reset sequence:
+                    # DTR=False, RTS=True -> pulls EN low (Reset)
+                    # RTS=False -> EN goes high (MCU boots sketch)
+                    conn.dtr = False
+                    conn.rts = True
+                    time.sleep(0.15)
+                    conn.rts = False
+                    conn.dtr = False
+                time.sleep(0.05)
+            self._append("  ✔ Hardware reset triggered.", "success")
+            self._skip_reconnect_reset = True
+        except Exception as e:
+            self._append(f"  ⚠ Could not trigger hardware reset: {e}", "warning")
+
+    # ──────────────────────────────────────────────────────────
+    # SERIAL MONITOR (always-on, right panel)
+    # ──────────────────────────────────────────────────────────
+    def _reset_mcu_from_monitor(self):
+        """Reset the MCU via DTR/RTS pulse and restart the serial monitor."""
+        port = self._get_port()
+        if not port:
+            self._append_notif("  ⚠ No port selected — cannot reset.", "warning")
+            return
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append_notif(f"  ⚠ Reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            return
+        if self.is_busy and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"):
+            self._append_notif("  ⚠ Reset blocked — an operation (uploading/resetting) is currently in progress.", "warning")
+            return
+
+        if not self._is_board_recognized():
+            if not getattr(self, "_silent_reset", False):
+                self._append_notif("  ⚠ Reset blocked — board on this port hasn't been recognized yet.", "warning")
+            return
+
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_uno = (board_info.get("platform", "") == "atmelavr")
+        
+        silent = getattr(self, "_silent_reset", False)
+        if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+            self._clear_serial_console()
+        if not silent:
+            self._append_notif(f"  ↺ Resetting MCU on {port}…", "dim")
+            self._append_serial(f"  ↺ Resetting MCU on {port}…", "dim")
+
+        def _reset_worker():
+            was_monitoring = self.serial_running
+            if was_monitoring:
+                self.serial_running = False
+                if self.serial_conn and self.serial_conn.is_open:
+                    try:
+                        self.serial_conn.close()
+                    except Exception:
+                        pass
+                if self.serial_thread and self.serial_thread.is_alive() and threading.current_thread() != self.serial_thread:
+                    self.serial_thread.join(timeout=1.0)
+                self.root.after(0, lambda: self._set_serial_status(False))
+
+            self._manual_reset_pending = True
+            self.root.after(0, lambda: self._schedule_auto_start_monitor(100))
+
+        import threading
+        threading.Thread(target=_reset_worker, daemon=True, name="MCU-Reset-Worker").start()
+
+    def _run_monitor(self, port: str, baud: int):
+        silent = getattr(self, "_silent_reset", False)
+        self._set_serial_status(False)
+
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append_notif(f"  ⚠ Serial Monitor blocked: {port} is in use by another window (PID {owner_pid}).", "warning")
+            self.serial_running = False
+            self._set_serial_status(False)
+            return
+
+        # ── Board-aware pre-connect strategy ──────────────────────────────
+        # ESP32/ESP8266: boot takes ~500 ms–2 s after the port opens, so a
+        # short delay is fine — we won't miss anything important.
+        #
+        # Arduino UNO (ATmega328P): opening the port asserts DTR which
+        # IMMEDIATELY resets the MCU.  The bootloader runs for ~2 s and then
+        # hands off to setup().  If we wait even 1 s before reading, the
+        # entire setup() block is gone.
+        #
+        # Strategy for UNO:
+        #  1. Open the port with DTR *de-asserted* (dtr=False) so we don't
+        #     accidentally trigger an extra reset when the port opens.
+        #  2. Pulse DTR low→high→low to reset the board ourselves, at a
+        #     moment we control.
+        #  3. Start reading immediately — the bootloader and setup() output
+        #     will both be captured.
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        is_uno = (board_info.get("platform", "") == "atmelavr")
+
+        # Determine if this connection attempt is a rapid duplicate of a failed attempt
+        current_time = time.time()
+        is_duplicate = (
+            getattr(self, "_last_conn_attempt", {}).get("port") == port
+            and getattr(self, "_last_conn_attempt", {}).get("baud") == baud
+            and getattr(self, "_last_conn_attempt", {}).get("board") == board_name
+            and (current_time - getattr(self, "_last_conn_attempt", {}).get("time", 0.0)) < 4.0
+        )
+
+        if not is_duplicate:
+            port_warning = self._unrecognized_mcu_port_warning(port)
+            if port_warning:
+                self._append_notif(port_warning, "warning")
+            if is_uno:
+                self._append_notif(f"  Connecting to {port} @ {baud} (Arduino AVR mode)…", "dim")
+            else:
+                self._append_notif(f"  Connecting to {port} @ {baud}…", "dim")
+
+        # Save this attempt details
+        self._last_conn_attempt = {
+            "port": port,
+            "baud": baud,
+            "board": board_name,
+            "time": current_time,
+        }
+
+        is_native_usb = self._is_native_usb_port()
+        is_first_connect = not getattr(self, "_first_connect_done", False)
+        is_manual_reset = getattr(self, "_manual_reset_pending", False)
+
+        if not is_uno:
+            if is_first_connect or is_manual_reset:
+                # First connect: board is already running, no boot delay needed.
+                # Manual reset: board hasn't been reset yet — we'll do it after
+                # opening the port so we can read the boot output immediately.
+                # On native USB-CDC (ESP32-S3) any unnecessary delay between
+                # opening the port and starting to read risks filling the MCU's
+                # USB TX buffer, which blocks Serial.print() and freezes the
+                # running sketch permanently.
+                pass
+            else:
+                time.sleep(1.0)   # ESP32/ESP8266: brief pause while board boots
+
+        # Try to open the port with retries to handle transient OS/driver locks (silently up to 5s)
+        max_attempts = 25
+        attempt = 0
+        while attempt < max_attempts:
+            # Gracefully abort immediately if busy with upload/flash/reset, or if monitor is stopped/paused
+            if (not getattr(self, "_monitor_should_run", False)
+                    or not getattr(self, "serial_running", False)
+                    or (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"))):
+                self.serial_running = False
+                return
+            try:
+                # Construct serial object and set DTR/RTS to False BEFORE opening
+                # so Win32 SetCommState initializes with DTR_CONTROL_DISABLE and RTS_CONTROL_DISABLE
+                # from the very first microsecond, preventing an initial DTR/RTS toggle reset pulse.
+                conn = serial.Serial()
+                conn.dtr = False
+                conn.rts = False
+                conn.port = port
+                conn.baudrate = baud
+                conn.timeout = 0.1
+                conn.dsrdtr = False
+                conn.rtscts = False
+                conn.open()
+                self.serial_conn = conn
+                self._last_monitor_error = ""
+
+                # Auto Clear serial monitor when connecting, if enabled
+                if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+                    self._clear_serial_console()
+
+                # For ESP32/ESP8266: ONLY pulse DTR/RTS when the user explicitly requests
+                # a manual hardware reset (is_manual_reset == True).
+                # Connecting at startup, port change, or hotplug MUST NOT interrupt or reset the running ESP/MCU.
+                if not is_uno and is_manual_reset:
+                    try:
+                        self.serial_conn.dtr = False
+                        self.serial_conn.rts = True
+                        time.sleep(0.15)
+                        self.serial_conn.rts = False
+                        self.serial_conn.dtr = False
+                        time.sleep(0.05)
+                    except Exception:
+                        pass
+                    self._manual_reset_pending = False
+
+                break
+            except serial.SerialException as e:
+                attempt += 1
+                if attempt < max_attempts:
+                    time.sleep(0.2)
+                else:
+                    err_msg = str(e)
+                    if getattr(self, "_last_monitor_error", "") != err_msg:
+                        self._last_monitor_error = err_msg
+                        self._append_notif(f"  ✖ Cannot open {port}: {e}", "error")
+                    self.serial_running = False
+                    self._set_serial_status(False)
+                    self._silent_reset = False
+                    # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
+                    if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
+                        self._schedule_auto_start_monitor(2000)
+                    return
+
+        self.serial_running = True
+        self._monitor_should_run = True
+        self._first_connect_done = True      # mark so future reconnects reset the MCU
+        self._set_serial_status(True)
+        if is_uno:
+            self._append_notif(f"  ✔ Connected — {port} @ {baud}  [Output captured]", "success")
+        else:
+            if not silent:
+                self._append_notif(f"  ✔ Connected — {port} @ {baud}", "success")
+
+        # _silent_reset is a one-shot flag (set by folder-switch auto-reset);
+        # clear it here so future connects/messages aren't silenced forever.
+        self._silent_reset = False
+
+        # ── ESP boot-loop banner detection ──────────────────────────────────
+        _boot_banner_seen = [0]
+        _boot_loop_notified = [False]
+        _BOOT_BANNER_PREFIXES = (
+            "build:", "rst:0x", "saved pc:", "spiwp:", "mode:",
+            "load:0x", "entry 0x",
+        )
+
+        def _is_boot_loop_noise(raw_text: str) -> bool:
+            low_t = raw_text.strip().lower()
+            if low_t.startswith("esp-rom:"):
+                _boot_banner_seen[0] += 1
+                if _boot_banner_seen[0] >= 5:
+                    if not _boot_loop_notified[0]:
+                        _boot_loop_notified[0] = True
+                        self._append_notif("", "")
+                        self._append_notif(
+                            f"  ⚠ {board_name}'s bootloader was burned, but no sketch is "
+                            "running — the chip is stuck resetting in a loop.",
+                            "warning",
+                        )
+                        self._append_notif("  📤 Please upload your sketch to continue.", "info")
+                    return True
+                return False
+            
+            if _boot_loop_notified[0] and low_t.startswith(_BOOT_BANNER_PREFIXES):
+                return True
+            
+            return False
+
+        def _filter_boot_loop_from_buffer(byte_buf: bytes) -> bytes:
+            """Remove ESP32 boot loop banner patterns only if an infinite loop is detected."""
+            if not byte_buf:
+                return byte_buf
+            if _boot_loop_notified[0]:
+                text = byte_buf.decode("utf-8", errors="replace")
+                low_text = text.lower()
+                if low_text.startswith("esp-rom:") or "rst:0x" in low_text:
+                    return b""
+            return byte_buf
+
+        # ── Read loop ────────────────────────────────────────────────────
+        # This is the actual monitor: keep pulling bytes off the port and
+        # pushing complete lines into the Serial Monitor panel until either
+        # the connection drops or something (pause/restart/port-removal)
+        # flips serial_running/_monitor_should_run off.
+        buf = b""
+        last_read_time = time.time()
+        try:
+            while self.serial_running and self._monitor_should_run:
+                try:
+                    n = self.serial_conn.in_waiting
+                    chunk = self.serial_conn.read(n if n else 1)
+                except (serial.SerialException, OSError) as e:
+                    if self.serial_running:
+                        self._append_notif(f"  ✖ Serial connection lost: {e}", "error")
+                    break
+
+                if not chunk:
+                    # If we have buffered text without a newline for > 80ms, display it immediately
+                    if buf and (time.time() - last_read_time) > 0.08:
+                        text = buf.decode("utf-8", errors="replace").rstrip("\r")
+                        buf = b""
+                        if text and not self._monitor_paused and not _is_boot_loop_noise(text):
+                            self._append_tagged_line(text, is_newline=False)
+                    continue
+
+                last_read_time = time.time()
+                buf += chunk
+                # Filter boot loop noise from buffer before processing
+                buf = _filter_boot_loop_from_buffer(buf)
+                # Guard against unbounded buffer growth (e.g. \r-only lines)
+                if len(buf) > 16384:
+                    buf = buf[-8192:]
+                while b"\n" in buf or b"\r" in buf:
+                    # Treat \r as a line separator too (ESP ROM output uses \r\n or bare \r)
+                    sep = b"\n" if b"\n" in buf else b"\r"
+                    raw, buf = buf.split(sep, 1)
+                    # Remove leftover \r or \n from the front of remaining buffer
+                    if buf.startswith(b"\r") and sep == b"\n":
+                        pass
+                    elif buf.startswith(b"\n") and sep == b"\r":
+                        buf = buf[1:]
+                    text = raw.decode("utf-8", errors="replace").rstrip("\r")
+                    if self._monitor_paused:
+                        continue
+                    if text and not _is_boot_loop_noise(text):
+                        self._append_tagged_line(text, is_newline=True)
+        finally:
+            # Flush any trailing partial line that never got a newline.
+            if buf:
+                text = buf.decode("utf-8", errors="replace").rstrip("\r")
+                if text and not self._monitor_paused and not _is_boot_loop_noise(text):
+                    self._append_tagged_line(text, is_newline=True)
+
+            self.serial_running = False
+            self._set_serial_status(False)
+            try:
+                if self.serial_conn and self.serial_conn.is_open:
+                    self.serial_conn.close()
+            except Exception:
+                pass
+
+            # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
+            if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
+                self._schedule_auto_start_monitor(2000)
+
+    def _build_editor(self, parent_frame):
+        """Dispatch to the active editor implementation based on the
+        configured editor mode ('default' Tkinter editor or 'monaco')."""
+        mode = getattr(self, "editor_mode", "default")
+        if mode == "monaco":
+            self._build_editor_monaco(parent_frame)
+        else:
+            self._build_editor_default(parent_frame)
+
+    def _build_editor_monaco(self, parent_frame):
+        """Host the Monaco code editor pane.
+
+        On Windows, the pywebview-hosted editor is a genuinely separate
+        native OS window under the hood. Rather than let it float on its
+        own, we reparent its native window handle (via the Win32 API) so
+        it renders natively inside this Tkinter frame — a single window
+        overall. If that isn't possible (non-Windows, or pywin32 missing),
+        we fall back to a button that opens the editor as its own window,
+        which is exactly the old behavior.
+        """
+        parent_frame.configure(bg=Theme.BG_DARKEST)
+
+        self._editor_embed_frame = parent_frame
+        self._editor_hwnd = None
+        self._editor_embedded = False
+        self._editor_reparent_attempts = 0
+
+        # Placeholder / fallback UI. Hidden automatically once the editor
+        # is successfully embedded; stays visible (with the popup button)
+        # if embedding isn't available on this platform/setup.
+        placeholder = tk.Frame(parent_frame, bg=Theme.BG_DARKEST)
+        placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self._editor_placeholder = placeholder
+        
+        spinner = tk.Canvas(
+            placeholder, width=48, height=48,
+            bg=Theme.BG_DARKEST, highlightthickness=0
+        )
+        spinner.pack(pady=(0, 6))
+        self._editor_spinner_canvas = spinner
+        self._editor_spinner_angle = 0
+        self._editor_spinner_job = None
+        self._editor_content_loaded = False 
+        self._animate_editor_spinner()
+
+        status_lbl = tk.Label(
+            placeholder,
+            text="📝 Loading code editor…",
+            font=tkfont.Font(family="Montserrat", size=16, weight="bold"),
+            fg=Theme.CYAN, bg=Theme.BG_DARKEST
+        )
+        status_lbl.pack(pady=10)
+        self._editor_status_lbl = status_lbl
+
+        desc_lbl = tk.Label(
+            placeholder,
+            text="Attaching the editor to this window…",
+            font=tkfont.Font(family="Montserrat", size=10),
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        desc_lbl.pack(pady=5)
+        self._editor_desc_lbl = desc_lbl
+
+        def open_editor_win():
+            if hasattr(self, "editor_window"):
+                self.editor_window.show()
+                self.editor_window.restore()
+
+        self._editor_fallback_btn = self._make_btn(
+            placeholder, "Open Editor Window", open_editor_win,
+            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, font=tkfont.Font(family="Montserrat", size=10, weight="bold")
+        )
+        # Only packed (shown) if/when embedding fails — see
+        # _try_embed_editor_window below.
+
+        # Keep the embedded editor window sized to match this frame.
+        parent_frame.bind("<Configure>", self._resize_embedded_editor)
+
+        # Initialize callbacks to evaluate_js on the webview window
+        self._load_editor_files = lambda: self.editor_window.evaluate_js("loadProject()") if hasattr(self, "editor_window") else None
+        self._save_all_editor_files = lambda: self.editor_window.evaluate_js("saveAllFiles()") if hasattr(self, "editor_window") else None
+        self._save_current_editor_file = lambda: self.editor_window.evaluate_js("saveActiveFile()") if hasattr(self, "editor_window") else None
+        self._reload_current_editor_file = lambda: self.editor_window.evaluate_js("reloadActiveFile()") if hasattr(self, "editor_window") else None
+
+    def _build_editor_default(self, parent_frame):
+        """Build the embedded tabbed code-editor container showing all .ino / .cpp / .h
+        source files in the current sketch directory.
+        """
+        self.editor_content_frame = tk.Frame(parent_frame, bg=Theme.BG_DARKEST)
+        self.editor_content_frame.pack(fill=tk.BOTH, expand=True)
+        parent_frame = self.editor_content_frame
+        if not hasattr(self, "editor_font"):
+            self.editor_font = tkfont.Font(family="Consolas", size=10)
+        if not hasattr(self, "editor_font_sm"):
+            self.editor_font_sm = tkfont.Font(family="Consolas", size=9)
+        if not hasattr(self, "editor_font_bold"):
+            self.editor_font_bold = tkfont.Font(family="Consolas", size=10, weight="bold")
+        if not hasattr(self, "editor_font_italic"):
+            self.editor_font_italic = tkfont.Font(family="Consolas", size=10, slant="italic")
+
+        sketch_dir = self.sketch_dir_path
+
+        # ── Syntax-highlight token specs ──────────────────────────────────
+        # Each entry: (tag_name, compiled_regex)
+        # Tags are applied in order; later tags overwrite earlier ones for
+        # the same character range — so comments / strings come last and win.
+        C_KEYWORDS = (
+            r"\b(?:void|int|long|unsigned|float|double|char|bool|byte|boolean|"
+            r"short|uint8_t|uint16_t|uint32_t|int8_t|int16_t|int32_t|size_t|"
+            r"String|const|static|volatile|class|struct|enum|typedef|namespace|"
+            r"public|private|protected|new|delete|this|nullptr|NULL|true|false|"
+            r"return|if|else|for|while|do|switch|case|break|continue|default|"
+            r"auto|inline|explicit|virtual|override|template|typename)\b"
+        )
+        ARDUINO_KEYWORDS = (
+            r"\b(?:setup|loop|pinMode|digitalWrite|digitalRead|analogWrite|"
+            r"analogRead|delay|millis|micros|Serial|Serial1|Serial2|Wire|SPI|"
+            r"HIGH|LOW|INPUT|OUTPUT|INPUT_PULLUP|LED_BUILTIN|A0|A1|A2|A3|A4|A5|"
+            r"digitalPinToInterrupt|attachInterrupt|detachInterrupt|CHANGE|RISING|FALLING|"
+            r"map|constrain|min|max|abs|sqrt|pow|sin|cos|tan|random|randomSeed|"
+            r"String|strlen|strcmp|strcpy|sprintf|memset|memcpy|sizeof|"
+            r"xTaskCreate|xTaskCreatePinnedToCore|vTaskDelay|pdMS_TO_TICKS|"
+            r"portMAX_DELAY|configTICK_RATE_HZ|uxTaskGetStackHighWaterMark)\b"
+        )
+        SYN_SPECS = [
+            ("syn_preproc",  re.compile(r"(?m)^[ \t]*#\w+[^\n]*")),
+            ("syn_number",   re.compile(r"\b0x[0-9A-Fa-f]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?[fFuUlL]*\b")),
+            ("syn_kw",       re.compile(C_KEYWORDS)),
+            ("syn_arduino",  re.compile(ARDUINO_KEYWORDS)),
+            ("syn_string",   re.compile(r'"(?:[^"\n\\]|\\.)*"')),
+            ("syn_char",     re.compile(r"'(?:[^'\n\\]|\\.)*'")),
+            ("syn_comment1", re.compile(r"//[^\n]*")),
+            ("syn_comment2", re.compile(r"/\*.*?\*/", re.DOTALL)),
+        ]
+        SYN_COLORS = {
+            "syn_preproc":  Theme.MAGENTA,
+            "syn_number":   Theme.ORANGE,
+            "syn_kw":       Theme.BLUE,
+            "syn_arduino":  Theme.CYAN,
+            "syn_string":   Theme.GREEN,
+            "syn_char":     Theme.GREEN,
+            "syn_comment1": Theme.TEXT_DIM,
+            "syn_comment2": Theme.TEXT_DIM,
+        }
+
+        # ── Notebook (tabs) ───────────────────────────────────────────────
+        style = ttk.Style()
+        # Style the notebook for dark theme
+        try:
+            style.configure("Editor.TNotebook",
+                            background=Theme.BG_DARKEST,
+                            borderwidth=0,
+                            tabmargins=[2, 4, 0, 0])
+            style.configure("Editor.TNotebook.Tab",
+                            background=Theme.BG_MID,
+                            foreground=Theme.TEXT_DIM,
+                            padding=[10, 4],
+                            font=("Consolas", 9))
+            style.map("Editor.TNotebook.Tab",
+                      background=[("selected", Theme.BG_HOVER), ("active", Theme.BG_LIGHT)],
+                      foreground=[("selected", Theme.TEXT_BRIGHT), ("active", Theme.TEXT)])
+        except Exception:
+            pass  # style may fail on some Tk versions; continue without custom style
+
+        nb = ttk.Notebook(parent_frame, style="Editor.TNotebook")
+        nb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.editor_notebook = nb
+
+        # ── Status bar ────────────────────────────────────────────────────
+        # Not packed into parent_frame — the file-path / cursor-position /
+        # save-status strip was reclaimed as usable editor space per user
+        # request. The widgets are still created (unattached) so the
+        # existing update logic elsewhere (cursor tracker, tab-switch,
+        # save/reload handlers) keeps working without needing further edits.
+        status_bar = tk.Frame(parent_frame, bg=Theme.BG_MID, pady=3)
+
+        lbl_filepath = tk.Label(
+            status_bar, text="", font=self.font_status,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor=tk.W,
+        )
+
+        lbl_cursor = tk.Label(
+            status_bar, text="Ln 1, Col 1", font=self.font_status,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
+        )
+
+        lbl_editor_status = tk.Label(
+            status_bar, text="", font=self.font_status,
+            fg=Theme.GREEN, bg=Theme.BG_MID,
+        )
+
+        # ── Per-tab state ─────────────────────────────────────────────────
+        # tab_data[tab_frame] = {"path": Path, "text": Text, "modified": BooleanVar,
+        #                         "original": str, "lineno_text": Text}
+        tab_data = {}
+        self.editor_tab_data = tab_data
+
+        # ── Zoom functionality ────────────────────────────────────────────
+        def _zoom_in(event=None):
+            size = self.editor_font.cget("size")
+            if size < 40:
+                self.editor_font.configure(size=size + 1)
+                self.editor_font_sm.configure(size=max(6, size))
+                self.editor_font_bold.configure(size=size + 1)
+                self.editor_font_italic.configure(size=size + 1)
+            return "break"
+
+        def _zoom_out(event=None):
+            size = self.editor_font.cget("size")
+            if size > 6:
+                self.editor_font.configure(size=size - 1)
+                self.editor_font_sm.configure(size=max(5, size - 2))
+                self.editor_font_bold.configure(size=size - 1)
+                self.editor_font_italic.configure(size=size - 1)
+            return "break"
+
+        def _zoom_wheel(event):
+            if event.delta > 0:
+                _zoom_in()
+            else:
+                _zoom_out()
+            return "break"
+
+        # ── Toggle Comment/Uncomment ──────────────────────────────────────
+        def _toggle_comment(event=None):
+            cur = nb.select()
+            if not cur:
+                return "break"
+            frame = parent_frame.nametowidget(cur)
+            txt = tab_data[frame]["text"]
+            try:
+                sel_start = txt.index(tk.SEL_FIRST)
+                sel_end = txt.index(tk.SEL_LAST)
+                start_row = int(sel_start.split(".")[0])
+                end_row = int(sel_end.split(".")[0])
+                if end_row > start_row and sel_end.split(".")[1] == "0":
+                    end_row -= 1
+            except tk.TclError:
+                start_row = end_row = int(txt.index(tk.INSERT).split(".")[0])
+            txt.edit_separator()
+            should_uncomment = True
+            lines_to_process = []
+            for row in range(start_row, end_row + 1):
+                line = txt.get(f"{row}.0", f"{row}.end")
+                lines_to_process.append((row, line))
+                stripped = line.strip()
+                if stripped and not stripped.startswith("//"):
+                    should_uncomment = False
+            for row, line in lines_to_process:
+                if should_uncomment:
+                    stripped = line.lstrip(" ")
+                    if stripped.startswith("//"):
+                        leading_spaces = len(line) - len(stripped)
+                        del_len = 2
+                        if len(stripped) > 2 and stripped[2] == ' ':
+                            del_len = 3
+                        txt.delete(f"{row}.{leading_spaces}", f"{row}.{leading_spaces + del_len}")
+                else:
+                    leading_spaces = len(line) - len(line.lstrip(" "))
+                    txt.insert(f"{row}.{leading_spaces}", "// ")
+            _highlight_after(txt)
+            _mark_modified(frame, txt, tab_data[frame]["path"])
+            _sync_linenos(txt, tab_data[frame]["lineno_text"])
+            return "break"
+
+        # ── Line highlighting tracker ─────────────────────────────────────
+        def _update_line_highlight(text_widget: tk.Text):
+            text_widget.tag_remove("active_line", "1.0", tk.END)
+            text_widget.tag_add("active_line", "insert linestart", "insert lineend + 1c")
+
+        # ── Find & Replace Panel & Logic ──────────────────────────────────
+        find_panel = tk.Frame(parent_frame, bg=Theme.BG_MID, pady=6, padx=12)
+        find_panel.columnconfigure(1, weight=1)
+        find_panel.columnconfigure(3, weight=1)
+        
+        tk.Label(find_panel, text="Find:", font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_MID).grid(row=0, column=0, sticky=tk.W, pady=2)
+        find_ent = tk.Entry(find_panel, width=25, font=self.font_mono_sm, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT, insertbackground=Theme.CYAN, borderwidth=0, highlightthickness=1, highlightcolor=Theme.CYAN_DIM, highlightbackground=Theme.BORDER)
+        find_ent.grid(row=0, column=1, padx=6, pady=2, sticky=tk.EW)
+        find_ent.bind("<Button-1>", lambda e: safe_reclaim_os_focus(find_ent), add="+")
+
+        def _on_find_change(event=None):
+            for data in tab_data.values():
+                data["text"].tag_remove("search_match", "1.0", tk.END)
+                data["text"].tag_remove("search_match_active", "1.0", tk.END)
+            query = find_ent.get()
+            if not query:
+                return
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            txt = tab_data.get(frame)
+            if txt:
+                txt = txt["text"]
+                start = "1.0"
+                while True:
+                    pos = txt.search(query, start, nocase=True, stopindex=tk.END)
+                    if not pos:
+                        break
+                    end = f"{pos} +{len(query)}c"
+                    txt.tag_add("search_match", pos, end)
+                    start = end
+
+        find_ent.bind("<KeyRelease>", _on_find_change)
+
+        def _find_match(forward=True):
+            query = find_ent.get()
+            if not query:
+                return
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            txt = tab_data[frame]["text"]
+            insert_pos = txt.index(tk.INSERT)
+            if forward:
+                pos = txt.search(query, f"{insert_pos} +1c", nocase=True, stopindex=tk.END)
+                if not pos:
+                    pos = txt.search(query, "1.0", nocase=True, stopindex=tk.END)
+            else:
+                pos = txt.search(query, insert_pos, nocase=True, stopindex="1.0", backwards=True)
+                if not pos:
+                    pos = txt.search(query, tk.END, nocase=True, stopindex="1.0", backwards=True)
+            if pos:
+                end = f"{pos} +{len(query)}c"
+                txt.tag_remove("search_match_active", "1.0", tk.END)
+                txt.tag_add("search_match_active", pos, end)
+                txt.mark_set(tk.INSERT, pos)
+                txt.tag_remove("sel", "1.0", tk.END)
+                txt.tag_add("sel", pos, end)
+                txt.see(pos)
+
+        btn_find_prev = self._make_btn(find_panel, "◀ Prev", lambda: _find_match(forward=False), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
+        btn_find_prev.grid(row=0, column=2, padx=2, pady=2)
+        
+        btn_find_next = self._make_btn(find_panel, "▶ Next", lambda: _find_match(forward=True), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
+        btn_find_next.grid(row=0, column=3, padx=2, pady=2, sticky=tk.W)
+
+        tk.Label(find_panel, text="Replace:", font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_MID).grid(row=1, column=0, sticky=tk.W, pady=2)
+        replace_ent = tk.Entry(find_panel, width=25, font=self.font_mono_sm, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT, insertbackground=Theme.CYAN, borderwidth=0, highlightthickness=1, highlightcolor=Theme.CYAN_DIM, highlightbackground=Theme.BORDER)
+        replace_ent.grid(row=1, column=1, padx=6, pady=2, sticky=tk.EW)
+        replace_ent.bind("<Button-1>", lambda e: safe_reclaim_os_focus(replace_ent), add="+")
+
+        def _replace_match():
+            query = find_ent.get()
+            if not query:
+                return
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            txt = tab_data[frame]["text"]
+            try:
+                sel_start = txt.index(tk.SEL_FIRST)
+                sel_end = txt.index(tk.SEL_LAST)
+                sel_text = txt.get(sel_start, sel_end)
+                if sel_text.lower() == query.lower():
+                    txt.delete(sel_start, sel_end)
+                    txt.insert(sel_start, replace_ent.get())
+                    _highlight_after(txt)
+                    _mark_modified(frame, txt, tab_data[frame]["path"])
+                    _sync_linenos(txt, tab_data[frame]["lineno_text"])
+            except tk.TclError:
+                pass
+            _find_match(forward=True)
+
+        def _replace_all():
+            query = find_ent.get()
+            if not query:
+                return
+            replace_val = replace_ent.get()
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            txt = tab_data[frame]["text"]
+            count = 0
+            start = "1.0"
+            txt.edit_separator()
+            while True:
+                pos = txt.search(query, start, nocase=True, stopindex=tk.END)
+                if not pos:
+                    break
+                end = f"{pos} +{len(query)}c"
+                txt.delete(pos, end)
+                txt.insert(pos, replace_val)
+                start = f"{pos} +{len(replace_val)}c"
+                count += 1
+            if count:
+                _highlight_after(txt)
+                _mark_modified(frame, txt, tab_data[frame]["path"])
+                _sync_linenos(txt, tab_data[frame]["lineno_text"])
+                _set_editor_status(f"✔ Replaced {count} occurrence(s)")
+                _on_find_change()
+
+        btn_rep = self._make_btn(find_panel, "Replace", _replace_match, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_label)
+        btn_rep.grid(row=1, column=2, padx=2, pady=2)
+        
+        btn_rep_all = self._make_btn(find_panel, "Replace All", _replace_all, Theme.BTN_FULL, Theme.BTN_FULL_H, font=self.font_label)
+        btn_rep_all.grid(row=1, column=3, padx=2, pady=2, sticky=tk.W)
+
+        def _toggle_find_panel(event=None, show=None):
+            if show is None:
+                show = not find_panel.winfo_ismapped()
+            if show:
+                find_panel.pack(before=nb, fill=tk.X, padx=10, pady=5)
+                find_ent.focus_set()
+                find_ent.select_range(0, tk.END)
+                _on_find_change()
+            else:
+                find_panel.pack_forget()
+                for data in tab_data.values():
+                    data["text"].tag_remove("search_match", "1.0", tk.END)
+                    data["text"].tag_remove("search_match_active", "1.0", tk.END)
+                cur = nb.select()
+                if cur:
+                    tab_data[parent_frame.nametowidget(cur)]["text"].focus_set()
+            return "break"
+
+        btn_close = self._make_btn(find_panel, "✕", lambda: _toggle_find_panel(show=False), Theme.BTN_STOP, Theme.BTN_STOP_H, font=self.font_label)
+        btn_close.grid(row=0, column=4, rowspan=2, padx=(10, 0), pady=2, sticky=tk.NS)
+
+        def _set_editor_status(msg: str, color: str = Theme.GREEN, ms: int = 2500):
+            lbl_editor_status.config(text=msg, fg=color)
+            self.root.after(ms, lambda: lbl_editor_status.config(text=""))
+
+        # ── Syntax highlighter ────────────────────────────────────────────
+        def _highlight(text_widget: tk.Text):
+            """Re-apply syntax colours to the entire contents of text_widget."""
+            # Remove old tags first
+            for tag in SYN_COLORS:
+                text_widget.tag_remove(tag, "1.0", tk.END)
+            content = text_widget.get("1.0", tk.END)
+            for tag, pattern in SYN_SPECS:
+                for m in pattern.finditer(content):
+                    start_idx = f"1.0+{m.start()}c"
+                    end_idx   = f"1.0+{m.end()}c"
+                    text_widget.tag_add(tag, start_idx, end_idx)
+
+            # C++ realtime syntax checker integration
+            file_path = None
+            for frame, data in tab_data.items():
+                if data["text"] == text_widget:
+                    file_path = data["path"]
+                    break
+            if file_path and file_path.suffix in (".ino", ".cpp", ".h"):
+                self._run_realtime_syntax_check(text_widget, file_path)
+                self._schedule_syntax_ui_update()
+
+        def _highlight_after(text_widget: tk.Text, delay_ms: int = 120):
+            """Schedule a debounced highlight pass so typing stays snappy."""
+            attr = f"_hl_after_{id(text_widget)}"
+            existing = getattr(self.root, attr, None)
+            if existing:
+                self.root.after_cancel(existing)
+            job = self.root.after(delay_ms, lambda: _highlight(text_widget))
+            setattr(self.root, attr, job)
+
+        # ── Line-number gutter sync ───────────────────────────────────────
+        def _sync_linenos(text_widget: tk.Text, lineno_widget: tk.Text):
+            """Rebuild the line-number gutter to match the editor content."""
+            tab_frame = None
+            for tf, d in tab_data.items():
+                if d["text"] == text_widget:
+                    tab_frame = tf
+                    break
+                    
+            folded_blocks = {}
+            if tab_frame and "folded_blocks" in tab_data[tab_frame]:
+                folded_blocks = tab_data[tab_frame]["folded_blocks"]
+
+            line_count = int(text_widget.index(tk.END).split(".")[0]) - 1
+            lineno_widget.config(state=tk.NORMAL)
+            lineno_widget.delete("1.0", tk.END)
+            
+            lines = []
+            for i in range(1, line_count + 1):
+                if i in folded_blocks:
+                    hidden_count = folded_blocks[i][0] - i
+                    lines.append(f"+{hidden_count} {i}")
+                else:
+                    line_text = text_widget.get(f"{i}.0", f"{i}.end")
+                    if "{" in line_text:
+                        lines.append(f"- {i}")
+                    else:
+                        lines.append(f"  {i}")
+                        
+            lineno_widget.insert("1.0", "\n".join(lines))
+            
+            # Apply elision to line numbers in the gutter for folded blocks, and
+            # make the "+N" marker itself stand out (bold + accent colour) so a
+            # collapsed block is obvious at a glance instead of blending in with
+            # the plain line numbers -- previously there was no visual cue at
+            # all that lines were hidden, which was confusing when a fold was
+            # toggled and a chunk of the file silently vanished from view.
+            lineno_widget.tag_configure(
+                "gutter_folded", foreground=Theme.ORANGE, font=self.editor_font_bold
+            )
+            for start_line, (end_line, _, _indicator_tag) in folded_blocks.items():
+                gutter_tag = f"fold_{start_line}"
+                lineno_widget.tag_configure(gutter_tag, elide=True)
+                lineno_widget.tag_add(gutter_tag, f"{start_line + 1}.0", f"{end_line}.0")
+                lineno_widget.tag_add("gutter_folded", f"{start_line}.0", f"{start_line}.end")
+
+            lineno_widget.config(state=tk.DISABLED)
+            # Sync scroll position
+            lineno_widget.yview_moveto(text_widget.yview()[0])
+
+        # ── Cursor position tracker ───────────────────────────────────────
+        def _update_cursor_label(text_widget: tk.Text):
+            pos = text_widget.index(tk.INSERT)
+            ln, col = pos.split(".")
+            cursor_str = f"Ln {ln}, Col {int(col)+1}"
+            lbl_cursor.config(text=cursor_str)
+            self._update_editor_info(cursor_str)
+
+        # ── Code folding toggler ──────────────────────────────────────────
+        def _toggle_fold(text_widget: tk.Text, line_num: int, tf):
+            data = tab_data.get(tf)
+            if not data:
+                return
+            if "folded_blocks" not in data:
+                data["folded_blocks"] = {}  # start_line -> (end_line, tag_name, indicator_tag)
+            
+            folded_blocks = data["folded_blocks"]
+            
+            if line_num in folded_blocks:
+                end_line, tag_name, indicator_tag = folded_blocks[line_num]
+                text_widget.tag_remove(tag_name, f"{line_num}.0", f"{end_line + 1}.0")
+                text_widget.tag_delete(indicator_tag)
+                del folded_blocks[line_num]
+                _sync_linenos(text_widget, data["lineno_text"])
+                return
+                
+            line_text = text_widget.get(f"{line_num}.0", f"{line_num}.end")
+            if "{" not in line_text:
+                return
+                
+            # Scan forward to find the matching '}'
+            balance = 0
+            found_start = False
+            end_line = -1
+            
+            total_lines = int(text_widget.index(tk.END).split(".")[0])
+            for r in range(line_num, total_lines):
+                r_text = text_widget.get(f"{r}.0", f"{r}.end")
+                r_text_clean = re.sub(r'//.*|/\*.*?\*/', '', r_text)
+                
+                for char in r_text_clean:
+                    if char == '{':
+                        balance += 1
+                        found_start = True
+                    elif char == '}':
+                        balance -= 1
+                        if found_start and balance == 0:
+                            end_line = r
+                            break
+                if end_line != -1:
+                    break
+                    
+            if end_line != -1 and end_line > line_num:
+                tag_name = f"fold_{line_num}"
+                text_widget.tag_configure(tag_name, elide=True)
+
+                # Elide only the interior lines (line_num+1 .. end_line-1),
+                # keeping both the opening '{' line and the closing '}' line
+                # visible as their own rows. This must match _sync_linenos'
+                # gutter elision range exactly, or the gutter and editor
+                # disagree on how many rows a fold removes and every line
+                # number after the fold drifts out of alignment.
+                start_idx = f"{line_num + 1}.0"
+                end_idx = f"{end_line}.0"
+
+                text_widget.tag_add(tag_name, start_idx, end_idx)
+
+                # Visible-in-editor cue: highlight the '{' line itself so the
+                # user can see, right there in the code, that this line is
+                # hiding a collapsed block beneath it. Before this, folding a
+                # block left no trace at all in the editor pane -- the code
+                # just stopped and jumped straight to whatever came after the
+                # matching '}', which read as content having gone missing
+                # rather than being intentionally collapsed.
+                indicator_tag = f"fold_marker_{line_num}"
+                text_widget.tag_configure(
+                    indicator_tag, background=Theme.YELLOW_DIM, foreground=Theme.TEXT_BRIGHT
+                )
+                text_widget.tag_add(indicator_tag, f"{line_num}.0", f"{line_num}.end")
+
+                folded_blocks[line_num] = (end_line, tag_name, indicator_tag)
+                _sync_linenos(text_widget, data["lineno_text"])
+
+        # ── Modified tracker ──────────────────────────────────────────────
+        def _mark_modified(frame, text_widget: tk.Text, path: Path):
+            data = tab_data.get(frame)
+            if data is None:
+                return
+            current = text_widget.get("1.0", tk.END)
+            changed = (current != data["original"])
+            if changed != data["modified"]:
+                data["modified"] = changed
+                tab_title = ("* " if changed else "") + path.name
+                nb.tab(frame, text=tab_title)
+            
+            any_modified = any(d["modified"] for d in tab_data.values())
+            if any_modified:
+                self.skip_compile_var.set(False)
+                self.cb_skip_compile.configure(state=tk.DISABLED)
+                self._set_symbol_cache_compiled_state(False)
+            else:
+                self._update_skip_compile_state()
+
+        # ── Save helpers ──────────────────────────────────────────────────
+        def _save_tab(frame):
+            data = tab_data.get(frame)
+            if data is None:
+                return
+            existing_autosave = _autosave_after_ids.pop(frame, None)
+            if existing_autosave:
+                try:
+                    self.root.after_cancel(existing_autosave)
+                except Exception:
+                    pass
+            content = data["text"].get("1.0", tk.END)
+            # Strip the trailing newline Tk always appends
+            if content.endswith("\n"):
+                content = content[:-1]
+            try:
+                data["path"].write_text(content, encoding="utf-8")
+                if getattr(self, "ai_controller", None):
+                    self.ai_controller.note_local_save(data["path"], content)
+                data["original"] = content + "\n"   # match Tk's representation
+                data["modified"] = False
+                nb.tab(frame, text=data["path"].name)
+                _set_editor_status(f"✔ Saved — {data['path'].name}")
+                # Invalidate compile cache so the GUI knows sources changed
+                self._compile_cache_hash = None
+                self._update_skip_compile_state()
+                self._run_manual_syntax_check()
+            except Exception as exc:
+                _set_editor_status(f"✖ Save failed: {exc}", color=Theme.RED, ms=5000)
+
+        # ── Auto-save (idle-triggered, configurable via Settings) ──────────
+        # Per-tab debounce: every keystroke pushes the save further out until
+        # the user has been idle for `self.autosave_delay_ms`. Controlled by
+        # self.autosave_enabled / self.autosave_delay_ms, which are loaded at
+        # startup and refreshed live from the Settings dialog (see
+        # _open_settings / save_settings) without needing a restart.
+        _autosave_after_ids = {}
+
+        def _schedule_autosave(frame):
+            if not getattr(self, "autosave_enabled", False):
+                return
+            existing = _autosave_after_ids.pop(frame, None)
+            if existing:
+                try:
+                    self.root.after_cancel(existing)
+                except Exception:
+                    pass
+
+            def _do_autosave(f=frame):
+                _autosave_after_ids.pop(f, None)
+                data = tab_data.get(f)
+                if data and data.get("modified"):
+                    _save_tab(f)
+                    _set_editor_status(f"💾 Auto-saved — {data['path'].name}", Theme.CYAN)
+
+            delay_ms = max(200, int(getattr(self, "autosave_delay_ms", 1500)))
+            _autosave_after_ids[frame] = self.root.after(delay_ms, _do_autosave)
+
+        def _cancel_autosave(frame):
+            existing = _autosave_after_ids.pop(frame, None)
+            if existing:
+                try:
+                    self.root.after_cancel(existing)
+                except Exception:
+                    pass
+
+        # Exposed so Settings can react instantly to the checkbox being
+        # unticked mid-session (cancel any pending autosave timers) and so
+        # tab-closing logic elsewhere can cancel a stale timer.
+        self._autosave_cancel_all = lambda: [
+            _cancel_autosave(f) for f in list(_autosave_after_ids.keys())
+        ]
+
+        def _save_current():
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            _save_tab(frame)
+
+        def _save_all():
+            saved = 0
+            for frame, data in tab_data.items():
+                if data["modified"]:
+                    _save_tab(frame)
+                    saved += 1
+            if saved:
+                _set_editor_status(f"✔ Saved {saved} file(s)")
+            else:
+                _set_editor_status("Nothing to save — all files up to date.", Theme.TEXT_DIM)
+
+        def _reload_current():
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            data = tab_data.get(frame)
+            if data is None:
+                return
+            try:
+                content = data["path"].read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:
+                _set_editor_status(f"✖ Reload failed: {exc}", Theme.RED, 5000)
+                return
+            txt = data["text"]
+            txt.delete("1.0", tk.END)
+            txt.insert("1.0", content)
+            txt.edit_reset()
+            data["original"] = txt.get("1.0", tk.END)
+            data["modified"] = False
+            nb.tab(frame, text=data["path"].name)
+            _highlight(txt)
+            _sync_linenos(txt, data["lineno_text"])
+            _set_editor_status(f"✔ Reloaded — {data['path'].name}")
+            self._update_skip_compile_state()
+
+        # ── Periodic Reload timer (re-reads all open tabs from disk) ──────
+        # Controlled by self.periodic_reload_enabled / periodic_reload_interval_s
+        # which are loaded at startup and refreshed live from the Settings
+        # dialog. Only reloads tabs whose on-disk content actually differs
+        # from the editor buffer, so the UI cost is near-zero when files
+        # haven't changed externally.
+
+        def _reload_default_tabs_if_changed():
+            for frame, d in list(tab_data.items()):
+                if d.get("modified"):
+                    continue  # skip unsaved user edits
+
+                try:
+                    disk_content = d["path"].read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue  # file deleted / inaccessible — skip silently
+
+                current_content = d["text"].get("1.0", "end-1c")
+                if disk_content == current_content:
+                    continue  # no change on disk — skip
+
+                # Save cursor position & scroll to restore after reload
+                try:
+                    cursor_pos = d["text"].index(tk.INSERT)
+                except Exception:
+                    cursor_pos = "1.0"
+                try:
+                    scroll_pos = d["text"].yview()
+                except Exception:
+                    scroll_pos = None
+
+                d["text"].delete("1.0", tk.END)
+                d["text"].insert("1.0", disk_content)
+                d["text"].edit_reset()
+                d["original"] = d["text"].get("1.0", tk.END)
+                d["modified"] = False
+                nb.tab(frame, text=d["path"].name)
+                _highlight(d["text"])
+                _sync_linenos(d["text"], d["lineno_text"])
+
+                # Restore cursor & scroll
+                try:
+                    d["text"].mark_set(tk.INSERT, cursor_pos)
+                    d["text"].see(cursor_pos)
+                except Exception:
+                    pass
+                if scroll_pos:
+                    try:
+                        d["text"].yview_moveto(scroll_pos[0])
+                    except Exception:
+                        pass
+
+        self._reload_default_tabs_if_changed = _reload_default_tabs_if_changed
+
+        # ── Smart indent helpers (shared across all tabs) ─────────────────
+        INDENT = "  "   # 2 spaces — VS Code C/Arduino default
+        INDENT_N = len(INDENT)
+
+        AUTO_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
+        def _get_line_text(t: tk.Text, index: str = tk.INSERT) -> str:
+            """Return the full text of the line containing *index*."""
+            row = t.index(index).split(".")[0]
+            return t.get(f"{row}.0", f"{row}.end")
+
+        def _leading_spaces(line: str) -> int:
+            """Count leading space characters in *line*."""
+            return len(line) - len(line.lstrip(" "))
+
+        def _on_return(event, t: tk.Text) -> str:
+            """Smart Enter: match current indent + extra level after '{'."""
+            cur_line = _get_line_text(t)
+            indent_lvl = _leading_spaces(cur_line)
+            stripped = cur_line.rstrip()
+
+            # Check whether the cursor is sitting between { and }
+            # e.g.  void setup() {|}   where | is cursor
+            cursor_col = int(t.index(tk.INSERT).split(".")[1])
+            char_before = t.get(f"{t.index(tk.INSERT)} -1c", tk.INSERT) if cursor_col > 0 else ""
+            char_after  = t.get(tk.INSERT, f"{t.index(tk.INSERT)} +1c")
+
+            t.edit_separator()  # make this one undo step
+
+            if char_before == "{" and char_after == "}":
+                # Cursor is between braces — expand into two lines with inner indent
+                inner = " " * (indent_lvl + INDENT_N)
+                outer = " " * indent_lvl
+                t.insert(tk.INSERT, f"\n{inner}\n{outer}")
+                # Move cursor to the inner (middle) line
+                row = int(t.index(tk.INSERT).split(".")[0])
+                t.mark_set(tk.INSERT, f"{row - 1}.end")
+            else:
+                extra = INDENT if stripped.endswith("{") else ""
+                new_indent = " " * indent_lvl + extra
+                t.insert(tk.INSERT, "\n" + new_indent)
+
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_tab(event, t: tk.Text) -> str:
+            """Tab key → insert INDENT spaces instead of a real tab char."""
+            # If there's a selection, indent every selected line
+            try:
+                sel_start = t.index(tk.SEL_FIRST)
+                sel_end   = t.index(tk.SEL_LAST)
+                start_row = int(sel_start.split(".")[0])
+                end_row   = int(sel_end.split(".")[0])
+                t.edit_separator()
+                for row in range(start_row, end_row + 1):
+                    t.insert(f"{row}.0", INDENT)
+                return "break"
+            except tk.TclError:
+                pass
+            t.edit_separator()
+            t.insert(tk.INSERT, INDENT)
+            return "break"
+
+        def _on_shift_tab(event, t: tk.Text) -> str:
+            """Shift+Tab → dedent by one INDENT level."""
+            try:
+                sel_start = t.index(tk.SEL_FIRST)
+                sel_end   = t.index(tk.SEL_LAST)
+                start_row = int(sel_start.split(".")[0])
+                end_row   = int(sel_end.split(".")[0])
+            except tk.TclError:
+                start_row = end_row = int(t.index(tk.INSERT).split(".")[0])
+
+            t.edit_separator()
+            for row in range(start_row, end_row + 1):
+                line = t.get(f"{row}.0", f"{row}.end")
+                spaces = min(_leading_spaces(line), INDENT_N)
+                if spaces:
+                    t.delete(f"{row}.0", f"{row}.{spaces}")
+            return "break"
+
+        def _on_closing_brace(event, t: tk.Text) -> str:
+            """}  key: dedent closing brace to align with its opening line."""
+            cur_line = _get_line_text(t)
+            # Only auto-dedent when the line so far is all spaces
+            # (user hasn't typed any non-space on this line yet)
+            if cur_line.strip() == "":
+                cur_indent = _leading_spaces(cur_line)
+                new_indent = max(0, cur_indent - INDENT_N)
+                row = t.index(tk.INSERT).split(".")[0]
+                t.edit_separator()
+                t.delete(f"{row}.0", f"{row}.{cur_indent}")
+                t.insert(f"{row}.0", " " * new_indent)
+                t.insert(tk.INSERT, "}")
+                t.see(tk.INSERT)
+                return "break"
+            return None   # fall through to normal insertion
+
+        def _on_backspace(event, t: tk.Text) -> str:
+            """Backspace: delete whole indent chunk when cursor is on spaces."""
+            # If there's a selection, let default behaviour handle it
+            try:
+                t.index(tk.SEL_FIRST)
+                return None
+            except tk.TclError:
+                pass
+
+            pos = t.index(tk.INSERT)
+            row, col = pos.split(".")
+            col = int(col)
+            if col == 0:
+                return None  # at line start — normal behaviour (delete newline)
+
+            line_start = t.get(f"{row}.0", pos)
+            # If everything to the left of the cursor is spaces, delete one indent level
+            if line_start and line_start == " " * col:
+                delete_n = ((col - 1) % INDENT_N) + 1   # 1..INDENT_N spaces
+                t.edit_separator()
+                t.delete(f"{row}.{col - delete_n}", pos)
+                return "break"
+            return None
+
+        def _on_open_pair(event, t: tk.Text, open_ch: str) -> str:
+            """Auto-close (, [, { with the matching closing character."""
+            close_ch = AUTO_PAIRS[open_ch]
+            t.edit_separator()
+            t.insert(tk.INSERT, open_ch + close_ch)
+            # Move cursor to between the pair
+            t.mark_set(tk.INSERT, f"{t.index(tk.INSERT)} -1c")
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_close_pair(event, t: tk.Text, close_ch: str) -> str:
+            """Skip over an already-present closing char instead of doubling it."""
+            next_char = t.get(tk.INSERT, f"{t.index(tk.INSERT)} +1c")
+            if next_char == close_ch:
+                t.mark_set(tk.INSERT, f"{t.index(tk.INSERT)} +1c")
+                t.see(tk.INSERT)
+                return "break"
+            return None
+
+        def _get_next_word_index(t: tk.Text, idx: str) -> str:
+            line_end = t.index(f"{idx} lineend")
+            if t.compare(idx, "==", line_end):
+                return t.index(f"{idx} +1c")
+            char_content = t.get(idx, line_end)
+            if not char_content:
+                return t.index(f"{idx} +1c")
+            first_char = char_content[0]
+            if first_char.isalnum() or first_char == '_':
+                for i, c in enumerate(char_content):
+                    if not (c.isalnum() or c == '_'):
+                        return t.index(f"{idx} +{i}c")
+                return line_end
+            elif first_char.isspace():
+                for i, c in enumerate(char_content):
+                    if not c.isspace():
+                        return t.index(f"{idx} +{i}c")
+                return line_end
+            else:
+                for i, c in enumerate(char_content):
+                    if c.isalnum() or c == '_' or c.isspace():
+                        return t.index(f"{idx} +{i}c")
+                return line_end
+
+        def _get_prev_word_index(t: tk.Text, idx: str) -> str:
+            line_start = t.index(f"{idx} linestart")
+            if t.compare(idx, "==", line_start):
+                return t.index(f"{idx} -1c")
+            char_content = t.get(line_start, idx)
+            if not char_content:
+                return t.index(f"{idx} -1c")
+            last_char = char_content[-1]
+            if last_char.isalnum() or last_char == '_':
+                for i in range(len(char_content) - 1, -1, -1):
+                    c = char_content[i]
+                    if not (c.isalnum() or c == '_'):
+                        return t.index(f"{line_start} +{i+1}c")
+                return line_start
+            elif last_char.isspace():
+                for i in range(len(char_content) - 1, -1, -1):
+                    c = char_content[i]
+                    if not c.isspace():
+                        return t.index(f"{line_start} +{i+1}c")
+                return line_start
+            else:
+                for i in range(len(char_content) - 1, -1, -1):
+                    c = char_content[i]
+                    if c.isalnum() or c == '_' or c.isspace():
+                        return t.index(f"{line_start} +{i+1}c")
+                return line_start
+
+        def _on_ctrl_right(event, t: tk.Text) -> str:
+            next_idx = _get_next_word_index(t, tk.INSERT)
+            t.mark_set(tk.INSERT, next_idx)
+            t.tag_remove("sel", "1.0", tk.END)
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_ctrl_left(event, t: tk.Text) -> str:
+            prev_idx = _get_prev_word_index(t, tk.INSERT)
+            t.mark_set(tk.INSERT, prev_idx)
+            t.tag_remove("sel", "1.0", tk.END)
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_ctrl_shift_right(event, t: tk.Text) -> str:
+            try:
+                has_sel = t.tag_ranges("sel")
+            except Exception:
+                has_sel = False
+            if not has_sel:
+                t.mark_set("anchor", tk.INSERT)
+            next_idx = _get_next_word_index(t, tk.INSERT)
+            t.mark_set(tk.INSERT, next_idx)
+            t.tag_remove("sel", "1.0", tk.END)
+            if t.compare("anchor", "<", tk.INSERT):
+                t.tag_add("sel", "anchor", tk.INSERT)
+            else:
+                t.tag_add("sel", tk.INSERT, "anchor")
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_ctrl_shift_left(event, t: tk.Text) -> str:
+            try:
+                has_sel = t.tag_ranges("sel")
+            except Exception:
+                has_sel = False
+            if not has_sel:
+                t.mark_set("anchor", tk.INSERT)
+            prev_idx = _get_prev_word_index(t, tk.INSERT)
+            t.mark_set(tk.INSERT, prev_idx)
+            t.tag_remove("sel", "1.0", tk.END)
+            if t.compare("anchor", "<", tk.INSERT):
+                t.tag_add("sel", "anchor", tk.INSERT)
+            else:
+                t.tag_add("sel", tk.INSERT, "anchor")
+            t.see(tk.INSERT)
+            return "break"
+
+        def _on_double_click(event, t: tk.Text) -> str:
+            click_idx = t.index(f"@{event.x},{event.y}")
+            line_start = t.index(f"{click_idx} linestart")
+            line_end = t.index(f"{click_idx} lineend")
+            
+            # Get the line content and relative column of the click index
+            col = int(click_idx.split(".")[1])
+            line_content = t.get(line_start, line_end)
+            if not line_content or col >= len(line_content):
+                return "break"
+                
+            click_char = line_content[col]
+            
+            if click_char.isalnum() or click_char == '_':
+                start_col = col
+                while start_col > 0 and (line_content[start_col - 1].isalnum() or line_content[start_col - 1] == '_'):
+                    start_col -= 1
+                end_col = col
+                while end_col < len(line_content) and (line_content[end_col].isalnum() or line_content[end_col] == '_'):
+                    end_col += 1
+            elif click_char.isspace():
+                start_col = col
+                while start_col > 0 and line_content[start_col - 1].isspace():
+                    start_col -= 1
+                end_col = col
+                while end_col < len(line_content) and line_content[end_col].isspace():
+                    end_col += 1
+            else:
+                # Select a run of the same character type (e.g. punctuation run)
+                start_col = col
+                while start_col > 0 and line_content[start_col - 1] == click_char:
+                    start_col -= 1
+                end_col = col
+                while end_col < len(line_content) and line_content[end_col] == click_char:
+                    end_col += 1
+                
+            row = click_idx.split(".")[0]
+            start_idx = f"{row}.{start_col}"
+            end_idx = f"{row}.{end_col}"
+            
+            # Select the word
+            t.tag_remove("sel", "1.0", tk.END)
+            t.tag_add("sel", start_idx, end_idx)
+            # Set cursor and anchor
+            t.mark_set(tk.INSERT, end_idx)
+            t.mark_set("anchor", start_idx)
+            return "break"
+
+        # ── Symbol search & Hover Card helper for Default Editor ──────────
+        _DEFAULT_HOVER_STATE = {"win": None, "timer": None, "last_word": ""}
+
+        BUILTIN_ARDUINO_DEFS = {
+            'pinMode': {'kind': 'function', 'return_type': 'void', 'params': ['uint8_t pin', 'uint8_t mode'], 'prototype': 'void pinMode(uint8_t pin, uint8_t mode)'},
+            'digitalWrite': {'kind': 'function', 'return_type': 'void', 'params': ['uint8_t pin', 'uint8_t val'], 'prototype': 'void digitalWrite(uint8_t pin, uint8_t val)'},
+            'digitalRead': {'kind': 'function', 'return_type': 'int', 'params': ['uint8_t pin'], 'prototype': 'int digitalRead(uint8_t pin)'},
+            'analogWrite': {'kind': 'function', 'return_type': 'void', 'params': ['uint8_t pin', 'int val'], 'prototype': 'void analogWrite(uint8_t pin, int val)'},
+            'analogRead': {'kind': 'function', 'return_type': 'int', 'params': ['uint8_t pin'], 'prototype': 'int analogRead(uint8_t pin)'},
+            'delay': {'kind': 'function', 'return_type': 'void', 'params': ['unsigned long ms'], 'prototype': 'void delay(unsigned long ms)'},
+            'delayMicroseconds': {'kind': 'function', 'return_type': 'void', 'params': ['unsigned int us'], 'prototype': 'void delayMicroseconds(unsigned int us)'},
+            'millis': {'kind': 'function', 'return_type': 'unsigned long', 'params': [], 'prototype': 'unsigned long millis()'},
+            'micros': {'kind': 'function', 'return_type': 'unsigned long', 'params': [], 'prototype': 'unsigned long micros()'},
+            'attachInterrupt': {'kind': 'function', 'return_type': 'void', 'params': ['uint8_t interrupt', 'void (*userFunc)(void)', 'int mode'], 'prototype': 'void attachInterrupt(uint8_t interrupt, void (*userFunc)(void), int mode)'},
+            'detachInterrupt': {'kind': 'function', 'return_type': 'void', 'params': ['uint8_t interrupt'], 'prototype': 'void detachInterrupt(uint8_t interrupt)'},
+            'map': {'kind': 'function', 'return_type': 'long', 'params': ['long x', 'long in_min', 'long in_max', 'long out_min', 'long out_max'], 'prototype': 'long map(long x, long in_min, long in_max, long out_min, long out_max)'},
+            'constrain': {'kind': 'function', 'return_type': 'long', 'params': ['long x', 'long a', 'long b'], 'prototype': 'long constrain(long x, long a, long b)'}
+        }
+
+        def _find_symbol_definition_default(word: str):
+            if not word or not word.isidentifier():
+                return None
+            kwords = {
+                'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+                'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+                'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+                'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+                'false', 'null', 'nullptr', 'include', 'define', 'ifdef', 'ifndef',
+                'endif'
+            }
+            if word in kwords:
+                return None
+
+            escaped = re.escape(word)
+            func_re = re.compile(r'(?:^|\s)([a-zA-Z0-9_:\*&]+(?:\s+[*&]*)?)\s+' + escaped + r'\s*\(([^)]*)\)')
+            macro_re = re.compile(r'#\s*define\s+' + escaped + r'(?:\(([^)]*)\))?\s*(.*)')
+            var_re = re.compile(r'(?:^|\s)([a-zA-Z0-9_:\*&]+(?:\s+[*&]*)?)\s+' + escaped + r'\s*(=|;|,|\[)')
+            type_re = re.compile(r'(class|struct|enum|union)\s+' + escaped)
+
+            fallback_sym = None
+
+            current_tab = None
+            try:
+                cur = nb.select()
+                if cur:
+                    current_tab = parent_frame.nametowidget(cur)
+            except Exception:
+                pass
+
+            ordered_frames = list(tab_data.keys())
+            if current_tab in ordered_frames:
+                ordered_frames.remove(current_tab)
+                ordered_frames.insert(0, current_tab)
+
+            # 1. Search open tabs first
+            for frame in ordered_frames:
+                d = tab_data[frame]
+                text_widget = d["text"]
+                content = text_widget.get("1.0", tk.END)
+                lines = content.splitlines()
+                for line_idx, line in enumerate(lines, start=1):
+                    sline = line.strip()
+                    if not sline or sline.startswith("//"):
+                        continue
+
+                    m_type = type_re.search(sline)
+                    if m_type:
+                        return {
+                            "kind": m_type.group(1).lower(),
+                            "name": word,
+                            "return_type": "",
+                            "params": [],
+                            "prototype": m_type.group(0),
+                            "frame": frame,
+                            "path": d.get("path"),
+                            "line_no": line_idx,
+                            "col_no": line.find(word)
+                        }
+
+                    m_macro = macro_re.search(sline)
+                    if m_macro:
+                        p_str = m_macro.group(1)
+                        p_list = [p.strip() for p in p_str.split(",")] if p_str else []
+                        return {
+                            "kind": "macro",
+                            "name": word,
+                            "return_type": "",
+                            "params": p_list,
+                            "prototype": f"#define {word}{'(' + p_str + ')' if p_str else ''} {m_macro.group(2) or ''}".strip(),
+                            "frame": frame,
+                            "path": d.get("path"),
+                            "line_no": line_idx,
+                            "col_no": line.find(word)
+                        }
+
+                    m_func = func_re.search(sline)
+                    if m_func:
+                        ret_t = m_func.group(1).strip()
+                        p_str = m_func.group(2).strip()
+                        p_list = [p.strip() for p in p_str.split(",")] if p_str else []
+                        is_impl = "{" in sline or (line_idx < len(lines) and lines[line_idx].strip().startswith("{"))
+                        sym_obj = {
+                            "kind": "function",
+                            "name": word,
+                            "return_type": ret_t,
+                            "params": p_list,
+                            "prototype": f"{ret_t} {word}({p_str})",
+                            "frame": frame,
+                            "path": d.get("path"),
+                            "line_no": line_idx,
+                            "col_no": line.find(word)
+                        }
+                        if is_impl:
+                            return sym_obj
+                        elif not fallback_sym:
+                            fallback_sym = sym_obj
+
+                    m_var = var_re.search(sline)
+                    if m_var and not fallback_sym:
+                        ret_t = m_var.group(1).strip()
+                        fallback_sym = {
+                            "kind": "variable",
+                            "name": word,
+                            "return_type": ret_t,
+                            "params": [],
+                            "prototype": f"{ret_t} {word}",
+                            "frame": frame,
+                            "path": d.get("path"),
+                            "line_no": line_idx,
+                            "col_no": line.find(word)
+                        }
+
+            # 2. Search unopened .ino, .cpp, .c, .h, .hpp files in project directory
+            if hasattr(self, "sketch_dir_path") and self.sketch_dir_path and self.sketch_dir_path.exists():
+                open_paths = {d["path"] for d in tab_data.values() if d.get("path")}
+                for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.hpp"):
+                    for file_path in self.sketch_dir_path.glob(ext):
+                        if file_path in open_paths:
+                            continue
+                        try:
+                            file_content = file_path.read_text(encoding="utf-8", errors="replace")
+                        except Exception:
+                            continue
+
+                        lines = file_content.splitlines()
+                        for line_idx, line in enumerate(lines, start=1):
+                            sline = line.strip()
+                            if not sline or sline.startswith("//"):
+                                continue
+
+                            m_func = func_re.search(sline)
+                            if m_func:
+                                ret_t = m_func.group(1).strip()
+                                p_str = m_func.group(2).strip()
+                                p_list = [p.strip() for p in p_str.split(",")] if p_str else []
+                                is_impl = "{" in sline or (line_idx < len(lines) and lines[line_idx].strip().startswith("{"))
+                                sym_obj = {
+                                    "kind": "function",
+                                    "name": word,
+                                    "return_type": ret_t,
+                                    "params": p_list,
+                                    "prototype": f"{ret_t} {word}({p_str})",
+                                    "unopened_path": file_path,
+                                    "line_no": line_idx,
+                                    "col_no": line.find(word)
+                                }
+                                if is_impl:
+                                    return sym_obj
+                                elif not fallback_sym:
+                                    fallback_sym = sym_obj
+
+                            m_macro = macro_re.search(sline)
+                            if m_macro and not fallback_sym:
+                                p_str = m_macro.group(1)
+                                p_list = [p.strip() for p in p_str.split(",")] if p_str else []
+                                fallback_sym = {
+                                    "kind": "macro",
+                                    "name": word,
+                                    "return_type": "",
+                                    "params": p_list,
+                                    "prototype": f"#define {word}{'(' + p_str + ')' if p_str else ''} {m_macro.group(2) or ''}".strip(),
+                                    "unopened_path": file_path,
+                                    "line_no": line_idx,
+                                    "col_no": line.find(word)
+                                }
+
+            if fallback_sym:
+                return fallback_sym
+
+            if word in BUILTIN_ARDUINO_DEFS:
+                res = dict(BUILTIN_ARDUINO_DEFS[word])
+                res["name"] = word
+                return res
+
+            return None
+
+        def _hide_default_hover():
+            if _DEFAULT_HOVER_STATE["timer"]:
+                try:
+                    self.root.after_cancel(_DEFAULT_HOVER_STATE["timer"])
+                except Exception:
+                    pass
+                _DEFAULT_HOVER_STATE["timer"] = None
+            if _DEFAULT_HOVER_STATE["win"]:
+                try:
+                    _DEFAULT_HOVER_STATE["win"].destroy()
+                except Exception:
+                    pass
+                _DEFAULT_HOVER_STATE["win"] = None
+            _DEFAULT_HOVER_STATE["last_word"] = ""
+
+        def _jump_to_symbol_def(sym_info):
+            _hide_default_hover()
+            if not sym_info or sym_info.get("not_compiled"):
+                return
+
+            frame = sym_info.get("frame")
+            if not frame and sym_info.get("unopened_path"):
+                u_path = sym_info["unopened_path"]
+                _build_tab(u_path)
+                for f_key, d_val in tab_data.items():
+                    if d_val.get("path") == u_path:
+                        frame = f_key
+                        break
+
+            if not frame:
+                return
+
+            line_no = sym_info.get("line_no", 1)
+            col_no = max(0, sym_info.get("col_no", 0))
+
+            nb.select(frame)
+            t = tab_data[frame]["text"]
+            pos_idx = f"{line_no}.{col_no}"
+            t.mark_set(tk.INSERT, pos_idx)
+            t.see(f"{line_no}.0")
+            t.focus_set()
+
+            t.tag_remove("jump_highlight", "1.0", tk.END)
+            t.tag_add("jump_highlight", f"{line_no}.0", f"{line_no}.end")
+            self.root.after(1500, lambda: t.tag_remove("jump_highlight", "1.0", tk.END))
+
+        def _show_default_hover(x: int, y: int, x_root: int, y_root: int, t_widget: tk.Text):
+            try:
+                click_idx = t_widget.index(f"@{x},{y}")
+                line_content = t_widget.get(f"{click_idx} linestart", f"{click_idx} lineend")
+                col = int(click_idx.split(".")[1])
+                if col >= len(line_content):
+                    _hide_default_hover()
+                    return
+
+                if not (line_content[col].isalnum() or line_content[col] == '_'):
+                    _hide_default_hover()
+                    return
+
+                start_col = col
+                while start_col > 0 and (line_content[start_col - 1].isalnum() or line_content[start_col - 1] == '_'):
+                    start_col -= 1
+                end_col = col
+                while end_col < len(line_content) and (line_content[end_col].isalnum() or line_content[end_col] == '_'):
+                    end_col += 1
+
+                word = line_content[start_col:end_col]
+                if not word or word == _DEFAULT_HOVER_STATE["last_word"]:
+                    return
+
+                sym = _find_symbol_definition_default(word)
+                if not sym:
+                    _hide_default_hover()
+                    return
+
+                _hide_default_hover()
+                _DEFAULT_HOVER_STATE["last_word"] = word
+
+                if sym.get("not_compiled"):
+                    win = tk.Toplevel(self.root)
+                    win.wm_overrideredirect(True)
+                    win.attributes("-topmost", True)
+                    _DEFAULT_HOVER_STATE["win"] = win
+
+                    frame = tk.Frame(win, bg="#151a23", bd=1, relief=tk.SOLID, highlightbackground="#3d2c18", highlightthickness=1, padx=10, pady=8)
+                    frame.pack(fill=tk.BOTH, expand=True)
+
+                    lbl = tk.Label(frame, text="⚙ Project Not Compiled", font=("Consolas", 10, "bold"), fg="#e6a23c", bg="#151a23")
+                    lbl.pack(anchor=tk.W)
+                    lbl_desc = tk.Label(frame, text="Compile the project (⚙ Compile) to enable definition navigation.", font=("Consolas", 8), fg="#abb2bf", bg="#151a23")
+                    lbl_desc.pack(anchor=tk.W, pady=(2, 0))
+
+                    pos_x = x_root + 15
+                    pos_y = y_root + 15
+                    win.geometry(f"+{pos_x}+{pos_y}")
+                    return
+
+                win = tk.Toplevel(self.root)
+                win.wm_overrideredirect(True)
+                win.attributes("-topmost", True)
+                _DEFAULT_HOVER_STATE["win"] = win
+
+                # Prevent window auto-hide when mouse moves into hover card
+                win.bind("<Enter>", lambda e: self.root.after_cancel(_DEFAULT_HOVER_STATE["timer"]) if _DEFAULT_HOVER_STATE["timer"] else None)
+
+                frame = tk.Frame(win, bg="#151a23", bd=1, relief=tk.SOLID, highlightbackground="#253244", highlightthickness=1, padx=10, pady=8, cursor="hand2")
+                frame.pack(fill=tk.BOTH, expand=True)
+
+                # Clicking anywhere on the hover card jumps to definition!
+                frame.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                h_frame = tk.Frame(frame, bg="#151a23", cursor="hand2")
+                h_frame.pack(anchor=tk.W, fill=tk.X)
+                h_frame.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                lbl_kind = tk.Label(h_frame, text=sym["kind"], font=("Consolas", 10, "bold"), fg="#e8edf3", bg="#151a23", cursor="hand2")
+                lbl_kind.pack(side=tk.LEFT)
+                lbl_kind.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                lbl_name = tk.Label(h_frame, text=f" {sym['name']}", font=("Consolas", 10, "bold"), fg="#00d2ff", bg="#151a23", cursor="hand2")
+                lbl_name.pack(side=tk.LEFT)
+                lbl_name.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                if sym.get("return_type"):
+                    lbl_ret = tk.Label(frame, text=f"  → {sym['return_type']}", font=("Consolas", 9), fg="#39c5bb", bg="#151a23", anchor=tk.W, cursor="hand2")
+                    lbl_ret.pack(anchor=tk.W, pady=(2, 0))
+                    lbl_ret.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                if sym.get("params"):
+                    lbl_p_title = tk.Label(frame, text="Parameters:", font=("Consolas", 9, "bold"), fg="#7f8c8d", bg="#151a23", anchor=tk.W, cursor="hand2")
+                    lbl_p_title.pack(anchor=tk.W, pady=(6, 2))
+                    lbl_p_title.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                    for p in sym["params"]:
+                        lbl_p = tk.Label(frame, text=f"  {p}", font=("Consolas", 9), fg="#abb2bf", bg="#151a23", anchor=tk.W, cursor="hand2")
+                        lbl_p.pack(anchor=tk.W)
+                        lbl_p.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                if sym.get("prototype"):
+                    tk.Frame(frame, bg="#242d3d", height=1).pack(fill=tk.X, pady=6)
+                    lbl_proto_title = tk.Label(frame, text="Function Prototypes", font=("Consolas", 9, "bold"), fg="#7f8c8d", bg="#151a23", anchor=tk.W, cursor="hand2")
+                    lbl_proto_title.pack(anchor=tk.W, pady=(0, 2))
+                    lbl_proto_title.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                    lbl_proto = tk.Label(frame, text=f"👉  {sym['prototype']}", font=("Consolas", 9, "bold"), fg="#39c5bb", bg="#151a23", cursor="hand2", anchor=tk.W)
+                    lbl_proto.pack(anchor=tk.W)
+
+                    def _on_hover_in(e):
+                        lbl_proto.config(fg="#00ffff", font=("Consolas", 9, "bold", "underline"))
+                    def _on_hover_out(e):
+                        lbl_proto.config(fg="#39c5bb", font=("Consolas", 9, "bold"))
+
+                    lbl_proto.bind("<Enter>", _on_hover_in)
+                    lbl_proto.bind("<Leave>", _on_hover_out)
+                    lbl_proto.bind("<Button-1>", lambda e, s=sym: _jump_to_symbol_def(s))
+
+                pos_x = x_root + 15
+                pos_y = y_root + 15
+                win.geometry(f"+{pos_x}+{pos_y}")
+            except Exception:
+                pass
+
+        def _clear_ctrl_link(t_widget: tk.Text):
+            """Remove the Ctrl+hover underline from the text widget."""
+            t_widget.tag_remove("ctrl_link", "1.0", tk.END)
+            t_widget.config(cursor="xterm")
+
+        def _on_ctrl_motion_default(event, t_widget: tk.Text):
+            """Ctrl+hover: underline the word under cursor if it has a navigable definition."""
+            try:
+                click_idx = t_widget.index(f"@{event.x},{event.y}")
+                line_content = t_widget.get(f"{click_idx} linestart", f"{click_idx} lineend")
+                col = int(click_idx.split(".")[1])
+                if col >= len(line_content) or not (line_content[col].isalnum() or line_content[col] == '_'):
+                    _clear_ctrl_link(t_widget)
+                    return
+
+                start_col = col
+                while start_col > 0 and (line_content[start_col - 1].isalnum() or line_content[start_col - 1] == '_'):
+                    start_col -= 1
+                end_col = col
+                while end_col < len(line_content) and (line_content[end_col].isalnum() or line_content[end_col] == '_'):
+                    end_col += 1
+
+                word = line_content[start_col:end_col]
+                row = click_idx.split(".")[0]
+                word_start = f"{row}.{start_col}"
+                word_end = f"{row}.{end_col}"
+
+                # Check if this word is a keyword (not navigable)
+                kwords = {
+                    'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+                    'return', 'break', 'continue', 'struct', 'class', 'enum', 'union',
+                    'public', 'private', 'protected', 'void', 'int', 'float', 'double',
+                    'char', 'bool', 'const', 'static', 'unsigned', 'signed', 'true',
+                    'false', 'null', 'nullptr', 'include', 'define', 'ifdef', 'ifndef',
+                    'endif'
+                }
+                if not word or not word.isidentifier() or word in kwords:
+                    _clear_ctrl_link(t_widget)
+                    return
+
+                # Apply underline tag
+                t_widget.tag_remove("ctrl_link", "1.0", tk.END)
+                t_widget.tag_add("ctrl_link", word_start, word_end)
+                t_widget.config(cursor="hand2")
+            except Exception:
+                _clear_ctrl_link(t_widget)
+
+        def _on_key_release_ctrl(event, t_widget: tk.Text):
+            """When Ctrl is released, clear the underline."""
+            _clear_ctrl_link(t_widget)
+
+        def _on_mouse_motion_default(event, t_widget: tk.Text):
+            # If Ctrl is held, show underline link instead of hover popup
+            if event.state & 0x4:  # Ctrl modifier bitmask
+                _hide_default_hover()
+                _on_ctrl_motion_default(event, t_widget)
+                return
+            else:
+                _clear_ctrl_link(t_widget)
+
+            x, y = event.x, event.y
+            x_root, y_root = event.x_root, event.y_root
+            if _DEFAULT_HOVER_STATE["timer"]:
+                try:
+                    self.root.after_cancel(_DEFAULT_HOVER_STATE["timer"])
+                except Exception:
+                    pass
+            _DEFAULT_HOVER_STATE["timer"] = self.root.after(250, lambda: _show_default_hover(x, y, x_root, y_root, t_widget))
+
+        def _on_ctrl_click_default(event, t_widget: tk.Text):
+            try:
+                click_idx = t_widget.index(f"@{event.x},{event.y}")
+                line_content = t_widget.get(f"{click_idx} linestart", f"{click_idx} lineend")
+                col = int(click_idx.split(".")[1])
+                if col < len(line_content) and (line_content[col].isalnum() or line_content[col] == '_'):
+                    start_col = col
+                    while start_col > 0 and (line_content[start_col - 1].isalnum() or line_content[start_col - 1] == '_'):
+                        start_col -= 1
+                    end_col = col
+                    while end_col < len(line_content) and (line_content[end_col].isalnum() or line_content[end_col] == '_'):
+                        end_col += 1
+                    word = line_content[start_col:end_col]
+                    sym = _find_symbol_definition_default(word)
+                    if sym:
+                        _clear_ctrl_link(t_widget)
+                        _jump_to_symbol_def(sym)
+                        return "break"
+            except Exception:
+                pass
+
+        def _build_tab(file_path: Path, init_content=None, orig_content=None, is_modified=False, cursor_pos=None, scroll_pos=None, defer_highlight=False):
+            if init_content is not None:
+                content = init_content
+            else:
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
+                except Exception as exc:
+                    content = f"# Error reading file: {exc}\n"
+
+            tab_frame = tk.Frame(nb, bg=Theme.BG_DARKEST)
+            nb.add(tab_frame, text=file_path.name)
+
+            # ── Editor area with line numbers ─────────────────────────────
+            editor_area = tk.Frame(tab_frame, bg=Theme.BG_DARKEST)
+            editor_area.pack(fill=tk.BOTH, expand=True)
+
+            # Line number gutter
+            lineno_text = tk.Text(
+                editor_area,
+                width=7, padx=4, pady=4,
+                font=self.editor_font,
+                bg=Theme.BG_MID, fg=Theme.TEXT_DIM,
+                bd=0, relief=tk.FLAT,
+                state=tk.DISABLED,
+                takefocus=False,
+                cursor="arrow",
+            )
+            lineno_text.pack(side=tk.LEFT, fill=tk.Y)
+
+            # Separator between gutter and editor
+            tk.Frame(editor_area, bg=Theme.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y)
+
+            # Main editor widget
+            txt = tk.Text(
+                editor_area,
+                font=self.editor_font,
+                bg=Theme.BG_DARKEST,
+                fg=Theme.TEXT,
+                insertbackground=Theme.CYAN,
+                selectbackground=Theme.BG_HOVER,
+                selectforeground=Theme.TEXT_BRIGHT,
+                bd=0, relief=tk.FLAT,
+                padx=8, pady=4,
+                undo=True,
+                maxundo=-1,
+                wrap=tk.NONE,   # horizontal scroll for long lines
+                tabs="16p",     # ~2-space tab stop width in Consolas 10
+            )
+            txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            txt.bind("<Button-1>", lambda e: safe_reclaim_os_focus(txt), add="+")
+
+            # Scrollbars
+            vsb = tk.Scrollbar(
+                editor_area, orient=tk.VERTICAL,
+                command=lambda *a: [txt.yview(*a), lineno_text.yview(*a)],
+                bg=Theme.TEXT_DIM,  # Highly visible flat grey-blue handle
+                troughcolor=Theme.BG_DARKEST,
+                activebackground=Theme.CYAN,  # Glow cyan when hovered or active
+                bd=0,
+                elementborderwidth=0,
+                width=14,  # Custom width for optimal visibility & clickability
+                highlightthickness=0,
+            )
+            vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            vsb.update_idletasks()
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.uxtheme.SetWindowTheme(vsb.winfo_id(), "", "")
+                except Exception:
+                    pass
+            txt.config(yscrollcommand=lambda f, l: (vsb.set(f, l), lineno_text.yview_moveto(f)))
+
+            # Click on line number to toggle fold
+            def _on_lineno_click(event, t=txt, ln=lineno_text, tf=tab_frame):
+                index = ln.index(f"@{event.x},{event.y}")
+                line_num = int(index.split(".")[0])
+                _toggle_fold(t, line_num, tf)
+                return "break"
+            lineno_text.bind("<Button-1>", _on_lineno_click)
+
+            # Scrolling directly over the gutter (mouse wheel / trackpad) must
+            # drive the main editor's view too. Previously only the editor's
+            # yscrollcommand pushed its position into the gutter (one-way
+            # sync), so scrolling with the cursor over the line numbers left
+            # the code pane exactly where it was -- the gutter and the code
+            # drifted apart and line numbers no longer matched their lines.
+            # Here we redirect the gutter's own wheel scroll into the editor;
+            # the editor's existing yscrollcommand then pulls the gutter back
+            # into sync automatically, keeping a single source of truth.
+            def _on_lineno_scroll(event, t=txt):
+                if getattr(event, "delta", 0):
+                    t.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif getattr(event, "num", None) == 4:
+                    t.yview_scroll(-3, "units")
+                elif getattr(event, "num", None) == 5:
+                    t.yview_scroll(3, "units")
+                return "break"
+            lineno_text.bind("<MouseWheel>", _on_lineno_scroll)
+            lineno_text.bind("<Button-4>", _on_lineno_scroll)   # Linux scroll up
+            lineno_text.bind("<Button-5>", _on_lineno_scroll)   # Linux scroll down
+
+            # Configure syntax-highlight tag colours
+            for tag, color in SYN_COLORS.items():
+                txt.tag_configure(tag, foreground=color)
+            txt.tag_configure("syn_comment1", foreground=Theme.TEXT_DIM, font=self.editor_font_italic)
+            txt.tag_configure("syn_comment2", foreground=Theme.TEXT_DIM, font=self.editor_font_italic)
+            txt.tag_configure("syn_string", foreground=Theme.GREEN)
+            txt.tag_configure("syn_kw", foreground=Theme.BLUE, font=self.editor_font_bold)
+            txt.tag_configure("active_line", background="#1e2430")
+            txt.tag_configure("search_match", background="#b07b00", foreground="#ffffff")
+            txt.tag_configure("search_match_active", background="#ff9f00", foreground="#000000")
+            txt.tag_configure("syntax_error", background="#4a1515", underline=True)
+            txt.tag_configure("syntax_warning", background="#4a3b15", underline=True)
+            txt.tag_configure("jump_highlight", background="#1c3b57")
+            txt.tag_configure("ctrl_link", foreground="#4fc1ff", underline=True)
+            txt.tag_raise("syntax_error", "active_line")
+            txt.tag_raise("syntax_warning", "active_line")
+            txt.tag_raise("search_match", "active_line")
+            txt.tag_raise("search_match_active", "search_match")
+            txt.tag_raise("jump_highlight", "active_line")
+            txt.tag_raise("ctrl_link", "active_line")
+            txt.tag_raise("sel", "active_line")
+
+            # Load content
+            txt.insert("1.0", content)
+            txt.edit_reset()
+            original_snapshot = orig_content if orig_content is not None else txt.get("1.0", tk.END)
+
+            tab_data[tab_frame] = {
+                "path":       file_path,
+                "text":       txt,
+                "lineno_text": lineno_text,
+                "modified":   is_modified,
+                "original":   original_snapshot,
+            }
+
+            if is_modified:
+                nb.tab(tab_frame, text="* " + file_path.name)
+
+            if cursor_pos:
+                try:
+                    txt.mark_set(tk.INSERT, cursor_pos)
+                except Exception:
+                    pass
+
+            if scroll_pos:
+                try:
+                    txt.yview_moveto(scroll_pos[0])
+                except Exception:
+                    pass
+
+            # Initial highlight + line numbers + line highlight
+            # When defer_highlight is True, skip the expensive passes —
+            # _reload_files will schedule them incrementally via after_idle.
+            if not defer_highlight:
+                _highlight(txt)
+                _sync_linenos(txt, lineno_text)
+            _update_line_highlight(txt)
+
+            # ── Event bindings ─────────────────────────────────────────────
+            def _on_key(event, f=tab_frame, t=txt, p=file_path, ln=lineno_text):
+                self.root.after(1, lambda: (
+                    _mark_modified(f, t, p),
+                    _sync_linenos(t, ln),
+                    _highlight_after(t),
+                    _update_cursor_label(t),
+                    _update_line_highlight(t),
+                    _schedule_autosave(f),
+                ))
+
+            def _on_click(event, t=txt, ln=lineno_text):
+                self.root.after(1, lambda: (
+                    _update_cursor_label(t),
+                    _update_line_highlight(t),
+                    lineno_text.yview_moveto(t.yview()[0]),
+                ))
+
+            # ── Smart-indent key bindings (bound before <KeyRelease>) ──────
+            txt.bind("<Return>",        lambda e, t=txt: _on_return(e, t))
+            txt.bind("<Tab>",           lambda e, t=txt: _on_tab(e, t))
+            txt.bind("<Shift-Tab>",     lambda e, t=txt: _on_shift_tab(e, t))
+            txt.bind("<ISO_Left_Tab>",  lambda e, t=txt: _on_shift_tab(e, t))  # Linux
+            txt.bind("<BackSpace>",     lambda e, t=txt: _on_backspace(e, t))
+            txt.bind("<braceleft>",     lambda e, t=txt: _on_open_pair(e, t, "{"))
+            txt.bind("<braceright>",    lambda e, t=txt: _on_closing_brace(e, t))
+            txt.bind("<parenleft>",     lambda e, t=txt: _on_open_pair(e, t, "("))
+            txt.bind("<parenright>",    lambda e, t=txt: _on_close_pair(e, t, ")"))
+            txt.bind("<bracketleft>",   lambda e, t=txt: _on_open_pair(e, t, "["))
+            txt.bind("<bracketright>",  lambda e, t=txt: _on_close_pair(e, t, "]"))
+
+            # Word navigation bindings (Arduino IDE style)
+            txt.bind("<Control-Right>",         lambda e, t=txt: _on_ctrl_right(e, t))
+            txt.bind("<Control-Left>",          lambda e, t=txt: _on_ctrl_left(e, t))
+            txt.bind("<Control-Shift-Right>",   lambda e, t=txt: _on_ctrl_shift_right(e, t))
+            txt.bind("<Control-Shift-Left>",    lambda e, t=txt: _on_ctrl_shift_left(e, t))
+            txt.bind("<Double-Button-1>",       lambda e, t=txt: _on_double_click(e, t))
+
+            # Mouse hover popover & Ctrl+Click definition jump bindings
+            txt.bind("<Motion>",            lambda e, t=txt: _on_mouse_motion_default(e, t))
+            txt.bind("<Leave>",             lambda e, t=txt: (_hide_default_hover(), _clear_ctrl_link(t)))
+            txt.bind("<Control-Button-1>",  lambda e, t=txt: _on_ctrl_click_default(e, t))
+            txt.bind("<F12>",               lambda e, t=txt: _on_ctrl_click_default(e, t))
+            txt.bind("<KeyRelease-Control_L>", lambda e, t=txt: _on_key_release_ctrl(e, t))
+            txt.bind("<KeyRelease-Control_R>", lambda e, t=txt: _on_key_release_ctrl(e, t))
+
+            # General after-key refresh (highlight, line-nos, dirty flag, cursor)
+            txt.bind("<KeyRelease>",        _on_key)
+            txt.bind("<ButtonRelease-1>",   _on_click)
+            txt.bind("<Control-s>",         lambda e, f=tab_frame: (_save_tab(f), "break")[1])
+            txt.bind("<Control-S>",         lambda e, f=tab_frame: (_save_tab(f), "break")[1])
+            txt.bind("<Control-slash>",     _toggle_comment)
+
+        def _reload_files():
+            for tab in nb.tabs():
+                nb.forget(tab)
+            tab_data.clear()
+
+            # Track tabs that need deferred highlighting
+            _deferred_highlight_tabs = []
+
+            backup = getattr(self, "_default_editor_state_backup", None)
+            if backup:
+                self._default_editor_state_backup = None
+                for idx, item in enumerate(backup):
+                    _build_tab(
+                        item["path"],
+                        init_content=item["content"],
+                        orig_content=item["original"],
+                        is_modified=item["modified"],
+                        cursor_pos=item["cursor"],
+                        scroll_pos=item["scroll"],
+                        defer_highlight=(idx > 0),
+                    )
+                    if idx > 0:
+                        # Collect non-first tabs for deferred highlighting
+                        tab_id = nb.tabs()[-1]
+                        _deferred_highlight_tabs.append(tab_id)
+            else:
+                sketch_dir = self.sketch_dir_path
+                files = []
+                for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.txt"):
+                    files.extend(sorted(sketch_dir.glob(ext)))
+
+                order_file = sketch_dir / ".mcu_flash_tab_order.json"
+                if order_file.exists():
+                    try:
+                        import json
+                        saved_order = json.loads(order_file.read_text(encoding="utf-8"))
+                        file_map = {}
+                        for f in files:
+                            try:
+                                rel = str(f.relative_to(sketch_dir))
+                            except Exception:
+                                rel = str(f)
+                            file_map[rel] = f
+                        ordered_files = []
+                        for name in saved_order:
+                            if name in file_map:
+                                ordered_files.append(file_map.pop(name))
+                        ordered_files.extend(file_map.values())
+                        files = ordered_files
+                    except Exception:
+                        pass
+                
+                if not files:
+                    placeholder_frame = tk.Frame(nb, bg=Theme.BG_DARKEST)
+                    nb.add(placeholder_frame, text="Empty")
+                    lbl_empty = tk.Label(
+                        placeholder_frame,
+                        text="No source files (.ino / .cpp / .c / .h / .txt) found in project folder.",
+                        font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+                    )
+                    lbl_empty.pack(expand=True)
+                    lbl_filepath.config(text="")
+                    lbl_cursor.config(text="")
+                    return
+
+                for idx, f in enumerate(files):
+                    # Only highlight the first (visible) tab immediately;
+                    # defer the rest so the GUI paints instantly.
+                    _build_tab(f, defer_highlight=(idx > 0))
+                    if idx > 0:
+                        tab_id = nb.tabs()[-1]
+                        _deferred_highlight_tabs.append(tab_id)
+
+            if nb.tabs():
+                first = parent_frame.nametowidget(nb.tabs()[0])
+                data = tab_data.get(first)
+                if data:
+                    lbl_filepath.config(text=str(data["path"]))
+                    _update_cursor_label(data["text"])
+                    lbl_editor_status.config(text="")
+
+            # Schedule deferred highlighting for background tabs one at a time
+            # so the event loop stays responsive between each tab.
+            def _highlight_deferred(remaining):
+                if not remaining:
+                    return
+                tab_id = remaining[0]
+                try:
+                    frame = parent_frame.nametowidget(tab_id)
+                    d = tab_data.get(frame)
+                    if d:
+                        _highlight(d["text"])
+                        _sync_linenos(d["text"], d["lineno_text"])
+                except Exception:
+                    pass
+                # Schedule next tab after a tiny delay to let the UI breathe
+                if len(remaining) > 1:
+                    self.root.after(10, lambda: _highlight_deferred(remaining[1:]))
+
+            if _deferred_highlight_tabs:
+                self.root.after_idle(lambda: _highlight_deferred(_deferred_highlight_tabs))
+
+        self._load_editor_files = _reload_files
+        self._save_all_editor_files = _save_all
+        self._save_current_editor_file = _save_current
+        self._reload_current_editor_file = _reload_files
+        _reload_files()
+
+        # ── Tab switch: update status bar ─────────────────────────────────
+        def _on_tab_changed(event):
+            cur = nb.select()
+            if not cur:
+                return
+            frame = parent_frame.nametowidget(cur)
+            data = tab_data.get(frame)
+            if data:
+                lbl_filepath.config(text=str(data["path"]))
+                _update_cursor_label(data["text"])
+                _update_line_highlight(data["text"])
+                data["text"].focus_set()
+
+        nb.bind("<<NotebookTabChanged>>", _on_tab_changed)
+
+        # ── Tab Drag-and-Drop Reordering ─────────────────────────────────
+        self._dragged_tab_idx = None
+
+        def _save_default_editor_tab_order():
+            if not self.sketch_dir_path:
+                return
+            paths = []
+            for tab_id in nb.tabs():
+                widget = nb.nametowidget(tab_id)
+                data = tab_data.get(widget)
+                if data and "path" in data:
+                    try:
+                        rel = str(data["path"].relative_to(self.sketch_dir_path))
+                    except Exception:
+                        rel = str(data["path"])
+                    paths.append(rel)
+            order_file = self.sketch_dir_path / ".mcu_flash_tab_order.json"
+            try:
+                import json
+                order_file.write_text(json.dumps(paths, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        def _on_tab_drag_start(event):
+            widget = event.widget
+            if widget.identify(event.x, event.y) != "label":
+                return
+            try:
+                self._dragged_tab_idx = widget.index(f"@{event.x},{event.y}")
+            except Exception:
+                self._dragged_tab_idx = None
+
+        def _on_tab_drag_motion(event):
+            if self._dragged_tab_idx is None:
+                return
+            widget = event.widget
+            if widget.identify(event.x, event.y) != "label":
+                return
+            try:
+                target_idx = widget.index(f"@{event.x},{event.y}")
+                if target_idx != self._dragged_tab_idx:
+                    active_tab = widget.select()
+                    widget.unbind("<<NotebookTabChanged>>")
+                    tab_child = widget.tabs()[self._dragged_tab_idx]
+                    widget.insert(target_idx, tab_child)
+                    widget.select(active_tab)
+                    widget.bind("<<NotebookTabChanged>>", _on_tab_changed)
+                    self._dragged_tab_idx = target_idx
+                    _save_default_editor_tab_order()
+            except Exception:
+                pass
+
+        def _on_tab_drag_release(event):
+            self._dragged_tab_idx = None
+
+        nb.bind("<ButtonPress-1>", _on_tab_drag_start, add="+")
+        nb.bind("<B1-Motion>", _on_tab_drag_motion, add="+")
+        nb.bind("<ButtonRelease-1>", _on_tab_drag_release, add="+")
+
+        # Window-level keyboard bindings. These must be bound to the actual
+        # toplevel that hosts this editor instance (the main window, or the
+        # separate Toplevel when detached) rather than unconditionally to
+        # self.root — Tk does not propagate key events between sibling
+        # toplevels, so binding to self.root left Ctrl+F / Ctrl+/ / zoom
+        # shortcuts dead whenever the Default editor was detached into its
+        # own window.
+        bind_target = parent_frame.winfo_toplevel()
+        bind_target.bind("<Control-f>", _toggle_find_panel)
+        bind_target.bind("<Control-F>", _toggle_find_panel)
+        bind_target.bind("<Control-slash>", _toggle_comment)
+        bind_target.bind("<Control-Key-equal>", _zoom_in)
+        bind_target.bind("<Control-Key-plus>", _zoom_in)
+        bind_target.bind("<Control-Key-minus>", _zoom_out)
+
+        # Trigger deferred background init once default editor tabs are ready
+        self.root.after(100, self._deferred_background_init)
+
+
+    def _find_editor_hwnd(self):
+        """Locate the pywebview editor's native window handle.
+
+        Searches via EnumWindows for the unique substring in the window title.
+        This is extremely robust against title re-writes and WebView2 subprocess boundaries
+        which otherwise fail simple PID checks.
+        """
+        if win32gui is None:
+            return None
+
+        # 1. Substring search for unique editor identifier
+        found = []
+        def _cb(hwnd, _):
+            try:
+                title = win32gui.GetWindowText(hwnd)
+                if any(k in title for k in ("Embedded Code Editor", "Monaco Code Editor", "Monaco Editor")):
+                    found.append(hwnd)
+            except Exception:
+                pass
+            return True
+
+        try:
+            win32gui.EnumWindows(_cb, None)
+        except Exception:
+            pass
+
+        if found:
+            return found[0]
+
+        # 2. Fallback to exact match or title variants
+        for variant in (EDITOR_WINDOW_TITLE, "Monaco Code Editor", "Embedded Code Editor"):
+            hwnd = win32gui.FindWindow(None, variant)
+            if hwnd:
+                return hwnd
+
+        before = getattr(self, "_editor_pre_create_hwnds", None)
+        if before is None:
+            return None
+
+        root_hwnd = None
+        try:
+            root_hwnd = self.root.winfo_id()
+        except Exception:
+            pass
+
+        current = _list_own_toplevel_hwnds()
+        new_hwnds = [h for h in (current - before) if h != root_hwnd]
+        if len(new_hwnds) == 1:
+            return new_hwnds[0]
+        if len(new_hwnds) > 1:
+            # Ambiguous — prefer one that still reports our title text
+            # somewhere, otherwise just take the first candidate.
+            for h in new_hwnds:
+                try:
+                    t = win32gui.GetWindowText(h)
+                    if any(k in t for k in ("MCU Flasher", "Embedded Code Editor", "Monaco")):
+                        return h
+                except Exception:
+                    pass
+            return new_hwnds[0]
+        return None
+
+    def _animate_editor_spinner(self):
+        """Rotating-arc spinner — keeps the panel visibly 'alive' while
+        loading instead of looking like a dead/blank box."""
+        canvas = getattr(self, "_editor_spinner_canvas", None)
+        if not canvas or not canvas.winfo_exists():
+            self._editor_spinner_job = None
+            return
+        canvas.delete("all")
+        angle = self._editor_spinner_angle
+        canvas.create_arc(
+            4, 4, 44, 44,
+            start=angle, extent=120,
+            outline=Theme.CYAN, width=4, style=tk.ARC
+        )
+        self._editor_spinner_angle = (angle + 20) % 360
+        self._editor_spinner_job = self.root.after(50, self._animate_editor_spinner)
+
+    def _stop_editor_spinner(self):
+        job = getattr(self, "_editor_spinner_job", None)
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+            self._editor_spinner_job = None
+
+    def _force_reveal_editor_timeout(self):
+        """Safety fallback: if the editor native window was embedded cleanly,
+        force-reveal the editor UI after a short timeout even if the page load
+        event notification was delayed or dropped by pywebview.
+        """
+        if getattr(self, "_editor_embedded", False) and not getattr(self, "_editor_content_loaded", False):
+            setattr(self, "_editor_content_loaded", True)
+            self._reveal_editor_if_ready()
+
+    def _reveal_editor_if_ready(self):
+        """Only hide the loading placeholder once BOTH the native window
+        is reparented+shown AND the page itself reports it finished
+        loading. Doing it in one step (right after .show()) is what left
+        a blank gap before — the window was visible but empty."""
+        if getattr(self, "_editor_embedded", False) and getattr(self, "_editor_content_loaded", False):
+            self._stop_editor_spinner()
+            self._editor_placeholder.place_forget()
+            # Editor is ready! Trigger deferred background init immediately
+            self.root.after(10, self._deferred_background_init)
+
+    def _try_embed_editor_window(self):
+        """Reparent the pywebview native window into the Tkinter editor
+        frame (Windows only, requires pywin32). Retries briefly since the
+        native window may not exist yet the first time this fires — it's
+        created asynchronously once webview.start() takes over the main
+        thread. Falls back to the 'Open Editor Window' button if pywin32
+        is unavailable or embedding doesn't succeed after several tries.
+        """
+        if win32gui is None or win32con is None:
+            self._append("  ⚠ pywin32 not available — editor will open in its own window.", "warning")
+            self._show_editor_fallback_button()
+            return
+
+        if getattr(self, "_editor_embedded", False) or getattr(self, "_embedding_in_progress", False):
+            return
+
+        # Ensure main window is viewable (mapped) before embedding
+        if not self.root.winfo_exists() or not self.root.winfo_viewable():
+            self.root.after(150, self._try_embed_editor_window)
+            return
+
+        self._embedding_in_progress = True
+        hwnd = self._find_editor_hwnd()
+        if not hwnd:
+            self._embedding_in_progress = False
+            self._editor_reparent_attempts += 1
+            if self._editor_reparent_attempts < 120:
+                poll_delay = 25 if self._editor_reparent_attempts < 20 else 50
+                self.root.after(poll_delay, self._try_embed_editor_window)
+            else:
+                self._append("  ✖ Could not locate the editor's window to embed it after 8s — "
+                              "falling back to a separate window.", "error")
+                self._show_editor_fallback_button()
+            return
+
+        # Ensure the webview host thread is actively pumping messages before attempting
+        # reparenting or thread input linking. Premature AttachThreadInput while WebView2 /
+        # pywebview is mid-initialization causes Windows to lock message queues, making
+        # the app temporarily "Not Responding".
+        import ctypes
+        from ctypes import wintypes
+        try:
+            user32 = ctypes.windll.user32
+            if user32.IsHungAppWindow(hwnd):
+                self._embedding_in_progress = False
+                self._editor_reparent_attempts += 1
+                if self._editor_reparent_attempts < 80:
+                    self.root.after(100, self._try_embed_editor_window)
+                else:
+                    self._append("  ✖ Editor window stopped responding during startup — falling back to separate window.", "error")
+                    self._show_editor_fallback_button()
+                return
+
+            res = wintypes.DWORD()
+            # SMTO_ABORTIFHUNG = 0x0002 — check if thread responds to message within 50ms
+            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 50, ctypes.byref(res)):
+                self._embedding_in_progress = False
+                self._editor_reparent_attempts += 1
+                if self._editor_reparent_attempts < 80:
+                    self.root.after(100, self._try_embed_editor_window)
+                else:
+                    self._append("  ✖ Editor window host thread timed out during embed retry.", "error")
+                    self._show_editor_fallback_button()
+                return
+        except Exception:
+            pass
+
+        try:
+            frame = self._editor_embed_frame
+            frame.update_idletasks()
+            tk_hwnd = frame.winfo_id()
+
+            # Set WS_CLIPCHILDREN on parent Tk frame to prevent paint overlap
+            try:
+                tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
+            except Exception:
+                pass
+
+            # Strip title bar / borders / system menu so the window
+            # behaves like a plain child control rather than a floating top-level window.
+            if not hasattr(self, "_original_editor_style") or getattr(self, "_original_editor_style", None) is None:
+                self._original_editor_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                self._original_editor_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                       win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                       win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+            style |= win32con.WS_CHILD
+            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                          win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+            ex_style |= win32con.WS_EX_TOOLWINDOW
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+            # Re-parent it under the Tkinter frame.
+            win32gui.SetParent(hwnd, tk_hwnd)
+
+            w = max(frame.winfo_width(), 50)
+            h = max(frame.winfo_height(), 50)
+            win32gui.SetWindowPos(
+                hwnd, 0, 0, 0, w, h,
+                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
+            )
+
+            # Raw SetWindowPos(SWP_SHOWWINDOW) only flips the native HWND's
+            # visible bit. WebView2's own Controller.IsVisible flag tracks
+            # the managed WinForms control's Visible property instead, which
+            # only flips when pywebview's own show() runs. Skip this and the
+            # HWND is visible but the browser control never paints — you get
+            # a blank white rectangle instead of content.
+            try:
+                if hasattr(self, "editor_window"):
+                    self.editor_window.show()
+            except Exception as e:
+                self._append(f"  ⚠ editor_window.show() failed: {e}", "warning")
+
+            self._editor_hwnd = hwnd
+            self._editor_embedded = True
+            self._embedding_in_progress = False
+            self._append("  ✓ Code editor embedded into the main window.", "success")
+            self._editor_status_lbl.configure(text="📝 Rendering editor…")
+            self._editor_desc_lbl.configure(text="Waiting for the editor page to finish loading…")
+            self._reveal_editor_if_ready()
+            # Safety watchdog: force-reveal if webview page load event was missed or delayed
+            self.root.after(1500, self._force_reveal_editor_timeout)
+            
+        except Exception as e:
+            self._embedding_in_progress = False
+            self._editor_reparent_attempts += 1
+            if self._editor_reparent_attempts < 80:  # ~8 seconds of retrying
+                self.root.after(100, self._try_embed_editor_window)
+            else:
+                self._append(f"  ✖ Failed to embed editor window after retries: {e}", "error")
+                self._show_editor_fallback_button()
+
+    def _start_editor_hang_watchdog(self, tk_hwnd, tk_tid, editor_tid):
+        """Watch for the exact failure mode AttachThreadInput can cause:
+        the whole app going 'Not Responding' because the editor's thread
+        wasn't pumping messages yet when we attached input queues to it
+        (see the long comment in _try_embed_editor_window).
+
+        This runs on its own plain Python thread — NOT through Tk's
+        after()/mainloop — specifically so it keeps running even if the
+        Tk thread itself is the one that's stuck. Windows exposes exactly
+        the classification we need via IsHungAppWindow(), so we poll that
+        for a few seconds after attaching; if it fires, we immediately
+        detach the input queues ourselves (self-healing) instead of
+        requiring the user to force-kill the process from Task Manager.
+        """
+        import ctypes
+
+        def _watch():
+            user32 = ctypes.windll.user32
+            # Give WebView2 a realistic window to finish first-run/first-
+            # paint init before we start judging responsiveness; a cold
+            # (freshly rebuilt env) first launch is slower than normal.
+            time.sleep(1.5)
+            detached = False
+            for _ in range(20):  # ~10s of checking, every 0.5s
+                try:
+                    if not getattr(self, "_editor_embedded", False):
+                        return  # embed path already failed/changed elsewhere
+                    if user32.IsHungAppWindow(tk_hwnd):
+                        try:
+                            user32.AttachThreadInput(tk_tid, editor_tid, False)
+                        except Exception:
+                            pass
+                        detached = True
+                        break
+                except Exception:
+                    return
+                time.sleep(0.5)
+
+            if detached:
+                self._editor_attach_ok = False
+                self._editor_attached_threads = None
+                # Tk's Tcl notifier should start servicing its message
+                # queue again immediately after detaching — schedule the
+                # notice through root.after rather than touching widgets
+                # directly from this background thread.
+                def _notify():
+                    self._append(
+                        "  ⚠ Detected the editor freezing the app right after embedding — "
+                        "automatically detached it to recover. The editor will open in its "
+                        "own window instead this session.", "warning"
+                    )
+                    self._editor_embedded = False
+                    self._editor_hwnd = None
+                    self._show_editor_fallback_button()
+                try:
+                    self.root.after(0, _notify)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_watch, daemon=True).start()
+
+    def _cleanup_active_editor(self):
+        """Clean up the active editor by hiding Monaco pywebview windows,
+        detaching Windows handles/hooks, canceling pending after jobs,
+        and destroying all Tk widgets inside the editor frame."""
+
+        # 1. Detach and hide Monaco pywebview window
+        hwnd = getattr(self, "_editor_hwnd", None)
+        if hwnd and win32gui is not None:
+            try:
+                # Reparent back to desktop/no parent so it doesn't get destroyed
+                # when the Tk frame children are destroyed.
+                win32gui.SetParent(hwnd, 0)
+                if win32con is not None:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+        
+        if hasattr(self, "editor_window") and self.editor_window:
+            try:
+                self.editor_window.hide()
+            except Exception:
+                pass
+
+        # 3. Detach thread inputs if we attached them
+        pair = getattr(self, "_editor_attached_threads", None)
+        if pair and win32gui is not None:
+            try:
+                import ctypes
+                ctypes.windll.user32.AttachThreadInput(pair[0], pair[1], False)
+            except Exception:
+                pass
+            self._editor_attached_threads = None
+
+        # 4. Cancel pending Tk after jobs
+        for job_attr in ("_editor_spinner_job", "_editor_resize_job"):
+            job = getattr(self, job_attr, None)
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, job_attr, None)
+
+        # 5. Clear layout
+        if hasattr(self, "editor_frame") and self.editor_frame:
+            try:
+                self.editor_frame.unbind("<Configure>")
+            except Exception:
+                pass
+            for child in self.editor_frame.winfo_children():
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+
+        # 6. Reset layout properties
+        self._editor_hwnd = None
+        self._editor_embedded = False
+        self._editor_content_loaded = False
+        self._editor_reparent_attempts = 0
+        self.editor_notebook = None
+        if hasattr(self, "editor_tab_data"):
+            self.editor_tab_data.clear()
+
+    def _show_editor_fallback_button(self):
+        """Embedding isn't available — swap the 'loading' placeholder for
+        the 'Open Editor Window' popup button so the editor is still
+        reachable."""
+        if getattr(self, "_editor_embedded", False):
+            return
+        self._editor_status_lbl.configure(text="📝 Monaco Editor Active")
+        self._editor_desc_lbl.configure(text="The editor is running in a separate window.")
+        self._editor_fallback_btn.pack(pady=15)
+
+    def _resize_embedded_editor(self, event=None):
+        """Keep the embedded editor window's size in sync with the Tk
+        frame hosting it — called on every <Configure> of that frame.
+        Debounced and uses SWP_ASYNCWINDOWPOS to prevent freezes during
+        rapid resizing, maximization, or fullscreen transitions on any device.
+        """
+        if not getattr(self, "_editor_embedded", False) or not self._editor_hwnd or win32gui is None:
+            return
+        
+        if hasattr(self, "_editor_resize_job") and self._editor_resize_job:
+            try:
+                self.root.after_cancel(self._editor_resize_job)
+            except Exception:
+                pass
+            self._editor_resize_job = None
+
+        def _do_resize():
+            self._editor_resize_job = None
+            try:
+                if not getattr(self, "_editor_embedded", False) or not self._editor_hwnd or win32gui is None:
+                    return
+                w = max(self._editor_embed_frame.winfo_width(), 10)
+                h = max(self._editor_embed_frame.winfo_height(), 10)
+                
+                last_w = getattr(self, "_last_editor_w", 0)
+                last_h = getattr(self, "_last_editor_h", 0)
+                if w == last_w and h == last_h:
+                    return
+                    
+                self._last_editor_w = w
+                self._last_editor_h = h
+                # SWP_ASYNCWINDOWPOS (0x4000) prevents blocking the calling
+                # (Tk) thread while the other thread processes the resize —
+                # this is the key to freeze-free resizing and fullscreen toggles.
+                win32gui.SetWindowPos(
+                    self._editor_hwnd, 0, 0, 0, w, h,
+                    win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE | 0x4000
+                )
+            except Exception:
+                pass
+
+        try:
+            self._editor_resize_job = self.root.after(30, _do_resize)
+        except Exception:
+            pass
+
+    def _set_embedded_editor_visible(self, visible: bool):
+        """Show/hide the embedded editor window when its pane is toggled
+        via Hide/Show Editor. A reparented native window doesn't
+        automatically follow its Tk parent frame's mapped state, so this
+        has to be done explicitly."""
+        if not getattr(self, "_editor_embedded", False) or not self._editor_hwnd or win32gui is None:
+            return
+        try:
+            win32gui.ShowWindow(
+                self._editor_hwnd,
+                win32con.SW_SHOW if visible else win32con.SW_HIDE
+            )
+        except Exception:
+            pass
+
+    def _open_download_manager(self):
+        import subprocess, sys
+        from pathlib import Path
+        script_dir = SCRIPT_DIR
+        script_path = script_dir / "src" / "libs" / "arduino_lib_req.py"
+        
+        # Grab our own native window handle so the child process can make
+        # itself an "owned" window of this one (stays on top of us, hides
+        # when we minimize, no separate taskbar entry).
+        parent_hwnd = None
+        if sys.platform == "win32":
+            try:
+                self.root.update_idletasks()
+                parent_hwnd = self.root.winfo_id()
+            except Exception:
+                parent_hwnd = None
+        
+        # Check if we are running as a PyInstaller executable
+        is_frozen = getattr(sys, 'frozen', False)
+        import os
+        env = os.environ.copy()
+        env["MCU_PREF_DIR"] = str(SCRIPT_DIR)
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        for k in ["_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH"]:
+            env.pop(k, None)
+            
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            # Clean up the parent's _MEIPASS folder from the PATH
+            path_val = env.get("PATH", "")
+            paths = path_val.split(os.pathsep)
+            cleaned_paths = [p for p in paths if p != meipass]
+            env["PATH"] = os.pathsep.join(cleaned_paths)
+            
+        # We always launch the python script using the local virtualenv python interpreter.
+        # This completely avoids any PyInstaller DLL packaging/LoadLibrary conflicts.
+        try:
+            venv_dir = SCRIPT_DIR / "env"
+            if sys.platform == "win32":
+                python_exe = venv_dir / "Scripts" / "pythonw.exe"
+                if not python_exe.exists():
+                    python_exe = venv_dir / "Scripts" / "python.exe"
+            else:
+                python_exe = venv_dir / "bin" / "python"
+
+            if python_exe.exists() and script_path.exists():
+                cmd = [str(python_exe), str(script_path)]
+                if parent_hwnd:
+                    cmd += ["--parent-hwnd", str(parent_hwnd)]
+                p = subprocess.Popen(cmd, env=env)
+            else:
+                python_exe = sys.executable
+                if sys.platform == "win32" and not getattr(sys, 'frozen', False):
+                    pythonw = Path(python_exe).parent / "pythonw.exe"
+                    if pythonw.exists():
+                        python_exe = str(pythonw)
+                cmd = [str(python_exe), str(script_path)]
+                if parent_hwnd:
+                    cmd += ["--parent-hwnd", str(parent_hwnd)]
+                p = subprocess.Popen(cmd, env=env)
+            self._download_managers.append(p)
+            self.root.after(1000, self._check_downloader_running)
+            self._append("  ℹ Launching Download Boards/Libraries Manager.", "info")
+        except Exception as e:
+            self._append(f"  ✖ Failed to launch download manager: {e}", "error")
+
+    def _check_downloader_running(self):
+        # Filter completed processes
+        still_running = []
+        any_finished = False
+        for p in self._download_managers:
+            if p.poll() is None:
+                still_running.append(p)
+            else:
+                any_finished = True
+        
+        self._download_managers = still_running
+        
+        if any_finished:
+            self._reload_supported_boards()
+        
+        # While the download manager is still open, periodically check
+        # for filesystem changes (new board installed / deleted) so the
+        # board dropdown updates live without waiting for the manager to
+        # close.
+        if self._download_managers: 
+            self._check_boards_dir_changed()
+            self.root.after(2000, self._check_downloader_running)
+
+    def _check_boards_dir_changed(self):
+        """Detect changes in the Boards download directory and reload if needed.
+
+        Watches both the download directory path itself (in case the user
+        changed it in the Download Manager) and the actual boards.txt
+        files on disk.
+        """
+        try:
+            download_dir = _get_download_dir()
+
+            boards_path = Path(download_dir) / "Boards"
+            if boards_path.is_dir():
+                # Build a snapshot of board folder names + boards.txt mtimes
+                current_snapshot = {("__download_dir__", download_dir)}
+                for p in boards_path.glob("**/boards.txt"):
+                    try:
+                        current_snapshot.add((str(p), os.path.getmtime(p)))
+                    except OSError:
+                        current_snapshot.add((str(p), 0))
+            else:
+                current_snapshot = {("__download_dir__", download_dir)}
+
+            prev = getattr(self, "_boards_dir_snapshot", None)
+            if prev is None:
+                # First check — store baseline, no reload needed
+                self._boards_dir_snapshot = current_snapshot
+            elif current_snapshot != prev:
+                # Something changed on disk or the directory moved — reload boards
+                self._boards_dir_snapshot = current_snapshot
+                self._reload_supported_boards()
+        except Exception:
+            pass
+
+    def _reload_supported_boards(self):
+        """Reload the dynamic boards from disk and refresh the dropdown list.
+        Runs the heavy disk scan in a background thread to keep the GUI
+        responsive, then applies the result on the main thread."""
+        def _bg_load():
+            new_boards = load_dynamic_boards({})
+            # Schedule the UI update on the main thread
+            self.root.after(0, lambda: self._apply_reloaded_boards(new_boards))
+        threading.Thread(target=_bg_load, daemon=True).start()
+
+    def _apply_reloaded_boards(self, new_boards: dict):
+        """Apply the reloaded board list on the main (UI) thread."""
+        global SUPPORTED_BOARDS
+        SUPPORTED_BOARDS = new_boards
+        
+        old_boards = getattr(self, "_known_board_names", None)
+        new_board_names = set(new_boards.keys())
+        if old_boards is not None:
+            added_boards = new_board_names - old_boards
+            for board_name in added_boards:
+                self._append_notif(
+                    f"  📦 New Board Installed: \"{board_name}\"",
+                    tag="success",
+                    category="board_install",
+                    title="Board Package Installed"
+                )
+        self._known_board_names = new_board_names
+
+        if hasattr(self, 'board_combo') and self.board_combo:
+            # Update the combobox's underlying option list
+            if hasattr(self.board_combo, 'update_options'):
+                self.board_combo.update_options(list(SUPPORTED_BOARDS.keys()))
+            else:
+                self.board_combo["values"] = list(SUPPORTED_BOARDS.keys())
+            
+            # If the current selected board is no longer in SUPPORTED_BOARDS
+            curr = self.board_var.get()
+            if curr not in SUPPORTED_BOARDS and SUPPORTED_BOARDS:
+                new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
+                self.board_var.set(new_board)
+                self._last_valid_board = new_board
+                self._on_board_changed()
+            elif not curr and SUPPORTED_BOARDS:
+                new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
+                self.board_var.set(new_board)
+                self._last_valid_board = new_board
+                self._on_board_changed()
+                
+            self._append("  ℹ Reloaded supported boards list from disk.", "info")
+
+    def _get_cpu_cores_jobs(self) -> int:
+        try:
+            data = _load_raw_config()
+            setting = data.get("shared", {}).get("cpu_multithreading", "HIGH")
+        except Exception:
+            setting = "HIGH"
+        
+        return _resource_safe_worker_count(setting)
+
+    def _launch_opencode_ai_assistant(self):
+        """Prompt user with beta & copyright disclaimer before launching elevated OpenCode AI."""
+        disclaimer_title = "OpenCode AI Assistant (Beta Test)"
+        disclaimer_msg = (
+            "🤖 OpenCode AI Assistant\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "📌 Notice & Disclaimer:\n"
+            "• OpenCode AI integration in this project is currently in BETA TESTING.\n"
+            "• MCU Flash GUI does not claim any copyright, trademark, or ownership of OpenCode AI. "
+            "All rights, trademarks, and intellectual property belong to their respective creators.\n\n"
+            "🛡️ System Permission:\n"
+            "• Clicking 'Yes' will launch OpenCode in an Elevated (Administrator) Command Prompt "
+            "to assist you with fixing, explaining, and debugging code.\n\n"
+            "Do you want to proceed and launch OpenCode AI as Administrator?"
+        )
+        
+        proceed = messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root)
+        if proceed:
+            try:
+                from dedicated_AI import launch_opencode_elevated_cmd
+                launch_opencode_elevated_cmd(str(self.sketch_dir_path))
+            except Exception as e:
+                # Fallback in case dedicated_AI import fails
+                try:
+                    import ctypes
+                    target_dir = os.path.abspath(str(self.sketch_dir_path))
+                    window_title = "MCU Flash GUI - OpenCode AI Assistant (Administrator)"
+                    cmd_args = f'/k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode"'
+                    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", cmd_args, target_dir, 1)
+                    if int(ret) <= 32:
+                        subprocess.Popen(f'start cmd /k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode"', shell=True)
+                except Exception as err:
+                    messagebox.showerror("Launch Error", f"Failed to launch OpenCode AI: {err}", parent=self.root)
+
+    def _dispose_active_ai_assistant(self):
+        """Dispose and terminate the active OpenCode AI CMD process window if open."""
+        try:
+            self._hide_ai_side_panel()
+            was_closed = False
+            if getattr(self, "ai_controller", None):
+                was_closed = self.ai_controller.dispose()
+            else:
+                try:
+                    from dedicated_AI import close_active_opencode
+                    was_closed = close_active_opencode()
+                except Exception:
+                    pass
+            if was_closed and hasattr(self, "_append_notif"):
+                self._append_notif("  ℹ Active AI Assistant process closed (project changed).", "info")
+        except Exception:
+            pass
+
+    def _update_ai_button_label(self):
+        """Update top toolbar AI button text to '🤖 Hide AI' when open and '🤖 AI Assistant' when hidden."""
+        btn = getattr(self, "btn_ai_assistant", None)
+        if not btn:
+            return
+        if getattr(self, "ai_controller", None) and getattr(self.ai_controller, "is_launching", False):
+            return
+        is_visible = getattr(self, "_ai_side_visible", False)
+        if is_visible:
+            btn.config(text="🤖 Hide AI", bg=Theme.BTN_CLEAR, fg=Theme.TEXT_BRIGHT)
+        else:
+            btn.config(text="🤖 AI Assistant", bg=Theme.BTN_CLEAR, fg=Theme.TEXT_BRIGHT)
+
+
+    def _toggle_ai_side_panel(self):
+        """Toggle right-side OpenCode AI Assistant container panel visibility."""
+        is_visible = getattr(self, "_ai_side_visible", False)
+        if is_visible:
+            self._hide_ai_side_panel()
+        else:
+            if getattr(self, "ai_controller", None):
+                try:
+                    from dedicated_AI import is_opencode_running
+                    if not is_opencode_running():
+                        # Prompt the disclaimer first BEFORE popping up the AI panel
+                        started = self.ai_controller.toggle_ai()
+                        if not started:
+                            return  # User declined/cancelled disclaimer prompt; don't open panel
+                except Exception:
+                    pass
+            self._show_ai_side_panel()
+
+    def _show_ai_loading_overlay_4s(self):
+        """Display circular loading overlay on top of AI container for exactly 4 seconds."""
+        self._dismiss_ai_loading_overlay()
+        try:
+            if hasattr(self, "ai_side_container") and self.ai_side_container:
+                bg = getattr(Theme, "BG_DARKEST", "#0c0d10")
+                self.ai_loading_overlay = CircularLoadingOverlay(
+                    self.ai_side_container,
+                    bg_color=bg,
+                    spinner_color="#00e5ff",
+                    text="Initializing AI Assistant..."
+                )
+                self.ai_loading_overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
+
+                if hasattr(self, "root") and self.root:
+                    self._ai_overlay_timer_id = self.root.after(4000, self._dismiss_ai_loading_overlay)
+        except Exception:
+            pass
+
+    _show_ai_loading_overlay_3s = _show_ai_loading_overlay_4s
+
+    def _dismiss_ai_loading_overlay(self):
+        """Remove and clean up circular loading overlay."""
+        if hasattr(self, "_ai_overlay_timer_id") and self._ai_overlay_timer_id and hasattr(self, "root") and self.root:
+            try:
+                self.root.after_cancel(self._ai_overlay_timer_id)
+            except Exception:
+                pass
+            self._ai_overlay_timer_id = None
+
+        if hasattr(self, "ai_loading_overlay") and self.ai_loading_overlay:
+            try:
+                self.ai_loading_overlay.stop_and_destroy()
+            except Exception:
+                pass
+            self.ai_loading_overlay = None
+
+    def _show_ai_side_panel(self):
+        """Show the AI Assistant side panel container on the right side of the main window."""
+        if not hasattr(self, "ai_side_container") or not hasattr(self, "h_split_pane"):
+            return
+
+        panes = [str(p) for p in self.h_split_pane.panes()]
+        if str(self.ai_side_container) not in panes and self.ai_side_container not in self.h_split_pane.panes():
+            # Preserve a usable editor area on snapped/small windows.
+            root_w = max(480, self.root.winfo_width())
+            calc_w = max(220, int(root_w * 0.44))
+            calc_w = min(calc_w, max(220, root_w - 300))
+            self.h_split_pane.add(self.ai_side_container, width=calc_w)
+
+        self._ai_side_visible = True
+        self._update_ai_button_label()
+
+        # Display 4-second circular loading overlay ONLY on first-time launch
+        # (Subsequent hide/unhide toggles open immediately without overlay delay)
+        from dedicated_AI import is_opencode_running
+        if not getattr(self, "_has_shown_ai_first_time_loader", False) or not is_opencode_running():
+            self._has_shown_ai_first_time_loader = True
+            self._show_ai_loading_overlay_4s()
+
+        # Reveal embedded native Win32 window if previously hidden
+        if getattr(self, "_ai_hwnd", None) and win32gui is not None:
+            try:
+                win32gui.ShowWindow(self._ai_hwnd, win32con.SW_SHOW)
+                self._resize_embedded_ai()
+            except Exception:
+                pass
+
+        # Trigger launch if AI process is not running
+        if getattr(self, "ai_controller", None):
+            try:
+                from dedicated_AI import is_opencode_running
+                if not is_opencode_running() and not getattr(self.ai_controller, "is_launching", False):
+                    started = self.ai_controller.toggle_ai()
+                    if not started:
+                        self._hide_ai_side_panel()
+                        return
+            except Exception:
+                pass
+        elif hasattr(self, "_launch_opencode_ai_assistant"):
+            self._launch_opencode_ai_assistant()
+
+        # Poll and embed AI pywebview OS window into self.ai_embed_frame
+        self._start_ai_embedding_poll()
+
+    def _hide_ai_side_panel(self):
+        """Hide the AI Assistant side panel container from the right side."""
+        self._dismiss_ai_loading_overlay()
+
+        # Explicitly hide embedded native Win32 window first so it doesn't linger on screen
+        if getattr(self, "_ai_hwnd", None) and win32gui is not None:
+            try:
+                win32gui.ShowWindow(self._ai_hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+
+        if not hasattr(self, "h_split_pane") or not hasattr(self, "ai_side_container"):
+            return
+        try:
+            panes = [str(p) for p in self.h_split_pane.panes()]
+            if str(self.ai_side_container) in panes or self.ai_side_container in self.h_split_pane.panes():
+                self.h_split_pane.forget(self.ai_side_container)
+        except Exception:
+            try:
+                self.h_split_pane.forget(self.ai_side_container)
+            except Exception:
+                pass
+        try:
+            self.ai_side_container.pack_forget()
+            self.ai_side_container.place_forget()
+        except Exception:
+            pass
+        self._ai_side_visible = False
+        self._update_ai_button_label()
+
+    def _start_ai_embedding_poll(self):
+        self._ai_embed_attempts = 0
+        if hasattr(self, "root") and self.root:
+            self.root.after(100, self._try_embed_ai_window)
+
+    def _try_embed_ai_window(self):
+        """Find and embed the pywebview-hosted AI window into the right-side container."""
+        if win32gui is None or win32con is None:
+            return
+
+        # Check if already embedded and HWND is still valid
+        if getattr(self, "_ai_hwnd", None):
+            try:
+                if win32gui.IsWindow(self._ai_hwnd):
+                    self._resize_embedded_ai()
+                    return
+            except Exception:
+                self._ai_hwnd = None
+
+        import ctypes
+        hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - OpenCode AI Assistant")
+        if not hwnd or hwnd == 0:
+            self._ai_embed_attempts = getattr(self, "_ai_embed_attempts", 0) + 1
+            if self._ai_embed_attempts < 100:
+                self.root.after(100, self._try_embed_ai_window)
+            return
+
+        try:
+            tk_hwnd = self.ai_embed_frame.winfo_id()
+
+            # Set WS_CLIPCHILDREN on parent Tk frame
+            try:
+                tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
+            except Exception:
+                pass
+
+            if not hasattr(self, "_original_ai_style") or getattr(self, "_original_ai_style", None) is None:
+                self._original_ai_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                self._original_ai_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+
+            # Strip caption/borders to embed as child control
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                       win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                       win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+            style |= win32con.WS_CHILD
+            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                          win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+            ex_style |= win32con.WS_EX_TOOLWINDOW
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+            win32gui.SetParent(hwnd, tk_hwnd)
+            self._ai_hwnd = hwnd
+            self._ai_is_embedded = True
+            self._resize_embedded_ai()
+            self._update_ai_button_label()
+        except Exception as e:
+            print(f"[MCU Flasher] Error embedding AI window: {e}")
+
+    def _resize_embedded_ai(self, event=None):
+        if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
+            return
+        if win32gui is None or win32con is None:
+            return
+        try:
+            if not win32gui.IsWindow(self._ai_hwnd):
+                self._ai_hwnd = None
+                return
+            frame = self.ai_embed_frame
+            w = max(frame.winfo_width(), 50)
+            h = max(frame.winfo_height(), 50)
+            win32gui.SetWindowPos(
+                self._ai_hwnd, 0, 0, 0, w, h,
+                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
+            )
+        except Exception:
+            pass
+    def _on_ai_applied_edit(
+        self,
+        filepath=None,
+        before_content=None,
+        after_content=None,
+        before_exists=True,
+        after_exists=True,
+    ):
+        """Triggered when OpenCode AI applies an edit to any file in the workspace.
+        Invokes the Reload button to automatically update the editor view,
+        and posts a notification so the user can see what the AI changed.
+        """
+        review_notification_state = {"queued": None}
+
+        def _do_reload():
+            if getattr(self, "editor_mode", "default") == "monaco" and hasattr(self, "editor_window") and self.editor_window:
+                try:
+                    import json
+                    js_path = str(filepath) if filepath else ""
+                    if (filepath and hasattr(self, "editor_api") and self.editor_api
+                            and before_content is not None and after_content is not None):
+                        queue_result = self.editor_api.queue_ai_edit_snapshot(
+                            filepath,
+                            before_content,
+                            after_content,
+                            before_exists,
+                            after_exists,
+                        )
+                        if queue_result == "cancelled":
+                            review_notification_state["queued"] = False
+                            self.editor_window.evaluate_js(
+                                "onAiReviewCancelled("
+                                f"{json.dumps(js_path)}, {json.dumps(bool(after_exists))})"
+                            )
+                            return
+                        if not queue_result:
+                            review_notification_state["queued"] = False
+                            return
+                        review_notification_state["queued"] = True
+                    self.editor_window.evaluate_js(f"reloadActiveFileWithDiff({json.dumps(js_path)})")
+                    return
+                except Exception as exc:
+                    review_notification_state["queued"] = False
+                    print(f"[MCU Flasher] AI review bridge error: {exc}")
+                    if hasattr(self, "_append_notif"):
+                        self._append_notif(
+                            f"  AI review could not open: {exc}",
+                            "error",
+                            category="system",
+                            title="AI review error",
+                        )
+            if hasattr(self, "btn_reload_file") and self.btn_reload_file:
+                try:
+                    self.btn_reload_file.invoke()
+                    return
+                except Exception:
+                    pass
+            if hasattr(self, "_reload_current_editor_file") and callable(self._reload_current_editor_file):
+                self._reload_current_editor_file()
+
+        def _do_notify():
+            if review_notification_state["queued"] is False:
+                return
+            if hasattr(self, "_append_notif"):
+                if filepath:
+                    try:
+                        fname = Path(filepath).name
+                    except Exception:
+                        fname = str(filepath)
+                    self._append_notif(
+                        f"  AI edit awaiting review: {fname}",
+                        "warning",
+                        category="system",
+                        title=f"Review AI edit: {fname}",
+                    )
+                else:
+                    self._append_notif(
+                        "  AI edit awaiting review.",
+                        "warning",
+                        category="system",
+                        title="Review AI edit",
+                    )
+
+        if hasattr(self, "root") and self.root:
+            self.root.after(0, _do_reload)
+            self.root.after(50, _do_notify)
+
+    def _restart_periodic_reload(self):
+        """Cancel any existing periodic reload timer and restart if enabled."""
+        if getattr(self, "_periodic_reload_after_id", None):
+            try:
+                self.root.after_cancel(self._periodic_reload_after_id)
+            except Exception:
+                pass
+            self._periodic_reload_after_id = None
+
+        if getattr(self, "periodic_reload_enabled", False):
+            interval_ms = max(2000, int(getattr(self, "periodic_reload_interval_s", 5)) * 1000)
+            self._periodic_reload_after_id = self.root.after(interval_ms, self._periodic_reload_tick)
+
+    def _periodic_reload_tick(self):
+        """Timer tick — reload open tabs/files if disk content differs from memory buffer."""
+        if not getattr(self, "periodic_reload_enabled", False):
+            self._periodic_reload_after_id = None
+            return
+
+        try:
+            if getattr(self, "editor_mode", "default") == "monaco":
+                # Skip auto-reload if the editor buffer is modified / dirty to protect user's typing
+                is_dirty = False
+                if hasattr(self, "editor_api") and self.editor_api:
+                    active_path = getattr(self.editor_api, "active_file_path", None)
+                    if active_path:
+                        is_dirty = self.editor_api.modified_files.get(active_path, False)
+                    else:
+                        is_dirty = any(self.editor_api.modified_files.values())
+
+                if not is_dirty:
+                    if hasattr(self, "_reload_current_editor_file") and callable(self._reload_current_editor_file):
+                        self._reload_current_editor_file()
+            else:
+                if hasattr(self, "_reload_default_tabs_if_changed") and callable(self._reload_default_tabs_if_changed):
+                    self._reload_default_tabs_if_changed()
+        except Exception:
+            pass
+
+        if getattr(self, "periodic_reload_enabled", False):
+            interval_ms = max(2000, int(getattr(self, "periodic_reload_interval_s", 5)) * 1000)
+            self._periodic_reload_after_id = self.root.after(interval_ms, self._periodic_reload_tick)
+    def _open_settings(self):
+        # Create dialog
+        dlg = tk.Toplevel(self.root)
+        dlg.title("MCU Flasher Settings")
+        
+        # Set window icon if available
+        try:
+            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            if icon_path.exists():
+                dlg.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        platform = board_info.get("platform", "").lower()
+        port_desc = self.port_var.get().lower()
+        is_esp = ("espressif" in platform or "esp" in board_name.lower() or 
+                  "esp" in port_desc or "cp210" in port_desc or "ch9102" in port_desc)
+
+        dlg.configure(bg=Theme.BG_DARKEST)
+        dlg.resizable(True, True)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        settings_scale = _get_widget_dpi_scale(dlg)
+
+        def sp(value):
+            return max(1, round(value * settings_scale))
+
+        settings_host = tk.Frame(dlg, bg=Theme.BG_DARKEST)
+        settings_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        settings_host.grid_rowconfigure(0, weight=1)
+        settings_host.grid_columnconfigure(0, weight=1)
+        settings_canvas = tk.Canvas(
+            settings_host, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0
+        )
+        settings_scroll = ttk.Scrollbar(
+            settings_host, orient=tk.VERTICAL, command=settings_canvas.yview
+        )
+        settings_canvas.configure(yscrollcommand=settings_scroll.set)
+        settings_canvas.grid(row=0, column=0, sticky="nsew")
+        settings_body = tk.Frame(settings_canvas, bg=Theme.BG_DARKEST)
+        settings_window = settings_canvas.create_window(
+            (0, 0), window=settings_body, anchor=tk.NW
+        )
+        scroll_state = {"visible": False}
+        settings_layout_state = {"narrow": None}
+
+        def _sync_settings_scrollbar():
+            if not settings_canvas.winfo_exists():
+                return
+            bbox = settings_canvas.bbox("all")
+            content_height = (bbox[3] - bbox[1]) if bbox else 0
+            needs_scroll = content_height > settings_canvas.winfo_height() + 1
+            if needs_scroll and not scroll_state["visible"]:
+                settings_scroll.grid(row=0, column=1, sticky="ns")
+                scroll_state["visible"] = True
+            elif not needs_scroll and scroll_state["visible"]:
+                settings_scroll.grid_remove()
+                settings_canvas.yview_moveto(0)
+                scroll_state["visible"] = False
+
+        def _on_settings_body_configure(_event=None):
+            settings_canvas.configure(scrollregion=settings_canvas.bbox("all"))
+            settings_canvas.after_idle(_sync_settings_scrollbar)
+
+        def _on_settings_canvas_configure(event):
+            settings_canvas.itemconfigure(settings_window, width=event.width)
+            note_wrap = max(sp(240), event.width - sp(100))
+            try:
+                editor_note.configure(wraplength=note_wrap)
+                autosave_note.configure(wraplength=note_wrap)
+            except (NameError, tk.TclError):
+                pass
+            narrow = (event.width / settings_scale) < 470
+            if settings_layout_state["narrow"] != narrow:
+                settings_layout_state["narrow"] = narrow
+                try:
+                    for widget in (
+                        cpu_label, cpu_combo, monitor_font_label,
+                        monitor_font_combo, monitor_font_unit,
+                        editor_label, editor_combo,
+                    ):
+                        widget.pack_forget()
+                    if narrow:
+                        cpu_label.pack(anchor=tk.W, pady=(0, sp(3)))
+                        cpu_combo.pack(fill=tk.X)
+                        monitor_font_label.pack(anchor=tk.W, pady=(0, sp(3)))
+                        monitor_font_combo.pack(side=tk.LEFT)
+                        monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
+                        editor_label.pack(anchor=tk.W, pady=(0, sp(3)))
+                        editor_combo.pack(fill=tk.X)
+                    else:
+                        cpu_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+                        cpu_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                        monitor_font_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+                        monitor_font_combo.pack(side=tk.LEFT)
+                        monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
+                        editor_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+                        editor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                    if btn_hard is not None:
+                        btn_hard.pack_forget()
+                        btn_soft.pack_forget()
+                        if narrow:
+                            btn_hard.pack(fill=tk.X, padx=sp(6), pady=(0, sp(5)))
+                            btn_soft.pack(fill=tk.X, padx=sp(6))
+                        else:
+                            btn_hard.pack(side=tk.LEFT, padx=sp(10), expand=True, fill=tk.X)
+                            btn_soft.pack(side=tk.LEFT, padx=sp(10), expand=True, fill=tk.X)
+                except (NameError, tk.TclError):
+                    pass
+            settings_canvas.after_idle(_sync_settings_scrollbar)
+
+        def _on_settings_mousewheel(event):
+            if scroll_state["visible"]:
+                settings_canvas.yview_scroll(int(-event.delta / 120), "units")
+                return "break"
+            return None
+
+        settings_body.bind("<Configure>", _on_settings_body_configure)
+        settings_canvas.bind("<Configure>", _on_settings_canvas_configure)
+        dlg.bind("<MouseWheel>", _on_settings_mousewheel)
+
+        # Section: CPU Cores MultiThreading
+        tk.Label(settings_body, text="Performance Settings", font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=(sp(12), sp(5)))
+
+        cpu_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        cpu_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        cpu_label = tk.Label(
+            cpu_frame, text="CPU Cores Multithreading:", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        cpu_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+        
+        total_processors = os.cpu_count() or 4
+        reserved_processors = _system_reserved_cpu_count(total_processors)
+        low_jobs = _resource_safe_worker_count("LOW", total_processors)
+        medium_jobs = _resource_safe_worker_count("MEDIUM", total_processors)
+        high_jobs = _resource_safe_worker_count("HIGH", total_processors)
+
+        low_val = f"LOW ({low_jobs} Jobs)"
+        med_val = f"MEDIUM ({medium_jobs} Jobs)"
+        high_val = f"HIGH ({high_jobs} Jobs + {reserved_processors} Reserved)"
+        
+        try:
+            current_setting = _load_raw_config().get("shared", {}).get("cpu_multithreading", "HIGH")
+        except Exception:
+            current_setting = "HIGH"
+            
+        default_combo_val = high_val
+        if current_setting == "LOW":
+            default_combo_val = low_val
+        elif current_setting == "MEDIUM":
+            default_combo_val = med_val
+            
+        cpu_var = tk.StringVar(value=default_combo_val)
+        cpu_combo = ttk.Combobox(
+            cpu_frame, textvariable=cpu_var, font=self.font_label, state="readonly",
+            values=[low_val, med_val, high_val], width=30
+        )
+        cpu_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        if self.is_busy:
+            cpu_combo.configure(state="disabled")
+
+        try:
+            current_g_setting = _load_raw_config().get("shared", {}).get("graphics_acceleration", "ON")
+        except Exception:
+            current_g_setting = "ON"
+
+        g_var = tk.BooleanVar(value=(current_g_setting == "ON"))
+        
+        g_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        g_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        cb_g_accel = tk.Checkbutton(
+            g_frame, text="Graphics Acceleration (Smooth sash resize)", variable=g_var,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_DARKEST,
+            activeforeground=Theme.TEXT,
+        )
+        cb_g_accel.pack(side=tk.LEFT)
+        if self.is_busy:
+            cb_g_accel.configure(state="disabled")
+
+        monitor_font_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        monitor_font_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+        monitor_font_label = tk.Label(
+            monitor_font_frame, text="Build / Serial / Syntax font size:",
+            font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+        )
+        monitor_font_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+        monitor_font_var = tk.StringVar(value=str(self.monitor_font_size))
+        monitor_font_combo = ttk.Combobox(
+            monitor_font_frame, textvariable=monitor_font_var, state="readonly",
+            values=[str(size) for size in range(8, 25)], width=5,
+            font=self.font_label,
+        )
+        monitor_font_combo.pack(side=tk.LEFT)
+        monitor_font_unit = tk.Label(
+            monitor_font_frame, text="pt", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
+        if self.is_busy:
+            monitor_font_combo.configure(state="disabled")
+
+        # Horizontal separator
+        sep_editor = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
+        sep_editor.pack(fill=tk.X, padx=sp(25), pady=sp(10))
+
+        # Section: File Editor
+        tk.Label(settings_body, text="File Editor", font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=(0, sp(5)))
+
+        editor_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        editor_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        editor_label = tk.Label(
+            editor_frame, text="Editor:", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        editor_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+
+        default_label = "Default (Tkinter, lightweight)"
+        monaco_label = "Monaco (VS Code-style, heavier)"
+        current_editor_mode = getattr(self, "editor_mode", None) or get_editor_mode()
+
+        if current_editor_mode == "monaco":
+            _start_val = monaco_label
+        else:
+            _start_val = default_label
+        editor_var = tk.StringVar(value=_start_val)
+
+        editor_combo = ttk.Combobox(
+            editor_frame, textvariable=editor_var, font=self.font_label, state="readonly",
+            values=[default_label, monaco_label], width=36
+        )
+        editor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        if self.is_busy:
+            editor_combo.configure(state="disabled")
+
+        editor_note = tk.Label(
+            settings_body, text="Changing the editor takes effect the next time the app is started.",
+            font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, wraplength=sp(440), justify=tk.LEFT
+        )
+        editor_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
+
+        # Track whether the user has confirmed the Monaco crash-risk warning
+        # during this dialog session, so we don't nag them repeatedly if they
+        # flip the combobox back and forth before hitting Save.
+        editor_var._monaco_confirmed = (current_editor_mode == "monaco")
+
+        def _on_editor_choice(event=None):
+            if editor_var.get() == monaco_label and not getattr(editor_var, "_monaco_confirmed", False):
+                from tkinter import messagebox
+                proceed = messagebox.askyesno(
+                    "Monaco Editor Warning",
+                    "The Monaco editor is a heavier, browser-based editor.\n\n"
+                    "On low-spec devices, it may cause the application to "
+                    "freeze or crash on startup.\n\n"
+                    "Do you want to continue selecting Monaco?",
+                    parent=dlg
+                )
+                if proceed:
+                    editor_var._monaco_confirmed = True
+                else:
+                    editor_var.set(default_label)
+
+        editor_combo.bind("<<ComboboxSelected>>", _on_editor_choice)
+
+        # Horizontal separator
+        sep_autosave_top = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
+        sep_autosave_top.pack(fill=tk.X, padx=sp(25), pady=sp(10))
+
+        # Section: Auto-Save
+        tk.Label(settings_body, text="Auto-Save", font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=(0, sp(5)))
+
+        autosave_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        autosave_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        current_autosave_enabled, current_autosave_delay = get_autosave_settings()
+
+        autosave_var = tk.BooleanVar(value=current_autosave_enabled)
+        autosave_delay_var = tk.StringVar(value=str(current_autosave_delay))
+
+        autosave_delay_ent = tk.Entry(
+            autosave_frame, textvariable=autosave_delay_var, width=7,
+            font=self.font_label, bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            insertbackground=Theme.CYAN, borderwidth=0,
+            highlightthickness=1, highlightcolor=Theme.CYAN_DIM, highlightbackground=Theme.BORDER,
+            justify=tk.CENTER,
+        )
+
+        def _on_autosave_toggle():
+            autosave_delay_ent.configure(state=(tk.NORMAL if autosave_var.get() else tk.DISABLED))
+
+        def _on_autosave_toggle_user():
+            _on_autosave_toggle()
+            self._append(
+                f"  ℹ Auto-Save: {'ON' if autosave_var.get() else 'OFF'}",
+                "info"
+            )
+
+        cb_autosave = tk.Checkbutton(
+            autosave_frame, text="Enable Auto-Save", variable=autosave_var,
+            command=_on_autosave_toggle_user,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_DARKEST,
+            activeforeground=Theme.TEXT,
+        )
+        cb_autosave.pack(side=tk.LEFT)
+
+        autosave_delay_label = tk.Label(
+            autosave_frame, text="Delay (ms):", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        autosave_delay_label.pack(side=tk.LEFT, padx=(sp(15), sp(5)))
+        autosave_delay_ent.pack(side=tk.LEFT)
+
+        _on_autosave_toggle()  # apply initial enabled/disabled state to the delay field
+
+        autosave_note = tk.Label(
+            settings_body,
+            text="Automatically saves modified files after you stop typing for the given delay.",
+            font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, wraplength=sp(440), justify=tk.LEFT
+        )
+        autosave_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
+
+        # Horizontal separator
+        sep = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
+        sep.pack(fill=tk.X, padx=sp(25), pady=sp(10))
+
+        # Reset & Recovery frame
+        reset_frame = tk.LabelFrame(
+            settings_body, text="Hardware Reset Operations", font=self.font_label,
+            fg=Theme.CYAN, bg=Theme.BG_DARKEST, bd=1, relief=tk.SOLID,
+            padx=sp(10), pady=sp(10)
+        )
+        reset_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        def run_hard_reset():
+            self._do_hard_reset(dlg)
+
+        def run_soft_reset():
+            self._do_soft_reset(dlg)
+
+        if is_esp:
+            btn_hard = self._make_btn(
+                reset_frame, "⚡ Hard Reset (Bootloader)", run_hard_reset,
+                Theme.BTN_STOP, Theme.BTN_STOP_H, font=self.font_label
+            )
+            btn_hard.pack(side=tk.LEFT, padx=sp(10), expand=True, fill=tk.X)
+
+            btn_soft = self._make_btn(
+                reset_frame, "🔄 Soft Reset (Reset Flash)", run_soft_reset,
+                Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_label
+            )
+            btn_soft.pack(side=tk.LEFT, padx=sp(10), expand=True, fill=tk.X)
+        else:
+            btn_hard = None
+            btn_soft = self._make_btn(
+                reset_frame, "🔄 Soft Reset (Reset Flash)", run_soft_reset,
+                Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_label
+            )
+            btn_soft.pack(fill=tk.X, padx=sp(10))
+        
+        if not self._is_board_recognized():
+            reset_disabled_state = tk.DISABLED
+            if btn_hard is not None:
+                btn_hard.configure(state=reset_disabled_state)
+            btn_soft.configure(state=reset_disabled_state)
+            tk.Label(
+                reset_frame,
+                text="⚠ Board on this port hasn't been recognized yet.",
+                font=self.font_status, fg=Theme.YELLOW, bg=Theme.BG_DARKEST
+            ).pack(side=tk.BOTTOM, pady=(sp(6), 0))
+
+        btn_frame = tk.Frame(dlg, bg=Theme.BG_DARKEST)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=sp(10), padx=sp(25))
+        
+        def reset_settings():
+            cpu_var.set(high_val)
+            g_var.set(True)
+            monitor_font_var.set("12")
+            editor_var.set(default_label)
+            editor_var._monaco_confirmed = False
+            self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
+            
+        reset_btn = self._make_btn(btn_frame, "Reset Defaults", reset_settings, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
+        reset_btn.pack(side=tk.LEFT, padx=sp(5))
+
+        def save_settings():
+            cpu_sel = cpu_var.get()
+            if "LOW" in cpu_sel:
+                cpu_key = "LOW"
+            elif "MEDIUM" in cpu_sel:
+                cpu_key = "MEDIUM"
+            else:
+                cpu_key = "HIGH"
+            
+            g_val = "ON" if g_var.get() else "OFF"
+            try:
+                monitor_font_size_new = max(8, min(24, int(monitor_font_var.get())))
+            except (TypeError, ValueError):
+                monitor_font_size_new = 12
+
+            autosave_enabled_new = autosave_var.get()
+            try:
+                autosave_delay_new = max(200, int(autosave_delay_var.get()))
+            except (TypeError, ValueError):
+                self._append("  ✖ Auto-Save delay must be a whole number (ms). Settings not saved.", "error")
+                return
+
+            try:
+                data = _load_raw_config()
+                if "shared" not in data:
+                    data["shared"] = {}
+                data["shared"]["cpu_multithreading"] = cpu_key
+                data["shared"]["graphics_acceleration"] = g_val
+                data["shared"]["monitor_font_size"] = monitor_font_size_new
+                data["shared"]["autosave_enabled"] = autosave_enabled_new
+                data["shared"]["autosave_delay_ms"] = autosave_delay_new
+                data["shared"]["periodic_reload_enabled"] = False
+
+                if editor_var.get() == monaco_label:
+                    new_editor_mode = "monaco"
+                else:
+                    new_editor_mode = "default"
+                mode_changed = new_editor_mode != current_editor_mode
+                
+                if mode_changed and current_editor_mode == "monaco" and new_editor_mode == "default":
+                    from tkinter import messagebox
+                    proceed = messagebox.askokcancel(
+                        "Dispose Monaco Editor",
+                        "Switching to another editor will dispose the Monaco editor.\n\n"
+                        "To use Monaco again, you will need to restart the application.\n\n"
+                        "Do you want to proceed?",
+                        parent=dlg
+                    )
+                    if not proceed:
+                        return
+
+                data["shared"]["editor_mode"] = new_editor_mode
+                if mode_changed:
+                    # Fresh choice — clear any stale crash sentinel from a
+                    # previous mode so the next boot check starts clean.
+                    data["shared"]["monaco_boot_pending"] = False
+
+                _save_raw_config(data)
+                if cpu_key != current_setting:
+                    self._append(f"  ✔ CPU multithreading set to {cpu_key}.", "success")
+                if g_val != current_g_setting:
+                    self._append(f"  ✔ Graphics acceleration set to {g_val}.", "success")
+                    try:
+                        self.main_pane.configure(opaqueresize=(g_val == "ON"))
+                    except Exception:
+                        pass
+                if monitor_font_size_new != self.monitor_font_size:
+                    self._apply_monitor_font_size(monitor_font_size_new)
+                    self._append(f"  ✔ Build / Serial / Syntax font size set to {monitor_font_size_new} pt.", "success")
+
+                autosave_changed = (
+                    autosave_enabled_new != current_autosave_enabled
+                    or autosave_delay_new != current_autosave_delay
+                )
+                self.autosave_enabled = autosave_enabled_new
+                self.autosave_delay_ms = autosave_delay_new
+                if hasattr(self, "_monaco_autosave_worker") and self._monaco_autosave_worker:
+                    self._monaco_autosave_worker.update_state()
+                if not self.autosave_enabled and hasattr(self, "_autosave_cancel_all") and callable(self._autosave_cancel_all):
+                    self._autosave_cancel_all()
+
+                if autosave_changed:
+                    if autosave_enabled_new:
+                        self._append(
+                            f"  ✔ Auto-Save: ON — delay {autosave_delay_new} ms.",
+                            "success"
+                        )
+                    else:
+                        self._append("  ✔ Auto-Save: OFF.", "success")
+
+                self.periodic_reload_enabled = False
+
+                if mode_changed:
+                    if new_editor_mode == "monaco":
+                        # Monaco requires pywebview running on the main thread —
+                        # it cannot be hot-swapped at runtime. Always require a
+                        # restart, regardless of whether editor_window still
+                        # exists from a previous Monaco session (it's orphaned
+                        # and cannot be re-embedded after cleanup).
+                        from tkinter import messagebox
+                        restart = messagebox.askyesno(
+                            "Restart Required",
+                            "Switching to the Monaco editor requires restarting the application.\n\n"
+                            "Would you like to restart the application now?",
+                            parent=dlg
+                        )
+                        self.editor_mode = new_editor_mode
+                        self._append("  ✔ Editor mode set to Monaco (requires restart to load).", "info")
+                        if restart:
+                            try:
+                                self._cleanup_active_editor()
+                            except Exception:
+                                pass
+                            try:
+                                dlg.destroy()
+                            except Exception:
+                                pass
+                            
+                            # Clean restart
+                            import sys
+                            import os
+                            try:
+                                self.root.destroy()
+                            except Exception:
+                                pass
+                            
+                            # Construct restart arguments with the current project directory
+                            restart_args = sys.argv.copy()
+                            if "--project" in restart_args:
+                                try:
+                                    idx = restart_args.index("--project")
+                                    if idx + 1 < len(restart_args):
+                                        restart_args[idx + 1] = str(self.sketch_dir_path)
+                                except Exception:
+                                    pass
+                            else:
+                                restart_args.extend(["--project", str(self.sketch_dir_path)])
+
+                            if getattr(sys, 'frozen', False):
+                                os.execv(sys.executable, restart_args)
+                            else:
+                                os.execv(sys.executable, [sys.executable] + restart_args)
+                    else:
+                        self._cleanup_active_editor()
+                        self.editor_mode = new_editor_mode
+                        self._build_editor(self.editor_frame)
+                        self._append(f"  ✔ File editor switched to {new_editor_mode.capitalize()} instantly.", "success")
+            except Exception as e:
+                self._append(f"  ✖ Failed to save settings: {e}", "error")
+
+            dlg.destroy()
+
+        save_btn = self._make_btn(btn_frame, "Save", save_settings, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, font=self.font_label)
+        save_btn.pack(side=tk.RIGHT, padx=sp(5))
+
+        cancel_btn = self._make_btn(btn_frame, "Cancel", dlg.destroy, Theme.BTN_STOP, Theme.BTN_STOP_H, font=self.font_label)
+        cancel_btn.pack(side=tk.RIGHT, padx=sp(5))
+
+        # Fit the dialog to its scaled content. The canvas only scrolls when
+        # the active monitor genuinely cannot provide enough vertical space.
+        dlg.update_idletasks()
+        desired_width = max(sp(540), settings_body.winfo_reqwidth() + sp(20))
+        work_left, work_top, work_right, work_bottom = _get_monitor_work_area(dlg)
+        max_width = max(sp(400), (work_right - work_left) - sp(40))
+        max_height = max(sp(360), (work_bottom - work_top) - sp(50))
+        desired_width = min(desired_width, max_width)
+        # Apply the intended width before measuring height, otherwise Tk's
+        # initial one-pixel canvas temporarily selects the narrow layout.
+        settings_canvas.itemconfigure(settings_window, width=desired_width)
+        initial_event = type("_SettingsConfigure", (), {"width": desired_width})()
+        _on_settings_canvas_configure(initial_event)
+        dlg.update_idletasks()
+        desired_height = (
+            settings_body.winfo_reqheight() + btn_frame.winfo_reqheight() + sp(22)
+        )
+        desired_height = min(desired_height, max_height)
+        dlg.minsize(min(sp(420), desired_width), min(sp(420), desired_height))
+        center_toplevel(
+            dlg, self.root,
+            width=desired_width / settings_scale,
+            height=desired_height / settings_scale,
+        )
+        # The first measurement may use the narrow stacked layout while the
+        # canvas is still only one pixel wide. Re-measure once the target
+        # width is applied so a normal display does not retain blank space.
+        dlg.update_idletasks()
+        fitted_height = min(
+            settings_body.winfo_reqheight() + btn_frame.winfo_reqheight() + sp(22),
+            max_height,
+        )
+        if abs(fitted_height - desired_height) > sp(4):
+            center_toplevel(
+                dlg, self.root,
+                width=desired_width / settings_scale,
+                height=fitted_height / settings_scale,
+            )
+        dlg.after_idle(_sync_settings_scrollbar)
+
+    def _do_hard_reset(self, parent_dlg):
+        # 0. Block if the board is in a boot loop — Hard Reset would make it worse
+        if getattr(self, '_boot_loop_active', False):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Boot Loop Detected",
+                "The board is currently in a boot loop.\n\n"
+                "Hard Reset will not help — it erases the flash and leaves the board "
+                "without an application, which causes the same loop.\n\n"
+                "Use Soft Reset instead to flash a minimal sketch and restore normal operation.",
+                parent=parent_dlg
+            )
+            return
+
+        # 1. Check if busy (with auto-recovery for stale busy flag)
+        if self.is_busy:
+            if not self.process or self.process.poll() is not None:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._append("  ℹ Stale busy state cleared — proceeding.", "info")
+            else:
+                from tkinter import messagebox
+                messagebox.showwarning("Busy", "The programmer is currently busy with another operation.", parent=parent_dlg)
+                return
+
+        if not self.board_var.get():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "No Board Selected",
+                "Please choose a board in the main window before performing a Hard Reset.",
+                parent=parent_dlg
+            )
+            return
+
+        port = self._get_port()
+        if not port:
+            from tkinter import messagebox
+            messagebox.showwarning("No Port Selected", "Please select a serial port in the main window before resetting.", parent=parent_dlg)
+            return
+
+        if not self._is_board_recognized():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Board Not Recognized",
+                "The board on this port hasn't been recognized yet.\n\n"
+                "Wait for auto-detect to finish, or verify the correct board/port is selected.",
+                parent=parent_dlg
+            )
+            return
+
+        # 2. Show confirmation
+        from tkinter import messagebox
+        confirm = messagebox.askyesno(
+            "Hard Reset Confirmation",
+            "WARNING: Burning the bootloader is a direct hardware write operation. "
+            "It will overwrite the boot portion of the MCU memory.\n\n"
+            "Do you want to proceed?",
+            parent=parent_dlg
+        )
+        if not confirm:
+            return
+
+        # Close settings dialog to let the user see the console output
+        parent_dlg.destroy()
+
+        self._clear_console_if_action_enabled()
+
+        # Run hard reset in background thread
+        self._active_reset_kind = "hard"
+        self.is_busy = True
+        self._set_buttons_state(True, operation="reset")
+        threading.Thread(target=self._run_hard_reset, args=(port,), daemon=True).start()
+
+    def _run_hard_reset(self, port: str):
+        try:
+            self._run_hard_reset_inner(port)
+        except Exception as e:
+            import traceback
+            try:
+                with open("error_log.txt", "w", encoding="utf-8") as f:
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
+            self._append(f"  ✖ Internal error in hard reset thread: {e}", "error")
+            self._set_status("Hard Reset FAILED", Theme.RED)
+        finally:
+            # Guarantee busy state is always cleared
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_window_closable(True)
+
+    def _get_esptool_cmd(self) -> list[str]:
+        """Dynamically resolve the most reliable esptool command across Windows environments."""
+        # Prefer the importable module under the GUI's trusted Python
+        # interpreter. Generated console-script .exe launchers are commonly
+        # blocked by Windows Application Control even when the Python module
+        # itself is allowed.
+        try:
+            import importlib.util
+            if importlib.util.find_spec("esptool") is not None:
+                return [sys.executable, "-m", "esptool"]
+        except Exception:
+            pass
+
+        if sys.platform == "win32":
+            local_exe = SCRIPT_DIR / "env" / "Scripts" / "esptool.exe"
+            if local_exe.exists():
+                return [str(local_exe)]
+            pio_exe = Path.home() / ".platformio" / "penv" / "Scripts" / "esptool.exe"
+            if pio_exe.exists():
+                return [str(pio_exe)]
+
+        import shutil
+        w = shutil.which("esptool")
+        if w:
+            return [w]
+
+        pio_home = Path.home() / ".platformio"
+        for candidate in (pio_home / "packages").glob("tool-esptoolpy*"):
+            for s_name in ("esptool.py", "esptool.exe"):
+                sp = candidate / s_name
+                if sp.exists():
+                    return [str(sp)] if sp.suffix == ".exe" else [sys.executable, str(sp)]
+
+        return [sys.executable, "-m", "esptool"]
+
+    def _run_hard_reset_inner(self, port: str):
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append(f"  ⚠ Hard reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            return
+        # Pause monitor
+        was_monitoring = self._pause_monitor()
+        if was_monitoring:
+            time.sleep(0.5)
+
+        self._append("")
+        self._append("=" * 50, "header")
+        self._append("  🔥 BURNING BOOTLOADER (Hard Reset)", "header")
+        self._append("=" * 50, "header")
+        self._append(f"  Port  : {port}", "port_highlight")
+        self._append(f"  Board : {self.board_var.get()}", "dim")
+        if self._detect_port_chip() is None and not getattr(self, "_board_port_confirmed", False):
+            self._append("  ⚠ Unrecognized USB-serial port — proceeding anyway.", "warning")
+
+        # Desktop vs Laptop tip
+        try:
+            # pyrefly: ignore [missing-import]
+            from detector import is_laptop
+            system_is_laptop = is_laptop()
+        except Exception:
+            system_is_laptop = False
+
+        if not system_is_laptop:
+            self._append("  💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.", "dim")
+
+        self._append("")
+        board_name = self.board_var.get()
+        is_avr = SUPPORTED_BOARDS.get(board_name, {}).get("platform", "") == "atmelavr"
+
+        ok = False
+
+        _hr_state   = ["Initializing"]
+        _hr_active  = [True]
+        _hr_frame   = [0]
+        _hr_start   = time.time()
+        _hr_spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        def _hr_spin_loop():
+            while _hr_active[0] and self.is_busy:
+                elapsed = int(time.time() - _hr_start)
+                frame   = _hr_spinner[_hr_frame[0] % len(_hr_spinner)]
+                _hr_frame[0] += 1
+                self._set_status(
+                    f"{frame} Hard Reset: {_hr_state[0]}... ({elapsed}s)",
+                    Theme.RED,
+                )
+                time.sleep(0.08)
+
+        import threading as _threading_hr
+        _hr_spin_thread = _threading_hr.Thread(target=_hr_spin_loop, daemon=True)
+        _hr_spin_thread.start()
+
+        if is_avr:
+            self._append("  Board: AVR — using PlatformIO bootloader target.", "dim")
+            _hr_state[0] = "Burning bootloader (AVR)"
+
+            if not self._ensure_platformio_ini():
+                self._append("  ✖ Failed to verify/create platformio.ini for Hard Reset.", "error")
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                if was_monitoring:
+                    self._resume_monitor()
+                return
+
+            pio_path = find_pio_executable()
+            if not pio_path:
+                self._append("  ⚠ PlatformIO not found — installing automatically...", "warning")
+                self._set_status("Installing PlatformIO...", Theme.YELLOW)
+                pio_path = ensure_platformio()
+                if not pio_path:
+                    self._append("  ✖ Failed to install PlatformIO!", "error")
+                    self.is_busy = False
+                    self._set_buttons_busy(False)
+                    if was_monitoring:
+                        self._resume_monitor()
+                    return
+
+            jobs = self._get_cpu_cores_jobs()
+            cmd = pio_path + ["run", "-t", "bootloader", "-j", str(jobs), "--upload-port", port]
+            try:
+                self.process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    cwd=str(self.sketch_dir_path),
+                )
+            except Exception as e:
+                self._append(f"  ✖ Failed to execute bootloader target: {e}", "error")
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                if was_monitoring:
+                    self._resume_monitor()
+                return
+
+            for line in iter(self.process.stdout.readline, ""):
+                stripped = line.rstrip()
+                if stripped:
+                    low = stripped.lower()
+                    if "error" in low or "failed" in low:
+                        self._append(f"  {stripped}", "error")
+                    elif any(kw in low for kw in ["success", "done", "writing", "erasing", "verified"]):
+                        self._append(f"  {stripped}", "success")
+                    else:
+                        self._append(f"  {stripped}", "dim")
+
+            self.process.wait()
+            ok = self.process.returncode == 0
+
+        else:
+            esptool_cmd_base = self._get_esptool_cmd()
+
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            target_mcu = board_info.get("mcu", "esp32").lower().replace("-", "")
+
+            pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR")
+            if pio_core_dir:
+                pio_packages = Path(pio_core_dir) / "packages"
+            else:
+                local_pio = SCRIPT_DIR / "env" / ".platformio"
+                pio_packages = (local_pio / "packages") if local_pio.exists() else Path.home() / ".platformio" / "packages"
+
+            framework_dir = None
+            if pio_packages.exists():
+                for candidate in sorted(pio_packages.glob("framework-arduinoespressif32*"), reverse=True):
+                    if candidate.is_dir():
+                        framework_dir = candidate
+                        break
+
+            tools_dir = (framework_dir / "tools") if framework_dir else Path()
+
+            libs_packages = []
+            if pio_packages.exists():
+                for candidate in sorted(pio_packages.glob("framework-arduinoespressif32-libs*"), reverse=True):
+                    if candidate.is_dir():
+                        libs_packages.append(candidate)
+            if framework_dir:
+                libs_packages.append(framework_dir)
+
+            _target_dirs = [target_mcu, f"esp32_{target_mcu}", target_mcu.upper()]
+
+            def _is_not_variant(p: Path) -> bool:
+                return "variants" not in p.parts
+
+            bootloader_bin = None
+            partitions_bin = None
+            boot_app0_bin = None
+            build_dir = self.sketch_dir_path / ".pio" / "build"
+
+            _bootloader_candidates = []
+            for pkg in libs_packages:
+                for t_dir in _target_dirs:
+                    _bootloader_candidates += [
+                        pkg / t_dir / "bin" / "bootloader_qio_80m.bin",
+                        pkg / t_dir / "bin" / "bootloader_dio_80m.bin",
+                        pkg / t_dir / "bin" / "bootloader_qio_120m.bin",
+                        pkg / t_dir / "bin" / "bootloader_dio_40m.bin",
+                        pkg / t_dir / "bin" / "bootloader_dout_40m.bin",
+                    ]
+            for t_dir in _target_dirs:
+                _bootloader_candidates += [
+                    tools_dir / "esp32-arduino-libs" / t_dir / "bin" / "bootloader_qio_80m.bin",
+                    tools_dir / "esp32-arduino-libs" / t_dir / "bin" / "bootloader_dio_80m.bin",
+                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_qio_80m.bin",
+                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_dio_80m.bin",
+                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_dout_40m.bin",
+                ]
+
+            for candidate in _bootloader_candidates:
+                if candidate.exists():
+                    bootloader_bin = candidate
+                    break
+
+            if bootloader_bin is None:
+                _search_roots = [tools_dir] + libs_packages
+                hits = [p for r in _search_roots for p in r.rglob("bootloader_*.bin") if _is_not_variant(p)]
+                if hits:
+                    match_target = [p for p in hits if target_mcu in str(p).lower()]
+                    bootloader_bin = match_target[0] if match_target else sorted(hits)[0]
+
+            if partitions_bin is None:
+                _partitions_explicit = [
+                    tools_dir / "partitions" / "default.bin",
+                ]
+                if framework_dir:
+                    _partitions_explicit.append(framework_dir / "partitions" / "default.bin")
+                for candidate in _partitions_explicit:
+                    if candidate.exists():
+                        partitions_bin = candidate
+                        break
+                if partitions_bin is None and framework_dir:
+                    hits = [p for p in framework_dir.rglob("default.bin")
+                            if _is_not_variant(p) and p.stat().st_size < 10_000]
+                    if hits:
+                        partitions_bin = sorted(hits)[0]
+
+            if boot_app0_bin is None:
+                _boot_app0_explicit = [
+                    tools_dir / "partitions" / "boot_app0.bin",
+                ]
+                if framework_dir:
+                    _boot_app0_explicit.append(framework_dir / "partitions" / "boot_app0.bin")
+                for candidate in _boot_app0_explicit:
+                    if candidate.exists():
+                        boot_app0_bin = candidate
+                        break
+                if boot_app0_bin is None and framework_dir:
+                    hits = [p for p in framework_dir.rglob("boot_app0.bin") if _is_not_variant(p)]
+                    if hits:
+                        boot_app0_bin = sorted(hits)[0]
+
+            # ── 3. AUTOMATIC AUTO-COMPILE FALLBACK IF ANY BINARY IS MISSING ─────────
+            if not bootloader_bin or not partitions_bin:
+                self._append(f"  ⚡ Bootloader/partitions not pre-built for {board_name}. Auto-building project now...", "info")
+                _hr_state[0] = "Auto-compiling project bootloader"
+                pio_path = find_pio_executable() or ensure_platformio()
+                if pio_path and self._ensure_platformio_ini():
+                    jobs = self._get_cpu_cores_jobs()
+                    cmd = pio_path + ["run", "-j", str(jobs)]
+                    try:
+                        res = subprocess.run(
+                            cmd, cwd=str(self.sketch_dir_path), capture_output=True, text=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                        )
+                        build_dir = self.sketch_dir_path / ".pio" / "build"
+                        if build_dir.is_dir():
+                            if not bootloader_bin:
+                                b_hits = sorted(list(build_dir.rglob("bootloader.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
+                                if b_hits:
+                                    bootloader_bin = b_hits[0]
+                                    self._append(f"  ✔ Generated bootloader.bin: {bootloader_bin.name}", "success")
+                            if not partitions_bin:
+                                p_hits = sorted(list(build_dir.rglob("partitions.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
+                                if p_hits:
+                                    partitions_bin = p_hits[0]
+                                    self._append(f"  ✔ Generated partitions.bin: {partitions_bin.name}", "success")
+                            if not boot_app0_bin:
+                                ba_hits = sorted(list(build_dir.rglob("boot_app0.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
+                                if ba_hits:
+                                    boot_app0_bin = ba_hits[0]
+                    except Exception as e:
+                        self._append(f"  ⚠ Auto-compilation attempt error: {e}", "warning")
+
+            missing = []
+            if not bootloader_bin:
+                missing.append("bootloader (bootloader.bin / bootloader_qio_80m.bin)")
+            if not partitions_bin:
+                missing.append("partitions (partitions.bin / default.bin)")
+            if not boot_app0_bin:
+                missing.append("boot_app0.bin")
+
+            if missing:
+                self._append(f"  \u2716 Could not locate or build required bootloader files:", "error")
+                for m in missing:
+                    self._append(f"      \u2022 {m}", "error")
+                self._append(f"  Searched inside build dir: {build_dir}", "dim")
+                self._append(f"  Searched inside: {framework_dir}", "dim")
+                if libs_packages:
+                    for lp in libs_packages:
+                        self._append(f"               + {lp}", "dim")
+                self._append("", "dim")
+                _hr_active[0] = False
+                _hr_spin_thread.join(timeout=1)
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                if was_monitoring:
+                    self._resume_monitor()
+                return
+
+            self._append(f"  Bootloader : {bootloader_bin.name}", "dim")
+            self._append(f"  Partitions : {partitions_bin.name}", "dim")
+            self._append(f"  boot_app0  : {boot_app0_bin.name}", "dim")
+            self._append("")
+
+            # ── Step 1: erase flash ─────────────────────────────────────────────
+            self._append("  Step 1/2 — Erasing flash...", "dim")
+            _hr_state[0] = "Erasing flash"
+
+            erase_cmd = esptool_cmd_base + [
+                "--chip", target_mcu,
+                "--port", port,
+                "--before", "default-reset",
+                "--after", "no-reset",
+                "--connect-attempts", "3",
+                "erase-flash",
+            ]
+            self._append(f"  $ {' '.join(str(x) for x in erase_cmd)}", "dim")
+
+            _HR_WATCHDOG_SECS = 120  # abort if a single esptool step takes longer
+            try:
+                self.process = subprocess.Popen(
+                    erase_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
+                _erase_start = time.time()
+                for line in iter(self.process.stdout.readline, ""):
+                    if time.time() - _erase_start > _HR_WATCHDOG_SECS:
+                        self._append(f"  ⚠ Erase timed out after {_HR_WATCHDOG_SECS}s — aborting.", "warning")
+                        self._do_stop()
+                        break
+                    stripped = line.rstrip()
+                    if stripped:
+                        low = stripped.lower()
+                        if "error" in low or "failed" in low:
+                            self._append(f"  {stripped}", "error")
+                        elif any(kw in low for kw in ["erase", "done", "chip", "connecting", "stub", "running"]):
+                            self._append(f"  {stripped}", "success")
+                        else:
+                            self._append(f"  {stripped}", "dim")
+                self.process.wait(timeout=10)
+                erase_ok = self.process.returncode == 0
+            except subprocess.TimeoutExpired:
+                self._append("  ⚠ Erase process did not exit cleanly — force killing.", "warning")
+                self._do_stop()
+                erase_ok = False
+            except Exception as e:
+                self._append(f"  ⚠ Erase failed: {e}", "warning")
+                erase_ok = False
+
+            if erase_ok:
+                self._append("  ✔ Full chip flash erased.", "success")
+            else:
+                self._append("  ⚠ Full chip erase skipped (device was not in download mode during Step 1).", "warning")
+                self._append("  👉 Proceeding to Step 2 — write-flash will connect, erase bootloader sectors, and write files.", "info")
+
+            self._append("")
+
+            # Determine bootloader offset address dynamically based on target MCU
+            if target_mcu in ("esp32s3", "esp32c3", "esp32c6", "esp32h2", "esp32c2"):
+                bootloader_addr = "0x0"
+            else:
+                bootloader_addr = "0x1000"
+
+            self._append(f"  Target Board: {self.board_var.get()} ({target_mcu}) -> Bootloader Addr: {bootloader_addr}", "dim")
+
+            # ── Step 2: write bootloader + partitions + boot_app0 ──────────────
+            self._append("  Step 2/2 — Writing bootloader files...", "dim")
+            _hr_state[0] = "Writing bootloader"
+
+            write_cmd = esptool_cmd_base + [
+                "--chip", target_mcu,
+                "--port", port,
+                "--baud", "460800",
+                "--before", "default-reset",
+                "--after", "hard-reset",
+                "--connect-attempts", "3",
+                "write-flash",
+                "--flash-mode", "keep",
+                "--flash-freq", "keep",
+                "--flash-size", "detect",
+                bootloader_addr, str(bootloader_bin),
+                "0x8000", str(partitions_bin),
+                "0xe000", str(boot_app0_bin),
+            ]
+            self._append(f"  $ {' '.join(str(x) for x in write_cmd)}", "dim")
+
+            def _execute_esptool_write(cmd_list):
+                try:
+                    self.process = subprocess.Popen(
+                        cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, encoding="utf-8", errors="replace",
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    )
+                except Exception as e:
+                    self._append(f"  ✖ Failed to launch esptool write: {e}", "error")
+                    return False
+                _write_start = time.time()
+                for line in iter(self.process.stdout.readline, ""):
+                    if time.time() - _write_start > _HR_WATCHDOG_SECS:
+                        self._append(f"  ⚠ Write timed out after {_HR_WATCHDOG_SECS}s — aborting.", "warning")
+                        self._do_stop()
+                        break
+                    stripped = line.rstrip()
+                    if stripped:
+                        low = stripped.lower()
+                        if "error" in low or "failed" in low:
+                            self._append(f"  {stripped}", "error")
+                        elif any(kw in low for kw in ["writing", "wrote", "done", "verified", "hash", "leaving", "hard reset", "compressed"]):
+                            self._append(f"  {stripped}", "success")
+                        else:
+                            self._append(f"  {stripped}", "dim")
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._append("  ⚠ Write process did not exit cleanly — force killing.", "warning")
+                    self._do_stop()
+                return self.process.returncode == 0
+
+            ok = _execute_esptool_write(write_cmd)
+
+            # Auto-retry at 115200 baud if 460800 fails (handles desktop CH340 / CP2102 driver limits or OS handle locks)
+            if not ok:
+                self._append("", "dim")
+                self._append("  ⚠ Bootloader write attempt at 460800 baud failed or encountered port lock.", "warning")
+                self._append("  🔄 Pausing 1.0s and retrying bootloader write at 115200 baud for maximum compatibility...", "info")
+                time.sleep(1.0)
+                fallback_cmd = esptool_cmd_base + [
+                    "--chip", target_mcu,
+                    "--port", port,
+                    "--baud", "115200",
+                    "--before", "default-reset",
+                    "--after", "hard-reset",
+                    "--connect-attempts", "3",
+                    "write-flash",
+                    "--flash-mode", "keep",
+                    "--flash-freq", "keep",
+                    "--flash-size", "detect",
+                    bootloader_addr, str(bootloader_bin),
+                    "0x8000", str(partitions_bin),
+                    "0xe000", str(boot_app0_bin),
+                ]
+                ok = _execute_esptool_write(fallback_cmd)
+
+        # Stop spinner
+        _hr_active[0] = False
+        _hr_spin_thread.join(timeout=1)
+
+        # ── Result ──────────────────────────────────────────────────────────────
+        if ok:
+            self._append("")
+            self._append("  ✔ Bootloader burn successful! (Hard Reset OK)", "success")
+            self._append("  👉 Bootloader and partitions restored. Click UPLOAD to flash your project sketch.", "info")
+            self._set_status("Hard Reset Successful", Theme.GREEN)
+        else:
+            self._append("")
+            self._append("  ✖ Bootloader burn FAILED.", "error")
+            self._set_status("Hard Reset FAILED", Theme.RED)
+
+        self.is_busy = False
+        self._set_buttons_busy(False)
+
+        if ok and not was_monitoring:
+            self._trigger_actual_board_reset(port)
+
+        if was_monitoring:
+            self._resume_monitor()
+
+    def _locate_esp32_boot_app0(self) -> Path | None:
+        """
+        Find boot_app0.bin inside PlatformIO's installed Arduino-ESP32
+        framework package. Cheap directory lookup (no subprocess) used by the
+        Soft Reset esptool fast path.
+        """
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR")
+        if pio_core_dir:
+            pio_packages = Path(pio_core_dir) / "packages"
+        else:
+            local_pio = SCRIPT_DIR / "env" / ".platformio"
+            pio_packages = (local_pio / "packages") if local_pio.exists() else Path.home() / ".platformio" / "packages"
+
+        framework_dir = None
+        try:
+            for candidate in sorted(pio_packages.glob("framework-arduinoespressif32*"), reverse=True):
+                if candidate.is_dir():
+                    framework_dir = candidate
+                    break
+        except Exception:
+            return None
+        if framework_dir is None:
+            return None
+
+        tools_dir = framework_dir / "tools"
+        for candidate in (tools_dir / "partitions" / "boot_app0.bin", framework_dir / "partitions" / "boot_app0.bin"):
+            if candidate.exists():
+                return candidate
+
+        hits = [p for p in framework_dir.rglob("boot_app0.bin") if "variants" not in p.parts]
+        return sorted(hits)[0] if hits else None
+
+    def _locate_soft_reset_fast_binaries(self, project_dir: Path, board_name: str,
+                                         p_platform: str, env_name: str = "mcu_flash",
+                                         upload_speed: str = "460800") -> dict | None:
+        """
+        Check whether a previously compiled Soft Reset build is still usable
+        for a direct esptool flash, skipping "pio run" entirely. Returns None
+        if any required binary can't be found — the caller then falls back to
+        the normal "pio run -t upload" path.
+        """
+        build_dir = project_dir / ".pio" / "build" / env_name
+        if not build_dir.is_dir():
+            return None
+
+        firmware_bin = build_dir / "firmware.bin"
+        if not firmware_bin.exists():
+            return None
+
+        if p_platform == "espressif8266":
+            # ESP8266's Arduino core produces a single merged image flashed at 0x0.
+            return {
+                "platform": p_platform,
+                "firmware": firmware_bin,
+                "bootloader": None,
+                "partitions": None,
+                "boot_app0": None,
+                "bootloader_addr": "0x0",
+                "upload_speed": upload_speed,
+            }
+
+        if p_platform != "espressif32":
+            return None
+
+        bootloader_bin = build_dir / "bootloader.bin"
+        partitions_bin = build_dir / "partitions.bin"
+        if not (bootloader_bin.exists() and partitions_bin.exists()):
+            return None
+
+        boot_app0_bin = self._locate_esp32_boot_app0()
+        if boot_app0_bin is None:
+            return None
+
+        upper = board_name.upper()
+        bootloader_addr = "0x0" if any(x in upper for x in ("S3", "C3", "C6", "H2")) else "0x1000"
+
+        return {
+            "platform": p_platform,
+            "firmware": firmware_bin,
+            "bootloader": bootloader_bin,
+            "partitions": partitions_bin,
+            "boot_app0": boot_app0_bin,
+            "bootloader_addr": bootloader_addr,
+            "upload_speed": upload_speed,
+        }
+
+    def _new_upload_progress_state(self, fast_bins: dict | None = None) -> dict:
+        """Create image-tracking state shared by both ESP upload paths."""
+        board_info = self._resolve_board_info()
+        platform = (fast_bins or {}).get("platform") or board_info.get("platform", "")
+        definitions = (
+            [("firmware", "Firmware")]
+            if platform == "espressif8266"
+            else [
+                ("bootloader", "Bootloader"),
+                ("partitions", "Partitions"),
+                ("boot_app0", "Boot App"),
+                ("firmware", "Firmware"),
+            ]
+        )
+        stages = []
+        for key, label in definitions:
+            path_value = (fast_bins or {}).get(key)
+            path_obj = Path(path_value) if path_value else None
+            stages.append({
+                "key": key,
+                "label": label,
+                "path": path_obj,
+                "basename": path_obj.name.lower() if path_obj else "",
+            })
+        return {
+            "stages": stages,
+            "active_index": 0,
+            "started": False,
+            "last_percent": None,
+            "compressed_total": None,
+        }
+
+    @staticmethod
+    def _select_upload_stage_for_source(state: dict, source: str) -> None:
+        """Select an image once from its v5 path; never infer it per address."""
+        source_name = Path(str(source).replace("\\", "/")).name.lower()
+        aliases = {
+            "bootloader.bin": "bootloader",
+            "partitions.bin": "partitions",
+            "boot_app0.bin": "boot_app0",
+            "firmware.bin": "firmware",
+        }
+        wanted_key = aliases.get(source_name)
+        for idx, stage in enumerate(state.get("stages") or []):
+            if (stage.get("basename") and stage["basename"] == source_name
+                    or wanted_key and stage.get("key") == wanted_key):
+                state["active_index"] = idx
+                state["last_percent"] = None
+                state["compressed_total"] = None
+                return
+
+    def _consume_esptool_upload_progress(self, state: dict, line: str,
+                                         before_progress=None,
+                                         phase_callback=None) -> bool:
+        """Consume/suppress one raw esptool image or progress line.
+
+        Returns True when the caller should not display the raw line.
+        """
+        image_start = _parse_esptool_image_start(line)
+        if image_start:
+            self._select_upload_stage_for_source(state, image_start["source"])
+            if callable(phase_callback):
+                phase_callback("Writing")
+            return True
+
+        compressed = _parse_esptool_compressed(line)
+        if compressed:
+            state["compressed_total"] = compressed["compressed"]
+            if callable(phase_callback):
+                phase_callback("Writing")
+            return True
+
+        progress = _parse_esptool_write_progress(line)
+        if progress:
+            if callable(before_progress):
+                before_progress()
+            if callable(phase_callback):
+                phase_callback("Writing")
+            stages = state.get("stages") or [{"label": "Firmware"}]
+            idx = max(0, min(int(state.get("active_index", 0)), len(stages) - 1))
+            stage = stages[idx]
+            self._append_upload_progress(
+                stage.get("label") or "Firmware",
+                idx + 1,
+                len(stages),
+                progress["percent"],
+                progress.get("written"),
+                progress.get("total"),
+                force_new=not bool(state.get("started")),
+            )
+            state["started"] = True
+            state["last_percent"] = progress["percent"]
+            return True
+
+        wrote = _parse_esptool_wrote(line)
+        if wrote:
+            if callable(before_progress):
+                before_progress()
+            if callable(phase_callback):
+                phase_callback("Writing")
+            stages = state.get("stages") or [{"label": "Firmware"}]
+            idx = max(0, min(int(state.get("active_index", 0)), len(stages) - 1))
+            stage = stages[idx]
+            byte_total = wrote.get("compressed") or state.get("compressed_total")
+            # Re-render 100% even if esptool already emitted it so the final
+            # live row always switches from ⚡ Flashing to ✔ Flashed.
+            self._append_upload_progress(
+                stage.get("label") or "Firmware",
+                idx + 1,
+                len(stages),
+                100.0,
+                byte_total,
+                byte_total,
+                force_new=not bool(state.get("started")),
+            )
+            state["started"] = True
+            state["last_percent"] = 100.0
+            if idx < len(stages) - 1:
+                state["active_index"] = idx + 1
+                state["compressed_total"] = None
+                state["last_percent"] = None
+            return True
+
+        return False
+
+    @staticmethod
+    def _parse_size_value(value) -> int | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        multipliers = {"k": 1024, "kb": 1024, "m": 1024 ** 2, "mb": 1024 ** 2}
+        match = re.fullmatch(r"(0x[0-9a-f]+|\d+(?:\.\d+)?)\s*(kb|mb|k|m)?", text)
+        if not match:
+            return None
+        number = match.group(1)
+        base = int(number, 16) if number.startswith("0x") else float(number)
+        return int(base * multipliers.get(match.group(2) or "", 1))
+
+    def _project_option(self, name: str) -> str | None:
+        """Read one scalar option from the generated PlatformIO environment."""
+        try:
+            ini_path = self.sketch_dir_path / "platformio.ini"
+            content = ini_path.read_text(encoding="utf-8", errors="replace")
+            match = re.search(
+                rf"^\s*{re.escape(name)}\s*=\s*([^;#\r\n]+)",
+                content, re.IGNORECASE | re.MULTILINE,
+            )
+            return match.group(1).strip() if match else None
+        except Exception:
+            return None
+
+    def _resolve_platform_upload_metadata(self) -> dict:
+        """Resolve PlatformIO's exact board/debug/upload options locally.
+
+        This uses the already-installed PlatformIO Python API and performs no
+        network access or SCons run.  It reproduces the same dynamic protocol
+        list PlatformIO would print, including S3 ``esp-builtin`` and board-
+        specific onboard tools.
+        """
+        board_info = self._resolve_board_info()
+        platform_name = board_info.get("platform", "")
+        board_id = board_info.get("board", "")
+        configured_debug = self._project_option("debug_tool")
+        cache_key = (platform_name, board_id, configured_debug or "")
+        cache = getattr(self, "_platform_upload_metadata_cache", {})
+        if cache_key in cache:
+            return dict(cache[cache_key])
+
+        result = {
+            "debug": None,
+            "available": ["esptool"],
+            "current": "esptool",
+            "max_ram": None,
+            "max_flash": None,
+            "partitions": None,
+        }
+        try:
+            core_dir = Path(os.environ.get("PLATFORMIO_CORE_DIR", ""))
+            platform_dir = core_dir / "platforms" / platform_name
+            if not platform_dir.is_dir():
+                raise FileNotFoundError(platform_dir)
+            from platformio.platform.factory import PlatformFactory
+
+            platform = PlatformFactory.new(str(platform_dir))
+            board = platform.board_config(board_id)
+            debug_tools = board.get("debug.tools", {}) or {}
+            if debug_tools:
+                current_debug = board.get_debug_tool_name(configured_debug)
+                onboard = sorted(
+                    key for key, value in debug_tools.items()
+                    if (value or {}).get("onboard")
+                )
+                external = sorted(
+                    key for key, value in debug_tools.items()
+                    if not (value or {}).get("onboard")
+                )
+                parts = [f"DEBUG: Current ({current_debug})"]
+                if onboard:
+                    parts.append(f"On-board ({', '.join(onboard)})")
+                if external:
+                    parts.append(f"External ({', '.join(external)})")
+                result["debug"] = " ".join(parts)
+
+            protocols = set(board.get("upload.protocols", []) or [])
+            protocols.add("esptool")
+            result["available"] = sorted(protocols)
+            result["max_ram"] = int(board.get("upload.maximum_ram_size", 0) or 0) or None
+            result["max_flash"] = int(board.get("upload.maximum_size", 0) or 0) or None
+            result["partitions"] = board.get("build.partitions")
+        except Exception:
+            # Direct flashing is still valid if metadata lookup fails. Keep a
+            # truthful minimal protocol block instead of delaying/failing it.
+            pass
+
+        if not hasattr(self, "_platform_upload_metadata_cache"):
+            self._platform_upload_metadata_cache = {}
+        self._platform_upload_metadata_cache[cache_key] = dict(result)
+        return result
+
+    def _cached_build_metadata(self, fast_bins: dict) -> dict:
+        board_name = self.board_var.get()
+        entry = dict(
+            (getattr(self, "_build_metadata_by_board", {}) or {}).get(board_name) or {}
+        )
+        if not entry:
+            return {}
+        if entry.get("env_name") and entry["env_name"] != self._pio_env_name():
+            return {}
+        if entry.get("source_hash"):
+            try:
+                if entry["source_hash"] != self._hash_sources():
+                    return {}
+            except Exception:
+                return {}
+        try:
+            stat = Path(fast_bins["firmware"]).stat()
+            if entry.get("firmware_size") is not None and int(entry["firmware_size"]) != stat.st_size:
+                return {}
+            if (entry.get("firmware_mtime_ns") is not None
+                    and int(entry["firmware_mtime_ns"]) != stat.st_mtime_ns):
+                return {}
+        except OSError:
+            return {}
+        return entry
+
+    def _partition_upload_capacity(self, fast_bins: dict,
+                                   default_size: int | None,
+                                   default_scheme: str | None = None) -> int | None:
+        """Resolve the selected app partition size without starting SCons."""
+        scheme = self._project_option("board_build.partitions") or default_scheme
+        if not scheme:
+            return default_size
+        scheme_path = Path(scheme)
+        names = [scheme_path.name]
+        if not scheme_path.suffix:
+            names.append(scheme_path.name + ".csv")
+        candidates: list[Path] = []
+        if scheme_path.is_absolute():
+            candidates.append(scheme_path)
+        else:
+            candidates.extend(self.sketch_dir_path / name for name in names)
+            boot_app0 = fast_bins.get("boot_app0")
+            if boot_app0:
+                candidates.extend(Path(boot_app0).parent / name for name in names)
+            try:
+                packages_dir = Path(os.environ.get("PLATFORMIO_CORE_DIR", "")) / "packages"
+                for framework in packages_dir.glob("framework-arduinoespressif32*"):
+                    candidates.extend(framework / "tools" / "partitions" / name for name in names)
+                    candidates.extend(framework / "partitions" / name for name in names)
+            except Exception:
+                pass
+
+        csv_path = next((path for path in candidates if path.is_file()), None)
+        if csv_path is None:
+            return default_size
+        try:
+            for raw in csv_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                fields = [field.strip() for field in line.split(",")]
+                if len(fields) < 5:
+                    continue
+                p_type, subtype = fields[1].lower(), fields[2].lower()
+                if p_type in ("0", "app") and subtype in ("factory", "ota_0"):
+                    return self._parse_size_value(fields[4]) or default_size
+        except Exception:
+            pass
+        return default_size
+
+    @staticmethod
+    def _format_platformio_memory_row(label: str, used: int, maximum: int) -> str:
+        ratio = float(used) / float(maximum) if maximum else 0.0
+        blocks = max(0, min(10, int(round(10 * ratio))))
+        bar = ("=" * blocks).ljust(10)
+        prefix = "RAM:  " if label.lower() == "ram" else "Flash:"
+        return (
+            f"{prefix} [{bar}] {ratio: 6.1%} "
+            f"(used {int(used)} bytes from {int(maximum)} bytes)"
+        )
+
+    def _derive_build_usage_from_elf(self, fast_bins: dict,
+                                     platform_meta: dict) -> dict:
+        """Fallback for pre-upgrade caches: reproduce PIO's ESP size regexes."""
+        elf_path = Path(fast_bins["firmware"]).with_suffix(".elf")
+        if not elf_path.is_file():
+            return {}
+        try:
+            from elftools.elf.elffile import ELFFile
+            with elf_path.open("rb") as handle:
+                elf = ELFFile(handle)
+                sections = {
+                    section.name: int(section.data_size)
+                    for section in elf.iter_sections()
+                }
+        except Exception:
+            return {}
+
+        platform_name = fast_bins.get("platform")
+        if platform_name == "espressif32":
+            flash_names = (
+                ".iram0.text", ".iram0.vectors", ".dram0.data",
+                ".flash.text", ".flash.rodata",
+            )
+            ram_names = (".dram0.data", ".dram0.bss", ".noinit")
+        elif platform_name == "espressif8266":
+            flash_names = (".text", ".data", ".rodata", ".irom0.text")
+            ram_names = (".data", ".rodata", ".bss", ".noinit")
+        else:
+            return {}
+
+        flash_used = sum(sections.get(name, 0) for name in flash_names)
+        ram_used = sum(sections.get(name, 0) for name in ram_names)
+        max_ram = platform_meta.get("max_ram")
+        max_flash = self._partition_upload_capacity(
+            fast_bins,
+            platform_meta.get("max_flash"),
+            platform_meta.get("partitions"),
+        )
+        result = {}
+        if ram_used and max_ram:
+            result["ram"] = self._format_platformio_memory_row("RAM", ram_used, max_ram)
+        if flash_used and max_flash:
+            result["flash"] = self._format_platformio_memory_row(
+                "Flash", flash_used, max_flash
+            )
+        return result
+
+    def _fast_upload_metadata_lines(self, fast_bins: dict) -> list[tuple[str, str]]:
+        """Return the compact PlatformIO metadata block for direct upload."""
+        cached = self._cached_build_metadata(fast_bins)
+        platform_meta = self._resolve_platform_upload_metadata()
+        derived = {}
+        if not cached.get("ram") or not cached.get("flash"):
+            derived = self._derive_build_usage_from_elf(fast_bins, platform_meta)
+
+        rows: list[tuple[str, str]] = []
+        debug_line = cached.get("debug") or platform_meta.get("debug")
+        if debug_line:
+            rows.append((f"  {debug_line}", "dim"))
+        ram_line = cached.get("ram") or derived.get("ram")
+        flash_line = cached.get("flash") or derived.get("flash")
+        if ram_line:
+            rows.append((f"  {ram_line}", "success"))
+        if flash_line:
+            rows.append((f"  {flash_line}", "success"))
+        rows.append(("  Configuring upload protocol...", "dim"))
+        available = platform_meta.get("available") or ["esptool"]
+        rows.append((f"  AVAILABLE: {', '.join(sorted(set(available)))}", "dim"))
+        rows.append(("  CURRENT: upload_protocol = esptool", "dim"))
+        return rows
+
+    def _append_fast_upload_metadata(self, fast_bins: dict) -> None:
+        for text, tag in self._fast_upload_metadata_lines(fast_bins):
+            self._append(text, tag)
+
+    def _record_fast_upload_diagnostic(self, port: str, command: list[str],
+                                       return_code=None, output_lines=None,
+                                       error: str = "") -> None:
+        """Persist hidden fast-path failures without cluttering the console."""
+        try:
+            log_dir = SCRIPT_DIR / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "fast_upload_fallback.log"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{timestamp}] port={port} return_code={return_code}\n")
+                handle.write("command=" + subprocess.list2cmdline([str(x) for x in command]) + "\n")
+                if error:
+                    handle.write(f"error={error}\n")
+                for line in output_lines or []:
+                    handle.write(str(line).rstrip() + "\n")
+                handle.write("\n")
+        except Exception:
+            pass
+
+    def _soft_reset_esptool_write(self, fast_bins: dict, port: str,
+                                  phase_callback=None) -> tuple[bool, str]:
+        """
+        Write the cached Soft Reset binaries straight to flash with esptool.
+        This performs the exact same upload "pio run -t upload" would have
+        done, just invoked directly so PlatformIO's project-scan overhead is
+        skipped entirely. Returns (ok, err_msg).
+        """
+        # Use sys.executable -m esptool directly to avoid Windows setuptools
+        # esptool.exe wrapper crashes when running in background subprocesses.
+        esptool_cmd_base = self._get_esptool_cmd()
+
+        write_cmd = esptool_cmd_base + [
+            "--port", port,
+            "--baud", str(fast_bins.get("upload_speed") or "460800"),
+            "--before", str(fast_bins.get("before") or "default-reset"),
+            "--after", "hard-reset",
+            # One serial sync per visible retry keeps the 1/10 progress row
+            # truthful while avoiding PlatformIO/SCons startup overhead.
+            "--connect-attempts", "1",
+            "write-flash",
+            "--flash-mode", "keep",
+            "--flash-freq", "keep",
+            "--flash-size", "detect",
+        ]
+
+        if fast_bins["platform"] == "espressif32":
+            write_cmd += [
+                fast_bins["bootloader_addr"], str(fast_bins["bootloader"]),
+                "0x8000", str(fast_bins["partitions"]),
+                "0xe000", str(fast_bins["boot_app0"]),
+                "0x10000", str(fast_bins["firmware"]),
+            ]
+        else:
+            # espressif8266 — single merged image at 0x0
+            write_cmd += ["0x0", str(fast_bins["firmware"])]
+
+        _WATCHDOG_SECS = 90
+        _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+        _connect_retry_count = 0
+        _CONNECT_FAIL_SIGNATURES = (
+            "wrong boot mode", "failed to connect",
+            "no serial data received", "timed out waiting for packet",
+            "device not found", "permissionerror", "access is denied",
+            "port is busy", "could not open port", "permission denied",
+            "connection timed out", "timed out after", "not responding",
+        )
+
+        chip_info: dict[str, str] = {}
+        chip_info_shown = False
+        fast_metadata_shown = False
+        connected_bar_flipped = False
+        upload_progress_state = self._new_upload_progress_state(fast_bins)
+        upload_started = time.perf_counter()
+
+        def _set_fast_phase(name: str):
+            if callable(phase_callback):
+                try:
+                    phase_callback(name)
+                except Exception:
+                    pass
+
+        def _show_fast_chip_info(force: bool = False):
+            nonlocal chip_info_shown
+            if chip_info_shown:
+                return
+            model = chip_info.get("Chip Model")
+            if not model and not force:
+                return
+            model = model or self.board_var.get()
+            fields = dict(chip_info)
+            if fields.get("Features"):
+                fields["Features"] = _enrich_chip_features(model, fields["Features"])
+            self._print_chip_info_box(model, list(fields.items()))
+            chip_info_shown = True
+
+        def _show_fast_context(force: bool = False):
+            nonlocal fast_metadata_shown
+            if fast_metadata_shown:
+                return
+            _show_fast_chip_info(force=force)
+            if chip_info_shown:
+                self._append_fast_upload_metadata(fast_bins)
+                fast_metadata_shown = True
+
+        def _flip_fast_connected_bar():
+            nonlocal connected_bar_flipped
+            if connected_bar_flipped:
+                return
+            connected_bar_flipped = True
+            self._append_connecting_progress(
+                _connect_retry_count + 1, _MAX_CONNECT_RETRIES, connected=True
+            )
+
+        def _before_fast_progress():
+            _flip_fast_connected_bar()
+            _show_fast_context(force=True)
+
+        self._append_connecting_progress(1, _MAX_CONNECT_RETRIES, force_new=True)
+
+        while True:
+            output_lines = []
+            try:
+                self.process = subprocess.Popen(
+                    write_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
+                _start = time.time()
+                for line in iter(self.process.stdout.readline, ""):
+                    if time.time() - _start > _WATCHDOG_SECS:
+                        self._append(f"  ⚠ Upload timed out after {_WATCHDOG_SECS}s — aborting.", "warning")
+                        self._do_stop()
+                        break
+                    stripped = line.rstrip()
+                    if stripped:
+                        output_lines.append(stripped)
+                        low = stripped.lower()
+
+                        match = re.search(
+                            r"chip (?:is|type)\s*:?\s+(.+)$", stripped, re.IGNORECASE
+                        )
+                        if match:
+                            chip_info["Chip Model"] = match.group(1).strip()
+                        match = re.search(r"features\s*:\s*(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["Features"] = match.group(1).strip()
+                        match = re.search(
+                            r"crystal (?:is|frequency)\s*:?\s+(.+)$",
+                            stripped, re.IGNORECASE,
+                        )
+                        if match:
+                            chip_info["Crystal"] = match.group(1).strip()
+                        match = re.search(r"^\s*mac\s*:\s*(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["MAC Address"] = match.group(1).strip()
+                        match = re.search(
+                            r"(?:auto-detected\s+)?flash size\s*:\s*(.+)$",
+                            stripped, re.IGNORECASE,
+                        )
+                        if match:
+                            chip_info["Flash Size"] = match.group(1).strip()
+                        if "connecting" in low:
+                            _set_fast_phase("Connecting")
+                            self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+                        if ("connected to" in low or "uploading stub" in low
+                                or "stub flasher running" in low):
+                            _set_fast_phase("Connecting")
+                            _flip_fast_connected_bar()
+                        if "will be erased" in low or "erasing flash" in low:
+                            _set_fast_phase("Erasing")
+                        if self._consume_esptool_upload_progress(
+                                upload_progress_state, stripped,
+                                before_progress=_before_fast_progress,
+                                phase_callback=_set_fast_phase):
+                            continue
+                        if "verifying written data" in low or "hash of data verified" in low:
+                            _set_fast_phase("Verifying")
+                        if "hard resetting" in low:
+                            _set_fast_phase("Resetting")
+                        # All raw esptool output is intentionally captured but
+                        # not printed. Successful uploads are rendered below
+                        # using the established compact console format; failed
+                        # attempts are persisted only in the diagnostic log.
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._append("  ⚠ Process did not exit cleanly — force killing.", "warning")
+                    self._do_stop()
+                    return False, "Process did not exit cleanly"
+
+                rc = self.process.returncode
+                joined = " ".join(line.rstrip().lower() for line in output_lines)
+                is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
+
+                if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
+                    _connect_retry_count += 1
+                    self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+                    time.sleep(0.25)
+                    continue
+
+                ok = (rc == 0)
+                if ok:
+                    _flip_fast_connected_bar()
+                    _show_fast_context(force=True)
+                    _set_fast_phase("Resetting")
+                    self._append("")
+                    self._append("  Hard resetting via RTS pin...", "success")
+                    elapsed = max(0.0, time.perf_counter() - upload_started)
+                    self._last_fast_upload_elapsed = elapsed
+                    self._append(
+                        f"  {'=' * 25} [SUCCESS] Took {elapsed:.2f} seconds {'=' * 25}",
+                        "success",
+                    )
+                    return True, ""
+                detail = next(
+                    (line.strip() for line in reversed(output_lines)
+                     if line.strip() and not line.lower().startswith("hint:")),
+                    "esptool exited with a non-zero status",
+                )
+                detail = detail[:300]
+                error_message = f"esptool exit code {rc}: {detail}"
+                self._record_fast_upload_diagnostic(
+                    port, write_cmd, return_code=rc,
+                    output_lines=output_lines, error=error_message,
+                )
+                return False, error_message
+            except Exception as e:
+                error_message = str(e)
+                self._record_fast_upload_diagnostic(
+                    port, write_cmd, return_code=None,
+                    output_lines=[], error=error_message,
+                )
+                return False, error_message
+
+    def _do_soft_reset(self, parent_dlg):
+        # 0. Block if the board is already running the soft-reset sketch
+        if getattr(self, '_soft_reset_sketch_active', False):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Already Reset",
+                "The board is already running the soft-reset sketch.\n\n"
+                "There is nothing to reset — upload your very own project sketch to continue.",
+                parent=parent_dlg
+            )
+            return
+
+        # 1. Check if busy (with auto-recovery for stale busy flag)
+        if self.is_busy:
+            if not self.process or self.process.poll() is not None:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._append("  ℹ Stale busy state cleared — proceeding.", "info")
+            else:
+                from tkinter import messagebox
+                messagebox.showwarning("Busy", "The programmer is currently busy with another operation.", parent=parent_dlg)
+                return
+
+        if not self.board_var.get():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "No Board Selected",
+                "Please choose a board in the main window before performing a Soft Reset.",
+                parent=parent_dlg
+            )
+            return
+
+        port = self._get_port()
+        if not port:
+            from tkinter import messagebox
+            messagebox.showwarning("No Port Selected", "Please select a serial port in the main window before resetting.", parent=parent_dlg)
+            return
+
+        if not self._is_board_recognized():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Board Not Recognized",
+                "The board on this port hasn't been recognized yet.\n\n"
+                "Wait for auto-detect to finish, or verify the correct board/port is selected.",
+                parent=parent_dlg
+            )
+            return
+
+        # Close settings dialog to let the process start
+        parent_dlg.destroy()
+
+        self._clear_console_if_action_enabled()
+
+        # Run soft reset in background thread
+        self._active_reset_kind = "soft"
+        self.is_busy = True
+        self._set_buttons_state(True, operation="reset")
+        threading.Thread(target=self._run_soft_reset, args=(port,), daemon=True).start()
+
+    def _run_soft_reset(self, port: str):
+        try:
+            self._run_soft_reset_inner(port)
+        except Exception as e:
+            import traceback
+            try:
+                with open("error_log.txt", "w", encoding="utf-8") as f:
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
+            self._append(f"  ✖ Internal error in soft reset thread: {e}", "error")
+            self._set_status("Soft Reset FAILED", Theme.RED)
+        finally:
+            # Guarantee busy state is always cleared
+            self.is_busy = False
+            self._set_buttons_state(False)
+            self._set_window_closable(True)
+
+    def _run_soft_reset_inner(self, port: str):
+        owner_pid = port_occupied_owner(port)
+        if owner_pid:
+            self._append(f"  ⚠ Soft reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            return
+        # Pause monitor (so port isn't blocked)
+        was_monitoring = self._pause_monitor()
+        if was_monitoring:
+            time.sleep(0.4)
+
+        self._append("")
+        self._append("=" * 50, "header")
+        self._append("  🔄 SOFT RESET (Clearing Flash Memory)", "header")
+        self._append("=" * 50, "header")
+        self._append(f"  Port  : {port}", "port_highlight")
+        self._append(f"  Board : {self.board_var.get()}", "dim")
+        if self._detect_port_chip() is None and not getattr(self, "_board_port_confirmed", False):
+            self._append("  ⚠ Unrecognized USB-serial port — proceeding anyway.", "warning")
+
+        # Desktop vs Laptop tip
+        try:
+            # pyrefly: ignore [missing-import]
+            from detector import is_laptop
+            system_is_laptop = is_laptop()
+        except Exception:
+            system_is_laptop = False
+
+        if not system_is_laptop:
+            self._append("  💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.", "dim")
+
+        self._append("")
+        self._set_status("Soft Reset: Initializing...", Theme.YELLOW)
+
+        pio_path = find_pio_executable()
+        if not pio_path:
+            self._append("  ✖ PlatformIO executable not found!", "error")
+            self._append("  Try manually: pip install platformio", "info")
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_status("Soft Reset: Failed", Theme.RED)
+            if was_monitoring:
+                self._resume_monitor()
+            from tkinter import messagebox
+            messagebox.showerror("Soft Reset Error", "PlatformIO not found! Could not perform soft reset.", parent=self.root)
+            return
+
+        # ── Use a persistent project directory inside the app folder ───────────
+        # This preserves the PlatformIO build cache (.pio/build/) between runs
+        # so subsequent soft resets skip compilation (upload-only ≈ 5s vs 30-60s).
+        import shutil
+
+        self._set_status("Soft Reset: Preparing project files...", Theme.YELLOW)
+        project_dir = SCRIPT_DIR / "soft_reset_project"
+        try:
+            project_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self._append(f"  ✖ Failed to create soft reset project directory:\n  {e}", "error")
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_status("Soft Reset: Failed", Theme.RED)
+            if was_monitoring:
+                self._resume_monitor()
+            from tkinter import messagebox
+            messagebox.showerror("Soft Reset Error", f"Failed to create project directory:\n{e}", parent=self.root)
+            return
+
+        # Write platformio.ini and main.cpp
+        board_name = self.board_var.get()
+        # See _ensure_platformio_ini for why this can no longer fall back
+        # to a literal SUPPORTED_BOARDS["ESP32 Dev Module"] key.
+        if board_name in SUPPORTED_BOARDS:
+            board_info = SUPPORTED_BOARDS[board_name]
+        elif SUPPORTED_BOARDS:
+            board_info = next(iter(SUPPORTED_BOARDS.values()))
+        else:
+            board_info = {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
+        p_platform = board_info["platform"]
+        p_board = board_info["board"]
+        p_framework = board_info["framework"]
+
+        # ESP32/ESP8266 can handle much faster upload speeds than AVR
+        is_avr = p_platform == "atmelavr"
+        upload_speed = "115200" if is_avr else "460800"
+
+        ini_content = f"""; PlatformIO Project Configuration File for Soft Reset
+[platformio]
+src_dir = .
+default_envs = mcu_flash
+
+[env:mcu_flash]
+platform = {p_platform}
+board = {p_board}
+framework = {p_framework}
+monitor_speed = 115200
+upload_speed = {upload_speed}
+"""
+
+        cpp_content = """#include <Arduino.h>
+void setup() {
+  Serial.begin(115200);
+  Serial.println(">>>   ──   <<<");
+}
+
+void loop() {
+  
+}
+"""
+
+        # ── Board-aware caching: only rewrite files if content changed ─────────
+        # When the board changes, the ini_content changes → we detect that,
+        # clear the build cache, and rewrite.  Otherwise we skip writing
+        # entirely and PlatformIO will see "nothing changed" → upload only.
+        ini_path = project_dir / "platformio.ini"
+        cpp_path = project_dir / "main.cpp"
+        build_dir = project_dir / ".pio" / "build"
+
+        files_changed = False
+        try:
+            existing_ini = ini_path.read_text(encoding="utf-8") if ini_path.exists() else ""
+            existing_cpp = cpp_path.read_text(encoding="utf-8") if cpp_path.exists() else ""
+
+            if existing_ini != ini_content or existing_cpp != cpp_content:
+                files_changed = True
+                env_build_dir = project_dir / ".pio" / "build" / "mcu_flash"
+                is_first_time = not env_build_dir.exists()
+                # Board or content changed — clear build cache to force recompile
+                if build_dir.exists():
+                    self._append("  ↻ Board changed — clearing cached build...", "dim")
+                    shutil.rmtree(build_dir, ignore_errors=True)
+                self._force_write_text(ini_path, ini_content)
+                self._force_write_text(cpp_path, cpp_content)
+                if is_first_time:
+                    self._append("  🔧 First-time setup for this board — this may take a minute. Subsequent Soft Resets will be instant.", "warning")
+                else:
+                    self._append("  ✔ Project files updated (will compile).", "dim")
+            else:
+                self._append("  ✔ Using cached build (no recompilation needed).", "success")
+        except Exception as e:
+            self._append(f"  ✖ Failed to write project files:\n  {e}", "error")
+            self.is_busy = False
+            self._set_buttons_busy(False)
+            self._set_status("Soft Reset: Failed", Theme.RED)
+            if was_monitoring:
+                self._resume_monitor()
+            from tkinter import messagebox
+            messagebox.showerror("Soft Reset Error", f"Failed to write project files:\n{e}", parent=self.root)
+            return
+
+        # Run parallel build + upload
+        jobs = self._get_cpu_cores_jobs()
+
+        # ── FAST PATH: nothing changed + ESP32/ESP8266 board ────────────────────
+        # "pio run -t upload" always pays PlatformIO's SCons project-scan cost
+        # (dependency graph, board/package checks, timestamp hashing) even when
+        # there's nothing to compile — for an "almost empty sketch" that scan is
+        # the whole delay, not the upload itself. When the cached build is still
+        # valid we skip PlatformIO entirely and hand the already-compiled
+        # binaries straight to esptool, the same way Hard Reset already does for
+        # the bootloader burn.
+        is_esp = p_platform in ("espressif32", "espressif8266")
+        fast_bins = None
+        if not files_changed and is_esp:
+            fast_bins = self._locate_soft_reset_fast_binaries(project_dir, board_name, p_platform)
+
+        # ── Spinner thread for Soft Reset ──────────────────────────────────────
+        _sr_state   = ["Uploading" if not files_changed else "Compiling"]
+
+        if fast_bins is None:
+            # Check if platform is already installed to notice the user
+            pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR", "")
+            platform_installed = False
+            if pio_core_dir:
+                platform_dir = Path(pio_core_dir) / "platforms" / p_platform
+                if platform_dir.exists() and any(platform_dir.iterdir()):
+                    packages_dir = Path(pio_core_dir) / "packages"
+                    if packages_dir.exists() and any(packages_dir.iterdir()):
+                        platform_installed = True
+            
+            if not platform_installed:
+                self._append("", "")
+                self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+                self._append("  ⚠ CRITICAL: Preparing/Installing core framework & toolchain packages...", "warning")
+                self._append("    This is a first-time setup for board framework '" + p_platform + "'.", "info")
+                self._append("    Notice: One-time setup of core framework packages (~760 MB) may take up", "info")
+                self._append("    to 5 minutes even on a stable internet connection. Please do NOT interrupt.", "warning")
+                self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+                self._append("", "")
+                _sr_state[0] = "Preparing/Installing Framework"
+
+        self._append("  🔨 Resetting Flash Memory...", "info")
+
+        img_count = 0
+        output_lines = []
+        ok = False
+        err_msg = ""
+        _sr_active  = [True]
+        _sr_frame   = [0]
+        _sr_start   = time.time()
+        _sr_spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        def _sr_spin_loop():
+            while _sr_active[0] and self.is_busy:
+                if str(_sr_state[0]).startswith("Connecting"):
+                    time.sleep(0.2)
+                    continue
+                elapsed = int(time.time() - _sr_start)
+                frame   = _sr_spinner[_sr_frame[0] % len(_sr_spinner)]
+                _sr_frame[0] += 1
+                self._set_status(
+                    f"{frame} Soft Reset: {_sr_state[0]}... ({elapsed}s)",
+                    Theme.YELLOW,
+                )
+                time.sleep(0.2)
+
+        import threading as _threading_sr
+        _sr_spin_thread = _threading_sr.Thread(target=_sr_spin_loop, daemon=True)
+        _sr_spin_thread.start()
+
+        if fast_bins is not None:
+            # ── Fast path: write cached binaries directly with esptool ─────────
+            self._append("  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "success")
+            ok, err_msg = self._soft_reset_esptool_write(fast_bins, port)
+        else:
+            _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+            _connect_retry_count = 0
+            _CONNECT_FAIL_SIGNATURES = (
+                "wrong boot mode", "failed to connect",
+                "no serial data received", "timed out waiting for packet",
+                "device not found", "permissionerror", "access is denied",
+                "port is busy", "could not open port", "permission denied",
+                "connection timed out", "timed out after", "not responding",
+            )
+            cmd = pio_path + [
+                "run",
+                "-t", "upload",
+                "-j", str(jobs),
+                "--upload-port", port
+            ]
+            while True:
+                output_lines.clear()
+                try:
+                    self.process = subprocess.Popen(
+                        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, encoding="utf-8", errors="replace",
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                        cwd=str(project_dir),
+                    )
+                    for line in iter(self.process.stdout.readline, ""):
+                        stripped = line.rstrip()
+                        if not stripped:
+                            continue
+                        output_lines.append(stripped)
+                        low = stripped.lower()
+
+                        if "compiling" in low or "building" in low:
+                            _sr_state[0] = "Compiling"
+                        elif any(kw in low for kw in ("tool manager:", "platform manager:", "downloading", "unpacking", "installing")):
+                            _sr_state[0] = "Preparing/Installing Framework"
+
+                        # Suppress percentage upload lines — spinner shows progress
+                        if re.search(r'\d+\s*%', stripped):
+                            _sr_state[0] = "Uploading"
+                            continue
+
+                        LINKER_ERROR_HINTS = (
+                            "undefined reference to",
+                            "multiple definition of",
+                            "cannot find -l",
+                            "undefined symbol",
+                            "duplicate symbol",
+                            "ld returned",
+                            "collect2",
+                        )
+                        is_linker_error = any(hint in low for hint in LINKER_ERROR_HINTS)
+
+                        if is_nonfatal_pio_clean_report(stripped):
+                            self._append(f"  ⚠ {stripped}", "warning")
+                        elif is_linker_error:
+                            self._append(f"  ✖ {stripped}", "error")
+                        elif "error" in low and "werror" not in low:
+                            is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
+                            can_retry = (_connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
+                            if not (is_conn_sig and can_retry):
+                                self._append(f"  ✖ {stripped}", "error")
+                        elif "warning" in low:
+                            self._append(f"  ⚠ {stripped}", "warning")
+                        elif "connecting" in low:
+                            _sr_state[0] = "Connecting"
+                            self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+                        elif "successfully created" in low and "image" in low:
+                            chip_match = re.search(r'successfully created (\w+) image', low)
+                            chip_name = chip_match.group(1).upper() if chip_match else "MCU"
+                            img_count += 1
+                            label = "Bootloader" if img_count == 1 else "Application"
+                            self._append(f"  ✔ Successfully created {chip_name} image ({label})", "success")
+                        elif any(kw in low for kw in ["hard resetting", "leaving", "wrote", "success"]):
+                            _sr_state[0] = "Done"
+                            self._append(f"  {stripped}", "success")
+
+                    self.process.wait()
+                    rc = self.process.returncode
+                    joined = " ".join(line.rstrip().lower() for line in output_lines)
+                    is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
+
+                    if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
+                        _connect_retry_count += 1
+                        _sr_state[0] = f"Connecting ({_connect_retry_count + 1}/{_MAX_CONNECT_RETRIES})"
+                        if any(x in joined for x in ("permissionerror", "access is denied", "port is busy", "could not open port", "permission denied")):
+                            time.sleep(1.0)
+                        self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+                        continue
+
+
+                    ok = (rc == 0)
+                    break
+                except Exception as e:
+                    ok = False
+                    err_msg = str(e)
+                    self._append(f"  ✖ Execution error: {err_msg}", "error")
+                    break
+
+        # Stop spinner
+        _sr_active[0] = False
+        _sr_spin_thread.join(timeout=1)
+
+        # NOTE: Do NOT delete project_dir — preserving it is the whole point.
+        # The .pio/build/ cache inside it makes subsequent soft resets instant.
+
+        self.is_busy = False
+        self._set_buttons_busy(False)
+
+        if ok and not was_monitoring:
+            self._trigger_actual_board_reset(port)
+
+        if was_monitoring:
+            self._resume_monitor()
+
+        from tkinter import messagebox
+        if ok:
+            self._append("")
+            self._append("  ✔ Soft Reset completed successfully!", "success")
+            self._set_status("Soft Reset: SUCCESS", Theme.GREEN)
+            messagebox.showinfo("Soft Reset Success", "Soft Reset (flash memory reset) completed successfully!", parent=self.root)
+        else:
+            self._append("")
+            self._append("  ✖ Soft Reset FAILED.", "error")
+            self._set_status("Soft Reset: FAILED", Theme.RED)
+            messagebox.showerror("Soft Reset Failed", f"Soft Reset failed.\n{err_msg}\nCheck if the device is connected to {port}.", parent=self.root)
+
+    # ──────────────────────────────────────────────────────────
+    # CLEANUP
+    # ──────────────────────────────────────────────────────────
+    def _on_close(self):
+        self._dispose_active_ai_assistant()
+        if getattr(self, "_framework_download_active", False):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Framework Download in Progress",
+                "A critical framework/tool download is currently in progress. "
+                "Closing the application now may corrupt your PlatformIO core installation.\n\n"
+                "Please wait for the download to finish.",
+                parent=self.root
+            )
+            return
+
+        if self.is_busy:
+            # Auto-recover: if no subprocess is actually running, clear stale busy flag
+            if not self.process or self.process.poll() is not None:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._set_window_closable(True)
+                # Fall through to normal close logic
+            else:
+                phase = getattr(self, "_current_op_phase", None)
+                kind = getattr(self, "_active_reset_kind", None)
+
+                # Allow closing if we are currently ONLY in the compilation phase!
+                if phase == "compiling":
+                    try:
+                        self._do_stop()
+                    except Exception:
+                        pass
+                    # Proceed to normal exit below
+                else:
+                    from tkinter import messagebox
+                    if kind == "hard":
+                        msg = ("A Hard Reset (bootloader burn) is in progress.\n\n"
+                               "Interrupting this can permanently brick the board. "
+                               "Please wait for it to finish.")
+                    elif kind == "soft":
+                        msg = ("A Soft Reset (flash rewrite) is in progress.\n\n"
+                               "Interrupting this can leave the board in a broken state. "
+                               "Please wait for it to finish.")
+                    else:
+                        msg = ("A Flash Upload is currently writing to the MCU memory.\n\n"
+                               "Interrupting this direct flash write can leave your board corrupted. "
+                               "Please wait for the upload to complete or click Stop.")
+                    messagebox.showwarning("Flash Upload / Reset in Progress", msg, parent=self.root)
+                    return
+
+        # Check if there are unsaved changes in the active editor
+        if getattr(self, "editor_mode", "default") == "monaco":
+            if hasattr(self, "editor_api") and self.editor_api.modified_files:
+                unsaved = [Path(p).name for p, is_modified in self.editor_api.modified_files.items() if is_modified]
+                if unsaved:
+                    import tkinter.messagebox as mb
+                    names = "\n  • ".join(unsaved)
+                    answer = mb.askyesnocancel(
+                        "Unsaved Changes",
+                        f"The following files have unsaved changes:\n\n  • {names}\n\n"
+                        "Save before closing?",
+                        parent=self.root,
+                    )
+                    if answer is None:       # Cancel closing
+                        return
+                    if answer:               # Yes — save all
+                        if hasattr(self, "_save_all_editor_files"):
+                            self._save_all_editor_files()
+        else:
+            tab_data = getattr(self, "editor_tab_data", None)
+            if tab_data:
+                unsaved = [d["path"].name for d in tab_data.values() if d.get("modified")]
+                if unsaved:
+                    import tkinter.messagebox as mb
+                    names = "\n  • ".join(unsaved)
+                    answer = mb.askyesnocancel(
+                        "Unsaved Changes",
+                        f"The following files have unsaved changes:\n\n  • {names}\n\n"
+                        "Save before closing?",
+                        parent=self.root,
+                    )
+                    if answer is None:       # Cancel closing
+                        return
+                    if answer:               # Yes — save all
+                        if hasattr(self, "_save_all_editor_files"):
+                            self._save_all_editor_files()
+
+        # Kill any active compile/upload/reset subprocess synchronously on exit
+        if self.process and self.process.poll() is None:
+            try:
+                if sys.platform == "win32":
+                    import subprocess
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                else:
+                    self.process.kill()
+            except Exception:
+                pass
+
+        # Kill any launched library manager subprocesses
+        for p in getattr(self, "_download_managers", []):
+            if p.poll() is None:
+                try:
+                    if sys.platform == "win32":
+                        import subprocess
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+                    else:
+                        p.kill()
+                except Exception:
+                    pass
+
+        self._do_stop()
+        self._syntax_bg_active = False
+        if hasattr(self, "_monaco_autosave_worker"):
+            self._monaco_autosave_worker.stop()
+        if hasattr(self, "_bg_executor") and self._bg_executor:
+            try:
+                self._bg_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+        # Stop serial monitor on close
+        self._monitor_should_run = False
+        self.serial_running = False
+        if self.serial_conn and self.serial_conn.is_open:
+            try:
+                self.serial_conn.close()
+            except Exception:
+                pass
+        if self.serial_thread and self.serial_thread.is_alive():
+            self.serial_thread.join(timeout=1.0)
+
+        # Clean up this instance configuration from the shared file
+        try:
+            data = _load_raw_config()
+            if "instances" in data and _INSTANCE_ID in data["instances"]:
+                del data["instances"][_INSTANCE_ID]
+                _save_raw_config(data)
+        except Exception:
+            pass
+
+        # Detach Win32 thread input if attached
+        try:
+            pair = getattr(self, "_editor_attached_threads", None)
+            if pair:
+                import ctypes
+                ctypes.windll.user32.AttachThreadInput(pair[0], pair[1], False)
+        except Exception:
+            pass
+
+        try:
+            set_monaco_boot_pending(False)
+        except Exception:
+            pass
+        self.root.destroy()
+        os._exit(0)
+
+    def _set_window_closable(self, closable: bool):
+        """Grey out (or restore) the window's native [X] close button and
+        Alt+F4 at the OS level. This sits on top of the existing is_busy
+        check in _on_close() as a stronger guarantee — Hard/Soft Reset
+        write directly to flash and, for Hard Reset, the bootloader itself;
+        an interrupted write there can brick the board or leave it in an
+        unrecoverable boot loop, so during that window we don't want the
+        close path reachable at all, not just intercepted-and-warned.
+        """
+        if win32gui is None or win32con is None:
+            return  # non-Windows or pywin32 missing — the is_busy dialog in _on_close is still the backstop
+        try:
+            hwnd = self.root.winfo_id()
+            menu = win32gui.GetSystemMenu(hwnd, False)
+            flag = win32con.MF_ENABLED if closable else win32con.MF_GRAYED
+            win32gui.EnableMenuItem(menu, win32con.SC_CLOSE, win32con.MF_BYCOMMAND | flag)
+        except Exception:
+            pass
+
+    def _start_periodic_syntax_check(self):
+        """Runs periodically to check for errors and update the UI in real-time."""
+        try:
+            if not self.is_busy and not self._compile_background_lock.is_set():
+                if hasattr(self, "editor_mode") and self.editor_mode == "default":
+                    self._run_manual_syntax_check()
+        except Exception:
+            pass
+        self.root.after(3000, self._start_periodic_syntax_check)
+
+    def _start_background_syntax_thread(self):
+        """Launch a permanent background thread that periodically checks syntax
+        for all open editor files, regardless of editor mode.
+        Stops itself if the window is destroyed or the thread is cancelled."""
+        if getattr(self, "_syntax_bg_active", False):
+            return  # already running
+        self._syntax_bg_active = True
+
+        def _syntax_bg_loop():
+            while getattr(self, "_syntax_bg_active", False):
+                try:
+                    cpus = os.cpu_count() or 4
+                    sleep_time = 3.5 if cpus <= 2 else (2.5 if cpus <= 4 else 1.2)
+                    if not tk.TclError and self.root and self.root.winfo_exists():
+                        time.sleep(sleep_time)
+                    else:
+                        break
+                except Exception:
+                    break
+
+                # Skip if busy compiling or no project loaded
+                if (getattr(self, "is_busy", False)
+                        or getattr(self, "_compile_background_lock", threading.Lock()).is_set()
+                        or not getattr(self, "sketch_dir_path", None)):
+                    continue
+
+                # Check editor is loaded
+                if getattr(self, "editor_mode", "default") == "monaco":
+                    if not getattr(self, "_editor_content_loaded", False):
+                        continue
+
+                # Run lightweight background check (no auto-save)
+                try:
+                    self.root.after(0, self._run_bg_syntax_check)
+                except Exception:
+                    pass
+
+        bg_thread = threading.Thread(target=_syntax_bg_loop, daemon=True)
+        bg_thread.start()
+        self._syntax_bg_thread = bg_thread
+
+        # Also keep the existing periodic check for inline highlighting
+        self.root.after(3000, self._start_periodic_syntax_check)
+
+    def _run_bg_syntax_check(self):
+        """Lightweight background syntax check — reads current editor content & project files
+        on a worker thread, then updates the syntax check UI tree without lag."""
+        if (getattr(self, "is_busy", False)
+                or getattr(self, "_compile_background_lock", threading.Lock()).is_set()
+                or not getattr(self, "sketch_dir_path", None)):
+            return
+
+        def _worker():
+            try:
+                sketch_dir = getattr(self, "sketch_dir_path", None)
+                if not sketch_dir or not sketch_dir.exists():
+                    return
+                from src.syntax_checker import analyze_cpp_syntax, extract_project_functions
+                defined_funcs = extract_project_functions(sketch_dir)
+
+                all_errors = []
+                for ext in ["*.ino", "*.cpp", "*.h"]:
+                    for file_path in sketch_dir.glob(ext):
+                        try:
+                            code = file_path.read_text(encoding="utf-8", errors="replace")
+                            errors = analyze_cpp_syntax(code, file_path, defined_funcs)
+                            all_errors.extend(errors)
+                        except Exception:
+                            pass
+
+                if hasattr(self, "root") and self.root and self.root.winfo_exists():
+                    self.root.after(0, lambda: self._update_syntax_check_ui(all_errors))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+
+    def _get_project_defined_functions(self) -> set[str]:
+        if not hasattr(self, "_cached_project_funcs") or self._cached_project_funcs is None:
+            try:
+                from src.syntax_checker import extract_project_functions
+                self._cached_project_funcs = extract_project_functions(self.sketch_dir_path)
+            except Exception:
+                self._cached_project_funcs = set()
+        return self._cached_project_funcs
+
+    def _run_realtime_syntax_check(self, text_widget: tk.Text, file_path: Path):
+        if self._compile_background_lock.is_set():
+            return
+        code = text_widget.get("1.0", tk.END)
+        text_widget.tag_remove("syntax_error", "1.0", tk.END)
+        text_widget.tag_remove("syntax_warning", "1.0", tk.END)
+        
+        defined_funcs = self._get_project_defined_functions()
+        try:
+            from src.syntax_checker import analyze_cpp_syntax
+            errors = analyze_cpp_syntax(code, file_path, defined_funcs)
+        except Exception:
+            return
+            
+        for err in errors:
+            line = err["line"]
+            col = err["col"]
+            tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
+            start_pos = f"{line}.{max(0, col - 1)}"
+            end_pos = f"{line}.end"
+            text_widget.tag_add(tag, start_pos, end_pos)
+
+    def _is_project_unsaved(self) -> bool:
+        mode = getattr(self, "editor_mode", "default")
+        if mode == "monaco":
+            if hasattr(self, "editor_api") and hasattr(self.editor_api, "modified_files"):
+                if any(is_modified for is_modified in self.editor_api.modified_files.values()):
+                    return True
+        else:
+            tab_data = getattr(self, "editor_tab_data", None)
+            if tab_data:
+                if any(d.get("modified") for d in tab_data.values()):
+                    return True
+        return False
+
+    def _run_manual_syntax_check(self):
+        # Trigger save all if unsaved changes exist
+        if self._is_project_unsaved():
+            if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
+                try:
+                    self._save_all_editor_files()
+                    # Small yielding loop to let async subprocesses / webviews write to disk
+                    import time
+                    start = time.time()
+                    while time.time() - start < 0.15:
+                        self.root.update()
+                        time.sleep(0.01)
+                except Exception:
+                    pass
+
+        self._cached_project_funcs = None
+        defined_funcs = self._get_project_defined_functions()
+        
+        all_errors = []
+        try:
+            from src.syntax_checker import analyze_cpp_syntax
+        except Exception:
+            return
+            
+        checked_files = set()
+        if hasattr(self, "editor_tab_data") and self.editor_tab_data:
+            for frame, data in self.editor_tab_data.items():
+                if not frame.winfo_exists():
+                    continue
+                file_path = data["path"]
+                if file_path.suffix in (".ino", ".cpp", ".h"):
+                    try:
+                        code = data["text"].get("1.0", tk.END)
+                        errors = analyze_cpp_syntax(code, file_path, defined_funcs)
+                        all_errors.extend(errors)
+                        checked_files.add(file_path.resolve())
+                        
+                        # Realtime highlight update in the text widget
+                        txt = data["text"]
+                        txt.tag_remove("syntax_error", "1.0", tk.END)
+                        txt.tag_remove("syntax_warning", "1.0", tk.END)
+                        for err in errors:
+                            line = err["line"]
+                            col = err["col"]
+                            tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
+                            txt.tag_add(tag, f"{line}.{max(0, col - 1)}", f"{line}.end")
+                    except Exception:
+                        pass
+                        
+        if hasattr(self, "sketch_dir_path") and self.sketch_dir_path and self.sketch_dir_path.exists():
+            for ext in ["*.ino", "*.cpp", "*.h"]:
+                for file_path in self.sketch_dir_path.glob(ext):
+                    if file_path.resolve() not in checked_files:
+                        try:
+                            code = file_path.read_text(encoding="utf-8", errors="replace")
+                            errors = analyze_cpp_syntax(code, file_path, defined_funcs)
+                            all_errors.extend(errors)
+                        except Exception:
+                            pass
+                            
+        self._update_syntax_check_ui(all_errors)
+
+    def _update_syntax_check_ui(self, errors):
+        if not hasattr(self, "syntax_tree") or not self.syntax_tree or not self.syntax_tree.winfo_exists():
+            return
+            
+        for child in self.syntax_tree.get_children():
+            self.syntax_tree.delete(child)
+            
+        err_count = sum(1 for e in errors if e["severity"] == "error")
+        warn_count = sum(1 for e in errors if e["severity"] == "warning")
+        
+        if not errors:
+            self.lbl_syntax_status.configure(text="🔍 SYNTAX CHECK: ✔ Clean (no issues)", fg=Theme.GREEN)
+        else:
+            status_text = f"🔍 SYNTAX CHECK: {err_count} Error(s), {warn_count} Warning(s)"
+            fg_color = Theme.RED if err_count > 0 else Theme.ORANGE
+            self.lbl_syntax_status.configure(text=status_text, fg=fg_color)
+            
+        for err in errors:
+            tag = "error" if err["severity"] == "error" else "warning"
+            self.syntax_tree.insert(
+                "", tk.END,
+                values=(err["file"], err["line"], err["severity"].upper(), err["message"]),
+                tags=(tag,)
+            )
+
+    def _on_syntax_tree_double_click(self, event):
+        if not hasattr(self, "syntax_tree") or not self.syntax_tree:
+            return
+        item = self.syntax_tree.selection()
+        if not item:
+            return
+        values = self.syntax_tree.item(item, "values")
+        if not values:
+            return
+            
+        file_name, line_str, severity, desc = values
+        try:
+            line_no = int(line_str)
+        except ValueError:
+            return
+            
+        if hasattr(self, "editor_tab_data") and self.editor_tab_data:
+            for frame, data in self.editor_tab_data.items():
+                if data["path"].name == file_name:
+                    if hasattr(self, "editor_notebook") and self.editor_notebook:
+                        self.editor_notebook.select(frame)
+                        txt = data["text"]
+                        txt.focus_set()
+                        txt.mark_set(tk.INSERT, f"{line_no}.0")
+                        txt.see(f"{line_no}.0")
+                        
+                        txt.tag_remove("active_line", "1.0", tk.END)
+                        txt.tag_add("active_line", f"{line_no}.0", f"{line_no}.end")
+                        break
+
+    def _trigger_save(self):
+        if hasattr(self, "_save_current_editor_file") and callable(self._save_current_editor_file):
+            self._save_current_editor_file()
+        self.root.after(200, self._run_manual_syntax_check)
+
+    def _trigger_save_all(self):
+        if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
+            self._save_all_editor_files()
+        self.root.after(200, self._run_manual_syntax_check)
+
+    def _schedule_syntax_ui_update(self):
+        if hasattr(self, "_syntax_ui_after_id") and self._syntax_ui_after_id:
+            try:
+                self.root.after_cancel(self._syntax_ui_after_id)
+            except Exception:
+                pass
+        self._syntax_ui_after_id = self.root.after(500, self._run_manual_syntax_check)
+
+    def _backup_default_editor_state(self):
+        saved_state = []
+        if hasattr(self, "editor_tab_data") and self.editor_tab_data:
+            for frame, data in list(self.editor_tab_data.items()):
+                try:
+                    if frame.winfo_exists() and data["text"].winfo_exists():
+                        saved_state.append({
+                            "path": data["path"],
+                            "content": data["text"].get("1.0", tk.END),
+                            "original": data["original"],
+                            "modified": data["modified"],
+                            "cursor": data["text"].index(tk.INSERT),
+                            "scroll": data["text"].yview()
+                        })
+                except Exception:
+                    pass
+        self._default_editor_state_backup = saved_state
+
+# ═══════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════
+def _configure_windows_dpi_awareness() -> None:
+    """Enable DPI handling before the first Tk window is created."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        # PER_MONITOR_AWARE_V2 on current Windows 10/11 builds.
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            import ctypes
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+        # Console toolbars also reflow. Long checkbox captions and status
+        # strings were previously wider than the entire window at 100%-175%
+        # Windows scaling.
+        try:
+            if width < 700:
+                self.lbl_build_console_title.pack_forget()
+                self.cb_clear_serial_on_upload.configure(text="Clear serial")
+                self.cb_clear_build_console_on_action.configure(text="Clear build")
+                self.cb_console_autoscroll.configure(text="Scroll")
+                self.btn_copy_console_header.configure(text="Copy")
+                self.btn_clear_console_header.configure(text="Clear")
+            else:
+                if not self.lbl_build_console_title.winfo_ismapped():
+                    self.lbl_build_console_title.pack(side=tk.LEFT)
+                self.cb_clear_serial_on_upload.configure(text="Auto-clear Serial Monitor on Action")
+                self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
+                self.cb_console_autoscroll.configure(text="Auto-scroll")
+
+            serial_tight = width < 820
+            self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
+            self.serial_status.configure(
+                text="●" if serial_tight else (
+                    "● Connected" if self.serial_running else "● Disconnected"
+                )
+            )
+            self.btn_reset_mcu.configure(text="Reset" if serial_tight else "↻ Reset")
+            self.btn_pause_serial.configure(
+                text="Resume" if self._monitor_paused else ("Pause" if serial_tight else "⏸ Pause")
+            )
+            self.btn_copy_serial_header.configure(text="Copy")
+            self.btn_clear_serial_header.configure(text="Clear")
+            if serial_tight:
+                self.cb_serial_autoscroll.pack_forget()
+                self.cb_ansi_clear.pack_forget()
+            else:
+                if not self.cb_ansi_clear.winfo_ismapped():
+                    self.cb_ansi_clear.pack(side=tk.RIGHT, padx=(0, 10))
+                if not self.cb_serial_autoscroll.winfo_ismapped():
+                    self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
+
+            style = ttk.Style()
+            style.configure(
+                "Bottom.TNotebook.Tab",
+                padding=[8 if width < 700 else 16, 5 if height < 600 else 6],
+                font=("Segoe UI", 8 if width < 700 else 9, "bold"),
+            )
+
+            if width < 700:
+                self.editor_info_label.pack_forget()
+            elif not self.editor_info_label.winfo_ismapped():
+                self.editor_info_label.pack(side=tk.RIGHT)
+        except Exception:
+            pass
+
+
+def main():
+    import os
+    _configure_windows_dpi_awareness()
+    # If not run from bootstrap, launch the VBS launcher to check for updates and setup dependencies
+    if "--from-bootstrap" not in sys.argv:
+        import subprocess
+        vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
+        if vbs_launcher.exists():
+            try:
+                # Sanitize PyInstaller environment variables so they don't pollute the VBS launcher
+                env = os.environ.copy()
+                env.pop("_MEIPASS", None)
+                env.pop("_MEIPASS2", None)
+                env.pop("PYTHONHOME", None)
+                env.pop("PYTHONPATH", None)
+                env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+                meipass = getattr(sys, '_MEIPASS', None)
+                if meipass:
+                    path_val = env.get("PATH", "")
+                    paths = path_val.split(os.pathsep)
+                    cleaned_paths = [p for p in paths if p != meipass]
+                    env["PATH"] = os.pathsep.join(cleaned_paths)
+                
+                subprocess.Popen(["wscript.exe", str(vbs_launcher)], cwd=str(SCRIPT_DIR), env=env)
+                sys.exit(0)
+            except Exception:
+                pass
+
+    # A VBS re-run/relaunch must never create a second main GUI accidentally.
+    # Additional windows are an explicit opt-in (--new-window), which keeps
+    # their per-PID editor/config state isolated from the normal task.
+    if not _claim_gui_instance():
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "MCU Flasher is already running. The existing main window will remain active.\n\n"
+                "To intentionally run an independent task, launch with --new-window.",
+                "MCU Flasher by Naph",
+                0x40,
+            )
+        except Exception:
+            pass
+        return
+
+    if not find_arduino_cli_executable():
+        import tkinter.messagebox as mb
+        import tkinter.filedialog as fd
+        
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes("-topmost", True)
+        root.attributes("-topmost", False)
+
+        msi_bundled = (SCRIPT_DIR / "installers" / "arduino-cli.msi").exists()
+        can_auto_install = _bootstrap_ensure_arduino_cli is not None and sys.platform == "win32"
+
+        if can_auto_install:
+            install_hint = (
+                "An arduino-cli.msi installer is bundled with this app.\n\n"
+                if msi_bundled else
+                "This app can download and install arduino-cli automatically.\n\n"
+            )
+            ans = mb.askyesnocancel(
+                "Arduino-CLI Not Found",
+                "Arduino-CLI is not installed on this computer, or its location was not detected.\n\n"
+                + install_hint +
+                "Yes = Install it automatically now\n"
+                "No = Manually locate an existing 'arduino-cli.exe'\n"
+                "Cancel = Exit",
+                parent=root
+            )
+            if ans is True:  # Yes: install automatically via bundled/downloaded MSI
+                mb.showinfo(
+                    "Installing Arduino-CLI",
+                    "Installing now — this may take a moment and could prompt for elevation.",
+                    parent=root
+                )
+                installed = False
+                try:
+                    installed = _bootstrap_ensure_arduino_cli()
+                except Exception as e:
+                    mb.showerror("Install Failed", f"Automatic install failed:\n{e}", parent=root)
+                if installed:
+                    cli = find_arduino_cli_executable()
+                    if cli:
+                        mb.showinfo("Success", f"Arduino-CLI installed:\n{cli}", parent=root)
+                        root.destroy()
+                    else:
+                        reason = ""
+                        if _bootstrap_get_last_arduino_cli_error is not None:
+                            try:
+                                reason = _bootstrap_get_last_arduino_cli_error()
+                            except Exception:
+                                reason = ""
+                        mb.showerror(
+                            "Install Finished, Still Not Found",
+                            "The installer ran but arduino-cli.exe could not be located afterward.\n"
+                            + (f"\n{reason}\n\n" if reason else "\n") +
+                            "You can try locating it manually instead.",
+                            parent=root
+                        )
+                        root.destroy()
+                        sys.exit(1)
+                else:
+                    reason = ""
+                    if _bootstrap_get_last_arduino_cli_error is not None:
+                        try:
+                            reason = _bootstrap_get_last_arduino_cli_error()
+                        except Exception:
+                            reason = ""
+                    mb.showerror(
+                        "Install Failed",
+                        (f"Automatic install did not succeed:\n\n{reason}\n\n"
+                         if reason else
+                         "Automatic install did not succeed.\n\n") +
+                        "You can try locating an existing arduino-cli.exe manually, "
+                        "or check your internet connection and retry.",
+                        parent=root
+                    )
+                    root.destroy()
+                    sys.exit(1)
+            elif ans is False:  # No: manually locate
+                selected_path = fd.askopenfilename(
+                    title="Select Arduino CLI Executable",
+                    filetypes=[("Arduino CLI Executable", "arduino-cli.exe;arduino-cli"), ("All Files", "*.*")],
+                    parent=root
+                )
+                if selected_path:
+                    try:
+                        script_dir = SCRIPT_DIR
+                        cached_file = script_dir / "arduino_cli_path.txt"
+                        cached_file.write_text(selected_path, encoding="utf-8")
+                        mb.showinfo("Success", f"Arduino CLI path saved successfully:\n{selected_path}", parent=root)
+                        root.destroy()
+                    except Exception as e:
+                        mb.showerror("Error", f"Failed to save path: {e}", parent=root)
+                        root.destroy()
+                        sys.exit(1)
+                else:
+                    root.destroy()
+                    sys.exit(1)
+            else:  # Cancel
+                root.destroy()
+                sys.exit(1)
+        else:
+            ans = mb.askyesno(
+                "Arduino-CLI Not Found",
+                "Arduino-CLI is not installed on this computer, or its location was not detected.\n\n"
+                "Would you like to manually locate 'arduino-cli.exe'?",
+                parent=root
+            )
+            if ans is True: # Yes: manually locate
+                selected_path = fd.askopenfilename(
+                    title="Select Arduino CLI Executable",
+                    filetypes=[("Arduino CLI Executable", "arduino-cli.exe;arduino-cli"), ("All Files", "*.*")],
+                    parent=root
+                )
+                if selected_path:
+                    try:
+                        # Save to arduino_cli_path.txt
+                        script_dir = SCRIPT_DIR
+                        cached_file = script_dir / "arduino_cli_path.txt"
+                        cached_file.write_text(selected_path, encoding="utf-8")
+                        mb.showinfo("Success", f"Arduino CLI path saved successfully:\n{selected_path}", parent=root)
+                        root.destroy()
+                    except Exception as e:
+                        mb.showerror("Error", f"Failed to save path: {e}", parent=root)
+                        root.destroy()
+                        sys.exit(1)
+                else:
+                    root.destroy()
+                    sys.exit(1)
+            else:
+                root.destroy()
+                sys.exit(1)
+
+
+    import threading
+
+    global _RESOLVED_EDITOR_MODE
+    requested_mode = get_editor_mode()
+    monaco_crashed_last_time = False
+    if requested_mode == "monaco" and get_monaco_boot_pending():
+        # The previous launch set the "about to try Monaco" sentinel and
+        # never cleared it — meaning the process died before Monaco could
+        # confirm it started cleanly. Revert to the safe default.
+        requested_mode = "default"
+        monaco_crashed_last_time = True
+        set_editor_mode("default")
+        set_monaco_boot_pending(False)
+
+    _RESOLVED_EDITOR_MODE = requested_mode
+
+    if requested_mode == "monaco":
+        # pyrefly: ignore [missing-import]
+        import webview
+
+    root_ready = threading.Event()
+    project_cancelled.clear()
+    root_val = None
+    app_val = None
+
+    def run_tk():
+        nonlocal root_val, app_val
+        root_val = tk.Tk()
+        root_val.withdraw()
+        root_val.configure(bg="#151922")
+
+        # Set window icon if available
+        icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+        if icon_path.exists():
+            try:
+                root_val.iconbitmap(default=str(icon_path))
+                root_val.iconbitmap(str(icon_path))
+            except Exception:
+                pass
+
+        # Load Montserrat custom fonts (kept independent of DPI awareness above
+        # so a failure there can never silently skip font loading too)
+        try:
+            from ctypes import windll, create_unicode_buffer
+            gdi32 = windll.gdi32
+            FR_PRIVATE = 0x10
+            fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat" / "static"
+            if not fonts_dir.exists():
+                fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat"
+            if fonts_dir.exists():
+                for ttf_file in fonts_dir.glob("*.ttf"):
+                    path_buf = create_unicode_buffer(str(ttf_file))
+                    gdi32.AddFontResourceExW(path_buf, FR_PRIVATE, 0)
+        except Exception:
+            pass
+
+        work_left, work_top, work_right, work_bottom = _get_monitor_work_area(root_val)
+        screen_w = work_right - work_left
+        screen_h = work_bottom - work_top
+        dpi_scale = _get_widget_dpi_scale(root_val)
+        logical_screen_w = screen_w / dpi_scale
+        logical_screen_h = screen_h / dpi_scale
+
+        # Start maximized or fallback to a suitable default based on display size, centered on the screen
+        if logical_screen_w < 1400 or logical_screen_h < 800:
+            target_w, target_h = 1000, 600
+        else:
+            target_w, target_h = 1350, 720
+        w = max(320, min(round(target_w * dpi_scale), screen_w - round(48 * dpi_scale)))
+        h = max(260, min(round(target_h * dpi_scale), screen_h - round(88 * dpi_scale)))
+        x = work_left + max(0, (screen_w - w) // 2)
+        y = work_top + max(0, (screen_h - h) // 2)
+        x_part = f"+{x}" if x >= 0 else str(x)
+        y_part = f"+{y}" if y >= 0 else str(y)
+        root_val.geometry(f"{w}x{h}{x_part}{y_part}")
+
+        app_val = MCUUploadGUI(root_val)
+
+        # If the user cancelled the Project Selector, __init__ destroyed
+        # root and returned early.  Always signal root_ready FIRST so the
+        # main thread's root_ready.wait() unblocks cleanly — without this
+        # the main thread can hang forever waiting on a set() that never
+        # comes, causing the process to appear to error/freeze on cancel.
+        cancelled = project_cancelled.is_set()
+        if not cancelled:
+            try:
+                cancelled = not root_val.winfo_exists() or not getattr(app_val, "sketch_dir_path", None)
+            except tk.TclError:
+                cancelled = True
+
+        if cancelled:
+            set_monaco_boot_pending(False)
+            project_cancelled.set()
+            root_ready.set()   # unblock main-thread wait() before exiting
+            os._exit(0)
+
+        # If we just auto-reverted from a crashed Monaco session, tell the
+        # user once the window is up rather than blocking startup on it.
+        if monaco_crashed_last_time:
+            def _notify_monaco_reverted():
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "Editor Reverted to Default",
+                    "The Monaco editor did not start cleanly last time "
+                    "(the app closed unexpectedly during startup), so the "
+                    "File Editor has been reset to Default.\n\n"
+                    "You can re-enable Monaco from MCU Flasher Settings.",
+                    parent=root_val
+                )
+            root_val.after(500, _notify_monaco_reverted)
+
+        # Startup deliberately does NOT auto-maximize the window anymore --
+        # it opens at the geometry set above (sized for the display) and
+        # stays there until the user maximizes it themselves. One less
+        # window-state transition happening automatically on launch.
+
+        # Intercept Tkinter window closure to exit the entire app
+        def on_tk_close():
+            try:
+                set_monaco_boot_pending(False)
+            except Exception:
+                pass
+            if app_val:
+                app_val._on_close()
+            else:
+                root_val.destroy()
+                os._exit(0)
+        root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
+
+        root_ready.set()
+        root_val.mainloop()
+
+    tk_thread = threading.Thread(target=run_tk, daemon=True)
+    tk_thread.start()
+
+    # Wait for Tkinter to initialize
+    root_ready.wait()
+
+    # Bail out immediately if the project selector was cancelled — the
+    # tk_thread already called os._exit(0), but if it hasn't terminated
+    # the process yet this prevents the main thread from blocking on
+    # tk_thread.join() indefinitely.
+    if project_cancelled.is_set():
+        set_monaco_boot_pending(False)
+        os._exit(0)
+
+    if requested_mode != "monaco":
+        # Default (Tkinter) editor — no separate webview process needed at
+        # all. Just block the main thread until the Tk mainloop (running on
+        # tk_thread) exits.
+        tk_thread.join()
+        return
+
+    # ── Monaco mode ─────────────────────────────────────────────────────
+    # Mark that we're about to attempt Monaco startup. If the process dies
+    # anywhere between here and the confirmation callback below, this flag
+    # stays set on disk and the *next* launch will detect it and revert to
+    # Default automatically instead of crash-looping.
+    set_monaco_boot_pending(True)
+
+    def _confirm_monaco_booted():
+        set_monaco_boot_pending(False)
+    # A few seconds of uneventful running is our signal that Monaco came up
+    # cleanly rather than hanging/crashing during initialization.
+    root_val.after(3000, _confirm_monaco_booted)
+
+    # Now run pywebview on the main thread
+    api = EditorApi(app_val)
+    app_val.editor_api = api
+
+    html_path = SCRIPT_DIR / "src" / "editor" / "index.html"
+
+    # Snapshot this process's top-level windows *before* creating the
+    # editor window, so we can later spot "whatever new window appeared"
+    # even if its title gets rewritten by the page's <title> tag.
+    app_val._editor_pre_create_hwnds = _list_own_toplevel_hwnds()
+
+    editor_window = webview.create_window(
+        title=EDITOR_WINDOW_TITLE,
+        url=str(html_path),
+        js_api=api,
+        width=1000,
+        height=700,
+        min_size=(360, 240),
+        hidden=True,
+        background_color="#151922",   # matches Theme.BG_DARKEST — no white flash
+    )
+    app_val.editor_window = editor_window
+    
+    def _on_editor_page_loaded():
+        # Fires on pywebview's own GUI thread — marshal back to the Tk thread.
+        try:
+            set_monaco_boot_pending(False)
+        except Exception:
+            pass
+        root_val.after(0, lambda: (
+            setattr(app_val, "_editor_content_loaded", True),
+            app_val._reveal_editor_if_ready(),
+            app_val._update_editor_info(),
+            app_val._start_background_syntax_thread(),
+        ))
+        # Sync symbol navigation compiled state to Monaco after page loads
+        root_val.after(1000, lambda: app_val._set_symbol_cache_compiled_state(
+            getattr(app_val, "_project_compiled_cache_active", False)
+        ))
+    editor_window.events.loaded += _on_editor_page_loaded
+
+    # Kick off the embed attempt now.
+    root_val.after(50, app_val._try_embed_editor_window)
+
+    def on_closing():
+        if getattr(app_val, "_editor_embedded", False):
+            # It's embedded in the main window now — there's nowhere
+            # separate for it to "close" to, so just ignore the close.
+            return False
+        # If it is detached, close event should trigger re-attachment back to main window
+        root_val.after(0, app_val._attach_editor)
+        return False  # Intercept close and just hide/re-parent
+
+    editor_window.events.closing += on_closing
+    webview.start(debug=False)
+    # If webview.start() returns normally (window closed cleanly), make sure
+    # the sentinel is cleared so a later launch doesn't misread this as a crash.
+    set_monaco_boot_pending(False)
+
+
+
+if __name__ == "__main__":
+    # ── Crash guard ──────────────────────────────────────────────────────────
+    # When launched via pythonw.exe or CREATE_NO_WINDOW, there is no console
+    # for tracebacks to appear in — any unhandled exception just silently
+    # kills the process and the user sees nothing.  This guard catches every
+    # unhandled exception, writes it to gui_crash.log next to this script,
+    # AND shows a tkinter error dialog (or a ctypes MessageBox if Tk itself
+    # failed to initialise) so the user is never left staring at a blank screen.
+    import traceback as _tb
+    import os as _os
+
+    _logs_dir = _os.path.join(str(SCRIPT_DIR), "logs")
+    try:
+        _os.makedirs(_logs_dir, exist_ok=True)
+    except Exception:
+        pass
+    _crash_log = _os.path.join(_logs_dir, "gui_crash.log")
+
+    try:
+        main()
+    except Exception:
+        _err = _tb.format_exc()
+        # Write to log file
+        try:
+            with open(_crash_log, "w", encoding="utf-8") as _f:
+                _f.write(_err)
+        except Exception:
+            pass
+        # Try to show a Tk error dialog
+        try:
+            import tkinter as _tk
+            from tkinter import messagebox as _mb
+            _r = _tk.Tk()
+            _r.withdraw()
+            _mb.showerror(
+                "MCU Flasher by Naph — Crash",
+                f"The GUI crashed before it could start.\n\n"
+                f"{_err[:1200]}\n\n"
+                f"Full log: {_crash_log}"
+            )
+            _r.destroy()
+        except Exception:
+            # Tk itself failed — fall back to a Win32 MessageBox
+            try:
+                import ctypes as _ct
+                _ct.windll.user32.MessageBoxW(
+                    0,
+                    f"GUI crashed:\n\n{_err[:800]}\n\nLog: {_crash_log}",
+                    "MCU Flasher by Naph — Crash",
+                    0x10,   # MB_ICONERROR
+                )
+            except Exception:
+                pass
+        raise SystemExit(1)

@@ -1,0 +1,4 @@
+Needs to resolve:
+
+* When the status of the project was compiled, auto check the 'Skip Compile' checkbox.
+* Auto detect board when any actions executed such as upload/reset/compile; this can be an issue if the board attached on port was an esp but board selected was Arduino.
