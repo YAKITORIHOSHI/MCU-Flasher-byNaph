@@ -1,3 +1,88 @@
-[02:10:07]  ╔═════════════════════════════════════════════════════╗
-[02:10:07] >>>      ⚡ Running parallel compilation on 24 cores  <<<
-[02:10:07]  ╚═════════════════════════════════════════════════════╝
+(1) This should be fully automated, do the action needed for less user intervention:
+```
+⚙ Initializing PlatformIO build engine & dependency tree...
+[00:15:57]     SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...
+[00:16:01]   ⚠ [WinError 145] The directory is not empty: 'D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2\\.pio\\build'
+[00:16:01]   ℹ Non-fatal: a stale build cache could not be fully cleaned (file in use or antivirus scan). PlatformIO will continue and rebuild the affected parts automatically.
+[00:16:01]   ⚠ Please manually remove the file `D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build`
+[00:16:01]     Processing mcu_flash_esp32_dev_module (platform: espressif32; board: esp32dev; framework: arduino)
+[00:16:01]   ──────────────────────────────────────────────────
+```
+
+(2) Hard/Soft Reset wont trigger RESET (DTR) after successful action.
+
+(2.1) I executed the Hard Reset on a newly opened sketch project.
+```
+[00:38:39] ==================================================
+[00:38:39]   🔥 BURNING BOOTLOADER (Hard Reset)
+[00:38:39] ==================================================
+[00:38:39]   Port  : COM6
+[00:38:39]   Board : ESP32 Dev Module
+[00:38:40]   💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.
+
+[00:38:40]   ⚡ Bootloader/partitions not pre-built for ESP32 Dev Module. Auto-building project now...
+[00:38:42]   📝 platformio.ini not found in D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2.
+[00:38:42]   Creating a default platformio.ini with detected dependencies...
+[00:38:42]   ✔ Created default platformio.ini successfully.
+[00:38:42]   Detected libraries: symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/ESP32Servo-3.2.1, symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/FastAccelStepper-1.2.7, symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/HX711-0.6.4
+[00:38:43]   ✖ Could not locate or build required bootloader files:
+[00:38:43]       • bootloader (bootloader.bin / bootloader_qio_80m.bin)
+[00:38:43]   Searched inside build dir: D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build
+[00:38:43]   Searched inside: C:\.platformio-mcu-gui\packages\framework-arduinoespressif32
+[00:38:43]                + C:\.platformio-mcu-gui\packages\framework-arduinoespressif32
+```
+- How do you fix this? On the other hand Soft Reset works fine.
+
+(2.2) Another issue is that the hard reset also requires a 'download_mode' which means that it should have the retries, and additionally can we rework the hard reset logging format like the way we have on our very own upload?
+```
+[00:42:10] ==================================================
+[00:42:10]   🔥 BURNING BOOTLOADER (Hard Reset)
+[00:42:10] ==================================================
+[00:42:10]   Port  : COM6
+[00:42:10]   Board : ESP32 Dev Module
+[00:42:10]   💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.
+
+[00:42:11]   ⚡ Bootloader/partitions not pre-built for ESP32 Dev Module. Auto-building project now...
+[00:42:12]   ✔ Updated platformio.ini successfully.
+[00:42:49]   ✔ Generated bootloader.bin: bootloader.bin
+[00:42:49]   Bootloader : bootloader.bin
+[00:42:49]   Partitions : default.bin
+[00:42:49]   boot_app0  : boot_app0.bin
+
+[00:42:49]   Step 1/2 — Erasing flash...
+[00:42:49]   $ C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\pythonw.exe -m esptool --chip esp32 --port COM6 --before default-reset --after no-reset --connect-attempts 3 erase-flash
+[00:42:49]   esptool v5.3.1
+[00:42:49]   Serial port COM6:
+[00:42:53]   Connecting..................
+[00:42:53]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
+[00:42:53]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
+[00:42:53]   ⚠ Full chip erase skipped (device was not in download mode during Step 1).
+[00:42:53]   👉 Proceeding to Step 2 — write-flash will connect, erase bootloader sectors, and write files.
+
+[00:42:53]   Target Board: ESP32 Dev Module (esp32) -> Bootloader Addr: 0x1000
+[00:42:53]   Step 2/2 — Writing bootloader files...
+[00:42:53]   $ C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\pythonw.exe -m esptool --chip esp32 --port COM6 --baud 460800 --before default-reset --after hard-reset --connect-attempts 3 write-flash --flash-mode keep --flash-freq keep --flash-size detect 0x1000 D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build\mcu_flash_esp32_dev_module\bootloader.bin 0x8000 C:\.platformio-mcu-gui\packages\framework-arduinoespressif32\tools\partitions\default.bin 0xe000 C:\.platformio-mcu-gui\packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin
+[00:42:53]   esptool v5.3.1
+[00:42:53]   Serial port COM6:
+[00:42:57]   Connecting..................
+[00:42:57]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
+[00:42:57]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
+
+[00:42:57]   ⚠ Bootloader write attempt at 460800 baud failed or encountered port lock.
+[00:42:57]   🔄 Pausing 1.0s and retrying bootloader write at 115200 baud for maximum compatibility...
+[00:42:58]   esptool v5.3.1
+[00:42:58]   Serial port COM6:
+[00:43:01]   Connecting..................
+[00:43:01]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
+[00:43:01]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
+
+[00:43:02]   ✖ Bootloader burn FAILED.
+```
+
+(4) AI Assistant(OpenCode) also resets when a new project was open on the same window, the only thing that was needed to update was the editors tabs and editor itself.
+
+(5) Compact Mode, in option dropbox the button for AI was only Close AI and it has no function. Please investigate further and fix it just like the hide and toggle of AI works now and it normally do.
+
+(6) This will be too much but I want you to put an error/warning notice on blood red and bold text then prompt the user if they still want to continue. COMPATIBILITY ISSUE - for example an NeoPixel code includes the 48 GPIO (PIN 48) and normal ESP32 Dev Module does not have something like that. I hope you get it.
+
+(7) The reconnecting have only 10 times to retry but when the retries failed 10 times it retries another 1/10 times. Keep it one 1/10 - 10/10
