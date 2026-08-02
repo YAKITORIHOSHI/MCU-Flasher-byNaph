@@ -4861,11 +4861,11 @@ class MCUUploadGUI:
         self.title_left.pack(side=tk.LEFT)
 
         # Logo text
-        tk.Label(
+        self.lbl_app_title = tk.Label(
             self.title_left, text="⚡ MCU Flasher by Naph",
             font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARK,
-        ).pack(side=tk.LEFT)
-        self.lbl_app_title = self.title_left.winfo_children()[-1]
+        )
+        self.lbl_app_title.pack(side=tk.LEFT)
 
         self.title_subtitle_label = None
 
@@ -6318,14 +6318,25 @@ class MCUUploadGUI:
         except Exception:
             pass
 
-        # Dynamic adjustments of Serial Monitor header
+        # Dynamic adjustments of Build Console and Serial Monitor toolbars based on width/height
         try:
-            if width < 950:
-                # Hide Serial Monitor title label and make checkbox text compact
-                self.lbl_serial_monitor_title.pack_forget()
-                self.cb_ansi_clear.configure(text="Clear-scr")
+            if width < 700:
+                self.lbl_build_console_title.pack_forget()
+                self.cb_clear_serial_on_upload.configure(text="Clear serial")
+                self.cb_clear_build_console_on_action.configure(text="Clear build")
+                self.cb_console_autoscroll.configure(text="Scroll")
+                self.btn_copy_console_header.configure(text="Copy")
+                self.btn_clear_console_header.configure(text="Clear")
             else:
-                # Restore Serial Monitor title label and normal checkbox text
+                if not self.lbl_build_console_title.winfo_ismapped():
+                    self.lbl_build_console_title.pack(side=tk.LEFT)
+                self.cb_clear_serial_on_upload.configure(text="Auto-clear Serial Monitor on Action")
+                self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
+                self.cb_console_autoscroll.configure(text="Auto-scroll")
+
+            if width < 950:
+                self.lbl_serial_monitor_title.pack_forget()
+            else:
                 if not self.lbl_serial_monitor_title.winfo_ismapped():
                     self.lbl_serial_monitor_title.pack_forget()
                     self.btn_reset_mcu.pack_forget()
@@ -6333,7 +6344,40 @@ class MCUUploadGUI:
                     self.lbl_serial_monitor_title.pack(side=tk.LEFT)
                     self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
                     self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
-                self.cb_ansi_clear.configure(text="Clear-screen")
+
+            serial_tight = width < 820
+            self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
+            self.serial_status.configure(
+                text="●" if serial_tight else (
+                    "● Connected" if self.serial_running else "● Disconnected"
+                )
+            )
+            self.btn_reset_mcu.configure(text="Reset" if serial_tight else "↻ Reset")
+            self.btn_pause_serial.configure(
+                text="Resume" if self._monitor_paused else ("Pause" if serial_tight else "⏸ Pause")
+            )
+            self.btn_copy_serial_header.configure(text="Copy")
+            self.btn_clear_serial_header.configure(text="Clear")
+            if serial_tight:
+                self.cb_serial_autoscroll.pack_forget()
+                self.cb_ansi_clear.pack_forget()
+            else:
+                if not self.cb_ansi_clear.winfo_ismapped():
+                    self.cb_ansi_clear.pack(side=tk.RIGHT, padx=(0, 10))
+                if not self.cb_serial_autoscroll.winfo_ismapped():
+                    self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
+
+            style = ttk.Style()
+            style.configure(
+                "Bottom.TNotebook.Tab",
+                padding=[8 if width < 700 else 16, 5 if height < 600 else 6],
+                font=("Segoe UI", 8 if width < 700 else 9, "bold"),
+            )
+
+            if width < 700:
+                self.editor_info_label.pack_forget()
+            elif not self.editor_info_label.winfo_ismapped():
+                self.editor_info_label.pack(side=tk.RIGHT)
         except Exception:
             pass
 
@@ -18590,6 +18634,7 @@ default_envs = {self._pio_env_name()}
             platform_dir = core_dir / "platforms" / platform_name
             if not platform_dir.is_dir():
                 raise FileNotFoundError(platform_dir)
+            # pyrefly: ignore [missing-import]
             from platformio.platform.factory import PlatformFactory
 
             platform = PlatformFactory.new(str(platform_dir))
@@ -18717,6 +18762,7 @@ default_envs = {self._pio_env_name()}
         if not elf_path.is_file():
             return {}
         try:
+            # pyrefly: ignore [missing-import]
             from elftools.elf.elffile import ELFFile
             with elf_path.open("rb") as handle:
                 elf = ELFFile(handle)
@@ -19935,60 +19981,6 @@ def _configure_windows_dpi_awareness() -> None:
         try:
             import ctypes
             ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-        # Console toolbars also reflow. Long checkbox captions and status
-        # strings were previously wider than the entire window at 100%-175%
-        # Windows scaling.
-        try:
-            if width < 700:
-                self.lbl_build_console_title.pack_forget()
-                self.cb_clear_serial_on_upload.configure(text="Clear serial")
-                self.cb_clear_build_console_on_action.configure(text="Clear build")
-                self.cb_console_autoscroll.configure(text="Scroll")
-                self.btn_copy_console_header.configure(text="Copy")
-                self.btn_clear_console_header.configure(text="Clear")
-            else:
-                if not self.lbl_build_console_title.winfo_ismapped():
-                    self.lbl_build_console_title.pack(side=tk.LEFT)
-                self.cb_clear_serial_on_upload.configure(text="Auto-clear Serial Monitor on Action")
-                self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
-                self.cb_console_autoscroll.configure(text="Auto-scroll")
-
-            serial_tight = width < 820
-            self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
-            self.serial_status.configure(
-                text="●" if serial_tight else (
-                    "● Connected" if self.serial_running else "● Disconnected"
-                )
-            )
-            self.btn_reset_mcu.configure(text="Reset" if serial_tight else "↻ Reset")
-            self.btn_pause_serial.configure(
-                text="Resume" if self._monitor_paused else ("Pause" if serial_tight else "⏸ Pause")
-            )
-            self.btn_copy_serial_header.configure(text="Copy")
-            self.btn_clear_serial_header.configure(text="Clear")
-            if serial_tight:
-                self.cb_serial_autoscroll.pack_forget()
-                self.cb_ansi_clear.pack_forget()
-            else:
-                if not self.cb_ansi_clear.winfo_ismapped():
-                    self.cb_ansi_clear.pack(side=tk.RIGHT, padx=(0, 10))
-                if not self.cb_serial_autoscroll.winfo_ismapped():
-                    self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
-
-            style = ttk.Style()
-            style.configure(
-                "Bottom.TNotebook.Tab",
-                padding=[8 if width < 700 else 16, 5 if height < 600 else 6],
-                font=("Segoe UI", 8 if width < 700 else 9, "bold"),
-            )
-
-            if width < 700:
-                self.editor_info_label.pack_forget()
-            elif not self.editor_info_label.winfo_ismapped():
-                self.editor_info_label.pack(side=tk.RIGHT)
         except Exception:
             pass
 
