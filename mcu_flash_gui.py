@@ -7558,6 +7558,56 @@ class MCUUploadGUI:
             self.btn_pause_serial.config(text="⏸ Pause")
             self._append_serial("  ▶ Serial monitoring resumed.", "dim")
 
+    def _activate_serial_monitor_after_success(self, action_name: str):
+        """Unpause, reveal, and select the Serial Monitor after success.
+
+        Upload/reset workers may finish off the Tk thread while the Serial
+        Monitor tab is still temporarily disabled.  Clear the pause flag
+        immediately so incoming bytes are displayed, then marshal the visual
+        tab activation to Tk and retry briefly until the operation lock has
+        released the tab.
+        """
+        was_paused = bool(getattr(self, "_monitor_paused", False))
+        self._monitor_paused = False
+
+        def _activate(attempt: int = 0):
+            try:
+                if hasattr(self, "btn_pause_serial") and self.btn_pause_serial.winfo_exists():
+                    current_text = str(self.btn_pause_serial.cget("text") or "").strip()
+                    compact = current_text in ("Pause", "Resume")
+                    self.btn_pause_serial.configure(text="Pause" if compact else "⏸ Pause")
+
+                # The entire Monitors pane may have been hidden by the user.
+                # Reveal it before selecting its Serial Monitor tab.
+                if not getattr(self, "monitors_pane_visible", True):
+                    self._toggle_monitors_pane()
+
+                tab_index = self._serial_monitor_tab_index()
+                tab_state = self.bottom_notebook.tab(tab_index, "state")
+                if tab_state == "disabled":
+                    if attempt < 30:
+                        self.root.after(50, lambda: _activate(attempt + 1))
+                    return
+
+                self.bottom_notebook.select(tab_index)
+                self.bottom_notebook.update_idletasks()
+                if was_paused:
+                    self._append_serial(
+                        f"  ▶ Serial monitoring resumed automatically after {action_name}.",
+                        "dim",
+                    )
+            except (tk.TclError, AttributeError):
+                if attempt < 30:
+                    try:
+                        self.root.after(50, lambda: _activate(attempt + 1))
+                    except Exception:
+                        pass
+
+        try:
+            self.root.after(0, _activate)
+        except Exception:
+            pass
+
     def _send_serial(self, event=None):
         """Send the text in the serial input box to the connected board,
         appending the selected line ending, then clear the input box."""
@@ -12825,7 +12875,7 @@ default_envs = {self._pio_env_name()}
         self._append(mid, "header")
         self._append(bot, "header")
         self._append(
-            f">>> System Reserved — {reserved_processors} Logical {reserved_word} <<<",
+            f"   >>> System Reserved — {reserved_processors} Logical {reserved_word} <<<",
             "dim",
         )
         self._append("")
@@ -14149,6 +14199,7 @@ default_envs = {self._pio_env_name()}
                 self._current_op_phase = None
                 self._set_buttons_busy(False)
                 self._set_window_closable(True)
+                self._activate_serial_monitor_after_success("Upload")
                 if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
                     self._clear_serial_console()
                 self._manual_reset_pending = True
@@ -14175,23 +14226,37 @@ default_envs = {self._pio_env_name()}
             # same esptool sync (a second, abnormal 1/10-10/10 series) while
             # PlatformIO re-runs its build step and re-creates images that
             # the compile phase already produced. Fail cleanly instead.
-            is_fast_tool_failure = any(
-                token in str(fast_error or "").lower() for token in tool_failure_tokens
+            failure_kind = getattr(self, "_last_fast_upload_failure_kind", "")
+            is_fast_tool_failure = (
+                failure_kind == "tool"
+                or any(token in str(fast_error or "").lower() for token in tool_failure_tokens)
             )
             if not is_fast_tool_failure:
                 _upload_active[0] = False
                 _upload_spin_thread.join(timeout=1)
-                self._append_connecting_progress(
-                    min(fast_attempts, _MAX_CONNECT_RETRIES), _MAX_CONNECT_RETRIES, failed=True
-                )
                 self._append("")
-                self._append(
-                    f"  ✖ Failed to connect to {board_name} on {port} after "
-                    f"{fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
-                    "error",
-                )
-                self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
-                self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
+                if failure_kind == "connection":
+                    self._append_connecting_progress(
+                        min(fast_attempts, _MAX_CONNECT_RETRIES),
+                        _MAX_CONNECT_RETRIES,
+                        failed=True,
+                    )
+                    self._append(
+                        f"  ✖ Failed to connect to {board_name} on {port} after "
+                        f"{fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
+                        "error",
+                    )
+                    self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
+                    self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
+                else:
+                    # The board connected, so do not overwrite the real flash
+                    # failure with a misleading BOOT-button connection error.
+                    self._append("  ✖ Upload stopped after the ESP32 connected.", "error")
+                    self._append(f"  Reason: {fast_error}", "error")
+                    self._append(
+                        "  Diagnostic details were saved to logs/fast_upload_fallback.log.",
+                        "dim",
+                    )
                 self._append("")
                 self._append("  ✖ Upload FAILED.", "error")
                 self._set_status("Upload FAILED", Theme.RED)
@@ -14824,6 +14889,7 @@ default_envs = {self._pio_env_name()}
         
         # Resume the monitor on successful upload (triggering hardware reset so setup() output is captured)
         if ok:
+            self._activate_serial_monitor_after_success("Upload")
             if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
                 self._clear_serial_console()
             self._manual_reset_pending = True
@@ -19057,6 +19123,183 @@ default_envs = {self._pio_env_name()}
             )
         dlg.after_idle(_sync_settings_scrollbar)
 
+
+    def _append_boot_connection_progress(self, step: int = 0, *, connected: bool = False,
+                                         failed: bool = False, cancelled: bool = False):
+        """Render the Hard Reset BOOT/download-mode connection indicator.
+
+        Unlike the old fixed five-second countdown, this row advances only when
+        esptool emits another real connection dot.  It therefore behaves like
+        the Arduino IDE/Cloud connection indicator: keep holding BOOT while the
+        row is moving and release it as soon as the row turns green.
+        """
+        width = 30
+        step = max(0, int(step or 0))
+        if connected:
+            bar = "█" * width
+            text = f"  ✔ Boot connection [ {bar} ] | Connected — release BOOT"
+            tag = "success"
+        elif failed or cancelled:
+            bar = "░" * width
+            suffix = "Cancelled" if cancelled else "FAILED — hold BOOT and try again"
+            text = f"  ✖ Boot connection [ {bar} ] | {suffix}"
+            tag = "warning" if cancelled else "error"
+        else:
+            block = 6
+            travel = max(1, width - block)
+            cycle = max(1, travel * 2)
+            pos = step % cycle
+            if pos > travel:
+                pos = cycle - pos
+            bar = "░" * pos + "█" * block + "░" * (width - pos - block)
+            dots = "." * ((step % 4) + 1)
+            text = f"  🔌 Boot connection [ {bar} ] | Hold BOOT{dots}"
+            tag = "magenta"
+
+        def _do():
+            try:
+                self.console.configure(state=tk.NORMAL)
+                total_lines = int(self.console.index("end-1c").split(".")[0])
+                found = None
+                old_line = ""
+                for idx in range(total_lines, max(0, total_lines - 250), -1):
+                    candidate = self.console.get(f"{idx}.0", f"{idx}.end")
+                    if "boot connection [" in candidate.lower():
+                        found = idx
+                        old_line = candidate
+                        break
+
+                if found is not None:
+                    ts_match = re.match(r'^(\[\d+:\d+:\d+\])\s*', old_line)
+                    ts_prefix = (ts_match.group(1) + " ") if ts_match else ""
+                    self.console.delete(f"{found}.0", f"{found + 1}.0")
+                    self.console.mark_set("_boot_conn_mark", f"{found}.0")
+                    insert_at = "_boot_conn_mark"
+                else:
+                    ts_prefix = f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    insert_at = tk.END
+
+                self.console.insert(insert_at, ts_prefix, "timestamp")
+                self.console.insert(insert_at, text + "\n", tag)
+                if found is not None:
+                    try:
+                        self.console.mark_unset("_boot_conn_mark")
+                    except Exception:
+                        pass
+                self.console.configure(state=tk.DISABLED)
+                if self.console_autoscroll_var.get():
+                    self.console.see(tk.END)
+            except tk.TclError:
+                pass
+
+        try:
+            self.root.after(0, _do)
+        except Exception:
+            pass
+
+    def _locate_hard_reset_recovery_images(self, board_name=None, board_info=None):
+        """Return the dedicated Soft Reset recovery boot images for Hard Reset.
+
+        Hard Reset deliberately does not depend on the active sketch's build.
+        It reuses only bootloader.bin and partitions.bin from the persistent
+        Soft Reset project.  firmware.bin is recorded for diagnostics but is
+        never placed in the esptool write command.
+        """
+        board_name = board_name or self.board_var.get()
+        board_info = dict(board_info or SUPPORTED_BOARDS.get(board_name, {}))
+        selected_platform = str(board_info.get("platform", "")).strip().lower()
+        selected_board_id = str(board_info.get("board", "")).strip().lower()
+        if selected_platform != "espressif32":
+            return None, "Dedicated recovery images are only used for ESP32-family boards."
+        if not selected_board_id:
+            return None, "The selected board has no PlatformIO board identifier."
+
+        project_dir = SCRIPT_DIR / "soft_reset_project"
+        build_dir = project_dir / ".pio" / "build" / "mcu_flash"
+        manifest_path = project_dir / "hard_reset_manifest.json"
+        manifest = {}
+        if manifest_path.is_file():
+            try:
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    manifest = loaded
+            except Exception:
+                manifest = {}
+
+        recovery_platform = str(manifest.get("platform", "")).strip().lower()
+        recovery_board_id = str(manifest.get("board", "")).strip().lower()
+        ini_path = project_dir / "platformio.ini"
+        if ini_path.is_file() and (not recovery_platform or not recovery_board_id):
+            try:
+                ini_text = ini_path.read_text(encoding="utf-8", errors="replace")
+                board_match = re.search(
+                    r"^\s*board\s*=\s*([^;#\r\n]+)", ini_text,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                platform_match = re.search(
+                    r"^\s*platform\s*=\s*([^;#\r\n]+)", ini_text,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                if board_match and not recovery_board_id:
+                    recovery_board_id = board_match.group(1).strip().lower()
+                if platform_match and not recovery_platform:
+                    recovery_platform = platform_match.group(1).strip().lower()
+            except Exception:
+                pass
+
+        if recovery_platform and recovery_platform != selected_platform:
+            return None, (
+                f"The installed recovery build targets {recovery_platform}, not "
+                f"{selected_platform}."
+            )
+        if recovery_board_id and recovery_board_id != selected_board_id:
+            return None, (
+                f"The installed recovery build targets '{recovery_board_id}', but "
+                f"the selected board uses '{selected_board_id}'. Run Soft Reset once "
+                "for the selected board or install its matching recovery bundle."
+            )
+
+        bootloader = build_dir / "bootloader.bin"
+        partitions = build_dir / "partitions.bin"
+        firmware = build_dir / "firmware.bin"
+        missing = [p.name for p in (bootloader, partitions) if not p.is_file()]
+        if missing:
+            return None, (
+                "The dedicated Soft Reset recovery cache is incomplete: missing "
+                + ", ".join(missing)
+                + f" in {build_dir}."
+            )
+
+        expected_hashes = manifest.get("sha256", {})
+        if isinstance(expected_hashes, dict):
+            for key, path in (("bootloader.bin", bootloader), ("partitions.bin", partitions)):
+                expected = str(expected_hashes.get(key, "")).strip().lower()
+                if not expected:
+                    continue
+                try:
+                    actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
+                except Exception as exc:
+                    return None, f"Could not read recovery image {path.name}: {exc}"
+                if actual != expected:
+                    return None, f"Recovery image integrity check failed for {path.name}."
+
+        return {
+            "project_dir": project_dir,
+            "build_dir": build_dir,
+            "bootloader": bootloader,
+            "partitions": partitions,
+            "firmware": firmware if firmware.is_file() else None,
+            "board_id": recovery_board_id or selected_board_id,
+            "platform": recovery_platform or selected_platform,
+            "partition_scheme": str(
+                manifest.get("partition_scheme")
+                or "ESP32 Dev Module default OTA partition table"
+            ),
+            "source_label": str(
+                manifest.get("source_label") or "Soft Reset recovery build"
+            ),
+        }, ""
+
     def _do_hard_reset(self, parent_dlg):
         # A boot loop is a valid reason to perform the ESP32 full-erase hard reset.
         # Do not block the operation merely because serial output is repeating.
@@ -19097,75 +19340,46 @@ default_envs = {self._pio_env_name()}
             )
             return
 
-        # ESP32 Hard Reset must use boot images generated for this exact project
-        # and board. Do not silently invoke raw PlatformIO here: the normal Compile
-        # action also prepares Arduino sketch sources and project structure first.
+        # ESP32 Hard Reset uses a dedicated, persistent recovery build instead
+        # of whichever sketch happens to be open.  Only its bootloader and
+        # partition table are used; its application firmware is never written.
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         platform_name = str(board_info.get("platform", "")).lower()
+        self._hard_reset_recovery_images = None
         if platform_name == "espressif32":
-            env_name = self._pio_env_name()
-            candidate_dirs = (
-                self.sketch_dir_path / ".pio" / "build" / env_name,
-                self.sketch_dir_path / "build_artifacts" / env_name,
+            recovery_images, recovery_error = self._locate_hard_reset_recovery_images(
+                board_name, board_info
             )
-            has_project_boot_images = any(
-                (folder / "bootloader.bin").is_file()
-                and (folder / "partitions.bin").is_file()
-                for folder in candidate_dirs
-            )
-            if not has_project_boot_images:
+            if recovery_images is None:
                 from tkinter import messagebox
-                compile_now = messagebox.askyesno(
-                    "Compile Required",
-                    f"Hard Reset cannot start because this project has not yet been "
-                    f"compiled successfully for {board_name}.\n\n"
-                    "A successful Compile is required to generate the exact "
-                    "bootloader.bin and partitions.bin for this project. Nothing "
-                    "will be erased or written yet.\n\n"
-                    "Compile the project now?\n\n"
-                    "After Compile succeeds, run Hard Reset again.",
+                messagebox.showwarning(
+                    "Hard Reset Recovery Images Required",
+                    "Hard Reset uses the persistent compiled Soft Reset project as a "
+                    "known-good recovery source, so the active sketch does not need "
+                    "to be compiled.\n\n"
+                    f"{recovery_error}\n\n"
+                    "Install the supplied soft_reset_project recovery bundle, or run "
+                    "Soft Reset once for this exact board to create matching images.\n\n"
+                    "No flash data was erased or written.",
                     parent=parent_dlg,
                 )
-                if not compile_now:
-                    return
-
-                try:
-                    parent_dlg.destroy()
-                except Exception:
-                    pass
-                self._clear_console_if_action_enabled()
-                self._append("")
-                self._append("=" * 50, "header")
-                self._append("  ⚙ COMPILE REQUIRED FOR HARD RESET", "header")
-                self._append("=" * 50, "header")
-                self._append(
-                    f"  Hard Reset needs project boot images for {board_name}.",
-                    "warning",
-                )
-                self._append("  Starting the normal Compile operation now...", "info")
-                self._append(
-                    "  No flash data has been erased or written.",
-                    "success",
-                )
-                self._append(
-                    "  After Compile succeeds, open Settings and run Hard Reset again.",
-                    "dim",
-                )
-                self.root.after_idle(self._do_compile)
                 return
+            self._hard_reset_recovery_images = recovery_images
 
         # 2. Show confirmation
         from tkinter import messagebox
         confirm = messagebox.askyesno(
             "ESP32 Full Erase + Burn Bootloader",
             "This is a destructive hard reset. It will erase the ENTIRE ESP32 flash, "
-            "including the current application, Soft Reset sketch, NVS settings, OTA "
-            "state, and filesystem data.\n\n"
-            "After erasing, it will write only the board bootloader, the active partition "
-            "table, and boot_app0. No application firmware will be installed.\n\n"
-            "A 5-second countdown will appear. Press and HOLD BOOT during the countdown "
-            "and keep holding it until esptool connects.\n\n"
+            "including the current application, NVS settings, OTA state, and filesystem "
+            "data.\n\n"
+            "After erasing, it will write only bootloader.bin and partitions.bin from "
+            "the dedicated compiled Soft Reset recovery project, plus boot_app0. The "
+            "Soft Reset application firmware and the active project firmware will NOT "
+            "be uploaded.\n\n"
+            "Esptool will start immediately and show a live BOOT connection indicator. "
+            "Press and HOLD BOOT until the indicator turns green, then release it.\n\n"
             "Continue with the full erase?",
             parent=parent_dlg
         )
@@ -19184,6 +19398,12 @@ default_envs = {self._pio_env_name()}
         threading.Thread(target=self._run_hard_reset, args=(port,), daemon=True).start()
 
     def _run_hard_reset(self, port: str):
+        # _pause_monitor() runs inside the worker and clears the monitor intent.
+        # Record whether it must be restored, then perform that restoration only
+        # after the reset operation is no longer busy.  Scheduling it earlier is
+        # silently discarded by _auto_start_monitor() while operation="reset".
+        self._hard_reset_reconnect_monitor = False
+        self._hard_reset_completed_successfully = False
         try:
             self._run_hard_reset_inner(port)
         except Exception as e:
@@ -19200,10 +19420,46 @@ default_envs = {self._pio_env_name()}
                 self._append(f"Log: {hard_reset_log}", "dim")
             self._set_status("Hard Reset FAILED", Theme.RED)
         finally:
-            # Guarantee busy state is always cleared
+            reconnect_monitor = bool(
+                getattr(self, "_hard_reset_reconnect_monitor", False)
+            )
+            hard_reset_ok = bool(
+                getattr(self, "_hard_reset_completed_successfully", False)
+            )
+            self._hard_reset_reconnect_monitor = False
+            self._hard_reset_completed_successfully = False
+
+            # Set the one-shot focus target before the unlock callback runs.
+            if hard_reset_ok:
+                self._focus_tab_on_unlock = self._serial_monitor_tab_index()
+
+            # Clear both is_busy and _active_operation before asking the monitor
+            # to reopen COM.  Otherwise _auto_start_monitor() exits immediately
+            # and leaves the Serial Monitor tab permanently Disconnected.
             self.is_busy = False
             self._set_buttons_state(False)
             self._set_window_closable(True)
+
+            if hard_reset_ok:
+                self._activate_serial_monitor_after_success("Hard Reset")
+
+            if reconnect_monitor:
+                self._monitor_should_run = True
+                # The final DTR/RTS pulse was already sent by Hard Reset.  Reopen
+                # the monitor without issuing a second reset pulse.
+                self._manual_reset_pending = False
+
+                def _restore_hard_reset_monitor():
+                    self._append_notif(
+                        "  ↻ Reconnecting Serial Monitor after Hard Reset…",
+                        "dim",
+                    )
+                    self._schedule_auto_start_monitor(250)
+
+                try:
+                    self.root.after(0, _restore_hard_reset_monitor)
+                except Exception:
+                    pass
 
     def _get_esptool_cmd(self) -> list[str]:
         """Dynamically resolve the most reliable esptool command across Windows environments."""
@@ -19245,10 +19501,9 @@ default_envs = {self._pio_env_name()}
 
         Esptool has no separate ``burn-bootloader`` command for ESP32. The safe
         serial equivalent is one ``write-flash --erase-all`` transaction that
-        erases every flash sector, then writes only the project-matched second-stage
-        bootloader, partition table, and boot_app0 image. Application firmware is
-        intentionally not written, so a previously flashed Soft Reset sketch cannot
-        remain active after this operation.
+        erases every flash sector, then writes only the dedicated Soft Reset
+        recovery build's second-stage bootloader and partition table plus boot_app0.
+        Neither the recovery firmware nor the active sketch firmware is written.
         """
         owner_pid = port_occupied_owner(port)
         if owner_pid:
@@ -19261,6 +19516,10 @@ default_envs = {self._pio_env_name()}
             return
 
         was_monitoring = self._pause_monitor()
+        # Hand this state back to _run_hard_reset(), whose finally block runs
+        # after the operation has cleared its busy/reset guard.  Restoring the
+        # monitor from this inner worker is too early and gets rejected.
+        self._hard_reset_reconnect_monitor = bool(was_monitoring)
         boot_images_written = False
         if was_monitoring:
             time.sleep(0.5)
@@ -19336,7 +19595,11 @@ default_envs = {self._pio_env_name()}
 
                 self._append("  🔄 Resetting board through DTR...", "info")
                 time.sleep(0.25)
-                self._trigger_actual_board_reset(port)
+                reset_ok = self._trigger_actual_board_reset(port)
+                if not reset_ok:
+                    self._set_status("Bootloader burned - DTR reset failed", Theme.YELLOW)
+                    return
+                self._hard_reset_completed_successfully = True
                 self._append("  ✔ Bootloader burn completed successfully.", "success")
                 self._set_status("Bootloader burn successful", Theme.GREEN)
                 return
@@ -19350,65 +19613,30 @@ default_envs = {self._pio_env_name()}
                 self._set_status("Hard Reset unsupported", Theme.RED)
                 return
 
-            if not self._ensure_platformio_ini():
-                self._append("  ✖ Could not prepare platformio.ini.", "error")
-                self._set_status("Hard Reset failed", Theme.RED)
+            # _do_hard_reset() normally preloads and validates the dedicated
+            # recovery image set before starting this worker.  Initialize the
+            # local on every ESP32 path so a missing/stale handoff can safely
+            # fall back to locating the bundle instead of raising
+            # UnboundLocalError before any flash operation begins.
+            image_set = getattr(self, "_hard_reset_recovery_images", None)
+            self._hard_reset_recovery_images = None
+            recovery_error = ""
+            if not image_set:
+                image_set, recovery_error = self._locate_hard_reset_recovery_images(
+                    board_name, board_info
+                )
+
+            if not image_set:
+                self._append("  ✖ Dedicated Hard Reset recovery images are unavailable.", "error")
+                if recovery_error:
+                    self._append(f"  {recovery_error}", "warning")
+                self._append("  No flash data was erased or written.", "success")
+                self._set_status("Hard Reset recovery images missing", Theme.RED)
                 return
 
-            env_name = self._pio_env_name()
-            project_build_dir = self.sketch_dir_path / ".pio" / "build" / env_name
-            artifact_build_dir = self.sketch_dir_path / "build_artifacts" / env_name
-
-            def _complete_project_images(folder: Path):
-                boot = folder / "bootloader.bin"
-                part = folder / "partitions.bin"
-                firmware = folder / "firmware.bin"
-                if boot.is_file() and part.is_file():
-                    return boot, part, (firmware if firmware.is_file() else None)
-                return None
-
-            image_set = _complete_project_images(project_build_dir)
-            if image_set is None:
-                image_set = _complete_project_images(artifact_build_dir)
-
-            if image_set is None:
-                self._append("  ✖ Compile required before Hard Reset.", "error")
-                self._append(
-                    "  This project has no completed bootloader.bin and partitions.bin "
-                    "for the selected board.",
-                    "warning",
-                )
-                self._append(
-                    "  Click Compile first. After it succeeds, run Hard Reset again.",
-                    "info",
-                )
-                self._append(
-                    "  No flash data was erased or written.",
-                    "success",
-                )
-                self._set_status("Compile required for Hard Reset", Theme.YELLOW)
-
-                def _show_compile_required_notice():
-                    try:
-                        from tkinter import messagebox
-                        messagebox.showwarning(
-                            "Compile Required",
-                            "Hard Reset was stopped because the selected project has "
-                            "not been compiled successfully for this board.\n\n"
-                            "Click Compile first. After Compile succeeds, run Hard "
-                            "Reset again.\n\nNo flash data was erased or written.",
-                            parent=self.root,
-                        )
-                    except Exception:
-                        pass
-
-                try:
-                    self.root.after(0, _show_compile_required_notice)
-                except Exception:
-                    pass
-                return
-
-            bootloader_bin, partitions_bin, firmware_bin = image_set
+            bootloader_bin = Path(image_set["bootloader"])
+            partitions_bin = Path(image_set["partitions"])
+            recovery_firmware_bin = image_set.get("firmware")
             boot_app0_bin = self._locate_esp32_boot_app0()
             if boot_app0_bin is None:
                 self._append("  ✖ Could not locate boot_app0.bin.", "error")
@@ -19470,54 +19698,38 @@ default_envs = {self._pio_env_name()}
                 self._set_status("Hard Reset failed", Theme.RED)
                 return
 
-            partition_scheme = self._project_option("board_build.partitions") or "board default"
-            self._append("  ⚡ Using the active project's matching boot images.", "info")
+            partition_scheme = image_set.get("partition_scheme") or "recovery default"
+            source_label = image_set.get("source_label") or "Soft Reset recovery build"
+            self._append(f"  ⚡ Using dedicated {source_label}.", "info")
+            self._append(f"  Recovery ID: {image_set.get('board_id') or 'unknown'}", "dim")
             self._append(f"  Bootloader : {bootloader_bin.name}", "dim")
             self._append(
                 f"  Partitions : {partitions_bin.name} ({partition_scheme})",
                 "dim",
             )
             self._append(f"  boot_app0  : {boot_app0_bin.name}", "dim")
-            self._append("  Firmware   : ERASED — no application will be written", "warning")
-            self._append("  Data       : ERASED — NVS, OTA state, and filesystem", "warning")
-            self._append("")
-            self._append("  ✔ Required bootloader files are ready.", "success")
-            self._append("  ⚠ Press and HOLD the BOOT button now.", "warning")
-
-            countdown_seconds = 5
-            bar_width = 30
-            for remaining in range(countdown_seconds, 0, -1):
-                if getattr(self, "_stop_requested", False):
-                    bar = "░" * bar_width
-                    self._append_progress(
-                        f"  ✖ Hold BOOT [ {bar} ] | Cancelled",
-                        "error",
-                        action_type="hold boot",
-                    )
-                    self._append("  ⚠ Bootloader burn cancelled.", "warning")
-                    self._set_status("Hard Reset cancelled", Theme.YELLOW)
-                    return
-                elapsed = countdown_seconds - remaining
-                filled = round(bar_width * elapsed / countdown_seconds)
-                bar = "█" * filled + "░" * (bar_width - filled)
-                self._set_status(f"Hold BOOT - starting in {remaining}s", Theme.YELLOW)
-                self._append_progress(
-                    f"  Hold BOOT [ {bar} ] | Starting in {remaining}s",
-                    "warning",
-                    action_type="hold boot",
-                )
-                time.sleep(1.0)
-
-            self._append_progress(
-                f"  ✔ Hold BOOT [ {'█' * bar_width} ] | Starting now",
-                "success",
-                action_type="hold boot",
-            )
             self._append(
-                "  🔌 Starting esptool. Keep holding BOOT until the board connects.",
+                "  Firmware   : ERASED — recovery firmware is NOT written",
+                "warning",
+            )
+            if recovery_firmware_bin:
+                self._append(
+                    f"  Recovery app: {Path(recovery_firmware_bin).name} stays on disk only",
+                    "dim",
+                )
+            self._append("  Data       : ERASED — NVS, OTA state, and filesystem", "warning")
+            self._append("  Active project build is not used by Hard Reset.", "success")
+            self._append("  The next normal Upload will write that project's own images.", "dim")
+            self._append("")
+            self._append("  ✔ Required recovery boot images are ready.", "success")
+            self._append("  ⚠ Press and HOLD the BOOT button now.", "warning")
+            self._append(
+                "  🔌 Esptool is starting now and will wait for ESP32 download mode.",
                 "info",
             )
-            self._set_status("Connecting to bootloader...", Theme.YELLOW)
+            self._append("  Release BOOT when the connection indicator turns green.", "dim")
+            self._set_status("Waiting for BOOT / ESP32 download mode...", Theme.YELLOW)
+            self._append_boot_connection_progress(0)
 
             target_mcu = str(board_info.get("mcu", "esp32")).lower().replace("-", "")
             bootloader_addr = (
@@ -19531,7 +19743,7 @@ default_envs = {self._pio_env_name()}
                 "--baud", "115200",
                 "--before", "default-reset",
                 "--after", "no-reset",
-                "--connect-attempts", "10",
+                "--connect-attempts", "30",
                 "write-flash",
                 "--erase-all",
                 "--flash-mode", "keep",
@@ -19572,22 +19784,57 @@ default_envs = {self._pio_env_name()}
             erase_progress_started = False
             erase_progress_completed = False
 
+            # Read esptool one byte at a time so its real ``Connecting....``
+            # dots drive the GUI indicator immediately instead of being hidden
+            # inside readline() until the connection attempt ends.
             self.process = subprocess.Popen(
                 burn_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                encoding="utf-8",
-                errors="replace",
+                text=False,
+                bufsize=0,
                 creationflags=(
                     subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 ),
             )
-            for line in iter(self.process.stdout.readline, ""):
-                stripped = line.rstrip()
+
+            import codecs
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            line_buffer = ""
+            connection_step = 0
+            connected_to_chip = False
+
+            def _mark_connected():
+                nonlocal connected_to_chip
+                if connected_to_chip:
+                    return
+                connected_to_chip = True
+                self._append_boot_connection_progress(connection_step, connected=True)
+                self._append("  ✔ ESP32 connected — release the BOOT button now.", "success")
+                self._set_status("Connected - release BOOT", Theme.GREEN)
+
+            def _handle_esptool_line(stripped: str):
+                nonlocal erase_progress_started, erase_progress_completed
+                nonlocal connection_step, connected_to_chip
+                stripped = stripped.rstrip()
                 if not stripped:
-                    continue
+                    return
+                low = stripped.lower()
+
+                # Suppress esptool's raw dot row; each real dot has already
+                # advanced the single live Boot connection bar above.
+                if low.startswith("connecting"):
+                    connection_step = max(connection_step, stripped.count("."))
+                    self._append_boot_connection_progress(connection_step)
+                    return
+
+                if (
+                    "connected to " in low
+                    or "uploading stub" in low
+                    or "stub flasher running" in low
+                ):
+                    _mark_connected()
+
                 if self._consume_esptool_upload_progress(
                     progress_state,
                     stripped,
@@ -19595,9 +19842,8 @@ default_envs = {self._pio_env_name()}
                         f"{phase} boot images...", Theme.YELLOW
                     ),
                 ):
-                    continue
+                    return
 
-                low = stripped.lower()
                 erase_finished = (
                     "flash memory erased successfully" in low
                     or "chip erase completed successfully" in low
@@ -19612,9 +19858,8 @@ default_envs = {self._pio_env_name()}
                         "success",
                         action_type="erasing flash",
                     )
-                    # Keep esptool's measured erase duration visible below the bar.
                     self._append(stripped, "success")
-                    continue
+                    return
                 if "erasing flash" in low or "chip erase" in low:
                     erase_progress_started = True
                     self._set_status("Erasing entire flash...", Theme.YELLOW)
@@ -19623,12 +19868,12 @@ default_envs = {self._pio_env_name()}
                         "warning",
                         action_type="erasing flash",
                     )
-                    continue
+                    return
                 if "connected to " in low or "hash of data verified" in low:
                     tag = "success"
                 elif "error" in low or "failed" in low or "fatal" in low:
                     tag = "error"
-                elif "connecting" in low or "uploading stub" in low:
+                elif "uploading stub" in low:
                     tag = "magenta"
                 elif low.startswith(("chip type", "features", "crystal", "mac", "serial port")):
                     tag = "dim"
@@ -19636,14 +19881,43 @@ default_envs = {self._pio_env_name()}
                     tag = "normal"
                 self._append(stripped, tag)
 
+            while True:
+                raw = self.process.stdout.read(1)
+                if not raw:
+                    break
+                decoded = decoder.decode(raw)
+                for char in decoded:
+                    if char in "\r\n":
+                        if line_buffer:
+                            _handle_esptool_line(line_buffer)
+                            line_buffer = ""
+                        continue
+                    line_buffer += char
+                    if line_buffer.lower().startswith("connecting") and char == ".":
+                        connection_step += 1
+                        self._append_boot_connection_progress(connection_step)
+
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                line_buffer += tail
+            if line_buffer:
+                _handle_esptool_line(line_buffer)
+
             self.process.wait()
             if self.process.returncode != 0:
+                if not connected_to_chip:
+                    self._append_boot_connection_progress(connection_step, failed=True)
                 self._append(
                     f"  ✖ Bootloader burn failed with exit code {self.process.returncode}.",
                     "error",
                 )
                 self._set_status("Bootloader burn failed", Theme.RED)
                 return
+
+            # A zero exit status proves esptool connected even if a future
+            # release changes the exact wording of its Connected line.
+            if not connected_to_chip:
+                _mark_connected()
 
             # Some esptool releases do not emit a separate parseable erase-done
             # line.  A successful write-flash --erase-all return code still means
@@ -19676,16 +19950,20 @@ default_envs = {self._pio_env_name()}
                 self._set_status("Hard Reset flashed - DTR reset failed", Theme.YELLOW)
                 return
 
+            self._hard_reset_completed_successfully = True
             self._append("  ✔ Full erase, bootloader burn, and Reset(DTR/RTS) completed successfully.", "success")
             self._append("  ℹ The ESP32 is intentionally blank. Use Upload to install a project sketch.", "info")
-            self._append("  ℹ The serial monitor remains stopped to avoid blank-flash boot messages.", "dim")
-            self._set_status("Hard Reset complete - board blank", Theme.GREEN)
+            self._append("  ℹ No Soft Reset application firmware was uploaded during Hard Reset.", "dim")
+            if was_monitoring:
+                self._append("  🔌 Reconnecting the Serial Monitor…", "info")
+                self._set_status("Hard Reset complete - reconnecting monitor", Theme.GREEN)
+            else:
+                self._append("  ℹ Serial Monitor was not running before Hard Reset.", "dim")
+                self._set_status("Hard Reset complete - board blank", Theme.GREEN)
         finally:
-            # Resume only when flashing did not complete.  Once the full erase
-            # succeeded the board is intentionally blank, even if the final
-            # Reset(DTR/RTS) pulse was blocked, so keep the monitor stopped.
-            if was_monitoring and not boot_images_written:
-                self._resume_monitor()
+            # Always preserve the user's pre-reset monitor state.  The outer
+            # worker restores it only after is_busy/_active_operation are clear.
+            self._hard_reset_reconnect_monitor = bool(was_monitoring)
 
     def _locate_esp32_boot_app0(self) -> Path | None:
         """
@@ -20192,7 +20470,12 @@ default_envs = {self._pio_env_name()}
             "--port", port,
             "--baud", str(fast_bins.get("upload_speed") or "460800"),
             "--before", str(fast_bins.get("before") or "default-reset"),
-            "--after", "hard-reset",
+            # Do not let esptool perform the final reset itself. On some Windows
+            # USB-serial drivers the flash and verification finish successfully,
+            # but the post-write RTS operation returns a non-zero exit code. The
+            # caller already reopens the Serial Monitor with a controlled DTR/RTS
+            # pulse, which both resets the MCU and captures setup() output.
+            "--after", "no-reset",
             # One serial sync per visible retry keeps the 1/10 progress row
             # truthful while avoiding PlatformIO/SCons startup overhead.
             "--connect-attempts", "1",
@@ -20228,8 +20511,8 @@ default_envs = {self._pio_env_name()}
         chip_info_shown = False
         fast_metadata_shown = False
         connected_bar_flipped = False
-        upload_progress_state = self._new_upload_progress_state(fast_bins)
         upload_started = time.perf_counter()
+        self._last_fast_upload_failure_kind = ""
 
         def _set_fast_phase(name: str):
             if callable(phase_callback):
@@ -20278,6 +20561,14 @@ default_envs = {self._pio_env_name()}
 
         while True:
             output_lines = []
+            # Attempt-local state must never leak into the next visible retry.
+            # A previous failed sync must not leave the image tracker pointing at
+            # Firmware or make a later failure look as though flashing completed.
+            upload_progress_state = self._new_upload_progress_state(fast_bins)
+            attempt_connected = False
+            completed_images: set[str] = set()
+            verified_images = 0
+            expected_image_count = len(upload_progress_state.get("stages") or [])
             try:
                 self.process = subprocess.Popen(
                     write_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -20323,10 +20614,32 @@ default_envs = {self._pio_env_name()}
                             self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
                         if ("connected to" in low or "uploading stub" in low
                                 or "stub flasher running" in low):
+                            attempt_connected = True
                             _set_fast_phase("Connecting")
                             _flip_fast_connected_bar()
                         if "will be erased" in low or "erasing flash" in low:
+                            attempt_connected = True
                             _set_fast_phase("Erasing")
+
+                        # Capture completion before the shared parser advances to
+                        # the next image. This gives us an independent, verified
+                        # success signal even if a USB driver reports an error only
+                        # during esptool's final line-control cleanup.
+                        wrote_event = _parse_esptool_wrote(stripped)
+                        if wrote_event:
+                            stages = upload_progress_state.get("stages") or []
+                            idx = max(0, min(
+                                int(upload_progress_state.get("active_index", 0)),
+                                max(0, len(stages) - 1),
+                            ))
+                            if stages:
+                                completed_images.add(str(stages[idx].get("key") or idx))
+                            attempt_connected = True
+
+                        if "hash of data verified" in low:
+                            verified_images += 1
+                            attempt_connected = True
+
                         if self._consume_esptool_upload_progress(
                                 upload_progress_state, stripped,
                                 before_progress=_before_fast_progress,
@@ -20349,7 +20662,24 @@ default_envs = {self._pio_env_name()}
 
                 rc = self.process.returncode
                 joined = " ".join(line.rstrip().lower() for line in output_lines)
-                is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
+                all_images_written = (
+                    expected_image_count > 0
+                    and len(completed_images) >= expected_image_count
+                )
+                all_images_verified = (
+                    all_images_written
+                    and verified_images >= expected_image_count
+                )
+                # Retry only a genuine pre-flash sync failure. Once the chip has
+                # connected or any image has been written, a later non-zero exit
+                # is a flash/post-flash error and must never be relabeled as
+                # "failed to connect".
+                is_conn_failure = (
+                    rc != 0
+                    and not attempt_connected
+                    and not completed_images
+                    and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES)
+                )
 
                 if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
                     _connect_retry_count += 1
@@ -20358,18 +20688,34 @@ default_envs = {self._pio_env_name()}
                     continue
 
                 ok = (rc == 0)
-                if ok:
+                if ok or all_images_verified:
                     _flip_fast_connected_bar()
                     _show_fast_context(force=True)
-                    _set_fast_phase("Resetting")
+                    _set_fast_phase("Done")
                     self._append("")
-                    self._append("  Hard resetting via RTS pin...", "success")
+                    if rc != 0:
+                        self._append(
+                            "  ⚠ Esptool returned an error after every image was written "
+                            "and hash-verified. Treating the upload as successful.",
+                            "warning",
+                        )
+                        self._record_fast_upload_diagnostic(
+                            port, write_cmd, return_code=rc,
+                            output_lines=output_lines,
+                            error="post-flash exit after all images verified",
+                        )
+                    self._append(
+                        "  ✔ Flash write and verification completed. "
+                        "Reset will continue through the Serial Monitor.",
+                        "success",
+                    )
                     elapsed = max(0.0, time.perf_counter() - upload_started)
                     self._last_fast_upload_elapsed = elapsed
                     self._append(
                         f"  {'=' * 25} [SUCCESS] Took {elapsed:.2f} seconds {'=' * 25}",
                         "success",
                     )
+                    self._last_fast_upload_failure_kind = ""
                     return True, "", _connect_retry_count + 1
                 detail = next(
                     (line.strip() for line in reversed(output_lines)
@@ -20378,6 +20724,12 @@ default_envs = {self._pio_env_name()}
                 )
                 detail = detail[:300]
                 error_message = f"esptool exit code {rc}: {detail}"
+                if is_conn_failure:
+                    self._last_fast_upload_failure_kind = "connection"
+                elif attempt_connected or completed_images:
+                    self._last_fast_upload_failure_kind = "flash"
+                else:
+                    self._last_fast_upload_failure_kind = "tool"
                 self._record_fast_upload_diagnostic(
                     port, write_cmd, return_code=rc,
                     output_lines=output_lines, error=error_message,
@@ -20385,6 +20737,7 @@ default_envs = {self._pio_env_name()}
                 return False, error_message, _connect_retry_count + 1
             except Exception as e:
                 error_message = str(e)
+                self._last_fast_upload_failure_kind = "tool"
                 self._record_fast_upload_diagnostic(
                     port, write_cmd, return_code=None,
                     output_lines=[], error=error_message,
@@ -20817,6 +21170,9 @@ void loop() {
 
         self.is_busy = False
         self._set_buttons_busy(False)
+
+        if ok:
+            self._activate_serial_monitor_after_success("Soft Reset")
 
         if ok and not was_monitoring:
             self._trigger_actual_board_reset(port)
