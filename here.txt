@@ -79,6 +79,18 @@
 [00:43:02]   ✖ Bootloader burn FAILED.
 ```
 
+(3) There was 2 times of 10 tries on connecting in upload phase, the first one works normally as intended then there was another 10 that operates abnormally:
+```
+[01:16:29] ==================================================
+[01:16:29]   ⬆  UPLOADING (PlatformIO)
+[01:16:29] ==================================================
+[01:16:29]   Port : COM6 | Upload Speed : 460800
+[01:16:29]   ⚡ Fast upload: polling the bootloader now…
+[01:16:29]   🔌 Connecting [ ███░░░░░░░░░░░░░░░░░░░░░░░░░░░ ] | 1/10
+[01:16:47]   ✔ Successfully created ESP32 image (Bootloader)
+```
+- It creates an image on its own while it already have it on Compile Phase. Please investigate this further then apply fix.
+
 (4) AI Assistant(OpenCode) also resets when a new project was open on the same window, the only thing that was needed to update was the editors tabs and editor itself.
 
 (5) Compact Mode, in option dropbox the button for AI was only Close AI and it has no function. Please investigate further and fix it just like the hide and toggle of AI works now and it normally do.
@@ -86,3 +98,7 @@
 (6) This will be too much but I want you to put an error/warning notice on blood red and bold text then prompt the user if they still want to continue. COMPATIBILITY ISSUE - for example an NeoPixel code includes the 48 GPIO (PIN 48) and normal ESP32 Dev Module does not have something like that. I hope you get it.
 
 (7) The reconnecting have only 10 times to retry but when the retries failed 10 times it retries another 1/10 times. Keep it one 1/10 - 10/10
+
+(8) The Close AI button on compact mode of the window, remove that and just have the same button and function with the normal window mode.
+
+(9) Advice the user to press&hold boot on mcu before the actual Hard Reset upload to happen. Better if you can add a retry function just like on upload.

@@ -1,16 +1,13 @@
 {
   "instances": {
-    "15448": {
+    "19304": {
       "last_sketch_dir": "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
-      "create_time": 1785690587.2150323
+      "create_time": 1785746923.0883791
     }
   },
   "shared": {
     "last_sketch_dir": "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
     "recent_projects": [
-      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
-      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\BLE_Receiver-Final",
-      "C:\\Users\\napht\\Documents\\NeoPixel_ColorWheel",
       "C:\\Users\\napht\\Downloads"
     ],
     "port_board_map": {
@@ -32,6 +29,6 @@
     "periodic_reload_enabled": false,
     "periodic_reload_interval_s": 3,
     "auto_clear_serial_monitor": false,
-    "clear_build_console_on_action": true
+    "clear_build_console_on_action": false
   }
 }

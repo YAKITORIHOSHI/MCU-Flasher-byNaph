@@ -163,10 +163,11 @@ class UploadOutputTests(unittest.TestCase):
                 mock.patch.object(gui_module.time, "time", return_value=100.0), \
                 mock.patch.object(gui_module.time, "perf_counter", side_effect=[100.0, 113.2]), \
                 mock.patch.object(gui_module.time, "sleep", return_value=None):
-            ok, error = app._soft_reset_esptool_write(fast_bins, "COM6")
+            ok, error, attempts = app._soft_reset_esptool_write(fast_bins, "COM6")
 
         self.assertTrue(ok)
         self.assertEqual(error, "")
+        self.assertEqual(attempts, 1)
         kinds = [event[0] for event in events]
         chip_index = kinds.index("chip_box")
         debug_index = next(
@@ -234,9 +235,10 @@ class UploadOutputTests(unittest.TestCase):
 
         with mock.patch.object(gui_module.subprocess, "Popen", side_effect=failed_attempts) as popen, \
                 mock.patch.object(gui_module.time, "sleep", return_value=None):
-            ok, _error = app._soft_reset_esptool_write(fast_bins, "COM6")
+            ok, _error, attempts = app._soft_reset_esptool_write(fast_bins, "COM6")
 
         self.assertFalse(ok)
+        self.assertEqual(attempts, gui_module.UPLOAD_CONNECTION_ATTEMPTS)
         self.assertEqual(popen.call_count, gui_module.UPLOAD_CONNECTION_ATTEMPTS)
         self.assertTrue(all(args[1] == gui_module.UPLOAD_CONNECTION_ATTEMPTS
                             for args, _kwargs in connection_events))

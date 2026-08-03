@@ -449,7 +449,13 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         pass
 
 def hide_internal_project_metadata(sketch_dir) -> None:
-    """Hide internal metadata files & folders (.pio, src, .opencodeignore, AGENTS.md, etc.) in Windows Explorer."""
+    """Hide every file/folder the app generated in the project folder in
+    Windows Explorer, while keeping the sketch's OWN sources visible.
+
+    Original sketch files (.ino/.cpp/.c/.h/.txt) are the user's actual
+    project and are never hidden.  Everything else at the root —
+    platformio.ini, .pio/, src/, cache JSONs, AI instruction files, tab-order
+    state, ... — is marked hidden so Explorer shows only the real project."""
     try:
         s_dir = Path(sketch_dir)
         if not s_dir.exists():
@@ -465,6 +471,7 @@ def hide_internal_project_metadata(sketch_dir) -> None:
 
         internal_names = [
             ".pio", "platformio.ini", "src", ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
+            ".mcu_gui_compat_cache.json", ".mcu_flash_tab_order.json",
             ".ai_edit_signal", "build_artifacts", ".build_artifacts",
             ".pio_cache", ".vscode", ".clangd", ".cache", "_temp",
             ".opencodeignore", ".ignore", "AGENTS.md", "OPENCODE.md",
@@ -474,11 +481,23 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             p = s_dir / name
             if p.exists():
                 hide_hidden_attribute(p)
-        
-        # Guarantee root sketch files and notes are unhidden
-        for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.txt"):
-            for f in s_dir.glob(ext):
-                unhide_hidden_attribute(f)
+
+        # Inverse sweep: the sketch's own sources (.ino/.cpp/.c/.h/.txt) are
+        # always visible; every other root-level FILE that is not an internal
+        # name is app-generated (cache, state, editor artifacts) → hide it.
+        # Root folders are only hidden via internal_names above so genuine
+        # user folders (lib/, data/, ...) are never touched.
+        visible_exts = {".ino", ".cpp", ".c", ".h", ".txt"}
+        try:
+            for entry in s_dir.iterdir():
+                if entry.is_dir() or entry.name in internal_names:
+                    continue
+                if entry.suffix.lower() in visible_exts:
+                    unhide_hidden_attribute(entry)
+                else:
+                    hide_hidden_attribute(entry)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -1472,6 +1491,7 @@ class EditorApi:
                 except Exception:
                     normalized_paths.append(p)
             order_file.write_text(json.dumps(normalized_paths, indent=2), encoding="utf-8")
+            hide_hidden_attribute(order_file)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1537,6 +1557,7 @@ class EditorApi:
                 err_file = get_project_temp_file(self._gui.sketch_dir_path, ".mcu_flash_syntax_errors.json")
                 try:
                     err_file.write_text(json.dumps(errors, indent=2), encoding="utf-8")
+                    hide_hidden_attribute(err_file)
                 except Exception:
                     pass
             
@@ -1712,7 +1733,17 @@ def _get_download_dir() -> str:
 
 def load_dynamic_boards(default_boards: dict) -> dict:
     """Scan the download directory for boards.txt platform definitions
-    and load all downloaded board types dynamically into the GUI."""
+    and load all downloaded board types dynamically into the GUI.
+
+    Besides the display name / PIO id / platform, each board entry also
+    carries hardware facts parsed from boards.txt so the compatibility
+    analysis can reason about real limits:
+
+      flash_mb  : default flash size (e.g. 4.0) from ``build.flash_size``
+      has_psram : True when the board's default build defines
+                  ``-DBOARD_HAS_PSRAM`` (menu entries are optional user
+                  selections — NOT board defaults — so they are ignored).
+    """
     boards = default_boards.copy()
     
     download_dir = _get_download_dir()
@@ -1730,40 +1761,60 @@ def load_dynamic_boards(default_boards: dict) -> dict:
                 platform = "atmelavr"
             else:
                 platform = "espressif32"
-                
+
             try:
-                content = p.read_text(encoding="utf-8", errors="replace")
-                for line in content.splitlines():
+                board_props: dict[str, dict] = {}
+                for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
                     line = line.strip()
                     if not line or line.startswith("#"):
                         continue
+                    if ".menu." in line:
+                        continue
                     if ".name=" in line:
                         parts = line.split(".name=", 1)
-                        if len(parts) == 2:
-                            board_id = parts[0].strip()
-                            if "." in board_id:
-                                continue
-                            display_name = parts[1].strip()
-                            if display_name and display_name not in boards:
-                                pio_board = board_id.lower()
-                                if pio_board in ("esp32", "esp32_family"):
-                                    pio_board = "esp32dev"
-                                elif pio_board == "esp32s3":
-                                    pio_board = "esp32-s3-devkitc-1"
-                                elif pio_board == "esp32c3":
-                                    pio_board = "esp32-c3-devkit-m-1"
-                                elif pio_board == "esp32s2":
-                                    pio_board = "esp32-s2-kaluga-1"
-                                elif pio_board == "esp32c6":
-                                    pio_board = "esp32-c6-devkitc-1"
-                                elif pio_board == "nodemcu":
-                                    pio_board = "nodemcuv2"
-                                
-                                boards[display_name] = {
-                                    "platform": platform,
-                                    "board": pio_board,
-                                    "framework": "arduino"
-                                }
+                        if len(parts) == 2 and "." not in parts[0].strip():
+                            board_props.setdefault(parts[0].strip(), {})["name"] = parts[1].strip()
+                    elif ".build.flash_size=" in line:
+                        parts = line.split(".build.flash_size=", 1)
+                        if parts and "." not in parts[0].strip():
+                            board_props.setdefault(parts[0].strip(), {})["flash_size"] = parts[1].strip()
+                    elif ".build.defines=" in line and "BOARD_HAS_PSRAM" in line:
+                        board_id = line.split(".", 1)[0].strip()
+                        if board_id:
+                            board_props.setdefault(board_id, {})["psram"] = True
+
+                for board_id, props in board_props.items():
+                    display_name = props.get("name")
+                    if not display_name or display_name in boards:
+                        continue
+                    pio_board = board_id.lower()
+                    if pio_board in ("esp32", "esp32_family"):
+                        pio_board = "esp32dev"
+                    elif pio_board == "esp32s3":
+                        pio_board = "esp32-s3-devkitc-1"
+                    elif pio_board == "esp32c3":
+                        pio_board = "esp32-c3-devkit-m-1"
+                    elif pio_board == "esp32s2":
+                        pio_board = "esp32-s2-kaluga-1"
+                    elif pio_board == "esp32c6":
+                        pio_board = "esp32-c6-devkitc-1"
+                    elif pio_board == "nodemcu":
+                        pio_board = "nodemcuv2"
+
+                    entry: dict = {
+                        "platform": platform,
+                        "board": pio_board,
+                        "framework": "arduino",
+                        "flash_mb": None,
+                        "has_psram": False,
+                    }
+                    m = re.match(
+                        r"(\d+(?:\.\d+)?)\s*MB", props.get("flash_size", ""), re.IGNORECASE
+                    )
+                    if m:
+                        entry["flash_mb"] = float(m.group(1))
+                    entry["has_psram"] = bool(props.get("psram"))
+                    boards[display_name] = entry
             except Exception:
                 pass
     return boards
@@ -1889,6 +1940,25 @@ _ESPTOOL_WROTE_RE = re.compile(
 def _strip_terminal_escapes(text: str) -> str:
     """Remove ANSI styling and carriage returns before parsing tool output."""
     return _ANSI_ESCAPE_RE.sub("", str(text or "")).replace("\r", "").strip()
+
+
+def _validate_img(path, label, min_size, magic=None) -> bool:
+    """Compatibility fallback for legacy Hard Reset call sites.
+
+    Older copies of the Hard Reset routine called ``_validate_img`` after the
+    validator was renamed or accidentally scoped inside another branch.  Keep
+    this module-level implementation so that even a remaining legacy call can
+    never terminate the burn with ``NameError``.
+    """
+    try:
+        data = Path(path).read_bytes()
+    except Exception:
+        return False
+    if len(data) < int(min_size):
+        return False
+    if magic is not None and (not data or data[0] != int(magic)):
+        return False
+    return True
 
 
 def _parse_esptool_image_start(line: str) -> dict | None:
@@ -2639,6 +2709,43 @@ def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
             f"→ compatible only with ESP32 boards"
         )
 
+    # ── OTA updates need ≥ 4 MB flash ─────────────────────────────────────
+    OTA_HDRS = {
+        "update.h", "httpupdate.h", "esp_ota_ops.h", "esp_https_ota.h",
+    }
+    hit = includes & OTA_HDRS
+    if hit:
+        small_boards = [
+            b for b in boards
+            if SUPPORTED_BOARDS.get(b, {}).get("flash_mb")
+            and SUPPORTED_BOARDS[b]["flash_mb"] < 4
+        ]
+        if small_boards:
+            boards -= set(small_boards)
+            exclusions.append(
+                f"OTA update header(s) detected: {_fmt_hits(hit)} "
+                f"→ needs ≥4 MB flash, excluded {len(small_boards)} board(s) "
+                f"(e.g., {', '.join(sorted(small_boards)[:3])}...)"
+            )
+
+    # ── PSRAM usage needs a board with PSRAM populated by default ─────────
+    PSRAM_RE = re.compile(
+        r'\b(?:ps_malloc|esp_psram_new|esp_psram_calloc|esp_psram_realloc)\s*\('
+        r'|\bESP\.getPsramSize\s*\('
+        r'|\bheap_caps_malloc\s*\([^)]*MALLOC_CAP_SPIRAM'
+        r'|\bheap_caps_realloc\s*\([^)]*MALLOC_CAP_SPIRAM'
+    )
+    psram_usage = ("esp_psram.h" in includes) or bool(PSRAM_RE.search(code_nc))
+    if psram_usage:
+        no_psram = [b for b in boards if not SUPPORTED_BOARDS.get(b, {}).get("has_psram")]
+        if no_psram:
+            exclusions.append(
+                f"⚠ Sketch uses PSRAM (ps_malloc / esp_psram.h) → requires a "
+                f"board variant with PSRAM populated; {len(no_psram)} board(s) "
+                f"lack it (e.g., {', '.join(sorted(no_psram)[:3])}...) — "
+                f"may fail at runtime"
+            )
+
     # ── Serial1 / Serial2 rules out Uno ───────────────────────────────────
     if re.search(r'\bSerial[12]\b', code_nc):
         boards = {b for b in boards if SUPPORTED_BOARDS.get(b, {}).get("board") != "uno" and SUPPORTED_BOARDS.get(b, {}).get("platform") != "atmelavr"}
@@ -2717,32 +2824,63 @@ def _fmt_hits(hit_set: set[str], max_show: int = 3) -> str:
     return result
 
 
+def _board_family(name: str, platform: str | None = None) -> str:
+    """Bucket a board display-name into a chip-family label for compact
+    compatibility listings (e.g. 'ESP32-S3', 'ESP8266', 'Uno').
+
+    ``platform`` (the espressif32 / espressif8266 / atmelavr field from the
+    board metadata) is the authoritative fallback when the display name
+    doesn't spell out the chip — e.g. 'AMYboard' or 'Adafruit FunHouse'."""
+    upper = name.upper()
+    if "ESP32-S3" in upper:
+        return "ESP32-S3"
+    if "ESP32-C6" in upper:
+        return "ESP32-C6"
+    if "ESP32-C3" in upper:
+        return "ESP32-C3"
+    if "ESP32-S2" in upper:
+        return "ESP32-S2"
+    if "ESP32-C2" in upper:
+        return "ESP32-C2"
+    if "ESP32" in upper:
+        return "ESP32"
+    # Boards like 'LOLIN S3 Mini', 'M5AtomS3', 'Bee S3' or 'CodeCell C3'
+    # carry the chip suffix without the full 'ESP32-X' prefix.
+    if "S3" in upper:
+        return "ESP32-S3"
+    if "C6" in upper:
+        return "ESP32-C6"
+    if "C3" in upper:
+        return "ESP32-C3"
+    if "S2" in upper:
+        return "ESP32-S2"
+    if "C2" in upper:
+        return "ESP32-C2"
+    if "ESP8266" in upper or "NODEMCU" in upper or "8266" in upper:
+        return "ESP8266"
+    if "UNO" in upper:
+        return "Uno"
+    # Names like 'Heltec WiFi LoRa 32', 'Node32s', 'LOLIN32' or 'Nano32'
+    # never spell out 'ESP32' but are ESP32-based boards.
+    if "32" in upper:
+        return "ESP32"
+    if platform == "espressif32":
+        return "ESP32 (other)"
+    if platform == "espressif8266":
+        return "ESP8266 (other)"
+    if platform == "atmelavr":
+        return "Arduino AVR"
+    return name
+
+
 def _format_compat_label(boards: set[str]) -> str:
     """Turn the compatible board set into a display string dynamically."""
     if not boards:
         return "Unknown / Incompatible"
-        
-    def get_short_name(b):
-        if b == "Arduino Uno":
-            return "Arduino Uno"
-        b_upper = b.upper()
-        if "ESP32-S3" in b_upper:
-            return "ESP32-S3"
-        elif "ESP32-C3" in b_upper:
-            return "ESP32-C3"
-        elif "ESP32-C6" in b_upper:
-            return "ESP32-C6"
-        elif "ESP32-S2" in b_upper:
-            return "ESP32-S2"
-        elif "ESP32" in b_upper:
-            return "ESP32"
-        elif "ESP8266" in b_upper or "NODEMCU" in b_upper:
-            return "ESP8266"
-        elif "UNO" in b_upper:
-            return "Uno"
-        return b
-        
-    ordered = sorted(list({get_short_name(b) for b in boards}))
+
+    ordered = sorted({
+        _board_family(b, SUPPORTED_BOARDS.get(b, {}).get("platform")) for b in boards
+    })
     if len(ordered) == 1:
         return ordered[0]
     if len(ordered) == 2:
@@ -2997,6 +3135,28 @@ def _claim_gui_instance() -> bool:
     except Exception:
         return True
     return True
+
+
+def _release_gui_instance() -> bool:
+    """Release the normal-GUI mutex for an intentional restart handoff.
+
+    A replacement process cannot pass _claim_gui_instance() while the current
+    process still owns this handle.  The old restart path destroyed Tk first
+    and then called os.execv(), so any failed replacement left no window.
+    Closing the mutex before spawning lets the replacement claim the normal
+    slot while the current GUI remains available to report launch failures.
+    """
+    global _GUI_INSTANCE_MUTEX
+    handle = _GUI_INSTANCE_MUTEX
+    if sys.platform != "win32" or not handle:
+        return False
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(handle)
+        _GUI_INSTANCE_MUTEX = None
+        return True
+    except Exception:
+        return False
 
 
 _CONFIG_MEM_CACHE: dict = {}
@@ -4584,6 +4744,8 @@ class MCUUploadGUI:
         self._build_metadata_by_board: dict[str, dict] = {}
         self._platform_upload_metadata_cache: dict[tuple[str, str, str], dict] = {}
         self._compat_warnings_approved_hash: str | None = None
+        self._compat_cache: dict | None = None
+        self._compat_analysis_gen: int = 0
         self._stop_requested: bool = False
         self._op_session_id: int = 0
 
@@ -4639,12 +4801,6 @@ class MCUUploadGUI:
         config["last_sketch_dir"] = str(self.sketch_dir_path)
         save_gui_config(config)
 
-        self.root.deiconify()  # show main window now
-        self.root.lift()
-        self.root.focus_force()
-        self.root.attributes("-topmost", True)
-        self.root.after(500, self._unset_main_topmost)
-
         # ── Icon ──
         try:
             icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
@@ -4691,8 +4847,19 @@ class MCUUploadGUI:
 
         self._build_ui()
 
-        # Force immediate rendering of the UI & Code Editor to the screen
+        # Finish laying out every widget while the root is still hidden.  The
+        # old order deiconified the empty Tk root before _build_ui(), which
+        # caused the visible white/blank flash reported at startup.  If widget
+        # construction then failed, that empty window was the only thing the
+        # user ever saw before the Tk thread terminated.
         self.root.update_idletasks()
+
+        # Reveal only after the complete main interface exists.
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self.root.attributes("-topmost", True)
+        self.root.after(500, self._unset_main_topmost)
 
         # Re-tune button padding/font live as the window is resized, so
         # buttons keep shrinking a bit further if the user makes the window
@@ -4709,10 +4876,96 @@ class MCUUploadGUI:
         self._first_run = False
         self._deferred_bg_done = False
 
+        # Do not run the selected-project scan from inside _build_ui().  Wait
+        # until construction has fully returned and Tk is processing events.
+        # This both fixes the startup-order bug and lets a project-scan failure
+        # degrade to a visible warning instead of terminating the whole app.
+        # Give Windows one real paint cycle before project loading starts.
+        # after_idle can run before the first WM_PAINT, making a synchronous
+        # project scan look like a frozen white window even when it later
+        # recovers. A short timer keeps startup responsive and visible.
+        self.root.after(250, self._run_initial_project_load)
+
         # Defer secondary background services (serial probing, syntax checks)
         # until the Code Editor is fully loaded & rendered (or 1500ms safety fallback),
         # giving 100% CPU & thread priority to editor startup.
         self.root.after(1500, self._deferred_background_init)
+
+    def _run_initial_project_load(self):
+        """Load the selected project after the main interface is complete.
+
+        Project discovery is useful but non-essential to creating the window.
+        A corrupt project cache, inaccessible folder, stale device setting, or
+        other project-specific exception must therefore never take down the
+        entire GUI.  Preserve the complete traceback for diagnosis and keep the
+        editor/window alive so the user can correct the project or choose a new
+        one.
+        """
+        try:
+            self._print_welcome()
+            return
+        except Exception as exc:
+            import traceback
+
+            error_text = traceback.format_exc()
+            log_path = SCRIPT_DIR / "logs" / "project_startup_error.log"
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(error_text, encoding="utf-8")
+            except Exception:
+                pass
+
+            # Keep the GUI usable and surface the actual final exception in the
+            # Build Console.  Every notification call is best-effort because
+            # this handler may itself be responding to a partially initialized
+            # project panel.
+            try:
+                self._append("")
+                self._append("=" * 56, "warning")
+                self._append("⚠ PROJECT STARTUP SCAN FAILED — GUI REMAINS OPEN", "warning")
+                self._append("=" * 56, "warning")
+                self._append(f"  {type(exc).__name__}: {exc}", "error")
+                self._append(f"  Full diagnostic: {log_path}", "dim")
+                self._append("  You may select another project or inspect the log above.", "info")
+            except Exception:
+                pass
+            try:
+                self._set_status("Project scan failed — see Build Console", Theme.YELLOW)
+            except Exception:
+                pass
+
+            # Python clears the exception target after leaving this `except`
+            # block. Capture strings now so the delayed warning callback does
+            # not fail silently when it tries to access `exc`.
+            error_type = type(exc).__name__
+            error_message = str(exc)
+
+            def _show_project_error(
+                error_type=error_type,
+                error_message=error_message,
+                diagnostic_path=str(log_path),
+            ):
+                try:
+                    if not self.root.winfo_exists():
+                        return
+                    from tkinter import messagebox
+                    messagebox.showwarning(
+                        "MCU Flasher — Project Load Warning",
+                        "The main window started, but the selected project's "
+                        "startup scan encountered an error.\n\n"
+                        f"{error_type}: {error_message}\n\n"
+                        f"Full diagnostic: {diagnostic_path}\n\n"
+                        "The GUI will remain open so you can select another "
+                        "project or inspect the Build Console.",
+                        parent=self.root,
+                    )
+                except Exception:
+                    pass
+
+            try:
+                self.root.after(100, _show_project_error)
+            except Exception:
+                pass
 
     def _unset_main_topmost(self):
         try:
@@ -5208,7 +5461,10 @@ class MCUUploadGUI:
         self.h_split_pane.add(self.main_pane, stretch="always")
 
         # ── RIGHT SIDEBAR: OpenCode AI Assistant Side Container ──
-        self.ai_side_container = tk.Frame(self.h_split_pane, bg=Theme.BG_DARKEST)
+        # Use the exact embedded terminal background (#0c0d10) so any sliver
+        # around the reparented AI window blends seamlessly.
+        ai_embed_bg = "#0c0d10"
+        self.ai_side_container = tk.Frame(self.h_split_pane, bg=ai_embed_bg)
 
         # AI Side Header Bar
         self.ai_side_header = tk.Frame(self.ai_side_container, bg=Theme.BG_MID, height=32, padx=8, pady=4)
@@ -5222,7 +5478,7 @@ class MCUUploadGUI:
         )
         self.lbl_ai_side_title.pack(side=tk.LEFT, padx=(2, 0))
         # Embed frame for pywebview AI window
-        self.ai_embed_frame = tk.Frame(self.ai_side_container, bg=Theme.BG_DARKEST)
+        self.ai_embed_frame = tk.Frame(self.ai_side_container, bg=ai_embed_bg)
         self.ai_embed_frame.pack(fill=tk.BOTH, expand=True)
 
         self.ai_embed_frame.bind("<Configure>", self._resize_embedded_ai)
@@ -5367,6 +5623,100 @@ class MCUUploadGUI:
             widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
 
         self.bottom_notebook.add(build_console_frame, text="  ⚙ Build Console  ")
+
+        # ── TAB 2: Compatible Devices ──
+        compat_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+
+        compat_header = tk.Frame(compat_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        compat_header.pack(fill=tk.X)
+
+        self.lbl_compat_title = tk.Label(
+            compat_header, text="🔧 COMPATIBLE DEVICES",
+            font=self.monitor_heading_font,
+            fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_compat_title.pack(side=tk.LEFT)
+
+        self.lbl_compat_status = tk.Label(
+            compat_header, text="Please compile to see the list of compatible devices",
+            font=self.font_mono_sm,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
+        )
+        self.lbl_compat_status.pack(side=tk.LEFT, padx=(12, 0))
+
+        def _copy_compat():
+            text = self.compat_text.get("1.0", tk.END).strip()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            btn_compat_copy.config(text="✔ Copied!")
+            self.root.after(1500, lambda: btn_compat_copy.config(text="⧉ Copy"))
+
+        btn_compat_copy = self._make_btn(
+            compat_header, "⧉ Copy", _copy_compat,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_compat_copy.pack(side=tk.RIGHT)
+        self.btn_compat_copy = btn_compat_copy
+
+        # ── Compatible Devices: search / filter bar ──
+        compat_search_row = tk.Frame(compat_frame, bg=Theme.BG_MID, pady=4, padx=10)
+        compat_search_row.pack(fill=tk.X)
+
+        tk.Label(
+            compat_search_row, text="🔍", bg=Theme.BG_MID, fg=Theme.TEXT_DIM,
+            font=self.font_mono_sm,
+        ).pack(side=tk.LEFT)
+
+        self.compat_search_var = tk.StringVar()
+        self.compat_search_var.trace_add("write", lambda *a: self._apply_compat_filter())
+        self._compat_full_state = None
+        self.compat_search_entry = tk.Entry(
+            compat_search_row, textvariable=self.compat_search_var,
+            bg=Theme.BG_DARKEST, fg=Theme.TEXT, insertbackground=Theme.TEXT,
+            relief=tk.FLAT, font=self.font_mono_sm,
+            highlightthickness=1, highlightbackground=Theme.BORDER,
+            highlightcolor=Theme.CYAN,
+        )
+        self.compat_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6), ipady=2)
+
+        def _clear_compat_search():
+            self.compat_search_var.set("")
+            self.compat_search_entry.focus_set()
+
+        btn_compat_search_clear = self._make_btn(
+            compat_search_row, "✕ Clear", _clear_compat_search,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
+        )
+        btn_compat_search_clear.pack(side=tk.RIGHT)
+
+        tk.Frame(compat_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+
+        self.compat_text = tk.Text(
+            compat_frame,
+            bg=Theme.BG_DARKEST,
+            fg=Theme.TEXT,
+            insertbackground=Theme.TEXT,
+            relief=tk.FLAT,
+            wrap="word",
+            font=self.font_mono,
+            padx=10, pady=8,
+            spacing1=1, spacing3=1,
+        )
+        compat_scroll = ttk.Scrollbar(compat_frame, orient=tk.VERTICAL, command=self.compat_text.yview)
+        self.compat_text.configure(yscrollcommand=compat_scroll.set)
+        compat_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.compat_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._setup_selectable_read_only_text(self.compat_text)
+
+        for widget in [self.compat_text]:
+            widget.tag_configure("system",  foreground=Theme.CYAN)
+            widget.tag_configure("success", foreground=Theme.GREEN)
+            widget.tag_configure("error",   foreground=Theme.RED)
+            widget.tag_configure("warning", foreground=Theme.YELLOW)
+            widget.tag_configure("dim",     foreground=Theme.TEXT_DIM)
+            widget.tag_configure("normal",  foreground=Theme.TEXT)
+
+        self.bottom_notebook.add(compat_frame, text="  🔧 Compatible Devices  ")
 
         # ── TAB 2: Serial Monitor Panel ──
         serial_monitor_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
@@ -5557,6 +5907,8 @@ class MCUUploadGUI:
             widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
 
         self.bottom_notebook.add(serial_monitor_frame, text="  📡 Serial Monitor  ")
+        self._serial_monitor_frame = serial_monitor_frame
+        self._serial_monitor_tab_index_cache = len(self.bottom_notebook.tabs()) - 1
 
         # ── TAB 3: Notifications ──
         notif_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
@@ -5728,6 +6080,19 @@ class MCUUploadGUI:
 
         self.bottom_notebook.add(syntax_check_frame, text="  🔍 Syntax Check  ")
 
+        # ── Tab order: keep Build Console and Serial Monitor side by side ──
+        # Tabs are added in construction order (Build Console, Compatible
+        # Devices, Serial Monitor, …), which placed the Compatible Devices
+        # tab between the console and the monitor.  Move the Serial Monitor
+        # tab to position 1 so the two most-used tabs sit adjacent, and
+        # invalidate the pre-cached serial-monitor index so lookups re-derive
+        # the new position.
+        try:
+            self.bottom_notebook.insert(1, serial_monitor_frame)
+        except Exception:
+            pass
+        self._serial_monitor_tab_index_cache = None
+
         self.main_pane.add(bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
 
         # ── Editor / Monitors show-hide state ──
@@ -5800,8 +6165,10 @@ class MCUUploadGUI:
         style.map("Vertical.TScrollbar",
                   background=[("active", Theme.BORDER_LIT)])
 
-        # Welcome message
-        self._print_welcome()
+        # The welcome/project scan is scheduled after MCUUploadGUI.__init__
+        # completes.  Calling it here used to run _on_folder_changed() while
+        # the interface was still being constructed, so any project-specific
+        # failure aborted the entire GUI before the main event loop started.
         self._update_editor_info()
 
     def _setup_selectable_read_only_text(self, text_widget: tk.Text, clear_callback=None, target_input_widget: tk.Widget = None):
@@ -6479,11 +6846,10 @@ class MCUUploadGUI:
         if self.ai_controller:
             ai_label = "🤖 AI Assistant"
             ai_bg, ai_bgh = Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
-            if self.ai_controller.running_handle:
-                ai_label = "🔴 Close AI"
-                ai_bg, ai_bgh = "#d13438", "#a80000"
-
-            entries.append((ai_label, self.ai_controller.toggle_ai, ai_bg, ai_bgh))
+            ai_action = self._toggle_ai_side_panel
+            if getattr(self, "_ai_side_visible", False):
+                ai_label = "🤖 Hide AI"
+            entries.append((ai_label, ai_action, ai_bg, ai_bgh))
 
         for label, action, bg_c, bg_h in entries:
             def make_cb(a=action):
@@ -6755,7 +7121,8 @@ class MCUUploadGUI:
         self.root.after(0, _do)
 
     def _append_connecting_progress(self, current: int, total: int, bar_width: int = 30,
-                                    connected: bool = False, force_new: bool = False):
+                                    connected: bool = False, force_new: bool = False,
+                                    failed: bool = False):
         """Render a live progress bar in the console, replacing the previous
         connecting-bar line in place on every tick/retry.
 
@@ -6763,7 +7130,11 @@ class MCUUploadGUI:
         '🔌 Connecting [ █████████░░░░░░░░░░░░░░░░░░░░░ ] | 3/10' (magenta,
         with the BOOT hint on retries).  Only when the chip has ACTUALLY
         synced (esptool uploaded its stub) should `connected=True` be passed,
-        re-rendering the same line as '✔ Connected [ ... ] | 3/10' in green."""
+        re-rendering the same line as '✔ Connected [ ... ] | 3/10' in green.
+        Once the whole retry budget is exhausted pass `failed=True` to flip
+        that same line, in place, to '🔌 Connecting [ ... ] | FAILED' (red)."""
+        if failed:
+            current = total
         current = max(0, min(total, current))
         if total > 0:
             multiplier = max(1, round(bar_width / total))
@@ -6818,7 +7189,14 @@ class MCUUploadGUI:
                 self.console.insert(idx, text, tag)
 
             _ins(ts_to_use, "timestamp")
-            if connected:
+            if failed:
+                _ins("  🔌 ", "error")
+                _ins("Connecting ", ("bold", "error"))
+                _ins(f"[ {bar} ]", ("bold", "error"))
+                _ins(" | FAILED", "error")
+                _ins(" >>  ", "error")
+                _ins("💡 Please hold 'BOOT' button on MCU physical board", ("bold", "orange"))
+            elif connected:
                 _ins("  ✔ ", "success")
                 _ins("Connected ", ("bold", "success"))
                 _ins(f"[ {bar} ]", "success_bold_lg")
@@ -7335,12 +7713,12 @@ class MCUUploadGUI:
                 if operation in ("compile", "upload"):
                     self.btn_stop.configure(state=tk.NORMAL)
                     if hasattr(self, "bottom_notebook"):
-                        self.bottom_notebook.tab(1, state="normal")
+                        self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
                         self.bottom_notebook.select(0)  # Switch to Build Console
                 elif operation in ("flash", "reset"):
                     self.btn_stop.configure(state=tk.DISABLED)
                     if hasattr(self, "bottom_notebook"):
-                        self.bottom_notebook.tab(1, state="disabled")
+                        self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="disabled")
                         self.bottom_notebook.select(0)
                         self._set_window_closable(False)
                 else:
@@ -7388,8 +7766,8 @@ class MCUUploadGUI:
                     #     rather than trusting Tk to leave the current
                     #     selection alone when a previously-disabled tab
                     #     flips back to "normal".
-                    was_locked = self.bottom_notebook.tab(1, "state") == "disabled"
-                    self.bottom_notebook.tab(1, state="normal")
+                    was_locked = self.bottom_notebook.tab(self._serial_monitor_tab_index(), "state") == "disabled"
+                    self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
                     target_tab = self._focus_tab_on_unlock
                     self._focus_tab_on_unlock = None  # one-shot, always consume
                     if target_tab is not None:
@@ -7407,6 +7785,7 @@ class MCUUploadGUI:
                 board_name = self.board_var.get()
                 board_info = SUPPORTED_BOARDS.get(board_name, {})
                 is_avr = (board_info.get("platform", "") == "atmelavr")
+
                 if is_avr:
                     self.upload_speed_combo.configure(state="disabled")
                 else:
@@ -7631,7 +8010,7 @@ class MCUUploadGUI:
             self.default_editor_toplevel.protocol("WM_DELETE_WINDOW", self._attach_editor)
 
         self.root.after_idle(self._apply_dynamic_button_scale)
-        self._append("  ✓ Code editor detached to separate window.", "success")
+        self._append_notif("  ✓ Code editor detached to separate window.", "success")
 
     def _attach_editor(self):
         mode = getattr(self, "editor_mode", "default")
@@ -7739,7 +8118,7 @@ class MCUUploadGUI:
             self._update_pane_toggle_buttons()
             
         self.root.after_idle(self._apply_dynamic_button_scale)
-        self._append("  ✓ Code editor re-attached to the main window.", "success")
+        self._append_notif("  ✓ Code editor re-attached to the main window.", "success")
 
     def _build_detached_editor_toolbar(self, parent):
         """Add action controls to a detached Default editor window.
@@ -7931,6 +8310,382 @@ class MCUUploadGUI:
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
         return t
+
+    # ──────────────────────────────────────────────────────────
+    # COMPATIBLE DEVICES ANALYSIS (background, non-blocking)
+    def _get_compat_analysis(self):
+        """Return (boards, reasons) for the current sketch — served from the
+        cached background analysis when the sources are unchanged.  NEVER runs
+        the full static analysis on the UI thread: when the cache is missing
+        or stale it schedules a thread-pool refresh and returns an empty
+        "not known yet" result so Compile/Upload can proceed instantly.  The
+        thread-pool result fills the tab + cache, and the next pre-check then
+        has the fresh answer at zero UI cost."""
+        try:
+            current_hash = self._hash_sources()
+        except Exception:
+            current_hash = ""
+        cached = getattr(self, "_compat_cache", None)
+        if cached and not cached.get("error") and cached.get("hash") == current_hash:
+            return cached["boards"], cached["reasons"]
+        try:
+            self._refresh_compatible_devices()
+        except Exception:
+            pass
+        return set(), []
+
+    def _serial_monitor_tab_index(self) -> int:
+        """Index of the '📡 Serial Monitor' tab in the bottom notebook.
+
+        Resolves the position from the tab's own frame widget (authoritative,
+        survives tab reordering), with a text-match fallback.  The pre-cached
+        value is invalidated whenever the tab layout is reordered."""
+        cached = getattr(self, "_serial_monitor_tab_index_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            frame = getattr(self, "_serial_monitor_frame", None)
+            if frame is not None and self.bottom_notebook.winfo_exists():
+                idx = self.bottom_notebook.index(frame)
+                self._serial_monitor_tab_index_cache = idx
+                return idx
+        except Exception:
+            pass
+        try:
+            for i, tab_id in enumerate(self.bottom_notebook.tabs()):
+                if "Serial Monitor" in self.bottom_notebook.tab(tab_id, "text"):
+                    self._serial_monitor_tab_index_cache = i
+                    return i
+        except Exception:
+            pass
+        return 1
+
+    def _refresh_compatible_devices(self, force: bool = False):
+        """Re-analyse the sketch in the background thread pool and redraw the
+        '🔧 Compatible Devices' tab.  Called ONLY from the compile-success
+        path — the list is compile-driven.  Never blocks the UI, and stale
+        results are discarded through a generation counter."""
+        try:
+            if not self.root.winfo_exists():
+                return
+        except Exception:
+            return
+        self._compat_analysis_gen = getattr(self, "_compat_analysis_gen", 0) + 1
+        gen = self._compat_analysis_gen
+
+        if hasattr(self, "lbl_compat_status"):
+            try:
+                self.lbl_compat_status.config(text="Please compile to see the list of compatible devices")
+            except Exception:
+                pass
+        self._run_bg_task(self._compat_worker, gen, on_success=self._render_compatible_devices)
+
+    def _compat_worker(self, gen: int) -> dict:
+        try:
+            boards, reasons = detect_board_compatibility(self.sketch_dir_path)
+            return {"gen": gen, "boards": boards, "reasons": reasons,
+                    "hash": self._hash_sources()}
+        except Exception as exc:
+            return {"gen": gen, "error": str(exc)}
+
+    def _compat_cache_file(self) -> Path | None:
+        """Path of the per-project compatible-devices cache JSON.  Written by
+        the last successful compile so the tab survives app restarts."""
+        if not self.sketch_dir_path:
+            return None
+        return Path(self.sketch_dir_path) / ".mcu_gui_compat_cache.json"
+
+    def _save_compat_cache(self, boards, reasons, src_hash) -> None:
+        try:
+            path = self._compat_cache_file()
+            if path is None:
+                return
+            payload = {
+                "hash": src_hash,
+                "boards": sorted(boards),
+                "reasons": list(reasons),
+                "updated_at": datetime.now().strftime("%H:%M:%S"),
+            }
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            hide_hidden_attribute(path)
+        except Exception:
+            pass
+
+    def _load_compat_cache(self) -> None:
+        """Reload the compatible-devices list cached at the last successful
+        compile (project folder → .mcu_gui_compat_cache.json).
+
+        The analysis is compile-driven, so opening a project just restores
+        the cached snapshot: not yet compiled → 'Please compile…', already
+        compiled → 'Please recompile…' (last known list still shown)."""
+        try:
+            if not self.root.winfo_exists():
+                return
+        except Exception:
+            return
+
+        cached = None
+        try:
+            path = self._compat_cache_file()
+            if path and path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                cached = {
+                    "boards": set(data.get("boards", [])),
+                    "reasons": list(data.get("reasons", [])),
+                    "hash": str(data.get("hash", "")),
+                    "updated_at": str(data.get("updated_at", "")),
+                }
+        except Exception:
+            cached = None
+        self._compat_cache = cached
+
+        if not cached:
+            self._compat_full_state = None
+            try:
+                self.compat_search_var.set("")
+            except Exception:
+                pass
+            self._apply_compat_content(
+                [
+                    ("", "normal"),
+                    ("  ℹ Compatible devices are detected when this project is compiled.", "dim"),
+                    ("  👉 Click '⚙ Compile' (or 'Upload') to generate the list.", "dim"),
+                ],
+                "Please compile to see the list of compatible devices",
+            )
+            return
+
+        try:
+            current_hash = self._hash_sources()
+        except Exception:
+            current_hash = ""
+        stale = cached.get("hash", "") != current_hash
+        state = {
+            "boards": cached["boards"],
+            "reasons": cached["reasons"],
+            "stale": stale,
+            "updated_at": cached.get("updated_at", ""),
+            "status": "Please recompile to update the list",
+        }
+        self._compat_full_state = state
+        try:
+            self._render_compat_from_state(state)
+        except Exception as exc:
+            # A compatibility-cache display problem is non-essential. Never
+            # let it abort the whole project load or freeze the main window.
+            import traceback
+            try:
+                log_path = SCRIPT_DIR / "logs" / "compat_cache_error.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                log_path = SCRIPT_DIR / "logs" / "compat_cache_error.log"
+            self._compat_full_state = None
+            self._apply_compat_content(
+                [
+                    ("  ⚠ The saved compatible-device list could not be displayed.", "warning"),
+                    (f"  {type(exc).__name__}: {exc}", "error"),
+                    ("  Recompile to regenerate the compatibility cache.", "dim"),
+                ],
+                "Compatibility cache ignored — recompile to refresh",
+            )
+
+    def _build_compat_content(self, boards, reasons, stale: bool = False,
+                              filter_text: str | None = None,
+                              updated_at: str | None = None) -> list:
+        """Build the display lines (text, tag) for the Compatible Devices tab.
+
+        ``filter_text`` narrows the board list to names containing the
+        substring (case-insensitive) so the user can look up a specific
+        model / family without scrolling the full list."""
+        total = len(SUPPORTED_BOARDS)
+        sketch_name = self.sketch_dir_path.name if self.sketch_dir_path else "—"
+
+        if filter_text:
+            needle = filter_text.strip().lower()
+            filtered = {b for b in boards if needle in b.lower()}
+        else:
+            needle = None
+            filtered = boards
+
+        family_order = ["ESP32-S3", "ESP32-C6", "ESP32-C3", "ESP32-S2",
+                        "ESP32-C2", "ESP32", "ESP32 (other)",
+                        "ESP8266", "ESP8266 (other)", "Arduino AVR", "Uno"]
+        groups: dict[str, list[str]] = {}
+        for b in filtered:
+            groups.setdefault(
+                _board_family(b, SUPPORTED_BOARDS.get(b, {}).get("platform")), []
+            ).append(b)
+        for names in groups.values():
+            names.sort(key=str.lower)
+
+        lines: list[tuple[str, str]] = []
+
+        def _add(text: str, tag: str = "normal") -> None:
+            lines.append((text, tag))
+
+        _add("  " + "─" * 46, "dim")
+        _add(f"  🔧 COMPATIBLE DEVICES — {sketch_name}", "system")
+        if stale:
+            # This renderer is called outside `_load_compat_cache`, so it must
+            # not reference that function's local `cached` variable.
+            cache_state = getattr(self, "_compat_cache", None) or {}
+            last = updated_at or cache_state.get("updated_at") or "-"
+            _add(f"  ⚠ Sources changed since the last compile — recompile to refresh. (last: {last})", "warning")
+        if needle:
+            if filtered:
+                _add(f"  🔍 {len(filtered)} of {len(boards)} boards match '{filter_text.strip()}'.",
+                     "dim")
+            else:
+                _add(f"  ✖ No boards match '{filter_text.strip()}'.", "error")
+        else:
+            _add(f"  ✔ {len(boards)} of {total} supported boards pass the static check.",
+                 "success" if boards else "error")
+        if not reasons and len(boards) == total:
+            _add("  ℹ No platform-specific APIs detected — likely portable across all boards.", "dim")
+        _add("  " + "─" * 46, "dim")
+        _add("")
+
+        if not filtered:
+            _add("  ✖ No compatible boards found.", "error")
+        else:
+            for fam in family_order:
+                if fam not in groups:
+                    continue
+                names = groups.pop(fam)
+                _add(f"  ✔ {fam}  ({len(names)})", "success")
+                for name in names:
+                    _add(f"      • {name}", "normal")
+                _add("")
+            for fam, names in groups.items():
+                _add(f"  ✔ {fam}  ({len(names)})", "success")
+                for name in names:
+                    _add(f"      • {name}", "normal")
+                _add("")
+
+        if reasons:
+            _add("  ⚠ Excluded / cautioned because:", "warning")
+            for r in reasons:
+                _add(f"      - {r}", "warning")
+            _add("")
+
+        _add("  ℹ Static estimate from headers, API calls, GPIO range, flash size and", "dim")
+        _add("    PSRAM metadata — not a guarantee. The selected board must still", "dim")
+        _add("    expose the used pins on its physical variant.", "dim")
+        return lines
+
+    def _apply_compat_content(self, lines, status_text: str) -> None:
+        """Write lines into the Compatible Devices tab and update its status.
+
+        One bulk insert + one tag-add pass over line ranges (no per-line
+        insert calls) so rendering 400+ board entries stays cheap on the
+        UI thread."""
+        try:
+            self.compat_text.configure(state=tk.NORMAL)
+            self.compat_text.delete("1.0", tk.END)
+            self.compat_text.insert("1.0", "".join(f"{text}\n" for text, _t in lines))
+            offset = 0
+            for text, tag in lines:
+                length = len(text) + 1  # + trailing newline
+                if tag and tag != "normal":
+                    try:
+                        self.compat_text.tag_add(
+                            tag, f"1.0+{offset}c", f"1.0+{offset + length}c"
+                        )
+                    except Exception:
+                        pass
+                offset += length
+            self.compat_text.configure(state=tk.DISABLED)
+            self.compat_text.see("1.0")
+            self.lbl_compat_status.config(text=status_text)
+        except Exception:
+            pass
+
+    def _apply_compat_filter(self):
+        """Re-render the Compatible Devices list narrowed by the search box.
+
+        Debounced (120 ms) so rapid typing never triggers a full 400+-line
+        rebuild per keystroke on the UI thread; the render runs once the
+        user pauses."""
+        if getattr(self, "_compat_filter_job", None):
+            try:
+                self.root.after_cancel(self._compat_filter_job)
+            except Exception:
+                pass
+            self._compat_filter_job = None
+        try:
+            self._compat_filter_job = self.root.after(120, self._do_compat_filter_render)
+        except Exception:
+            self._do_compat_filter_render()
+
+    def _do_compat_filter_render(self):
+        self._compat_filter_job = None
+        state = getattr(self, "_compat_full_state", None)
+        if not state:
+            return
+        try:
+            self._render_compat_from_state(state)
+        except Exception:
+            pass
+
+    def _render_compat_from_state(self, state: dict) -> None:
+        """Render the stored full compatible-devices snapshot, applying the
+        current search-box filter to the board list."""
+        filter_text = self.compat_search_var.get().strip()
+        lines = self._build_compat_content(
+            state["boards"], state["reasons"],
+            stale=state.get("stale", False),
+            filter_text=filter_text or None,
+            updated_at=state.get("updated_at"),
+        )
+        self._apply_compat_content(lines, state.get("status", ""))
+
+    def _render_compatible_devices(self, result: dict) -> None:
+        """Draw a compile-triggered analysis result into the tab and persist
+        it to the project's cache JSON."""
+        try:
+            if not self.root.winfo_exists():
+                return
+        except Exception:
+            return
+        gen = result.get("gen")
+        if gen is not None and gen != self._compat_analysis_gen:
+            return  # stale result from an older refresh — discard
+
+        if result.get("error"):
+            self._compat_full_state = None
+            try:
+                self.compat_search_var.set("")
+            except Exception:
+                pass
+            self._apply_compat_content(
+                [
+                    ("  ✖ Compatibility analysis failed:", "error"),
+                    (f"  {result['error']}", "error"),
+                ],
+                "✖ analysis failed",
+            )
+            return
+
+        boards: set[str] = result["boards"]
+        reasons: list[str] = result["reasons"]
+        now = datetime.now().strftime("%H:%M:%S")
+        self._compat_cache = {
+            "boards": boards,
+            "reasons": reasons,
+            "hash": result.get("hash", ""),
+            "updated_at": now,
+        }
+        status = f"✔ {len(boards)}/{len(SUPPORTED_BOARDS)} · {now}"
+        self._compat_full_state = {
+            "boards": boards,
+            "reasons": reasons,
+            "stale": False,
+            "updated_at": now,
+            "status": status,
+        }
+        self._render_compat_from_state(self._compat_full_state)
+        self._save_compat_cache(boards, reasons, result.get("hash", ""))
 
     # ──────────────────────────────────────────────────────────
     def _save_selected_port(self, port_name: str | None):
@@ -8874,6 +9629,79 @@ class MCUUploadGUI:
     # ──────────────────────────────────────────────────────────
     # ACTIONS
     # ──────────────────────────────────────────────────────────
+    def _capture_stale_clean_path(self, report_text: str, stash: list):
+        """Extract the backtick-quoted path from a PlatformIO 'Please manually
+        remove the file `...`' report and remember it for automatic retry."""
+        if report_text is None:
+            return
+        _m = re.search(r"`([^`]+)`", report_text)
+        if _m:
+            _p = _m.group(1).strip()
+            if _p and _p not in stash:
+                stash.append(_p)
+
+    def _auto_clean_stale_build_paths(self, reported_paths: list, env_name: str,
+                                      build_ok: bool, build_root: Path | None = None):
+        """Retry deletion of build paths PlatformIO could not remove itself
+        (WinError 145 — file locked by antivirus/indexer/another handle).
+        Must be called AFTER the PlatformIO process has fully exited so the
+        locks have a chance to clear. Fully automated — the user no longer
+        needs to manually delete anything.
+
+        Safe-guards: when the build succeeded, the CURRENT env's fresh build
+        output is never deleted; only stale debris from the aborted clean is
+        removed. ``build_root`` overrides the default sketch .pio/build root
+        for projects that build elsewhere (e.g. the bundled soft_reset
+        project)."""
+        if not reported_paths:
+            return
+        if build_root is None:
+            build_root = self.sketch_dir_path / ".pio" / "build"
+        _pio_build_root = build_root
+        for _stale_path_str in reported_paths:
+            _stale_path = Path(_stale_path_str)
+            try:
+                _stale_path_res = _stale_path.resolve()
+            except Exception:
+                _stale_path_res = _stale_path
+            if not _stale_path_res.exists():
+                continue
+            if not build_ok:
+                # Build/upload FAILED — whatever is left is garbage; remove it all.
+                if robust_rmtree(_stale_path_res):
+                    self._append(f"  ✔ Auto-cleaned stale build directory: {_stale_path_res}", "success")
+                else:
+                    self._append(f"  ⚠ Stale build directory still locked (will be retried automatically on the next run): {_stale_path_res}", "warning")
+            elif _stale_path_res.parent == _pio_build_root:
+                # Build SUCCEEDED. The report usually names the whole
+                # .pio/build parent after PlatformIO's checksum-driven global
+                # clean aborted midway (WinError 145). The current env dir
+                # holds the FRESH build just produced — never delete it — but
+                # sibling env dirs left half-deleted by the aborted clean are
+                # pure stale debris.
+                try:
+                    _children = list(_stale_path_res.iterdir())
+                except Exception:
+                    _children = []
+                for _child in _children:
+                    if _child.name == env_name:
+                        continue
+                    try:
+                        if _child.is_dir():
+                            robust_rmtree(_child)
+                        else:
+                            _child.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                if _children and any(_c.exists() for _c in _children):
+                    self._append(f"  ✔ Auto-cleaned stale build debris under: {_stale_path_res}", "success")
+            else:
+                # Report names a single env dir — only delete it when it is
+                # NOT the env we just built (that one is freshly valid).
+                if _stale_path_res.name != env_name:
+                    if robust_rmtree(_stale_path_res):
+                        self._append(f"  ✔ Auto-cleaned stale build directory: {_stale_path_res}", "success")
+
     def _perform_clean(self) -> tuple[list[str], list[str]]:
         """Core clean execution: delete all build artifacts, temporary directories, and generated configs, leaving only sketch source files."""
         sketch = self.sketch_dir_path
@@ -9195,7 +10023,7 @@ class MCUUploadGUI:
 
         # Pre-check: detect board/sketch mismatch so _run_compile can display the warning
         # inside the COMPILING section header (not before it).
-        compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+        compat_boards, compat_reasons = self._get_compat_analysis()
         selected_board = self.board_var.get()
         self._board_mismatch_detected = (
             bool(compat_boards) and selected_board not in compat_boards
@@ -9393,11 +10221,18 @@ class MCUUploadGUI:
         self.serial_thread.start()
 
     def _do_stop(self):
-        """Stop compile/upload process (does NOT stop serial monitor)."""
+        """Stop compile/upload process (does NOT stop serial monitor).
+
+        NOTE: may be invoked from a worker thread (esptool watchdog timeouts),
+        so every Tk widget access is marshaled to the main thread."""
         self._stop_requested = True
         session_id = getattr(self, "_op_session_id", 0)
         if self.process and self.process.poll() is None:
-            self.btn_stop.configure(text="■ Stopping...", state=tk.DISABLED)
+            try:
+                self.root.after(0, lambda: self.btn_stop.configure(
+                    text="■ Stopping...", state=tk.DISABLED))
+            except Exception:
+                pass
             self._set_status("Stopping process...", Theme.YELLOW)
             proc_to_kill = self.process
             
@@ -9454,8 +10289,12 @@ class MCUUploadGUI:
 
     def _resume_monitor(self):
         """Resume serial monitor after upload completes, triggering MCU reset so setup() output is captured."""
-        if not self._monitor_should_run:
-            return
+        # Re-arm the intent flag: _pause_monitor() clears it, and every caller
+        # of _resume_monitor() explicitly wants the monitor back (they are all
+        # guarded by "was_monitoring"). Without this re-arm the monitor never
+        # restarts and the DTR/RTS reset pulse after a successful Hard/Soft
+        # Reset is never sent.
+        self._monitor_should_run = True
         self._manual_reset_pending = True
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
@@ -10062,7 +10901,9 @@ class MCUUploadGUI:
         Updates the UI label, invalidates the compile cache, then scans
         includes in a background thread so the console gets an instant
         project-summary report."""
-        self._dispose_active_ai_assistant()
+        # Keep the running AI Assistant (OpenCode) process alive across
+        # project switches — only the editor tabs, editor binding, and the
+        # file-watcher baselines need refreshing for the new project.
         if getattr(self, "ai_controller", None) and hasattr(
             self.ai_controller, "reset_monitoring_state"
         ):
@@ -10120,6 +10961,11 @@ class MCUUploadGUI:
         threading.Thread(target=self._report_project_includes, daemon=True).start()
 
         self._update_editor_info()
+
+        # Restore the '🔧 Compatible Devices' list cached at the last compile
+        # (the analysis itself is compile-driven — folder switches only
+        # reload the snapshot, never re-scan).
+        self._load_compat_cache()
 
     def _is_framework_downloaded(self, board_name: str = None) -> bool:
         """Check if the core framework and toolchains for the board's platform are installed."""
@@ -12136,6 +12982,11 @@ default_envs = {self._pio_env_name()}
         # failures (WinError 145 etc.) — see is_nonfatal_pio_clean_report.
         _clean_warn_shown = [False]
 
+        # Paths PlatformIO failed to delete ("Please manually remove the file
+        # `...`"). The GUI retries the removal itself right after the build
+        # process exits — no manual user intervention needed.
+        _stale_clean_paths: list[str] = []
+
         def _maybe_close_init_divider():
             if _first_divider_printed[0] and _has_intermediate_content[0] and not _init_divider_closed[0]:
                 _init_divider_closed[0] = True
@@ -12261,6 +13112,14 @@ default_envs = {self._pio_env_name()}
                         "rebuild the affected parts automatically.",
                         "info",
                     )
+                # Auto-heal: remember the locked path so we can retry deleting
+                # it ourselves once the build process has fully exited (the
+                # lock usually clears right after the toolchain closes its
+                # handles). Fully automated — the user no longer needs to
+                # manually remove anything.
+                _m = re.search(r"`([^`]+)`", stripped)
+                if _m and _m.group(1).strip() not in _stale_clean_paths:
+                    _stale_clean_paths.append(_m.group(1).strip())
             elif is_linker_error:
                 self._append(f"  ✖ {stripped}", "error")
                 _in_error_block[0] = False
@@ -12458,6 +13317,14 @@ default_envs = {self._pio_env_name()}
             _tool_dl_total[0] += (time.time() - _tool_dl_start[0])
             _tool_dl_active[0] = False
 
+        # ── Auto-clean stale build paths reported by PlatformIO ───────────
+        # The build process has exited, so handles it could not release while
+        # running are gone now. Retry the removal with robust_rmtree (which
+        # also falls back to a hidden rename) so the next run starts clean
+        # without any manual user intervention.
+        if _stale_clean_paths:
+            self._auto_clean_stale_build_paths(_stale_clean_paths, env_name, build_ok=(rc == 0))
+
         total_sec    = round(time.time() - compile_start, 1)
         tool_dl_sec  = round(_tool_dl_total[0], 1)
         if _build_start[0] is not None:
@@ -12500,18 +13367,9 @@ default_envs = {self._pio_env_name()}
                 self._append(f"  ✔ Compilation successful! ({total_sec}s)", "success")
                 self._set_status(f"Compile OK ({total_sec}s)", Theme.GREEN)
 
-            # ── Board compatibility label ───────────────────────────────────
-            compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
-            compat_label = _format_compat_label(compat_boards)
-            self._append("")
-            self._append("  " + "─" * 48, "dim")
-            self._append(f"  [COMPATIBLE DEVICES]  {compat_label}", "system")
-            if not compat_reasons and len(compat_boards) == len(SUPPORTED_BOARDS):
-                self._append(
-                    "    ℹ No platform-specific APIs detected — "
-                    "likely portable across all supported boards.", "dim"
-                )
-            self._append("  " + "─" * 48, "dim")
+            # ── Board compatibility → dedicated 'Compatible Devices' tab ──
+            self._refresh_compatible_devices(force=True)
+            self._append("  ℹ Compatible devices analysis updated → see the '🔧 Compatible Devices' tab.", "dim")
 
             # ── Check for Selected Board Hardware Compatibility ─────────────
             selected_board_name = self.board_var.get()
@@ -13039,7 +13897,7 @@ default_envs = {self._pio_env_name()}
 
         # ── Sketch-vs-board compatibility guard (run before starting upload timer) ──
         selected_board = self.board_var.get()
-        compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
+        compat_boards, compat_reasons = self._get_compat_analysis()
         
         has_warnings = False
         warnings_list = []
@@ -13071,17 +13929,57 @@ default_envs = {self._pio_env_name()}
 
         if has_warnings:
             self._set_status("Waiting for compatibility confirmation...", Theme.YELLOW)
+            # Split by severity: reasons starting with "⚠" are soft cautions
+            # (e.g. "GPIO reserved for SPI flash — may cause instability");
+            # everything else is a hard exclusion (board not supported,
+            # GPIO out of range, platform-exclusive APIs) that genuinely
+            # warrants the blood-red banner.
+            severe_reasons = [r for r in warnings_list if not r.startswith("⚠")]
+            soft_reasons = [r for r in warnings_list if r.startswith("⚠")]
+
+            # Blood-red bold console notice BEFORE the interactive prompt so the
+            # user sees exactly why the upload is being questioned.
+            self._append("", "")
+            if severe_reasons:
+                self._append("  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "severe_alert")
+                self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                self._append("  ⚠ COMPATIBILITY ISSUE DETECTED — CONTINUING MAY DAMAGE YOUR BOARD OR FIRMWARE! ⚠", "severe_alert")
+                self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                for reason in severe_reasons:
+                    self._append(f"  ✖ {reason}", "severe_alert")
+                self._append("  ════════════════════════════════════════════════════════════════════════════", "severe_alert")
+                self._append("  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "severe_alert")
+            else:
+                self._append("  ⚠ Compatibility warning(s) detected:", "warning")
+            for reason in soft_reasons:
+                # Reflow each caution for the console: the ⚠ belongs to the
+                # header line, and the aggregated "on N boards (e.g., ...)"
+                # list is noise — the selected board is what matters.
+                clean = re.sub(
+                    r"\s+on \d+ boards \(e\.g\., .*\)", "",
+                    reason[2:].lstrip() if reason.startswith("⚠") else reason,
+                )
+                self._append(f"  • {clean}", "warning")
+            self._append("")
             # Show interactive confirmation dialog box (thread-safe on Windows)
             proceed = [None]
             def _prompt():
                 reasons_text = "\n".join(f"- {r}" for r in warnings_list)
                 from tkinter import messagebox
-                msg = (
-                    f"Warning: This project has compatibility warnings/exclusions:\n\n"
-                    f"{reasons_text}\n\n"
-                    "It may be dangerous to proceed and could affect MCU operation.\n"
-                    "Do you still want to proceed with the upload?"
-                )
+                if severe_reasons:
+                    msg = (
+                        f"Warning: This project has compatibility warnings/exclusions:\n\n"
+                        f"{reasons_text}\n\n"
+                        "It may be dangerous to proceed and could affect MCU operation.\n"
+                        "Do you still want to proceed with the upload?"
+                    )
+                else:
+                    msg = (
+                        f"The sketch uses pins/features that may not behave as expected on "
+                        f"the selected board(s):\n\n{reasons_text}\n\n"
+                        "It will usually still work, but could cause instability.\n"
+                        "Do you still want to proceed with the upload?"
+                    )
                 proceed[0] = messagebox.askyesno(
                     "Compatibility Warning",
                     msg,
@@ -13093,11 +13991,6 @@ default_envs = {self._pio_env_name()}
                 time.sleep(0.05)
                 
             if not proceed[0]:
-                # Log warnings to the console ONLY upon cancellation so the user knows why it was stopped
-                self._append("", "")
-                self._append("  ℹ Compatibility Notice — board/sketch details detected", "dim")
-                for reason in warnings_list:
-                    self._append(f"    ℹ {reason}", "dim")
                 self._append("", "")
                 self._append("  ℹ Upload cancelled by user.", "info")
                 self.is_busy = False
@@ -13202,6 +14095,20 @@ default_envs = {self._pio_env_name()}
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         is_avr = (board_info.get("platform", "") == "atmelavr")
 
+        # Total connection-attempt budget for this upload.  The fast esptool
+        # path and (only after a tool failure) the PlatformIO compatibility
+        # uploader SHARE this budget — the console shows exactly one
+        # 1/10-10/10 series per upload, never a second one.
+        _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+        _CONNECT_FAIL_SIGNATURES = (
+            "wrong boot mode", "failed to connect",
+            "no serial data received", "timed out waiting for packet",
+            "device not found", "permissionerror", "access is denied",
+            "port is busy", "could not open port", "permission denied",
+            "connection timed out", "timed out after", "not responding",
+        )
+        _connect_retry_count = 0
+
         # Fast ESP upload: compilation has already produced the exact images
         # PlatformIO would pass to esptool. Invoke esptool directly so its
         # internal connection loop starts immediately and keeps polling while
@@ -13225,7 +14132,7 @@ default_envs = {self._pio_env_name()}
             self._set_status("Connecting to bootloader now…", Theme.MAGENTA)
             self._current_op_phase = "flashing"
             self._set_window_closable(False)
-            fast_ok, fast_error = self._soft_reset_esptool_write(
+            fast_ok, fast_error, fast_attempts = self._soft_reset_esptool_write(
                 fast_bins, port, phase_callback=_set_upload_phase
             )
             if fast_ok:
@@ -13237,7 +14144,7 @@ default_envs = {self._pio_env_name()}
                 self._append(f"  ✔ Upload successful! {board_name} is running…", "success")
                 self._set_status(f"Upload OK — {board_name} running", Theme.GREEN)
                 self.root.after(0, self._update_skip_compile_state)
-                self._focus_tab_on_unlock = 1
+                self._focus_tab_on_unlock = self._serial_monitor_tab_index()
                 self.is_busy = False
                 self._current_op_phase = None
                 self._set_buttons_busy(False)
@@ -13261,6 +14168,42 @@ default_envs = {self._pio_env_name()}
             if (any(token in str(fast_error or "").lower() for token in tool_failure_tokens)
                     or self._fast_upload_failure_count >= 2):
                 self._fast_upload_disabled_reason = fast_error or "fast uploader unavailable"
+
+            # A pure CONNECTION failure means the board never entered
+            # download mode, so the entire 1/10-10/10 budget has been spent.
+            # Falling back to "pio run -t upload" here would only repeat the
+            # same esptool sync (a second, abnormal 1/10-10/10 series) while
+            # PlatformIO re-runs its build step and re-creates images that
+            # the compile phase already produced. Fail cleanly instead.
+            is_fast_tool_failure = any(
+                token in str(fast_error or "").lower() for token in tool_failure_tokens
+            )
+            if not is_fast_tool_failure:
+                _upload_active[0] = False
+                _upload_spin_thread.join(timeout=1)
+                self._append_connecting_progress(
+                    min(fast_attempts, _MAX_CONNECT_RETRIES), _MAX_CONNECT_RETRIES, failed=True
+                )
+                self._append("")
+                self._append(
+                    f"  ✖ Failed to connect to {board_name} on {port} after "
+                    f"{fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
+                    "error",
+                )
+                self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
+                self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
+                self._append("")
+                self._append("  ✖ Upload FAILED.", "error")
+                self._set_status("Upload FAILED", Theme.RED)
+                self.root.after(0, self._update_skip_compile_state)
+                self.is_busy = False
+                self._current_op_phase = None
+                self._set_buttons_busy(False)
+                self._set_window_closable(True)
+                if was_monitoring:
+                    self._resume_monitor()
+                return False
+
             self._set_status("Using PlatformIO compatibility uploader…", Theme.MAGENTA)
             self._current_op_phase = "compiling"
             self._set_window_closable(True)
@@ -13473,28 +14416,25 @@ default_envs = {self._pio_env_name()}
         # When esptool fails with "Wrong boot mode" / "Failed to connect",
         # we retry the upload subprocess up to MAX_CONNECT_RETRIES times
         # instead of giving up immediately. Each retry restarts the Popen
-        _CONNECT_FAIL_SIGNATURES = (
-            "wrong boot mode", "failed to connect",
-            "no serial data received", "timed out waiting for packet",
-            "device not found", "permissionerror", "access is denied",
-            "port is busy", "could not open port", "permission denied",
-            "connection timed out", "timed out after", "not responding",
-        )
-
         # Each PlatformIO retry incurs a full SCons/project scan. The fast
         # esptool path above performs the rapid connection polling; keep this
-        # compatibility fallback bounded.
-        _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+        # compatibility fallback bounded. The PIO uploader only runs after a
+        # fast-path TOOL failure (esptool could not be launched), so it starts
+        # its own fresh 1/10-10/10 series.
         _connect_retry_count = 0
         _last_dot_update = [0.0]
         _connection_dot_count = [0]
+
+        # Paths PlatformIO reported as undeletable (WinError 145) — auto-retried
+        # after the process exits so no manual user intervention is needed.
+        _stale_clean_paths: list[str] = []
 
         # ── Print the initial "Connecting..." line proactively ───────────
         # This shows BEFORE esptool's first output, so the user knows
         # immediately that a connection attempt is in progress and can
         # press the BOOT button on their board.
         if not is_avr:
-            self._append_connecting_progress(1, _MAX_CONNECT_RETRIES)
+            self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
             _connected_logged[0] = True
             _set_upload_phase("Connecting")
 
@@ -13714,6 +14654,7 @@ default_envs = {self._pio_env_name()}
                         self._append(f"  ✔ Successfully created {chip_name} image ({label})", "success")
                     elif is_nonfatal_pio_clean_report(stripped):
                         self._append(f"  ⚠ {stripped}", "warning")
+                        self._capture_stale_clean_path(stripped, _stale_clean_paths)
                     elif "error" in low or "failed" in low:
                         is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
                         can_retry = (not is_avr and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
@@ -13740,6 +14681,7 @@ default_envs = {self._pio_env_name()}
                     continue
                 if is_nonfatal_pio_clean_report(stripped):
                     self._append(f"  ⚠ {stripped}", "warning")
+                    self._capture_stale_clean_path(stripped, _stale_clean_paths)
                 elif "error" in low or "failed" in low:
                     is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
                     can_retry = (not is_avr and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
@@ -13807,6 +14749,10 @@ default_envs = {self._pio_env_name()}
         _upload_active[0] = False
         _upload_spin_thread.join(timeout=1)
 
+        # ── Auto-clean stale build paths reported by PlatformIO ───────────
+        if _stale_clean_paths:
+            self._auto_clean_stale_build_paths(_stale_clean_paths, env_name, build_ok=(rc == 0))
+
         ok = rc == 0
 
         if ok:
@@ -13820,7 +14766,7 @@ default_envs = {self._pio_env_name()}
 
             # Jump to the Serial Monitor tab once the lock clears below, so
             # the user immediately sees the board's fresh boot output.
-            self._focus_tab_on_unlock = 1
+            self._focus_tab_on_unlock = self._serial_monitor_tab_index()
         else:
 
             self._append("")
@@ -13845,6 +14791,10 @@ default_envs = {self._pio_env_name()}
                         self._append(_text, _tag)
                 _pending_pre_box.clear()
             self._append("")
+            if not is_avr:
+                self._append_connecting_progress(
+                    _connect_retry_count + 1, _MAX_CONNECT_RETRIES, failed=True
+                )
             if _timeout_triggered[0]:
                 self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
                 self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
@@ -13885,12 +14835,17 @@ default_envs = {self._pio_env_name()}
 
         return ok
 
-    def _trigger_actual_board_reset(self, port: str):
-        """Briefly open the port and toggle DTR/RTS to trigger a hardware reset."""
+    def _trigger_actual_board_reset(self, port: str) -> bool:
+        """Open the serial port and perform the ESP32 Reset(DTR/RTS) pulse.
+
+        Returns True only when the pulse was actually sent.  Callers that run
+        after a flash operation can therefore avoid reporting a fully finished
+        reset when Windows still has the COM port locked.
+        """
         owner_pid = port_occupied_owner(port)
         if owner_pid:
-            self._append(f"  ⚠ Hardware reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
-            return
+            self._append(f"  ⚠ Reset(DTR/RTS) blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            return False
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         is_uno = (board_info.get("platform", "") == "atmelavr")
@@ -13927,10 +14882,12 @@ default_envs = {self._pio_env_name()}
                     conn.rts = False
                     conn.dtr = False
                 time.sleep(0.05)
-            self._append("  ✔ Hardware reset triggered.", "success")
+            self._append("  ✔ Reset(DTR/RTS) pulse completed.", "success")
             self._skip_reconnect_reset = True
+            return True
         except Exception as e:
-            self._append(f"  ⚠ Could not trigger hardware reset: {e}", "warning")
+            self._append(f"  ⚠ Could not complete Reset(DTR/RTS): {e}", "warning")
+            return False
 
     # ──────────────────────────────────────────────────────────
     # SERIAL MONITOR (always-on, right panel)
@@ -16115,6 +17072,7 @@ default_envs = {self._pio_env_name()}
             try:
                 import json
                 order_file.write_text(json.dumps(paths, indent=2), encoding="utf-8")
+                hide_hidden_attribute(order_file)
             except Exception:
                 pass
 
@@ -16965,10 +17923,18 @@ default_envs = {self._pio_env_name()}
 
         # Poll and embed AI pywebview OS window into self.ai_embed_frame
         self._start_ai_embedding_poll()
+        self._start_ai_size_watchdog()
 
     def _hide_ai_side_panel(self):
         """Hide the AI Assistant side panel container from the right side."""
         self._dismiss_ai_loading_overlay()
+
+        if hasattr(self, "_ai_size_watchdog_job") and self._ai_size_watchdog_job:
+            try:
+                self.root.after_cancel(self._ai_size_watchdog_job)
+            except Exception:
+                pass
+            self._ai_size_watchdog_job = None
 
         # Explicitly hide embedded native Win32 window first so it doesn't linger on screen
         if getattr(self, "_ai_hwnd", None) and win32gui is not None:
@@ -17068,15 +18034,110 @@ default_envs = {self._pio_env_name()}
             if not win32gui.IsWindow(self._ai_hwnd):
                 self._ai_hwnd = None
                 return
+            if hasattr(self, "root") and self.root:
+                # <Configure> can fire while the paned-window layout is still
+                # settling (pane insertion, sash drags, first show), leaving
+                # the embedded window a few pixels short of the frame.  Re-read
+                # the frame's FINAL size after the idle layout pass and apply.
+                self.root.after_idle(self._apply_ai_embed_size)
+            else:
+                self._apply_ai_embed_size()
+        except Exception:
+            pass
+
+    def _apply_ai_embed_size(self):
+        if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
+            return
+        if win32gui is None or win32con is None:
+            return
+        try:
+            if not win32gui.IsWindow(self._ai_hwnd):
+                self._ai_hwnd = None
+                return
             frame = self.ai_embed_frame
             w = max(frame.winfo_width(), 50)
             h = max(frame.winfo_height(), 50)
-            win32gui.SetWindowPos(
-                self._ai_hwnd, 0, 0, 0, w, h,
-                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
-            )
+            # Skip redundant SetWindowPos when the size already matches.
+            left, top, right, bottom = win32gui.GetWindowRect(self._ai_hwnd)
+            if right - left != w or bottom - top != h:
+                win32gui.SetWindowPos(
+                    self._ai_hwnd, 0, 0, 0, w, h,
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
+                    win32con.SWP_SHOWWINDOW | 0x4000
+                )
+            self._force_ai_webview_fill()
         except Exception:
             pass
+
+    def _force_ai_webview_fill(self):
+        """Force the pywebview child control(s) to fill the AI window client area.
+
+        The WebView2 control inside the pywebview WinForms host uses
+        Dock=Fill; after reparenting and stripping the caption, WinForms can
+        keep a stale layout, leaving a dead strip at the bottom of the
+        embedded view.  Check each child HWND and resize only when its size
+        actually disagrees with the client rect (no-op when already right,
+        so the 500 ms watchdog never causes flicker).
+        """
+        if not getattr(self, "_ai_hwnd", None) or win32gui is None:
+            return
+        try:
+            if not win32gui.IsWindow(self._ai_hwnd):
+                self._ai_hwnd = None
+                return
+            cr = win32gui.GetClientRect(self._ai_hwnd)
+            cw, ch = cr[2], cr[3]
+            child_rects = []
+
+            def _collect(hwnd, lparam):
+                try:
+                    r = win32gui.GetWindowRect(hwnd)
+                    child_rects.append((hwnd, r[2] - r[0], r[3] - r[1]))
+                except Exception:
+                    pass
+                return True
+
+            win32gui.EnumChildWindows(self._ai_hwnd, _collect, None)
+            mismatched = [(hwnd,) for hwnd, cwd, chd in child_rects
+                          if cwd != cw or chd != ch]
+            for (hwnd,) in mismatched:
+                win32gui.SetWindowPos(
+                    hwnd, 0, 0, 0, cw, ch,
+                    win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
+                )
+        except Exception:
+            pass
+
+    def _start_ai_size_watchdog(self):
+        """While the AI side panel is visible, verify every 500 ms that the
+        embedded window truly fills its container and re-sync if any event
+        (missed <Configure>, show/hide toggle, sash drag) left it short."""
+        if not hasattr(self, "root") or not self.root:
+            return
+        def _watch():
+            if not getattr(self, "_ai_side_visible", False):
+                self._ai_size_watchdog_job = None
+                return
+            try:
+                if getattr(self, "_ai_hwnd", None) and win32gui is not None:
+                    if not win32gui.IsWindow(self._ai_hwnd):
+                        self._ai_hwnd = None
+                    else:
+                        frame = self.ai_embed_frame
+                        w = max(frame.winfo_width(), 50)
+                        h = max(frame.winfo_height(), 50)
+                        left, top, right, bottom = win32gui.GetWindowRect(self._ai_hwnd)
+                        if right - left != w or bottom - top != h:
+                            self._apply_ai_embed_size()
+                        else:
+                            self._force_ai_webview_fill()
+            except Exception:
+                pass
+            try:
+                self._ai_size_watchdog_job = self.root.after(500, _watch)
+            except Exception:
+                self._ai_size_watchdog_job = None
+        self._ai_size_watchdog_job = self.root.after(500, _watch)
     def _on_ai_applied_edit(
         self,
         filepath=None,
@@ -17206,6 +18267,229 @@ default_envs = {self._pio_env_name()}
         if getattr(self, "periodic_reload_enabled", False):
             interval_ms = max(2000, int(getattr(self, "periodic_reload_interval_s", 5)) * 1000)
             self._periodic_reload_after_id = self.root.after(interval_ms, self._periodic_reload_tick)
+
+    def _build_editor_restart_command(self) -> list[str]:
+        """Build a clean command line for an editor-mode restart.
+
+        Do not reuse sys.argv wholesale: a frozen build and a source launch
+        have different argv[0] semantics, and stale project arguments can be
+        duplicated.  The replacement bypasses bootstrap because dependencies
+        have already been verified in the current session.
+        """
+        project_path = str(Path(self.sketch_dir_path).resolve(strict=False))
+        if getattr(sys, "frozen", False):
+            command = [sys.executable]
+        else:
+            command = [sys.executable, str(Path(__file__).resolve())]
+        command.extend(["--from-bootstrap", "--project", project_path])
+        if "--new-window" in sys.argv:
+            command.append("--new-window")
+        return command
+
+    def _confirm_restart_edits(self, parent=None) -> bool:
+        """Protect modified editor buffers before an application restart."""
+        modified = []
+        if getattr(self, "editor_mode", "default") == "monaco":
+            api = getattr(self, "editor_api", None)
+            if api:
+                modified = [
+                    Path(path).name
+                    for path, is_modified in api.modified_files.items()
+                    if is_modified
+                ]
+        else:
+            tab_data = getattr(self, "editor_tab_data", None) or {}
+            modified = [
+                data["path"].name for data in tab_data.values()
+                if data.get("modified")
+            ]
+
+        if not modified:
+            return True
+
+        from tkinter import messagebox
+        names = "\n  • ".join(modified)
+        answer = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            f"The following files have unsaved changes:\n\n  • {names}\n\n"
+            "Save before restarting?",
+            parent=parent or self.root,
+        )
+        if answer is None:
+            return False
+        if answer:
+            if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
+                self._save_all_editor_files()
+
+            # Saving is synchronous in both editor implementations.  Abort the
+            # restart if any buffer still reports dirty (for example, a write
+            # failed because the project is read-only).
+            if getattr(self, "editor_mode", "default") == "monaco":
+                api = getattr(self, "editor_api", None)
+                still_dirty = bool(api and any(api.modified_files.values()))
+            else:
+                still_dirty = any(
+                    data.get("modified")
+                    for data in (getattr(self, "editor_tab_data", None) or {}).values()
+                )
+            if still_dirty:
+                messagebox.showerror(
+                    "Restart Cancelled",
+                    "One or more files could not be saved. The current window will remain open.",
+                    parent=parent or self.root,
+                )
+                return False
+        return True
+
+    def _restart_for_editor_change(self, parent=None) -> bool:
+        """Start and verify the replacement process before closing this GUI.
+
+        Returns False when the handoff failed and the current application must
+        stay open.  On success this function terminates the current process
+        after the replacement has remained alive through its immediate startup
+        window, so it does not normally return.
+        """
+        from tkinter import messagebox
+        import subprocess
+
+        if self.is_busy:
+            messagebox.showwarning(
+                "Restart Unavailable",
+                "Finish or stop the current compile/upload/reset operation before restarting.",
+                parent=parent or self.root,
+            )
+            return False
+        if not self._confirm_restart_edits(parent=parent):
+            return False
+
+        command = self._build_editor_restart_command()
+        logs_dir = SCRIPT_DIR / "logs"
+        restart_log = logs_dir / "editor_restart.log"
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            restart_log.write_text(
+                "Editor restart requested.\n"
+                f"Current PID: {os.getpid()}\n"
+                f"Command: {command!r}\n",
+                encoding="utf-8",
+            )
+            # Remove stale crash output so an immediate restart failure can
+            # only report diagnostics from the replacement being launched now.
+            (logs_dir / "gui_crash.log").write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
+        released_mutex = _release_gui_instance()
+        try:
+            env = os.environ.copy()
+            if getattr(sys, "frozen", False):
+                # Prevent a PyInstaller child from inheriting the current
+                # extraction directory as though it were the same process.
+                env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+                env.pop("_MEIPASS", None)
+                env.pop("_MEIPASS2", None)
+
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 1  # SW_SHOWNORMAL
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+            replacement = subprocess.Popen(
+                command,
+                cwd=str(SCRIPT_DIR),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+
+            # Detect the two common immediate failures: the replacement being
+            # rejected by the single-instance gate and an early import/startup
+            # crash.  Keep the old GUI alive until this check passes.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and replacement.poll() is None:
+                try:
+                    self.root.update_idletasks()
+                except Exception:
+                    pass
+                time.sleep(0.05)
+
+            exit_code = replacement.poll()
+            if exit_code is not None:
+                if released_mutex:
+                    _claim_gui_instance()
+                crash_log = SCRIPT_DIR / "logs" / "gui_crash.log"
+                try:
+                    detail = crash_log.read_text(encoding="utf-8", errors="replace").strip()
+                except Exception:
+                    detail = ""
+                try:
+                    with restart_log.open("a", encoding="utf-8") as stream:
+                        stream.write(f"Replacement exited early with code {exit_code}.\n")
+                        if detail:
+                            stream.write(detail[-4000:] + "\n")
+                except Exception:
+                    pass
+                messagebox.showerror(
+                    "Restart Failed",
+                    f"The Monaco replacement process exited before it was ready "
+                    f"(code {exit_code}).\n\n"
+                    "The current window has been kept open.\n\n"
+                    f"Log: {restart_log}",
+                    parent=parent or self.root,
+                )
+                return False
+
+            try:
+                with restart_log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"Replacement PID {replacement.pid} remained alive; closing old GUI.\n")
+            except Exception:
+                pass
+
+        except Exception as exc:
+            if released_mutex:
+                _claim_gui_instance()
+            try:
+                with restart_log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"Could not launch replacement: {exc!r}\n")
+            except Exception:
+                pass
+            messagebox.showerror(
+                "Restart Failed",
+                f"The replacement application could not be started:\n\n{exc}\n\n"
+                "The current window has been kept open.\n\n"
+                f"Log: {restart_log}",
+                parent=parent or self.root,
+            )
+            return False
+
+        # The replacement is alive and owns (or is about to own) the normal
+        # GUI slot.  Only now dispose this process.  No os.execv() is used: on
+        # Windows that overlay was invoked from the Tk worker thread after the
+        # window had already been destroyed, making failures invisible.
+        try:
+            self._cleanup_active_editor()
+        except Exception:
+            pass
+        try:
+            self._do_stop()
+        except Exception:
+            pass
+        try:
+            if self.serial_conn and self.serial_conn.is_open:
+                self.serial_conn.close()
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
     def _open_settings(self):
         # Create dialog
         dlg = tk.Toplevel(self.root)
@@ -17707,42 +18991,16 @@ default_envs = {self._pio_env_name()}
                             "Would you like to restart the application now?",
                             parent=dlg
                         )
-                        self.editor_mode = new_editor_mode
+                        # Save the preference for the next launch, but keep
+                        # the live runtime marked as Default until a verified
+                        # replacement actually takes over.  Setting
+                        # self.editor_mode to Monaco here used to make the
+                        # still-running Default editor follow Monaco-only close
+                        # and save paths when the user declined or restart failed.
                         self._append("  ✔ Editor mode set to Monaco (requires restart to load).", "info")
                         if restart:
-                            try:
-                                self._cleanup_active_editor()
-                            except Exception:
-                                pass
-                            try:
-                                dlg.destroy()
-                            except Exception:
-                                pass
-                            
-                            # Clean restart
-                            import sys
-                            import os
-                            try:
-                                self.root.destroy()
-                            except Exception:
-                                pass
-                            
-                            # Construct restart arguments with the current project directory
-                            restart_args = sys.argv.copy()
-                            if "--project" in restart_args:
-                                try:
-                                    idx = restart_args.index("--project")
-                                    if idx + 1 < len(restart_args):
-                                        restart_args[idx + 1] = str(self.sketch_dir_path)
-                                except Exception:
-                                    pass
-                            else:
-                                restart_args.extend(["--project", str(self.sketch_dir_path)])
-
-                            if getattr(sys, 'frozen', False):
-                                os.execv(sys.executable, restart_args)
-                            else:
-                                os.execv(sys.executable, [sys.executable] + restart_args)
+                            if self._restart_for_editor_change(parent=dlg):
+                                return
                     else:
                         self._cleanup_active_editor()
                         self.editor_mode = new_editor_mode
@@ -17800,18 +19058,8 @@ default_envs = {self._pio_env_name()}
         dlg.after_idle(_sync_settings_scrollbar)
 
     def _do_hard_reset(self, parent_dlg):
-        # 0. Block if the board is in a boot loop — Hard Reset would make it worse
-        if getattr(self, '_boot_loop_active', False):
-            from tkinter import messagebox
-            messagebox.showwarning(
-                "Boot Loop Detected",
-                "The board is currently in a boot loop.\n\n"
-                "Hard Reset will not help — it erases the flash and leaves the board "
-                "without an application, which causes the same loop.\n\n"
-                "Use Soft Reset instead to flash a minimal sketch and restore normal operation.",
-                parent=parent_dlg
-            )
-            return
+        # A boot loop is a valid reason to perform the ESP32 full-erase hard reset.
+        # Do not block the operation merely because serial output is repeating.
 
         # 1. Check if busy (with auto-recovery for stale busy flag)
         if self.is_busy:
@@ -17849,13 +19097,76 @@ default_envs = {self._pio_env_name()}
             )
             return
 
+        # ESP32 Hard Reset must use boot images generated for this exact project
+        # and board. Do not silently invoke raw PlatformIO here: the normal Compile
+        # action also prepares Arduino sketch sources and project structure first.
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        platform_name = str(board_info.get("platform", "")).lower()
+        if platform_name == "espressif32":
+            env_name = self._pio_env_name()
+            candidate_dirs = (
+                self.sketch_dir_path / ".pio" / "build" / env_name,
+                self.sketch_dir_path / "build_artifacts" / env_name,
+            )
+            has_project_boot_images = any(
+                (folder / "bootloader.bin").is_file()
+                and (folder / "partitions.bin").is_file()
+                for folder in candidate_dirs
+            )
+            if not has_project_boot_images:
+                from tkinter import messagebox
+                compile_now = messagebox.askyesno(
+                    "Compile Required",
+                    f"Hard Reset cannot start because this project has not yet been "
+                    f"compiled successfully for {board_name}.\n\n"
+                    "A successful Compile is required to generate the exact "
+                    "bootloader.bin and partitions.bin for this project. Nothing "
+                    "will be erased or written yet.\n\n"
+                    "Compile the project now?\n\n"
+                    "After Compile succeeds, run Hard Reset again.",
+                    parent=parent_dlg,
+                )
+                if not compile_now:
+                    return
+
+                try:
+                    parent_dlg.destroy()
+                except Exception:
+                    pass
+                self._clear_console_if_action_enabled()
+                self._append("")
+                self._append("=" * 50, "header")
+                self._append("  ⚙ COMPILE REQUIRED FOR HARD RESET", "header")
+                self._append("=" * 50, "header")
+                self._append(
+                    f"  Hard Reset needs project boot images for {board_name}.",
+                    "warning",
+                )
+                self._append("  Starting the normal Compile operation now...", "info")
+                self._append(
+                    "  No flash data has been erased or written.",
+                    "success",
+                )
+                self._append(
+                    "  After Compile succeeds, open Settings and run Hard Reset again.",
+                    "dim",
+                )
+                self.root.after_idle(self._do_compile)
+                return
+
         # 2. Show confirmation
         from tkinter import messagebox
         confirm = messagebox.askyesno(
-            "Hard Reset Confirmation",
-            "WARNING: Burning the bootloader is a direct hardware write operation. "
-            "It will overwrite the boot portion of the MCU memory.\n\n"
-            "Do you want to proceed?",
+            "ESP32 Full Erase + Burn Bootloader",
+            "This is a destructive hard reset. It will erase the ENTIRE ESP32 flash, "
+            "including the current application, Soft Reset sketch, NVS settings, OTA "
+            "state, and filesystem data.\n\n"
+            "After erasing, it will write only the board bootloader, the active partition "
+            "table, and boot_app0. No application firmware will be installed.\n\n"
+            "A 5-second countdown will appear. Press and HOLD BOOT during the countdown "
+            "and keep holding it until esptool connects.\n\n"
+            "Continue with the full erase?",
             parent=parent_dlg
         )
         if not confirm:
@@ -17878,11 +19189,15 @@ default_envs = {self._pio_env_name()}
         except Exception as e:
             import traceback
             try:
-                with open("error_log.txt", "w", encoding="utf-8") as f:
+                hard_reset_log = SCRIPT_DIR / "logs" / "hard_reset_error.log"
+                hard_reset_log.parent.mkdir(parents=True, exist_ok=True)
+                with open(hard_reset_log, "w", encoding="utf-8") as f:
                     traceback.print_exc(file=f)
             except Exception:
-                pass
-            self._append(f"  ✖ Internal error in hard reset thread: {e}", "error")
+                hard_reset_log = None
+            self._append(f"Hard reset error: {e}", "error")
+            if hard_reset_log:
+                self._append(f"Log: {hard_reset_log}", "dim")
             self._set_status("Hard Reset FAILED", Theme.RED)
         finally:
             # Guarantee busy state is always cleared
@@ -17926,357 +19241,299 @@ default_envs = {self._pio_env_name()}
         return [sys.executable, "-m", "esptool"]
 
     def _run_hard_reset_inner(self, port: str):
+        """Perform the ESP32 equivalent of a clean bootloader burn.
+
+        Esptool has no separate ``burn-bootloader`` command for ESP32. The safe
+        serial equivalent is one ``write-flash --erase-all`` transaction that
+        erases every flash sector, then writes only the project-matched second-stage
+        bootloader, partition table, and boot_app0 image. Application firmware is
+        intentionally not written, so a previously flashed Soft Reset sketch cannot
+        remain active after this operation.
+        """
         owner_pid = port_occupied_owner(port)
         if owner_pid:
-            self._append(f"  ⚠ Hard reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
+            self._append(
+                f"  ⚠ Hard reset blocked: Port '{port}' is in use by another "
+                f"window (PID {owner_pid}).",
+                "warning",
+            )
+            self._set_status("Hard Reset blocked", Theme.RED)
             return
-        # Pause monitor
+
         was_monitoring = self._pause_monitor()
+        boot_images_written = False
         if was_monitoring:
             time.sleep(0.5)
 
-        self._append("")
-        self._append("=" * 50, "header")
-        self._append("  🔥 BURNING BOOTLOADER (Hard Reset)", "header")
-        self._append("=" * 50, "header")
-        self._append(f"  Port  : {port}", "port_highlight")
-        self._append(f"  Board : {self.board_var.get()}", "dim")
-        if self._detect_port_chip() is None and not getattr(self, "_board_port_confirmed", False):
-            self._append("  ⚠ Unrecognized USB-serial port — proceeding anyway.", "warning")
-
-        # Desktop vs Laptop tip
         try:
-            # pyrefly: ignore [missing-import]
-            from detector import is_laptop
-            system_is_laptop = is_laptop()
-        except Exception:
-            system_is_laptop = False
-
-        if not system_is_laptop:
-            self._append("  💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.", "dim")
-
-        self._append("")
-        board_name = self.board_var.get()
-        is_avr = SUPPORTED_BOARDS.get(board_name, {}).get("platform", "") == "atmelavr"
-
-        ok = False
-
-        _hr_state   = ["Initializing"]
-        _hr_active  = [True]
-        _hr_frame   = [0]
-        _hr_start   = time.time()
-        _hr_spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-        def _hr_spin_loop():
-            while _hr_active[0] and self.is_busy:
-                elapsed = int(time.time() - _hr_start)
-                frame   = _hr_spinner[_hr_frame[0] % len(_hr_spinner)]
-                _hr_frame[0] += 1
-                self._set_status(
-                    f"{frame} Hard Reset: {_hr_state[0]}... ({elapsed}s)",
-                    Theme.RED,
-                )
-                time.sleep(0.08)
-
-        import threading as _threading_hr
-        _hr_spin_thread = _threading_hr.Thread(target=_hr_spin_loop, daemon=True)
-        _hr_spin_thread.start()
-
-        if is_avr:
-            self._append("  Board: AVR — using PlatformIO bootloader target.", "dim")
-            _hr_state[0] = "Burning bootloader (AVR)"
-
-            if not self._ensure_platformio_ini():
-                self._append("  ✖ Failed to verify/create platformio.ini for Hard Reset.", "error")
-                self.is_busy = False
-                self._set_buttons_busy(False)
-                if was_monitoring:
-                    self._resume_monitor()
-                return
-
-            pio_path = find_pio_executable()
-            if not pio_path:
-                self._append("  ⚠ PlatformIO not found — installing automatically...", "warning")
-                self._set_status("Installing PlatformIO...", Theme.YELLOW)
-                pio_path = ensure_platformio()
-                if not pio_path:
-                    self._append("  ✖ Failed to install PlatformIO!", "error")
-                    self.is_busy = False
-                    self._set_buttons_busy(False)
-                    if was_monitoring:
-                        self._resume_monitor()
-                    return
-
-            jobs = self._get_cpu_cores_jobs()
-            cmd = pio_path + ["run", "-t", "bootloader", "-j", str(jobs), "--upload-port", port]
-            try:
-                self.process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, encoding="utf-8", errors="replace",
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                    cwd=str(self.sketch_dir_path),
-                )
-            except Exception as e:
-                self._append(f"  ✖ Failed to execute bootloader target: {e}", "error")
-                self.is_busy = False
-                self._set_buttons_busy(False)
-                if was_monitoring:
-                    self._resume_monitor()
-                return
-
-            for line in iter(self.process.stdout.readline, ""):
-                stripped = line.rstrip()
-                if stripped:
-                    low = stripped.lower()
-                    if "error" in low or "failed" in low:
-                        self._append(f"  {stripped}", "error")
-                    elif any(kw in low for kw in ["success", "done", "writing", "erasing", "verified"]):
-                        self._append(f"  {stripped}", "success")
-                    else:
-                        self._append(f"  {stripped}", "dim")
-
-            self.process.wait()
-            ok = self.process.returncode == 0
-
-        else:
-            esptool_cmd_base = self._get_esptool_cmd()
-
+            board_name = self.board_var.get()
             board_info = SUPPORTED_BOARDS.get(board_name, {})
-            target_mcu = board_info.get("mcu", "esp32").lower().replace("-", "")
+            platform_name = str(board_info.get("platform", "")).lower()
+            is_avr = platform_name == "atmelavr"
 
-            pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR")
-            if pio_core_dir:
-                pio_packages = Path(pio_core_dir) / "packages"
-            else:
-                local_pio = SCRIPT_DIR / "env" / ".platformio"
-                pio_packages = (local_pio / "packages") if local_pio.exists() else Path.home() / ".platformio" / "packages"
+            self._append("")
+            self._append("=" * 50, "header")
+            self._append("  🔥 BURNING BOOTLOADER (Hard Reset)", "header")
+            self._append("=" * 50, "header")
+            self._append(f"  Port  : {port}", "port_highlight")
+            self._append(f"  Board : {board_name}", "dim")
 
-            framework_dir = None
-            if pio_packages.exists():
-                for candidate in sorted(pio_packages.glob("framework-arduinoespressif32*"), reverse=True):
-                    if candidate.is_dir():
-                        framework_dir = candidate
-                        break
-
-            tools_dir = (framework_dir / "tools") if framework_dir else Path()
-
-            libs_packages = []
-            if pio_packages.exists():
-                for candidate in sorted(pio_packages.glob("framework-arduinoespressif32-libs*"), reverse=True):
-                    if candidate.is_dir():
-                        libs_packages.append(candidate)
-            if framework_dir:
-                libs_packages.append(framework_dir)
-
-            _target_dirs = [target_mcu, f"esp32_{target_mcu}", target_mcu.upper()]
-
-            def _is_not_variant(p: Path) -> bool:
-                return "variants" not in p.parts
-
-            bootloader_bin = None
-            partitions_bin = None
-            boot_app0_bin = None
-            build_dir = self.sketch_dir_path / ".pio" / "build"
-
-            _bootloader_candidates = []
-            for pkg in libs_packages:
-                for t_dir in _target_dirs:
-                    _bootloader_candidates += [
-                        pkg / t_dir / "bin" / "bootloader_qio_80m.bin",
-                        pkg / t_dir / "bin" / "bootloader_dio_80m.bin",
-                        pkg / t_dir / "bin" / "bootloader_qio_120m.bin",
-                        pkg / t_dir / "bin" / "bootloader_dio_40m.bin",
-                        pkg / t_dir / "bin" / "bootloader_dout_40m.bin",
-                    ]
-            for t_dir in _target_dirs:
-                _bootloader_candidates += [
-                    tools_dir / "esp32-arduino-libs" / t_dir / "bin" / "bootloader_qio_80m.bin",
-                    tools_dir / "esp32-arduino-libs" / t_dir / "bin" / "bootloader_dio_80m.bin",
-                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_qio_80m.bin",
-                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_dio_80m.bin",
-                    tools_dir / "sdk" / t_dir / "bin" / "bootloader_dout_40m.bin",
-                ]
-
-            for candidate in _bootloader_candidates:
-                if candidate.exists():
-                    bootloader_bin = candidate
-                    break
-
-            if bootloader_bin is None:
-                _search_roots = [tools_dir] + libs_packages
-                hits = [p for r in _search_roots for p in r.rglob("bootloader_*.bin") if _is_not_variant(p)]
-                if hits:
-                    match_target = [p for p in hits if target_mcu in str(p).lower()]
-                    bootloader_bin = match_target[0] if match_target else sorted(hits)[0]
-
-            if partitions_bin is None:
-                _partitions_explicit = [
-                    tools_dir / "partitions" / "default.bin",
-                ]
-                if framework_dir:
-                    _partitions_explicit.append(framework_dir / "partitions" / "default.bin")
-                for candidate in _partitions_explicit:
-                    if candidate.exists():
-                        partitions_bin = candidate
-                        break
-                if partitions_bin is None and framework_dir:
-                    hits = [p for p in framework_dir.rglob("default.bin")
-                            if _is_not_variant(p) and p.stat().st_size < 10_000]
-                    if hits:
-                        partitions_bin = sorted(hits)[0]
-
-            if boot_app0_bin is None:
-                _boot_app0_explicit = [
-                    tools_dir / "partitions" / "boot_app0.bin",
-                ]
-                if framework_dir:
-                    _boot_app0_explicit.append(framework_dir / "partitions" / "boot_app0.bin")
-                for candidate in _boot_app0_explicit:
-                    if candidate.exists():
-                        boot_app0_bin = candidate
-                        break
-                if boot_app0_bin is None and framework_dir:
-                    hits = [p for p in framework_dir.rglob("boot_app0.bin") if _is_not_variant(p)]
-                    if hits:
-                        boot_app0_bin = sorted(hits)[0]
-
-            # ── 3. AUTOMATIC AUTO-COMPILE FALLBACK IF ANY BINARY IS MISSING ─────────
-            if not bootloader_bin or not partitions_bin:
-                self._append(f"  ⚡ Bootloader/partitions not pre-built for {board_name}. Auto-building project now...", "info")
-                _hr_state[0] = "Auto-compiling project bootloader"
-                pio_path = find_pio_executable() or ensure_platformio()
-                if pio_path and self._ensure_platformio_ini():
-                    jobs = self._get_cpu_cores_jobs()
-                    cmd = pio_path + ["run", "-j", str(jobs)]
-                    try:
-                        res = subprocess.run(
-                            cmd, cwd=str(self.sketch_dir_path), capture_output=True, text=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                        )
-                        build_dir = self.sketch_dir_path / ".pio" / "build"
-                        if build_dir.is_dir():
-                            if not bootloader_bin:
-                                b_hits = sorted(list(build_dir.rglob("bootloader.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
-                                if b_hits:
-                                    bootloader_bin = b_hits[0]
-                                    self._append(f"  ✔ Generated bootloader.bin: {bootloader_bin.name}", "success")
-                            if not partitions_bin:
-                                p_hits = sorted(list(build_dir.rglob("partitions.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
-                                if p_hits:
-                                    partitions_bin = p_hits[0]
-                                    self._append(f"  ✔ Generated partitions.bin: {partitions_bin.name}", "success")
-                            if not boot_app0_bin:
-                                ba_hits = sorted(list(build_dir.rglob("boot_app0.bin")), key=lambda p: p.stat().st_mtime, reverse=True)
-                                if ba_hits:
-                                    boot_app0_bin = ba_hits[0]
-                    except Exception as e:
-                        self._append(f"  ⚠ Auto-compilation attempt error: {e}", "warning")
-
-            missing = []
-            if not bootloader_bin:
-                missing.append("bootloader (bootloader.bin / bootloader_qio_80m.bin)")
-            if not partitions_bin:
-                missing.append("partitions (partitions.bin / default.bin)")
-            if not boot_app0_bin:
-                missing.append("boot_app0.bin")
-
-            if missing:
-                self._append(f"  \u2716 Could not locate or build required bootloader files:", "error")
-                for m in missing:
-                    self._append(f"      \u2022 {m}", "error")
-                self._append(f"  Searched inside build dir: {build_dir}", "dim")
-                self._append(f"  Searched inside: {framework_dir}", "dim")
-                if libs_packages:
-                    for lp in libs_packages:
-                        self._append(f"               + {lp}", "dim")
-                self._append("", "dim")
-                _hr_active[0] = False
-                _hr_spin_thread.join(timeout=1)
-                self.is_busy = False
-                self._set_buttons_busy(False)
-                if was_monitoring:
-                    self._resume_monitor()
-                return
-
-            self._append(f"  Bootloader : {bootloader_bin.name}", "dim")
-            self._append(f"  Partitions : {partitions_bin.name}", "dim")
-            self._append(f"  boot_app0  : {boot_app0_bin.name}", "dim")
+            try:
+                # pyrefly: ignore [missing-import]
+                from detector import is_laptop
+                system_is_laptop = is_laptop()
+            except Exception:
+                system_is_laptop = False
+            if not system_is_laptop:
+                self._append(
+                    "  💡 Press and HOLD the BOOT button when prompted below.",
+                    "warning",
+                )
             self._append("")
 
-            # ── Step 1: erase flash ─────────────────────────────────────────────
-            self._append("  Step 1/2 — Erasing flash...", "dim")
-            _hr_state[0] = "Erasing flash"
-
-            erase_cmd = esptool_cmd_base + [
-                "--chip", target_mcu,
-                "--port", port,
-                "--before", "default-reset",
-                "--after", "no-reset",
-                "--connect-attempts", "3",
-                "erase-flash",
-            ]
-            self._append(f"  $ {' '.join(str(x) for x in erase_cmd)}", "dim")
-
-            _HR_WATCHDOG_SECS = 120  # abort if a single esptool step takes longer
-            try:
+            if is_avr:
+                self._append("  🔧 Starting the normal PlatformIO bootloader target...", "info")
+                if not self._ensure_platformio_ini():
+                    self._append("  ✖ Could not prepare platformio.ini.", "error")
+                    self._set_status("Hard Reset failed", Theme.RED)
+                    return
+                pio_path = find_pio_executable() or ensure_platformio()
+                if not pio_path:
+                    self._append("  ✖ PlatformIO is unavailable.", "error")
+                    self._set_status("Hard Reset failed", Theme.RED)
+                    return
+                cmd = pio_path + [
+                    "run", "-t", "bootloader", "-j", str(self._get_cpu_cores_jobs()),
+                    "--upload-port", port,
+                ]
                 self.process = subprocess.Popen(
-                    erase_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, encoding="utf-8", errors="replace",
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    cmd,
+                    cwd=str(self.sketch_dir_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    ),
                 )
-                _erase_start = time.time()
                 for line in iter(self.process.stdout.readline, ""):
-                    if time.time() - _erase_start > _HR_WATCHDOG_SECS:
-                        self._append(f"  ⚠ Erase timed out after {_HR_WATCHDOG_SECS}s — aborting.", "warning")
-                        self._do_stop()
-                        break
                     stripped = line.rstrip()
                     if stripped:
                         low = stripped.lower()
-                        if "error" in low or "failed" in low:
-                            self._append(f"  {stripped}", "error")
-                        elif any(kw in low for kw in ["erase", "done", "chip", "connecting", "stub", "running"]):
-                            self._append(f"  {stripped}", "success")
-                        else:
-                            self._append(f"  {stripped}", "dim")
-                self.process.wait(timeout=10)
-                erase_ok = self.process.returncode == 0
-            except subprocess.TimeoutExpired:
-                self._append("  ⚠ Erase process did not exit cleanly — force killing.", "warning")
-                self._do_stop()
-                erase_ok = False
-            except Exception as e:
-                self._append(f"  ⚠ Erase failed: {e}", "warning")
-                erase_ok = False
+                        tag = "error" if "error" in low or "failed" in low else "normal"
+                        self._append(stripped, tag)
+                self.process.wait()
+                if self.process.returncode != 0:
+                    self._append(
+                        f"  ✖ Bootloader burn failed with exit code {self.process.returncode}.",
+                        "error",
+                    )
+                    self._set_status("Hard Reset failed", Theme.RED)
+                    return
 
-            if erase_ok:
-                self._append("  ✔ Full chip flash erased.", "success")
-            else:
-                self._append("  ⚠ Full chip erase skipped (device was not in download mode during Step 1).", "warning")
-                self._append("  👉 Proceeding to Step 2 — write-flash will connect, erase bootloader sectors, and write files.", "info")
+                self._append("  🔄 Resetting board through DTR...", "info")
+                time.sleep(0.25)
+                self._trigger_actual_board_reset(port)
+                self._append("  ✔ Bootloader burn completed successfully.", "success")
+                self._set_status("Bootloader burn successful", Theme.GREEN)
+                return
 
+            if platform_name != "espressif32":
+                self._append(
+                    f"  ✖ Normal bootloader burn is not implemented for platform "
+                    f"'{platform_name or 'unknown'}'.",
+                    "error",
+                )
+                self._set_status("Hard Reset unsupported", Theme.RED)
+                return
+
+            if not self._ensure_platformio_ini():
+                self._append("  ✖ Could not prepare platformio.ini.", "error")
+                self._set_status("Hard Reset failed", Theme.RED)
+                return
+
+            env_name = self._pio_env_name()
+            project_build_dir = self.sketch_dir_path / ".pio" / "build" / env_name
+            artifact_build_dir = self.sketch_dir_path / "build_artifacts" / env_name
+
+            def _complete_project_images(folder: Path):
+                boot = folder / "bootloader.bin"
+                part = folder / "partitions.bin"
+                firmware = folder / "firmware.bin"
+                if boot.is_file() and part.is_file():
+                    return boot, part, (firmware if firmware.is_file() else None)
+                return None
+
+            image_set = _complete_project_images(project_build_dir)
+            if image_set is None:
+                image_set = _complete_project_images(artifact_build_dir)
+
+            if image_set is None:
+                self._append("  ✖ Compile required before Hard Reset.", "error")
+                self._append(
+                    "  This project has no completed bootloader.bin and partitions.bin "
+                    "for the selected board.",
+                    "warning",
+                )
+                self._append(
+                    "  Click Compile first. After it succeeds, run Hard Reset again.",
+                    "info",
+                )
+                self._append(
+                    "  No flash data was erased or written.",
+                    "success",
+                )
+                self._set_status("Compile required for Hard Reset", Theme.YELLOW)
+
+                def _show_compile_required_notice():
+                    try:
+                        from tkinter import messagebox
+                        messagebox.showwarning(
+                            "Compile Required",
+                            "Hard Reset was stopped because the selected project has "
+                            "not been compiled successfully for this board.\n\n"
+                            "Click Compile first. After Compile succeeds, run Hard "
+                            "Reset again.\n\nNo flash data was erased or written.",
+                            parent=self.root,
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    self.root.after(0, _show_compile_required_notice)
+                except Exception:
+                    pass
+                return
+
+            bootloader_bin, partitions_bin, firmware_bin = image_set
+            boot_app0_bin = self._locate_esp32_boot_app0()
+            if boot_app0_bin is None:
+                self._append("  ✖ Could not locate boot_app0.bin.", "error")
+                self._set_status("Hard Reset failed", Theme.RED)
+                return
+
+            def _validate_image(path: Path, label: str, minimum: int, magic=None):
+                try:
+                    data = path.read_bytes()
+                except Exception as exc:
+                    self._append(f"  ✖ Could not read {label}: {exc}", "error")
+                    return False
+                if len(data) < minimum:
+                    self._append(
+                        f"  ✖ {label} is truncated ({len(data)} bytes).",
+                        "error",
+                    )
+                    return False
+                if magic is not None and not data.startswith(magic):
+                    self._append(f"  ✖ {label} has an invalid file header.", "error")
+                    return False
+                return True
+
+            def _validate_partition_table(path: Path):
+                try:
+                    data = path.read_bytes()
+                except Exception as exc:
+                    self._append(f"  ✖ Could not read partitions.bin: {exc}", "error")
+                    return False
+                if len(data) < 0xC00 or data[:2] != b"\xAA\x50":
+                    self._append(
+                        "  ✖ partitions.bin is not a valid ESP32 partition table.",
+                        "error",
+                    )
+                    return False
+                md5_marker = data.find(b"\xEB\xEB")
+                if md5_marker < 0 or md5_marker % 32 != 0 or md5_marker + 32 > len(data):
+                    self._append(
+                        "  ✖ partitions.bin has no valid MD5 record; refusing to flash it.",
+                        "error",
+                    )
+                    return False
+                expected = data[md5_marker + 16:md5_marker + 32]
+                actual = hashlib.md5(data[:md5_marker]).digest()
+                if expected != actual:
+                    self._append(
+                        "  ✖ partitions.bin failed its MD5 integrity check.",
+                        "error",
+                    )
+                    return False
+                return True
+
+            if not all((
+                _validate_image(bootloader_bin, "bootloader.bin", 4096, b"\xE9"),
+                _validate_partition_table(partitions_bin),
+                _validate_image(boot_app0_bin, "boot_app0.bin", 1024),
+            )):
+                self._append("  ✖ Hard Reset stopped before writing anything.", "error")
+                self._set_status("Hard Reset failed", Theme.RED)
+                return
+
+            partition_scheme = self._project_option("board_build.partitions") or "board default"
+            self._append("  ⚡ Using the active project's matching boot images.", "info")
+            self._append(f"  Bootloader : {bootloader_bin.name}", "dim")
+            self._append(
+                f"  Partitions : {partitions_bin.name} ({partition_scheme})",
+                "dim",
+            )
+            self._append(f"  boot_app0  : {boot_app0_bin.name}", "dim")
+            self._append("  Firmware   : ERASED — no application will be written", "warning")
+            self._append("  Data       : ERASED — NVS, OTA state, and filesystem", "warning")
             self._append("")
+            self._append("  ✔ Required bootloader files are ready.", "success")
+            self._append("  ⚠ Press and HOLD the BOOT button now.", "warning")
 
-            # Determine bootloader offset address dynamically based on target MCU
-            if target_mcu in ("esp32s3", "esp32c3", "esp32c6", "esp32h2", "esp32c2"):
-                bootloader_addr = "0x0"
-            else:
-                bootloader_addr = "0x1000"
+            countdown_seconds = 5
+            bar_width = 30
+            for remaining in range(countdown_seconds, 0, -1):
+                if getattr(self, "_stop_requested", False):
+                    bar = "░" * bar_width
+                    self._append_progress(
+                        f"  ✖ Hold BOOT [ {bar} ] | Cancelled",
+                        "error",
+                        action_type="hold boot",
+                    )
+                    self._append("  ⚠ Bootloader burn cancelled.", "warning")
+                    self._set_status("Hard Reset cancelled", Theme.YELLOW)
+                    return
+                elapsed = countdown_seconds - remaining
+                filled = round(bar_width * elapsed / countdown_seconds)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                self._set_status(f"Hold BOOT - starting in {remaining}s", Theme.YELLOW)
+                self._append_progress(
+                    f"  Hold BOOT [ {bar} ] | Starting in {remaining}s",
+                    "warning",
+                    action_type="hold boot",
+                )
+                time.sleep(1.0)
 
-            self._append(f"  Target Board: {self.board_var.get()} ({target_mcu}) -> Bootloader Addr: {bootloader_addr}", "dim")
+            self._append_progress(
+                f"  ✔ Hold BOOT [ {'█' * bar_width} ] | Starting now",
+                "success",
+                action_type="hold boot",
+            )
+            self._append(
+                "  🔌 Starting esptool. Keep holding BOOT until the board connects.",
+                "info",
+            )
+            self._set_status("Connecting to bootloader...", Theme.YELLOW)
 
-            # ── Step 2: write bootloader + partitions + boot_app0 ──────────────
-            self._append("  Step 2/2 — Writing bootloader files...", "dim")
-            _hr_state[0] = "Writing bootloader"
-
-            write_cmd = esptool_cmd_base + [
+            target_mcu = str(board_info.get("mcu", "esp32")).lower().replace("-", "")
+            bootloader_addr = (
+                "0x0"
+                if target_mcu in ("esp32s3", "esp32c3", "esp32c6", "esp32h2", "esp32c2")
+                else "0x1000"
+            )
+            burn_cmd = self._get_esptool_cmd() + [
                 "--chip", target_mcu,
                 "--port", port,
-                "--baud", "460800",
+                "--baud", "115200",
                 "--before", "default-reset",
-                "--after", "hard-reset",
-                "--connect-attempts", "3",
+                "--after", "no-reset",
+                "--connect-attempts", "10",
                 "write-flash",
+                "--erase-all",
                 "--flash-mode", "keep",
                 "--flash-freq", "keep",
                 "--flash-size", "detect",
@@ -18284,88 +19541,151 @@ default_envs = {self._pio_env_name()}
                 "0x8000", str(partitions_bin),
                 "0xe000", str(boot_app0_bin),
             ]
-            self._append(f"  $ {' '.join(str(x) for x in write_cmd)}", "dim")
 
-            def _execute_esptool_write(cmd_list):
-                try:
-                    self.process = subprocess.Popen(
-                        cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1, encoding="utf-8", errors="replace",
-                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            progress_state = {
+                "stages": [
+                    {
+                        "key": "bootloader",
+                        "label": "Bootloader",
+                        "path": bootloader_bin,
+                        "basename": bootloader_bin.name.lower(),
+                    },
+                    {
+                        "key": "partitions",
+                        "label": "Partitions",
+                        "path": partitions_bin,
+                        "basename": partitions_bin.name.lower(),
+                    },
+                    {
+                        "key": "boot_app0",
+                        "label": "Boot App",
+                        "path": boot_app0_bin,
+                        "basename": boot_app0_bin.name.lower(),
+                    },
+                ],
+                "active_index": 0,
+                "started": False,
+                "last_percent": None,
+                "compressed_total": None,
+            }
+
+            erase_progress_started = False
+            erase_progress_completed = False
+
+            self.process = subprocess.Popen(
+                burn_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+            )
+            for line in iter(self.process.stdout.readline, ""):
+                stripped = line.rstrip()
+                if not stripped:
+                    continue
+                if self._consume_esptool_upload_progress(
+                    progress_state,
+                    stripped,
+                    phase_callback=lambda phase: self._set_status(
+                        f"{phase} boot images...", Theme.YELLOW
+                    ),
+                ):
+                    continue
+
+                low = stripped.lower()
+                erase_finished = (
+                    "flash memory erased successfully" in low
+                    or "chip erase completed successfully" in low
+                    or ("erase" in low and "completed" in low and "success" in low)
+                )
+                if erase_finished:
+                    erase_progress_started = True
+                    erase_progress_completed = True
+                    self._set_status("Full flash erase complete", Theme.GREEN)
+                    self._append_progress(
+                        "  ✔ Erasing flash [ ██████████████████████████████ ] | 100% Complete",
+                        "success",
+                        action_type="erasing flash",
                     )
-                except Exception as e:
-                    self._append(f"  ✖ Failed to launch esptool write: {e}", "error")
-                    return False
-                _write_start = time.time()
-                for line in iter(self.process.stdout.readline, ""):
-                    if time.time() - _write_start > _HR_WATCHDOG_SECS:
-                        self._append(f"  ⚠ Write timed out after {_HR_WATCHDOG_SECS}s — aborting.", "warning")
-                        self._do_stop()
-                        break
-                    stripped = line.rstrip()
-                    if stripped:
-                        low = stripped.lower()
-                        if "error" in low or "failed" in low:
-                            self._append(f"  {stripped}", "error")
-                        elif any(kw in low for kw in ["writing", "wrote", "done", "verified", "hash", "leaving", "hard reset", "compressed"]):
-                            self._append(f"  {stripped}", "success")
-                        else:
-                            self._append(f"  {stripped}", "dim")
-                try:
-                    self.process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self._append("  ⚠ Write process did not exit cleanly — force killing.", "warning")
-                    self._do_stop()
-                return self.process.returncode == 0
+                    # Keep esptool's measured erase duration visible below the bar.
+                    self._append(stripped, "success")
+                    continue
+                if "erasing flash" in low or "chip erase" in low:
+                    erase_progress_started = True
+                    self._set_status("Erasing entire flash...", Theme.YELLOW)
+                    self._append_progress(
+                        "  Erasing flash [ ███████████████░░░░░░░░░░░░░░░ ] | Please wait",
+                        "warning",
+                        action_type="erasing flash",
+                    )
+                    continue
+                if "connected to " in low or "hash of data verified" in low:
+                    tag = "success"
+                elif "error" in low or "failed" in low or "fatal" in low:
+                    tag = "error"
+                elif "connecting" in low or "uploading stub" in low:
+                    tag = "magenta"
+                elif low.startswith(("chip type", "features", "crystal", "mac", "serial port")):
+                    tag = "dim"
+                else:
+                    tag = "normal"
+                self._append(stripped, tag)
 
-            ok = _execute_esptool_write(write_cmd)
+            self.process.wait()
+            if self.process.returncode != 0:
+                self._append(
+                    f"  ✖ Bootloader burn failed with exit code {self.process.returncode}.",
+                    "error",
+                )
+                self._set_status("Bootloader burn failed", Theme.RED)
+                return
 
-            # Auto-retry at 115200 baud if 460800 fails (handles desktop CH340 / CP2102 driver limits or OS handle locks)
-            if not ok:
-                self._append("", "dim")
-                self._append("  ⚠ Bootloader write attempt at 460800 baud failed or encountered port lock.", "warning")
-                self._append("  🔄 Pausing 1.0s and retrying bootloader write at 115200 baud for maximum compatibility...", "info")
-                time.sleep(1.0)
-                fallback_cmd = esptool_cmd_base + [
-                    "--chip", target_mcu,
-                    "--port", port,
-                    "--baud", "115200",
-                    "--before", "default-reset",
-                    "--after", "hard-reset",
-                    "--connect-attempts", "3",
-                    "write-flash",
-                    "--flash-mode", "keep",
-                    "--flash-freq", "keep",
-                    "--flash-size", "detect",
-                    bootloader_addr, str(bootloader_bin),
-                    "0x8000", str(partitions_bin),
-                    "0xe000", str(boot_app0_bin),
-                ]
-                ok = _execute_esptool_write(fallback_cmd)
+            # Some esptool releases do not emit a separate parseable erase-done
+            # line.  A successful write-flash --erase-all return code still means
+            # the erase completed, so never leave the visual bar half-filled.
+            if erase_progress_started and not erase_progress_completed:
+                self._append_progress(
+                    "  ✔ Erasing flash [ ██████████████████████████████ ] | 100% Complete",
+                    "success",
+                    action_type="erasing flash",
+                )
+                erase_progress_completed = True
 
-        # Stop spinner
-        _hr_active[0] = False
-        _hr_spin_thread.join(timeout=1)
+            boot_images_written = True
+            self._append("  🔄 Boot images written successfully.", "success")
+            self._append("  🔄 Performing final Reset(DTR/RTS)...", "info")
+            self._set_status("Resetting board through DTR/RTS...", Theme.YELLOW)
+            # Give Windows/esptool enough time to release the COM handle before
+            # reopening it for the explicit post-flash reset pulse.
+            time.sleep(0.75)
+            reset_ok = self._trigger_actual_board_reset(port)
+            if not reset_ok:
+                self._append(
+                    "  ⚠ Flashing succeeded, but the automatic Reset(DTR/RTS) did not complete.",
+                    "warning",
+                )
+                self._append(
+                    "  Press the board's EN/RESET button once, or reconnect USB.",
+                    "info",
+                )
+                self._set_status("Hard Reset flashed - DTR reset failed", Theme.YELLOW)
+                return
 
-        # ── Result ──────────────────────────────────────────────────────────────
-        if ok:
-            self._append("")
-            self._append("  ✔ Bootloader burn successful! (Hard Reset OK)", "success")
-            self._append("  👉 Bootloader and partitions restored. Click UPLOAD to flash your project sketch.", "info")
-            self._set_status("Hard Reset Successful", Theme.GREEN)
-        else:
-            self._append("")
-            self._append("  ✖ Bootloader burn FAILED.", "error")
-            self._set_status("Hard Reset FAILED", Theme.RED)
-
-        self.is_busy = False
-        self._set_buttons_busy(False)
-
-        if ok and not was_monitoring:
-            self._trigger_actual_board_reset(port)
-
-        if was_monitoring:
-            self._resume_monitor()
+            self._append("  ✔ Full erase, bootloader burn, and Reset(DTR/RTS) completed successfully.", "success")
+            self._append("  ℹ The ESP32 is intentionally blank. Use Upload to install a project sketch.", "info")
+            self._append("  ℹ The serial monitor remains stopped to avoid blank-flash boot messages.", "dim")
+            self._set_status("Hard Reset complete - board blank", Theme.GREEN)
+        finally:
+            # Resume only when flashing did not complete.  Once the full erase
+            # succeeded the board is intentionally blank, even if the final
+            # Reset(DTR/RTS) pulse was blocked, so keep the monitor stopped.
+            if was_monitoring and not boot_images_written:
+                self._resume_monitor()
 
     def _locate_esp32_boot_app0(self) -> Path | None:
         """
@@ -18852,12 +20172,17 @@ default_envs = {self._pio_env_name()}
             pass
 
     def _soft_reset_esptool_write(self, fast_bins: dict, port: str,
-                                  phase_callback=None) -> tuple[bool, str]:
+                                  phase_callback=None,
+                                  start_attempt: int = 1) -> tuple[bool, str, int]:
         """
         Write the cached Soft Reset binaries straight to flash with esptool.
         This performs the exact same upload "pio run -t upload" would have
         done, just invoked directly so PlatformIO's project-scan overhead is
-        skipped entirely. Returns (ok, err_msg).
+        skipped entirely. Returns (ok, err_msg, attempts_used).
+
+        ``start_attempt`` continues an already-running 1/10-10/10 series
+        (e.g. after a previous phase of the same upload consumed attempts),
+        so the console never shows a second "1/10" bar.
         """
         # Use sys.executable -m esptool directly to avoid Windows setuptools
         # esptool.exe wrapper crashes when running in background subprocesses.
@@ -18890,7 +20215,7 @@ default_envs = {self._pio_env_name()}
 
         _WATCHDOG_SECS = 90
         _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
-        _connect_retry_count = 0
+        _connect_retry_count = max(0, start_attempt - 1)
         _CONNECT_FAIL_SIGNATURES = (
             "wrong boot mode", "failed to connect",
             "no serial data received", "timed out waiting for packet",
@@ -18949,7 +20274,7 @@ default_envs = {self._pio_env_name()}
             _flip_fast_connected_bar()
             _show_fast_context(force=True)
 
-        self._append_connecting_progress(1, _MAX_CONNECT_RETRIES, force_new=True)
+        self._append_connecting_progress(start_attempt, _MAX_CONNECT_RETRIES, force_new=True)
 
         while True:
             output_lines = []
@@ -19045,7 +20370,7 @@ default_envs = {self._pio_env_name()}
                         f"  {'=' * 25} [SUCCESS] Took {elapsed:.2f} seconds {'=' * 25}",
                         "success",
                     )
-                    return True, ""
+                    return True, "", _connect_retry_count + 1
                 detail = next(
                     (line.strip() for line in reversed(output_lines)
                      if line.strip() and not line.lower().startswith("hint:")),
@@ -19057,14 +20382,14 @@ default_envs = {self._pio_env_name()}
                     port, write_cmd, return_code=rc,
                     output_lines=output_lines, error=error_message,
                 )
-                return False, error_message
+                return False, error_message, _connect_retry_count + 1
             except Exception as e:
                 error_message = str(e)
                 self._record_fast_upload_diagnostic(
                     port, write_cmd, return_code=None,
                     output_lines=[], error=error_message,
                 )
-                return False, error_message
+                return False, error_message, _connect_retry_count + 1
 
     def _do_soft_reset(self, parent_dlg):
         # 0. Block if the board is already running the soft-reset sketch
@@ -19361,10 +20686,14 @@ void loop() {
         _sr_spin_thread = _threading_sr.Thread(target=_sr_spin_loop, daemon=True)
         _sr_spin_thread.start()
 
+        # Paths PlatformIO reported as undeletable (WinError 145) — auto-
+        # retried after the process exits so no manual intervention needed.
+        _stale_clean_paths: list[str] = []
+
         if fast_bins is not None:
             # ── Fast path: write cached binaries directly with esptool ─────────
             self._append("  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "success")
-            ok, err_msg = self._soft_reset_esptool_write(fast_bins, port)
+            ok, err_msg, _fast_attempts_used = self._soft_reset_esptool_write(fast_bins, port)
         else:
             _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
             _connect_retry_count = 0
@@ -19420,6 +20749,7 @@ void loop() {
 
                         if is_nonfatal_pio_clean_report(stripped):
                             self._append(f"  ⚠ {stripped}", "warning")
+                            self._capture_stale_clean_path(stripped, _stale_clean_paths)
                         elif is_linker_error:
                             self._append(f"  ✖ {stripped}", "error")
                         elif "error" in low and "werror" not in low:
@@ -19468,8 +20798,22 @@ void loop() {
         _sr_active[0] = False
         _sr_spin_thread.join(timeout=1)
 
+        # ── Auto-clean stale build paths reported by PlatformIO ───────────
+        # The soft-reset project builds OUTSIDE the sketch dir, so point the
+        # cleanup at its own .pio/build root (the fresh env cache stays).
+        if _stale_clean_paths:
+            self._auto_clean_stale_build_paths(
+                _stale_clean_paths, "mcu_flash", build_ok=ok,
+                build_root=project_dir / ".pio" / "build",
+            )
+
         # NOTE: Do NOT delete project_dir — preserving it is the whole point.
         # The .pio/build/ cache inside it makes subsequent soft resets instant.
+
+        if ok:
+            # Land on the Serial Monitor tab once the lock clears below so the
+            # user immediately sees the freshly-flashed board boot output.
+            self._focus_tab_on_unlock = self._serial_monitor_tab_index()
 
         self.is_busy = False
         self._set_buttons_busy(False)
@@ -19478,6 +20822,9 @@ void loop() {
             self._trigger_actual_board_reset(port)
 
         if was_monitoring:
+            # _resume_monitor() re-arms the intent flag itself and triggers the
+            # DTR/RTS hardware reset so the freshly-flashed board boots into
+            # the new code (the "Hard/Soft Reset won't trigger RESET" bug fix).
             self._resume_monitor()
 
         from tkinter import messagebox
@@ -19488,6 +20835,7 @@ void loop() {
             messagebox.showinfo("Soft Reset Success", "Soft Reset (flash memory reset) completed successfully!", parent=self.root)
         else:
             self._append("")
+            self._append_connecting_progress(_MAX_CONNECT_RETRIES, _MAX_CONNECT_RETRIES, failed=True)
             self._append("  ✖ Soft Reset FAILED.", "error")
             self._set_status("Soft Reset: FAILED", Theme.RED)
             messagebox.showerror("Soft Reset Failed", f"Soft Reset failed.\n{err_msg}\nCheck if the device is connected to {port}.", parent=self.root)
@@ -20188,8 +21536,10 @@ def main():
     project_cancelled.clear()
     root_val = None
     app_val = None
+    startup_state = {"stage": "creating the Tk root window"}
+    startup_failure = {}
 
-    def run_tk():
+    def _run_tk_inner():
         nonlocal root_val, app_val
         root_val = tk.Tk()
         root_val.withdraw()
@@ -20240,6 +21590,7 @@ def main():
         y_part = f"+{y}" if y >= 0 else str(y)
         root_val.geometry(f"{w}x{h}{x_part}{y_part}")
 
+        startup_state["stage"] = "opening the selected project and building the main interface"
         app_val = MCUUploadGUI(root_val)
 
         # If the user cancelled the Project Selector, __init__ destroyed
@@ -20258,7 +21609,7 @@ def main():
             set_monaco_boot_pending(False)
             project_cancelled.set()
             root_ready.set()   # unblock main-thread wait() before exiting
-            os._exit(0)
+            return
 
         # If we just auto-reverted from a crashed Monaco session, tell the
         # user once the window is up rather than blocking startup on it.
@@ -20293,8 +21644,45 @@ def main():
                 os._exit(0)
         root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
 
+        startup_state["stage"] = "starting the main Tk event loop"
         root_ready.set()
         root_val.mainloop()
+
+    def run_tk():
+        """Run Tk on its dedicated thread and propagate startup failures.
+
+        Exceptions raised while MCUUploadGUI is being constructed used to die
+        only on this worker thread.  The main thread remained blocked in
+        root_ready.wait(), so the process appeared as a blank window that
+        vanished with no crash dialog.  Capture the traceback here, always
+        release the wait, and let the main-thread crash guard report it.
+        """
+        nonlocal root_val, app_val
+        try:
+            _run_tk_inner()
+        except BaseException:
+            import traceback
+
+            error_text = traceback.format_exc()
+            startup_failure["stage"] = startup_state.get("stage", "starting the main GUI")
+            startup_failure["traceback"] = error_text
+            try:
+                logs_dir = SCRIPT_DIR / "logs"
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                (logs_dir / "gui_crash.log").write_text(error_text, encoding="utf-8")
+            except Exception:
+                pass
+            try:
+                if root_val is not None and root_val.winfo_exists():
+                    root_val.destroy()
+            except Exception:
+                pass
+            # Drop the Tcl/Tk objects on the same thread that created them.
+            # Letting their final references survive until main-thread process
+            # teardown can trigger Tcl_AsyncDelete / wrong-thread cleanup.
+            app_val = None
+            root_val = None
+            root_ready.set()
 
     tk_thread = threading.Thread(target=run_tk, daemon=True)
     tk_thread.start()
@@ -20302,13 +21690,20 @@ def main():
     # Wait for Tkinter to initialize
     root_ready.wait()
 
-    # Bail out immediately if the project selector was cancelled — the
-    # tk_thread already called os._exit(0), but if it hasn't terminated
-    # the process yet this prevents the main thread from blocking on
-    # tk_thread.join() indefinitely.
+    if startup_failure:
+        tk_thread.join(timeout=2.0)
+        stage = startup_failure.get("stage", "starting the main GUI")
+        original_traceback = startup_failure.get("traceback", "Unknown startup failure")
+        raise RuntimeError(
+            f"The main GUI failed while {stage}.\n\n{original_traceback}"
+        )
+
+    # Project selection was cancelled cleanly.  Avoid os._exit(), which skips
+    # normal cleanup and can discard buffered diagnostics.
     if project_cancelled.is_set():
         set_monaco_boot_pending(False)
-        os._exit(0)
+        tk_thread.join(timeout=1.0)
+        return
 
     if requested_mode != "monaco":
         # Default (Tkinter) editor — no separate webview process needed at
@@ -20409,6 +21804,23 @@ if __name__ == "__main__":
         pass
     _crash_log = _os.path.join(_logs_dir, "gui_crash.log")
 
+    def _crash_preview(error_text: str, limit: int = 1600) -> str:
+        """Return the useful tail of a traceback for the startup dialog.
+
+        Nested startup failures can exceed the dialog limit.  Showing the
+        beginning hid the final exception (the actual cause) below the cutoff.
+        The end of a Python traceback contains the deepest frame and exception,
+        so prefer that while the complete text remains in gui_crash.log.
+        """
+        clean = str(error_text or "").strip()
+        if len(clean) <= limit:
+            return clean
+        tail = clean[-limit:]
+        first_newline = tail.find("\n")
+        if first_newline >= 0:
+            tail = tail[first_newline + 1:]
+        return "… earlier traceback omitted; showing the root-cause end …\n" + tail
+
     try:
         main()
     except Exception:
@@ -20428,7 +21840,7 @@ if __name__ == "__main__":
             _mb.showerror(
                 "MCU Flasher by Naph — Crash",
                 f"The GUI crashed before it could start.\n\n"
-                f"{_err[:1200]}\n\n"
+                f"{_crash_preview(_err)}\n\n"
                 f"Full log: {_crash_log}"
             )
             _r.destroy()
@@ -20438,7 +21850,7 @@ if __name__ == "__main__":
                 import ctypes as _ct
                 _ct.windll.user32.MessageBoxW(
                     0,
-                    f"GUI crashed:\n\n{_err[:800]}\n\nLog: {_crash_log}",
+                    f"GUI crashed:\n\n{_crash_preview(_err, 1000)}\n\nLog: {_crash_log}",
                     "MCU Flasher by Naph — Crash",
                     0x10,   # MB_ICONERROR
                 )

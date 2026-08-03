@@ -27,6 +27,35 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+
+def _configure_windows_dpi_awareness():
+    """Enable DPI awareness before any window is created.
+
+    Must mirror the main GUI's awareness level: the main app is
+    per-monitor-DPI aware, so a virtualized AI subprocess would disagree
+    with it on pixel coordinates after the window is reparented into the
+    Tk frame (causing a dead strip at the bottom of the embedded view).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+_configure_windows_dpi_awareness()
+
 # Ensure workspace 'env' site-packages is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent
 ENV_DIR = SCRIPT_DIR / "env"
@@ -729,6 +758,34 @@ class AIController:
             self._file_contents = {}
             self._pending_edits = {}
             self._monitoring_initialized = False
+        self._rebaseline_project_files()
+
+    def _rebaseline_project_files(self):
+        """Re-read the current project's sketch files as fresh watcher
+        baselines right after a project switch.
+
+        Without this, the next monitor tick sees every pre-existing file of
+        the new project with an empty baseline, waits out the 400 ms settle
+        window, and queues an AI Review for EACH file showing the ENTIRE file
+        as newly added (the whole project's line count)."""
+        try:
+            sketch_dir = self.get_sketch_dir()
+            if callable(sketch_dir):
+                sketch_dir = sketch_dir()
+            with self._watch_lock:
+                scanned = self._scan_project_files(sketch_dir)
+                self._file_mtimes = {
+                    self._path_key(fp): mtime
+                    for fp, mtime in scanned.items()
+                }
+                self._file_contents = {
+                    self._path_key(fp): self._read_project_text(fp)
+                    for fp in scanned
+                    if self._is_valid_user_sketch_file(fp)
+                }
+                self._pending_edits = {}
+        except Exception:
+            pass
 
     def collect_unreported_edits(self):
         """Synchronously detect edits not yet emitted by the debounce loop.

@@ -1,10 +1,8 @@
 Traceback (most recent call last):
-  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 8335, in _safe_run
-    self._run_upload(port)
-    ~~~~~~~~~~~~~~~~^^^^^^
-  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 11950, in _run_upload
-    compile_result = self._run_compile(is_upload=True)
-  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 10903, in _run_compile
-    logical_processors = max(1, os.cpu_count() or jobs)
-                                ^^
-UnboundLocalError: cannot access local variable 'os' where it is not associated with a value
+  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 18890, in _run_hard_reset
+    self._run_hard_reset_inner(port)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 19441, in _run_hard_reset_inner
+    _validate_img(bootloader_bin, "bootloader.bin", 0x4000, 0xE9),
+    ^^^^^^^^^^^^^
+NameError: name '_validate_img' is not defined. Did you mean: '_hr_validate_img'?
