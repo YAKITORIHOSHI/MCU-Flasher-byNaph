@@ -10963,7 +10963,13 @@ class MCUUploadGUI:
                     )
                     if relaunched and getattr(self, "_ai_side_visible", False):
                         # The old embedded window died with the old process;
-                        # re-poll so the fresh AI window gets embedded again.
+                        # show the loading overlay while the fresh AI window
+                        # boots into the new project, then re-poll so it gets
+                        # embedded again.
+                        try:
+                            self._show_ai_loading_overlay_4s()
+                        except Exception:
+                            pass
                         try:
                             self._start_ai_embedding_poll()
                         except Exception:
@@ -17920,7 +17926,9 @@ default_envs = {self._pio_env_name()}
             self._show_ai_side_panel()
 
     def _show_ai_loading_overlay_4s(self):
-        """Display circular loading overlay on top of AI container for exactly 4 seconds."""
+        """Display circular loading overlay on top of AI container until the
+        AI assistant is actually ready (PTY spawned + first output received),
+        with a safety timeout so the UI never stays blocked."""
         self._dismiss_ai_loading_overlay()
         try:
             if hasattr(self, "ai_side_container") and self.ai_side_container:
@@ -17934,11 +17942,38 @@ default_envs = {self._pio_env_name()}
                 self.ai_loading_overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
 
                 if hasattr(self, "root") and self.root:
-                    self._ai_overlay_timer_id = self.root.after(4000, self._dismiss_ai_loading_overlay)
+                    self._ai_launch_marker_time = time.time()
+                    self._ai_overlay_retry_count = 0
+                    self._ai_overlay_timer_id = self.root.after(250, self._poll_ai_ready_dismiss)
         except Exception:
             pass
 
     _show_ai_loading_overlay_3s = _show_ai_loading_overlay_4s
+
+    def _poll_ai_ready_dismiss(self):
+        """Dismiss the AI loading overlay once the AI subprocess signals it is
+        actually ready (.ai_ready_signal written after first PTY output)."""
+        if not getattr(self, "ai_loading_overlay", None):
+            return
+        ready = False
+        try:
+            sketch_dir = getattr(self, "sketch_dir_path", None)
+            if sketch_dir:
+                marker = Path(sketch_dir) / ".ai_ready_signal"
+                launch_time = getattr(self, "_ai_launch_marker_time", 0)
+                if marker.exists() and marker.stat().st_mtime >= launch_time:
+                    ready = True
+        except Exception:
+            pass
+        if ready:
+            self._dismiss_ai_loading_overlay()
+            return
+        self._ai_overlay_retry_count = getattr(self, "_ai_overlay_retry_count", 0) + 1
+        if self._ai_overlay_retry_count > 120:
+            self._dismiss_ai_loading_overlay()
+            return
+        if hasattr(self, "root") and self.root:
+            self._ai_overlay_timer_id = self.root.after(250, self._poll_ai_ready_dismiss)
 
     def _dismiss_ai_loading_overlay(self):
         """Remove and clean up circular loading overlay."""

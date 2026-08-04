@@ -347,12 +347,20 @@ class TerminalServer:
                 print(f"[ERROR] Failed to spawn PTY process: {e}")
 
         # Thread: PTY -> WebSocket
+        ready_marker_written = [False]
         def pty_read_loop():
             edit_kw = ["Applied edit", "Applied patch", "Updating file", "Writing to", "Wrote ", "Created ", "Edited ", "[edit]", "[write]", "[create]", "File saved"]
             while self.is_running and self.pty:
                 try:
                     data = self.pty.read(4096)
                     if data:
+                        if not ready_marker_written[0]:
+                            ready_marker_written[0] = True
+                            try:
+                                sig = Path(target_dir) / ".ai_ready_signal"
+                                sig.write_text(str(time.time()), encoding="utf-8")
+                            except Exception:
+                                pass
                         try:
                             if any(kw in data for kw in edit_kw):
                                 sig = Path(target_dir) / ".ai_edit_signal"
@@ -526,8 +534,34 @@ def apply_window_icon(window_title):
         pass
 
 
+def _pre_hide_console_for_conpty():
+    """Pre-allocate a hidden console before pywebview + pywinpty ConPTY start.
+
+    On Windows 11, spawning a pseudo console (pywinpty ConPTY) from a GUI
+    process that already runs a message pump (pywebview/WebView2) makes the
+    conhost flash a visible ConsoleWindowClass window for a few milliseconds
+    while the console session initializes.  Pre-creating the console hidden
+    via AllocConsole() + ShowWindow(SW_HIDE) lets ConPTY reuse that console,
+    eliminating the flash.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        if not user32.GetConsoleWindow():
+            kernel32.AllocConsole()
+        hwnd = user32.GetConsoleWindow()
+        if hwnd:
+            user32.ShowWindow(hwnd, 0)
+    except Exception:
+        pass
+
+
 def run_standalone_ai(target_directory=None):
     """Entry point when executed as an independent AI terminal process."""
+    _pre_hide_console_for_conpty()
     target_dir = os.path.abspath(target_directory) if target_directory else os.getcwd()
     port = find_free_pair(8765)
     opencode_exe = find_opencode_cli() or "opencode"
@@ -1041,7 +1075,7 @@ class AIController:
         "agents.md", "opencode.md", "read-first.md", ".read-first.md",
         "skill.md", ".skill.md", ".opencodeignore", ".ignore",
         "platformio.ini", ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
-        ".mcu_flash_tab_order.json", ".ai_edit_signal"
+        ".mcu_flash_tab_order.json", ".ai_edit_signal", ".ai_ready_signal"
     }
 
     def _is_valid_user_sketch_file(self, filepath):
