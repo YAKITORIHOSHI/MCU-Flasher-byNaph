@@ -760,6 +760,48 @@ class AIController:
             self._monitoring_initialized = False
         self._rebaseline_project_files()
 
+    def relaunch_for_project(self, sketch_dir):
+        """Restart the running OpenCode AI process so its session points at a
+        new sketch directory instead of the one it was launched with.
+
+        Returns True when a running AI process was killed and relaunched,
+        False when no AI process was running (watcher is rebaselined only).
+        """
+        was_running = is_opencode_running()
+        if not was_running:
+            # Nothing to redirect; just rebaseline the watcher for the new project.
+            self.reset_monitoring_state()
+            return False
+
+        # Cancel the pending monitor tick so stale baselines are not reused.
+        if self.monitor_job and self.root:
+            try:
+                self.root.after_cancel(self.monitor_job)
+            except Exception:
+                pass
+            self.monitor_job = None
+
+        # launch_opencode_elevated_cmd() closes the old process and spawns a
+        # fresh one whose PTY starts inside the new sketch directory.
+        try:
+            launch_opencode_elevated_cmd(str(sketch_dir))
+        except Exception:
+            try:
+                close_active_opencode()
+            except Exception:
+                pass
+            self.reset_monitoring_state()
+            return False
+
+        # Rebaseline the watcher against the new project and re-arm monitoring
+        # for the freshly launched process.
+        self.reset_monitoring_state()
+        try:
+            self._start_monitoring()
+        except Exception:
+            pass
+        return True
+
     def _rebaseline_project_files(self):
         """Re-read the current project's sketch files as fresh watcher
         baselines right after a project switch.

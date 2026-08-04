@@ -10951,13 +10951,27 @@ class MCUUploadGUI:
         Updates the UI label, invalidates the compile cache, then scans
         includes in a background thread so the console gets an instant
         project-summary report."""
-        # Keep the running AI Assistant (OpenCode) process alive across
-        # project switches — only the editor tabs, editor binding, and the
-        # file-watcher baselines need refreshing for the new project.
-        if getattr(self, "ai_controller", None) and hasattr(
-            self.ai_controller, "reset_monitoring_state"
-        ):
-            self.ai_controller.reset_monitoring_state()
+        # If the AI Assistant (OpenCode) is running, restart it so the new
+        # sketch directory becomes its session root instead of the previous
+        # project's folder. When no AI process is active, only the watcher
+        # baselines need refreshing for the new project.
+        if getattr(self, "ai_controller", None):
+            try:
+                if hasattr(self.ai_controller, "relaunch_for_project"):
+                    relaunched = self.ai_controller.relaunch_for_project(
+                        self.sketch_dir_path
+                    )
+                    if relaunched and getattr(self, "_ai_side_visible", False):
+                        # The old embedded window died with the old process;
+                        # re-poll so the fresh AI window gets embedded again.
+                        try:
+                            self._start_ai_embedding_poll()
+                        except Exception:
+                            pass
+                elif hasattr(self.ai_controller, "reset_monitoring_state"):
+                    self.ai_controller.reset_monitoring_state()
+            except Exception as exc:
+                print(f"[MCU Flasher] Could not restart AI Assistant: {exc}")
         if getattr(self, "editor_api", None):
             try:
                 self.editor_api.bind_project(self.sketch_dir_path)
