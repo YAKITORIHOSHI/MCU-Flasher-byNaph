@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# AI project-local backup storage patch v20
 # -*- coding: utf-8 -*-
 """
 MCU Flasher by Naph — ESP32 Compile, Upload & Serial Monitor
@@ -72,6 +73,7 @@ else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 
 UPLOAD_CONNECTION_ATTEMPTS = 10
+MCU_FLASH_PATCH_VERSION = "v21-compatible-focus-ai-readiness"
 
 def hide_hidden_attribute(path) -> None:
     """Set the Windows hidden attribute (FILE_ATTRIBUTE_HIDDEN = 0x02) on
@@ -96,6 +98,30 @@ def hide_hidden_attribute(path) -> None:
             ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
     except Exception:
         pass
+
+def hide_generated_directory(path) -> None:
+    """Hide an app-generated DIRECTORY without making its files unwritable.
+
+    Windows supports FILE_ATTRIBUTE_HIDDEN on NTFS, FAT32, and exFAT.  The
+    portability problem is applying hidden/system attributes to the individual
+    files: on some removable volumes that can make later atomic replacements
+    fail with PermissionError.  This helper therefore marks only the directory
+    itself hidden.  Its child files remain ordinary writable files.
+
+    On non-Windows systems the caller uses a dot-prefixed directory name, which
+    is the native hidden-directory convention.
+    """
+    try:
+        p = Path(path)
+        if sys.platform != "win32" or not p.is_dir():
+            return
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+        if attrs != -1 and not (attrs & 0x02):
+            ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
+    except Exception:
+        pass
+
 
 def unhide_hidden_attribute(path) -> None:
     """Remove Windows hidden and system attributes on Windows."""
@@ -346,8 +372,11 @@ def get_project_temp_file(project_dir, filename: str) -> Path:
         return Path(tempfile.gettempdir()) / filename
 
 
-def get_ai_review_state_file(project_dir) -> Path:
-    """Return a durable per-project journal path for reversible AI edits."""
+AI_PROJECT_STORAGE_DIR = ".mcu_ai_edits"
+
+
+def _legacy_ai_review_state_file(project_dir) -> Path:
+    """Return the pre-v20 LocalAppData journal path for one-time migration."""
     project_path = Path(project_dir).resolve(strict=False)
     project_hash = hashlib.sha256(
         os.path.normcase(str(project_path)).encode("utf-8")
@@ -357,12 +386,414 @@ def get_ai_review_state_file(project_dir) -> Path:
         state_dir = Path(local_app_data) / "MCU Flasher by Naph" / "ai-reviews"
     else:
         state_dir = Path.home() / ".mcu_flash_gui" / "ai-reviews"
-    try:
-        state_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        state_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_ai_reviews"
-        state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir / f"{project_hash}.json"
+
+
+def get_ai_project_storage_root(project_dir, create=True) -> Path:
+    """Return the hidden project-local root used by AI review and backups.
+
+    The root always lives beside the sketch files, so projects remain portable
+    when moved to another drive or computer.  Creation is retried because USB
+    flash drives and secondary volumes can be briefly locked by antivirus or
+    indexing services.  Only the DIRECTORY receives the Windows hidden bit;
+    the .txt/.json files remain normal and atomically writable on NTFS, FAT32,
+    and exFAT.
+    """
+    if not project_dir:
+        raise OSError("No active sketch project is available for AI edit storage.")
+    project_path = Path(project_dir).expanduser().resolve(strict=False)
+    if not project_path.is_dir():
+        raise OSError(f"Sketch project folder is unavailable: {project_path}")
+
+    root = project_path / AI_PROJECT_STORAGE_DIR
+    if not create:
+        return root
+
+    last_error = None
+    for attempt in range(6):
+        try:
+            root.mkdir(parents=False, exist_ok=True)
+            hide_generated_directory(root)
+            return root
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.12 * (attempt + 1))
+    raise OSError(
+        f"Could not create project-local AI edit storage at {root}: {last_error}"
+    )
+
+
+def get_ai_review_state_file(project_dir) -> Path:
+    """Return the project-local pending-review journal and migrate v19 data."""
+    root = get_ai_project_storage_root(project_dir, create=True)
+    state_dir = root / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    hide_generated_directory(state_dir)
+    target = state_dir / "pending_reviews.json"
+
+    # Preserve any unresolved v19 review when a project is first opened in v20.
+    # Both replicas are copied because the backup is the journal commit point.
+    legacy = _legacy_ai_review_state_file(project_dir)
+    for source, destination in (
+        (legacy, target),
+        (legacy.with_suffix(legacy.suffix + ".bak"), target.with_suffix(target.suffix + ".bak")),
+    ):
+        if destination.exists() or not source.exists():
+            continue
+        try:
+            import shutil
+            shutil.copy2(source, destination)
+        except OSError:
+            # Migration is best effort.  Never delete or alter the legacy copy.
+            pass
+    return target
+
+
+def get_ai_edit_backup_root(project_dir, create=True) -> Path:
+    """Return the hidden project-local root for dated AI edit sessions."""
+    return get_ai_project_storage_root(project_dir, create=create)
+
+
+class AIEditBackupStore:
+    """RAM-first AI edit history with asynchronous plain-text backups.
+
+    The complete current-session records stay in memory. Accept, Reject,
+    Undo, and Redo therefore never read an edit backup from disk. A single
+    background writer mirrors each record to the dated session folder so a
+    crash still leaves human-readable recovery copies.
+    """
+
+    FORMAT_VERSION = 1
+
+    def __init__(self, project_dir, root=None):
+        self.project_dir = Path(project_dir).expanduser().resolve(strict=False)
+        self.root = Path(root) if root else get_ai_edit_backup_root(self.project_dir)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.started_at = datetime.now().astimezone()
+        date_name = f"{self.started_at.month}-{self.started_at.day}-{str(self.started_at.year)[-2:]}"
+        self.date_dir = self.root / date_name
+        self.date_dir.mkdir(parents=True, exist_ok=True)
+        hide_generated_directory(self.root)
+        hide_generated_directory(self.date_dir)
+        self.session_dir, self.session_number = self._allocate_session_dir()
+
+        # Full bodies for every edit made during this app session. Live
+        # Undo/Redo consults these dictionaries and the EditorApi stacks only.
+        self._records = {}
+        self._review_to_edit = {}
+        self._edit_counter = 0
+        self._lock = threading.RLock()
+
+        # Coalescing write queue: repeated status changes for edit1.txt replace
+        # the pending write instead of creating a backlog or touching the UI.
+        self._write_condition = threading.Condition()
+        self._pending_writes = {}
+        self._closing = False
+        self._last_write_error = ""
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            daemon=True,
+            name="AI-Edit-Backup-Writer",
+        )
+        self._writer_thread.start()
+
+        # Old sessions are indexed in the background without loading their
+        # source bodies into RAM. This keeps startup fast while avoiding a new
+        # directory scan whenever recovery history is requested.
+        self._archive_index = []
+        self._archive_index_ready = False
+        self._archive_index_thread = threading.Thread(
+            target=self._build_archive_index,
+            daemon=True,
+            name="AI-Edit-Backup-Indexer",
+        )
+        self._archive_index_thread.start()
+
+        self._schedule_write(
+            self.session_dir / "session.txt",
+            self._format_session_info(closed=False),
+        )
+
+    def _allocate_session_dir(self):
+        # mkdir(exist_ok=False) makes session allocation safe even when two
+        # MCU Flasher windows start at almost the same time.
+        for number in range(1, 100000):
+            candidate = self.date_dir / f"session{number}"
+            try:
+                candidate.mkdir(parents=False, exist_ok=False)
+                hide_generated_directory(candidate)
+                return candidate, number
+            except FileExistsError:
+                continue
+        raise OSError(f"Could not allocate an AI backup session under {self.date_dir}")
+
+    @staticmethod
+    def _timestamp():
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def _format_session_info(self, closed=False):
+        lines = [
+            "MCU Flasher by Naph - AI Edit Backup Session",
+            "================================================",
+            f"Format-Version: {self.FORMAT_VERSION}",
+            f"Session: session{self.session_number}",
+            f"Started: {self.started_at.isoformat(timespec='seconds')}",
+            f"PID: {os.getpid()}",
+            f"State: {'closed-cleanly' if closed else 'active'}",
+            f"Edit-Count: {self._edit_counter}",
+        ]
+        if closed:
+            lines.append(f"Closed: {self._timestamp()}")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _safe_text(value):
+        return str(value if value is not None else "")
+
+    def _format_record(self, record):
+        history = record.get("historyActions") or []
+        history_lines = [
+            f"  {item.get('timestamp', '')} | {item.get('direction', '')} | "
+            f"exists={item.get('exists', '')}"
+            for item in history
+        ] or ["  (none)"]
+        return "\n".join([
+            "MCU Flasher by Naph - AI Edit Backup",
+            "=======================================",
+            f"Format-Version: {self.FORMAT_VERSION}",
+            f"Edit-Number: {record.get('editNumber', '')}",
+            f"Session: session{self.session_number}",
+            f"Created: {record.get('createdAt', '')}",
+            f"Updated: {record.get('updatedAt', '')}",
+            f"Status: {record.get('status', 'pending')}",
+            f"Decision: {record.get('decision', '')}",
+            f"Review-ID: {record.get('reviewId', '')}",
+            f"Decision-ID: {record.get('decisionId', '')}",
+            f"Project: {record.get('project', '')}",
+            f"File: {record.get('path', '')}",
+            f"Before-Exists: {bool(record.get('beforeExists', True))}",
+            f"After-Exists: {bool(record.get('afterExists', True))}",
+            f"Applied-Exists: {record.get('appliedExists', '')}",
+            f"Undo-Exists: {record.get('undoExists', '')}",
+            "",
+            "History:",
+            *history_lines,
+            "",
+            "<<< BEFORE CONTENT >>>",
+            self._safe_text(record.get("beforeContent", "")),
+            "<<< END BEFORE CONTENT >>>",
+            "",
+            "<<< AFTER / AI CONTENT >>>",
+            self._safe_text(record.get("afterContent", "")),
+            "<<< END AFTER / AI CONTENT >>>",
+            "",
+            "<<< CURRENT APPLIED CONTENT >>>",
+            self._safe_text(record.get("appliedContent", "")),
+            "<<< END CURRENT APPLIED CONTENT >>>",
+            "",
+            "<<< UNDO TARGET CONTENT >>>",
+            self._safe_text(record.get("undoContent", "")),
+            "<<< END UNDO TARGET CONTENT >>>",
+            "",
+        ])
+
+    def _schedule_write(self, target, content):
+        target = str(Path(target))
+        with self._write_condition:
+            self._pending_writes[target] = str(content)
+            self._write_condition.notify()
+
+    @staticmethod
+    def _write_text_atomic(target, content):
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
+        try:
+            with os.fdopen(
+                file_descriptor, "w", encoding="utf-8", errors="strict", newline=""
+            ) as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, target)
+        except Exception:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+            raise
+
+    def _writer_loop(self):
+        while True:
+            with self._write_condition:
+                while not self._pending_writes and not self._closing:
+                    self._write_condition.wait(timeout=0.5)
+                if self._closing and not self._pending_writes:
+                    return
+                target = next(iter(self._pending_writes))
+                content = self._pending_writes.pop(target)
+            try:
+                self._write_text_atomic(target, content)
+                self._last_write_error = ""
+            except Exception as exc:
+                self._last_write_error = str(exc)
+                # Requeue the newest copy and back off. The GUI thread is never
+                # blocked by a temporarily locked antivirus/indexer handle.
+                with self._write_condition:
+                    self._pending_writes[target] = content
+                time.sleep(0.25)
+
+    def _build_archive_index(self):
+        try:
+            current = os.path.normcase(str(self.session_dir.resolve(strict=False)))
+            indexed = []
+            for candidate in self.root.glob("*/*/edit*.txt"):
+                try:
+                    parent = os.path.normcase(str(candidate.parent.resolve(strict=False)))
+                    if parent == current:
+                        continue
+                    stat = candidate.stat()
+                    indexed.append({
+                        "path": str(candidate),
+                        "modified": stat.st_mtime,
+                        "size": stat.st_size,
+                    })
+                except OSError:
+                    continue
+            indexed.sort(key=lambda item: item["modified"], reverse=True)
+            self._archive_index = indexed
+        finally:
+            self._archive_index_ready = True
+
+    def record_edit(self, payload, status="pending", decision_entry=None):
+        review_id = self._safe_text(payload.get("reviewId") or payload.get("path"))
+        if not review_id:
+            return ""
+        with self._lock:
+            edit_number = self._review_to_edit.get(review_id)
+            if edit_number is None:
+                self._edit_counter += 1
+                edit_number = self._edit_counter
+                self._review_to_edit[review_id] = edit_number
+                created_at = self._timestamp()
+            else:
+                created_at = self._records.get(edit_number, {}).get(
+                    "createdAt", self._timestamp()
+                )
+            existing = dict(self._records.get(edit_number, {}))
+            project_dir = getattr(self, "current_project", "")
+            record = {
+                **existing,
+                "editNumber": edit_number,
+                "reviewId": review_id,
+                "createdAt": created_at,
+                "updatedAt": self._timestamp(),
+                "status": status,
+                "project": self._safe_text(
+                    payload.get("project") or project_dir
+                ),
+                "path": self._safe_text(payload.get("path")),
+                "beforeExists": bool(payload.get("beforeExists", True)),
+                "afterExists": bool(payload.get("afterExists", True)),
+                "beforeContent": self._safe_text(payload.get("beforeContent", "")),
+                "afterContent": self._safe_text(payload.get("content", "")),
+                "historyActions": list(existing.get("historyActions") or []),
+            }
+            if decision_entry:
+                record.update({
+                    "decision": self._safe_text(decision_entry.get("action")),
+                    "decisionId": self._safe_text(decision_entry.get("decisionId")),
+                    "appliedExists": bool(decision_entry.get("appliedExists", True)),
+                    "appliedContent": self._safe_text(decision_entry.get("appliedContent", "")),
+                    "undoExists": bool(decision_entry.get("undoExists", True)),
+                    "undoContent": self._safe_text(decision_entry.get("undoContent", "")),
+                })
+            self._records[edit_number] = record
+            backup_path = self.session_dir / f"edit{edit_number}.txt"
+            self._schedule_write(backup_path, self._format_record(record))
+            self._schedule_write(
+                self.session_dir / "session.txt",
+                self._format_session_info(closed=False),
+            )
+            return str(backup_path)
+
+    def record_history_action(self, entry, direction, exists, content):
+        review_id = self._safe_text(entry.get("reviewId") or entry.get("sourceReviewId"))
+        if not review_id:
+            # Older decisions created before this store was initialized still
+            # receive their own recovery record when first undone/redone.
+            review_id = self._safe_text(entry.get("decisionId") or entry.get("path"))
+        payload = {
+            "reviewId": review_id,
+            "project": entry.get("project", ""),
+            "path": entry.get("path", ""),
+            "beforeExists": entry.get("originalBeforeExists", entry.get("undoExists", True)),
+            "afterExists": entry.get("originalAfterExists", entry.get("appliedExists", True)),
+            "beforeContent": entry.get("originalBeforeContent", entry.get("undoContent", "")),
+            "content": entry.get("originalAfterContent", entry.get("appliedContent", "")),
+        }
+        with self._lock:
+            backup_path = self.record_edit(payload, status=f"{direction}-applied", decision_entry=entry)
+            edit_number = self._review_to_edit.get(review_id)
+            if edit_number is not None:
+                record = self._records.get(edit_number)
+                if record is not None:
+                    record.setdefault("historyActions", []).append({
+                        "timestamp": self._timestamp(),
+                        "direction": direction,
+                        "exists": bool(exists),
+                    })
+                    record["appliedExists"] = bool(exists)
+                    record["appliedContent"] = self._safe_text(content)
+                    record["updatedAt"] = self._timestamp()
+                    self._schedule_write(
+                        self.session_dir / f"edit{edit_number}.txt",
+                        self._format_record(record),
+                    )
+            return backup_path
+
+    def mark_cancelled(self, payload):
+        return self.record_edit(payload, status="cancelled")
+
+    def get_memory_state(self):
+        with self._lock:
+            return {
+                "sessionPath": str(self.session_dir),
+                "currentSessionEditsInRam": len(self._records),
+                "archiveIndexReady": bool(self._archive_index_ready),
+                "archivedEditCount": len(self._archive_index),
+                "lastWriteError": self._last_write_error,
+            }
+
+    def shutdown(self, timeout=1.5):
+        # Queue the final session marker first, then ask the writer to drain.
+        self._schedule_write(
+            self.session_dir / "session.txt",
+            self._format_session_info(closed=True),
+        )
+        with self._write_condition:
+            self._closing = True
+            self._write_condition.notify_all()
+        self._writer_thread.join(timeout=max(0.0, float(timeout)))
+
+        # If Windows was still holding a file and the daemon worker did not
+        # drain in time, make one final best-effort synchronous pass before the
+        # process exits. This runs only during application shutdown.
+        with self._write_condition:
+            remaining = list(self._pending_writes.items())
+            self._pending_writes.clear()
+        for target, content in remaining:
+            try:
+                self._write_text_atomic(target, content)
+            except Exception:
+                pass
+
 
 def ensure_hidden_read_first_md(sketch_dir) -> None:
     """
@@ -403,6 +834,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             ".vscode/\n"
             ".clangd/\n"
             ".cache/\n"
+            ".mcu_ai_edits/.state/\n"
         )
         opencode_ign = s_dir / ".opencodeignore"
         try:
@@ -413,6 +845,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             pass
 
         # 3. Single instructions file recognized by OpenCode CLI (AGENTS.md)
+        ai_backup_root = get_ai_edit_backup_root(s_dir, create=False).as_posix()
         content = (
             "---\n"
             "name: project-sketch-scope\n"
@@ -434,6 +867,14 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "- **IGNORE** all files inside `src/` (`src/*`).\n"
             "- Files inside `src/` are internal backups/extras used by MCU Flash GUI and must **NOT** be read, edited, or modified by the AI.\n"
             "- Work ONLY with active sketch files (`.ino`, `.h`, `.cpp`) and authorized project notes (`NOTE.txt`) at the project root level.\n\n"
+            "### 4. AI EDIT BACKUP & RECOVERY\n"
+            f"- Backup root: `{ai_backup_root}`\n"
+            "- Folder layout: `M-D-YY/sessionN/editN.txt`. Each edit file contains exact BEFORE, AI/AFTER, current-applied, and Undo-target copies.\n"
+            "- The hidden `.mcu_ai_edits` folder travels with this sketch project across drives and computers.\n"
+            "- Treat the backup tree as READ-ONLY. Never modify, rename, or delete backup files.\n"
+            "- Never read or edit `.mcu_ai_edits/.state`; it is application journal data.\n"
+            "- When the user explicitly asks to recover or compare an earlier AI edit, locate the matching project/file entry and restore only the requested content section.\n"
+            "- The current app session keeps live Undo/Redo bodies in RAM; these text files are crash-recovery copies, not a workspace to edit directly.\n\n"
             "---\n"
             "*Generated automatically by MCU Flash GUI by Naph for OpenCode AI Assistant.*\n"
         )
@@ -475,12 +916,15 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             ".ai_edit_signal", "build_artifacts", ".build_artifacts",
             ".pio_cache", ".vscode", ".clangd", ".cache", "_temp",
             ".opencodeignore", ".ignore", "AGENTS.md", "OPENCODE.md",
+            ".mcu_ai_edits",
             "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md"
         ]
         for name in internal_names:
             p = s_dir / name
             if p.exists():
                 hide_hidden_attribute(p)
+                if p.is_dir():
+                    hide_generated_directory(p)
 
         # Inverse sweep: the sketch's own sources (.ino/.cpp/.c/.h/.txt) are
         # always visible; every other root-level FILE that is not an internal
@@ -803,17 +1247,39 @@ class EditorApi:
         self.modified_files = {} # path -> is_modified
         self._pending_ai_edits = {}
         self._pending_ai_lock = threading.Lock()
+        # Accepted/rejected AI decisions are reversible for the current editor
+        # session. Keep a bounded, multi-level undo/redo history just like an
+        # IDE edit stack, without weakening the durable pending-review journal.
+        self._ai_decision_history = []
+        self._ai_decision_redo = []
+        self._ai_decision_history_limit = 50
+        project_dir = getattr(gui, "sketch_dir_path", None)
+        try:
+            self._ai_backup_store = (
+                AIEditBackupStore(project_dir) if project_dir else None
+            )
+            if self._ai_backup_store:
+                self._ai_backup_store.current_project = str(project_dir)
+        except Exception as exc:
+            print(f"[MCU Flasher] Project-local AI edit backup session could not start: {exc}")
+            self._ai_backup_store = None
         self._ai_review_revision = 0
         self._ai_review_generation = 0
         self._ai_review_journal_error = ""
         self._ai_review_journal_recovery_required = False
         configured_state_path = getattr(gui, "ai_review_state_path", None)
         self._ai_review_state_path_is_configured = bool(configured_state_path)
-        project_dir = getattr(gui, "sketch_dir_path", None)
         if configured_state_path:
             self._ai_review_state_path = Path(configured_state_path)
         elif project_dir:
-            self._ai_review_state_path = get_ai_review_state_file(project_dir)
+            try:
+                self._ai_review_state_path = get_ai_review_state_file(project_dir)
+            except Exception as exc:
+                # A temporarily unavailable/removable project drive must not
+                # prevent the editor from opening. AI history remains in RAM;
+                # persistent review/backup creation is retried on project bind.
+                print(f"[MCU Flasher] Project-local AI review journal unavailable: {exc}")
+                self._ai_review_state_path = None
         else:
             self._ai_review_state_path = None
         self._load_pending_ai_edits()
@@ -826,7 +1292,15 @@ class EditorApi:
             return os.path.normcase(os.path.abspath(str(path or "")))
 
     def bind_project(self, project_dir):
-        """Switch the review journal when the main GUI changes projects."""
+        """Switch the review journal and backup session with the project."""
+        new_review_state_path = self._ai_review_state_path
+        if not self._ai_review_state_path_is_configured:
+            try:
+                new_review_state_path = get_ai_review_state_file(project_dir)
+            except Exception as exc:
+                print(f"[MCU Flasher] Project-local AI review journal unavailable: {exc}")
+                new_review_state_path = None
+
         with self._pending_ai_lock:
             if self._ai_review_journal_recovery_required:
                 raise OSError(
@@ -842,15 +1316,35 @@ class EditorApi:
                 )
                 raise OSError(self._ai_review_journal_error) from exc
             self._pending_ai_edits = {}
+            self._ai_decision_history = []
+            self._ai_decision_redo = []
+            old_backup_store = self._ai_backup_store
+            self._ai_backup_store = None
             self._ai_review_revision = 0
             self._ai_review_generation = 0
             self._ai_review_journal_error = ""
             self._ai_review_journal_recovery_required = False
             if not self._ai_review_state_path_is_configured:
-                self._ai_review_state_path = get_ai_review_state_file(project_dir)
+                self._ai_review_state_path = new_review_state_path
             self.modified_files.clear()
             self.active_file_path = None
             self._load_pending_ai_edits_locked()
+
+        # Finish the previous project's asynchronous backup session only after
+        # its review journal has committed, then start a fresh dated session in
+        # the newly selected sketch folder.  Switching back later creates the
+        # next sessionN directory, exactly like a new app session for that project.
+        if old_backup_store:
+            try:
+                old_backup_store.shutdown(timeout=1.0)
+            except Exception as exc:
+                print(f"[MCU Flasher] Could not close previous AI backup session: {exc}")
+        try:
+            self._ai_backup_store = AIEditBackupStore(project_dir)
+            self._ai_backup_store.current_project = str(project_dir or "")
+        except Exception as exc:
+            print(f"[MCU Flasher] Project-local AI edit backup session could not start: {exc}")
+            self._ai_backup_store = None
 
     def _path_is_in_project(self, path):
         project_dir = getattr(self._gui, "sketch_dir_path", None)
@@ -1216,7 +1710,10 @@ class EditorApi:
             else:
                 original_content = before_content
                 original_exists = before_exists
-                review_id = key
+                # A resolved edit on the same file must create a new backup
+                # record (edit2.txt, edit3.txt, ...), while updates to one
+                # still-pending proposal retain their existing review ID.
+                review_id = f"{key}:{time.time_ns()}"
             if existing and original_exists == after_exists and original_content == after_content:
                 self._pending_ai_edits.pop(key, None)
                 self._next_ai_review_revision_locked()
@@ -1228,6 +1725,11 @@ class EditorApi:
                     # memory consistent with that durable state and fail closed.
                     self._pending_ai_edits[key] = existing
                     return False
+                if self._ai_backup_store:
+                    try:
+                        self._ai_backup_store.mark_cancelled(existing)
+                    except Exception as exc:
+                        print(f"[MCU Flasher] Could not queue cancelled AI backup: {exc}")
                 return "cancelled"
             payload = {
                 "reviewId": review_id,
@@ -1240,12 +1742,23 @@ class EditorApi:
                 "diff": build_ai_line_diff(original_content, after_content),
             }
             self._pending_ai_edits[key] = payload
+            # A new AI write branches the edit timeline, so redo entries from
+            # an earlier undone decision are no longer valid.
+            self._ai_decision_redo.clear()
             try:
                 self._commit_pending_ai_edits_locked()
             except Exception as exc:
                 # Retain the exact Reject copy in memory and let the journal
                 # error block Compile/Upload until storage becomes writable.
                 print(f"[MCU Flasher] Could not persist pending AI review: {exc}")
+            if self._ai_backup_store:
+                try:
+                    payload["project"] = str(getattr(self._gui, "sketch_dir_path", "") or "")
+                    payload["backupFile"] = self._ai_backup_store.record_edit(
+                        payload, status="pending"
+                    )
+                except Exception as exc:
+                    print(f"[MCU Flasher] Could not queue AI edit backup: {exc}")
         return True
 
     def consume_ai_edit_snapshot(self, path):
@@ -1320,6 +1833,14 @@ class EditorApi:
                     self._commit_pending_ai_edits_locked()
                 except Exception as exc:
                     print(f"[MCU Flasher] Could not persist refreshed AI review: {exc}")
+                if self._ai_backup_store:
+                    try:
+                        payload["project"] = str(getattr(self._gui, "sketch_dir_path", "") or "")
+                        payload["backupFile"] = self._ai_backup_store.record_edit(
+                            payload, status="pending-refreshed"
+                        )
+                    except Exception as exc:
+                        print(f"[MCU Flasher] Could not refresh AI edit backup: {exc}")
                 return {
                     "success": False,
                     "conflict": True,
@@ -1356,6 +1877,32 @@ class EditorApi:
                 controller.note_local_save(
                     resolved_payload["path"], final_content if final_exists else None
                 )
+            decision_entry = {
+                "decisionId": f"{self._next_ai_review_revision_locked()}:{key}",
+                "sourceReviewId": resolved_payload.get("reviewId", key),
+                "reviewId": resolved_payload.get("reviewId", key),
+                "project": str(getattr(self._gui, "sketch_dir_path", "") or ""),
+                "path": resolved_payload["path"],
+                "fileName": Path(resolved_payload["path"]).name,
+                "action": "accepted" if accept else "rejected",
+                "originalBeforeExists": bool(resolved_payload.get("beforeExists", True)),
+                "originalAfterExists": bool(resolved_payload.get("afterExists", True)),
+                "originalBeforeContent": str(resolved_payload.get("beforeContent", "")),
+                "originalAfterContent": str(resolved_payload.get("content", "")),
+                # State currently applied after the decision.
+                "appliedExists": final_exists,
+                "appliedContent": final_content,
+                # State that Undo should restore. Accept -> original;
+                # Reject -> the AI-proposed version that was rejected.
+                "undoExists": (
+                    bool(resolved_payload.get("beforeExists", True))
+                    if accept else bool(resolved_payload.get("afterExists", True))
+                ),
+                "undoContent": (
+                    str(resolved_payload.get("beforeContent", ""))
+                    if accept else str(resolved_payload.get("content", ""))
+                ),
+            }
             pending_before_resolution = dict(self._pending_ai_edits)
             self._pending_ai_edits.pop(key, None)
             try:
@@ -1375,6 +1922,21 @@ class EditorApi:
                     ),
                     "snapshot": self._snapshot_for_key_locked(key),
                 }
+            if self._ai_backup_store:
+                try:
+                    resolved_payload["project"] = decision_entry["project"]
+                    decision_entry["backupFile"] = self._ai_backup_store.record_edit(
+                        resolved_payload,
+                        status=decision_entry["action"],
+                        decision_entry=decision_entry,
+                    )
+                except Exception as exc:
+                    print(f"[MCU Flasher] Could not queue resolved AI backup: {exc}")
+            self._ai_decision_history.append(decision_entry)
+            limit = max(1, int(getattr(self, "_ai_decision_history_limit", 50)))
+            if len(self._ai_decision_history) > limit:
+                del self._ai_decision_history[:-limit]
+            self._ai_decision_redo.clear()
             next_path = next(iter(self._pending_ai_edits.values()), {}).get("path", "")
             pending_count = len(self._pending_ai_edits)
 
@@ -1409,8 +1971,174 @@ class EditorApi:
             "afterExists": bool(resolved_payload.get("afterExists", True)),
             "nextPath": next_path,
             "pendingCount": pending_count,
+            "undoAvailable": True,
         }
         return result
+
+    def _ai_history_summary_locked(self):
+        def _summary(entry):
+            if not entry:
+                return None
+            return {
+                "decisionId": entry.get("decisionId", ""),
+                "path": entry.get("path", ""),
+                "fileName": entry.get("fileName") or Path(entry.get("path", "")).name,
+                "action": entry.get("action", "edited"),
+            }
+
+        undo_entry = self._ai_decision_history[-1] if self._ai_decision_history else None
+        redo_entry = self._ai_decision_redo[-1] if self._ai_decision_redo else None
+        backup_state = (
+            self._ai_backup_store.get_memory_state()
+            if self._ai_backup_store else {}
+        )
+        return {
+            "canUndo": bool(undo_entry),
+            "canRedo": bool(redo_entry),
+            "undoDepth": len(self._ai_decision_history),
+            "redoDepth": len(self._ai_decision_redo),
+            "undo": _summary(undo_entry),
+            "redo": _summary(redo_entry),
+            "backup": backup_state,
+        }
+
+    def get_ai_history_state(self):
+        with self._pending_ai_lock:
+            return self._ai_history_summary_locked()
+
+    def _apply_ai_history_decision(self, direction: str, force=False):
+        undoing = str(direction).lower() == "undo"
+        with self._pending_ai_lock:
+            if self._pending_ai_edits:
+                return {
+                    "success": False,
+                    "error": "Accept or reject the pending AI review before using AI Undo/Redo.",
+                    "history": self._ai_history_summary_locked(),
+                }
+
+            source = self._ai_decision_history if undoing else self._ai_decision_redo
+            destination = self._ai_decision_redo if undoing else self._ai_decision_history
+            if not source:
+                return {
+                    "success": False,
+                    "error": "There is no AI decision to undo." if undoing else "There is no AI decision to redo.",
+                    "history": self._ai_history_summary_locked(),
+                }
+
+            entry = source[-1]
+            path = entry.get("path", "")
+            if not self._path_is_in_project(path):
+                return {
+                    "success": False,
+                    "error": "The AI history file is outside the active project.",
+                    "history": self._ai_history_summary_locked(),
+                }
+
+            target = Path(path)
+            expected_exists = bool(entry.get("appliedExists" if undoing else "undoExists", True))
+            expected_content = str(entry.get("appliedContent" if undoing else "undoContent", ""))
+            target_exists = bool(entry.get("undoExists" if undoing else "appliedExists", True))
+            target_content = str(entry.get("undoContent" if undoing else "appliedContent", ""))
+
+            actual_exists = target.is_file()
+            actual_content = self._read_text_exact(target) if actual_exists else ""
+            if not force and (actual_exists != expected_exists or actual_content != expected_content):
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "error": (
+                        "The file changed after this AI decision. Undoing now would "
+                        "replace newer edits." if undoing else
+                        "The file changed after AI Undo. Redoing now would replace newer edits."
+                    ),
+                    "path": path,
+                    "history": self._ai_history_summary_locked(),
+                }
+
+            try:
+                if target_exists:
+                    self._write_text_atomic(target, target_content)
+                elif target.exists():
+                    ensure_file_writable(target)
+                    target.unlink()
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "error": f"Could not {'undo' if undoing else 'redo'} the AI decision: {exc}",
+                    "history": self._ai_history_summary_locked(),
+                }
+
+            controller = getattr(self._gui, "ai_controller", None)
+            if controller:
+                controller.note_local_save(path, target_content if target_exists else None)
+
+            source.pop()
+            destination.append(entry)
+            limit = max(1, int(getattr(self, "_ai_decision_history_limit", 50)))
+            if len(destination) > limit:
+                del destination[:-limit]
+            if self._ai_backup_store:
+                try:
+                    self._ai_backup_store.record_history_action(
+                        entry,
+                        "undo" if undoing else "redo",
+                        target_exists,
+                        target_content,
+                    )
+                except Exception as exc:
+                    print(f"[MCU Flasher] Could not queue AI history backup: {exc}")
+            history_state = self._ai_history_summary_locked()
+
+        self.modified_files[path] = False
+
+        def _notify_history_change():
+            if hasattr(self._gui, "_update_skip_compile_state"):
+                self._gui._update_skip_compile_state()
+            if hasattr(self._gui, "_update_editor_info"):
+                self._gui._update_editor_info()
+            if hasattr(self._gui, "_append_notif"):
+                verb = "Undid" if undoing else "Redid"
+                action = str(entry.get("action", "AI edit")).rstrip("d")
+                self._gui._append_notif(
+                    f"  {verb} AI {action}: {entry.get('fileName') or Path(path).name}",
+                    "info",
+                    category="system",
+                    title=f"{verb} AI decision",
+                )
+
+        root = getattr(self._gui, "root", None)
+        if root:
+            try:
+                root.after(0, _notify_history_change)
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "direction": "undo" if undoing else "redo",
+            "action": entry.get("action", "edited"),
+            "path": path,
+            "fileName": entry.get("fileName") or Path(path).name,
+            "exists": target_exists,
+            "workspaceShapeChanged": expected_exists != target_exists,
+            "history": history_state,
+        }
+
+    def undo_ai_edit_decision(self, force=False):
+        return self._apply_ai_history_decision("undo", force=bool(force))
+
+    def redo_ai_edit_decision(self, force=False):
+        return self._apply_ai_history_decision("redo", force=bool(force))
+
+    def shutdown_ai_edit_backup(self):
+        store = getattr(self, "_ai_backup_store", None)
+        if store:
+            try:
+                store.shutdown(timeout=1.5)
+                return {"success": True, **store.get_memory_state()}
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        return {"success": True}
 
     def accept_ai_edit(self, path, revision):
         return self._resolve_ai_edit(path, revision, accept=True)
@@ -1823,13 +2551,16 @@ def load_dynamic_boards(default_boards: dict) -> dict:
 SUPPORTED_BOARDS = load_dynamic_boards({})
 
 
-def load_downloaded_board_usb_ids() -> set[tuple[int, int]]:
-    """Read VID/PID pairs from the user's downloaded boards.txt files."""
-    pairs: set[tuple[int, int]] = set()
+def load_downloaded_board_usb_ids() -> dict[tuple[int, int], str]:
+    """Map downloaded boards.txt VID/PID pairs to GUI board display names.
+
+    The old implementation returned a set even though descriptor detection
+    indexed it as a dictionary. Exact USB identity detection therefore failed.
+    """
     values: dict[tuple[str, str], dict[str, int]] = {}
     boards_path = Path(_get_download_dir()) / "Boards"
     if not boards_path.is_dir():
-        return pairs
+        return {}
 
     property_re = re.compile(
         r"^([^.=]+)\.(?:upload_port\.)?(vid|pid)\.(\d+)\s*=\s*(0x[0-9a-f]+|\d+)\s*$",
@@ -1849,14 +2580,30 @@ def load_downloaded_board_usb_ids() -> set[tuple[int, int]]:
         except OSError:
             continue
 
-    for usb_id in values.values():
-        if "vid" in usb_id and "pid" in usb_id:
-            pairs.add((usb_id["vid"], usb_id["pid"]))
-    return pairs
+    board_names_by_id: dict[str, str] = {}
+    for display_name, info in SUPPORTED_BOARDS.items():
+        board_id = str(info.get("board", "")).strip().lower()
+        if board_id:
+            board_names_by_id.setdefault(board_id, display_name)
+
+    mapped: dict[tuple[int, int], str] = {}
+    for (board_id, _index), usb_id in values.items():
+        if "vid" not in usb_id or "pid" not in usb_id:
+            continue
+        display_name = board_names_by_id.get(board_id)
+        if display_name:
+            mapped[(usb_id["vid"], usb_id["pid"])] = display_name
+    return mapped
 
 
-# Exact USB identities supplied by the board packages the user downloaded.
 DOWNLOADED_BOARD_USB_IDS = load_downloaded_board_usb_ids()
+
+# Generic WCH bridge IDs commonly used by Arduino UNO/Nano clones. Explicit
+# ESP32/ESP8266/NodeMCU descriptor text is checked first and remains authoritative.
+KNOWN_UNO_CLONE_USB_IDS = {
+    (0x1A86, 0x7523),
+    (0x1A86, 0x5523),
+}
 
 # ─── Canonical chip-feature descriptions ─────────────────────────
 # PlatformIO bundles its own esptool build per platform version, and older
@@ -2460,6 +3207,19 @@ def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None
         elif "dev module" in name.lower() and "dev module" not in fallback.lower():
             fallback = name
     return fallback
+
+
+def find_arduino_uno_board() -> str | None:
+    """Return the installed Arduino Uno display name, if available."""
+    for name, info in SUPPORTED_BOARDS.items():
+        if info.get("platform") == "atmelavr" and name.strip().lower() in (
+            "arduino uno", "arduino/genuino uno", "uno"
+        ):
+            return name
+    for name, info in SUPPORTED_BOARDS.items():
+        if info.get("platform") == "atmelavr" and str(info.get("board", "")).lower() == "uno":
+            return name
+    return find_board_for_platform("atmelavr")
 
 
 def is_s3_board(p_board: str) -> bool:
@@ -4553,7 +5313,7 @@ class ToolTip:
 class CircularLoadingOverlay(tk.Frame):
     """
     Sleek, modern loading overlay with an animated circular spinner.
-    Covers the AI container for 3 seconds while OpenCode AI starts in the background.
+    Remains visible until the OpenCode terminal reports interactive readiness.
     """
     def __init__(self, parent, bg_color="#0c0d10", spinner_color="#00e5ff", text="Initializing AI Assistant..."):
         super().__init__(parent, bg=bg_color)
@@ -4618,6 +5378,16 @@ class CircularLoadingOverlay(tk.Frame):
             )
             self.angle = (self.angle + 12) % 360
             self._after_id = self.after(30, self._draw_spinner)
+        except Exception:
+            pass
+
+    def update_message(self, title=None, subtitle=None):
+        """Update loader copy without recreating the overlay or spinner."""
+        try:
+            if title is not None and self.title_label.winfo_exists():
+                self.title_label.configure(text=str(title))
+            if subtitle is not None and self.sub_label.winfo_exists():
+                self.sub_label.configure(text=str(subtitle))
         except Exception:
             pass
 
@@ -5626,8 +6396,11 @@ class MCUUploadGUI:
 
         # ── TAB 2: Compatible Devices ──
         compat_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+        self._compat_frame = compat_frame
+        self._compatible_devices_tab_index_cache = None
 
         compat_header = tk.Frame(compat_frame, bg=Theme.BG_MID, pady=6, padx=10)
+        self._compat_header = compat_header
         compat_header.pack(fill=tk.X)
 
         self.lbl_compat_title = tk.Label(
@@ -5661,11 +6434,13 @@ class MCUUploadGUI:
         # ── Compatible Devices: search / filter bar ──
         compat_search_row = tk.Frame(compat_frame, bg=Theme.BG_MID, pady=4, padx=10)
         compat_search_row.pack(fill=tk.X)
+        self._compat_search_row = compat_search_row
 
-        tk.Label(
+        self.lbl_compat_search_icon = tk.Label(
             compat_search_row, text="🔍", bg=Theme.BG_MID, fg=Theme.TEXT_DIM,
             font=self.font_mono_sm,
-        ).pack(side=tk.LEFT)
+        )
+        self.lbl_compat_search_icon.pack(side=tk.LEFT)
 
         self.compat_search_var = tk.StringVar()
         self.compat_search_var.trace_add("write", lambda *a: self._apply_compat_filter())
@@ -5678,6 +6453,24 @@ class MCUUploadGUI:
             highlightcolor=Theme.CYAN,
         )
         self.compat_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6), ipady=2)
+        self.compat_search_entry.configure(takefocus=True, state=tk.NORMAL)
+        self.compat_search_entry.bind(
+            "<Button-1>",
+            lambda _e: self._focus_compatible_search(select_all=False, select_tab=False),
+            add="+",
+        )
+        self.compat_search_entry.bind(
+            "<Control-f>",
+            lambda _e: self._focus_compatible_search(select_all=True, select_tab=False),
+        )
+        self.compat_search_entry.bind(
+            "<Control-F>",
+            lambda _e: self._focus_compatible_search(select_all=True, select_tab=False),
+        )
+        self.compat_search_entry.bind(
+            "<Escape>",
+            lambda _e: (self.compat_search_var.set(""), "break")[1],
+        )
 
         def _clear_compat_search():
             self.compat_search_var.set("")
@@ -5688,6 +6481,22 @@ class MCUUploadGUI:
             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm
         )
         btn_compat_search_clear.pack(side=tk.RIGHT)
+        self.btn_compat_search_clear = btn_compat_search_clear
+
+        # Clicking the title/search-row background should always reclaim keyboard
+        # focus from the embedded Monaco/OpenCode native windows.
+        for _compat_focus_widget in (
+            compat_header,
+            self.lbl_compat_title,
+            self.lbl_compat_status,
+            compat_search_row,
+            self.lbl_compat_search_icon,
+        ):
+            _compat_focus_widget.bind(
+                "<Button-1>",
+                lambda _e: self._focus_compatible_search(select_all=False),
+                add="+",
+            )
 
         tk.Frame(compat_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
 
@@ -5707,6 +6516,14 @@ class MCUUploadGUI:
         compat_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.compat_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._setup_selectable_read_only_text(self.compat_text)
+        self.compat_text.bind(
+            "<Control-f>",
+            lambda _e: self._focus_compatible_search(select_all=True),
+        )
+        self.compat_text.bind(
+            "<Control-F>",
+            lambda _e: self._focus_compatible_search(select_all=True),
+        )
 
         for widget in [self.compat_text]:
             widget.tag_configure("system",  foreground=Theme.CYAN)
@@ -6092,6 +6909,13 @@ class MCUUploadGUI:
         except Exception:
             pass
         self._serial_monitor_tab_index_cache = None
+        self._compatible_devices_tab_index_cache = None
+        self.bottom_notebook.bind(
+            "<<NotebookTabChanged>>", self._on_bottom_notebook_tab_changed, add="+"
+        )
+        self.bottom_notebook.bind(
+            "<ButtonRelease-1>", self._on_bottom_notebook_click_release, add="+"
+        )
 
         self.main_pane.add(bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
 
@@ -7729,6 +8553,8 @@ class MCUUploadGUI:
         self._set_buttons_state(busy, operation="any")
 
     def _set_buttons_state(self, busy: bool, operation: str = "any"):
+        previous_operation = getattr(self, "_active_operation", None)
+        entering_busy = bool(busy and previous_operation is None)
         self._active_operation = operation if busy else None
         def _do():
             if busy:
@@ -7764,12 +8590,14 @@ class MCUUploadGUI:
                     self.btn_stop.configure(state=tk.NORMAL)
                     if hasattr(self, "bottom_notebook"):
                         self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
-                        self.bottom_notebook.select(0)  # Switch to Build Console
+                        if entering_busy:
+                            self.bottom_notebook.select(0)  # Switch once at operation start
                 elif operation in ("flash", "reset"):
                     self.btn_stop.configure(state=tk.DISABLED)
                     if hasattr(self, "bottom_notebook"):
                         self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="disabled")
-                        self.bottom_notebook.select(0)
+                        if entering_busy:
+                            self.bottom_notebook.select(0)
                         self._set_window_closable(False)
                 else:
                     self.btn_stop.configure(state=tk.DISABLED)
@@ -7816,14 +8644,24 @@ class MCUUploadGUI:
                     #     rather than trusting Tk to leave the current
                     #     selection alone when a previously-disabled tab
                     #     flips back to "normal".
-                    was_locked = self.bottom_notebook.tab(self._serial_monitor_tab_index(), "state") == "disabled"
-                    self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
+                    current_tab = self.bottom_notebook.select()
+                    serial_index = self._serial_monitor_tab_index()
+                    was_locked = self.bottom_notebook.tab(serial_index, "state") == "disabled"
+                    self.bottom_notebook.tab(serial_index, state="normal")
                     target_tab = self._focus_tab_on_unlock
                     self._focus_tab_on_unlock = None  # one-shot, always consume
                     if target_tab is not None:
                         self.bottom_notebook.select(target_tab)
                     elif was_locked:
-                        self.bottom_notebook.select(0)
+                        # Keep a user-selected Compatible Devices/Notifications tab.
+                        # Only fall back when the selected tab itself was the one locked.
+                        try:
+                            if current_tab and self.bottom_notebook.index(current_tab) == serial_index:
+                                self.bottom_notebook.select(0)
+                        except Exception:
+                            self.bottom_notebook.select(0)
+                    if self._compatible_devices_is_selected():
+                        self.root.after_idle(self._repair_compatible_devices_interaction)
                 
                 # Re-enable board/ports/baud selection
                 self.board_combo.configure(state="readonly")
@@ -8410,6 +9248,116 @@ class MCUUploadGUI:
             pass
         return 1
 
+    def _compatible_devices_tab_index(self) -> int:
+        """Resolve the Compatible Devices tab index after dynamic tab reordering."""
+        cached = getattr(self, "_compatible_devices_tab_index_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            frame = getattr(self, "_compat_frame", None)
+            if frame is not None and self.bottom_notebook.winfo_exists():
+                idx = self.bottom_notebook.index(frame)
+                self._compatible_devices_tab_index_cache = idx
+                return idx
+        except Exception:
+            pass
+        try:
+            for i, tab_id in enumerate(self.bottom_notebook.tabs()):
+                if "Compatible Devices" in self.bottom_notebook.tab(tab_id, "text"):
+                    self._compatible_devices_tab_index_cache = i
+                    return i
+        except Exception:
+            pass
+        return 2
+
+    def _compatible_devices_is_selected(self) -> bool:
+        try:
+            current = self.bottom_notebook.select()
+            return bool(current) and self.bottom_notebook.index(current) == self._compatible_devices_tab_index()
+        except Exception:
+            return False
+
+    def _repair_compatible_devices_interaction(self):
+        """Repair focus/state after native Monaco/OpenCode windows or a busy-state transition.
+
+        A reparented WebView2 window can retain the Windows keyboard focus even
+        after the user clicks back into Tk. Reassert the tab and Entry state,
+        raise the Tk widgets, and release only a stale invisible Tk grab.
+        """
+        try:
+            idx = self._compatible_devices_tab_index()
+            self.bottom_notebook.tab(idx, state="normal")
+        except Exception:
+            pass
+        try:
+            entry = self.compat_search_entry
+            entry.configure(state=tk.NORMAL, takefocus=True)
+            for widget in (
+                getattr(self, "_compat_frame", None),
+                getattr(self, "_compat_header", None),
+                getattr(self, "_compat_search_row", None),
+                entry,
+            ):
+                if widget is not None and widget.winfo_exists():
+                    widget.lift()
+        except Exception:
+            pass
+        try:
+            grabbed = self.root.grab_current()
+            if grabbed is not None and (
+                not grabbed.winfo_exists() or not grabbed.winfo_ismapped()
+            ):
+                grabbed.grab_release()
+        except Exception:
+            pass
+
+    def _focus_compatible_search(self, select_all: bool = False, select_tab: bool = True):
+        """Reveal Compatible Devices and reliably focus its search Entry."""
+        try:
+            if not getattr(self, "monitors_pane_visible", True):
+                self._toggle_monitors_pane()
+            idx = self._compatible_devices_tab_index()
+            self.bottom_notebook.tab(idx, state="normal")
+            if select_tab:
+                self.bottom_notebook.select(idx)
+            self._repair_compatible_devices_interaction()
+            entry = self.compat_search_entry
+            safe_reclaim_os_focus(entry)
+
+            def _finish_focus():
+                try:
+                    entry.configure(state=tk.NORMAL)
+                    entry.focus_force()
+                    entry.focus_set()
+                    if select_all:
+                        entry.selection_range(0, tk.END)
+                        entry.icursor(tk.END)
+                except Exception:
+                    pass
+
+            self.root.after(25, _finish_focus)
+        except Exception:
+            pass
+        return "break"
+
+    def _on_bottom_notebook_tab_changed(self, _event=None):
+        if not self._compatible_devices_is_selected():
+            return
+        try:
+            self.root.after_idle(self._repair_compatible_devices_interaction)
+        except Exception:
+            pass
+
+    def _on_bottom_notebook_click_release(self, _event=None):
+        """A real tab click should also reclaim focus from embedded native views."""
+        def _after_click():
+            if self._compatible_devices_is_selected():
+                self._focus_compatible_search(select_all=False, select_tab=False)
+        try:
+            self.root.after_idle(_after_click)
+        except Exception:
+            pass
+
     def _refresh_compatible_devices(self, force: bool = False):
         """Re-analyse the sketch in the background thread pool and redraw the
         '🔧 Compatible Devices' tab.  Called ONLY from the compile-success
@@ -8629,7 +9577,22 @@ class MCUUploadGUI:
 
         One bulk insert + one tag-add pass over line ranges (no per-line
         insert calls) so rendering 400+ board entries stays cheap on the
-        UI thread."""
+        UI thread. Preserve the search Entry's focus/caret while a background
+        compatibility refresh finishes.
+        """
+        search_had_focus = False
+        search_insert = None
+        search_selection = None
+        try:
+            search_had_focus = self.root.focus_get() is self.compat_search_entry
+            search_insert = self.compat_search_entry.index(tk.INSERT)
+            if self.compat_search_entry.selection_present():
+                search_selection = (
+                    self.compat_search_entry.index(tk.SEL_FIRST),
+                    self.compat_search_entry.index(tk.SEL_LAST),
+                )
+        except Exception:
+            pass
         try:
             self.compat_text.configure(state=tk.NORMAL)
             self.compat_text.delete("1.0", tk.END)
@@ -8648,6 +9611,19 @@ class MCUUploadGUI:
             self.compat_text.configure(state=tk.DISABLED)
             self.compat_text.see("1.0")
             self.lbl_compat_status.config(text=status_text)
+            if search_had_focus:
+                def _restore_search_focus():
+                    try:
+                        self._repair_compatible_devices_interaction()
+                        self.compat_search_entry.focus_force()
+                        self.compat_search_entry.focus_set()
+                        if search_selection:
+                            self.compat_search_entry.selection_range(*search_selection)
+                        if search_insert is not None:
+                            self.compat_search_entry.icursor(search_insert)
+                    except Exception:
+                        pass
+                self.root.after_idle(_restore_search_focus)
         except Exception:
             pass
 
@@ -9172,9 +10148,18 @@ class MCUUploadGUI:
         if is_avr:
             self.upload_speed_var.set("115200")
             self.upload_speed_combo.configure(state="disabled")
+            # Arduino Uno sketches conventionally use 9600 baud. Keep both the
+            # internal and visible Serial Monitor controls synchronized so a
+            # successful upload cannot reconnect at the previous ESP32 115200.
+            self.baud_var.set("9600")
+            if hasattr(self, "serial_baud_var"):
+                self.serial_baud_var.set("9600")
         else:
             if is_esp32:
                 self.upload_speed_var.set("460800")
+                self.baud_var.set("115200")
+                if hasattr(self, "serial_baud_var"):
+                    self.serial_baud_var.set("115200")
             self.upload_speed_combo.configure(state="readonly")
 
         self._restart_monitor(f"board → {board_name}")
@@ -9265,8 +10250,21 @@ class MCUUploadGUI:
                         return find_board_for_platform("espressif32", variant_hint="esp32") or "ESP32 Dev Module"
                     elif "esp8266" in text or "nodemcu" in text:
                         return find_board_for_platform("espressif8266") or "NodeMCU 1.0 (ESP-12E Module)"
+                    elif (
+                        any(k in text for k in (
+                            "usb-serial ch340", "usb serial ch340",
+                            "usb-serial ch341", "usb serial ch341",
+                            "wch ch340", "wch ch341"
+                        ))
+                        or (
+                            candidate.vid is not None
+                            and candidate.pid is not None
+                            and (candidate.vid, candidate.pid) in KNOWN_UNO_CLONE_USB_IDS
+                        )
+                    ):
+                        return find_arduino_uno_board() or "Arduino Uno"
                     elif "uno" in text or "atmega328" in text:
-                        return find_board_for_platform("atmelavr") or "Arduino Uno"
+                        return find_arduino_uno_board() or "Arduino Uno"
                     
                     # Check downloaded board USB VID/PIDs
                     if candidate.vid is not None and candidate.pid is not None:
@@ -9512,6 +10510,14 @@ class MCUUploadGUI:
         if not chip:
             return False
         keyword, allowed_platforms, _label = chip
+        if keyword in ("ch340", "ch341"):
+            # A generic Windows descriptor such as "USB-SERIAL CH340" has no
+            # chip-family text. Treat that exact clone-board signature as Uno,
+            # while allowing descriptors that explicitly say ESP8266/NodeMCU to
+            # remain ESP boards.
+            descriptor_board = self._detect_board_from_descriptor(self._get_port() or "")
+            if descriptor_board:
+                return SUPPORTED_BOARDS.get(descriptor_board, {}).get("platform") == "atmelavr"
         esp_platforms = {"espressif32", "espressif8266"}
         return not (allowed_platforms & esp_platforms)
 
@@ -11804,6 +12810,13 @@ class MCUUploadGUI:
             "SimpleBLE.h",
             "BluetoothSerial.h",
         }
+        _NETWORK_PROV_MARKERS = (
+            "WiFiProv.h",
+            "wifi_provisioning/",
+            "NETWORK_PROV_SCHEME_",
+            "NETWORK_PROV_SECURITY_",
+        )
+        needs_network_prov_compat = False
         needs_huge_app = False
         # Default huge_app for ESP32 / ESP32-S3 boards — their base firmware
         # already consumes most of the default 1.25 MB app partition, and any
@@ -11817,12 +12830,30 @@ class MCUUploadGUI:
                 for file_path in self.sketch_dir_path.glob(ext):
                     try:
                         content = file_path.read_text(encoding="utf-8", errors="replace")
+                        if any(marker in content for marker in _NETWORK_PROV_MARKERS):
+                            needs_network_prov_compat = True
                         if any(h in content for h in _LARGE_STACK_HEADERS):
                             needs_huge_app = True
-                            break
+                            if needs_network_prov_compat:
+                                break
                     except Exception:
                         pass
-                if needs_huge_app:
+                if needs_huge_app and needs_network_prov_compat:
+                    break
+
+        # ESP32 defaults to huge_app before scanning, so provisioning aliases
+        # need their own source-driven pass.
+        if p_platform == "espressif32" and not needs_network_prov_compat and self.sketch_dir_path.exists():
+            for ext in ("*.ino", "*.cpp", "*.h", "*.hpp", "*.c"):
+                for file_path in self.sketch_dir_path.glob(ext):
+                    try:
+                        source_text = file_path.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    if any(marker in source_text for marker in _NETWORK_PROV_MARKERS):
+                        needs_network_prov_compat = True
+                        break
+                if needs_network_prov_compat:
                     break
         
         # 2. Get Arduino user libraries directory from local settings
@@ -11850,11 +12881,13 @@ class MCUUploadGUI:
             # board_build.flash_mode = dio is required on most S3 modules;
             # qio can cause boot loops on boards that don't support it.
             
-            build_flags_list = [
-                "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
-                "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
-                "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1"
-            ]
+            build_flags_list = []
+            if p_platform == "espressif32" and needs_network_prov_compat:
+                build_flags_list.extend([
+                    "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
+                    "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
+                    "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1",
+                ])
             
             s3_extra = ""
             _uspd = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
@@ -11887,16 +12920,20 @@ class MCUUploadGUI:
                     f"\nboard_build.flash_mode = dio"
                 )
 
-            build_flags_str = "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags_list)
+            build_flags_str = (
+                "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags_list)
+                if build_flags_list else ""
+            )
             partition_str = "board_build.partitions = huge_app.csv\n" if needs_huge_app else ""
 
             # Build the [env:mcu_flash] body line-by-line so no key ever gets
             # concatenated onto the tail of another key's value line.
+            monitor_speed = "9600" if p_platform == "atmelavr" else "115200"
             env_lines: list[str] = [
                 f"platform = {p_platform}",
                 f"board = {p_board}",
                 f"framework = {p_framework}",
-                "monitor_speed = 115200",
+                f"monitor_speed = {monitor_speed}",
             ]
             if flash_size:
                 env_lines.append(f"board_build.flash_size = {flash_size}")
@@ -11912,7 +12949,8 @@ class MCUUploadGUI:
                 # s3_extra is "\nupload_protocol = esptool\nboard_build.flash_mode = dio"
                 for extra_line in s3_extra.strip().splitlines():
                     env_lines.append(extra_line.strip())
-            env_lines.append(build_flags_str)
+            if build_flags_str:
+                env_lines.append(build_flags_str)
             if lib_extra_dirs_str:
                 env_lines.append(f"lib_extra_dirs = {arduino_lib_dir}")
             if lib_deps_str:
@@ -12042,6 +13080,22 @@ default_envs = {self._pio_env_name()}
                 if re.search(r"^board\s*=", content, re.MULTILINE):
                     content = re.sub(r"^board\s*=.*", f"board = {p_board}", content, flags=re.MULTILINE)
 
+                # Keep the generated monitor baud aligned with the selected
+                # platform. Arduino Uno uses 9600; ESP boards use 115200.
+                desired_monitor_speed = "9600" if p_platform == "atmelavr" else "115200"
+                if re.search(r"^monitor_speed\s*=", content, re.MULTILINE):
+                    content = re.sub(
+                        r"^monitor_speed\s*=.*",
+                        f"monitor_speed = {desired_monitor_speed}",
+                        content, flags=re.MULTILINE,
+                    )
+                else:
+                    content = re.sub(
+                        r"(\[env:[^\]]*\]\n)",
+                        rf"\1monitor_speed = {desired_monitor_speed}\n",
+                        content, count=1,
+                    )
+
                 # Update upload_speed based on board type
                 if p_board == "uno":
                     if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
@@ -12077,7 +13131,7 @@ default_envs = {self._pio_env_name()}
                 # Ensure Arduino core v3 compatibility defines are present in build_flags.
                 # These work around an ESP32 Arduino-core v3 API rename in WiFiProv —
                 # they don't exist on AVR and must never be injected for Uno/atmelavr.
-                if p_platform == "espressif32":
+                if p_platform == "espressif32" and needs_network_prov_compat:
                     compat_flags = [
                         "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
                         "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
@@ -12100,9 +13154,8 @@ default_envs = {self._pio_env_name()}
                             content += "\n"
                         content += flags_block
                 else:
-                    # Non-ESP32 board (e.g. Arduino Uno) — strip these defines out
-                    # if a previously-generated ini already has them, since they
-                    # only existed there because of this same unconditional-inject bug.
+                    # Strip generated provisioning aliases when this sketch does
+                    # not use WiFiProv, including ordinary ESP32 and all AVR boards.
                     for _flag in (
                         "-D NETWORK_PROV_SCHEME_SOFTAP=WIFI_PROV_SCHEME_SOFTAP",
                         "-D NETWORK_PROV_SCHEME_HANDLER_NONE=WIFI_PROV_SCHEME_HANDLER_NONE",
@@ -12122,6 +13175,13 @@ default_envs = {self._pio_env_name()}
                             r"\1board_build.partitions = huge_app.csv\n",
                             content, count=1
                         )
+                elif p_platform != "espressif32":
+                    content = re.sub(
+                        r"^board_build\.partitions\s*=\s*huge_app\.csv\s*\n?",
+                        "",
+                        content,
+                        flags=re.MULTILINE | re.IGNORECASE,
+                    )
 
                 # Inject ESP32-S3 required build flags if missing.
                 # These are needed for USB-Serial (Serial monitor) to work and
@@ -14381,6 +15441,7 @@ default_envs = {self._pio_env_name()}
         _chip_info: dict[str, str] = {}
         _chip_info_shown = [False]
         _connected_logged = [False]
+        _avr_connected_logged = [False]
         _connected_bar_flipped = [False]  # progress line re-rendered as green "✔ Connected"
 
         # Lines that would normally print BEFORE the chip-info box (build
@@ -14680,7 +15741,9 @@ default_envs = {self._pio_env_name()}
                     # avrdude output — map to clean structured lines
                     if "avr device initialized" in low or "device signature" in low:
                         _set_upload_phase("Connecting")
-                        self._append("  🔌 Connected to Arduino Uno", "system")
+                        if not _avr_connected_logged[0]:
+                            self._append("  🔌 Connected to Arduino Uno", "system")
+                            _avr_connected_logged[0] = True
                     elif "writing flash" in low or "writing eeprom" in low:
                         _set_upload_phase("Writing")
                     elif "verifying flash" in low or "verifying eeprom" in low:
@@ -15131,17 +16194,28 @@ default_envs = {self._pio_env_name()}
                 if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
                     self._clear_serial_console()
 
-                # For ESP32/ESP8266: ONLY pulse DTR/RTS when the user explicitly requests
-                # a manual hardware reset (is_manual_reset == True).
-                # Connecting at startup, port change, or hotplug MUST NOT interrupt or reset the running ESP/MCU.
-                if not is_uno and is_manual_reset:
+                # Pulse reset only after an explicit Upload/Reset request. For
+                # Uno, opening with DTR=False avoids an uncontrolled reset; the
+                # deliberate False -> True -> False pulse below then starts the
+                # bootloader while the monitor is already open, so setup() output
+                # is captured instead of being missed.
+                if is_manual_reset:
                     try:
-                        self.serial_conn.dtr = False
-                        self.serial_conn.rts = True
-                        time.sleep(0.15)
-                        self.serial_conn.rts = False
-                        self.serial_conn.dtr = False
-                        time.sleep(0.05)
+                        if is_uno:
+                            self.serial_conn.rts = False
+                            self.serial_conn.dtr = False
+                            time.sleep(0.05)
+                            self.serial_conn.dtr = True
+                            time.sleep(0.10)
+                            self.serial_conn.dtr = False
+                            time.sleep(0.05)
+                        else:
+                            self.serial_conn.dtr = False
+                            self.serial_conn.rts = True
+                            time.sleep(0.15)
+                            self.serial_conn.rts = False
+                            self.serial_conn.dtr = False
+                            time.sleep(0.05)
                     except Exception:
                         pass
                     self._manual_reset_pending = False
@@ -17926,9 +19000,12 @@ default_envs = {self._pio_env_name()}
             self._show_ai_side_panel()
 
     def _show_ai_loading_overlay_4s(self):
-        """Display circular loading overlay on top of AI container until the
-        AI assistant is actually ready (PTY spawned + first output received),
-        with a safety timeout so the UI never stays blocked."""
+        """Show a non-blocking loader while the AI WebView is attaching.
+
+        Readiness is accepted from either the cross-process marker or a valid
+        embedded HWND. This prevents a fully loaded AI terminal from remaining
+        hidden behind the spinner when startup output completes unusually fast.
+        """
         self._dismiss_ai_loading_overlay()
         try:
             if hasattr(self, "ai_side_container") and self.ai_side_container:
@@ -17940,48 +19017,114 @@ default_envs = {self._pio_env_name()}
                     text="Initializing AI Assistant..."
                 )
                 self.ai_loading_overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
+                self.ai_loading_overlay.lift()
 
                 if hasattr(self, "root") and self.root:
                     self._ai_launch_marker_time = time.time()
+                    self._ai_embed_ready_time = 0.0
                     self._ai_overlay_retry_count = 0
-                    self._ai_overlay_timer_id = self.root.after(250, self._poll_ai_ready_dismiss)
+                    self._ai_overlay_timer_id = self.root.after(100, self._poll_ai_ready_dismiss)
         except Exception:
             pass
 
     _show_ai_loading_overlay_3s = _show_ai_loading_overlay_4s
 
     def _poll_ai_ready_dismiss(self):
-        """Dismiss the AI loading overlay once the AI subprocess signals it is
-        actually ready (.ai_ready_signal written after first PTY output)."""
-        if not getattr(self, "ai_loading_overlay", None):
+        """Dismiss only after OpenCode reports that its TUI is interactive.
+
+        Native embedding or WebSocket connection alone is not readiness: the
+        WebView may already be painted while OpenCode is still loading models,
+        configuration, or its initial screen. The child process publishes a
+        JSON marker only after meaningful PTY output has settled.
+        """
+        overlay = getattr(self, "ai_loading_overlay", None)
+        if not overlay:
             return
-        ready = False
+        now = time.time()
+        launch_time = float(getattr(self, "_ai_launch_marker_time", now) or now)
+        elapsed = max(0.0, now - launch_time)
+        embedded = False
+        marker_ready = False
+        marker_reason = ""
         try:
+            hwnd = getattr(self, "_ai_hwnd", None)
+            embedded = bool(hwnd and getattr(self, "_ai_is_embedded", False))
+            if embedded and win32gui is not None:
+                embedded = bool(win32gui.IsWindow(hwnd))
+
             sketch_dir = getattr(self, "sketch_dir_path", None)
             if sketch_dir:
                 marker = Path(sketch_dir) / ".ai_ready_signal"
-                launch_time = getattr(self, "_ai_launch_marker_time", 0)
-                if marker.exists() and marker.stat().st_mtime >= launch_time:
-                    embedded = bool(
-                        getattr(self, "_ai_hwnd", None)
-                        and getattr(self, "_ai_is_embedded", False)
-                    )
-                    # Only dismiss once the AI window is actually embedded, so
-                    # the container is never left blank while content renders.
-                    # A 15s fallback prevents hanging if embedding never occurs.
-                    if embedded or (time.time() - launch_time) > 15:
-                        ready = True
+                if marker.exists() and marker.stat().st_mtime >= (launch_time - 2.0):
+                    try:
+                        marker_data = json.loads(marker.read_text(encoding="utf-8", errors="replace"))
+                    except Exception:
+                        marker_data = {}
+                    marker_reason = str(marker_data.get("reason", ""))
+                    marker_ready = marker_reason in {
+                        "opencode-ready",
+                        "pty-settled",
+                        "startup-fallback-ready",
+                    }
         except Exception:
             pass
-        if ready:
+
+        # Keep the copy accurate to the actual startup phase.
+        try:
+            if marker_ready and not embedded:
+                overlay.update_message(
+                    "Attaching AI Assistant...",
+                    "OpenCode is ready. Finishing the embedded terminal window...",
+                )
+            elif embedded and not marker_ready:
+                if elapsed >= 20.0:
+                    overlay.update_message(
+                        "OpenCode is still starting...",
+                        "First launch can take longer. Waiting until the terminal is interactive...",
+                    )
+                else:
+                    overlay.update_message(
+                        "Loading OpenCode...",
+                        "Terminal attached. Waiting for OpenCode to finish initialization...",
+                    )
+            else:
+                overlay.update_message(
+                    "Initializing AI Assistant...",
+                    "Starting the OpenCode process and embedded terminal...",
+                )
+        except Exception:
+            pass
+
+        if embedded and marker_ready:
             self._dismiss_ai_loading_overlay()
             return
+
+        # Emergency fallback only after a very conservative timeout. This
+        # prevents permanent overlays if a filesystem blocks marker creation,
+        # without repeating the old early-dismiss behavior.
+        if elapsed >= 45.0 and embedded:
+            running = False
+            try:
+                from dedicated_AI import is_opencode_running
+                running = bool(is_opencode_running())
+            except Exception:
+                pass
+            if running:
+                self._dismiss_ai_loading_overlay()
+                try:
+                    self._append_notif(
+                        "  ⚠ AI readiness confirmation timed out; showing the running terminal.",
+                        "warning",
+                        category="system",
+                        title="AI startup fallback",
+                    )
+                except Exception:
+                    pass
+                return
+
         self._ai_overlay_retry_count = getattr(self, "_ai_overlay_retry_count", 0) + 1
-        if self._ai_overlay_retry_count > 120:
-            self._dismiss_ai_loading_overlay()
-            return
         if hasattr(self, "root") and self.root:
-            self._ai_overlay_timer_id = self.root.after(250, self._poll_ai_ready_dismiss)
+            self._ai_overlay_timer_id = self.root.after(150, self._poll_ai_ready_dismiss)
 
     def _dismiss_ai_loading_overlay(self):
         """Remove and clean up circular loading overlay."""
@@ -18015,8 +19158,8 @@ default_envs = {self._pio_env_name()}
         self._ai_side_visible = True
         self._update_ai_button_label()
 
-        # Display 4-second circular loading overlay ONLY on first-time launch
-        # (Subsequent hide/unhide toggles open immediately without overlay delay)
+        # Display the readiness-driven loading overlay only on first launch.
+        # Subsequent hide/unhide toggles keep the already-running terminal visible.
         from dedicated_AI import is_opencode_running
         if not getattr(self, "_has_shown_ai_first_time_loader", False) or not is_opencode_running():
             self._has_shown_ai_first_time_loader = True
@@ -18051,6 +19194,13 @@ default_envs = {self._pio_env_name()}
     def _hide_ai_side_panel(self):
         """Hide the AI Assistant side panel container from the right side."""
         self._dismiss_ai_loading_overlay()
+
+        if hasattr(self, "_ai_embed_poll_job") and self._ai_embed_poll_job:
+            try:
+                self.root.after_cancel(self._ai_embed_poll_job)
+            except Exception:
+                pass
+            self._ai_embed_poll_job = None
 
         if hasattr(self, "_ai_size_watchdog_job") and self._ai_size_watchdog_job:
             try:
@@ -18087,11 +19237,20 @@ default_envs = {self._pio_env_name()}
 
     def _start_ai_embedding_poll(self):
         self._ai_embed_attempts = 0
+        if hasattr(self, "_ai_embed_poll_job") and self._ai_embed_poll_job:
+            try:
+                self.root.after_cancel(self._ai_embed_poll_job)
+            except Exception:
+                pass
+            self._ai_embed_poll_job = None
         if hasattr(self, "root") and self.root:
-            self.root.after(100, self._try_embed_ai_window)
+            self._ai_embed_poll_job = self.root.after(50, self._try_embed_ai_window)
 
     def _try_embed_ai_window(self):
         """Find and embed the pywebview-hosted AI window into the right-side container."""
+        # The scheduled callback is now running; clear the handle before any
+        # possible reschedule so stale Tk after-ids never accumulate.
+        self._ai_embed_poll_job = None
         if win32gui is None or win32con is None:
             return
 
@@ -18108,8 +19267,10 @@ default_envs = {self._pio_env_name()}
         hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - OpenCode AI Assistant")
         if not hwnd or hwnd == 0:
             self._ai_embed_attempts = getattr(self, "_ai_embed_attempts", 0) + 1
-            if self._ai_embed_attempts < 100:
-                self.root.after(100, self._try_embed_ai_window)
+            if self._ai_embed_attempts < 200 and getattr(self, "_ai_side_visible", False):
+                self._ai_embed_poll_job = self.root.after(75, self._try_embed_ai_window)
+            else:
+                self._ai_embed_poll_job = None
             return
 
         try:
@@ -18143,7 +19304,28 @@ default_envs = {self._pio_env_name()}
             win32gui.SetParent(hwnd, tk_hwnd)
             self._ai_hwnd = hwnd
             self._ai_is_embedded = True
-            self._resize_embedded_ai()
+            self._ai_embed_ready_time = time.time()
+            self._ai_embed_poll_job = None
+
+            # Reparenting an already-created WebView2 window does not always
+            # trigger a native WM_SIZE/paint pass. Force an initial show and a
+            # few inexpensive deferred resizes so first launch behaves exactly
+            # like the previously-working hide/show cycle.
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.RedrawWindow(
+                    hwnd, None, None,
+                    win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW |
+                    win32con.RDW_ALLCHILDREN,
+                )
+            except Exception:
+                pass
+            self._apply_ai_embed_size(force=True)
+            for delay in (50, 150, 350):
+                try:
+                    self.root.after(delay, lambda: self._apply_ai_embed_size(force=True))
+                except Exception:
+                    pass
             self._update_ai_button_label()
         except Exception as e:
             print(f"[MCU Flasher] Error embedding AI window: {e}")
@@ -18168,7 +19350,7 @@ default_envs = {self._pio_env_name()}
         except Exception:
             pass
 
-    def _apply_ai_embed_size(self):
+    def _apply_ai_embed_size(self, force=False):
         if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
             return
         if win32gui is None or win32con is None:
@@ -18180,19 +19362,20 @@ default_envs = {self._pio_env_name()}
             frame = self.ai_embed_frame
             w = max(frame.winfo_width(), 50)
             h = max(frame.winfo_height(), 50)
-            # Skip redundant SetWindowPos when the size already matches.
+            # During first attachment force SetWindowPos even when the outer
+            # dimensions happen to match; WebView2 still needs the WM_SIZE paint.
             left, top, right, bottom = win32gui.GetWindowRect(self._ai_hwnd)
-            if right - left != w or bottom - top != h:
+            if force or right - left != w or bottom - top != h:
                 win32gui.SetWindowPos(
                     self._ai_hwnd, 0, 0, 0, w, h,
                     win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
                     win32con.SWP_SHOWWINDOW | 0x4000
                 )
-            self._force_ai_webview_fill()
+            self._force_ai_webview_fill(force=force)
         except Exception:
             pass
 
-    def _force_ai_webview_fill(self):
+    def _force_ai_webview_fill(self, force=False):
         """Force the pywebview child control(s) to fill the AI window client area.
 
         The WebView2 control inside the pywebview WinForms host uses
@@ -18222,7 +19405,7 @@ default_envs = {self._pio_env_name()}
 
             win32gui.EnumChildWindows(self._ai_hwnd, _collect, None)
             mismatched = [(hwnd,) for hwnd, cwd, chd in child_rects
-                          if cwd != cw or chd != ch]
+                          if force or cwd != cw or chd != ch]
             for (hwnd,) in mismatched:
                 win32gui.SetWindowPos(
                     hwnd, 0, 0, 0, cw, ch,
@@ -20888,12 +22071,28 @@ default_envs = {self._pio_env_name()}
         if was_monitoring:
             time.sleep(0.4)
 
+        board_name = self.board_var.get()
+        if board_name in SUPPORTED_BOARDS:
+            board_info = SUPPORTED_BOARDS[board_name]
+        elif SUPPORTED_BOARDS:
+            board_info = next(iter(SUPPORTED_BOARDS.values()))
+        else:
+            board_info = {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
+        p_platform = board_info["platform"]
+        p_board = board_info["board"]
+        p_framework = board_info["framework"]
+        is_avr = p_platform == "atmelavr"
+
         self._append("")
         self._append("=" * 50, "header")
-        self._append("  🔄 SOFT RESET (Clearing Flash Memory)", "header")
+        self._append(
+            "  🔄 SOFT RESET (Arduino UNO Minimal Sketch)"
+            if is_avr else "  🔄 SOFT RESET (Clearing Flash Memory)",
+            "header",
+        )
         self._append("=" * 50, "header")
         self._append(f"  Port  : {port}", "port_highlight")
-        self._append(f"  Board : {self.board_var.get()}", "dim")
+        self._append(f"  Board : {board_name}", "dim")
         if self._detect_port_chip() is None and not getattr(self, "_board_port_confirmed", False):
             self._append("  ⚠ Unrecognized USB-serial port — proceeding anyway.", "warning")
 
@@ -20905,8 +22104,10 @@ default_envs = {self._pio_env_name()}
         except Exception:
             system_is_laptop = False
 
-        if not system_is_laptop:
-            self._append("  💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.", "dim")
+        if not system_is_laptop and p_platform in ("espressif32", "espressif8266"):
+            self._append("  💡 Tip: On Desktop PCs, some ESP modules may need BOOT held during connection.", "dim")
+        elif is_avr:
+            self._append("  ℹ Arduino UNO uses automatic DTR reset; do not hold a BOOT button.", "dim")
 
         self._append("")
         self._set_status("Soft Reset: Initializing...", Theme.YELLOW)
@@ -20930,7 +22131,7 @@ default_envs = {self._pio_env_name()}
         import shutil
 
         self._set_status("Soft Reset: Preparing project files...", Theme.YELLOW)
-        project_dir = SCRIPT_DIR / "soft_reset_project"
+        project_dir = SCRIPT_DIR / ("soft_reset_project_uno" if is_avr else "soft_reset_project")
         try:
             project_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -20944,23 +22145,10 @@ default_envs = {self._pio_env_name()}
             messagebox.showerror("Soft Reset Error", f"Failed to create project directory:\n{e}", parent=self.root)
             return
 
-        # Write platformio.ini and main.cpp
-        board_name = self.board_var.get()
-        # See _ensure_platformio_ini for why this can no longer fall back
-        # to a literal SUPPORTED_BOARDS["ESP32 Dev Module"] key.
-        if board_name in SUPPORTED_BOARDS:
-            board_info = SUPPORTED_BOARDS[board_name]
-        elif SUPPORTED_BOARDS:
-            board_info = next(iter(SUPPORTED_BOARDS.values()))
-        else:
-            board_info = {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
-        p_platform = board_info["platform"]
-        p_board = board_info["board"]
-        p_framework = board_info["framework"]
-
-        # ESP32/ESP8266 can handle much faster upload speeds than AVR
-        is_avr = p_platform == "atmelavr"
+        # Write platformio.ini and main.cpp. Keep a separate Uno project so
+        # switching between ESP32 and AVR never destroys either build cache.
         upload_speed = "115200" if is_avr else "460800"
+        monitor_speed = "9600" if is_avr else "115200"
 
         ini_content = f"""; PlatformIO Project Configuration File for Soft Reset
 [platformio]
@@ -20971,18 +22159,33 @@ default_envs = mcu_flash
 platform = {p_platform}
 board = {p_board}
 framework = {p_framework}
-monitor_speed = 115200
+monitor_speed = {monitor_speed}
 upload_speed = {upload_speed}
 """
 
-        cpp_content = """#include <Arduino.h>
+        if is_avr:
+            cpp_content = """#include <Arduino.h>
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   Serial.println(">>>   ──   <<<");
 }
 
 void loop() {
-  
+
+}
+"""
+            # Force the GUI monitor to the same baud before it reconnects.
+            self.baud_var.set("9600")
+            if hasattr(self, "serial_baud_var"):
+                self.serial_baud_var.set("9600")
+        else:
+            cpp_content = """#include <Arduino.h>
+void setup() {
+  Serial.begin(115200);
+  Serial.println(">>> ESP SOFT RESET ACTIVE <<<");
+}
+
+void loop() {
 }
 """
 
@@ -21059,15 +22262,22 @@ void loop() {
             if not platform_installed:
                 self._append("", "")
                 self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
-                self._append("  ⚠ CRITICAL: Preparing/Installing core framework & toolchain packages...", "warning")
+                self._append("  ⚠ Preparing/Installing the required framework and toolchain...", "warning")
                 self._append("    This is a first-time setup for board framework '" + p_platform + "'.", "info")
-                self._append("    Notice: One-time setup of core framework packages (~760 MB) may take up", "info")
-                self._append("    to 5 minutes even on a stable internet connection. Please do NOT interrupt.", "warning")
+                if is_avr:
+                    self._append("    Arduino AVR packages are being prepared for UNO compilation/upload.", "info")
+                else:
+                    self._append("    ESP framework packages can be large and may take several minutes.", "info")
+                self._append("    Please keep the application open until setup completes.", "warning")
                 self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
                 self._append("", "")
                 _sr_state[0] = "Preparing/Installing Framework"
 
-        self._append("  🔨 Resetting Flash Memory...", "info")
+        self._append(
+            "  🔨 Uploading Arduino UNO reset sketch at 9600 baud..."
+            if is_avr else "  🔨 Resetting Flash Memory...",
+            "info",
+        )
 
         img_count = 0
         output_lines = []
@@ -21376,6 +22586,11 @@ void loop() {
         self._syntax_bg_active = False
         if hasattr(self, "_monaco_autosave_worker"):
             self._monaco_autosave_worker.stop()
+        if hasattr(self, "editor_api") and self.editor_api:
+            try:
+                self.editor_api.shutdown_ai_edit_backup()
+            except Exception:
+                pass
         if hasattr(self, "_bg_executor") and self._bg_executor:
             try:
                 self._bg_executor.shutdown(wait=False, cancel_futures=True)

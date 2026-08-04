@@ -1,8 +1,9 @@
 {
   "instances": {},
   "shared": {
-    "last_sketch_dir": "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\BLE_Receiver-Final",
+    "last_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
     "recent_projects": [
+      "C:\\Users\\napht\\Documents\\TRYLANG",
       "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\BLE_Receiver-Final",
       "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
       "D:\\PERSONAL-PROJECT\\DRAFT_FILES\\GarbyESP32\\NAPHTALI_CODE_V2",
@@ -14,7 +15,8 @@
       "COM5": "ESP32 Dev Module",
       "COM6": "ESP32 Dev Module",
       "COM18": "ESP32S3 Dev Module",
-      "COM22": "ESP32 Dev Module"
+      "COM22": "ESP32 Dev Module",
+      "COM9": "Arduino UNO"
     },
     "clear_serial_on_upload": true,
     "cpu_multithreading": "HIGH",

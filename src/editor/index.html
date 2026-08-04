@@ -532,6 +532,28 @@
       border-color: #3fb950;
     }
 
+    #ai-diff-banner .review-btn.undo {
+      color: #ffffff;
+      background: #1f6feb;
+      border-color: #388bfd;
+      font-weight: 700;
+    }
+
+    #ai-diff-banner .review-btn.undo:hover:not(:disabled) {
+      background: #388bfd;
+      border-color: #58a6ff;
+    }
+
+    #ai-diff-banner .review-btn.redo {
+      color: #d2a8ff;
+      border-color: rgba(163, 113, 247, 0.75);
+    }
+
+    #ai-diff-banner .review-btn.redo:hover:not(:disabled) {
+      background: rgba(163, 113, 247, 0.22);
+      border-color: #a371f7;
+    }
+
     @media (max-width: 700px) {
       #ai-diff-banner {
         left: 8px;
@@ -607,7 +629,7 @@
     <div id="editor-container">
       <div id="monaco-anchor"></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
-        <span class="review-title">🤖 AI Review</span>
+        <span id="ai-review-title" class="review-title">🤖 AI Review</span>
         <span id="ai-review-file" class="review-file"></span>
         <span id="ai-review-position" class="review-position"></span>
         <span id="ai-diff-add-count" class="diff-badge-add">+0 added</span>
@@ -617,6 +639,9 @@
         <span class="review-actions">
           <button id="ai-review-reject" class="review-btn reject" type="button">Reject</button>
           <button id="ai-review-accept" class="review-btn accept" type="button">Accept</button>
+          <button id="ai-history-undo" class="review-btn undo" type="button" style="display:none">Undo AI</button>
+          <button id="ai-history-redo" class="review-btn redo" type="button" style="display:none">Redo AI</button>
+          <button id="ai-history-close" class="review-btn close-banner" type="button" style="display:none" aria-label="Close AI history banner" title="Close">✕</button>
         </span>
       </div>
     </div>
@@ -956,6 +981,7 @@
       let glyphMarginWasEnabled = null;
       let reloadQueue = Promise.resolve();
       let deferredReviewCancellations = [];
+      let historyBusy = false;
 
       function normalizePath(path) {
         return String(path || '').replace(/\\/g, '/').toLowerCase();
@@ -1027,6 +1053,51 @@
         }
       };
 
+      function setVisible(element, visible) {
+        if (element) element.style.display = visible ? '' : 'none';
+      }
+
+      let aiHistoryBannerDismissed = false;
+      let aiHistoryBannerToken = '';
+      let lastAiHistoryState = null;
+      let aiHistoryBaselinePath = '';
+      let aiHistoryBaselineVersion = null;
+
+      function captureAiHistoryBaseline() {
+        const model = window.editorInstance && window.editorInstance.getModel
+          ? window.editorInstance.getModel() : null;
+        aiHistoryBaselinePath = normalizePath(activeEditorPath());
+        aiHistoryBaselineVersion = model && model.getAlternativeVersionId
+          ? model.getAlternativeVersionId() : null;
+      }
+
+      function editorIsAtAiHistoryBaseline() {
+        const model = window.editorInstance && window.editorInstance.getModel
+          ? window.editorInstance.getModel() : null;
+        if (!model || aiHistoryBaselineVersion === null) return false;
+        return normalizePath(activeEditorPath()) === aiHistoryBaselinePath &&
+          model.getAlternativeVersionId() === aiHistoryBaselineVersion;
+      }
+
+      function dismissAiHistoryBanner() {
+        aiHistoryBannerDismissed = true;
+        const banner = document.getElementById('ai-diff-banner');
+        if (banner && !currentReview) banner.style.display = 'none';
+        restoreGlyphMargin();
+      }
+
+      function currentAiHistoryToken(state) {
+        if (!state) return '';
+        return [
+          Number(state.undoDepth) || 0,
+          Number(state.redoDepth) || 0,
+          state.undo && state.undo.path || '',
+          state.undo && state.undo.action || '',
+          state.redo && state.redo.path || '',
+          state.redo && state.redo.action || ''
+        ].join('|');
+      }
+
       function setReviewButtonsDisabled(disabled) {
         const accept = document.getElementById('ai-review-accept');
         const reject = document.getElementById('ai-review-reject');
@@ -1034,9 +1105,25 @@
         if (reject) reject.disabled = !!disabled;
       }
 
+      function setBannerReviewMode() {
+        const title = document.getElementById('ai-review-title');
+        if (title) title.textContent = '🤖 AI Review';
+        setVisible(document.getElementById('ai-diff-add-count'), true);
+        setVisible(document.getElementById('ai-diff-modify-count'), true);
+        setVisible(document.getElementById('ai-diff-remove-count'), true);
+        setVisible(document.getElementById('ai-review-accept'), true);
+        setVisible(document.getElementById('ai-review-reject'), true);
+        setVisible(document.getElementById('ai-history-undo'), false);
+        setVisible(document.getElementById('ai-history-redo'), false);
+        setVisible(document.getElementById('ai-history-close'), false);
+      }
+
       function showReviewBanner(snapshot, message) {
         const banner = document.getElementById('ai-diff-banner');
         if (!banner || !snapshot) return;
+        aiHistoryBannerDismissed = false;
+        aiHistoryBannerToken = '';
+        setBannerReviewMode();
         const diff = snapshot.diff || {};
         const file = document.getElementById('ai-review-file');
         const position = document.getElementById('ai-review-position');
@@ -1065,6 +1152,141 @@
           messageNode.style.display = stateMessage ? 'inline' : 'none';
         }
         banner.style.display = 'flex';
+      }
+
+      async function refreshAiHistoryBanner(message) {
+        if (currentReview || resolvingReview) return null;
+        const api = bridgeApi();
+        if (!api || !api.get_ai_history_state) return null;
+        try {
+          const state = await api.get_ai_history_state();
+          const banner = document.getElementById('ai-diff-banner');
+          if (!banner) return state;
+          if (!state || (!state.canUndo && !state.canRedo)) {
+            banner.style.display = 'none';
+            restoreGlyphMargin();
+            return state;
+          }
+
+          const title = document.getElementById('ai-review-title');
+          const file = document.getElementById('ai-review-file');
+          const position = document.getElementById('ai-review-position');
+          const messageNode = document.getElementById('ai-review-message');
+          const undoButton = document.getElementById('ai-history-undo');
+          const redoButton = document.getElementById('ai-history-redo');
+          const closeButton = document.getElementById('ai-history-close');
+          const activeEntry = state.undo || state.redo || {};
+          const historyToken = currentAiHistoryToken(state);
+          if (historyToken !== aiHistoryBannerToken) {
+            aiHistoryBannerToken = historyToken;
+            aiHistoryBannerDismissed = false;
+            // The refreshed model state becomes the boundary between normal
+            // Monaco typing undo and AI-decision undo. Ctrl+Z only crosses
+            // into AI history when the editor is exactly at this boundary.
+            setTimeout(captureAiHistoryBaseline, 0);
+          }
+          lastAiHistoryState = state;
+
+          if (title) title.textContent = '↶ AI History';
+          if (file) {
+            file.textContent = activeEntry.fileName || 'AI decision';
+            file.title = activeEntry.path || '';
+          }
+          if (position) {
+            position.textContent = `${Number(state.undoDepth) || 0} undo / ${Number(state.redoDepth) || 0} redo`;
+          }
+          setVisible(document.getElementById('ai-diff-add-count'), false);
+          setVisible(document.getElementById('ai-diff-modify-count'), false);
+          setVisible(document.getElementById('ai-diff-remove-count'), false);
+          setVisible(document.getElementById('ai-review-accept'), false);
+          setVisible(document.getElementById('ai-review-reject'), false);
+          setVisible(undoButton, true);
+          setVisible(redoButton, true);
+          setVisible(closeButton, true);
+          if (undoButton) {
+            undoButton.disabled = historyBusy || !state.canUndo;
+            undoButton.title = state.undo
+              ? `Undo AI ${state.undo.action || 'decision'}: ${state.undo.fileName || ''}`
+              : 'No AI decision to undo';
+          }
+          if (redoButton) {
+            redoButton.disabled = historyBusy || !state.canRedo;
+            redoButton.title = state.redo
+              ? `Redo AI ${state.redo.action || 'decision'}: ${state.redo.fileName || ''}`
+              : 'No AI decision to redo';
+          }
+          if (closeButton) closeButton.disabled = false;
+          let stateMessage = message || '';
+          if (!stateMessage && state.undo) {
+            stateMessage = `Last AI edit ${state.undo.action || 'resolved'} — Undo is available`;
+          } else if (!stateMessage && state.redo) {
+            stateMessage = 'AI decision undone — Redo is available';
+          }
+          if (messageNode) {
+            messageNode.textContent = stateMessage;
+            messageNode.title = stateMessage;
+            messageNode.style.display = stateMessage ? 'inline' : 'none';
+          }
+          banner.style.display = aiHistoryBannerDismissed ? 'none' : 'flex';
+          if (aiHistoryBannerDismissed) restoreGlyphMargin();
+          return state;
+        } catch (error) {
+          console.error('Could not refresh AI history:', error);
+          return null;
+        }
+      }
+
+      async function applyAiHistory(direction, force) {
+        if (historyBusy || currentReview || resolvingReview) return;
+        const api = bridgeApi();
+        const method = direction === 'undo'
+          ? api && api.undo_ai_edit_decision
+          : api && api.redo_ai_edit_decision;
+        if (!method) return;
+        historyBusy = true;
+        await refreshAiHistoryBanner(direction === 'undo' ? 'Undoing AI decision…' : 'Redoing AI decision…');
+        try {
+          let result = direction === 'undo'
+            ? await api.undo_ai_edit_decision(!!force)
+            : await api.redo_ai_edit_decision(!!force);
+          if (result && result.conflict && !force) {
+            const proceed = window.confirm(
+              `${result.error || 'The file has newer changes.'}\n\n` +
+              `${direction === 'undo' ? 'Undo' : 'Redo'} anyway and replace those changes?`
+            );
+            if (!proceed) {
+              await refreshAiHistoryBanner('AI history action cancelled');
+              return;
+            }
+            result = direction === 'undo'
+              ? await api.undo_ai_edit_decision(true)
+              : await api.redo_ai_edit_decision(true);
+          }
+          if (!result || !result.success) {
+            await refreshAiHistoryBanner((result && result.error) || 'AI history action failed');
+            return;
+          }
+
+          window.clearAiDiffHighlights();
+          currentReview = null;
+          currentReviewModel = null;
+          if (result.workspaceShapeChanged) {
+            scheduleWorkspaceReload('');
+            return;
+          }
+          if (result.path) {
+            const model = await activateAndResolveModel(result.path, 700);
+            if (model) await reloadThroughBundle(result.path);
+          }
+          const verb = direction === 'undo' ? 'Undid' : 'Redid';
+          await refreshAiHistoryBanner(`${verb} AI ${result.action || 'decision'}: ${result.fileName || ''}`);
+        } catch (error) {
+          console.error('AI history action failed:', error);
+          await refreshAiHistoryBanner(`AI history action failed: ${error}`);
+        } finally {
+          historyBusy = false;
+          await refreshAiHistoryBanner();
+        }
       }
 
       async function reloadThroughBundleOnce(expectedPath) {
@@ -1519,6 +1741,7 @@
             }
           }
           setReviewButtonsDisabled(!currentReview);
+          if (!currentReview) await refreshAiHistoryBanner();
         }
       }
 
@@ -1596,6 +1819,11 @@
         workspaceReloadScheduled = false;
         currentReview = null;
         currentReviewModel = null;
+        aiHistoryBannerDismissed = false;
+        aiHistoryBannerToken = '';
+        lastAiHistoryState = null;
+        aiHistoryBaselinePath = '';
+        aiHistoryBaselineVersion = null;
         window.clearAiDiffHighlights();
         restoreGlyphMargin();
         setReviewButtonsDisabled(true);
@@ -1615,7 +1843,11 @@
         try {
           if (typeof window.syncTabPaths === 'function') await window.syncTabPaths();
           const reviews = await api.get_ai_edit_reviews() || [];
-          if (!reviews.length || currentReview) return;
+          if (!reviews.length) {
+            if (!currentReview) await refreshAiHistoryBanner();
+            return;
+          }
+          if (currentReview) return;
           let preferred = '';
           try {
             preferred = sessionStorage.getItem('pending_ai_review_path') || '';
@@ -1633,8 +1865,41 @@
 
       const acceptButton = document.getElementById('ai-review-accept');
       const rejectButton = document.getElementById('ai-review-reject');
+      const undoButton = document.getElementById('ai-history-undo');
+      const redoButton = document.getElementById('ai-history-redo');
+      const closeHistoryButton = document.getElementById('ai-history-close');
       if (acceptButton) acceptButton.addEventListener('click', () => resolveCurrentReview(true));
       if (rejectButton) rejectButton.addEventListener('click', () => resolveCurrentReview(false));
+      if (undoButton) undoButton.addEventListener('click', () => applyAiHistory('undo', false));
+      if (redoButton) redoButton.addEventListener('click', () => applyAiHistory('redo', false));
+      if (closeHistoryButton) closeHistoryButton.addEventListener('click', () => dismissAiHistoryBanner());
+
+      // Ctrl+Z/Ctrl+Y behave like an IDE timeline. Monaco keeps priority while
+      // the current model has user typing to undo/redo. Once the model returns
+      // to the exact post-AI-decision baseline, the same shortcuts continue
+      // into the RAM-resident AI decision history. Ctrl+Alt+Z/Y remain explicit
+      // shortcuts that always target AI history.
+      window.addEventListener('keydown', (event) => {
+        if (!event.ctrlKey || event.shiftKey) return;
+        const key = String(event.key || '').toLowerCase();
+        if (key !== 'z' && key !== 'y') return;
+
+        if (event.altKey) {
+          event.preventDefault();
+          applyAiHistory(key === 'z' ? 'undo' : 'redo', false);
+          return;
+        }
+
+        if (currentReview || resolvingReview || historyBusy || !lastAiHistoryState) return;
+        if (!editorIsAtAiHistoryBaseline()) return;
+        const canApply = key === 'z'
+          ? !!lastAiHistoryState.canUndo
+          : !!lastAiHistoryState.canRedo;
+        if (!canApply) return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyAiHistory(key === 'z' ? 'undo' : 'redo', false);
+      }, true);
 
       if (window.pywebview && window.pywebview.api) {
         setTimeout(resumePendingReview, 700);

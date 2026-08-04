@@ -58,6 +58,7 @@ _configure_windows_dpi_awareness()
 
 # Ensure workspace 'env' site-packages is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent
+AI_STARTUP_PATCH_VERSION = "v21-readiness-gated"
 ENV_DIR = SCRIPT_DIR / "env"
 ENV_SITE_PACKAGES = ENV_DIR / "Lib" / "site-packages"
 if ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
@@ -248,6 +249,13 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                 window.fitAddon.fit();
                 sendResize();
             }
+            // Tell the Python host that WebView2, xterm, and the WebSocket are
+            // alive. This is more reliable than inferring readiness solely from
+            // OpenCode's output timing, which may finish before the old watcher
+            // arms on fast machines.
+            try {
+                socket.send(JSON.stringify({ type: 'client_ready' }));
+            } catch (e) {}
         };
 
         function stripAnsi(str) {
@@ -348,14 +356,43 @@ class TerminalServer:
 
         # Thread: PTY -> WebSocket
         ready_marker_written = [False]
+        ready_marker_lock = threading.Lock()
         spawn_ts = [time.time()]
         last_data_ts = [time.time()]
+        output_seen = [False]
+        output_bytes = [0]
+        output_chunks = [0]
+        webview_connected = [False]
+
+        def write_ready_marker(reason="ready"):
+            """Publish readiness exactly once for the embedding GUI.
+
+            The marker means the OpenCode TUI itself has settled and should be
+            interactive. A connected WebView/WebSocket is intentionally not enough:
+            the browser surface can exist several seconds before OpenCode is ready.
+            """
+            with ready_marker_lock:
+                if ready_marker_written[0]:
+                    return
+                ready_marker_written[0] = True
+                try:
+                    sig = Path(target_dir) / ".ai_ready_signal"
+                    sig.write_text(
+                        json.dumps({"time": time.time(), "reason": reason}),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+
         def pty_read_loop():
             edit_kw = ["Applied edit", "Applied patch", "Updating file", "Writing to", "Wrote ", "Created ", "Edited ", "[edit]", "[write]", "[create]", "File saved"]
             while self.is_running and self.pty:
                 try:
                     data = self.pty.read(4096)
                     if data:
+                        output_seen[0] = True
+                        output_chunks[0] += 1
+                        output_bytes[0] += len(data.encode("utf-8", errors="replace"))
                         last_data_ts[0] = time.time()
                         try:
                             if any(kw in data for kw in edit_kw):
@@ -378,29 +415,38 @@ class TerminalServer:
                     time.sleep(0.05)
 
         def ready_monitor():
-            """Write .ai_ready_signal once opencode's output has settled.
+            """Publish readiness only when the OpenCode TUI has settled.
 
-            cmd.exe's echo + cls arrive within ~0.5s of the spawn; any output
-            after that is opencode rendering.  The marker is written only when
-            that output then goes quiet for 1.5s (prompt rendered and waiting
-            for input), with an 8.5s hard cap so slow loads still dismiss.
+            WebView2 and the websocket often connect before OpenCode has loaded
+            its configuration and rendered the interactive prompt. Require a
+            connected client, meaningful PTY output, a minimum startup interval,
+            and a quiet period. The long fallback still requires a settled PTY.
             """
-            marker_armed = False
             while self.is_running and not ready_marker_written[0]:
                 now = time.time()
-                if not marker_armed:
-                    if last_data_ts[0] - spawn_ts[0] > 0.5:
-                        marker_armed = True
-                else:
-                    if (now - last_data_ts[0] > 1.5) or (now - spawn_ts[0] > 8.5):
-                        ready_marker_written[0] = True
-                        try:
-                            sig = Path(target_dir) / ".ai_ready_signal"
-                            sig.write_text(str(time.time()), encoding="utf-8")
-                        except Exception:
-                            pass
-                        return
-                time.sleep(0.25)
+                elapsed = now - spawn_ts[0]
+                quiet_for = now - last_data_ts[0]
+                meaningful_output = (
+                    output_seen[0]
+                    and (output_bytes[0] >= 512 or output_chunks[0] >= 3)
+                )
+                if (
+                    webview_connected[0]
+                    and meaningful_output
+                    and elapsed >= 4.0
+                    and quiet_for >= 1.75
+                ):
+                    write_ready_marker("opencode-ready")
+                    return
+                if (
+                    elapsed >= 30.0
+                    and webview_connected[0]
+                    and output_seen[0]
+                    and quiet_for >= 4.0
+                ):
+                    write_ready_marker("startup-fallback-ready")
+                    return
+                time.sleep(0.15)
 
         if self.pty:
             threading.Thread(target=pty_read_loop, daemon=True).start()
@@ -410,7 +456,12 @@ class TerminalServer:
         try:
             async for message in websocket:
                 msg = json.loads(message)
-                if self.pty and msg.get('type') == 'input':
+                if msg.get('type') == 'client_ready':
+                    # The browser surface is alive, but OpenCode may still be
+                    # loading. The readiness monitor will publish the marker only
+                    # after PTY output settles.
+                    webview_connected[0] = True
+                elif self.pty and msg.get('type') == 'input':
                     self.pty.write(msg['data'])
                 elif self.pty and msg.get('type') == 'resize':
                     cols = msg.get('cols', 120)
@@ -585,6 +636,13 @@ def run_standalone_ai(target_directory=None):
     """Entry point when executed as an independent AI terminal process."""
     _pre_hide_console_for_conpty()
     target_dir = os.path.abspath(target_directory) if target_directory else os.getcwd()
+    # Remove a stale marker from an earlier process. The new process publishes
+    # a fresh marker after WebView/PTY readiness, preventing old timestamps from
+    # racing the main GUI's loading overlay.
+    try:
+        (Path(target_dir) / ".ai_ready_signal").unlink(missing_ok=True)
+    except Exception:
+        pass
     port = find_free_pair(8765)
     opencode_exe = find_opencode_cli() or "opencode"
     server = TerminalServer(port=port, target_dir=target_dir, command=opencode_exe)
