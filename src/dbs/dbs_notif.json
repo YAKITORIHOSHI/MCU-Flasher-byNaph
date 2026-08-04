@@ -3529,5 +3529,104 @@
     "title": "✔ Connected — COM6 @ 115200",
     "message": "✔ Connected — COM6 @ 115200",
     "details": {}
+  },
+  {
+    "id": "notif_1785834986_704",
+    "timestamp": "2026-08-04T17:16:26",
+    "date": "2026-08-04",
+    "time": "17:16:26",
+    "category": "board_install",
+    "level": "success",
+    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "details": {}
+  },
+  {
+    "id": "notif_1785834986_809",
+    "timestamp": "2026-08-04T17:16:26",
+    "date": "2026-08-04",
+    "time": "17:16:26",
+    "category": "system",
+    "level": "info",
+    "title": "Connecting to COM6 @ 115200…",
+    "message": "Connecting to COM6 @ 115200…",
+    "details": {}
+  },
+  {
+    "id": "notif_1785834986_866",
+    "timestamp": "2026-08-04T17:16:26",
+    "date": "2026-08-04",
+    "time": "17:16:26",
+    "category": "device",
+    "level": "success",
+    "title": "✔ Connected — COM6 @ 115200",
+    "message": "✔ Connected — COM6 @ 115200",
+    "details": {}
+  },
+  {
+    "id": "notif_1785835605_705",
+    "timestamp": "2026-08-04T17:26:45",
+    "date": "2026-08-04",
+    "time": "17:26:45",
+    "category": "board_install",
+    "level": "success",
+    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "details": {}
+  },
+  {
+    "id": "notif_1785835605_810",
+    "timestamp": "2026-08-04T17:26:45",
+    "date": "2026-08-04",
+    "time": "17:26:45",
+    "category": "system",
+    "level": "info",
+    "title": "Connecting to COM6 @ 115200…",
+    "message": "Connecting to COM6 @ 115200…",
+    "details": {}
+  },
+  {
+    "id": "notif_1785835605_866",
+    "timestamp": "2026-08-04T17:26:45",
+    "date": "2026-08-04",
+    "time": "17:26:45",
+    "category": "device",
+    "level": "success",
+    "title": "✔ Connected — COM6 @ 115200",
+    "message": "✔ Connected — COM6 @ 115200",
+    "details": {}
+  },
+  {
+    "id": "notif_1785836459_500",
+    "timestamp": "2026-08-04T17:40:59",
+    "date": "2026-08-04",
+    "time": "17:40:59",
+    "category": "board_install",
+    "level": "success",
+    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "details": {}
+  },
+  {
+    "id": "notif_1785836459_695",
+    "timestamp": "2026-08-04T17:40:59",
+    "date": "2026-08-04",
+    "time": "17:40:59",
+    "category": "system",
+    "level": "info",
+    "title": "Connecting to COM6 @ 115200…",
+    "message": "Connecting to COM6 @ 115200…",
+    "details": {}
+  },
+  {
+    "id": "notif_1785836459_756",
+    "timestamp": "2026-08-04T17:40:59",
+    "date": "2026-08-04",
+    "time": "17:40:59",
+    "category": "device",
+    "level": "success",
+    "title": "✔ Connected — COM6 @ 115200",
+    "message": "✔ Connected — COM6 @ 115200",
+    "details": {}
   }
 ]

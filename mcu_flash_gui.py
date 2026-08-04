@@ -17962,7 +17962,15 @@ default_envs = {self._pio_env_name()}
                 marker = Path(sketch_dir) / ".ai_ready_signal"
                 launch_time = getattr(self, "_ai_launch_marker_time", 0)
                 if marker.exists() and marker.stat().st_mtime >= launch_time:
-                    ready = True
+                    embedded = bool(
+                        getattr(self, "_ai_hwnd", None)
+                        and getattr(self, "_ai_is_embedded", False)
+                    )
+                    # Only dismiss once the AI window is actually embedded, so
+                    # the container is never left blank while content renders.
+                    # A 15s fallback prevents hanging if embedding never occurs.
+                    if embedded or (time.time() - launch_time) > 15:
+                        ready = True
         except Exception:
             pass
         if ready:

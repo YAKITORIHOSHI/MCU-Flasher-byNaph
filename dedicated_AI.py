@@ -348,19 +348,15 @@ class TerminalServer:
 
         # Thread: PTY -> WebSocket
         ready_marker_written = [False]
+        spawn_ts = [time.time()]
+        last_data_ts = [time.time()]
         def pty_read_loop():
             edit_kw = ["Applied edit", "Applied patch", "Updating file", "Writing to", "Wrote ", "Created ", "Edited ", "[edit]", "[write]", "[create]", "File saved"]
             while self.is_running and self.pty:
                 try:
                     data = self.pty.read(4096)
                     if data:
-                        if not ready_marker_written[0]:
-                            ready_marker_written[0] = True
-                            try:
-                                sig = Path(target_dir) / ".ai_ready_signal"
-                                sig.write_text(str(time.time()), encoding="utf-8")
-                            except Exception:
-                                pass
+                        last_data_ts[0] = time.time()
                         try:
                             if any(kw in data for kw in edit_kw):
                                 sig = Path(target_dir) / ".ai_edit_signal"
@@ -381,8 +377,34 @@ class TerminalServer:
                     print(f"[ERROR] pty_read_loop error: {err}")
                     time.sleep(0.05)
 
+        def ready_monitor():
+            """Write .ai_ready_signal once opencode's output has settled.
+
+            cmd.exe's echo + cls arrive within ~0.5s of the spawn; any output
+            after that is opencode rendering.  The marker is written only when
+            that output then goes quiet for 1.5s (prompt rendered and waiting
+            for input), with an 8.5s hard cap so slow loads still dismiss.
+            """
+            marker_armed = False
+            while self.is_running and not ready_marker_written[0]:
+                now = time.time()
+                if not marker_armed:
+                    if last_data_ts[0] - spawn_ts[0] > 0.5:
+                        marker_armed = True
+                else:
+                    if (now - last_data_ts[0] > 1.5) or (now - spawn_ts[0] > 8.5):
+                        ready_marker_written[0] = True
+                        try:
+                            sig = Path(target_dir) / ".ai_ready_signal"
+                            sig.write_text(str(time.time()), encoding="utf-8")
+                        except Exception:
+                            pass
+                        return
+                time.sleep(0.25)
+
         if self.pty:
             threading.Thread(target=pty_read_loop, daemon=True).start()
+            threading.Thread(target=ready_monitor, daemon=True).start()
 
         # Handle WebSocket -> PTY
         try:
