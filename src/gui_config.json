@@ -1,12 +1,16 @@
 {
-  "instances": {},
+  "instances": {
+    "6292": {
+      "last_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
+      "create_time": 1786088146.892713,
+      "active_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
+      "selected_port": "COM6"
+    }
+  },
   "shared": {
     "last_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
     "recent_projects": [
       "C:\\Users\\napht\\Documents\\TRYLANG",
-      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\BLE_Receiver-Final",
-      "D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2",
-      "D:\\PERSONAL-PROJECT\\DRAFT_FILES\\GarbyESP32\\NAPHTALI_CODE_V2",
       "C:\\Users\\napht\\Downloads"
     ],
     "port_board_map": {

@@ -1,8 +1,8 @@
 Traceback (most recent call last):
-  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 18890, in _run_hard_reset
-    self._run_hard_reset_inner(port)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
-  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 19441, in _run_hard_reset_inner
-    _validate_img(bootloader_bin, "bootloader.bin", 0x4000, 0xE9),
-    ^^^^^^^^^^^^^
-NameError: name '_validate_img' is not defined. Did you mean: '_hr_validate_img'?
+  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 22253, in _run_soft_reset
+    self._active_reset_kind = "soft"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\mcu_flash_gui.py", line 22732, in _run_soft_reset_inner
+    if ok:
+    
+UnboundLocalError: cannot access local variable '_MAX_CONNECT_RETRIES' where it is not associated with a value

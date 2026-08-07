@@ -7538,10 +7538,16 @@ class MCUUploadGUI:
 
             serial_tight = width < 820
             self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
+            st = getattr(self, "_serial_status_state", "disconnected")
+            if st == "connected":
+                status_text = "● Connected"
+            elif st == "reconnecting":
+                status_text = "● Reconnecting..."
+            else:
+                status_text = "● Disconnected"
+
             self.serial_status.configure(
-                text="●" if serial_tight else (
-                    "● Connected" if self.serial_running else "● Disconnected"
-                )
+                text="●" if serial_tight else status_text
             )
             self.btn_reset_mcu.configure(text="Reset" if serial_tight else "↻ Reset")
             self.btn_pause_serial.configure(
@@ -8539,10 +8545,20 @@ class MCUUploadGUI:
             self.editor_info_label.configure(text=txt)
         self.root.after(0, _do)
 
-    def _set_serial_status(self, connected: bool):
+    def _set_serial_status(self, connected):
+        if connected is True or connected == "connected":
+            self._serial_status_state = "connected"
+        elif str(connected).lower().startswith("reconnect"):
+            self._serial_status_state = "reconnecting"
+        else:
+            self._serial_status_state = "disconnected"
+
         def _do():
-            if connected:
+            st = getattr(self, "_serial_status_state", "disconnected")
+            if st == "connected":
                 self.serial_status.configure(text="● Connected", fg=Theme.GREEN)
+            elif st == "reconnecting":
+                self.serial_status.configure(text="● Reconnecting...", fg=Theme.YELLOW)
             else:
                 self.serial_status.configure(text="● Disconnected", fg=Theme.RED)
         self.root.after(0, _do)
@@ -8690,6 +8706,8 @@ class MCUUploadGUI:
                 # re-apply the board-selected (and, for Upload, hardware-
                 # recognized) gating now that is_busy is back to False.
                 self._update_hardware_action_buttons()
+
+            self._sync_detached_compact_actions()
                 
         self.root.after(0, _do)
 
@@ -8764,6 +8782,111 @@ class MCUUploadGUI:
             self._attach_editor()
         else:
             self._detach_editor()
+
+    def _sync_ai_and_editor_layout(self):
+        """Synchronize the main window layout based on whether the code editor is detached
+        and whether the OpenCode AI Assistant side panel is visible.
+
+        Requirements:
+        - When editor is detached:
+          1. Hide editor frame on the main window.
+          2. If AI Assistant is visible, configure h_split_pane to orient=VERTICAL,
+             stacking OpenCode AI Assistant (top) and Build Console (bottom) in two rows.
+        - When editor is attached:
+          1. Show editor frame on the main window.
+          2. Configure h_split_pane to orient=HORIZONTAL, placing OpenCode AI Assistant
+             in a right-side column alongside main_pane.
+        """
+        detached = getattr(self, "editor_detached", False)
+        ai_visible = getattr(self, "_ai_side_visible", False)
+
+        if not hasattr(self, "h_split_pane") or not hasattr(self, "main_pane") or not hasattr(self, "ai_side_container"):
+            return
+
+        if detached:
+            # 1. Hide editor frame from main_pane when editor is detached
+            if hasattr(self, "editor_frame"):
+                try:
+                    if self.editor_frame in self.main_pane.panes() or str(self.editor_frame) in [str(p) for p in self.main_pane.panes()]:
+                        self.main_pane.forget(self.editor_frame)
+                except Exception:
+                    pass
+            self.editor_pane_visible = False
+            if hasattr(self, "btn_toggle_editor") and self.btn_toggle_editor and self.btn_toggle_editor.winfo_exists():
+                self.btn_toggle_editor.configure(text="🗖 Show Editor")
+
+            # 2. When detached and AI Assistant is visible, stack OpenCode and Build Console in two VERTICAL rows
+            if ai_visible:
+                try:
+                    self.h_split_pane.configure(orient=tk.VERTICAL)
+                    for p in list(self.h_split_pane.panes()):
+                        self.h_split_pane.forget(p)
+
+                    root_h = max(400, self.root.winfo_height()) if hasattr(self, "root") else 600
+                    calc_h = max(180, int(root_h * 0.45))
+                    self.h_split_pane.add(self.ai_side_container, height=calc_h)
+                    self.h_split_pane.add(self.main_pane, stretch="always")
+                except Exception:
+                    pass
+            else:
+                # AI is hidden: ensure main_pane fills h_split_pane
+                try:
+                    for p in list(self.h_split_pane.panes()):
+                        if str(p) != str(self.main_pane) and p != self.main_pane:
+                            self.h_split_pane.forget(p)
+                    if self.main_pane not in self.h_split_pane.panes() and str(self.main_pane) not in [str(p) for p in self.h_split_pane.panes()]:
+                        self.h_split_pane.add(self.main_pane, stretch="always")
+                except Exception:
+                    pass
+        else:
+            # Editor is ATTACHED
+            # 1. Configure h_split_pane orientation back to HORIZONTAL
+            try:
+                self.h_split_pane.configure(orient=tk.HORIZONTAL)
+                for p in list(self.h_split_pane.panes()):
+                    self.h_split_pane.forget(p)
+
+                self.h_split_pane.add(self.main_pane, stretch="always")
+            except Exception:
+                pass
+
+            # 2. Restore editor frame in main_pane
+            if hasattr(self, "editor_frame"):
+                try:
+                    main_panes = [str(p) for p in self.main_pane.panes()]
+                    if str(self.editor_frame) not in main_panes and self.editor_frame not in self.main_pane.panes():
+                        if hasattr(self, "bottom_frame") and (str(self.bottom_frame) in main_panes or self.bottom_frame in self.main_pane.panes()):
+                            self.main_pane.add(self.editor_frame, before=self.bottom_frame,
+                                                minsize=getattr(self, "_editor_minsize", 100),
+                                                height=getattr(self, "_editor_height", 400))
+                        else:
+                            self.main_pane.add(self.editor_frame,
+                                                minsize=getattr(self, "_editor_minsize", 100),
+                                                height=getattr(self, "_editor_height", 400))
+                except Exception:
+                    pass
+            self.editor_pane_visible = True
+            if hasattr(self, "btn_toggle_editor") and self.btn_toggle_editor and self.btn_toggle_editor.winfo_exists():
+                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+
+            # 3. If AI Assistant is visible, place it on the right column of h_split_pane
+            if ai_visible:
+                try:
+                    h_panes = [str(p) for p in self.h_split_pane.panes()]
+                    if str(self.ai_side_container) not in h_panes and self.ai_side_container not in self.h_split_pane.panes():
+                        root_w = max(480, self.root.winfo_width()) if hasattr(self, "root") else 800
+                        calc_w = max(220, int(root_w * 0.44))
+                        calc_w = min(calc_w, max(220, root_w - 300))
+                        self.h_split_pane.add(self.ai_side_container, width=calc_w)
+                except Exception:
+                    pass
+
+        # Trigger AI WebView resize update after layout change
+        if ai_visible and hasattr(self, "_resize_embedded_ai"):
+            try:
+                self._resize_embedded_ai()
+            except Exception:
+                pass
 
     def _detach_editor(self):
         mode = getattr(self, "editor_mode", "default")
@@ -8898,6 +9021,7 @@ class MCUUploadGUI:
             self.default_editor_toplevel.protocol("WM_DELETE_WINDOW", self._attach_editor)
 
         self.root.after_idle(self._apply_dynamic_button_scale)
+        self._sync_ai_and_editor_layout()
         self._append_notif("  ✓ Code editor detached to separate window.", "success")
 
     def _attach_editor(self):
@@ -9006,7 +9130,41 @@ class MCUUploadGUI:
             self._update_pane_toggle_buttons()
             
         self.root.after_idle(self._apply_dynamic_button_scale)
+        self._sync_ai_and_editor_layout()
         self._append_notif("  ✓ Code editor re-attached to the main window.", "success")
+
+    def _close_detached_editor_window(self):
+        """If the code editor is currently detached in a separate window,
+        dispose/close that window cleanly before main GUI shutdown."""
+        if not getattr(self, "editor_detached", False):
+            return
+
+        mode = getattr(self, "editor_mode", "default")
+        if mode == "monaco":
+            # Destroy pywebview window asynchronously
+            if hasattr(self, "editor_window") and self.editor_window:
+                try:
+                    self.editor_window.destroy()
+                except Exception:
+                    pass
+            # Post WM_CLOSE asynchronously (NEVER use SendMessage which deadlocks the Tk thread)
+            hwnd = getattr(self, "_editor_hwnd", None)
+            if hwnd and win32gui is not None:
+                try:
+                    if win32con is not None:
+                        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                except Exception:
+                    pass
+        else:
+            if hasattr(self, "default_editor_toplevel") and self.default_editor_toplevel:
+                try:
+                    self.default_editor_toplevel.destroy()
+                except Exception:
+                    pass
+                self.default_editor_toplevel = None
+
+        self.editor_detached = False
+        self._editor_embedded = False
 
     def _build_detached_editor_toolbar(self, parent):
         """Add action controls to a detached Default editor window.
@@ -9019,27 +9177,30 @@ class MCUUploadGUI:
         bar.pack(fill=tk.X)
         tk.Label(bar, text="ACTIONS", font=self.font_label,
                  fg=Theme.TEXT_DIM, bg=Theme.BG_DARK).pack(side=tk.LEFT, padx=(0, 6))
+        self._detached_buttons_dict = {}
         actions = [
-            ("Compile", self._do_compile, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
-            ("Upload", self._do_upload, Theme.BTN_FULL, Theme.BTN_FULL_H),
-            ("Stop", self._do_stop, Theme.BTN_STOP, Theme.BTN_STOP_H),
-            ("Clean", self._do_clean, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
-            ("Save", self._trigger_save, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
-            ("Save All", self._trigger_save_all, Theme.BTN_FULL, Theme.BTN_FULL_H),
-            ("Reload", self._reload_current_editor_file, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
-            ("Modify", self._open_modify_files_dialog, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H),
+            ("compile", "Compile", self._do_compile, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
+            ("upload", "Upload", self._do_upload, Theme.BTN_FULL, Theme.BTN_FULL_H),
+            ("stop", "Stop", self._do_stop, Theme.BTN_STOP, Theme.BTN_STOP_H),
+            ("clean", "Clean", self._do_clean, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            ("save", "Save", self._trigger_save, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H),
+            ("save_all", "Save All", self._trigger_save_all, Theme.BTN_FULL, Theme.BTN_FULL_H),
+            ("reload", "Reload", self._reload_current_editor_file, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H),
+            ("modify", "Modify", self._open_modify_files_dialog, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H),
         ]
-        for index, (label, command, bg, hover) in enumerate(actions):
+        for index, (key, label, command, bg, hover) in enumerate(actions):
             if index == 4:
                 tk.Frame(bar, bg=Theme.BORDER, width=2, height=22).pack(
                     side=tk.LEFT, padx=7
                 )
-            self._make_btn(bar, label, command, bg, hover, font=self.font_label).pack(side=tk.LEFT, padx=2)
+            btn = self._make_btn(bar, label, command, bg, hover, font=self.font_label)
+            btn.pack(side=tk.LEFT, padx=2)
+            self._detached_buttons_dict[key] = btn
         self._detached_editor_toolbar = bar
         self._sync_detached_compact_actions()
 
     def _sync_detached_compact_actions(self, width=None):
-        """Put actions in the detached editor whenever it is detached."""
+        """Put actions in the detached editor whenever it is detached and sync button states."""
         if width is None:
             try:
                 width = self.root.winfo_width()
@@ -9059,6 +9220,26 @@ class MCUUploadGUI:
         except Exception:
             pass
 
+        busy = getattr(self, "is_busy", False)
+        operation = getattr(self, "_active_operation", None)
+
+        stop_enabled = bool(busy and operation in ("compile", "upload"))
+        actions_enabled = not busy
+
+        # Update Default Editor detached toolbar buttons if present
+        detached_btns = getattr(self, "_detached_buttons_dict", {})
+        if detached_btns:
+            for act, btn in detached_btns.items():
+                try:
+                    if not btn or not btn.winfo_exists():
+                        continue
+                    if act == "stop":
+                        btn.configure(state=tk.NORMAL if stop_enabled else tk.DISABLED)
+                    elif act in ("compile", "upload", "clean"):
+                        btn.configure(state=tk.NORMAL if actions_enabled else tk.DISABLED)
+                except Exception:
+                    pass
+
         # Monaco is a native WebView window. Its page owns an equivalent bar
         # and calls EditorApi.run_action(), keeping the controls in the actual
         # detached editor window rather than in a separate helper window.
@@ -9068,6 +9249,19 @@ class MCUUploadGUI:
                     self.editor_window.evaluate_js(
                         "window.setDetachedActionBar && window.setDetachedActionBar(" +
                         ("true" if active else "false") + ")"
+                    )
+                    states_json = json.dumps({
+                        "compile": actions_enabled,
+                        "upload": actions_enabled,
+                        "stop": stop_enabled,
+                        "clean": actions_enabled,
+                        "save": actions_enabled,
+                        "save_all": actions_enabled,
+                        "reload": actions_enabled,
+                        "modify": actions_enabled,
+                    })
+                    self.editor_window.evaluate_js(
+                        f"window.setDetachedButtonStates && window.setDetachedButtonStates({states_json});"
                     )
             except Exception:
                 pass
@@ -10327,6 +10521,7 @@ class MCUUploadGUI:
         """Handle baud rate selection change."""
         baud = self.baud_var.get()
         self._set_status(f"Baud rate changed to {baud}", Theme.CYAN)
+        self._set_serial_status("reconnecting")
         # Also sync the serial monitor tab baud var
         if hasattr(self, "serial_baud_var"):
             self.serial_baud_var.set(baud)
@@ -10336,6 +10531,7 @@ class MCUUploadGUI:
         """Handle serial monitor tab baud rate change."""
         baud = self.serial_baud_var.get()
         self._set_status(f"Serial monitor baud rate: {baud}", Theme.CYAN)
+        self._set_serial_status("reconnecting")
         # Also sync the main baud var
         self.baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
@@ -11330,14 +11526,23 @@ class MCUUploadGUI:
         was_running = self.serial_running or getattr(self, "_monitor_should_run", False)
         self._monitor_should_run = False
         self.serial_running = False
-        if self.serial_conn:
-            try:
-                if self.serial_conn.is_open:
-                    self.serial_conn.close()
-            except Exception:
-                pass
-        if self.serial_thread and self.serial_thread.is_alive():
-            self.serial_thread.join(timeout=0.6)
+        old_conn = self.serial_conn
+        old_thread = self.serial_thread
+
+        def _bg_pause():
+            if old_conn:
+                try:
+                    if old_conn.is_open:
+                        old_conn.close()
+                except Exception:
+                    pass
+            if old_thread and old_thread.is_alive():
+                try:
+                    old_thread.join(timeout=0.5)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_bg_pause, daemon=True, name="Monitor-BG-Pause").start()
         self._set_serial_status(False)
         if was_running:
             self._append_notif("  ⏸ Paused for upload…", "dim")
@@ -11355,35 +11560,46 @@ class MCUUploadGUI:
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         is_avr = (board_info.get("platform", "") == "atmelavr")
-        delay = 0.3 if is_avr else 0.4
-        time.sleep(delay)
-
-        self._schedule_auto_start_monitor(0)
+        delay_ms = 100 if is_avr else 150
+        self.root.after(delay_ms, lambda: self._schedule_auto_start_monitor(0))
 
     def _restart_monitor(self, reason: str):
         """Stop and relaunch the serial monitor with the current port/baud.
         Used when a setting that affects the monitor connection changes
         (baud rate, board selection, port selection) while the monitor
         is connected or idle."""
-        def _do():
-            was_running = self.serial_running
-            self.serial_running = False
-            if self.serial_conn and self.serial_conn.is_open:
+        self._monitor_should_run = False
+        was_running = self.serial_running
+        self.serial_running = False
+
+        if was_running or "baud" in reason.lower() or "reconnect" in reason.lower():
+            self._set_serial_status("reconnecting")
+            self._append_notif(f"  ↻ Restarting monitor — {reason}…", "dim")
+            # Separator so the new session is visually distinct
+            self._append_notif("─" * 40, "dim")
+
+        # Auto Clear serial monitor when connecting, if enabled
+        if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
+            self._clear_serial_console()
+
+        old_conn = self.serial_conn
+        old_thread = self.serial_thread
+
+        def _bg_restart():
+            if old_conn:
                 try:
-                    self.serial_conn.close()
+                    if old_conn.is_open:
+                        old_conn.close()
                 except Exception:
                     pass
-            if self.serial_thread and self.serial_thread.is_alive():
-                self.serial_thread.join(timeout=1.0)
-            if was_running:
-                self._append_notif(f"  ↻ Restarting monitor — {reason}…", "dim")
-                # Separator so the new session is visually distinct
-                self._append_notif("─" * 40, "dim")
-            # Auto Clear serial monitor when connecting, if enabled
-            if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
-                self._clear_serial_console()
-            self._schedule_auto_start_monitor(100)
-        self.root.after(0, _do)
+            if old_thread and old_thread.is_alive():
+                try:
+                    old_thread.join(timeout=0.5)
+                except Exception:
+                    pass
+            self.root.after(0, lambda: self._schedule_auto_start_monitor(10))
+
+        threading.Thread(target=_bg_restart, daemon=True, name="Monitor-BG-Restart").start()
 
     def _open_sketch_in_explorer(self):
         """Open the current project folder in Windows File Explorer."""
@@ -15947,6 +16163,23 @@ default_envs = {self._pio_env_name()}
                 self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
                 self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
                 self._append("")
+            else:
+                self._append("  ⚠ Upload failure was not caused by BOOT mode connection timing.", "warning")
+                self._append("  💡 Build artifacts or cache may be corrupted or out of sync.", "info")
+                self._append("  👉 Prompting for a Clean Upload of the sketch project...", "info")
+                def _prompt_clean_upload():
+                    from tkinter import messagebox
+                    if messagebox.askyesno(
+                        "Clean Upload Recommended",
+                        "Upload failed after connecting to the MCU.\n\n"
+                        "The issue appears to be corrupted or out-of-sync build artifacts rather than BOOT button timing.\n\n"
+                        "Would you like to clean the project build cache and perform a Clean Upload?",
+                        icon="warning",
+                        parent=self.root,
+                    ):
+                        self._do_clean_then_compile()
+                self.root.after(0, _prompt_clean_upload)
+
             self._append("  ✖ Upload FAILED.", "error")
             if has_port_busy_error:
                 self._append(f"  💡 Port '{port}' is in use by another program (e.g. Serial Monitor, PuTTY, Arduino IDE, or Python).", "info")
@@ -16092,7 +16325,7 @@ default_envs = {self._pio_env_name()}
 
     def _run_monitor(self, port: str, baud: int):
         silent = getattr(self, "_silent_reset", False)
-        self._set_serial_status(False)
+        self._set_serial_status("reconnecting")
 
         owner_pid = port_occupied_owner(port)
         if owner_pid:
@@ -18604,6 +18837,12 @@ default_envs = {self._pio_env_name()}
         detaching Windows handles/hooks, canceling pending after jobs,
         and destroying all Tk widgets inside the editor frame."""
 
+        # 0. Close/dispose detached editor window if open
+        try:
+            self._close_detached_editor_window()
+        except Exception:
+            pass
+
         # 1. Detach and hide Monaco pywebview window
         hwnd = getattr(self, "_editor_hwnd", None)
         if hwnd and win32gui is not None:
@@ -19143,20 +19382,13 @@ default_envs = {self._pio_env_name()}
             self.ai_loading_overlay = None
 
     def _show_ai_side_panel(self):
-        """Show the AI Assistant side panel container on the right side of the main window."""
+        """Show the AI Assistant side panel container (stacked vertically when editor is detached, column on right when attached)."""
         if not hasattr(self, "ai_side_container") or not hasattr(self, "h_split_pane"):
             return
 
-        panes = [str(p) for p in self.h_split_pane.panes()]
-        if str(self.ai_side_container) not in panes and self.ai_side_container not in self.h_split_pane.panes():
-            # Preserve a usable editor area on snapped/small windows.
-            root_w = max(480, self.root.winfo_width())
-            calc_w = max(220, int(root_w * 0.44))
-            calc_w = min(calc_w, max(220, root_w - 300))
-            self.h_split_pane.add(self.ai_side_container, width=calc_w)
-
         self._ai_side_visible = True
         self._update_ai_button_label()
+        self._sync_ai_and_editor_layout()
 
         # Display the readiness-driven loading overlay only on first launch.
         # Subsequent hide/unhide toggles keep the already-running terminal visible.
@@ -19192,7 +19424,7 @@ default_envs = {self._pio_env_name()}
         self._start_ai_size_watchdog()
 
     def _hide_ai_side_panel(self):
-        """Hide the AI Assistant side panel container from the right side."""
+        """Hide the AI Assistant side panel container."""
         self._dismiss_ai_loading_overlay()
 
         if hasattr(self, "_ai_embed_poll_job") and self._ai_embed_poll_job:
@@ -19216,24 +19448,9 @@ default_envs = {self._pio_env_name()}
             except Exception:
                 pass
 
-        if not hasattr(self, "h_split_pane") or not hasattr(self, "ai_side_container"):
-            return
-        try:
-            panes = [str(p) for p in self.h_split_pane.panes()]
-            if str(self.ai_side_container) in panes or self.ai_side_container in self.h_split_pane.panes():
-                self.h_split_pane.forget(self.ai_side_container)
-        except Exception:
-            try:
-                self.h_split_pane.forget(self.ai_side_container)
-            except Exception:
-                pass
-        try:
-            self.ai_side_container.pack_forget()
-            self.ai_side_container.place_forget()
-        except Exception:
-            pass
         self._ai_side_visible = False
         self._update_ai_button_label()
+        self._sync_ai_and_editor_layout()
 
     def _start_ai_embedding_poll(self):
         self._ai_embed_attempts = 0
@@ -21254,6 +21471,18 @@ default_envs = {self._pio_env_name()}
         if not firmware_bin.exists():
             return None
 
+        # Invalidate fast binary cache if firmware.bin is older than source main.cpp or platformio.ini
+        try:
+            bin_mtime = firmware_bin.stat().st_mtime
+            cpp_file = project_dir / "main.cpp"
+            ini_file = project_dir / "platformio.ini"
+            if cpp_file.exists() and bin_mtime < cpp_file.stat().st_mtime:
+                return None
+            if ini_file.exists() and bin_mtime < ini_file.stat().st_mtime:
+                return None
+        except Exception:
+            pass
+
         if p_platform == "espressif8266":
             # ESP8266's Arduino core produces a single merged image flashed at 0x0.
             return {
@@ -21801,9 +22030,6 @@ default_envs = {self._pio_env_name()}
 
         while True:
             output_lines = []
-            # Attempt-local state must never leak into the next visible retry.
-            # A previous failed sync must not leave the image tracker pointing at
-            # Firmware or make a later failure look as though flashing completed.
             upload_progress_state = self._new_upload_progress_state(fast_bins)
             attempt_connected = False
             completed_images: set[str] = set()
@@ -21861,10 +22087,6 @@ default_envs = {self._pio_env_name()}
                             attempt_connected = True
                             _set_fast_phase("Erasing")
 
-                        # Capture completion before the shared parser advances to
-                        # the next image. This gives us an independent, verified
-                        # success signal even if a USB driver reports an error only
-                        # during esptool's final line-control cleanup.
                         wrote_event = _parse_esptool_wrote(stripped)
                         if wrote_event:
                             stages = upload_progress_state.get("stages") or []
@@ -22167,7 +22389,7 @@ upload_speed = {upload_speed}
             cpp_content = """#include <Arduino.h>
 void setup() {
   Serial.begin(9600);
-  Serial.println(">>>   ──   <<<");
+  Serial.println(">>> ----- <<<");
 }
 
 void loop() {
@@ -22182,7 +22404,7 @@ void loop() {
             cpp_content = """#include <Arduino.h>
 void setup() {
   Serial.begin(115200);
-  Serial.println(">>> ESP SOFT RESET ACTIVE <<<");
+  Serial.println(">>> ----- <<<");
 }
 
 void loop() {
@@ -22310,26 +22532,58 @@ void loop() {
         # retried after the process exits so no manual intervention needed.
         _stale_clean_paths: list[str] = []
 
+        _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
+        _connect_retry_count = 0
+        _CONNECT_FAIL_SIGNATURES = (
+            "wrong boot mode", "failed to connect",
+            "no serial data received", "timed out waiting for packet",
+            "device not found", "permissionerror", "access is denied",
+            "port is busy", "could not open port", "permission denied",
+            "connection timed out", "timed out after", "not responding",
+        )
+
         if fast_bins is not None:
             # ── Fast path: write cached binaries directly with esptool ─────────
             self._append("  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "success")
             ok, err_msg, _fast_attempts_used = self._soft_reset_esptool_write(fast_bins, port)
         else:
-            _MAX_CONNECT_RETRIES = UPLOAD_CONNECTION_ATTEMPTS
-            _connect_retry_count = 0
-            _CONNECT_FAIL_SIGNATURES = (
-                "wrong boot mode", "failed to connect",
-                "no serial data received", "timed out waiting for packet",
-                "device not found", "permissionerror", "access is denied",
-                "port is busy", "could not open port", "permission denied",
-                "connection timed out", "timed out after", "not responding",
-            )
             cmd = pio_path + [
                 "run",
                 "-t", "upload",
                 "-j", str(jobs),
                 "--upload-port", port
             ]
+            chip_info: dict[str, str] = {}
+            chip_info_shown = False
+            connected_bar_flipped = False
+            upload_progress_state = self._new_upload_progress_state(None)
+
+            def _flip_sr_connected_bar():
+                nonlocal connected_bar_flipped
+                if not is_avr and not connected_bar_flipped:
+                    connected_bar_flipped = True
+                    self._append_connecting_progress(
+                        _connect_retry_count + 1, _MAX_CONNECT_RETRIES, connected=True
+                    )
+
+            def _show_sr_chip_info(force: bool = False):
+                nonlocal chip_info_shown
+                if chip_info_shown:
+                    return
+                model = chip_info.get("Chip Model")
+                if not model and not force:
+                    return
+                model = model or board_name
+                fields = dict(chip_info)
+                if fields.get("Features"):
+                    fields["Features"] = _enrich_chip_features(model, fields["Features"])
+                self._print_chip_info_box(model, list(fields.items()))
+                chip_info_shown = True
+
+            def _before_sr_progress():
+                _flip_sr_connected_bar()
+                _show_sr_chip_info(force=True)
+
             while True:
                 output_lines.clear()
                 try:
@@ -22351,10 +22605,28 @@ void loop() {
                         elif any(kw in low for kw in ("tool manager:", "platform manager:", "downloading", "unpacking", "installing")):
                             _sr_state[0] = "Preparing/Installing Framework"
 
-                        # Suppress percentage upload lines — spinner shows progress
-                        if re.search(r'\d+\s*%', stripped):
-                            _sr_state[0] = "Uploading"
-                            continue
+                        # Parse chip info fields if emitted by esptool
+                        match = re.search(r"chip (?:is|type)\s*:?\s+(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["Chip Model"] = match.group(1).strip()
+                        match = re.search(r"features\s*:\s*(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["Features"] = match.group(1).strip()
+                        match = re.search(r"crystal (?:is|frequency)\s*:?\s+(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["Crystal"] = match.group(1).strip()
+                        match = re.search(r"^\s*mac\s*:\s*(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["MAC Address"] = match.group(1).strip()
+                        match = re.search(r"(?:auto-detected\s+)?flash size\s*:\s*(.+)$", stripped, re.IGNORECASE)
+                        if match:
+                            chip_info["Flash Size"] = match.group(1).strip()
+
+                        if ("connected to" in low or "uploading stub" in low
+                                or "stub flasher running" in low):
+                            _sr_state[0] = "Connecting"
+                            _flip_sr_connected_bar()
+                            _show_sr_chip_info()
 
                         LINKER_ERROR_HINTS = (
                             "undefined reference to",
@@ -22388,7 +22660,11 @@ void loop() {
                             img_count += 1
                             label = "Bootloader" if img_count == 1 else "Application"
                             self._append(f"  ✔ Successfully created {chip_name} image ({label})", "success")
-                        elif any(kw in low for kw in ["hard resetting", "leaving", "wrote", "success"]):
+                        elif self._consume_esptool_upload_progress(
+                                upload_progress_state, stripped,
+                                before_progress=_before_sr_progress):
+                            continue
+                        elif any(kw in low for kw in ["hard resetting", "leaving"]):
                             _sr_state[0] = "Done"
                             self._append(f"  {stripped}", "success")
 
@@ -22405,8 +22681,21 @@ void loop() {
                         self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
                         continue
 
-
                     ok = (rc == 0)
+                    if ok:
+                        _flip_sr_connected_bar()
+                        _show_sr_chip_info(force=True)
+                        self._append("")
+                        self._append(
+                            "  ✔ Flash write and verification completed. "
+                            "Reset will continue through the Serial Monitor.",
+                            "success",
+                        )
+                        elapsed = max(0.0, time.time() - _sr_start)
+                        self._append(
+                            f"  {'=' * 25} [SUCCESS] Took {elapsed:.2f} seconds {'=' * 25}",
+                            "success",
+                        )
                     break
                 except Exception as e:
                     ok = False
@@ -22461,7 +22750,24 @@ void loop() {
             self._append_connecting_progress(_MAX_CONNECT_RETRIES, _MAX_CONNECT_RETRIES, failed=True)
             self._append("  ✖ Soft Reset FAILED.", "error")
             self._set_status("Soft Reset: FAILED", Theme.RED)
-            messagebox.showerror("Soft Reset Failed", f"Soft Reset failed.\n{err_msg}\nCheck if the device is connected to {port}.", parent=self.root)
+            is_connection_error = getattr(self, "_last_fast_upload_failure_kind", "") == "connection"
+            if not is_connection_error:
+                self._append("  ⚠ Failure was not caused by BOOT mode connection timing.", "warning")
+                self._append("  💡 Build artifacts or cache may be corrupted or out of sync.", "info")
+                self._append("  👉 Prompting for a Clean Upload of the sketch project...", "info")
+                def _prompt_clean_soft_reset():
+                    if messagebox.askyesno(
+                        "Clean Upload Recommended",
+                        "Soft Reset failed after connecting to the MCU.\n\n"
+                        "The issue appears to be corrupted or out-of-sync build artifacts rather than BOOT button timing.\n\n"
+                        "Would you like to clean the project build cache and perform a Clean Upload of your sketch project?",
+                        icon="warning",
+                        parent=self.root,
+                    ):
+                        self._do_clean_then_compile()
+                self.root.after(0, _prompt_clean_soft_reset)
+            else:
+                messagebox.showerror("Soft Reset Failed", f"Soft Reset failed.\n{err_msg}\nCheck if the device is connected to {port}.", parent=self.root)
 
     # ──────────────────────────────────────────────────────────
     # CLEANUP
@@ -22550,6 +22856,12 @@ void loop() {
                     if answer:               # Yes — save all
                         if hasattr(self, "_save_all_editor_files"):
                             self._save_all_editor_files()
+
+        # If editor was detached, dispose/close that window first before destroying main GUI
+        try:
+            self._close_detached_editor_window()
+        except Exception:
+            pass
 
         # Kill any active compile/upload/reset subprocess synchronously on exit
         if self.process and self.process.poll() is None:

@@ -75,6 +75,13 @@
       cursor: pointer;
     }
 
+    #detached-action-bar button:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+      pointer-events: none;
+      filter: grayscale(0.5);
+    }
+
     #detached-action-bar button:hover {
       filter: brightness(1.18);
     }
@@ -657,14 +664,22 @@
         bar.classList.toggle('visible', !!visible);
         if (window.editorInstance) window.editorInstance.layout();
       };
+      window.setDetachedButtonStates = function (states) {
+        if (!bar || !states) return;
+        Object.keys(states).forEach(action => {
+          const btn = bar.querySelector(`button[data-action="${action}"]`);
+          if (btn) {
+            btn.disabled = !states[action];
+          }
+        });
+      };
       bar.addEventListener('click', async (event) => {
         const button = event.target.closest('button[data-action]');
-        if (!button || !window.pywebview || !window.pywebview.api) return;
-        button.disabled = true;
+        if (!button || button.disabled || !window.pywebview || !window.pywebview.api) return;
         try {
           await window.pywebview.api.run_action(button.dataset.action);
-        } finally {
-          window.setTimeout(() => { button.disabled = false; }, 250);
+        } catch (e) {
+          console.error("Detached action error:", e);
         }
       });
     })();
