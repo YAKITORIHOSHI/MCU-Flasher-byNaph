@@ -450,6 +450,10 @@ import serial.tools.list_ports
 DEFAULT_SKETCH_DIR = SCRIPT_DIR
 DEFAULT_BAUD = 115200
 DEFAULT_UPLOAD_SPEED = 460800
+VALID_BAUD_RATES = {
+    300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800,
+    38400, 57600, 115200, 230400, 460800, 921600
+}
 
 def _get_download_dir() -> str:
     """Read the download directory from the shared settings file.
@@ -825,6 +829,19 @@ def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None
         elif "dev module" in name.lower() and "dev module" not in fallback.lower():
             fallback = name
     return fallback
+
+
+def find_arduino_uno_board() -> str | None:
+    """Return the installed Arduino Uno display name, if available."""
+    for name, info in SUPPORTED_BOARDS.items():
+        if info.get("platform") == "atmelavr" and name.strip().lower() in (
+            "arduino uno", "arduino/genuino uno", "uno"
+        ):
+            return name
+    for name, info in SUPPORTED_BOARDS.items():
+        if info.get("platform") == "atmelavr" and str(info.get("board", "")).lower() == "uno":
+            return name
+    return find_board_for_platform("atmelavr")
 
 
 def is_s3_board(p_board: str) -> bool:
@@ -4545,7 +4562,12 @@ class MCUUploadGUI:
 
             # Auto-switch to newly connected MCU only if current port is not recognized
             current_port = self._get_port()
-            is_recognized = getattr(self, "_board_port_confirmed", False) and current_port and current_port.upper() != "COM1"
+            is_recognized = bool(
+                current_port 
+                and current_port.upper() != "COM1" 
+                and current_port in new_devices
+                and (getattr(self, "_board_port_confirmed", False) or self._is_valid_port() or self._port_is_avr_only())
+            )
             
             force_select_port = None
             if has_new_known_mcu and not is_recognized:
@@ -4806,6 +4828,51 @@ class MCUUploadGUI:
         self.baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
 
+    def _detect_sketch_baud_rate(self) -> str | None:
+        """Scan active sketch directory for Serial.begin(...) calls and return a valid baud rate string, or None if invalid or not found."""
+        if not hasattr(self, "sketch_dir_path") or not self.sketch_dir_path:
+            return None
+        try:
+            sketch_dir = Path(self.sketch_dir_path)
+            if not sketch_dir.exists() or not sketch_dir.is_dir():
+                return None
+
+            macros: dict[str, int] = {}
+            sketch_files = (
+                list(sketch_dir.glob("*.ino")) +
+                list(sketch_dir.glob("*.cpp")) +
+                list(sketch_dir.glob("*.h")) +
+                list(sketch_dir.glob("*.hpp"))
+            )
+
+            for file_path in sketch_files:
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                # Strip C/C++ single-line and multi-line comments before matching
+                content_clean = re.sub(r'//.*?\n|/\*.*?\*/', '', content, flags=re.DOTALL)
+
+                for macro_match in re.finditer(r"#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+([0-9]+)\b", content_clean):
+                    macros[macro_match.group(1)] = int(macro_match.group(2))
+                for const_match in re.finditer(r"(?:const\s+)?(?:unsigned\s+)?(?:long|int|uint32_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([0-9]+)\b", content_clean):
+                    macros[const_match.group(1)] = int(const_match.group(2))
+
+                for match in re.finditer(r"\bSerial[0-9A-Za-z_]*\.begin\s*\(\s*([A-Za-z0-9_]+)\b", content_clean):
+                    arg = match.group(1)
+                    val = None
+                    if arg.isdigit():
+                        val = int(arg)
+                    elif arg in macros:
+                        val = macros[arg]
+
+                    if val in VALID_BAUD_RATES:
+                        return str(val)
+        except Exception:
+            pass
+        return None
+
     def _on_upload_speed_changed(self):
         """Handle upload speed selection change — updates platformio.ini asynchronously on a background thread."""
         speed = self.upload_speed_var.get()
@@ -4852,30 +4919,36 @@ class MCUUploadGUI:
 
     def _auto_select_board(self, show_msg: bool = True) -> str | None:
         """If this physical port has a board type on record from a previous
-        session (see remember_port_board / get_remembered_board_for_port),
-        select it immediately instead of waiting on the slower esptool
-        probe. The probe (kicked off alongside this call by the caller)
-        remains authoritative and will correct this guess if the hardware
-        on the port has changed since it was last remembered."""
+        session, select it immediately. Otherwise, attempt USB descriptor-based
+        auto-detection (e.g. CH340 -> Arduino Uno, ESP32-S3 -> ESP32-S3 Dev Module)."""
         port_device = self._extract_port_device(self.port_var.get())
         if not port_device:
             return None
 
         remembered = get_remembered_board_for_port(port_device)
-        if not remembered or remembered not in SUPPORTED_BOARDS:
-            return None
+        detected = getattr(self, "_detect_board_from_descriptor", lambda p: None)(self.port_var.get()) or getattr(self, "_detect_board_from_descriptor", lambda p: None)(port_device)
+        
+        target_board = remembered or detected
+        if not target_board or target_board not in SUPPORTED_BOARDS:
+            if self._port_is_avr_only():
+                target_board = find_arduino_uno_board() or "Arduino Uno"
+            else:
+                return None
 
-        if self.board_var.get() == remembered:
-            return remembered  # already selected — nothing to do
+        if self.board_var.get() == target_board:
+            self._board_port_confirmed = True
+            return target_board  # already selected — nothing to do
 
-        self.board_var.set(remembered)
+        self.board_var.set(target_board)
+        self._board_port_confirmed = True
         self._on_board_changed()
         if show_msg:
+            source = "Remembered" if remembered else "Auto-detected"
             self._append(
-                f"  🧠 Remembered board for {port_device}: \"{remembered}\" (used last time on this port)",
+                f"  🧠 {source} board for {port_device}: \"{target_board}\"",
                 "info"
             )
-        return remembered
+        return target_board
 
     def _detect_port_chip(self) -> tuple[str, set, str] | None:
         """Identify which known USB-serial chip the selected port reports,
@@ -4937,11 +5010,18 @@ class MCUUploadGUI:
         port_label = self.port_var.get().lower()
         if not port_label:
             return False
-        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native"]
-        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "uart", "wch"]
+        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug"]
+        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch"]
         has_native = any(k in port_label for k in native_keywords)
         has_uart = any(k in port_label for k in uart_keywords)
-        return has_native and not has_uart
+        if has_native and not has_uart:
+            return True
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        p_board = board_info.get("board", "")
+        if (is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart:
+            return True
+        return False
 
     def _is_valid_port(self) -> bool:
         """Check if the selected port's USB-serial chip is actually sold
@@ -7002,16 +7082,20 @@ default_envs = {self._pio_env_name()}
                         content = re.sub(r"^board_build\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
                         content = re.sub(r"^board_upload\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
 
-                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures)
+                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures on ESP32)
                     # and remove upload_resetmethod.
-                    if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
-                        content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
-                    elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
-                        content = re.sub(
-                            r"(\[env:[^\]]*\]\n)",
-                            r"\1upload_protocol = esptool\n",
-                            content, count=1
-                        )
+                    if p_platform in ("espressif32", "espressif8266"):
+                        if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
+                            content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
+                        elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                r"\1upload_protocol = esptool\n",
+                                content, count=1
+                            )
+                    else:
+                        # For Atmel AVR / Arduino Uno, remove any stale upload_protocol = esptool
+                        content = re.sub(r"^upload_protocol\s*=.*\n?", "", content, flags=re.MULTILINE)
                     # Remove upload_resetmethod as it is JTAG-specific
                     content = re.sub(r"^upload_resetmethod\s*=.*\n?", "", content, flags=re.MULTILINE)
                     # Remove upload_speed for native USB — baud rate is irrelevant
@@ -8401,6 +8485,7 @@ default_envs = {self._pio_env_name()}
     def _run_upload(self, port: str) -> bool:
         self._stop_requested = False
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        self._pending_auto_baud = self._detect_sketch_baud_rate()
         # ── Smart compile check (upload path) ──────────────────────────────
         need_compile = True
         if self.skip_compile_var.get() and self._has_prior_build():
@@ -8972,6 +9057,28 @@ default_envs = {self._pio_env_name()}
         self.is_busy = False
         self._set_buttons_busy(False)
         
+        if ok and getattr(self, "_pending_auto_baud", None):
+            auto_baud = self._pending_auto_baud
+            curr_baud = self.serial_baud_var.get() if hasattr(self, "serial_baud_var") else self.baud_var.get()
+            if auto_baud != curr_baud:
+                def _apply_auto_baud(b=auto_baud):
+                    try:
+                        if hasattr(self, "serial_baud_var"):
+                            self.serial_baud_var.set(b)
+                        if hasattr(self, "baud_var"):
+                            self.baud_var.set(b)
+                        self._append(
+                            f"  ⚡ Auto-detected Serial.begin({b}) in sketch — set Serial Monitor baud rate to {b}",
+                            "info"
+                        )
+                    except Exception:
+                        pass
+                self.root.after(0, _apply_auto_baud)
+                if hasattr(self, "serial_baud_var"):
+                    self.serial_baud_var.set(auto_baud)
+                if hasattr(self, "baud_var"):
+                    self.baud_var.set(auto_baud)
+
         # Trigger hardware reset if monitor is not going to resume
         if ok and not was_monitoring:
             self._trigger_actual_board_reset(port)

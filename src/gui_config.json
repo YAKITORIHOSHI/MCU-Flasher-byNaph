@@ -1,12 +1,5 @@
 {
-  "instances": {
-    "6292": {
-      "last_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
-      "create_time": 1786088146.892713,
-      "active_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
-      "selected_port": "COM6"
-    }
-  },
+  "instances": {},
   "shared": {
     "last_sketch_dir": "C:\\Users\\napht\\Documents\\TRYLANG",
     "recent_projects": [
@@ -20,7 +13,8 @@
       "COM6": "ESP32 Dev Module",
       "COM18": "ESP32S3 Dev Module",
       "COM22": "ESP32 Dev Module",
-      "COM9": "Arduino UNO"
+      "COM9": "Arduino UNO",
+      "COM10": "Arduino UNO"
     },
     "clear_serial_on_upload": true,
     "cpu_multithreading": "HIGH",

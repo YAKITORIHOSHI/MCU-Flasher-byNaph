@@ -2436,6 +2436,10 @@ import serial.tools.list_ports
 DEFAULT_SKETCH_DIR = SCRIPT_DIR
 DEFAULT_BAUD = 115200
 DEFAULT_UPLOAD_SPEED = 460800
+VALID_BAUD_RATES = {
+    300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800,
+    38400, 57600, 115200, 230400, 460800, 921600
+}
 
 def _get_download_dir() -> str:
     """Read the download directory from the shared settings file.
@@ -10157,8 +10161,14 @@ class MCUUploadGUI:
                 self._board_port_confirmed = False
                 self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
 
-            # Auto-switch to newly connected MCU only if current port is not valid/recognized
-            is_recognized = getattr(self, "_board_port_confirmed", False) and current_port and current_port.upper() != "COM1" and current_port in new_devices
+            # Auto-switch to newly connected MCU only if current port is not valid/recognized (e.g. empty, disconnected, or placeholder COM1)
+            current_port = self._get_port()
+            is_recognized = bool(
+                current_port 
+                and current_port.upper() != "COM1" 
+                and current_port in new_devices
+                and (getattr(self, "_board_port_confirmed", False) or self._is_valid_port() or self._port_is_avr_only())
+            )
             
             force_select_port = None
             if has_new_known_mcu and not is_recognized:
@@ -10448,7 +10458,8 @@ class MCUUploadGUI:
                         any(k in text for k in (
                             "usb-serial ch340", "usb serial ch340",
                             "usb-serial ch341", "usb serial ch341",
-                            "wch ch340", "wch ch341"
+                            "wch ch340", "wch ch341",
+                            "ch340", "ch341", "ch340g", "ch340c"
                         ))
                         or (
                             candidate.vid is not None
@@ -10536,6 +10547,51 @@ class MCUUploadGUI:
         self.baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
 
+    def _detect_sketch_baud_rate(self) -> str | None:
+        """Scan active sketch directory for Serial.begin(...) calls and return a valid baud rate string, or None if invalid or not found."""
+        if not hasattr(self, "sketch_dir_path") or not self.sketch_dir_path:
+            return None
+        try:
+            sketch_dir = Path(self.sketch_dir_path)
+            if not sketch_dir.exists() or not sketch_dir.is_dir():
+                return None
+
+            macros: dict[str, int] = {}
+            sketch_files = (
+                list(sketch_dir.glob("*.ino")) +
+                list(sketch_dir.glob("*.cpp")) +
+                list(sketch_dir.glob("*.h")) +
+                list(sketch_dir.glob("*.hpp"))
+            )
+
+            for file_path in sketch_files:
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                # Strip C/C++ single-line and multi-line comments before matching
+                content_clean = re.sub(r'//.*?\n|/\*.*?\*/', '', content, flags=re.DOTALL)
+
+                for macro_match in re.finditer(r"#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+([0-9]+)\b", content_clean):
+                    macros[macro_match.group(1)] = int(macro_match.group(2))
+                for const_match in re.finditer(r"(?:const\s+)?(?:unsigned\s+)?(?:long|int|uint32_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([0-9]+)\b", content_clean):
+                    macros[const_match.group(1)] = int(const_match.group(2))
+
+                for match in re.finditer(r"\bSerial[0-9A-Za-z_]*\.begin\s*\(\s*([A-Za-z0-9_]+)\b", content_clean):
+                    arg = match.group(1)
+                    val = None
+                    if arg.isdigit():
+                        val = int(arg)
+                    elif arg in macros:
+                        val = macros[arg]
+
+                    if val in VALID_BAUD_RATES:
+                        return str(val)
+        except Exception:
+            pass
+        return None
+
     def _on_upload_speed_changed(self):
         """Handle upload speed selection change — updates platformio.ini asynchronously on thread pool when CPU is ready."""
         speed = self.upload_speed_var.get()
@@ -10586,30 +10642,36 @@ class MCUUploadGUI:
 
     def _auto_select_board(self, show_msg: bool = True) -> str | None:
         """If this physical port has a board type on record from a previous
-        session (see remember_port_board / get_remembered_board_for_port),
-        select it immediately instead of waiting on the slower esptool
-        probe. The probe (kicked off alongside this call by the caller)
-        remains authoritative and will correct this guess if the hardware
-        on the port has changed since it was last remembered."""
+        session, select it immediately. Otherwise, attempt USB descriptor-based
+        auto-detection (e.g. CH340 -> Arduino Uno, ESP32-S3 -> ESP32-S3 Dev Module)."""
         port_device = self._extract_port_device(self.port_var.get())
         if not port_device:
             return None
 
         remembered = get_remembered_board_for_port(port_device)
-        if not remembered or remembered not in SUPPORTED_BOARDS:
-            return None
+        detected = self._detect_board_from_descriptor(self.port_var.get()) or self._detect_board_from_descriptor(port_device)
+        
+        target_board = remembered or detected
+        if not target_board or target_board not in SUPPORTED_BOARDS:
+            if self._port_is_avr_only():
+                target_board = find_arduino_uno_board() or "Arduino Uno"
+            else:
+                return None
 
-        if self.board_var.get() == remembered:
-            return remembered  # already selected — nothing to do
+        if self.board_var.get() == target_board:
+            self._board_port_confirmed = True
+            return target_board  # already selected — nothing to do
 
-        self.board_var.set(remembered)
+        self.board_var.set(target_board)
+        self._board_port_confirmed = True
         self._on_board_changed()
         if show_msg:
+            source = "Remembered" if remembered else "Auto-detected"
             self._append(
-                f"  🧠 Remembered board for {port_device}: \"{remembered}\" (used last time on this port)",
+                f"  🧠 {source} board for {port_device}: \"{target_board}\"",
                 "info"
             )
-        return remembered
+        return target_board
 
     def _get_usb_chip_board_families(self) -> dict:
         """Dynamically build the USB-to-board family mapping based on installed platforms."""
@@ -10755,11 +10817,18 @@ class MCUUploadGUI:
         port_label = self.port_var.get().lower()
         if not port_label:
             return False
-        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native"]
-        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "uart", "wch"]
+        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug"]
+        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch"]
         has_native = any(k in port_label for k in native_keywords)
         has_uart = any(k in port_label for k in uart_keywords)
-        return has_native and not has_uart
+        if has_native and not has_uart:
+            return True
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        p_board = board_info.get("board", "")
+        if (is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart:
+            return True
+        return False
 
     def _is_valid_port(self) -> bool:
         """Check if the selected port's USB-serial chip is actually sold
@@ -11522,27 +11591,28 @@ class MCUUploadGUI:
             self._append("  ℹ Busy state was stale — cleared.", "info")
 
     def _pause_monitor(self) -> bool:
-        """Pause serial monitor temporarily for uploading."""
+        """Pause serial monitor temporarily for uploading, ensuring COM port is completely closed and released."""
         was_running = self.serial_running or getattr(self, "_monitor_should_run", False)
         self._monitor_should_run = False
         self.serial_running = False
         old_conn = self.serial_conn
         old_thread = self.serial_thread
+        self.serial_conn = None
+        self.serial_thread = None
 
-        def _bg_pause():
-            if old_conn:
-                try:
-                    if old_conn.is_open:
-                        old_conn.close()
-                except Exception:
-                    pass
-            if old_thread and old_thread.is_alive():
-                try:
-                    old_thread.join(timeout=0.5)
-                except Exception:
-                    pass
+        if old_conn:
+            try:
+                if old_conn.is_open:
+                    old_conn.close()
+            except Exception:
+                pass
 
-        threading.Thread(target=_bg_pause, daemon=True, name="Monitor-BG-Pause").start()
+        if old_thread and old_thread.is_alive():
+            try:
+                old_thread.join(timeout=0.8)
+            except Exception:
+                pass
+
         self._set_serial_status(False)
         if was_running:
             self._append_notif("  ⏸ Paused for upload…", "dim")
@@ -11584,6 +11654,7 @@ class MCUUploadGUI:
 
         old_conn = self.serial_conn
         old_thread = self.serial_thread
+        self.serial_thread = None  # Detach old thread reference so it exits quietly without stomping new monitor
 
         def _bg_restart():
             if old_conn:
@@ -12623,22 +12694,29 @@ class MCUUploadGUI:
 
     def _has_prior_build(self) -> bool:
         """Return True if a compiled firmware binary exists for the CURRENTLY
-        selected board specifically. Used by the Skip-recompile logic to guard
-        against skipping a never-built project. Each board gets its own
-        .pio/build/<env> folder (see _pio_env_name), so this only reports
-        True when THIS board has actually been built before — a different
-        board's cached build won't false-positive this check."""
+        selected board specifically. Checks .pio/build/<env>, compiled_builds/<mcu_folder>, and build_artifacts."""
         env_name = self._pio_env_name()
+        mcu_folder = self._get_mcu_folder_name()
         build_dir = self.sketch_dir_path / ".pio" / "build" / env_name
+        compiled_dir = self.sketch_dir_path / "compiled_builds" / mcu_folder
         artifacts_dir = self.sketch_dir_path / "build_artifacts" / env_name
 
-        # Auto-restore from project build_artifacts if .pio build folder was cleaned/deleted
-        if not (build_dir.exists() and ((build_dir / "firmware.elf").exists() or (build_dir / "firmware.hex").exists() or (build_dir / "firmware.bin").exists())):
-            if artifacts_dir.exists():
+        has_local = (
+            build_dir.exists() and (
+                (build_dir / "firmware.elf").exists() or
+                (build_dir / "firmware.hex").exists() or
+                (build_dir / "firmware.bin").exists()
+            )
+        )
+
+        # Auto-restore from project compiled_builds/<mcu_folder> or build_artifacts if .pio build folder was cleaned/deleted
+        if not has_local:
+            src_dir = compiled_dir if (compiled_dir.exists() and any(compiled_dir.glob("firmware.*"))) else (artifacts_dir if artifacts_dir.exists() else None)
+            if src_dir and src_dir.exists():
                 try:
                     import shutil
                     build_dir.mkdir(parents=True, exist_ok=True)
-                    for f in artifacts_dir.glob("*"):
+                    for f in src_dir.glob("*"):
                         if f.is_file():
                             shutil.copy2(f, build_dir / f.name)
                 except Exception:
@@ -13000,6 +13078,29 @@ class MCUUploadGUI:
             return "mcu_flash"
         slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
         return f"mcu_flash_{slug}" if slug else "mcu_flash"
+
+    def _get_mcu_folder_name(self, board_name: str | None = None) -> str:
+        """Return clean, user-friendly folder name for storing compiled binaries per MCU family (e.g. ESP32, ESP32S3, Arduino_UNO)."""
+        name = board_name if board_name is not None else self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(name, {})
+        p_board = str(board_info.get("board", "")).lower()
+        platform = str(board_info.get("platform", "")).lower()
+        
+        if "uno" in p_board or "uno" in name.lower() or platform == "atmelavr":
+            return "Arduino_UNO"
+        elif "s3" in p_board or "s3" in name.lower():
+            return "ESP32S3"
+        elif "c3" in p_board or "c3" in name.lower():
+            return "ESP32C3"
+        elif "s2" in p_board or "s2" in name.lower():
+            return "ESP32S2"
+        elif "esp8266" in platform or "nodemcu" in name.lower():
+            return "ESP8266"
+        elif platform == "espressif32" or "esp32" in name.lower():
+            return "ESP32"
+        else:
+            slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_')
+            return slug or "Generic_MCU"
 
     def _ensure_platformio_ini(self) -> bool:
         """Ensure platformio.ini exists and has all required library dependencies."""
@@ -13492,16 +13593,20 @@ default_envs = {self._pio_env_name()}
                         content = re.sub(r"^board_build\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
                         content = re.sub(r"^board_upload\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
 
-                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures)
+                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures on ESP32)
                     # and remove upload_resetmethod.
-                    if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
-                        content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
-                    elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
-                        content = re.sub(
-                            r"(\[env:[^\]]*\]\n)",
-                            r"\1upload_protocol = esptool\n",
-                            content, count=1
-                        )
+                    if p_platform in ("espressif32", "espressif8266"):
+                        if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
+                            content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
+                        elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
+                            content = re.sub(
+                                r"(\[env:[^\]]*\]\n)",
+                                r"\1upload_protocol = esptool\n",
+                                content, count=1
+                            )
+                    else:
+                        # For Atmel AVR / Arduino Uno, remove any stale upload_protocol = esptool
+                        content = re.sub(r"^upload_protocol\s*=.*\n?", "", content, flags=re.MULTILINE)
                     # Remove upload_resetmethod as it is JTAG-specific
                     content = re.sub(r"^upload_resetmethod\s*=.*\n?", "", content, flags=re.MULTILINE)
                     # Remove upload_speed for native USB — baud rate is irrelevant
@@ -14773,17 +14878,21 @@ default_envs = {self._pio_env_name()}
                     self.root.after(100, _show_severe_gpio_popup)
 
             self._save_compile_cache()  # snapshot so upload can skip recompile
-            # Automatically back up compiled binary artifacts into project folder build_artifacts/
+            # Automatically back up compiled binary artifacts into project folder compiled_builds/<mcu_folder>/
             try:
                 build_dir = self.sketch_dir_path / ".pio" / "build" / self._pio_env_name()
                 artifacts_dir = self.sketch_dir_path / "build_artifacts" / self._pio_env_name()
+                mcu_folder = self._get_mcu_folder_name()
+                compiled_dir = self.sketch_dir_path / "compiled_builds" / mcu_folder
                 if build_dir.exists():
                     import shutil
                     artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    compiled_dir.mkdir(parents=True, exist_ok=True)
                     for pattern in ["bootloader.bin", "partitions.bin", "firmware.bin", "firmware.elf", "firmware.hex"]:
                         for f in build_dir.glob(pattern):
                             shutil.copy2(f, artifacts_dir / f.name)
-                    self._append(f"  💾 Saved build artifacts (bootloader, partitions, firmware) to {artifacts_dir.name}/", "dim")
+                            shutil.copy2(f, compiled_dir / f.name)
+                    self._append(f"  💾 Saved compiled binaries to compiled_builds/{mcu_folder}/", "success")
             except Exception:
                 pass
 
@@ -15202,6 +15311,7 @@ default_envs = {self._pio_env_name()}
         self._current_op_phase = "compiling"
         self._active_reset_kind = None
         self._set_window_closable(True)
+        self._pending_auto_baud = self._detect_sketch_baud_rate()
 
         # ── Smart compile check (upload path) ──────────────────────────────
         need_compile = True
@@ -15472,7 +15582,7 @@ default_envs = {self._pio_env_name()}
         fast_upload_attempted = False
         if fast_bins is not None and not getattr(self, "_fast_upload_disabled_reason", None):
             fast_upload_attempted = True
-            if is_s3_board(board_info.get("board", "")) and self._is_native_usb_port():
+            if (is_s3_board(board_info.get("board", "")) or "s3" in board_name.lower()) and self._is_native_usb_port():
                 fast_bins["before"] = "usb-reset"
             self._append("  ⚡ Fast upload: polling the bootloader now…", "info")
             self._set_status("Connecting to bootloader now…", Theme.MAGENTA)
@@ -16079,6 +16189,25 @@ default_envs = {self._pio_env_name()}
                     Theme.MAGENTA,
                 )
 
+                # Before we start a fresh PlatformIO subprocess, give the
+                # filesystem a chance to clear the WinError 32/145 lock the
+                # previous attempt just hit. The previous process has been
+                # wait()'d above, so its child handles are closed; the
+                # auto-clean helper retries with backoff and falls back to a
+                # hidden rename, so it never throws. build_ok=False is
+                # intentional: the locked files live inside
+                # .pio/build/<env_name>/, and build_ok=True would skip them.
+                # The next `pio run -t upload` regenerates them via SCons'
+                # normal incremental build.
+                if _stale_clean_paths:
+                    self._append(
+                        "  ♻ Releasing stale build lock before retry…",
+                        "dim",
+                    )
+                    self._auto_clean_stale_build_paths(
+                        list(_stale_clean_paths), env_name, build_ok=False
+                    )
+
                 # Restart the upload subprocess with the same command.
                 try:
                     self.process = subprocess.Popen(
@@ -16205,6 +16334,28 @@ default_envs = {self._pio_env_name()}
         
         # Resume the monitor on successful upload (triggering hardware reset so setup() output is captured)
         if ok:
+            if getattr(self, "_pending_auto_baud", None):
+                auto_baud = self._pending_auto_baud
+                curr_baud = self.serial_baud_var.get() if hasattr(self, "serial_baud_var") else self.baud_var.get()
+                if auto_baud != curr_baud:
+                    def _apply_auto_baud(b=auto_baud):
+                        try:
+                            if hasattr(self, "serial_baud_var"):
+                                self.serial_baud_var.set(b)
+                            if hasattr(self, "baud_var"):
+                                self.baud_var.set(b)
+                            self._append(
+                                f"  ⚡ Auto-detected Serial.begin({b}) in sketch — set Serial Monitor baud rate to {b}",
+                                "info"
+                            )
+                        except Exception:
+                            pass
+                    self.root.after(0, _apply_auto_baud)
+                    if hasattr(self, "serial_baud_var"):
+                        self.serial_baud_var.set(auto_baud)
+                    if hasattr(self, "baud_var"):
+                        self.baud_var.set(auto_baud)
+
             self._activate_serial_monitor_after_success("Upload")
             if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
                 self._clear_serial_console()
@@ -16324,6 +16475,7 @@ default_envs = {self._pio_env_name()}
         threading.Thread(target=_reset_worker, daemon=True, name="MCU-Reset-Worker").start()
 
     def _run_monitor(self, port: str, baud: int):
+        cur_thread = threading.current_thread()
         silent = getattr(self, "_silent_reset", False)
         self._set_serial_status("reconnecting")
 
@@ -16423,6 +16575,14 @@ default_envs = {self._pio_env_name()}
                 self.serial_conn = conn
                 self._last_monitor_error = ""
 
+                # On Native USB / ESP32-S3 CDC ports, set DTR=True to signal CDC terminal active
+                if is_native_usb or is_s3_board(board_info.get("board", "")):
+                    try:
+                        conn.dtr = True
+                        conn.rts = True
+                    except Exception:
+                        pass
+
                 # Auto Clear serial monitor when connecting, if enabled
                 if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
                     self._clear_serial_console()
@@ -16442,7 +16602,7 @@ default_envs = {self._pio_env_name()}
                             time.sleep(0.10)
                             self.serial_conn.dtr = False
                             time.sleep(0.05)
-                        else:
+                        elif not is_native_usb:
                             self.serial_conn.dtr = False
                             self.serial_conn.rts = True
                             time.sleep(0.15)
@@ -16463,12 +16623,13 @@ default_envs = {self._pio_env_name()}
                     if getattr(self, "_last_monitor_error", "") != err_msg:
                         self._last_monitor_error = err_msg
                         self._append_notif(f"  ✖ Cannot open {port}: {e}", "error")
-                    self.serial_running = False
-                    self._set_serial_status(False)
-                    self._silent_reset = False
-                    # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
-                    if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
-                        self._schedule_auto_start_monitor(2000)
+                    if getattr(self, "serial_thread", None) is cur_thread:
+                        self.serial_running = False
+                        self._set_serial_status(False)
+                        self._silent_reset = False
+                        # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
+                        if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
+                            self._schedule_auto_start_monitor(2000)
                     return
 
         self.serial_running = True
@@ -16574,23 +16735,25 @@ default_envs = {self._pio_env_name()}
                     if text and not _is_boot_loop_noise(text):
                         self._append_tagged_line(text, is_newline=True)
         finally:
-            # Flush any trailing partial line that never got a newline.
-            if buf:
-                text = buf.decode("utf-8", errors="replace").rstrip("\r")
-                if text and not self._monitor_paused and not _is_boot_loop_noise(text):
-                    self._append_tagged_line(text, is_newline=True)
+            is_active_thread = (getattr(self, "serial_thread", None) is cur_thread)
+            if is_active_thread:
+                # Flush any trailing partial line that never got a newline.
+                if buf:
+                    text = buf.decode("utf-8", errors="replace").rstrip("\r")
+                    if text and not self._monitor_paused and not _is_boot_loop_noise(text):
+                        self._append_tagged_line(text, is_newline=True)
 
-            self.serial_running = False
-            self._set_serial_status(False)
-            try:
-                if self.serial_conn and self.serial_conn.is_open:
-                    self.serial_conn.close()
-            except Exception:
-                pass
+                self.serial_running = False
+                self._set_serial_status(False)
+                try:
+                    if self.serial_conn and self.serial_conn.is_open:
+                        self.serial_conn.close()
+                except Exception:
+                    pass
 
-            # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
-            if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
-                self._schedule_auto_start_monitor(2000)
+                # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
+                if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
+                    self._schedule_auto_start_monitor(2000)
 
     def _build_editor(self, parent_frame):
         """Dispatch to the active editor implementation based on the
@@ -21463,23 +21626,39 @@ default_envs = {self._pio_env_name()}
         if any required binary can't be found — the caller then falls back to
         the normal "pio run -t upload" path.
         """
+        mcu_folder = self._get_mcu_folder_name(board_name)
         build_dir = project_dir / ".pio" / "build" / env_name
-        if not build_dir.is_dir():
-            return None
+        compiled_dir = project_dir / "compiled_builds" / mcu_folder
+
+        firmware_bin = build_dir / "firmware.bin"
+        if not firmware_bin.exists() and compiled_dir.exists():
+            try:
+                import shutil
+                build_dir.mkdir(parents=True, exist_ok=True)
+                for f in compiled_dir.glob("*"):
+                    if f.is_file():
+                        shutil.copy2(f, build_dir / f.name)
+            except Exception:
+                pass
 
         firmware_bin = build_dir / "firmware.bin"
         if not firmware_bin.exists():
             return None
 
-        # Invalidate fast binary cache if firmware.bin is older than source main.cpp or platformio.ini
+        # Check sketch source modification times (main.cpp, src/*, *.ino, *.cpp, *.h)
+        # Note: We deliberately do NOT check platformio.ini mtime because platformio.ini is modified when switching boards!
         try:
             bin_mtime = firmware_bin.stat().st_mtime
-            cpp_file = project_dir / "main.cpp"
-            ini_file = project_dir / "platformio.ini"
-            if cpp_file.exists() and bin_mtime < cpp_file.stat().st_mtime:
-                return None
-            if ini_file.exists() and bin_mtime < ini_file.stat().st_mtime:
-                return None
+            source_candidates = (
+                list(project_dir.glob("src/**/*")) +
+                list(project_dir.glob("*.cpp")) +
+                list(project_dir.glob("*.ino")) +
+                list(project_dir.glob("*.h")) +
+                list(project_dir.glob("*.hpp"))
+            )
+            for sc in source_candidates:
+                if sc.is_file() and sc.stat().st_mtime > bin_mtime:
+                    return None  # source was modified after compilation -> recompile needed
         except Exception:
             pass
 
@@ -21935,7 +22114,29 @@ default_envs = {self._pio_env_name()}
         # esptool.exe wrapper crashes when running in background subprocesses.
         esptool_cmd_base = self._get_esptool_cmd()
 
-        write_cmd = esptool_cmd_base + [
+        # Determine target chip for esptool to avoid autodetect reset glitches
+        board_name = self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        target_mcu = str(board_info.get("mcu") or board_info.get("board") or "").lower()
+        if "s3" in target_mcu or "esp32s3" in target_mcu or "esp32-s3" in target_mcu or is_s3_board(board_info.get("board", "")) or "s3" in board_name.lower():
+            chip_name = "esp32s3"
+        elif "c3" in target_mcu or "esp32c3" in target_mcu:
+            chip_name = "esp32c3"
+        elif "c6" in target_mcu or "esp32c6" in target_mcu:
+            chip_name = "esp32c6"
+        elif "h2" in target_mcu or "esp32h2" in target_mcu:
+            chip_name = "esp32h2"
+        elif "s2" in target_mcu or "esp32s2" in target_mcu:
+            chip_name = "esp32s2"
+        elif fast_bins.get("platform") == "espressif32":
+            chip_name = "esp32"
+        else:
+            chip_name = None
+
+        write_cmd = esptool_cmd_base + []
+        if chip_name:
+            write_cmd += ["--chip", chip_name]
+        write_cmd += [
             "--port", port,
             "--baud", str(fast_bins.get("upload_speed") or "460800"),
             "--before", str(fast_bins.get("before") or "default-reset"),
@@ -22679,6 +22880,30 @@ void loop() {
                         if any(x in joined for x in ("permissionerror", "access is denied", "port is busy", "could not open port", "permission denied")):
                             time.sleep(1.0)
                         self._append_connecting_progress(_connect_retry_count + 1, _MAX_CONNECT_RETRIES)
+
+                        # Before we start a fresh PlatformIO subprocess, give
+                        # the filesystem a chance to clear the WinError 32/145
+                        # lock the previous attempt just hit. process.wait()
+                        # has already closed the child handles; the auto-clean
+                        # helper is best-effort and never throws. build_ok=False
+                        # is intentional: the locked files live inside
+                        # .pio/build/mcu_flash/, and build_ok=True would skip
+                        # them. The next invocation regenerates them via SCons'
+                        # normal incremental build. build_root mirrors the
+                        # post-loop call below (soft-reset builds outside the
+                        # sketch dir, into its own .pio/build root).
+                        if _stale_clean_paths:
+                            self._append(
+                                "  ♻ Releasing stale build lock before retry…",
+                                "dim",
+                            )
+                            self._auto_clean_stale_build_paths(
+                                list(_stale_clean_paths),
+                                "mcu_flash",
+                                build_ok=False,
+                                build_root=project_dir / ".pio" / "build",
+                            )
+
                         continue
 
                     ok = (rc == 0)
