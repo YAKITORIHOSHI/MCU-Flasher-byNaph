@@ -121,6 +121,98 @@ def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9,
     return btn
 
 
+class CircularLoadingOverlay(tk.Frame):
+    """Circular arc loading spinner overlay matching the AI Assistant loading animation."""
+
+    def __init__(self, parent, bg_color=Theme.BG_DARKEST, spinner_color=Theme.CYAN,
+                 title="Loading Arduino Indexes...", subtitle="Downloading & scanning packages in background thread..."):
+        super().__init__(parent, bg=bg_color)
+        self.bg_color = bg_color
+        self.spinner_color = spinner_color
+        self.angle = 0
+        self.is_animating = True
+        self._after_id = None
+
+        self.center_frame = tk.Frame(self, bg=bg_color)
+        self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.size = 56
+        self.canvas = tk.Canvas(
+            self.center_frame,
+            width=self.size,
+            height=self.size,
+            bg=bg_color,
+            highlightthickness=0
+        )
+        self.canvas.pack(pady=(0, 12))
+
+        self.title_label = tk.Label(
+            self.center_frame,
+            text=title,
+            font=("Montserrat", 11, "bold"),
+            fg=Theme.TEXT_BRIGHT,
+            bg=bg_color
+        )
+        self.title_label.pack(pady=(0, 4))
+
+        self.sub_label = tk.Label(
+            self.center_frame,
+            text=subtitle,
+            font=("Montserrat", 9),
+            fg=Theme.TEXT_DIM,
+            bg=bg_color
+        )
+        self.sub_label.pack()
+
+        self._draw_spinner()
+
+    def _draw_spinner(self):
+        if not self.is_animating:
+            return
+        try:
+            self.canvas.delete("all")
+            pad = 6
+            r = self.size - pad
+            self.canvas.create_oval(
+                pad, pad, r, r,
+                outline=Theme.BORDER,
+                width=4
+            )
+            self.canvas.create_arc(
+                pad, pad, r, r,
+                start=self.angle,
+                extent=100,
+                outline=self.spinner_color,
+                style="arc",
+                width=4
+            )
+            self.angle = (self.angle + 12) % 360
+            self._after_id = self.after(30, self._draw_spinner)
+        except Exception:
+            pass
+
+    def update_message(self, title=None, subtitle=None):
+        try:
+            if title is not None and self.title_label.winfo_exists():
+                self.title_label.configure(text=str(title))
+            if subtitle is not None and self.sub_label.winfo_exists():
+                self.sub_label.configure(text=str(subtitle))
+        except Exception:
+            pass
+
+    def stop_and_destroy(self):
+        self.is_animating = False
+        if self._after_id:
+            try:
+                self.after_cancel(self._after_id)
+            except Exception:
+                pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
 def _open_code_viewer(file_path, all_paths=None):
     viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
     if not os.path.exists(viewer_script):
@@ -483,12 +575,6 @@ class BrowseTab:
         self.detail_frame = tk.Frame(pane, bg=Theme.BG_DARKEST)
         pane.add(self.detail_frame, minsize=350)
 
-        def _on_detail_resize(event):
-            pad = 30
-            for lbl in self._wrapping_labels:
-                lbl.configure(wraplength=max(event.width - pad, 100))
-        self.detail_frame.bind("<Configure>", _on_detail_resize)
-
         # Placeholder
         self.lbl_placeholder = tk.Label(
             self.detail_frame, text="No Item Selected",
@@ -496,8 +582,68 @@ class BrowseTab:
         )
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Detail content (hidden until selection)
-        self._detail_content = tk.Frame(self.detail_frame, bg=Theme.BG_DARKEST)
+        # Scrollable Canvas container for detail panel (Scrollable IF AND ONLY IF content overflows)
+        self.detail_canvas = tk.Canvas(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
+        self.detail_scroll = ttk.Scrollbar(self.detail_frame, orient="vertical", style="Vertical.TScrollbar",
+                                           command=self.detail_canvas.yview)
+        self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
+
+        self._scroll_state = {"visible": False}
+
+        def _sync_detail_scrollbar():
+            if not self.detail_canvas.winfo_exists() or not self.detail_canvas.winfo_ismapped():
+                if self._scroll_state["visible"]:
+                    self.detail_scroll.pack_forget()
+                    self._scroll_state["visible"] = False
+                return
+            bbox = self.detail_canvas.bbox("all")
+            content_height = (bbox[3] - bbox[1]) if bbox else 0
+            view_height = self.detail_canvas.winfo_height()
+            needs_scroll = content_height > view_height + 2
+            if needs_scroll and not self._scroll_state["visible"]:
+                self.detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+                self._scroll_state["visible"] = True
+            elif not needs_scroll and self._scroll_state["visible"]:
+                self.detail_scroll.pack_forget()
+                self.detail_canvas.yview_moveto(0)
+                self._scroll_state["visible"] = False
+
+        self._sync_detail_scrollbar = _sync_detail_scrollbar
+
+        def _on_canvas_configure(event):
+            self.detail_canvas.itemconfigure(self._content_window, width=event.width)
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            _sync_detail_scrollbar()
+
+            pad = 30
+            for lbl in self._wrapping_labels:
+                lbl.configure(wraplength=max(event.width - pad, 100))
+
+        def _on_content_configure(event=None):
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            self.detail_canvas.after_idle(_sync_detail_scrollbar)
+
+        def _on_mousewheel(event):
+            if self._scroll_state["visible"]:
+                if event.delta:
+                    self.detail_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif event.num == 4:
+                    self.detail_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.detail_canvas.yview_scroll(1, "units")
+
+        self.detail_canvas.bind("<Configure>", _on_canvas_configure)
+        self.detail_canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.detail_canvas.bind("<Button-4>", _on_mousewheel)
+        self.detail_canvas.bind("<Button-5>", _on_mousewheel)
+
+        # Detail content
+        self._detail_content = tk.Frame(self.detail_canvas, bg=Theme.BG_DARKEST)
+        self._content_window = self.detail_canvas.create_window((0, 0), window=self._detail_content, anchor="nw")
+        self._detail_content.bind("<Configure>", _on_content_configure)
+        self._detail_content.bind("<MouseWheel>", _on_mousewheel)
+        self._detail_content.bind("<Button-4>", _on_mousewheel)
+        self._detail_content.bind("<Button-5>", _on_mousewheel)
 
         # Let the detail builder populate the content frame
         self._detail_builder(self)
@@ -507,6 +653,12 @@ class BrowseTab:
         self.sorted_names = sorted(items.keys(), key=str.lower)
         self.name_tuples = [(n, n.lower()) for n in self.sorted_names]
         self.filtered_names = list(self.sorted_names)
+        if hasattr(self, "detail_canvas"):
+            self.detail_canvas.pack_forget()
+        if hasattr(self, "detail_scroll"):
+            self.detail_scroll.pack_forget()
+            self._scroll_state["visible"] = False
+        self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._populate_listbox()
 
     def _populate_listbox(self):
@@ -581,11 +733,14 @@ class BrowseTab:
         name = self.filtered_names[idx]
         item = self.all_items[name]
 
-        # Show detail content, hide placeholder
+        # Show detail canvas, hide placeholder
         self.lbl_placeholder.pack_forget()
-        self._detail_content.pack(fill="both", expand=True)
+        if not self.detail_canvas.winfo_ismapped():
+            self.detail_canvas.pack(side=tk.LEFT, fill="both", expand=True)
 
         self._on_select_handler(self, item)
+        self.detail_canvas.yview_moveto(0)
+        self.detail_canvas.after_idle(self._sync_detail_scrollbar)
 
 
 # ---------------------------------------------------------------------------
@@ -656,12 +811,6 @@ class InstalledTab:
         self.detail_frame = tk.Frame(pane, bg=Theme.BG_DARKEST)
         pane.add(self.detail_frame, minsize=350)
 
-        def _on_detail_resize(event):
-            pad = 30
-            for lbl in self._wrapping_labels:
-                lbl.configure(wraplength=max(event.width - pad, 100))
-        self.detail_frame.bind("<Configure>", _on_detail_resize)
-
         # Placeholder
         self.lbl_placeholder = tk.Label(
             self.detail_frame, text="No Local Item Selected",
@@ -669,8 +818,68 @@ class InstalledTab:
         )
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Detail content (hidden until selection)
-        self._detail_content = tk.Frame(self.detail_frame, bg=Theme.BG_DARKEST)
+        # Scrollable Canvas container for detail panel (Scrollable IF AND ONLY IF content overflows)
+        self.detail_canvas = tk.Canvas(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
+        self.detail_scroll = ttk.Scrollbar(self.detail_frame, orient="vertical", style="Vertical.TScrollbar",
+                                           command=self.detail_canvas.yview)
+        self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
+
+        self._scroll_state = {"visible": False}
+
+        def _sync_detail_scrollbar():
+            if not self.detail_canvas.winfo_exists() or not self.detail_canvas.winfo_ismapped():
+                if self._scroll_state["visible"]:
+                    self.detail_scroll.pack_forget()
+                    self._scroll_state["visible"] = False
+                return
+            bbox = self.detail_canvas.bbox("all")
+            content_height = (bbox[3] - bbox[1]) if bbox else 0
+            view_height = self.detail_canvas.winfo_height()
+            needs_scroll = content_height > view_height + 2
+            if needs_scroll and not self._scroll_state["visible"]:
+                self.detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+                self._scroll_state["visible"] = True
+            elif not needs_scroll and self._scroll_state["visible"]:
+                self.detail_scroll.pack_forget()
+                self.detail_canvas.yview_moveto(0)
+                self._scroll_state["visible"] = False
+
+        self._sync_detail_scrollbar = _sync_detail_scrollbar
+
+        def _on_canvas_configure(event):
+            self.detail_canvas.itemconfigure(self._content_window, width=event.width)
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            _sync_detail_scrollbar()
+
+            pad = 30
+            for lbl in self._wrapping_labels:
+                lbl.configure(wraplength=max(event.width - pad, 100))
+
+        def _on_content_configure(event=None):
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            self.detail_canvas.after_idle(_sync_detail_scrollbar)
+
+        def _on_mousewheel(event):
+            if self._scroll_state["visible"]:
+                if event.delta:
+                    self.detail_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif event.num == 4:
+                    self.detail_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.detail_canvas.yview_scroll(1, "units")
+
+        self.detail_canvas.bind("<Configure>", _on_canvas_configure)
+        self.detail_canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.detail_canvas.bind("<Button-4>", _on_mousewheel)
+        self.detail_canvas.bind("<Button-5>", _on_mousewheel)
+
+        # Detail content
+        self._detail_content = tk.Frame(self.detail_canvas, bg=Theme.BG_DARKEST)
+        self._content_window = self.detail_canvas.create_window((0, 0), window=self._detail_content, anchor="nw")
+        self._detail_content.bind("<Configure>", _on_content_configure)
+        self._detail_content.bind("<MouseWheel>", _on_mousewheel)
+        self._detail_content.bind("<Button-4>", _on_mousewheel)
+        self._detail_content.bind("<Button-5>", _on_mousewheel)
 
         # Labels inside detail content
         self.lbl_name = tk.Label(self._detail_content, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
@@ -806,62 +1015,7 @@ class InstalledTab:
         found.sort(key=lambda p: os.path.basename(p).lower())
         return found
 
-    def _clear_examples(self, message: str = "(no sample sketches found)"):
-        self._current_examples = []
-        self.examples_listbox.config(state=tk.NORMAL)
-        self.examples_listbox.delete(0, tk.END)
-        self.examples_listbox.insert(tk.END, message)
-        self.examples_listbox.config(state=tk.DISABLED)
-
-    def _on_examples_search_change(self, *args):
-        self._filter_and_render_list()
-
-    def _filter_and_render_list(self):
-        query = self.examples_search_var.get().lower().strip()
-        self.examples_listbox.config(state=tk.NORMAL)
-        self.examples_listbox.delete(0, tk.END)
-
-        sel = self.listbox.curselection()
-        if not sel:
-            return
-        item = self.filtered_items[sel[0]]
-
-        if item["type"] == "Library":
-            self._current_examples = []
-            if not self._all_examples:
-                self.examples_listbox.insert(tk.END, "(no sample sketches found)")
-                self.examples_listbox.config(state=tk.DISABLED)
-                return
-
-            for path in self._all_examples:
-                sketch_folder = os.path.basename(os.path.dirname(path))
-                display_name = f"{sketch_folder} / {os.path.basename(path)}"
-                if not query or query in display_name.lower():
-                    self.examples_listbox.insert(tk.END, display_name)
-                    self._current_examples.append(path)
-
-            if not self._current_examples:
-                self.examples_listbox.insert(tk.END, "(no matching sample sketches found)")
-                self.examples_listbox.config(state=tk.DISABLED)
-        else:
-            self._current_examples = []
-            if not self._all_boards:
-                self.examples_listbox.insert(tk.END, "(no board definitions found)")
-                self.examples_listbox.config(state=tk.DISABLED)
-                return
-
-            matched_count = 0
-            for board in self._all_boards:
-                if not query or query in board.lower():
-                    self.examples_listbox.insert(tk.END, f"  •  {board}")
-                    matched_count += 1
-
-            if matched_count == 0:
-                self.examples_listbox.insert(tk.END, "(no matching board definitions found)")
-                self.examples_listbox.config(state=tk.DISABLED)
-
-    def _populate_boards(self, base_path: str):
-        self._all_boards = []
+    def _find_boards(self, base_path: str) -> list[str]:
         boards = []
         try:
             from pathlib import Path
@@ -885,9 +1039,131 @@ class InstalledTab:
                     pass
         except Exception:
             pass
-
         boards.sort(key=str.lower)
-        self._all_boards = boards
+        return boards
+
+    def _clear_examples(self, message: str = "(no sample sketches found)"):
+        self._current_examples = []
+        self.examples_listbox.config(state=tk.NORMAL)
+        self.examples_listbox.delete(0, tk.END)
+        self.examples_listbox.insert(tk.END, message)
+        self.examples_listbox.config(state=tk.DISABLED)
+
+    _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _start_loading_animation(self, req_id: int, frame_idx: int = 0):
+        if getattr(self, "_select_req_id", 0) != req_id:
+            return
+        if getattr(self, "_loading_complete_req_id", None) == req_id:
+            return
+
+        frame = self._SPINNER_FRAMES[frame_idx % len(self._SPINNER_FRAMES)]
+        try:
+            current_text = self.lbl_size["text"]
+            if "Calculating" in current_text:
+                self.lbl_size.config(text=f"Size on Disk: Calculating {frame}...")
+        except Exception:
+            pass
+
+        next_idx = (frame_idx + 1) % len(self._SPINNER_FRAMES)
+        try:
+            self.app.root.after(80, lambda: self._start_loading_animation(req_id, next_idx))
+        except Exception:
+            pass
+
+    def _load_details_async_worker(self, item: dict, req_id: int):
+        path = item.get("path", "")
+        item_type = item.get("type", "Library")
+
+        # Perform heavy disk I/O scanning on background thread
+        size_bytes = self._get_dir_size(path)
+
+        if item_type == "Library":
+            examples = self._find_examples(path)
+            boards = []
+        else:
+            examples = []
+            boards = self._find_boards(path)
+
+        # Post results back to main thread safely
+        def _on_complete():
+            if getattr(self, "_select_req_id", 0) != req_id:
+                return
+
+            self._loading_complete_req_id = req_id
+
+            if size_bytes > 1024 * 1024:
+                self.lbl_size.config(text=f"Size on Disk: {size_bytes / (1024 * 1024):.1f} MB")
+            else:
+                self.lbl_size.config(text=f"Size on Disk: {size_bytes / 1024:.0f} KB")
+
+            if item_type == "Library":
+                self._all_examples = examples
+            else:
+                self._all_boards = boards
+
+            self._filter_and_render_list(item_override=item)
+
+            if hasattr(self, "detail_canvas"):
+                self.detail_canvas.after_idle(self._sync_detail_scrollbar)
+
+        try:
+            self.app.root.after(0, _on_complete)
+        except Exception:
+            pass
+
+    def _on_examples_search_change(self, *args):
+        self._filter_and_render_list()
+
+    def _filter_and_render_list(self, item_override=None):
+        query = self.examples_search_var.get().lower().strip()
+        self.examples_listbox.config(state=tk.NORMAL)
+        self.examples_listbox.delete(0, tk.END)
+
+        item = item_override
+        if not item:
+            sel = self.listbox.curselection()
+            if sel and sel[0] < len(self.filtered_items):
+                item = self.filtered_items[sel[0]]
+
+        item_type = item["type"] if item else ("Library" if getattr(self, "_all_examples", None) else "Board Platform")
+
+        if item_type == "Library":
+            self._current_examples = []
+            if not getattr(self, "_all_examples", None):
+                self.examples_listbox.insert(tk.END, "(no sample sketches found)")
+                self.examples_listbox.config(state=tk.DISABLED)
+                return
+
+            for path in self._all_examples:
+                sketch_folder = os.path.basename(os.path.dirname(path))
+                display_name = f"{sketch_folder} / {os.path.basename(path)}"
+                if not query or query in display_name.lower():
+                    self.examples_listbox.insert(tk.END, display_name)
+                    self._current_examples.append(path)
+
+            if not self._current_examples:
+                self.examples_listbox.insert(tk.END, "(no matching sample sketches found)")
+                self.examples_listbox.config(state=tk.DISABLED)
+        else:
+            self._current_examples = []
+            if not getattr(self, "_all_boards", None):
+                self.examples_listbox.insert(tk.END, "(no board definitions found)")
+                self.examples_listbox.config(state=tk.DISABLED)
+                return
+
+            matched_count = 0
+            for board in self._all_boards:
+                if not query or query in board.lower():
+                    self.examples_listbox.insert(tk.END, f"  •  {board}")
+                    matched_count += 1
+
+            if matched_count == 0:
+                self.examples_listbox.insert(tk.END, "(no matching board definitions found)")
+                self.examples_listbox.config(state=tk.DISABLED)
+
+    def _populate_boards(self, base_path: str):
+        self._all_boards = self._find_boards(base_path)
         self._filter_and_render_list()
 
     def _populate_examples(self, base_path: str):
@@ -933,35 +1209,32 @@ class InstalledTab:
 
     def _execute_search(self):
         self._search_after_id = None
-        text = self.search_var.get().strip().lower()
-        if not text:
-            self.filtered_items = list(self.installed_items)
-        else:
-            starts_with = [i for i in self.installed_items if i["name"].lower().startswith(text)]
-            contains = [i for i in self.installed_items if text in i["name"].lower() and not i["name"].lower().startswith(text)]
-            self.filtered_items = starts_with + contains
-        self._populate_listbox()
-
-    def _populate_listbox(self):
+        query = self.search_var.get().lower().strip()
         selected_name = None
         sel = self.listbox.curselection()
-        if sel and self.filtered_items:
-            idx = sel[0]
-            if idx < len(self.filtered_items):
-                selected_name = self.filtered_items[idx]["name"]
+        if sel and sel[0] < len(self.filtered_items):
+            selected_name = self.filtered_items[sel[0]]["name"]
+
+        if not query:
+            self.filtered_items = list(self.installed_items)
+        else:
+            starts = []
+            contains = []
+            for item in self.installed_items:
+                name_lower = item["name"].lower()
+                if name_lower.startswith(query):
+                    starts.append(item)
+                elif query in name_lower or query in item.get("type", "").lower():
+                    contains.append(item)
+            self.filtered_items = starts + contains
+
+        self.lbl_search_status.config(text=f"Found {len(self.filtered_items)} installed item(s)")
 
         self.listbox.delete(0, tk.END)
-        total = len(self.filtered_items)
-        self.lbl_search_status.config(text=f"Found {total} installed item(s)")
+        for item in self.filtered_items:
+            up_prefix = "⬆ " if item.get("update_available") else ""
+            self.listbox.insert(tk.END, f"{up_prefix}{item['name']} ({item['installed_version']})")
 
-        for i, item in enumerate(self.filtered_items):
-            update_flag = "⬆ " if item.get("update_available") else "  "
-            # Show type letter and name
-            type_letter = "L" if item["type"] == "Library" else "B"
-            display = f"{update_flag}[{type_letter}] {item['name']}  ({item['installed_version']})"
-            self.listbox.insert(tk.END, display)
-
-        # Restore selection if possible
         if selected_name:
             for i, item in enumerate(self.filtered_items):
                 if item["name"] == selected_name:
@@ -971,7 +1244,8 @@ class InstalledTab:
                     return
 
         # Hide detail if nothing
-        self._detail_content.pack_forget()
+        if hasattr(self, "detail_canvas"):
+            self.detail_canvas.pack_forget()
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._clear_examples()
 
@@ -988,7 +1262,8 @@ class InstalledTab:
             self.examples_search_var.set("")
 
         self.lbl_placeholder.pack_forget()
-        self._detail_content.pack(fill="both", expand=True)
+        if hasattr(self, "detail_canvas") and not self.detail_canvas.winfo_ismapped():
+            self.detail_canvas.pack(side=tk.LEFT, fill="both", expand=True)
 
         self.lbl_name.config(text=item["name"])
         self.lbl_type.config(text=f"Type: {item['type']}")
@@ -1003,22 +1278,39 @@ class InstalledTab:
             self.lbl_update_status.config(text="✓ Up‑to‑date", fg=Theme.GREEN)
             self.update_btn.config(state="disabled")
 
-        size_bytes = self._get_dir_size(item["path"])
-        if size_bytes > 1024 * 1024:
-            self.lbl_size.config(text=f"Size on Disk: {size_bytes / (1024 * 1024):.1f} MB")
-        else:
-            self.lbl_size.config(text=f"Size on Disk: {size_bytes / 1024:.0f} KB")
-
         self.lbl_path.config(text=item["path"])
 
         if item["type"] == "Library":
             self.lbl_examples_header.config(text="Sample Codes (Examples):")
             self.lbl_examples_hint.config(text="Double-click a sketch to view its code")
-            self._populate_examples(item["path"])
         else:
             self.lbl_examples_header.config(text="Available Boards:")
             self.lbl_examples_hint.config(text="Supported microcontrollers inside this downloaded platform package")
-            self._populate_boards(item["path"])
+
+        # Increment select request ID for async thread cancellation/validation
+        self._select_req_id = getattr(self, "_select_req_id", 0) + 1
+        req_id = self._select_req_id
+
+        # Show immediate loading state with animated spinner
+        self.lbl_size.config(text="Size on Disk: Calculating ⠋...")
+        self.examples_listbox.config(state=tk.NORMAL)
+        self.examples_listbox.delete(0, tk.END)
+        self.examples_listbox.insert(tk.END, "  ⏳ Scanning disk content in background...")
+        self.examples_listbox.config(state=tk.DISABLED)
+
+        # Start loading animation spinner
+        self._start_loading_animation(req_id)
+
+        # Launch background thread worker for disk I/O scanning!
+        threading.Thread(
+            target=self._load_details_async_worker,
+            args=(item, req_id),
+            daemon=True
+        ).start()
+
+        if hasattr(self, "detail_canvas"):
+            self.detail_canvas.yview_moveto(0)
+            self.detail_canvas.after_idle(self._sync_detail_scrollbar)
 
     def _open_folder(self):
         sel = self.listbox.curselection()
@@ -1103,10 +1395,18 @@ class ArduinoBrowser:
         self.root = tk.Tk()
         self.root.title("Arduino Library & Board Browser")
 
-        # Set window icon if available
+        # Set AppUserModelID so Windows taskbar groups it with the main MCU Flasher window
         if sys.platform == "win32":
             try:
-                icon_path = os.path.join(SCRIPT_DIR, "src", "mcu_icon.ico")
+                import ctypes
+                myappid = 'Naph.MCUFlasher.GUI.V6'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass
+            try:
+                icon_path = os.path.join(SCRIPT_DIR, "src", "assets", "mcu_icon.ico")
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(SCRIPT_DIR, "src", "mcu_icon.ico")
                 if os.path.exists(icon_path):
                     self.root.iconbitmap(default=icon_path)
                     self.root.iconbitmap(icon_path)
@@ -1124,6 +1424,8 @@ class ArduinoBrowser:
         self._active_download_tab = None
         self._downloading_item_name = None
         self._cancel_event = threading.Event()
+        self._keep_alive = True
+        self._is_hidden = False
 
         # Load persisted download directory
         settings = _load_settings()
@@ -1135,11 +1437,80 @@ class ArduinoBrowser:
         os.makedirs(self._download_dir, exist_ok=True)
         os.makedirs(INDEX_CACHE_DIR, exist_ok=True)
 
+        # Intercept window close event to hide window instead of destroying process (Sleep Mode)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
+        # Save window HWND for instant Win32 unhide
+        try:
+            hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
+            with open(hwnd_file, "w", encoding="utf-8") as f:
+                f.write(str(self.root.winfo_id()))
+        except Exception:
+            pass
+
         # Installed items cache (computed from disk + indexes)
         self._installed_items: list[dict] = []
 
         self._build_ui()
         self.root.after(100, self._initial_load)
+        self.root.after(250, self._check_show_trigger)
+
+    def _on_window_close(self):
+        """Sleep Mode: Hide window on close to keep loaded indexes in RAM."""
+        if getattr(self, "_keep_alive", True):
+            self.root.withdraw()
+            self._is_hidden = True
+        else:
+            self._force_exit()
+
+    def _check_show_trigger(self):
+        """Poll for wake-up trigger file sent by main MCU Flasher GUI."""
+        trigger_file = os.path.join(INDEX_CACHE_DIR, ".show_dm_trigger")
+        if os.path.exists(trigger_file):
+            try:
+                os.remove(trigger_file)
+            except Exception:
+                pass
+            self._unhide_window()
+        self.root.after(250, self._check_show_trigger)
+
+    def _unhide_window(self):
+        """Instantly restore window from memory without reloading JSON indexes."""
+        self.root.deiconify()
+        try:
+            self.root.state('zoomed')
+        except tk.TclError:
+            pass
+        self.root.lift()
+        self.root.focus_force()
+        self._is_hidden = False
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = self.root.winfo_id()
+                ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE / SW_SHOW
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+        threading.Thread(target=self._wake_sync, daemon=True).start()
+
+    def _wake_sync(self):
+        self._compute_installed_items()
+        try:
+            self.root.after(0, lambda: self.installed_tab.populate(self._installed_items) if hasattr(self, "installed_tab") else None)
+        except Exception:
+            pass
+
+    def _force_exit(self):
+        """Permanently close process and purge memory."""
+        try:
+            hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
+            if os.path.exists(hwnd_file):
+                os.remove(hwnd_file)
+        except Exception:
+            pass
+        self.root.destroy()
+        sys.exit(0)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1208,6 +1579,13 @@ class ArduinoBrowser:
 
         tk.Label(top_bar, text="Arduino Library & Board Browser",
                  font=("Montserrat", 12, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARK).pack(side="left")
+
+        self.quit_btn = make_flat_button(
+            top_bar, "✖ Quit & Purge", self._force_exit,
+            Theme.BTN_STOP, Theme.BTN_STOP_H
+        )
+        self.quit_btn.config(fg=Theme.TEXT_BRIGHT)
+        self.quit_btn.pack(side="right", padx=(6, 0))
 
         self.refresh_btn = make_flat_button(
             top_bar, "⟳ Refresh All", self._refresh_all,
@@ -1287,10 +1665,35 @@ class ArduinoBrowser:
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             if selected_tab == 2:  # Installed tab
-                self._compute_installed_items()
-                self.installed_tab.populate(self._installed_items)
+                self._compute_installed_items_async()
         except Exception:
             pass
+
+    def _compute_installed_items_async(self):
+        self._set_status("Scanning installed libraries & cores ⠋...")
+        try:
+            self.progress.start(10)
+        except Exception:
+            pass
+
+        def _worker():
+            self._compute_installed_items()
+
+            def _ui_done():
+                try:
+                    self.progress.stop()
+                except Exception:
+                    pass
+                self._set_status("Ready")
+                if hasattr(self, "installed_tab"):
+                    self.installed_tab.populate(self._installed_items)
+
+            try:
+                self.root.after(0, _ui_done)
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _choose_download_dir(self):
         chosen = filedialog.askdirectory(
@@ -1661,14 +2064,34 @@ class ArduinoBrowser:
     # ------------------------------------------------------------------
 
     def _initial_load(self):
-        """Called once on startup. Loads both indexes."""
+        """Called once on startup. Loads both indexes with circular loading overlay."""
         self._set_status("Loading indexes…")
+        if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
+            try:
+                self._loading_overlay = CircularLoadingOverlay(
+                    self.notebook,
+                    title="Loading Arduino Library & Board Indexes...",
+                    subtitle="Downloading & parsing package definitions on background thread..."
+                )
+                self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            except Exception:
+                pass
         self._start_thread(self._load_both)
 
     def _refresh_all(self):
         if self._busy:
             return
         self._set_status("Refreshing all indexes…")
+        if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
+            try:
+                self._loading_overlay = CircularLoadingOverlay(
+                    self.notebook,
+                    title="Refreshing All Indexes...",
+                    subtitle="Downloading newest library & board definitions..."
+                )
+                self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            except Exception:
+                pass
         self._start_thread(lambda: self._load_both(force_refresh=True))
 
     def _cache_is_fresh(self, cache_file: str) -> bool:
@@ -1721,8 +2144,15 @@ class ArduinoBrowser:
             except Exception:
                 pass
 
-        self.root.after(0, self._set_status,
-                        f"Downloading {label} index…")
+        def _update_overlay():
+            self._set_status(f"Downloading {label} index…")
+            if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
+                self._loading_overlay.update_message(
+                    title=f"Downloading {label.title()} Index...",
+                    subtitle="Downloading index from Arduino servers on background thread..."
+                )
+
+        self.root.after(0, _update_overlay)
         try:
             resp = requests.get(url, timeout=60)
             resp.raise_for_status()
@@ -1748,6 +2178,13 @@ class ArduinoBrowser:
         return data
 
     def _finish_load(self, msg: str):
+        if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
+            try:
+                self._loading_overlay.stop_and_destroy()
+            except Exception:
+                pass
+            self._loading_overlay = None
+
         self.progress.stop()
         self.progress.config(mode="determinate", value=0)
         self._set_status(msg)

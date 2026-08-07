@@ -197,7 +197,7 @@ class UploadOutputTests(unittest.TestCase):
             ".pio\\build",
         ):
             self.assertNotIn(forbidden, console_text)
-        self.assertEqual(console_text.count("Hard resetting via RTS pin..."), 1)
+        self.assertNotIn("Hard resetting via RTS pin...", console_text)
         self.assertIn(
             "========================= [SUCCESS] Took 13.20 seconds =========================",
             console_text,

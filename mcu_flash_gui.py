@@ -889,14 +889,67 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
     except Exception:
         pass
 
+def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
+    """Perform an optimized, shallow-pruned directory walk over sketch_dir.
+    Prunes hidden/internal directories (.pio, .git, build, MCU-FLASHER-SRC, etc.)
+    at the directory level BEFORE recursing, avoiding massive disk scan freezes."""
+    if not sketch_dir:
+        return []
+    s_dir = Path(sketch_dir)
+    if not s_dir.exists():
+        return []
+    
+    ignored_dir_names = {
+        ".git", ".vscode", "env", "node_modules", "__pycache__",
+        ".platformio", "build", ".pio", "src", "mcu-flasher-src", "mcu_flasher_src",
+        "compiled_builds", "build_artifacts", ".build_artifacts", ".clangd", ".cache", "_temp",
+        ".mcu_ai_edits", "logs",
+    }
+    
+    results = []
+    supp_set = {ext.lower() for ext in supported_extensions} if supported_extensions else None
+
+    def _walk(current_dir):
+        try:
+            for entry in os.scandir(current_dir):
+                name_low = entry.name.lower()
+                if name_low.startswith(".") or name_low in ignored_dir_names or name_low.startswith("mcu-flasher"):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    _walk(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    p = Path(entry.path)
+                    if supp_set is None or p.suffix.lower() in supp_set:
+                        results.append(p)
+        except Exception:
+            pass
+
+    _walk(s_dir)
+    return results
+
+
+def get_mcu_flasher_src_dir(sketch_dir) -> Path:
+    """Return dedicated MCU-FLASHER-SRC folder inside sketch_dir for app-generated files,
+    ensuring it exists and is marked as a hidden directory on Windows."""
+    try:
+        s_dir = Path(sketch_dir)
+        mcu_src = s_dir / "MCU-FLASHER-SRC"
+        mcu_src.mkdir(parents=True, exist_ok=True)
+        hide_generated_directory(mcu_src)
+        hide_hidden_attribute(mcu_src)
+        return mcu_src
+    except Exception:
+        return Path(sketch_dir)
+
 def hide_internal_project_metadata(sketch_dir) -> None:
     """Hide every file/folder the app generated in the project folder in
     Windows Explorer, while keeping the sketch's OWN sources visible.
 
     Original sketch files (.ino/.cpp/.c/.h/.txt) are the user's actual
     project and are never hidden.  Everything else at the root —
-    platformio.ini, .pio/, src/, cache JSONs, AI instruction files, tab-order
-    state, ... — is marked hidden so Explorer shows only the real project."""
+    platformio.ini, .pio/, src/, MCU-FLASHER-SRC/, cache JSONs, AI instruction
+    files, tab-order state, ... — is marked hidden so Explorer shows only the
+    real project."""
     try:
         s_dir = Path(sketch_dir)
         if not s_dir.exists():
@@ -911,12 +964,14 @@ def hide_internal_project_metadata(sketch_dir) -> None:
         ensure_hidden_read_first_md(s_dir)
 
         internal_names = [
-            ".pio", "platformio.ini", "src", ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
+            ".pio", "platformio.ini", "src", "MCU-FLASHER-SRC", "MCU_FLASHER_SRC",
+            "compiled_builds", "build_artifacts", ".build_artifacts",
+            ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
             ".mcu_gui_compat_cache.json", ".mcu_flash_tab_order.json",
-            ".ai_edit_signal", "build_artifacts", ".build_artifacts",
+            ".ai_edit_signal",
             ".pio_cache", ".vscode", ".clangd", ".cache", "_temp",
             ".opencodeignore", ".ignore", "AGENTS.md", "OPENCODE.md",
-            ".mcu_ai_edits",
+            ".mcu_ai_edits", "temp.json", "here.txt", "compile_commands.json", "logs",
             "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md"
         ]
         for name in internal_names:
@@ -2159,24 +2214,7 @@ class EditorApi:
         if not sketch_dir.exists():
             return []
         supported_suffixes = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
-        ignored_directories = {
-            ".git", ".vscode", "env", "node_modules", "__pycache__",
-            ".platformio", "build", ".pio", "src",
-        }
-        files = []
-        for candidate in sketch_dir.rglob("*"):
-            if not candidate.is_file() or candidate.suffix.lower() not in supported_suffixes:
-                continue
-            try:
-                relative_parts = candidate.relative_to(sketch_dir).parts[:-1]
-            except ValueError:
-                continue
-            if any(
-                part.lower() in ignored_directories or part.startswith(".")
-                for part in relative_parts
-            ):
-                continue
-            files.append(candidate)
+        files = get_sketch_files_fast(sketch_dir, supported_suffixes)
         files.sort(key=lambda item: str(item.relative_to(sketch_dir)).lower())
 
         order_file = sketch_dir / ".mcu_flash_tab_order.json"
@@ -5193,7 +5231,8 @@ class BoardSearchDialog(tk.Toplevel):
 
         btn_cancel = tk.Button(
             btn_frame, text="Cancel", font=("Montserrat", 9),
-            bg=Theme.BG_LIGHT, fg=Theme.TEXT_DIM, activebackground=Theme.BG_HOVER,
+            bg=Theme.BTN_STOP, fg=Theme.TEXT_BRIGHT, activebackground=Theme.BTN_STOP_H,
+            activeforeground=Theme.TEXT_BRIGHT,
             bd=0, padx=12, pady=4, cursor="hand2", command=self.destroy
         )
         btn_cancel.pack(side=tk.RIGHT)
@@ -5576,8 +5615,17 @@ class MCUUploadGUI:
         save_gui_config(config)
 
         # ── Icon ──
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                myappid = 'Naph.MCUFlasher.GUI.V6'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass
         try:
-            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+            if not icon_path.exists():
+                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
             if icon_path.exists():
                 self.root.iconbitmap(default=str(icon_path))
                 self.root.iconbitmap(str(icon_path))
@@ -6012,11 +6060,10 @@ class MCUUploadGUI:
         # ── Controls Bar ──
         ctrl_frame = tk.Frame(
             self.root, bg=Theme.BG_MID,
-            pady=round(10 * self._display_scale),
-            padx=round(16 * self._display_scale),
+            pady=round(8 * self._display_scale),
         )
         self.ctrl_frame = ctrl_frame
-        ctrl_frame.pack(fill=tk.X)
+        ctrl_frame.pack(fill=tk.X, padx=0)
 
         self.ctrl_row_top = tk.Frame(ctrl_frame, bg=Theme.BG_MID)
         self.ctrl_row_top.pack(fill=tk.X)
@@ -6025,7 +6072,7 @@ class MCUUploadGUI:
 
         # Board selection
         self.board_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
-        self.board_group.pack(side=tk.LEFT, padx=(0, 8))
+        self.board_group.pack(side=tk.LEFT, padx=(round(12 * self._display_scale), 8))
 
         tk.Label(self.board_group, text="BOARD", font=self.font_label,
                  fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(anchor=tk.W)
@@ -6105,7 +6152,7 @@ class MCUUploadGUI:
 
         # Right side: clear + autoscroll
         self.right_group = tk.Frame(self.root, bg=Theme.BG_MID)
-        self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT)
+        self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT, padx=(0, round(16 * self._display_scale)))
         self._right_ctrl_group = self.right_group  # saved for upload spd re-packing
 
         self.lbl_options_title = tk.Label(self.right_group, text="OPTIONS", font=self.font_label,
@@ -7320,19 +7367,19 @@ class MCUUploadGUI:
         except Exception:
             pass
 
-        # Tighten the controls-bar and options-bar horizontal padding as
-        # the window narrows, so the shrunk widgets above actually have
-        # the extra room to make a difference instead of it being eaten
-        # by fixed gutters.
+        # Keep the controls-bar background edge-to-edge (padx=0) so no black empty gaps appear
+        # on either end, while configuring inner left/right inset gutters.
         try:
-            ctrl_padx = 0
-            self.ctrl_row_top.master.pack_configure(padx=ctrl_padx)
-            group_gap = (
-                (0, round(4 * display_scale))
-                if width < 700 else (0, round(8 * display_scale))
-            )
-            for grp in (self.board_group, self.port_group, self.upload_spd_group):
-                grp.pack_configure(padx=group_gap)
+            self.ctrl_row_top.master.pack_configure(padx=0)
+            left_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
+            right_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
+            inner_gap = round((4 if width < 700 else 8) * display_scale)
+
+            self.board_group.pack_configure(padx=(left_pad, inner_gap))
+            self.port_group.pack_configure(padx=(0, inner_gap))
+            self.upload_spd_group.pack_configure(padx=(0, inner_gap))
+            if hasattr(self, "right_group") and self.right_group:
+                self.right_group.pack_configure(padx=(0, right_pad))
         except Exception:
             pass
 
@@ -7471,7 +7518,7 @@ class MCUUploadGUI:
             self.right_group.pack_forget()
             if self.ctrl_row_bottom.winfo_ismapped():
                 self.ctrl_row_bottom.pack_forget()
-            self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT)
+            self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT, padx=(0, right_pad))
 
             # OPTIONS title centered above, content in one row below
             self.lbl_options_title.pack_forget()
@@ -8881,7 +8928,7 @@ class MCUUploadGUI:
                         root_w = max(480, self.root.winfo_width()) if hasattr(self, "root") else 800
                         calc_w = max(220, int(root_w * 0.44))
                         calc_w = min(calc_w, max(220, root_w - 300))
-                        self.h_split_pane.add(self.ai_side_container, width=calc_w)
+                        self.h_split_pane.add(self.ai_side_container, width=calc_w, stretch="always")
                 except Exception:
                     pass
 
@@ -9004,7 +9051,9 @@ class MCUUploadGUI:
 
             # Set window icon if available
             try:
-                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+                icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+                if not icon_path.exists():
+                    icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
                 if icon_path.exists():
                     self.default_editor_toplevel.iconbitmap(str(icon_path))
             except Exception:
@@ -11846,7 +11895,9 @@ class MCUUploadGUI:
         
         # Set window icon if available
         try:
-            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+            if not icon_path.exists():
+                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
             if icon_path.exists():
                 dlg.iconbitmap(str(icon_path))
         except Exception:
@@ -12623,7 +12674,7 @@ class MCUUploadGUI:
                 else:
                     self._append("  ✔ All detected deps already in platformio.ini", "success")
         else:
-            self._append("  No known library #includes detected", "dim")
+            self._append_notif("  No known library #includes detected", "info")
 
         self._append("")
         self._append("  Ready. Click an action to begin.", "info")
@@ -12908,12 +12959,8 @@ class MCUUploadGUI:
         # Collect local project header filenames so we don't chase them as libs
         local_files: set[str] = set()
         try:
-            for f in self.sketch_dir_path.rglob("*"):
-                if f.is_file():
-                    if any(p.startswith(".") for p in
-                           f.relative_to(self.sketch_dir_path).parts):
-                        continue
-                    local_files.add(f.name.lower())
+            for f in get_sketch_files_fast(self.sketch_dir_path):
+                local_files.add(f.name.lower())
         except Exception:
             pass
 
@@ -13812,12 +13859,8 @@ default_envs = {self._pio_env_name()}
         # Collect local files to avoid false alarms on local headers
         local_files = []
         try:
-            for f in self.sketch_dir_path.rglob("*"):
-                if f.is_file():
-                    # Skip files in hidden directories (like .pio or .git)
-                    if any(part.startswith(".") for part in f.relative_to(self.sketch_dir_path).parts):
-                        continue
-                    local_files.append(f.name.lower())
+            for f in get_sketch_files_fast(self.sketch_dir_path):
+                local_files.append(f.name.lower())
         except Exception:
             pass
 
@@ -18485,6 +18528,120 @@ default_envs = {self._pio_env_name()}
             txt.bind("<Control-S>",         lambda e, f=tab_frame: (_save_tab(f), "break")[1])
             txt.bind("<Control-slash>",     _toggle_comment)
 
+        def _try_embed_editor_window(self):
+            if win32gui is None or win32con is None:
+                self._append("  ⚠ pywin32 not available — editor will open in its own window.", "warning")
+                self._show_editor_fallback_button()
+                return
+
+            if getattr(self, "_editor_embedded", False) or getattr(self, "_embedding_in_progress", False):
+                return
+
+            # Ensure main window is viewable (mapped) before embedding
+            if not self.root.winfo_exists() or not self.root.winfo_viewable():
+                self.root.after(150, self._try_embed_editor_window)
+                return
+
+            self._embedding_in_progress = True
+            hwnd = self._find_editor_hwnd()
+            if not hwnd:
+                self._embedding_in_progress = False
+                self._editor_reparent_attempts += 1
+                if self._editor_reparent_attempts < 120:
+                    poll_delay = 50 if self._editor_reparent_attempts < 20 else 100
+                    self.root.after(poll_delay, self._try_embed_editor_window)
+                else:
+                    self._append("  ✖ Could not locate the editor's window to embed it after 8s — "
+                                  "falling back to a separate window.", "error")
+                    self._show_editor_fallback_button()
+                return
+
+            # ⚡ Background Execution Optimization:
+            # Reparenting a WebView2 HWND while its V8 engine is mid-initialization causes Win32
+            # cross-thread message queue locks, freezing the main GUI window.
+            # Wait until pywebview signals that the editor page content has finished loading in the background
+            # before attaching native handles.
+            if not getattr(self, "_editor_content_loaded", False):
+                self._embedding_in_progress = False
+                self._editor_reparent_attempts += 1
+                if self._editor_reparent_attempts < 120:
+                    self.root.after(80, self._try_embed_editor_window)
+                else:
+                    self._show_editor_fallback_button()
+                return
+
+            # Fast, non-blocking check: verify host window is not hung before reparenting
+            import ctypes
+            try:
+                user32 = ctypes.windll.user32
+                if user32.IsHungAppWindow(hwnd):
+                    self._embedding_in_progress = False
+                    self._editor_reparent_attempts += 1
+                    if self._editor_reparent_attempts < 80:
+                        self.root.after(100, self._try_embed_editor_window)
+                    else:
+                        self._append("  ✖ Editor window stopped responding during startup — falling back to separate window.", "error")
+                        self._show_editor_fallback_button()
+                    return
+            except Exception:
+                pass
+
+            try:
+                frame = self._editor_embed_frame
+                tk_hwnd = frame.winfo_id()
+
+                # Set WS_CLIPCHILDREN on parent Tk frame to prevent paint overlap
+                try:
+                    tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+                    win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
+                except Exception:
+                    pass
+
+                # Strip title bar / borders / system menu so the window
+                # behaves like a plain child control rather than a floating top-level window.
+                if not hasattr(self, "_original_editor_style") or getattr(self, "_original_editor_style", None) is None:
+                    self._original_editor_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                    self._original_editor_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+
+                style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                           win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                           win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+                style |= win32con.WS_CHILD
+                win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                              win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+                ex_style |= win32con.WS_EX_TOOLWINDOW
+                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+                # Re-parent it under the Tkinter frame.
+                win32gui.SetParent(hwnd, tk_hwnd)
+
+                w = max(frame.winfo_width(), 50)
+                h = max(frame.winfo_height(), 50)
+                # Use SWP_ASYNCWINDOWPOS (0x4000) so SetWindowPos executes without blocking calling thread
+                win32gui.SetWindowPos(
+                    hwnd, 0, 0, 0, w, h,
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW | 0x4000
+                )
+
+                try:
+                    if hasattr(self, "editor_window"):
+                        self.editor_window.show()
+                except Exception as e:
+                    self._append(f"  ⚠ editor_window.show() failed: {e}", "warning")
+
+                self._editor_embedded = True
+                self._embedding_in_progress = False
+                self._stop_editor_spinner()
+                self._editor_embed_frame.config(bg=Theme.BG_DARKEST)
+            except Exception as e:
+                self._embedding_in_progress = False
+                self._append(f"  ✖ Embedding failed: {e}", "error")
+                self._show_editor_fallback_button()
+
         def _reload_files():
             for tab in nb.tabs():
                 nb.forget(tab)
@@ -19137,70 +19294,115 @@ default_envs = {self._pio_env_name()}
             pass
 
     def _open_download_manager(self):
-        import subprocess, sys
+        import subprocess, sys, os
         from pathlib import Path
-        script_dir = SCRIPT_DIR
-        script_path = script_dir / "src" / "libs" / "arduino_lib_req.py"
-        
-        # Grab our own native window handle so the child process can make
-        # itself an "owned" window of this one (stays on top of us, hides
-        # when we minimize, no separate taskbar entry).
+
+        self._append_notif("  ℹ Launching Download Boards/Libraries Manager...", "info")
+
         parent_hwnd = None
         if sys.platform == "win32":
             try:
-                self.root.update_idletasks()
                 parent_hwnd = self.root.winfo_id()
             except Exception:
                 parent_hwnd = None
-        
-        # Check if we are running as a PyInstaller executable
-        is_frozen = getattr(sys, 'frozen', False)
-        import os
-        env = os.environ.copy()
-        env["MCU_PREF_DIR"] = str(SCRIPT_DIR)
-        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-        for k in ["_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH"]:
-            env.pop(k, None)
-            
-        meipass = getattr(sys, '_MEIPASS', None)
-        if meipass:
-            # Clean up the parent's _MEIPASS folder from the PATH
-            path_val = env.get("PATH", "")
-            paths = path_val.split(os.pathsep)
-            cleaned_paths = [p for p in paths if p != meipass]
-            env["PATH"] = os.pathsep.join(cleaned_paths)
-            
-        # We always launch the python script using the local virtualenv python interpreter.
-        # This completely avoids any PyInstaller DLL packaging/LoadLibrary conflicts.
-        try:
-            venv_dir = SCRIPT_DIR / "env"
-            if sys.platform == "win32":
-                python_exe = venv_dir / "Scripts" / "pythonw.exe"
-                if not python_exe.exists():
-                    python_exe = venv_dir / "Scripts" / "python.exe"
-            else:
-                python_exe = venv_dir / "bin" / "python"
 
-            if python_exe.exists() and script_path.exists():
-                cmd = [str(python_exe), str(script_path)]
+        def _bg_launch_worker():
+            script_dir = SCRIPT_DIR
+            script_path = script_dir / "src" / "libs" / "arduino_lib_req.py"
+
+            # Check if a persistent Download Manager process is already sleeping in background
+            active_proc = None
+            for p in getattr(self, "_download_managers", []):
+                if p.poll() is None:
+                    active_proc = p
+                    break
+
+            if active_proc:
+                # Send wake-up trigger file + Win32 HWND restore for instant unhide
+                trigger_file = script_dir / "index_json" / ".show_dm_trigger"
+                try:
+                    trigger_file.parent.mkdir(parents=True, exist_ok=True)
+                    trigger_file.write_text("show", encoding="utf-8")
+                except Exception:
+                    pass
+
+                hwnd_file = script_dir / "index_json" / ".dm_hwnd"
+                if sys.platform == "win32" and hwnd_file.exists():
+                    try:
+                        dm_hwnd = int(hwnd_file.read_text(encoding="utf-8").strip())
+                        import ctypes
+                        ctypes.windll.user32.ShowWindow(dm_hwnd, 9)  # SW_RESTORE / SW_SHOW
+                        ctypes.windll.user32.SetForegroundWindow(dm_hwnd)
+                    except Exception:
+                        pass
+
+                def _on_restored():
+                    self._append_notif("  ⚡ Restored Download Manager instantly from memory (Sleep Mode).", "info")
+
+                try:
+                    self.root.after(0, _on_restored)
+                except Exception:
+                    pass
+                return
+
+            env = os.environ.copy()
+            env["MCU_PREF_DIR"] = str(SCRIPT_DIR)
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+            for k in ["_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH"]:
+                env.pop(k, None)
+
+            meipass = getattr(sys, '_MEIPASS', None)
+            if meipass:
+                path_val = env.get("PATH", "")
+                paths = path_val.split(os.pathsep)
+                cleaned_paths = [p for p in paths if p != meipass]
+                env["PATH"] = os.pathsep.join(cleaned_paths)
+
+            try:
+                venv_dir = SCRIPT_DIR / "env"
+                if sys.platform == "win32":
+                    python_exe = venv_dir / "Scripts" / "pythonw.exe"
+                    if not python_exe.exists():
+                        python_exe = venv_dir / "Scripts" / "python.exe"
+                else:
+                    python_exe = venv_dir / "bin" / "python"
+
+                cmd_args = ["--keep-alive"]
                 if parent_hwnd:
-                    cmd += ["--parent-hwnd", str(parent_hwnd)]
+                    cmd_args += ["--parent-hwnd", str(parent_hwnd)]
+
+                if python_exe.exists() and script_path.exists():
+                    cmd = [str(python_exe), str(script_path)] + cmd_args
+                else:
+                    python_exe = sys.executable
+                    if sys.platform == "win32" and not getattr(sys, 'frozen', False):
+                        pythonw = Path(python_exe).parent / "pythonw.exe"
+                        if pythonw.exists():
+                            python_exe = str(pythonw)
+                    cmd = [str(python_exe), str(script_path)] + cmd_args
+
                 p = subprocess.Popen(cmd, env=env)
-            else:
-                python_exe = sys.executable
-                if sys.platform == "win32" and not getattr(sys, 'frozen', False):
-                    pythonw = Path(python_exe).parent / "pythonw.exe"
-                    if pythonw.exists():
-                        python_exe = str(pythonw)
-                cmd = [str(python_exe), str(script_path)]
-                if parent_hwnd:
-                    cmd += ["--parent-hwnd", str(parent_hwnd)]
-                p = subprocess.Popen(cmd, env=env)
-            self._download_managers.append(p)
-            self.root.after(1000, self._check_downloader_running)
-            self._append("  ℹ Launching Download Boards/Libraries Manager.", "info")
-        except Exception as e:
-            self._append(f"  ✖ Failed to launch download manager: {e}", "error")
+
+                def _on_launched():
+                    self._download_managers.append(p)
+                    self.root.after(1000, self._check_downloader_running)
+                    self._append_notif("  ✔ Download Boards/Libraries Manager process ready.", "success")
+
+                try:
+                    self.root.after(0, _on_launched)
+                except Exception:
+                    pass
+            except Exception as e:
+                def _on_err(err_str=str(e)):
+                    self._append_notif(f"  ✖ Failed to launch download manager: {err_str}", "error")
+
+                try:
+                    self.root.after(0, _on_err)
+                except Exception:
+                    pass
+
+        import threading
+        threading.Thread(target=_bg_launch_worker, daemon=True).start()
 
     def _check_downloader_running(self):
         # Filter completed processes
@@ -19760,10 +19962,8 @@ default_envs = {self._pio_env_name()}
 
         The WebView2 control inside the pywebview WinForms host uses
         Dock=Fill; after reparenting and stripping the caption, WinForms can
-        keep a stale layout, leaving a dead strip at the bottom of the
-        embedded view.  Check each child HWND and resize only when its size
-        actually disagrees with the client rect (no-op when already right,
-        so the 500 ms watchdog never causes flicker).
+        keep a stale layout, leaving a dead strip at the bottom/right of the
+        embedded view. Check each child HWND and resize so it fills the full container.
         """
         if not getattr(self, "_ai_hwnd", None) or win32gui is None:
             return
@@ -19771,8 +19971,14 @@ default_envs = {self._pio_env_name()}
             if not win32gui.IsWindow(self._ai_hwnd):
                 self._ai_hwnd = None
                 return
+            frame = getattr(self, "ai_embed_frame", None)
+            fw = frame.winfo_width() if frame else 0
+            fh = frame.winfo_height() if frame else 0
             cr = win32gui.GetClientRect(self._ai_hwnd)
             cw, ch = cr[2], cr[3]
+            target_w = max(fw, cw)
+            target_h = max(fh, ch)
+
             child_rects = []
 
             def _collect(hwnd, lparam):
@@ -19785,10 +19991,10 @@ default_envs = {self._pio_env_name()}
 
             win32gui.EnumChildWindows(self._ai_hwnd, _collect, None)
             mismatched = [(hwnd,) for hwnd, cwd, chd in child_rects
-                          if force or cwd != cw or chd != ch]
+                          if force or cwd != target_w or chd != target_h]
             for (hwnd,) in mismatched:
                 win32gui.SetWindowPos(
-                    hwnd, 0, 0, 0, cw, ch,
+                    hwnd, 0, 0, 0, target_w, target_h,
                     win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
                 )
         except Exception:
@@ -20183,7 +20389,9 @@ default_envs = {self._pio_env_name()}
         
         # Set window icon if available
         try:
-            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+            if not icon_path.exists():
+                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
             if icon_path.exists():
                 dlg.iconbitmap(str(icon_path))
         except Exception:
@@ -23162,6 +23370,13 @@ void loop() {
         except Exception:
             pass
 
+        # Hide all generated internal project files and MCU-FLASHER-SRC directory on close
+        try:
+            if hasattr(self, "sketch_dir_path") and self.sketch_dir_path:
+                hide_internal_project_metadata(self.sketch_dir_path)
+        except Exception:
+            pass
+
         try:
             set_monaco_boot_pending(False)
         except Exception:
@@ -23711,7 +23926,9 @@ def main():
         root_val.configure(bg="#151922")
 
         # Set window icon if available
-        icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+        icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+        if not icon_path.exists():
+            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
         if icon_path.exists():
             try:
                 root_val.iconbitmap(default=str(icon_path))
@@ -23884,11 +24101,34 @@ def main():
     # Default automatically instead of crash-looping.
     set_monaco_boot_pending(True)
 
+    # 🚀 Full-Performance Boost: Temporarily allocate HIGH priority & unrestrict all CPU cores
+    # so WebView2, V8 JS engine, WinForms, and Tkinter load Monaco instantly without micro-stutter.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            h_proc = k32.GetCurrentProcess()
+            k32.SetPriorityClass(h_proc, 0x00000080)  # HIGH_PRIORITY_CLASS
+            # Enable WebView2 GPU & Zero-Copy Hardware Acceleration flags
+            existing_args = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+            perf_flags = "--enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist --disable-background-timer-throttling --renderer-process-limit=4"
+            if perf_flags not in existing_args:
+                os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"{existing_args} {perf_flags}".strip()
+        except Exception:
+            pass
+
     def _confirm_monaco_booted():
         set_monaco_boot_pending(False)
-    # A few seconds of uneventful running is our signal that Monaco came up
-    # cleanly rather than hanging/crashing during initialization.
-    root_val.after(3000, _confirm_monaco_booted)
+        # Restore normal process priority once Monaco is live & rendered
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                k32 = ctypes.windll.kernel32
+                k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00000020)  # NORMAL_PRIORITY_CLASS
+            except Exception:
+                pass
+
+    root_val.after(3500, _confirm_monaco_booted)
 
     # Now run pywebview on the main thread
     api = EditorApi(app_val)
@@ -23923,8 +24163,9 @@ def main():
             setattr(app_val, "_editor_content_loaded", True),
             app_val._reveal_editor_if_ready(),
             app_val._update_editor_info(),
-            app_val._start_background_syntax_thread(),
         ))
+        # Defer background syntax parsing by 2 seconds to avoid CPU contention while Monaco paints
+        root_val.after(2000, lambda: app_val._start_background_syntax_thread())
         # Sync symbol navigation compiled state to Monaco after page loads
         root_val.after(1000, lambda: app_val._set_symbol_cache_compiled_state(
             getattr(app_val, "_project_compiled_cache_active", False)
@@ -23948,6 +24189,7 @@ def main():
     # If webview.start() returns normally (window closed cleanly), make sure
     # the sentinel is cleared so a later launch doesn't misread this as a crash.
     set_monaco_boot_pending(False)
+    _confirm_monaco_booted()
 
 
 

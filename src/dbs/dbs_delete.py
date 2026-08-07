@@ -1,6 +1,6 @@
 import json
 import os
-from .dbs_create import _DB_LOCK, _DB_PATH
+from .dbs_create import _DB_LOCK, _DB_PATH, _safe_replace_file
 
 def clear_all_notifications() -> bool:
     """Clear all records from dbs_notif.json."""
@@ -10,7 +10,7 @@ def clear_all_notifications() -> bool:
             temp_path = db_path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump([], f, indent=2)
-            os.replace(temp_path, db_path)
+            _safe_replace_file(temp_path, db_path)
             return True
         except Exception as e:
             print(f"[dbs_delete] Failed to clear notifications: {e}")
@@ -38,7 +38,7 @@ def delete_notification(notif_id: str) -> bool:
             temp_path = db_path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            os.replace(temp_path, db_path)
+            _safe_replace_file(temp_path, db_path)
             return True
         except Exception as e:
             print(f"[dbs_delete] Failed to delete notification {notif_id}: {e}")
@@ -67,7 +67,7 @@ def delete_notifications_by_category(category: str) -> int:
             temp_path = db_path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            os.replace(temp_path, db_path)
+            _safe_replace_file(temp_path, db_path)
             return removed_count
         except Exception as e:
             print(f"[dbs_delete] Failed to delete category {category}: {e}")

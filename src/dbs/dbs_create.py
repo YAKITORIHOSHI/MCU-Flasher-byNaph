@@ -10,6 +10,30 @@ _DB_PATH = os.path.join(os.path.dirname(__file__), "dbs_notif.json")
 def _get_db_path() -> str:
     return _DB_PATH
 
+def _safe_replace_file(src: str, dst: str, max_retries: int = 5, backoff_ms: int = 50) -> bool:
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(dst) and os.name == "nt":
+                try:
+                    os.chmod(dst, 0o666)
+                except Exception:
+                    pass
+            os.replace(src, dst)
+            return True
+        except (PermissionError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep((backoff_ms * (2 ** attempt)) / 1000.0)
+            else:
+                try:
+                    import shutil
+                    shutil.copy2(src, dst)
+                    if os.path.exists(src):
+                        os.unlink(src)
+                    return True
+                except Exception:
+                    return False
+    return False
+
 def add_notification(
     category: str = "system",
     level: str = "info",
@@ -71,7 +95,7 @@ def add_notification(
             temp_path = db_path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
-            os.replace(temp_path, db_path)
+            _safe_replace_file(temp_path, db_path)
         except Exception as e:
             print(f"[dbs_create] Failed to save notification: {e}")
 

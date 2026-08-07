@@ -42776,7 +42776,7 @@
               "host": "x86_64-apple-darwin",
               "url": "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.4/toolchain_macos-x86_64_arm-zephyr-eabi.tar.xz",
               "archiveFileName": "toolchain_macos-x86_64_arm-zephyr-eabi-0.17.4.tar.xz",
-              "checksum": "SHA-256:2bc24fff7b8ec3ed785022563e5d913191203a0bd32eeb38903840bfdef4b955",
+              "checksum": "SHA-256:25caef36014ee9597d60da3020511f7298f53b08663a0adce33a58d0a9e251bc",
               "size": 109852768
             },
             {

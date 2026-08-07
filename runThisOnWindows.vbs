@@ -582,11 +582,16 @@ End Function
 ' This keeps the previous environment recoverable until the new setup works.
 Sub QuarantineFolder(folderPath)
     If Not fso.FolderExists(folderPath) Then Exit Sub
-    Dim stamp, backupPath
+    Dim stamp, backupPath, attempt
     stamp = Year(Now) & Right("0" & Month(Now), 2) & Right("0" & Day(Now), 2) & _
             "-" & Right("0" & Hour(Now), 2) & Right("0" & Minute(Now), 2) & Right("0" & Second(Now), 2)
     backupPath = folderPath & ".incompatible-" & stamp
     On Error Resume Next
-    fso.MoveFolder folderPath, backupPath
+    For attempt = 1 To 5
+        fso.MoveFolder folderPath, backupPath
+        If Err.Number = 0 Then Exit For
+        Err.Clear
+        WScript.Sleep 200
+    Next
     On Error GoTo 0
 End Sub

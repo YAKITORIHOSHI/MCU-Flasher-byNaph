@@ -142,20 +142,20 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     <title>OpenCode AI Assistant</title>
     <style>
         html, body {
-            margin: 0; padding: 0; width: 100vw; height: 100vh;
+            margin: 0; padding: 0; width: 100% !important; height: 100% !important;
             background-color: #0c0d10 !important; color: #cccccc;
             font-family: 'Consolas', 'Courier New', monospace; font-size: 14px;
             overflow: hidden;
             box-sizing: border-box;
         }
         #terminal-container {
-            width: 100vw; height: 100vh;
+            width: 100% !important; height: 100% !important;
             background-color: #0c0d10;
             margin: 0; padding: 0;
             box-sizing: border-box;
         }
         #fallback-container {
-            display: none; width: 100%; height: 100%; box-sizing: border-box;
+            display: none; width: 100% !important; height: 100% !important; box-sizing: border-box;
             padding: 12px; flex-direction: column; background: #0c0d10; color: #00ff66;
         }
         #fallback-output {
@@ -177,6 +177,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         .xterm, .xterm-viewport, .xterm-screen {
             background-color: #0c0d10 !important;
             overflow-y: hidden !important;
+            width: 100% !important;
         }
         ::-webkit-scrollbar {
             display: none !important;
@@ -534,7 +535,11 @@ def apply_window_icon(window_title):
         except Exception:
             pass
 
-        icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+        icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+        if not icon_path.exists():
+            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+        if not icon_path.exists():
+            icon_path = SCRIPT_DIR.parent / "src" / "assets" / "mcu_icon.ico"
         if not icon_path.exists():
             icon_path = SCRIPT_DIR.parent / "src" / "mcu_icon.ico"
         if not icon_path.exists():

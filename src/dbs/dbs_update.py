@@ -1,6 +1,6 @@
 import json
 import os
-from .dbs_create import _DB_LOCK, _DB_PATH
+from .dbs_create import _DB_LOCK, _DB_PATH, _safe_replace_file
 
 def update_notification(notif_id: str, updates: dict) -> bool:
     """Update fields of an existing notification record in dbs_notif.json.
@@ -39,7 +39,7 @@ def update_notification(notif_id: str, updates: dict) -> bool:
             temp_path = db_path + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
-            os.replace(temp_path, db_path)
+            _safe_replace_file(temp_path, db_path)
             return True
         except Exception as e:
             print(f"[dbs_update] Failed to update notification {notif_id}: {e}")

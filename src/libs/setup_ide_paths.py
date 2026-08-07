@@ -57,11 +57,12 @@ def fix_paths():
         except Exception as e:
             print(f"[!] Error reading compile_commands.json: {e}")
 
-    # Fallback to standard hardcoded pattern search if we couldn't find them dynamically
+    # Fallback to dynamic pattern search if we couldn't find exact paths in sample
     if not old_platformio:
-        old_platformio = "C:/Users/napht/.platformio"
+        user_home = os.path.expanduser("~").replace("\\", "/")
+        old_platformio = f"{user_home}/.platformio"
     if not old_directory:
-        old_directory = "c:/Users/napht/Documents/_MCU_Flash_GUI_V.6-byNAPH"
+        old_directory = workspace_dir.replace("\\", "/")
 
     # Define target local replacements
     new_platformio = os.path.join(workspace_dir, "env", ".platformio")

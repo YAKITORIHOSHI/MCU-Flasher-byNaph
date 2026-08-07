@@ -180,7 +180,9 @@ class MainWindow(QMainWindow):
 
         # Set window icon if available
         src_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(src_dir, "mcu_icon.ico")
+        icon_path = os.path.join(src_dir, "assets", "mcu_icon.ico")
+        if not os.path.exists(icon_path):
+            icon_path = os.path.join(src_dir, "mcu_icon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 

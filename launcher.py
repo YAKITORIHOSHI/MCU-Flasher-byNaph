@@ -122,10 +122,14 @@ def _claim_launcher_slot() -> bool:
         return False  # a real launcher/bootstrap is genuinely in progress
 
     # Stale lock — reclaim it.
-    try:
-        _LAUNCHER_LOCK_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
+    for _ in range(3):
+        try:
+            if _LAUNCHER_LOCK_FILE.exists():
+                _LAUNCHER_LOCK_FILE.unlink(missing_ok=True)
+            break
+        except Exception:
+            import time
+            time.sleep(0.05)
     return _try_create_lock_exclusive()
 
 
@@ -137,7 +141,13 @@ def _release_launcher_slot():
         if _LAUNCHER_LOCK_FILE.exists():
             existing_pid = int(_LAUNCHER_LOCK_FILE.read_text(encoding="utf-8").strip())
             if existing_pid == os.getpid():
-                _LAUNCHER_LOCK_FILE.unlink()
+                for _ in range(3):
+                    try:
+                        _LAUNCHER_LOCK_FILE.unlink(missing_ok=True)
+                        break
+                    except Exception:
+                        import time
+                        time.sleep(0.05)
     except Exception:
         pass
 
@@ -188,9 +198,14 @@ def _apply_defender_exclusions():
         return
     import subprocess
 
+    local_appdata = os.environ.get("LOCALAPPDATA", "") or str(Path.home() / "AppData" / "Local")
+
     # ── Directories to exclude ─────────────────────────────────────────────
     # Add new directories here as the project evolves.
     EXCLUDED_PATHS = [
+        # PlatformIO LocalAppData paths (non-admin safe, non-OneDrive)
+        Path(local_appdata) / ".platformio-mcu-gui",
+        Path(local_appdata) / ".pio-mcu",
         # PlatformIO junction path (avoids MAX_PATH issues on Windows)
         Path("C:\\") / ".platformio-mcu-gui",
         # PlatformIO actual storage inside the app (src/_board-frameworks/.platformio)

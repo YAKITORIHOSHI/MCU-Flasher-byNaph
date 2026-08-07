@@ -55,7 +55,15 @@ class AIEditReviewTests(unittest.TestCase):
         self.api = gui_module.EditorApi(self.gui)
 
     def tearDown(self):
-        self.temporary_directory.cleanup()
+        try:
+            self.temporary_directory.cleanup()
+        except Exception:
+            try:
+                # pyrefly: ignore [missing-import]
+                from bootstrap import safe_rmtree
+                safe_rmtree(self.temporary_directory.name)
+            except Exception:
+                pass
 
     def _stage_modified(self, name="sketch.ino", before="old\r\n", after="new\r\n"):
         path = self.project / name

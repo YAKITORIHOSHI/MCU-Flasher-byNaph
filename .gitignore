@@ -63,6 +63,8 @@ compile_cache/
 *_syntax_errors.json
 *_tab_order.json
 *_gui_cache.json
+src/gui_config.json
+.mcu_gui_config.json
 
 # === Compiled firmware / build artifacts (PlatformIO output) ===
 *.o
@@ -74,6 +76,9 @@ compile_cache/
 *.dblite
 
 .pio_cache/
+"index_json/library_index.json"
 
-.pio_cache/
-"index_json/library_index.json" 
+# === MCU Flasher dedicated internal app directories ===
+MCU-FLASHER-SRC/
+MCU_FLASHER_SRC/
+

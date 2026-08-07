@@ -133,59 +133,147 @@ def ensure_platformio_penv_with_hook(script_dir: Path = None) -> bool:
     except Exception:
         return False
 
-def _get_safe_platformio_core_dir(script_dir: Path) -> str:
-    frameworks_dir = script_dir / "src" / "_board-frameworks"
-    try:
-        frameworks_dir.mkdir(parents=True, exist_ok=True)
-        hide_hidden_attribute(frameworks_dir)
-    except Exception:
-        pass
-    local_path = frameworks_dir / ".platformio"
-    local_path_str = str(local_path)
-
-    # Auto-migrate existing .platformio directory from old locations if present
-    try:
-        if not local_path.exists():
-            for old_loc in [script_dir / "-env" / ".platformio", script_dir / "env" / ".platformio"]:
-                if old_loc.is_dir() and any(old_loc.iterdir()):
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(old_loc, local_path, dirs_exist_ok=True)
-                    break
-    except Exception:
-        pass
-
-    if sys.platform == "win32" and (" " in local_path_str or "(" in local_path_str or ")" in local_path_str):
-        junction_path = Path("C:\\") / ".platformio-mcu-gui"
+def safe_unlink(path: str | Path, max_retries: int = 5, backoff_ms: int = 50) -> bool:
+    """Safely unlink/delete a file with retry backoff for OneDrive/Defender locks."""
+    p = Path(path)
+    if not p.exists():
+        return True
+    for attempt in range(max_retries):
         try:
-            local_path.mkdir(parents=True, exist_ok=True)
-            # Remove stale junction first (rmdir only removes the junction, not the target)
+            if sys.platform == "win32":
+                try:
+                    os.chmod(p, 0o666)
+                except Exception:
+                    pass
+            p.unlink()
+            return True
+        except (PermissionError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep((backoff_ms * (2 ** attempt)) / 1000.0)
+            else:
+                return False
+    return False
+
+def safe_rmtree(path: str | Path, max_retries: int = 5, backoff_ms: int = 50) -> bool:
+    """Safely delete a directory tree handling Windows file locks and read-only attributes."""
+    p = Path(path)
+    if not p.exists():
+        return True
+
+    def _on_error(func, path_str, exc_info):
+        try:
+            os.chmod(path_str, 0o777)
+            func(path_str)
+        except Exception:
+            pass
+
+    for attempt in range(max_retries):
+        try:
+            shutil.rmtree(p, onerror=_on_error)
+            if not p.exists():
+                return True
+        except (PermissionError, OSError):
+            pass
+        if attempt < max_retries - 1:
+            time.sleep((backoff_ms * (2 ** attempt)) / 1000.0)
+    return not p.exists()
+
+def safe_replace_file(src: str | Path, dst: str | Path, max_retries: int = 5, backoff_ms: int = 50) -> bool:
+    """Safely replace dst with src with retries for OneDrive / MS Defender locks."""
+    src_p = Path(src)
+    dst_p = Path(dst)
+    for attempt in range(max_retries):
+        try:
+            if dst_p.exists() and sys.platform == "win32":
+                try:
+                    os.chmod(dst_p, 0o666)
+                except Exception:
+                    pass
+            os.replace(src_p, dst_p)
+            return True
+        except (PermissionError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep((backoff_ms * (2 ** attempt)) / 1000.0)
+            else:
+                try:
+                    shutil.copy2(src_p, dst_p)
+                    safe_unlink(src_p)
+                    return True
+                except Exception:
+                    return False
+    return False
+
+def hide_hidden_attribute(path) -> None:
+    try:
+        p = Path(path)
+        if not p.exists() or sys.platform != "win32":
+            return
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+        if attrs != -1 and not (attrs & 0x02):
+            ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
+    except Exception:
+        pass
+
+def _get_safe_platformio_core_dir(script_dir: Path) -> str:
+    """Return a non-admin safe, short, non-OneDrive path for PLATFORMIO_CORE_DIR."""
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    if not local_appdata:
+        local_appdata = str(Path.home() / "AppData" / "Local")
+
+    target_dir = Path(local_appdata) / ".platformio-mcu-gui"
+    target_str = str(target_dir)
+
+    has_spaces = any(c in target_str for c in (" ", "(", ")"))
+
+    if sys.platform == "win32" and has_spaces:
+        junction_path = Path(local_appdata) / ".pio-mcu"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
             if junction_path.exists() or junction_path.is_symlink():
                 subprocess.run(
                     ["cmd", "/c", "rmdir", str(junction_path)],
                     capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
             res = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(junction_path), local_path_str],
+                ["cmd", "/c", "mklink", "/J", str(junction_path), target_str],
                 capture_output=True, text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
-            # Verify the junction is actually traversable (not just present)
             if junction_path.exists() and (res.returncode == 0 or junction_path.is_dir()):
-                try:
-                    list(junction_path.iterdir())
-                except Exception:
-                    pass
                 return str(junction_path)
         except Exception:
             pass
-        print(
-            f"\n  \033[93m⚠\033[0m  WARNING: Could not create C:\\.platformio-mcu-gui junction.\n"
-            f"       PlatformIO will use the long path:\n"
-            f"       {local_path_str}\n",
-            file=sys.stderr,
-        )
-    return local_path_str
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_str
+    except Exception:
+        pass
+
+    if sys.platform == "win32":
+        root_junc = Path("C:\\") / ".platformio-mcu-gui"
+        try:
+            root_junc.mkdir(parents=True, exist_ok=True)
+            return str(root_junc)
+        except Exception:
+            pass
+
+    try:
+        import tempfile
+        temp_dir = Path(tempfile.gettempdir()) / ".platformio-mcu-gui"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return str(temp_dir)
+    except Exception:
+        pass
+
+    frameworks_dir = script_dir / "src" / "_board-frameworks"
+    try:
+        frameworks_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return str(frameworks_dir / ".platformio")
 
 os.environ["PLATFORMIO_CORE_DIR"] = _get_safe_platformio_core_dir(SCRIPT_DIR)
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -267,7 +355,9 @@ class BootstrapGUI:
         
         # Set window icon if available
         try:
-            icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+            icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+            if not icon_path.exists():
+                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
             if icon_path.exists():
                 self.root.iconbitmap(default=str(icon_path))
                 self.root.iconbitmap(str(icon_path))
