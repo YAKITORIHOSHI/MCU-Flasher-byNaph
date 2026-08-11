@@ -21,6 +21,43 @@ if sys.platform == "win32":
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+# Disable python bytecode file creation
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+
+def _verify_storage_drive_type():
+    """Ensure MCU Flasher is running from an internal fixed drive (SSD/HDD), not a USB flash drive or removable media."""
+    if sys.platform != "win32":
+        return
+    try:
+        drive_root = SCRIPT_DIR.anchor  # e.g., "D:\\" or "C:\\"
+        DRIVE_REMOVABLE = 2
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(str(drive_root))
+        if drive_type == DRIVE_REMOVABLE:
+            msg = (
+                f"MCU Uploader IDE by Naph cannot be run directly from a USB flash drive or removable disk ({drive_root}).\n\n"
+                f"Current Path: {SCRIPT_DIR}\n\n"
+                "High-speed disk access (SSD/HDD) is required for toolchain compilation and workspace storage.\n\n"
+                "Please copy the entire MCU Flasher folder to an internal SSD or HDD drive (e.g. C:\\ or D:\\ drive) "
+                "and launch it from there."
+            )
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    msg,
+                    "MCU Uploader IDE by Naph — Storage Location Notice",
+                    0x10,  # MB_ICONERROR
+                )
+            except Exception:
+                pass
+            sys.exit(1)
+    except Exception:
+        pass
+
+
+_verify_storage_drive_type()
+
 
 # ─────────────────────────────────────────────────────────────
 # BOOTSTRAP SINGLE-INSTANCE GATE
@@ -74,7 +111,7 @@ def _process_is_alive(pid: int) -> bool:
             if ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
                 exe_name = Path(buf.value).name.lower()
                 return any(k in exe_name for k in ("python", "mcu", "flasher", "launcher"))
-            return True
+            return False
         finally:
             ctypes.windll.kernel32.CloseHandle(handle)
     except Exception:
@@ -203,15 +240,15 @@ def _apply_defender_exclusions():
     # ── Directories to exclude ─────────────────────────────────────────────
     # Add new directories here as the project evolves.
     EXCLUDED_PATHS = [
-        # PlatformIO LocalAppData paths (non-admin safe, non-OneDrive)
+        # Real PlatformIO package store: everything actually downloads here now.
+        SCRIPT_DIR / "src" / "libs" / ".platformio-mcu-gui",
+        # LocalAppData is only a directory junction back to the path above,
+        # but Defender exclusions don't reliably follow junctions on every
+        # Windows build, so list it explicitly too -- excluding it never
+        # excludes anything real beyond what's already covered above.
         Path(local_appdata) / ".platformio-mcu-gui",
-        Path(local_appdata) / ".pio-mcu",
-        # PlatformIO junction path (avoids MAX_PATH issues on Windows)
-        Path("C:\\") / ".platformio-mcu-gui",
-        # PlatformIO actual storage inside the app (src/_board-frameworks/.platformio)
+        # Last-resort portable fallback store (only used if src/libs isn't writable).
         SCRIPT_DIR / "src" / "_board-frameworks" / ".platformio",
-        # Standard user-level PlatformIO directory (~/.platformio)
-        Path.home() / ".platformio",
         # The MCU Flasher app directory itself (build output, logs, etc.)
         SCRIPT_DIR,
     ]

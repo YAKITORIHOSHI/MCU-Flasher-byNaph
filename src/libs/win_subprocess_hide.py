@@ -130,16 +130,39 @@ def install() -> None:
             # cmd.exe /C, which strips the outermost pair before executing.
             # We do NOT add another layer of quotes; just pass args[2] directly.
             cmd = f'"{path or args[0]}" {args[1]} {_fix_pythonw_in_cmd(args[2])}'
+            # This is a single command-line string, so CreateProcess resolves
+            # the target purely from that string. Passing executable= here
+            # would be redundant, not incorrect -- so leave the exec_kwargs
+            # path below alone for this branch (it sets executable=path).
+            exec_kwargs = {"executable": path} if path else {}
         else:
+            # SCons/os.spawnve gives us the real executable's path separately
+            # from argv. Passing BOTH a list `cmd` (whose cmd[0] is argv[0],
+            # often just a bare/relative name) AND executable=path to
+            # subprocess.run/Popen is what breaks CreateProcess here: Windows
+            # needs a single, consistent source of truth for which file to
+            # launch. When we have a real path, drive CreateProcess off that
+            # path alone -- rewrite cmd[0] to the resolved path and drop the
+            # separate executable= kwarg, so there is no chance of the two
+            # disagreeing (e.g. relative vs absolute, case, or extension).
             cmd = list(args)
+            if path:
+                resolved = str(path)
+                if cmd:
+                    cmd[0] = resolved
+                else:
+                    cmd = [resolved]
+                exec_kwargs = {}
+            else:
+                exec_kwargs = {}
 
         try:
             if mode == os.P_WAIT:
-                res = orig_run(cmd, env=merged_env, executable=path, close_fds=False, **kwargs)
+                res = orig_run(cmd, env=merged_env, close_fds=False, **exec_kwargs, **kwargs)
                 return res.returncode
 
             if mode == os.P_NOWAIT:
-                proc = HiddenPopen(cmd, env=merged_env, executable=path, close_fds=False, **kwargs)
+                proc = HiddenPopen(cmd, env=merged_env, close_fds=False, **exec_kwargs, **kwargs)
                 with _registry_lock:
                     _popen_registry[proc.pid] = proc
                 return proc.pid

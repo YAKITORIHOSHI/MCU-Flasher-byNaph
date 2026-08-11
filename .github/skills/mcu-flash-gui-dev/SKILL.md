@@ -1,12 +1,19 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for MCU Flash GUI V6.0 (mcu_flash_gui.py, launcher.py, dedicated_AI.py). Use when modifying, debugging, or enhancing the Tkinter ESP32 flasher interface, serial monitor, Arduino CLI / PlatformIO compilation pipelines, or launcher scripts."
-user-invocable: true
+description: "Developer and troubleshooting guide for the Windows MCU Flash GUI (mcu_flash_gui.py, launcher.py, dedicated_AI.py). Use when modifying, debugging, or enhancing the Tkinter flasher interface, serial monitor, Arduino CLI or PlatformIO pipelines, board caches, or Windows launchers. Do not use it to modify the Linux port unless the user explicitly requests Linux work."
 ---
 
 # MCU Flash GUI V6.0 Development & Maintenance Skill
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI V6.0** desktop application (`mcu_flash_gui.py`) and its supporting execution ecosystem.
+
+## Platform Scope
+
+- Default to the Windows main app, `mcu_flash_gui.py`, and Windows launchers.
+- Do not mirror changes into `mcu_flash_gui_linux.py` or Linux scripts unless the
+  user explicitly expands the task to Linux.
+- Treat real sketch files and unknown user content as visible, user-owned data.
+  Hide only known app-generated project metadata, and keep it writable.
 
 ---
 

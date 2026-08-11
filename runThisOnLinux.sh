@@ -4,6 +4,13 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# Prevent Python from creating or using compiled .pyc bytecode files
+export PYTHONDONTWRITEBYTECODE=1
+
+# Purge Python bytecode caches on launch
+find "$SCRIPT_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
+find "$SCRIPT_DIR" -name "*.pyc" -o -name "*.pyo" -delete 2>/dev/null
+
 echo "============================================="
 echo "   MCU Uploader IDE by Naph - Launcher for Ubuntu      "
 echo "============================================="

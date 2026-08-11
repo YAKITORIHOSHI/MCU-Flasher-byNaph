@@ -1,104 +1,1040 @@
-(1) This should be fully automated, do the action needed for less user intervention:
-```
-⚙ Initializing PlatformIO build engine & dependency tree...
-[00:15:57]     SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...
-[00:16:01]   ⚠ [WinError 145] The directory is not empty: 'D:\\ALL-ABOUT-THESIS\\.GARBY-MAIN\\8-2-26\\SINGLE-TASK-DEFAULT\\NAPHTALI_CODE_V2\\.pio\\build'
-[00:16:01]   ℹ Non-fatal: a stale build cache could not be fully cleaned (file in use or antivirus scan). PlatformIO will continue and rebuild the affected parts automatically.
-[00:16:01]   ⚠ Please manually remove the file `D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build`
-[00:16:01]     Processing mcu_flash_esp32_dev_module (platform: espressif32; board: esp32dev; framework: arduino)
-[00:16:01]   ──────────────────────────────────────────────────
-```
+  3. Default the "Skip Updates" checkbox to on. The GUI already has a Skip Updates toggle in the Bootstrap window. If it defaulted to checked (or
+  respected a new bootstrap_config.json key skip_updates_by_default: true), warm launches would skip the network round-trip entirely. There's    
+  already plumbing for this — run_update_checks honours skip_updates from config and MCU_FLASH_GUI_SKIP_UPDATES env var, so it's a one-line      
+  default change.
 
-(2) Hard/Soft Reset wont trigger RESET (DTR) after successful action.
+  Medium wins
 
-(2.1) I executed the Hard Reset on a newly opened sketch project.
-```
-[00:38:39] ==================================================
-[00:38:39]   🔥 BURNING BOOTLOADER (Hard Reset)
-[00:38:39] ==================================================
-[00:38:39]   Port  : COM6
-[00:38:39]   Board : ESP32 Dev Module
-[00:38:40]   💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.
+  4. Defer the slow venv-repair probes. _activate_bootstrap_venv always runs python -c "import sys" and, if pio.exe exists, a pio --version      
+  subprocess (8s timeout). On a known-good venv these are pure overhead. Short-circuit when env/pyvenv.cfg and env/Scripts/python.exe are present
+  and the venv was successfully launched in the last N days (stamp into bootstrap_config.json).
+  5. Stop re-importing bootstrap in the main GUI. The 5 try: from bootstrap import … blocks at the top of mcu_flash_gui.py:40-66 cause Python to 
+  re-execute the entire 7025-line bootstrap.py module just to pull a handful of names. Either move the few used symbols into a tiny
+  bootstrap_exports.py (or hoist them into win_subprocess_hide.py), or import the module under a different name and grab names from it. This is  
+  several hundred ms of duplicate work every launch.
+  6. Move the BootstrapGUI window to a single, pre-warmed hidden Tk root. Currently launcher.py does no Tk, bootstrap.py constructs one, the     
+  bootstrap runs, then mcu_flash_gui.py constructs a second Tk root in a second process. If the project-selector dialog is the only thing that   
+  needs the user's input on a warm launch, you can skip the bootstrap window entirely when bootstrap_config.json has a recent "all ready" stamp  
+  and just spawn the main GUI directly, deferring network/dependency verification to a background thread that only shows the spinner if something
+  actually needs to be done.
+  7. Reuse the Project Selector's "last opened" path with a fast existence check only. show_project_selector walks the last directory's contents 
+  synchronously. A Path(last_dir).is_dir() check is sub-millisecond; the listing should happen after the window appears, on a background thread, 
+  with a placeholder row "loading…" that gets replaced when the scan finishes.
 
-[00:38:40]   ⚡ Bootloader/partitions not pre-built for ESP32 Dev Module. Auto-building project now...
-[00:38:42]   📝 platformio.ini not found in D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2.
-[00:38:42]   Creating a default platformio.ini with detected dependencies...
-[00:38:42]   ✔ Created default platformio.ini successfully.
-[00:38:42]   Detected libraries: symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/ESP32Servo-3.2.1, symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/FastAccelStepper-1.2.7, symlink://C:/Users/napht/Documents/_MCUFlasherByNaph_src/Libs/HX711-0.6.4
-[00:38:43]   ✖ Could not locate or build required bootloader files:
-[00:38:43]       • bootloader (bootloader.bin / bootloader_qio_80m.bin)
-[00:38:43]   Searched inside build dir: D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build
-[00:38:43]   Searched inside: C:\.platformio-mcu-gui\packages\framework-arduinoespressif32
-[00:38:43]                + C:\.platformio-mcu-gui\packages\framework-arduinoespressif32
-```
-- How do you fix this? On the other hand Soft Reset works fine.
+  Smaller wins
 
-(2.2) Another issue is that the hard reset also requires a 'download_mode' which means that it should have the retries, and additionally can we rework the hard reset logging format like the way we have on our very own upload?
-```
-[00:42:10] ==================================================
-[00:42:10]   🔥 BURNING BOOTLOADER (Hard Reset)
-[00:42:10] ==================================================
-[00:42:10]   Port  : COM6
-[00:42:10]   Board : ESP32 Dev Module
-[00:42:10]   💡 Tip: On Desktop PCs, some ESP32 modules need their 'BOOT' button held down during connection to upload successfully.
+  8. Drop the unnecessary time.sleep(1.2) before launch. In _run_setup_in_thread after the "Launching…" status, the bootstrap thread sleeps 1.2  
+  seconds purely so the user can read the message. On a warm launch this is a second the user is staring at a frozen window. Either remove it or 
+  make it conditional on whether any actual work happened.
+  9. Make the platformio/arduino-cli update probes fail fast. check_arduino_cli_update and check_pio_update each spawn a subprocess with an 8s   
+  timeout. With these in a ThreadPoolExecutor of size 9 you're at the mercy of the slowest. If PyPI/GitHub are unreachable from the user's       
+  network, all of them time out concurrently and the user waits 8–20s anyway. Detect offline (e.g. one cheap
+  socket.create_connection(("pypi.org", 443), timeout=2)) and skip the whole fan-out.
+  bootstrap_config.json has a recent "all ready" stamp and just spawn the main GUI directly, deferring network/dependency verification to a background thread that only shows the spinner if        
+  something actually needs to be done.
+  7. Reuse the Project Selector's "last opened" path with a fast existence check only. show_project_selector walks the last directory's contents synchronously. A Path(last_dir).is_dir() check is  
+  sub-millisecond; the listing should happen after the window appears, on a background thread, with a placeholder row "loading…" that gets replaced when the scan finishes.
 
-[00:42:11]   ⚡ Bootloader/partitions not pre-built for ESP32 Dev Module. Auto-building project now...
-[00:42:12]   ✔ Updated platformio.ini successfully.
-[00:42:49]   ✔ Generated bootloader.bin: bootloader.bin
-[00:42:49]   Bootloader : bootloader.bin
-[00:42:49]   Partitions : default.bin
-[00:42:49]   boot_app0  : boot_app0.bin
+  Smaller wins
 
-[00:42:49]   Step 1/2 — Erasing flash...
-[00:42:49]   $ C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\pythonw.exe -m esptool --chip esp32 --port COM6 --before default-reset --after no-reset --connect-attempts 3 erase-flash
-[00:42:49]   esptool v5.3.1
-[00:42:49]   Serial port COM6:
-[00:42:53]   Connecting..................
-[00:42:53]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
-[00:42:53]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
-[00:42:53]   ⚠ Full chip erase skipped (device was not in download mode during Step 1).
-[00:42:53]   👉 Proceeding to Step 2 — write-flash will connect, erase bootloader sectors, and write files.
+  8. Drop the unnecessary time.sleep(1.2) before launch. In _run_setup_in_thread after the "Launching…" status, the bootstrap thread sleeps 1.2 seconds purely so the user can read the message. On 
+  a warm launch this is a second the user is staring at a frozen window. Either remove it or make it conditional on whether any actual work happened.
+  module under a different name and grab names from it. This is several hundred ms of duplicate work every launch.
+  6. Move the BootstrapGUI window to a single, pre-warmed hidden Tk root. Currently launcher.py does no Tk, bootstrap.py constructs one, the bootstrap runs, then mcu_flash_gui.py    
+  constructs a second Tk root in a second process. If the project-selector dialog is the only thing that needs the user's input on a warm launch, you can skip the bootstrap window   
+  entirely when bootstrap_config.json has a recent "all ready" stamp and just spawn the main GUI directly, deferring network/dependency verification to a background thread that only 
+  shows the spinner if something actually needs to be done.
+  7. Reuse the Project Selector's "last opened" path with a fast existence check only. show_project_selector walks the last directory's contents synchronously. A
+  Path(last_dir).is_dir() check is sub-millisecond; the listing should happen after the window appears, on a background thread, with a placeholder row "loading…" that gets replaced  
+  when the scan finishes.
 
-[00:42:53]   Target Board: ESP32 Dev Module (esp32) -> Bootloader Addr: 0x1000
-[00:42:53]   Step 2/2 — Writing bootloader files...
-[00:42:53]   $ C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\pythonw.exe -m esptool --chip esp32 --port COM6 --baud 460800 --before default-reset --after hard-reset --connect-attempts 3 write-flash --flash-mode keep --flash-freq keep --flash-size detect 0x1000 D:\ALL-ABOUT-THESIS\.GARBY-MAIN\8-2-26\SINGLE-TASK-DEFAULT\NAPHTALI_CODE_V2\.pio\build\mcu_flash_esp32_dev_module\bootloader.bin 0x8000 C:\.platformio-mcu-gui\packages\framework-arduinoespressif32\tools\partitions\default.bin 0xe000 C:\.platformio-mcu-gui\packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin
-[00:42:53]   esptool v5.3.1
-[00:42:53]   Serial port COM6:
-[00:42:57]   Connecting..................
-[00:42:57]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
-[00:42:57]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
+  Smaller wins
 
-[00:42:57]   ⚠ Bootloader write attempt at 460800 baud failed or encountered port lock.
-[00:42:57]   🔄 Pausing 1.0s and retrying bootloader write at 115200 baud for maximum compatibility...
-[00:42:58]   esptool v5.3.1
-[00:42:58]   Serial port COM6:
-[00:43:01]   Connecting..................
-[00:43:01]   A fatal error occurred: Failed to connect to ESP32: Wrong boot mode detected (0x13)! The chip needs to be in download mode.
-[00:43:01]   For troubleshooting steps visit: https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html
+  8. Drop the unnecessary time.sleep(1.2) before launch. In _run_setup_in_thread after the "Launching…" status, the bootstrap thread sleeps 1.2 seconds purely so the user can read   
+  the message. On a warm launch this is a second the user is staring at a frozen window. Either remove it or make it conditional on whether any actual work happened.
+  9. Make the platformio/arduino-cli update probes fail fast. check_arduino_cli_update and check_pio_update each spawn a subprocess with an 8s timeout. With these in a
+  ThreadPoolExecutor of size 9 you're at the mercy of the slowest. If PyPI/GitHub are unreachable from the user's network, all of them time out concurrently and the user waits 8–20s 
+  anyway. Detect offline (e.g. one cheap socket.create_connection(("pypi.org", 443), timeout=2)) and skip the whole fan-out.
+  10. Use pythonw.exe -B -OO and Py._FrozenFlag style minimisation. The launcher already uses pythonw.exe (good) and -B (good). Going to -OO strips docstrings and assert statements  
+  at startup. For a script this size the difference is small but real.
+  11. One-time purge_python_cache only on upgrade. The whole point of the purges is to defend against stale .pyc from before you set PYTHONDONTWRITEBYTECODE. Once that's set, a      
+  one-time find . -name __pycache__ -exec rm -rf {} + at the end of any future installation/upgrade is enough. Or just delete __pycache__ from the git-ignored .platformio-mcu-gui and
+  env subtrees at install time.
+  12. Set mpl.use("TkAgg") etc. up front only if needed — minor, but Python's site does some work checking for a default Matplotlib backend. If you don't need MPL, a tiny import sys;
+  sys.modules["matplotlib"] = None before any third-party import speeds cold start.
 
-[00:43:02]   ✖ Bootloader burn FAILED.
-```
+  What I would change first, in order
 
-(3) There was 2 times of 10 tries on connecting in upload phase, the first one works normally as intended then there was another 10 that operates abnormally:
-```
-[01:16:29] ==================================================
-[01:16:29]   ⬆  UPLOADING (PlatformIO)
-[01:16:29] ==================================================
-[01:16:29]   Port : COM6 | Upload Speed : 460800
-[01:16:29]   ⚡ Fast upload: polling the bootloader now…
-[01:16:29]   🔌 Connecting [ ███░░░░░░░░░░░░░░░░░░░░░░░░░░░ ] | 1/10
-[01:16:47]   ✔ Successfully created ESP32 image (Bootloader)
-```
-- It creates an image on its own while it already have it on Compile Phase. Please investigate this further then apply fix.
+  ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────┐
+  │  #  │                                           Change                                           │              Expected win              │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 1   │ Remove the 3 recursive cache purges; rely on -B                                            │ 1–3s off every launch                  │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 2   │ Move run_update_checks after the main GUI spawn, default Skip Updates to on                │ 3–10s off warm launches with internet  │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 3   │ Stop re-importing all of bootstrap.py in the main GUI; move shared names to a small module │ 0.3–0.8s                               │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 4   │ Skip the bootstrap GUI entirely when a recent "all ready" stamp exists                     │ 1–2s and one whole UI window           │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 5   │ Move the project-selector directory scan to a background thread                            │ 0.3–2s depending on sketch folder size │
+  └─────┴────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────┘
 
-(4) AI Assistant(OpenCode) also resets when a new project was open on the same window, the only thing that was needed to update was the editors tabs and editor itself.
+  After those, the path becomes: double-click → ~0.5s of pure filesystem/registry work → Project Selector appears → Main GUI appears. No network, no cache walk, no second bootstrap  
+  window on a healthy install.
 
-(5) Compact Mode, in option dropbox the button for AI was only Close AI and it has no function. Please investigate further and fix it just like the hide and toggle of AI works now and it normally do.
+  If you want, I can put together a concrete plan/patch for any of these — the easiest high-leverage target is #1 + #2 together, which is essentially a one-file edit in bootstrap.py 
+  (drop the purge at line 91, move run_update_checks after _spawn_main_gui, and respect a default-on skip_updates in config) plus a couple of lines removed from launcher.py and the  
+  VBS.
 
-(6) This will be too much but I want you to put an error/warning notice on blood red and bold text then prompt the user if they still want to continue. COMPATIBILITY ISSUE - for example an NeoPixel code includes the 48 GPIO (PIN 48) and normal ESP32 Dev Module does not have something like that. I hope you get it.
+● Want me to draft the patches for the top 2–3 items?
 
-(7) The reconnecting have only 10 times to retry but when the retries failed 10 times it retries another 1/10 times. Keep it one 1/10 - 10/10
+✻ Baked for 2m 23s
 
-(8) The Close AI button on compact mode of the window, remove that and just have the same button and function with the normal window mode.
+❯ Here's the thing, after applying the #1 on this project, it was really slow to start up.
+                                                                                                                                                                                      ● The user is now out of plan mode and asking me to make the actual edits. Let me confirm the exact target before editing: apply the #1 change to the project. That's the recursive
+  cache purge removal from all three locations.
 
-(9) Advice the user to press&hold boot on mcu before the actual Hard Reset upload to happen. Better if you can add a retry function just like on upload.
+  Wait — I should re-read what the user said carefully. "after applying the #1 on this project, it was really slow to start up."
+
+  That phrasing is a bit ambiguous. Two possible readings:
+  
+  1. "After applying #1 (removing the cache purges), the project was still really slow to start up" — i.e. #1 alone didn't fix it, they want the next change.
+  2. "After applying #1 to this project, it was really slow to start up" — i.e. they're confirming the problem is real and want me to apply #1 now.
+     
+  Reading #1 is more likely: they tried my top recommendation and the app is still slow, so they want the next change. But I should not assume — the right thing is to ask before
+  editing 3 files.
+  
+  Actually, re-reading once more: "Here's the thing, after applying the #1 on this project, it was really slow to start up."
+  
+  This reads as: "Here's the thing — after applying #1, the project was still really slow to start up." They're reporting the result of trying my recommendation. They want me to keep  going.
+
+  But wait — I gave them a recommendation, not a patch. They didn't actually have #1 to apply unless they manually edited the files. Let me think about this more carefully.
+
+  Actually, looking at the git status I was given at the start of the conversation: many of the project files are in modified state (M launcher.py, M mcu_flash_gui.py, etc.) and the 
+  user said "after applying the #1 on this project." That suggests they actually went and removed the cache purges themselves based on my advice, and the app is still slow.
+
+  So the question is: what should I do now?
+
+  Given the plan-mode exit system reminder, I'm now allowed to make edits. But the user's message is informational — they're telling me #1 wasn't enough, and presumably want me to   
+  either investigate further or apply the next recommendation.
+
+  The right move is to ask one clarifying question rather than guess. They could want:
+  - Investigation of why it's still slow
+  - Apply #2-#3 next
+  - Profile it to find the real bottleneck
+  - Something else
+
+  Let me ask, since I genuinely don't know which of those they want. Actually, the user just said "it was really slow to start up" — that's the report. They didn't explicitly say    
+  what they want me to do next. Asking is the right call.
+
+● User answered Claude's questions:
+  ⎿  · #1 didn't help enough — what do you want next? → as long it never skips BOOTSTRAP because it was a critical part to see the loggings. We can apply #5 - and you decide what's 
+     best for the rest.
+                                                                                                                                                                                      ● Got it. The user is saying:
+
+  1. Never skip the Bootstrap GUI — it's a critical part because of the loggings (the Setup window with the live log). So #4 is off the table.
+  2. Apply #5 — move the project-selector directory scan to a background thread so it doesn't block the main thread.
+  3. I decide what's best for the rest.
+
+  So my constraints are:
+  - Bootstrap window must always show (no skip on warm launch). This means #2 (move run_update_checks after GUI spawn) is fine as long as the user can still see the bootstrap log,
+  but the visual bootstrap window stays.
+  - Apply #5 (background-thread the project scan).
+  - For "the rest," I need to pick what else to apply that's compatible with the "keep the bootstrap window" constraint.
+
+  Let me re-rank my recommendations under the "keep bootstrap window" constraint:
+
+  - #1 (done by user)
+  - #2 (defer update checks) — still applies. Move them to a background thread inside the bootstrap flow so the user can see the log but the network probes don't block the main      
+  thread's progress. ✓ Compatible
+  - #3 (stop re-importing bootstrap) — still applies. ✓ Compatible
+  - #4 (skip bootstrap GUI) — EXCLUDED by user
+  - #5 (project-scan on background thread) — user wants this ✓
+  - #6-#12 — minor wins
+
+  I should also reconsider what the user really meant about "logs" — the bootstrap window's log_section calls show the user "Checking pip", "Checking WebView2", etc. If I move       
+  run_update_checks to a background thread, the log still appears (it's just on a background thread posting via root.after(0, ...)). So that should be fine.
+
+  Let me think about the right scope. The user said "decide what's best for the rest." I should pick the changes that:
+  1. Have meaningful impact
+  2. Are safe (don't break the always-show-bootstrap invariant)
+  3. Don't conflict with each other
+
+  My pick: apply #2, #3, #5, and a couple of the smaller wins (#8 remove the time.sleep(1.2), #9 fail-fast offline detection). That gives a meaningful speedup without removing the   
+  bootstrap window.
+
+  Let me plan the edits carefully. Since this is a multi-file edit, let me use EnterPlanMode first.
+
+  Actually — the user already said "you decide what's best for the rest" and explicitly asked for #5. They want me to just go. Let me not over-process this. I'll skip plan mode and  
+  go straight to edits, but I'll be explicit in my response about what I'm doing.
+
+  Let me think about each change:
+
+  #3 — Stop re-importing all of bootstrap.py in mcu_flash_gui.py
+
+  The 5 try/except blocks at lines 40-66 do:
+  try:
+      from bootstrap import ensure_platformio_penv_with_hook
+  except ImportError:
+      def ensure_platformio_penv_with_hook(*args, **kwargs):
+          return False
+  # ... 4 more
+
+  Each one re-runs the entire bootstrap.py module. Since src/libs is already on sys.path, I just need to import a few names. But importing bootstrap from mcu_flash_gui.py will run   
+  bootstrap.py's top-level code (the cache purge, DPI awareness, etc.). So even a single import bootstrap re-executes bootstrap.py's module body.
+
+  The cleanest fix is to extract the few used names into a small module. Let me look at what names are used:
+  - ensure_platformio_penv_with_hook
+  - find_arduino_cli
+  - ensure_arduino_cli
+  - get_last_arduino_cli_error
+  - _platform_already_installed
+
+  That's 5 names. I should make a bootstrap_exports.py that imports them from bootstrap lazily (inside functions) so bootstrap.py's full module body only runs when actually needed.  
+
+  Actually, looking at the code more carefully: each try/except is already doing from bootstrap import X. The act of importing bootstrap runs the entire module. So whether we have 1 
+  import or 5, bootstrap.py is fully executed once. The current code re-executes bootstrap.py 5 times? No, Python caches modules in sys.modules after the first import, so subsequent 
+  from bootstrap import X calls just look up the cached module. The first import is the expensive one.
+
+  So the "savings" from #3 is removing the first bootstrap import from mcu_flash_gui.py. But bootstrap is also imported by launcher.py → bootstrap.py itself. So when mcu_flash_gui.py
+  starts, sys.modules['bootstrap'] may already be set if the parent process imported it. But bootstrap.py is spawned as a new process via Popen, so it has its own sys.modules — the  
+  main GUI's sys.modules does NOT have bootstrap already loaded when it starts.
+
+  So the first from bootstrap import X in mcu_flash_gui.py is what loads bootstrap.py into memory. To skip this:
+  - Lazy-import inside functions: instead of from bootstrap import X at module top, do def my_func(): from bootstrap import X inside.
+  - Or extract the few used names into a small module that itself lazy-imports.
+
+  The simplest is to lazy-import inside the functions that use them. Let me find where each name is used.
+
+  Actually, I should check: does the order of edits matter? Let me first find usages, then plan, then edit.
+
+  #5 — Project scan on background thread
+
+  show_project_selector walks the directory synchronously. Let me look at it.
+
+  #2 — Defer update checks
+
+  Move run_update_checks(auto_update=False) (currently called at line 6648 in _run_setup_in_thread, after all the dependency checks) to be called in a background thread that runs in 
+  parallel with everything else, OR keep it where it is but ensure it doesn't block.
+
+  Actually re-reading: run_update_checks is already in _run_setup_in_thread, which IS a background thread. So the bootstrap GUI mainloop is responsive. But the user is waiting until 
+  the bootstrap window says "Launching…" before the main GUI spawns. If run_update_checks takes 8s due to network timeouts, the user sees "Checking for updates" for 8s before the GUI
+  spawns.
+
+  The fix: run run_update_checks concurrently with the rest of the setup, or run it in parallel with the launch. Actually, the cleanest fix: don't make the update checks gate the    
+  launch at all. Let them run in a background daemon thread that posts results to the GUI, but don't await their completion before spawning the main GUI.
+
+  Wait — but the user said "never skip BOOTSTRAP because it was a critical part to see the loggings." So the bootstrap window must show its log. The log includes "Checking for       
+  updates" section. As long as that section appears, the user is happy. So I can fire update checks in parallel and show "Checking for updates" immediately, then update with results 
+  as they come in.
+
+  Better idea: spawn the update check as a daemon thread, post each completion back via root.after(0, lambda: gui.log_ok(...)). The main thread can proceed to launch the main GUI    
+  without waiting.
+
+  Plan
+
+  I'll do these in order:
+
+  1. #3 (lazy import): Edit the 5 try/except blocks in mcu_flash_gui.py to lazy-import inside functions. Or better: change them to a single import-block inside an if False: ...      
+  dead-code-fence. Actually the cleanest: replace the module-level imports with a small helper module or with lazy imports inside the functions that use them.
+
+  1. Hmm, let me look at the imports more carefully:
+  try:
+      from bootstrap import ensure_platformio_penv_with_hook
+  except ImportError:
+      def ensure_platformio_penv_with_hook(*args, **kwargs):
+          return False
+
+  1. The fallback defs are so the names exist even if bootstrap is unavailable. The fallback runs only on ImportError, so if bootstrap is available, the real function is bound. If I 
+  move the import into a function, I should keep the fallback logic.
+
+  1. Simplest approach: define a lazy getter:
+  def _bootstrap_ensure_platformio_penv_with_hook(*args, **kwargs):
+      try:
+          from bootstrap import ensure_platformio_penv_with_hook
+          return ensure_platformio_penv_with_hook(*args, **kwargs)
+      except ImportError:
+          return False
+  1. But that imports bootstrap every call. Better: cache in a module-level variable.
+
+  1. Actually the cleanest: use a single function that imports bootstrap once and caches, with fallbacks.
+
+  1. But wait — I need to preserve the semantics. The 5 imports bind 5 names. The simplest way: keep them as module-level imports, but move them inside a small bootstrap_lazy.py that
+  itself imports bootstrap on first use. Then in mcu_flash_gui.py do:
+  from src.libs.bootstrap_lazy import (
+      ensure_platformio_penv_with_hook,
+      find_arduino_cli,
+      ...
+  )
+  1. And bootstrap_lazy.py does:
+  _bootstrap = None
+  def _get_bootstrap():
+      global _bootstrap
+      if _bootstrap is None:
+          try:
+              import bootstrap
+              _bootstrap = bootstrap
+          except ImportError:
+              _bootstrap = False
+      return _bootstrap if _bootstrap else None
+
+  def ensure_platformio_penv_with_hook(*args, **kwargs):
+      b = _get_bootstrap()
+      if b is None:
+          return False
+      return b.ensure_platformio_penv_with_hook(*args, **kwargs)
+  ...
+  1. But this still imports bootstrap on first use of any of these names. So the cost is deferred, not avoided. The cost of loading bootstrap.py is ~hundreds of ms. If only one of   
+  these names is used (e.g., _platform_already_installed), then deferring saves the import cost until the user actually clicks something that needs it.
+
+  1. Let me check which of these names is actually used at startup vs. later.
+
+  1. Let me search for usages of each.
+  2. #2 (defer update checks): Move run_update_checks(auto_update=False) to a daemon thread that runs after the main GUI is spawned. Log results as they arrive. The bootstrap window 
+  will show "Checking for updates" in the log but the user can proceed.
+  3. #5 (background project scan): Modify ProjectSelectorDialog to do its initial directory scan in a background thread, showing a "Loading…" placeholder.
+  4. #8 (remove time.sleep(1.2)): drop the sleep before launch.
+  5. #9 (fail-fast offline): add a single socket.create_connection(('pypi.org', 443), timeout=2) check at the start of run_update_checks; skip all probes if it fails.
+
+  Let me start. First, let me find usages of the imported names.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Now let me look at where ProjectSelectorDialog does its directory scan.
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me see the rest, especially load_recent_projects and the dialog's run():
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Let me restructure the tasks for this implementation phase and add a couple new ones for the actual edits.
+
+● Let me look at the recent projects loading and the existing project dialog to plan the threading change properly.
+
+  Read 1 file (ctrl+o to expand)
+
+● Good. Now I have full context. Let me also confirm: where does load_recent_projects validate directories (the Path(p).is_dir() checks at line 5093)? That's a stat per recent
+  project — usually fast, but with 10 entries on a slow network drive it can lag. I'll do that on a thread too.
+
+  Now let me start editing. Let me do the small, safe ones first.
+   
+  Edit 1: Remove the time.sleep(1.2) before launch
+     
+● Update(src\libs\bootstrap.py)
+  ⎿  Removed 3 lines
+      6665 
+      6666          gui.root.after(0, _finish)
+      6667 
+      6668 -        # Small delay so the user can read "Launching…" before the window closes
+      6669 -        time.sleep(1.2)
+      6670 -
+      6668          # Hide Bootstrap before the main process is spawned. The old flow
+      6669          # waited for the main GUI's crash check before closing this window,
+      6670          # which let the Project Selector appear while Bootstrap was still
+
+● Now let me check whether time is still used elsewhere after that edit (it should be — time.time(), time.sleep for retry backoff, etc.). Let me confirm.
+
+● Bash(cd "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release" && grep -n "^import time\b\|^import time$" src/libs/bootstrap.py)
+  ⎿  22:import time
+  ⎿  Allowed by auto mode classifier
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good, time is still used heavily. Task 6 done.
+
+● Edit 2: Add offline fast-fail to run_update_checks
+
+  Let me find the exact start of run_update_checks and add the probe at the top.
+     
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\libs\bootstrap.py)
+  ⎿  Added 11 lines
+      1608      section("Checking for updates")
+      1609      status("Querying PyPI, GitHub, and winget...", DIM)
+      1610 
+      1611 +    # Fast offline check: if we can't even reach pypi.org:443 in 2 seconds,
+      1612 +    # every probe below will just sit in its socket timeout (8-20s each).
+      1613 +    # Bail with a single log line so the bootstrap window proceeds.
+      1614 +    if not _is_network_reachable(timeout=2.0):
+      1615 +        msg = "  ⏭  Offline detected — skipping online update checks."                                                                                                          1616 +        if _gui:
+      1617 +            _gui.log_dim(msg)                                                                                                                                             
+      1618 +        else:
+      1619 +            print(msg)
+      1620 +        return                                                                                                                                                            
+      1621 +                                                                                                                                                                          
+      1622      import threading
+      1623
+      1624      results: dict[str, dict] = {}
+
+● Now add the _is_network_reachable helper near the other network helpers. Let me put it right after _fetch_url since they're both URL/IO helpers.
+
+● Update(src\libs\bootstrap.py)
+  ⎿  Added 14 lines
+      1286          return None
+      1287 
+      1288 
+      1289 +def _is_network_reachable(timeout: float = 2.0) -> bool:
+      1290 +    """Best-effort check: can we open a TCP socket to pypi.org:443 within `timeout`?
+      1291 +
+      1292 +    Used to short-circuit a fan-out of online update probes when the network is
+      1293 +    clearly unavailable.  A single lightweight probe beats letting 8-9 probes                                                                                             
+      1294 +    each wait out their own 8-20s socket timeout."""
+      1295 +    try:                                                                                                                                                                  
+      1296 +        import socket
+      1297 +        with socket.create_connection(("pypi.org", 443), timeout=timeout):
+      1298 +            return True                                                                                                                                                   
+      1299 +    except Exception:                                                                                                                                                     
+      1300 +        return False                                                                                                                                                      
+      1301 +                                                                                                                                                                          
+      1302 +                                                                                                                                                                          
+      1303  def _pip_installed_version(pkg_import: str, pkg_name: str) -> str | None:
+      1304      """Return the installed version string for a pip package, or None."""
+      1305      try:
+
+● Task 7 done. Now task 8: defer run_update_checks to a background thread.
+
+● The goal: don't gate the launch on run_update_checks. Instead, fire it on a background thread that runs in parallel with the rest of the setup. The bootstrap window already shows
+  "Checking for updates" in its log — that still happens. The user is just no longer blocked by it.
+     
+  But wait — currently run_update_checks runs AFTER all the dependency checks (line 6648, after CP210x check, OpenCode check, etc.). If I just move it to a background thread right
+  where it is, it'll still happen after the rest of the setup. That's the simplest and safest change. The user is only blocked by it when those other steps have already completed —
+  so most of the time, on a warm launch where dependency checks all pass quickly, the update checks are the long pole.
+
+  Actually, even better: I should fire the update-check thread EARLIER — right after pip+pywebview are confirmed, since those are the prerequisites the update check depends on (it   
+  queries pip show on these packages). But for simplicity, let me first just make it not block the launch. I'll fire it on a thread at the point where it's currently called, and let
+  the main flow proceed to launch the GUI.
+  
+  Let me look at the section again:
+
+  Read 1 file (ctrl+o to expand)
+
+● OK. The current call is at line 6673. The main thread (background setup thread) will call run_update_checks and block on it before _finish() runs. I want to:
+
+  1. Skip blocking the main flow on run_update_checks.
+  2. Still log to the GUI as update checks complete.
+  3. Still log the "Checking for updates" section header (so the user sees it in the log).
+     
+  The cleanest approach: replace the call with a small wrapper that spawns a daemon thread. The thread logs the section header itself (so it appears immediately) and runs
+  run_update_checks (which will check skip_updates, the offline probe I just added, etc.).
+
+  Looking at run_update_checks itself — it uses _gui.log_dim, section(), status() to write to the GUI log, and those are already thread-safe via root.after(0, ...). So
+  run_update_checks is already designed to be called from a background thread.
+  
+  Let me check the section/status helpers to confirm they thread-safely post to the GUI:
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● log_status etc. — let me verify these are thread-safe (use root.after internally):
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+     
+❯ /model                                                                                                                                                                                ⎿  Kept model as minimax-m3:cloud
+                                                                                                                                                                                      
+  5 tasks (2 done, 1 in progress, 2 open)
+  ✔ Remove time.sleep(1.2) before launch
+  ✔ Add offline fast-fail in run_update_checks
+  ◼ Defer run_update_checks to background thread
+  ◻ Lazy-import bootstrap names in main GUI                                                                                                                                             ◻ Thread the project scan in ProjectSelectorDialog
+    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ultracode ─❯ /q 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/exit (quit)                  Exit the CLI
+/btw                          Ask a quick side question without interrupting the main conversation
+/supabase                     Use when doing ANY task involving Supabase. Triggers: Supabase products (Database, Auth, Edge Functions, Realtime, Storage, Vectors, Cron, Queues);
+                              client libraries and SSR integrations (supabase-js, @supabase/ssr) in Next.js, React, SvelteKit, Astro, Remix; auth issues (login, logout, sessions…
+/update-config                Use this skill to configure the Claude Code harness via settings.json. Automated behaviors ("from now on when X", "each time X", "whenever X",
+                              "before/after X") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Al…
+/find-skills                  Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or
+                              express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable…
+/simplify                     Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for
+                              bugs; use /code-review for that.
+/claude-api                   Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model
+                              migration. TRIGGER — read BEFORE opening the target file; don't skip because it "looks like a one-liner" — whenever: the prompt names Claude/Anthro…
+/mobile                       Show QR code to download the Claude mobile app
+/powerup                      Discover Claude Code features through quick interactive lessons
+/dataviz                      Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React
+                              artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart share…
+/doctor                       Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude doctor` terminal diagnostics cover — from
+                              local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent definitions); find unused skills, MCP serve…
+
+
+
+
+
+
+
+
+
+
+Resume this session with:
+claude --resume e2439e10-ea4d-445a-95b7-5b577ccb2e2c
+PS C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release> ^C
+PS C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release> ^C
+PS C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release> claude --resume e2439e10-ea4d-445a-95b7-5b577ccb2e2c^C
+PS C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release> ollama launch claude --resume e2439e10-ea4d-445a-95b7-5b577ccb2e2c
+Error: unknown flag: --resume
+PS C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release> ollama launch claude
+╭─── Claude Code v2.1.227 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                      │
+│                    Welcome back!                   │ Run /init to create a CLAUDE.md file with instructions for Claude                                                             │
+│                                                    │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                                    │
+│                      ▝▜█████▛▘                     │ Bug fixes and reliability improvements                                                                                        │
+│                        ▘▘ ▝▝                       │ Added gateway spend-limit support to Claude Code's usage warning; the limit-reached message now names the cap, its reset tim… │
+│                                                    │ Added a workspace trust prompt to `claude agents` for untrusted directories, matching the behavior of `claude`                │
+│ nemotron-3-ultra:cloud with h… · API Usage Billing │ /release-notes for more                                                                                                       │
+│  ~\Documents\MCU Flasher by Naph - Stable Release  │                                                                                                                               │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ /effort                                                                                                                                                                             
+  ⎿  Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration
+                                                                                                                                                                                      ❯ Why does the app was so slow to start? Is there a way to make it faster?                                                                                                            
+
+  Thought for 9s (ctrl+o to expand)                                                                                                                                                   
+
+● I'll investigate the startup performance of your MCU Flasher app. Let me trace through the codebase to find bottlenecks.
+
+  Searched for 4 patterns, listed 1 directory (ctrl+o to expand)
+
+● Let me read the entry point and key files to understand the startup flow.
+   
+  Read 2 files (ctrl+o to expand)
+
+● Now let me look at bootstrap.py and the main GUI entry to understand the full startup sequence.
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+● The user is asking a research/analysis question about why the app starts slowly. This is a multi-step investigation that would benefit from task tracking. Let me set up tasks to
+  organize the investigation properly.
+
+  Read 1 file (ctrl+o to expand)
+
+● bootstrap.py is 7025 lines. Let me find the main() entry and key heavy sections.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now let me find BootstrapGUI and _run_setup_in_thread to understand what runs before the GUI shows up.
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Let me update task status — I've finished tracing the VBS path, and I should be working on the bootstrap flow now.
+
+● Now let me look at the rest of _run_setup_in_thread to see what the typical warm-launch path actually runs, and also check what BootstrapGUI.__init__ does.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now let me check the run_update_checks (the "warm launch" path) and the GUI's __init__ to find heavy synchronous work.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● run_update_checks runs on every launch and makes live PyPI / GitHub / winget requests (parallel, but with 8–20s timeouts each). On a normal warm launch with internet this
+  dominates. Let me confirm by skimming the check_pip_package_update and pip_latest_version timing patterns and the ensure_* ones, and also quickly check the GUI top-level imports.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now I have enough on the bootstrap side. Let me look at the main GUI top-level imports briefly and BootstrapGUI.__init__ to see if there's heavy synchronous work there.
+
+  Read 1 file (ctrl+o to expand)
+
+● I have enough on the bootstrap side to be confident about findings. Let me update task status and move on to the GUI startup.
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me find the main entry, project-selector code, and any top-level config / JSON load. The visible delay the user notices is mostly the time from clicking the .vbs until a window
+  is responsive, so the heaviest suspects are: cache purge, the BootstrapGUI Tk window, the run_update_checks network call, and the Main GUI's first paint.
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● Let me check main() and the heavy init phase of MCUUploadGUI.
+
+  Read 1 file (ctrl+o to expand)
+
+● I have enough now. Let me also confirm one more thing — how load_gui_config and the board-index JSON load. Then I'll synthesize.
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+● I have enough to write the synthesis. Let me close out the GUI inspection and start writing up findings.
+
+● I traced the full cold-launch and warm-launch paths: runThisOnWindows.vbs → launcher.py → bootstrap.py → mcu_flash_gui.py. Here is what's slowing it down and what to do about it,  
+  in order of impact.
+
+  Why it feels slow
+
+  The first window users see is the "Setup" window. On a warm launch where env already exists, the visible flow is roughly:
+
+  1. runThisOnWindows.vbs calls PurgePythonCache over the entire project (recursively). With env\Lib\site-packages and src\libs deep inside the project, that walks tens of thousands 
+  of files on every launch.
+  2. launcher.py then calls the same purge in Python (purge_python_cache) before doing anything else.
+  3. bootstrap.py does it a third time at module import. Three independent walks of the same tree on every launch.
+  4. bootstrap.py builds a Tk window and a custom font set; on Windows loading Montserrat TTFs and creating a Tk root is ~300–500ms of UI-thread time before any background work      
+  starts.
+  5. _run_setup_in_thread runs, in order: ensure_python_system_environment (registry writes), then unconditionally re-activates the venv (probes python -c "import sys"), then calls  
+  run_update_checks(auto_update=False).
+  6. run_update_checks is the real culprit on warm launches. It fans out ~9 concurrent network checks (PyPI JSON, GitHub releases/redirect, winget search, pip show per package,      
+  arduino-cli version, pio --version, arduino-cli upgrade fallback). Each has an 8–20s timeout, runs in parallel — but only after the user has already been staring at the spinner for
+  several seconds waiting for the project selector to appear.
+  7. After all that, mcu_flash_gui.py is spawned as a fresh process and re-imports bootstrap (the first lines do from bootstrap import …), which itself re-runs DPI awareness,        
+  file-attribute pokes, etc.
+  8. Inside MCUUploadGUI.__init__, load_gui_config() reads a JSON file every call (it has a 2s in-memory cache, so that's fine), then _build_ui() constructs every widget before the  
+  window is ever deiconified. The Project Selector dialog then runs synchronously on the same thread; on large last_sketch_dir trees the directory walk blocks the main thread for a  
+  noticeable moment.
+
+  So the user-perceived delay is essentially: 3 full project tree walks → 1 cold-start Tk window → 9 concurrent network requests → 1 extra Python process import → 1 more Tk window   
+  build → Project Selector — for what is conceptually "open my IDE."
+
+  How to make it faster
+
+  Big wins (do these first)
+
+  1. Stop purging bytecode on every launch. PYTHONDONTWRITEBYTECODE=1 is already set in three places, and you also force sys.dont_write_bytecode = True. There will never be a .pyc to
+  delete. Drop the PurgePythonCache call from runThisOnWindows.vbs:27, the purge_python_cache(SCRIPT_DIR) call in launcher.py:53, and the same call in bootstrap.py:91. At minimum,   
+  only purge on the path under SCRIPT_DIR/src and SCRIPT_DIR/env (skip env/ entirely — it has tens of thousands of files and Python's -B flag already prevents the cache files you're 
+  trying to delete). On a typical install this removes 1–3 seconds before the first window even starts.
+  2. Don't make update checks a hard prerequisite to launching the GUI. The current run_update_checks(auto_update=False) runs in the same thread, before the user can interact with   
+  the main window. Two cheap fixes:
+    - Move run_update_checks after _spawn_main_gui (or run it in a daemon thread, fire-and-forget, with a .after(2000, ...) delay) so the project selector shows up immediately.      
+    - Or: cache the last successful check result in bootstrap_config.json (timestamp + per-package version) and only re-hit the network if the cache is older than ~24h. PyPI/GitHub  
+  are usually slower than your SSD, and the answer almost never changes between two launches in the same day.
+  3. Default the "Skip Updates" checkbox to on. The GUI already has a Skip Updates toggle in the Bootstrap window. If it defaulted to checked (or respected a new
+  bootstrap_config.json key skip_updates_by_default: true), warm launches would skip the network round-trip entirely. There's already plumbing for this — run_update_checks honours   
+  skip_updates from config and MCU_FLASH_GUI_SKIP_UPDATES env var, so it's a one-line default change.
+
+  Medium wins
+
+  4. Defer the slow venv-repair probes. _activate_bootstrap_venv always runs python -c "import sys" and, if pio.exe exists, a pio --version subprocess (8s timeout). On a known-good  
+  venv these are pure overhead. Short-circuit when env/pyvenv.cfg and env/Scripts/python.exe are present and the venv was successfully launched in the last N days (stamp into        
+  bootstrap_config.json).
+  5. Stop re-importing bootstrap in the main GUI. The 5 try: from bootstrap import … blocks at the top of mcu_flash_gui.py:40-66 cause Python to re-execute the entire 7025-line      
+  bootstrap.py module just to pull a handful of names. Either move the few used symbols into a tiny bootstrap_exports.py (or hoist them into win_subprocess_hide.py), or import the   
+  module under a different name and grab names from it. This is several hundred ms of duplicate work every launch.
+  6. Move the BootstrapGUI window to a single, pre-warmed hidden Tk root. Currently launcher.py does no Tk, bootstrap.py constructs one, the bootstrap runs, then mcu_flash_gui.py    
+  constructs a second Tk root in a second process. If the project-selector dialog is the only thing that needs the user's input on a warm launch, you can skip the bootstrap window   
+  entirely when bootstrap_config.json has a recent "all ready" stamp and just spawn the main GUI directly, deferring network/dependency verification to a background thread that only 
+  shows the spinner if something actually needs to be done.
+  7. Reuse the Project Selector's "last opened" path with a fast existence check only. show_project_selector walks the last directory's contents synchronously. A
+  Path(last_dir).is_dir() check is sub-millisecond; the listing should happen after the window appears, on a background thread, with a placeholder row "loading…" that gets replaced  
+  when the scan finishes.
+
+  Smaller wins
+
+  8. Drop the unnecessary time.sleep(1.2) before launch. In _run_setup_in_thread after the "Launching…" status, the bootstrap thread sleeps 1.2 seconds purely so the user can read   
+  the message. On a warm launch this is a second the user is staring at a frozen window. Either remove it or make it conditional on whether any actual work happened.
+  9. Make the platformio/arduino-cli update probes fail fast. check_arduino_cli_update and check_pio_update each spawn a subprocess with an 8s timeout. With these in a
+  ThreadPoolExecutor of size 9 you're at the mercy of the slowest. If PyPI/GitHub are unreachable from the user's network, all of them time out concurrently and the user waits 8–20s 
+  anyway. Detect offline (e.g. one cheap socket.create_connection(("pypi.org", 443), timeout=2)) and skip the whole fan-out.
+  10. Use pythonw.exe -B -OO and Py._FrozenFlag style minimisation. The launcher already uses pythonw.exe (good) and -B (good). Going to -OO strips docstrings and assert statements  
+  at startup. For a script this size the difference is small but real.
+  11. One-time purge_python_cache only on upgrade. The whole point of the purges is to defend against stale .pyc from before you set PYTHONDONTWRITEBYTECODE. Once that's set, a      
+  one-time find . -name __pycache__ -exec rm -rf {} + at the end of any future installation/upgrade is enough. Or just delete __pycache__ from the git-ignored .platformio-mcu-gui and
+  env subtrees at install time.
+  12. Set mpl.use("TkAgg") etc. up front only if needed — minor, but Python's site does some work checking for a default Matplotlib backend. If you don't need MPL, a tiny import sys;
+  sys.modules["matplotlib"] = None before any third-party import speeds cold start.
+
+  What I would change first, in order
+
+  ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────┐
+  │  #  │                                           Change                                           │              Expected win              │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 1   │ Remove the 3 recursive cache purges; rely on -B                                            │ 1–3s off every launch                  │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 2   │ Move run_update_checks after the main GUI spawn, default Skip Updates to on                │ 3–10s off warm launches with internet  │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 3   │ Stop re-importing all of bootstrap.py in the main GUI; move shared names to a small module │ 0.3–0.8s                               │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 4   │ Skip the bootstrap GUI entirely when a recent "all ready" stamp exists                     │ 1–2s and one whole UI window           │
+  ├─────┼────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+  │ 5   │ Move the project-selector directory scan to a background thread                            │ 0.3–2s depending on sketch folder size │
+  └─────┴────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────┘
+
+  After those, the path becomes: double-click → ~0.5s of pure filesystem/registry work → Project Selector appears → Main GUI appears. No network, no cache walk, no second bootstrap  
+  window on a healthy install.
+
+  If you want, I can put together a concrete plan/patch for any of these — the easiest high-leverage target is #1 + #2 together, which is essentially a one-file edit in bootstrap.py 
+  (drop the purge at line 91, move run_update_checks after _spawn_main_gui, and respect a default-on skip_updates in config) plus a couple of lines removed from launcher.py and the  
+  VBS.
+
+● Want me to draft the patches for the top 2–3 items?
+
+✻ Sautéed for 2m 23s
+
+❯ Here's the thing, after applying the #1 on this project, it was really slow to start up.
+
+● The user is now out of plan mode and asking me to make the actual edits. Let me confirm the exact target before editing: apply the #1 change to the project. That's the recursive   
+  cache purge removal from all three locations.
+
+  Wait — I should re-read what the user said carefully. "after applying the #1 on this project, it was really slow to start up."
+
+  That phrasing is a bit ambiguous. Two possible readings:
+
+  1. "After applying #1 (removing the cache purges), the project was still really slow to start up" — i.e. #1 alone didn't fix it, they want the next change.
+  2. "After applying #1 to this project, it was really slow to start up" — i.e. they're confirming the problem is real and want me to apply #1 now.
+
+  Reading #1 is more likely: they tried my top recommendation and the app is still slow, so they want the next change. But I should not assume — the right thing is to ask before     
+  editing 3 files.
+
+  Actually, re-reading once more: "Here's the thing, after applying the #1 on this project, it was really slow to start up."
+
+  This reads as: "Here's the thing — after applying #1, the project was still really slow to start up." They're reporting the result of trying my recommendation. They want me to keep
+  going.
+
+  But wait — I gave them a recommendation, not a patch. They didn't actually have #1 to apply unless they manually edited the files. Let me think about this more carefully.
+
+  Actually, looking at the git status I was given at the start of the conversation: many of the project files are in modified state (M launcher.py, M mcu_flash_gui.py, etc.) and the 
+  user said "after applying the #1 on this project." That suggests they actually went and removed the cache purges themselves based on my advice, and the app is still slow.
+
+  So the question is: what should I do now?
+
+  Given the plan-mode exit system reminder, I'm now allowed to make edits. But the user's message is informational — they're telling me #1 wasn't enough, and presumably want me to   
+  either investigate further or apply the next recommendation.
+
+  The right move is to ask one clarifying question rather than guess. They could want:
+  - Investigation of why it's still slow
+  - Apply #2-#3 next
+  - Profile it to find the real bottleneck
+  - Something else
+
+  Let me ask, since I genuinely don't know which of those they want. Actually, the user just said "it was really slow to start up" — that's the report. They didn't explicitly say    
+  what they want me to do next. Asking is the right call.
+
+● User answered Claude's questions:
+  ⎿  · #1 didn't help enough — what do you want next? → as long it never skips BOOTSTRAP because it was a critical part to see the loggings. We can apply #5 - and you decide what's  
+     best for the rest.
+
+● Got it. The user is saying:
+
+  1. Never skip the Bootstrap GUI — it's a critical part because of the loggings (the Setup window with the live log). So #4 is off the table.
+  2. Apply #5 — move the project-selector directory scan to a background thread so it doesn't block the main thread.
+  3. I decide what's best for the rest.
+
+  So my constraints are:
+  - Bootstrap window must always show (no skip on warm launch). This means #2 (move run_update_checks after GUI spawn) is fine as long as the user can still see the bootstrap log,   
+  but the visual bootstrap window stays.
+  - Apply #5 (background-thread the project scan).
+  - For "the rest," I need to pick what else to apply that's compatible with the "keep the bootstrap window" constraint.
+
+  Let me re-rank my recommendations under the "keep bootstrap window" constraint:
+
+  - #1 (done by user)
+  - #2 (defer update checks) — still applies. Move them to a background thread inside the bootstrap flow so the user can see the log but the network probes don't block the main      
+  thread's progress. ✓ Compatible
+  - #3 (stop re-importing bootstrap) — still applies. ✓ Compatible
+  - #4 (skip bootstrap GUI) — EXCLUDED by user
+  - #5 (project-scan on background thread) — user wants this ✓
+  - #6-#12 — minor wins
+
+  I should also reconsider what the user really meant about "logs" — the bootstrap window's log_section calls show the user "Checking pip", "Checking WebView2", etc. If I move       
+  run_update_checks to a background thread, the log still appears (it's just on a background thread posting via root.after(0, ...)). So that should be fine.
+
+  Let me think about the right scope. The user said "decide what's best for the rest." I should pick the changes that:
+  1. Have meaningful impact
+  2. Are safe (don't break the always-show-bootstrap invariant)
+  3. Don't conflict with each other
+
+  My pick: apply #2, #3, #5, and a couple of the smaller wins (#8 remove the time.sleep(1.2), #9 fail-fast offline detection). That gives a meaningful speedup without removing the   
+  bootstrap window.
+
+  Let me plan the edits carefully. Since this is a multi-file edit, let me use EnterPlanMode first.
+
+  Actually — the user already said "you decide what's best for the rest" and explicitly asked for #5. They want me to just go. Let me not over-process this. I'll skip plan mode and  
+  go straight to edits, but I'll be explicit in my response about what I'm doing.
+
+  Let me think about each change:
+
+  #3 — Stop re-importing all of bootstrap.py in mcu_flash_gui.py
+
+  The 5 try/except blocks at lines 40-66 do:
+  try:
+      from bootstrap import ensure_platformio_penv_with_hook
+  except ImportError:
+      def ensure_platformio_penv_with_hook(*args, **kwargs):
+          return False
+  # ... 4 more
+
+  Each one re-runs the entire bootstrap.py module. Since src/libs is already on sys.path, I just need to import a few names. But importing bootstrap from mcu_flash_gui.py will run   
+  bootstrap.py's top-level code (the cache purge, DPI awareness, etc.). So even a single import bootstrap re-executes bootstrap.py's module body.
+
+  The cleanest fix is to extract the few used names into a small module. Let me look at what names are used:
+  - ensure_platformio_penv_with_hook
+  - find_arduino_cli
+  - ensure_arduino_cli
+  - get_last_arduino_cli_error
+  - _platform_already_installed
+
+  That's 5 names. I should make a bootstrap_exports.py that imports them from bootstrap lazily (inside functions) so bootstrap.py's full module body only runs when actually needed.  
+
+  Actually, looking at the code more carefully: each try/except is already doing from bootstrap import X. The act of importing bootstrap runs the entire module. So whether we have 1 
+  import or 5, bootstrap.py is fully executed once. The current code re-executes bootstrap.py 5 times? No, Python caches modules in sys.modules after the first import, so subsequent 
+  from bootstrap import X calls just look up the cached module. The first import is the expensive one.
+
+  So the "savings" from #3 is removing the first bootstrap import from mcu_flash_gui.py. But bootstrap is also imported by launcher.py → bootstrap.py itself. So when mcu_flash_gui.py
+  starts, sys.modules['bootstrap'] may already be set if the parent process imported it. But bootstrap.py is spawned as a new process via Popen, so it has its own sys.modules — the  
+  main GUI's sys.modules does NOT have bootstrap already loaded when it starts.
+
+  So the first from bootstrap import X in mcu_flash_gui.py is what loads bootstrap.py into memory. To skip this:
+  - Lazy-import inside functions: instead of from bootstrap import X at module top, do def my_func(): from bootstrap import X inside.
+  - Or extract the few used names into a small module that itself lazy-imports.
+
+  The simplest is to lazy-import inside the functions that use them. Let me find where each name is used.
+
+  Actually, I should check: does the order of edits matter? Let me first find usages, then plan, then edit.
+
+  #5 — Project scan on background thread
+
+  show_project_selector walks the directory synchronously. Let me look at it.
+
+  #2 — Defer update checks
+
+  Move run_update_checks(auto_update=False) (currently called at line 6648 in _run_setup_in_thread, after all the dependency checks) to be called in a background thread that runs in 
+  parallel with everything else, OR keep it where it is but ensure it doesn't block.
+
+  Actually re-reading: run_update_checks is already in _run_setup_in_thread, which IS a background thread. So the bootstrap GUI mainloop is responsive. But the user is waiting until 
+  the bootstrap window says "Launching…" before the main GUI spawns. If run_update_checks takes 8s due to network timeouts, the user sees "Checking for updates" for 8s before the GUI
+  spawns.
+
+  The fix: run run_update_checks concurrently with the rest of the setup, or run it in parallel with the launch. Actually, the cleanest fix: don't make the update checks gate the    
+  launch at all. Let them run in a background daemon thread that posts results to the GUI, but don't await their completion before spawning the main GUI.
+
+  Wait — but the user said "never skip BOOTSTRAP because it was a critical part to see the loggings." So the bootstrap window must show its log. The log includes "Checking for       
+  updates" section. As long as that section appears, the user is happy. So I can fire update checks in parallel and show "Checking for updates" immediately, then update with results 
+  as they come in.
+
+  Better idea: spawn the update check as a daemon thread, post each completion back via root.after(0, lambda: gui.log_ok(...)). The main thread can proceed to launch the main GUI    
+  without waiting.
+
+  Plan
+
+  I'll do these in order:
+
+  1. #3 (lazy import): Edit the 5 try/except blocks in mcu_flash_gui.py to lazy-import inside functions. Or better: change them to a single import-block inside an if False: ...      
+  dead-code-fence. Actually the cleanest: replace the module-level imports with a small helper module or with lazy imports inside the functions that use them.
+
+  1. Hmm, let me look at the imports more carefully:
+  try:
+      from bootstrap import ensure_platformio_penv_with_hook
+  except ImportError:
+      def ensure_platformio_penv_with_hook(*args, **kwargs):
+          return False
+
+  1. The fallback defs are so the names exist even if bootstrap is unavailable. The fallback runs only on ImportError, so if bootstrap is available, the real function is bound. If I 
+  move the import into a function, I should keep the fallback logic.
+
+  1. Simplest approach: define a lazy getter:
+  def _bootstrap_ensure_platformio_penv_with_hook(*args, **kwargs):
+      try:
+          from bootstrap import ensure_platformio_penv_with_hook
+          return ensure_platformio_penv_with_hook(*args, **kwargs)
+      except ImportError:
+          return False
+  1. But that imports bootstrap every call. Better: cache in a module-level variable.
+
+  1. Actually the cleanest: use a single function that imports bootstrap once and caches, with fallbacks.
+
+  1. But wait — I need to preserve the semantics. The 5 imports bind 5 names. The simplest way: keep them as module-level imports, but move them inside a small bootstrap_lazy.py that
+  itself imports bootstrap on first use. Then in mcu_flash_gui.py do:
+  from src.libs.bootstrap_lazy import (
+      ensure_platformio_penv_with_hook,
+      find_arduino_cli,
+      ...
+  )
+  1. And bootstrap_lazy.py does:
+  _bootstrap = None
+  def _get_bootstrap():
+      global _bootstrap
+      if _bootstrap is None:
+          try:
+              import bootstrap
+              _bootstrap = bootstrap
+          except ImportError:
+              _bootstrap = False
+      return _bootstrap if _bootstrap else None
+
+  def ensure_platformio_penv_with_hook(*args, **kwargs):
+      b = _get_bootstrap()
+      if b is None:
+          return False
+      return b.ensure_platformio_penv_with_hook(*args, **kwargs)
+  ...
+  1. But this still imports bootstrap on first use of any of these names. So the cost is deferred, not avoided. The cost of loading bootstrap.py is ~hundreds of ms. If only one of   
+  these names is used (e.g., _platform_already_installed), then deferring saves the import cost until the user actually clicks something that needs it.
+
+  1. Let me check which of these names is actually used at startup vs. later.
+
+  1. Let me search for usages of each.
+  2. #2 (defer update checks): Move run_update_checks(auto_update=False) to a daemon thread that runs after the main GUI is spawned. Log results as they arrive. The bootstrap window 
+  will show "Checking for updates" in the log but the user can proceed.
+  3. #5 (background project scan): Modify ProjectSelectorDialog to do its initial directory scan in a background thread, showing a "Loading…" placeholder.
+  4. #8 (remove time.sleep(1.2)): drop the sleep before launch.
+  5. #9 (fail-fast offline): add a single socket.create_connection(('pypi.org', 443), timeout=2) check at the start of run_update_checks; skip all probes if it fails.
+
+  Let me start. First, let me find usages of the imported names.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Now let me look at where ProjectSelectorDialog does its directory scan.
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me see the rest, especially load_recent_projects and the dialog's run():
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Let me restructure the tasks for this implementation phase and add a couple new ones for the actual edits.
+
+● Let me look at the recent projects loading and the existing project dialog to plan the threading change properly.
+
+  Read 1 file (ctrl+o to expand)
+
+● Good. Now I have full context. Let me also confirm: where does load_recent_projects validate directories (the Path(p).is_dir() checks at line 5093)? That's a stat per recent       
+  project — usually fast, but with 10 entries on a slow network drive it can lag. I'll do that on a thread too.
+
+  Now let me start editing. Let me do the small, safe ones first.
+
+  Edit 1: Remove the time.sleep(1.2) before launch
+
+● Update(src\libs\bootstrap.py)
+  ⎿  Removed 3 lines
+      6665
+      6666          gui.root.after(0, _finish)
+      6667
+      6668 -        # Small delay so the user can read "Launching…" before the window closes                                                                                          
+      6669 -        time.sleep(1.2)                                                                                                                                                   
+      6670 -                                                                                                                                                                          
+      6668          # Hide Bootstrap before the main process is spawned. The old flow
+      6669          # waited for the main GUI's crash check before closing this window,
+      6670          # which let the Project Selector appear while Bootstrap was still
+
+● Now let me check whether time is still used elsewhere after that edit (it should be — time.time(), time.sleep for retry backoff, etc.). Let me confirm.
+
+● Bash(cd "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release" && grep -n "^import time\b\|^import time$" src/libs/bootstrap.py)
+  ⎿  22:import time
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good, time is still used heavily. Task 6 done.
+
+● Edit 2: Add offline fast-fail to run_update_checks
+
+  Let me find the exact start of run_update_checks and add the probe at the top.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\libs\bootstrap.py)
+  ⎿  Added 11 lines
+      1608      section("Checking for updates")
+      1609      status("Querying PyPI, GitHub, and winget...", DIM)
+      1610
+      1611 +    # Fast offline check: if we can't even reach pypi.org:443 in 2 seconds,                                                                                               
+      1612 +    # every probe below will just sit in its socket timeout (8-20s each).                                                                                                 
+      1613 +    # Bail with a single log line so the bootstrap window proceeds.                                                                                                       
+      1614 +    if not _is_network_reachable(timeout=2.0):                                                                                                                            
+      1615 +        msg = "  ⏭  Offline detected — skipping online update checks."                                                                                                    
+      1616 +        if _gui:                                                                                                                                                          
+      1617 +            _gui.log_dim(msg)                                                                                                                                             
+      1618 +        else:                                                                                                                                                             
+      1619 +            print(msg)                                                                                                                                                    
+      1620 +        return                                                                                                                                                            
+      1621 +                                                                                                                                                                          
+      1622      import threading
+      1623
+      1624      results: dict[str, dict] = {}
+
+● Now add the _is_network_reachable helper near the other network helpers. Let me put it right after _fetch_url since they're both URL/IO helpers.
+
+● Update(src\libs\bootstrap.py)
+  ⎿  Added 14 lines
+      1286          return None
+      1287
+      1288
+      1289 +def _is_network_reachable(timeout: float = 2.0) -> bool:                                                                                                                  
+      1290 +    """Best-effort check: can we open a TCP socket to pypi.org:443 within `timeout`?                                                                                      
+      1291 +                                                                                                                                                                          
+      1292 +    Used to short-circuit a fan-out of online update probes when the network is                                                                                           
+      1293 +    clearly unavailable.  A single lightweight probe beats letting 8-9 probes                                                                                             
+      1294 +    each wait out their own 8-20s socket timeout."""                                                                                                                      
+      1295 +    try:                                                                                                                                                                  
+      1296 +        import socket                                                                                                                                                     
+      1297 +        with socket.create_connection(("pypi.org", 443), timeout=timeout):                                                                                                
+      1298 +            return True                                                                                                                                                   
+      1299 +    except Exception:                                                                                                                                                     
+      1300 +        return False                                                                                                                                                      
+      1301 +                                                                                                                                                                          
+      1302 +                                                                                                                                                                          
+      1303  def _pip_installed_version(pkg_import: str, pkg_name: str) -> str | None:
+      1304      """Return the installed version string for a pip package, or None."""
+      1305      try:
+
+● Task 7 done. Now task 8: defer run_update_checks to a background thread.
+
+● The goal: don't gate the launch on run_update_checks. Instead, fire it on a background thread that runs in parallel with the rest of the setup. The bootstrap window already shows  
+  "Checking for updates" in its log — that still happens. The user is just no longer blocked by it.
+
+  But wait — currently run_update_checks runs AFTER all the dependency checks (line 6648, after CP210x check, OpenCode check, etc.). If I just move it to a background thread right   
+  where it is, it'll still happen after the rest of the setup. That's the simplest and safest change. The user is only blocked by it when those other steps have already completed —  
+  so most of the time, on a warm launch where dependency checks all pass quickly, the update checks are the long pole.
+
+  Actually, even better: I should fire the update-check thread EARLIER — right after pip+pywebview are confirmed, since those are the prerequisites the update check depends on (it   
+  queries pip show on these packages). But for simplicity, let me first just make it not block the launch. I'll fire it on a thread at the point where it's currently called, and let 
+  the main flow proceed to launch the GUI.
+
+  Let me look at the section again:
+
+  Read 1 file (ctrl+o to expand)
+
+● OK. The current call is at line 6673. The main thread (background setup thread) will call run_update_checks and block on it before _finish() runs. I want to:
+
+  1. Skip blocking the main flow on run_update_checks.
+
+  The cleanest approach: replace the call with a small wrapper that spawns a daemon thread. The thread logs the section header itself (so it appears immediately) and runs
+  run_update_checks (which will check skip_updates, the offline probe I just added, etc.).
+
+  Looking at run_update_checks itself — it uses _gui.log_dim, section(), status() to write to the GUI log, and those are already thread-safe via root.after(0, ...). So
+  run_update_checks is already designed to be called from a background thread.
+
+  Let me check the section/status helpers to confirm they thread-safely post to the GUI:
+
+● Search(pattern: "^def section\(|^def status\(|^def ok\(|^def warn\(|^def dim\(", path: "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\src\libs\bootstrap.py")       
+  ⎿  Found 4 lines
+     1231:def status(msg: str, color: str = CYAN):
+     1237:def ok(msg: str):
+     1243:def warn(msg: str):
+     1255:def section(title: str):
+
+● Read(C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\src\libs\bootstrap.py · lines 1228-1277)
+  ⎿  Read 50 lines
+
+                                                                                                                                                           09:20 PM minimax-m3        
+● log_status etc. — let me verify these are thread-safe (use root.after internally):
+
+● Search(pattern: "def log_status|def log_ok|def log_warn|def log_section|def log_subsection|def log_dim|def log_fail|def log_update_notice|def log_up_to_date", path:
+  "C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\src\libs\bootstrap.py")
+  ⎿  Found 9 lines
+     1117:    def log_section(self, title: str):
+     1125:    def log_subsection(self, title: str):
+     1137:    def log_status(self, msg: str):
+     1140:    def log_ok(self, msg: str):
+     1143:    def log_warn(self, msg: str):
+     1146:    def log_fail(self, msg: str):
+     1149:    def log_update_notice(self, pkg: str, current: str, latest: str):
+     1152:    def log_up_to_date(self, pkg: str, version: str):
+     1155:    def log_dim(self, msg: str):
+
+● Read(C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\src\libs\bootstrap.py · lines 1115-1174)
+  ⎿  Read 60 lines
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ /model 
+  ⎿  Kept model as minimax-m3:cloud
+
+❯ /exit
+  ⎿  See ya!
+
+                                                                                                                                                          09:22 PM <synthetic>        
+
+❯ /effort
+  ⎿  Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration
+
+❯ Continue

@@ -13,6 +13,10 @@ _libs_path = Path(__file__).resolve().parent / "src" / "libs"
 if str(_libs_path) not in sys.path:
     sys.path.insert(0, str(_libs_path))
 
+sys.dont_write_bytecode = True
+import os
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import hashlib
 import json
 import os
@@ -27,37 +31,80 @@ if len(sys.argv) > 1:
 import textwrap
 import threading
 import time
+import queue
+from collections import deque
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font as tkfont
 from pathlib import Path
 from datetime import datetime
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import ensure_platformio_penv_with_hook
-except ImportError:
-    # pyrefly: ignore [missing-import]
-    def ensure_platformio_penv_with_hook(*args, **kwargs):
+# ── Lazy imports from bootstrap ──────────────────────────────
+# The original code eagerly did `from bootstrap import X` at module top,
+# which forces Python to fully execute the ~7000-line bootstrap.py module
+# (including its DPI-awareness and file-attribute pokes) on *every* main-GUI
+# launch just to pull a handful of names.  These wrappers defer the import
+# until the name is actually called, so a normal launch that doesn't need
+# any bootstrap functions skips that cost entirely.
+_bootstrap_module = None
+
+
+def _get_bootstrap():
+    """Import (once) and cache the bootstrap module, or return None on failure."""
+    global _bootstrap_module
+    if _bootstrap_module is None:
+        try:
+            import bootstrap
+            _bootstrap_module = bootstrap
+        except ImportError:
+            _bootstrap_module = False
+    return _bootstrap_module if _bootstrap_module else None
+
+
+def ensure_platformio_penv_with_hook(*args, **kwargs):
+    b = _get_bootstrap()
+    if b is None:
         return False
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import find_arduino_cli as _bootstrap_find_arduino_cli
-except ImportError:
-    _bootstrap_find_arduino_cli = None
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import ensure_arduino_cli as _bootstrap_ensure_arduino_cli
-except ImportError:
-    _bootstrap_ensure_arduino_cli = None
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import get_last_arduino_cli_error as _bootstrap_get_last_arduino_cli_error
-except ImportError:
-    _bootstrap_get_last_arduino_cli_error = None
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import _platform_already_installed
-except ImportError:
-    _platform_already_installed = None
+    return b.ensure_platformio_penv_with_hook(*args, **kwargs)
+
+
+def _bootstrap_find_arduino_cli():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.find_arduino_cli()
+
+
+def _bootstrap_ensure_arduino_cli():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.ensure_arduino_cli()
+
+
+def _bootstrap_get_last_arduino_cli_error():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.get_last_arduino_cli_error()
+
+
+def _bootstrap_confirm_healthy_startup() -> bool:
+    """Let Bootstrap save its fast-start record after the GUI is genuinely ready."""
+    if "--from-bootstrap" not in sys.argv:
+        return False
+    b = _get_bootstrap()
+    if b is None:
+        return False
+    try:
+        return bool(b._write_fast_start_record())
+    except Exception:
+        return False
+
+
+def _platform_already_installed(pio_core_dir, platform):
+    b = _get_bootstrap()
+    if b is None:
+        return False
+    return b._platform_already_installed(pio_core_dir, platform)
 
 try:
     from src.dbs import dbs_create, dbs_read, dbs_update, dbs_delete
@@ -72,41 +119,40 @@ if getattr(sys, 'frozen', False):
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 UPLOAD_CONNECTION_ATTEMPTS = 10
-MCU_FLASH_PATCH_VERSION = "v21-compatible-focus-ai-readiness"
+MCU_FLASH_PATCH_VERSION = "v24-ui-responsive-serial-pump"
 
 def hide_hidden_attribute(path) -> None:
     """Set the Windows hidden attribute (FILE_ATTRIBUTE_HIDDEN = 0x02) on
-    internal files/folders so they don't clutter Windows Explorer.
+    app-generated files/folders so they don't clutter Windows Explorer.
 
-    NTFS volumes only.  On FAT32/exFAT (flash drives, external disks) the
-    attribute is skipped entirely: Windows treats any file carrying HIDDEN
-    or SYSTEM as special, and Python's plain open(..., "w") then fails with
-    PermissionError [Errno 13] on those volumes — a hidden-attribute file
-    there is a write-bomb waiting to happen.  Directories stay fully usable
-    with the attribute (only individual FILES are affected), and Explorer
-    hides files equally well on both volume types."""
+    Hidden and read-only are independent attributes.  App-owned entries stay
+    hidden on NTFS, FAT32, and exFAT, while READONLY is always cleared so the
+    GUI and ordinary editors can still update them."""
     try:
         p = Path(path)
         if not p.exists() or sys.platform != "win32":
             return
-        if not is_ntfs_path(p):
-            return
+        os.chmod(p, 0o777 if p.is_dir() else 0o666)
         import ctypes
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
-        if attrs != -1 and not (attrs & 0x02):
-            ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
+        if attrs != -1:
+            desired = (attrs & ~0x01) | 0x02
+            if desired != attrs:
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), desired)
     except Exception:
         pass
 
 def hide_generated_directory(path) -> None:
     """Hide an app-generated DIRECTORY without making its files unwritable.
 
-    Windows supports FILE_ATTRIBUTE_HIDDEN on NTFS, FAT32, and exFAT.  The
-    portability problem is applying hidden/system attributes to the individual
-    files: on some removable volumes that can make later atomic replacements
-    fail with PermissionError.  This helper therefore marks only the directory
-    itself hidden.  Its child files remain ordinary writable files.
+    Windows supports FILE_ATTRIBUTE_HIDDEN on NTFS, FAT32, and exFAT.  A hidden
+    parent keeps the whole generated tree out of Explorer without spending an
+    attribute update on every compiler object inside it.  READONLY is cleared
+    independently, so the directory remains editable.
 
     On non-Windows systems the caller uses a dot-prefixed directory name, which
     is the native hidden-directory convention.
@@ -115,10 +161,13 @@ def hide_generated_directory(path) -> None:
         p = Path(path)
         if sys.platform != "win32" or not p.is_dir():
             return
+        os.chmod(p, 0o777)
         import ctypes
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
-        if attrs != -1 and not (attrs & 0x02):
-            ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | 0x02)
+        if attrs != -1:
+            desired = (attrs & ~0x01) | 0x02
+            if desired != attrs:
+                ctypes.windll.kernel32.SetFileAttributesW(str(p), desired)
     except Exception:
         pass
 
@@ -137,13 +186,27 @@ def unhide_hidden_attribute(path) -> None:
     except Exception:
         pass
 
+
+def _hide_junction(path) -> None:
+    """Hide only a junction entry; /L prevents applying the flag to its target."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["attrib", "/L", "+h", str(path)],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
+
 def ensure_file_writable(path) -> None:
     """Ensure file is writable by clearing POSIX read-only flags and Windows
-    FILE_ATTRIBUTE_READONLY (0x01), FILE_ATTRIBUTE_HIDDEN (0x02) and
-    FILE_ATTRIBUTE_SYSTEM (0x04).  The GUI marks internal files (platformio.ini,
-    .pio, src, ...) with hidden+system so Explorer stays clean; those attributes
-    can make Python's open() fail with PermissionError on some filesystems
-    (notably removable exFAT drives), so they must be cleared before writing."""
+    FILE_ATTRIBUTE_READONLY (0x01).
+
+    Deliberately preserve HIDDEN/SYSTEM: visibility and writability are
+    separate concerns, and app-generated files must not briefly become mixed
+    into the user's visible sketch files whenever the GUI edits them."""
     try:
         p = Path(path)
         if not p.exists():
@@ -154,9 +217,6 @@ def ensure_file_writable(path) -> None:
             attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
             if attrs != -1 and (attrs & 0x01):  # 0x01 = FILE_ATTRIBUTE_READONLY
                 ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x01)
-            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
-            if attrs != -1 and ((attrs & 0x02) or (attrs & 0x04)):
-                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x02 & ~0x04)
     except Exception:
         pass
 
@@ -175,6 +235,69 @@ def is_nonfatal_pio_clean_report(text: str) -> bool:
         ("[winerror" in low and "is not empty" in low)
         or "manually remove the file" in low
     )
+
+
+def classify_platformio_failure(output_lines) -> str:
+    """Classify a failed PlatformIO run without guessing that every failure
+    means the cache is corrupt.
+
+    Normal compiler/linker diagnostics are expected incremental-build state:
+    SCons keeps all successful objects and recompiles only the failed/changed
+    units after the source is fixed.  Only explicit signature-database or
+    build-directory corruption is classified as ``cache`` and eligible for a
+    selected-board-only repair.
+    """
+    lines = [str(line or "") for line in (output_lines or [])]
+    joined = "\n".join(lines).lower()
+
+    cache_markers = (
+        "database disk image is malformed",
+        "pickle data was truncated",
+        "corrupt sconsign",
+        "invalid sconsign",
+        "sconsign file is corrupt",
+        "cannot decode sconsign",
+        "no input files",
+        "please manually remove the file",
+        "directory is not empty",
+        "winerror 145",
+    )
+    source_patterns = (
+        # Warnings/notes can precede a genuine SCons database failure and do
+        # not explain a non-zero exit by themselves.  Only actual compiler
+        # errors outrank an explicit cache-corruption signature.
+        r":\d+(?::\d+)?:\s+(?:fatal\s+error|error)\s*:",
+        r"\bundefined reference to\b",
+        r"\bmultiple definition of\b",
+        r"\bduplicate symbol\b",
+        r"\bundefined symbol\b",
+        r"\bcannot find -l",
+        r"\bwill not fit in region\b",
+        r"\boverflowed by\b",
+        r"\bld(?:\.exe)?:.*(?:error|failed)\b",
+        r"\bcollect2(?:\.exe)?: error\b",
+    )
+    if any(re.search(pattern, joined, re.IGNORECASE) for pattern in source_patterns):
+        return "source"
+    if any(marker in joined for marker in cache_markers):
+        return "cache"
+
+    configuration_markers = (
+        "unknown board",
+        "unknown environment",
+        "could not find the package",
+        "could not find a version that satisfies",
+        "missing package manifest",
+        "platformio.ini",
+        "library dependency finder",
+        "dependency graph",
+        "no such file or directory",
+        "permission denied",
+        "access is denied",
+    )
+    if any(marker in joined for marker in configuration_markers):
+        return "configuration"
+    return "tool"
 
 
 _volume_info_cache: dict = {}
@@ -361,8 +484,15 @@ def get_project_temp_file(project_dir, filename: str) -> Path:
         h = hashlib.md5(str(p).encode("utf-8")).hexdigest()[:12]
         temp_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_cache"
         temp_dir.mkdir(exist_ok=True)
+        # Only migrate/remove names that this helper owns. A future caller
+        # must not cause an arbitrary user JSON/text file in the project root
+        # to be deleted merely because it requested a temp path.
+        owned_names = {
+            ".mcu_gui_cache.json",
+            ".mcu_flash_syntax_errors.json",
+        }
         legacy_file = p / filename
-        if legacy_file.exists():
+        if filename in owned_names and legacy_file.exists():
             try:
                 legacy_file.unlink()
             except Exception:
@@ -795,6 +925,27 @@ class AIEditBackupStore:
                 pass
 
 
+def _is_mcu_generated_instruction_file(path) -> bool:
+    """True only for a legacy/current instruction file proven app-owned."""
+    try:
+        p = Path(path)
+        if not p.is_file() or p.stat().st_size > 2 * 1024 * 1024:
+            return False
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if (
+            "Auto-generated by MCU Flash GUI" in text
+            or "Generated automatically by MCU Flash GUI" in text
+        ):
+            return True
+        return (
+            "project-sketch-scope" in text
+            and "CRITICAL OPENCODE AI WORKSPACE INSTRUCTIONS" in text
+            and "MCU Flash GUI" in text
+        )
+    except OSError:
+        return False
+
+
 def ensure_hidden_read_first_md(sketch_dir) -> None:
     """
     Generate hidden .opencodeignore and AGENTS.md in sketch_dir.
@@ -814,7 +965,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         )
         for r_name in redundant_files:
             rf = s_dir / r_name
-            if rf.exists():
+            if _is_mcu_generated_instruction_file(rf):
                 try:
                     rf.unlink(missing_ok=True)
                 except Exception:
@@ -838,9 +989,13 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         )
         opencode_ign = s_dir / ".opencodeignore"
         try:
-            ensure_file_writable(opencode_ign)
-            opencode_ign.write_text(ignore_content, encoding="utf-8")
-            hide_hidden_attribute(opencode_ign)
+            if (
+                not opencode_ign.exists()
+                or _is_mcu_generated_instruction_file(opencode_ign)
+            ):
+                ensure_file_writable(opencode_ign)
+                opencode_ign.write_text(ignore_content, encoding="utf-8")
+                hide_hidden_attribute(opencode_ign)
         except Exception:
             pass
 
@@ -881,9 +1036,10 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
 
         agents_md = s_dir / "AGENTS.md"
         try:
-            ensure_file_writable(agents_md)
-            agents_md.write_text(content, encoding="utf-8")
-            hide_hidden_attribute(agents_md)
+            if not agents_md.exists() or _is_mcu_generated_instruction_file(agents_md):
+                ensure_file_writable(agents_md)
+                agents_md.write_text(content, encoding="utf-8")
+                hide_hidden_attribute(agents_md)
         except Exception:
             pass
     except Exception:
@@ -936,24 +1092,34 @@ def get_mcu_flasher_src_dir(sketch_dir) -> Path:
         mcu_src = s_dir / "MCU-FLASHER-SRC"
         mcu_src.mkdir(parents=True, exist_ok=True)
         hide_generated_directory(mcu_src)
-        hide_hidden_attribute(mcu_src)
         return mcu_src
     except Exception:
         return Path(sketch_dir)
 
 def hide_internal_project_metadata(sketch_dir) -> None:
-    """Hide every file/folder the app generated in the project folder in
-    Windows Explorer, while keeping the sketch's OWN sources visible.
+    """Hide the explicit app-generated allowlist in Windows Explorer.
 
-    Original sketch files (.ino/.cpp/.c/.h/.txt) are the user's actual
-    project and are never hidden.  Everything else at the root —
-    platformio.ini, .pio/, src/, MCU-FLASHER-SRC/, cache JSONs, AI instruction
-    files, tab-order state, ... — is marked hidden so Explorer shows only the
-    real project."""
+    User sources and every unrecognized root entry remain visible and
+    writable. Unknown names are never inferred to be metadata merely because
+    of their extension, preventing the app from hiding user docs, assets,
+    configuration, or future source types.
+    """
     try:
         s_dir = Path(sketch_dir)
         if not s_dir.exists():
             return
+
+        try:
+            is_codebase_root = s_dir.resolve(strict=False) == SCRIPT_DIR.resolve(strict=False)
+        except Exception:
+            is_codebase_root = False
+
+        # Older releases could hide the codebase itself through a junction
+        # attribute. Repair only these exact directories; do not walk children.
+        if is_codebase_root:
+            unhide_hidden_attribute(s_dir)
+            unhide_hidden_attribute(s_dir / "src")
+            unhide_hidden_attribute(s_dir / "src" / "libs")
         
         # Ensure platformio.ini is always editable
         ini_p = s_dir / "platformio.ini"
@@ -969,32 +1135,53 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
             ".mcu_gui_compat_cache.json", ".mcu_flash_tab_order.json",
             ".ai_edit_signal",
-            ".pio_cache", ".vscode", ".clangd", ".cache", "_temp",
-            ".opencodeignore", ".ignore", "AGENTS.md", "OPENCODE.md",
-            ".mcu_ai_edits", "temp.json", "here.txt", "compile_commands.json", "logs",
-            "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md"
+            ".pio_cache", ".mcu_ai_edits",
         ]
+        if is_codebase_root:
+            # The application root is code, not a user sketch. Keep its source
+            # tree and PlatformIO file visible while still hiding app caches.
+            internal_names = [
+                ".pio", "index_json", "compiled_builds", "build_artifacts",
+                ".build_artifacts", ".mcu_gui_cache.json",
+                ".mcu_flash_syntax_errors.json", ".mcu_gui_compat_cache.json",
+                ".mcu_flash_tab_order.json", ".ai_edit_signal", ".pio_cache",
+                ".mcu_ai_edits",
+            ]
         for name in internal_names:
             p = s_dir / name
             if p.exists():
-                hide_hidden_attribute(p)
                 if p.is_dir():
                     hide_generated_directory(p)
-
-        # Inverse sweep: the sketch's own sources (.ino/.cpp/.c/.h/.txt) are
-        # always visible; every other root-level FILE that is not an internal
-        # name is app-generated (cache, state, editor artifacts) → hide it.
-        # Root folders are only hidden via internal_names above so genuine
-        # user folders (lib/, data/, ...) are never touched.
-        visible_exts = {".ino", ".cpp", ".c", ".h", ".txt"}
-        try:
-            for entry in s_dir.iterdir():
-                if entry.is_dir() or entry.name in internal_names:
-                    continue
-                if entry.suffix.lower() in visible_exts:
-                    unhide_hidden_attribute(entry)
                 else:
-                    hide_hidden_attribute(entry)
+                    hide_hidden_attribute(p)
+
+        # These standard filenames are hidden only when their content proves
+        # MCU Flasher created them.  Never hide a user's own AGENTS.md,
+        # .opencodeignore, SKILL.md, or other instruction file by name alone.
+        for name in (
+            ".opencodeignore", "AGENTS.md", "OPENCODE.md", ".ignore",
+            "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md",
+        ):
+            p = s_dir / name
+            if _is_mcu_generated_instruction_file(p):
+                hide_hidden_attribute(p)
+
+        # Inverse sweep: only the explicit allowlist above is app-owned.  Any
+        # other root-level file may be part of the user's project (including
+        # .hpp, README.md, schematics, custom JSON, and future file types), so
+        # restore its visibility instead of guessing from its extension.
+        try:
+            internal_lower = {name.lower() for name in internal_names}
+            for entry in s_dir.iterdir():
+                if entry.name.lower() in internal_lower:
+                    continue
+                if entry.is_dir():
+                    # Repair folders hidden by the legacy inverse sweep while
+                    # leaving conventional dot-directories alone.
+                    if not entry.name.startswith("."):
+                        unhide_hidden_attribute(entry)
+                    continue
+                unhide_hidden_attribute(entry)
         except Exception:
             pass
     except Exception:
@@ -2256,6 +2443,7 @@ class EditorApi:
                         normalized_paths.append(p)
                 except Exception:
                     normalized_paths.append(p)
+            ensure_file_writable(order_file)
             order_file.write_text(json.dumps(normalized_paths, indent=2), encoding="utf-8")
             hide_hidden_attribute(order_file)
             return {"success": True}
@@ -2322,6 +2510,7 @@ class EditorApi:
             if self._gui.sketch_dir_path:
                 err_file = get_project_temp_file(self._gui.sketch_dir_path, ".mcu_flash_syntax_errors.json")
                 try:
+                    ensure_file_writable(err_file)
                     err_file.write_text(json.dumps(errors, indent=2), encoding="utf-8")
                     hide_hidden_attribute(err_file)
                 except Exception:
@@ -2366,35 +2555,378 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-def _get_safe_platformio_core_dir(script_dir: Path) -> str:
-    frameworks_dir = script_dir / "src" / "_board-frameworks"
+def _make_localappdata_shortcut(real_dir: Path) -> None:
+    """Best-effort: point %LOCALAPPDATA%\\.platformio-mcu-gui at real_dir.
+
+    This is a convenience pointer only — a directory junction on Windows
+    (a symlink elsewhere) — so anything that still goes looking under
+    LocalAppData (manual poking around, an old hardcoded fallback path,
+    etc.) transparently lands in the real, project-local store instead.
+    It is never load-bearing: every actual read/write of packages goes
+    through PLATFORMIO_CORE_DIR / real_dir directly, so if this fails we
+    just skip it silently.
+    """
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_appdata:
+        local_appdata = str(Path.home() / "AppData" / "Local")
+    link_path = Path(local_appdata) / ".platformio-mcu-gui"
+
     try:
-        frameworks_dir.mkdir(parents=True, exist_ok=True)
-        hide_hidden_attribute(frameworks_dir)
+        real_dir_resolved = real_dir.resolve()
+    except Exception:
+        real_dir_resolved = real_dir
+
+    try:
+        if link_path.is_symlink():
+            try:
+                if link_path.resolve() == real_dir_resolved:
+                    return
+            except Exception:
+                pass
+            try:
+                link_path.unlink()
+            except Exception:
+                return
+        elif link_path.exists():
+            if link_path.is_dir():
+                # Could be a pre-existing real folder (e.g. before this
+                # migration) OR a Windows junction (which also reports as
+                # a directory and is not a symlink). Try to tell them apart
+                # by checking whether it already resolves to our target.
+                try:
+                    already_correct = link_path.resolve() == real_dir_resolved
+                except Exception:
+                    already_correct = False
+                if already_correct:
+                    return
+                try:
+                    is_empty = not any(link_path.iterdir())
+                except Exception:
+                    is_empty = False
+                if not is_empty:
+                    # Real user data sitting here — don't touch it, leave as-is.
+                    return
+                try:
+                    os.rmdir(link_path)  # unlinks an empty dir or a junction stub
+                except Exception:
+                    return
+            else:
+                return  # a plain file with this name — leave it alone
+
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
+                    check=True,
+                    capture_output=True,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                link_path.symlink_to(real_dir, target_is_directory=True)
+            except Exception:
+                pass
     except Exception:
         pass
-    local_path = frameworks_dir / ".platformio"
-    local_path_str = str(local_path)
-    if sys.platform == "win32":
-        junction_path = Path("C:\\") / ".platformio-mcu-gui"
+
+
+def _make_root_drive_junction(real_dir: Path) -> str | None:
+    """Best-effort: create <drive>:\\.platformio-mcu-gui as a junction to real_dir.
+
+    GCC (the Xtensa/RISC-V ESP32 cross-compiler) uses Windows CreateProcess
+    internally to spawn cc1plus.exe. Unlike subprocess.Popen, it does NOT
+    quote paths that contain spaces, so it fails with:
+
+        xtensa-esp32s3-elf-g++: error: CreateProcess: No such file or directory
+
+    when PLATFORMIO_CORE_DIR (and therefore the toolchain binary path) contains
+    spaces. Creating a junction at the root of the current drive (no spaces)
+    and using that as PLATFORMIO_CORE_DIR works around this GCC limitation.
+
+    Returns the junction path string on success, or None if the junction could
+    not be created (e.g. non-Windows OS, no write access to root, junction
+    already points somewhere unrelated, etc.).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        # Use the same drive as the real store so the junction always lives on
+        # a locally writable drive even if the project is on a non-C: drive.
+        drive = Path(real_dir).drive or "C:"
+        link_path = Path(drive + "\\.platformio-mcu-gui")
+
         try:
-            local_path.mkdir(parents=True, exist_ok=True)
-            if os.path.lexists(str(junction_path)) or junction_path.exists() or junction_path.is_symlink():
-                subprocess.run(["cmd", "/c", "rmdir", str(junction_path)], creationflags=subprocess.CREATE_NO_WINDOW)
-            res = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(junction_path), local_path_str],
-                capture_output=True, text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            if res.returncode == 0 or junction_path.exists():
-                return str(junction_path)
+            real_dir_resolved = real_dir.resolve()
+        except Exception:
+            real_dir_resolved = real_dir
+
+        # If the junction already points at our real store, reuse it.
+        if link_path.exists() or link_path.is_symlink():
+            try:
+                existing_target = link_path.resolve()
+                if existing_target == real_dir_resolved:
+                    return str(link_path)
+            except Exception:
+                pass
+            # Junction points somewhere else or is broken — leave it alone to
+            # avoid stomping another tool's data, unless it is an empty stub.
+            try:
+                try:
+                    is_empty = not any(link_path.iterdir())
+                except Exception:
+                    is_empty = False
+                if not is_empty:
+                    return None  # has real data — don't touch it
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link_path)],
+                    check=True,
+                    capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except Exception:
+                return None
+
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
+            check=True,
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return str(link_path)
+    except Exception:
+        return None
+
+
+def _get_safe_platformio_core_dir(script_dir: Path) -> str:
+    """Return the single shared PlatformIO package store used by Bootstrap and GUI.
+
+    Never put frameworks/toolchains in the active sketch's ``src`` directory.
+    ``sketch/src`` is generated build input and is intentionally removable by
+    Clean.  PlatformIO's platform/framework/compiler packages must live in a
+    separate persistent store so cleaning a sketch cannot trigger downloads.
+
+    Store lives at ``<PROJECT_FOLDER>/src/libs/.platformio-mcu-gui`` so the
+    whole project — including its downloaded toolchains/frameworks — stays
+    self-contained under one folder. A directory junction/symlink is left at
+    ``%LOCALAPPDATA%\\.platformio-mcu-gui`` pointing back at the real store,
+    purely as a convenience pointer for anything that goes looking there.
+
+    On Windows, when the project path contains spaces, GCC's internal
+    CreateProcess call fails to spawn cc1plus.exe because it does not quote
+    paths. In that case a space-free root-drive junction is created (e.g.
+    ``C:\\.platformio-mcu-gui``) and returned as PLATFORMIO_CORE_DIR so the
+    toolchain binary path that GCC constructs never contains spaces.
+
+    When Bootstrap launches the GUI, preserve its PLATFORMIO_CORE_DIR exactly
+    so both processes always agree on the same store.
+    """
+    inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
+    if inherited:
+        try:
+            inherited_path = Path(os.path.expandvars(os.path.expanduser(inherited)))
+            inherited_path.mkdir(parents=True, exist_ok=True)
+            _make_localappdata_shortcut(inherited_path)
+            return str(inherited_path)
         except Exception:
             pass
-    return local_path_str
 
-os.environ["PLATFORMIO_CORE_DIR"] = _get_safe_platformio_core_dir(SCRIPT_DIR)
+    target_dir = script_dir / "src" / "libs" / ".platformio-mcu-gui"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        _make_localappdata_shortcut(target_dir)
+        # On Windows, when the real store path contains spaces, GCC's internal
+        # CreateProcess cannot launch cc1plus.exe without quoting the path.
+        # Offer a space-free root-drive junction as PLATFORMIO_CORE_DIR so
+        # the toolchain binary path never contains spaces.
+        if sys.platform == "win32" and " " in str(target_dir):
+            junction = _make_root_drive_junction(target_dir)
+            if junction:
+                return junction
+        return str(target_dir)
+    except Exception:
+        pass
+
+    # Portable last resort only, if src/libs isn't writable for some reason.
+    fallback = script_dir / "src" / "_board-frameworks" / ".platformio"
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+        hide_generated_directory(fallback.parent)
+        _make_localappdata_shortcut(fallback)
+        if sys.platform == "win32" and " " in str(fallback):
+            junction = _make_root_drive_junction(fallback)
+            if junction:
+                return junction
+    except Exception:
+        pass
+    return str(fallback)
+
+def _neutralize_conflicting_global_platformio_config() -> None:
+    """Stop PlatformIO's own global config from silently overriding PLATFORMIO_CORE_DIR.
+
+    PlatformIO reads ``<home>/.platformio/platformio.ini`` (its per-user core
+    config -- NOT any project's local platformio.ini) on every invocation. If
+    that file already has a ``[platformio] core_dir = ...`` line -- typically
+    left over from an install that happened before this app started managing
+    its own store -- some PlatformIO versions honor that file over the
+    PLATFORMIO_CORE_DIR environment variable, so headers/toolchains silently
+    resolve from the old location no matter what we set above.
+
+    ``Path.home()`` resolves per-user on every machine (no username is ever
+    hardcoded here), so this is safe to run unconditionally for any account.
+    We only ever comment out a conflicting core_dir line -- we never delete
+    the old store itself, so nothing another tool relies on there is lost.
+    """
+    try:
+        global_ini = Path.home() / ".platformio" / "platformio.ini"
+        if not global_ini.is_file():
+            return
+
+        text = global_ini.read_text(encoding="utf-8", errors="replace")
+        our_core_dir = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
+        if not our_core_dir:
+            return
+
+        import re as _re
+        changed = False
+        out_lines = []
+        for line in text.splitlines():
+            m = _re.match(r"^(\s*)core_dir(\s*=\s*)(.+?)\s*$", line, _re.IGNORECASE)
+            if m:
+                existing_value = m.group(3).strip().strip('"').strip("'")
+                try:
+                    existing_resolved = str(Path(os.path.expandvars(os.path.expanduser(existing_value))).resolve())
+                except Exception:
+                    existing_resolved = existing_value
+                try:
+                    ours_resolved = str(Path(our_core_dir).resolve())
+                except Exception:
+                    ours_resolved = our_core_dir
+                if existing_resolved != ours_resolved:
+                    # Comment it out rather than delete -- keeps the file
+                    # human-diffable and reversible if a person edits it by hand.
+                    out_lines.append(f"{m.group(1)}; (disabled by MCU Flasher — pointed elsewhere) core_dir{m.group(2)}{m.group(3)}")
+                    changed = True
+                    continue
+            out_lines.append(line)
+
+        if changed:
+            global_ini.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    except Exception:
+        # Never let this best-effort cleanup block app startup.
+        pass
+
+
+def _ensure_libs_junction(script_dir: Path) -> str | None:
+    r"""Best-effort: create a space-free root-drive junction pointing at src/libs.
+
+    The project folder name contains spaces (e.g. "MCU Flasher by Naph - Stable Release").
+    Some tools (GCC's internal CreateProcess, Arduino CLI) cannot handle spaces in paths.
+    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/libs``
+    so those tools always have a clean, space-free path to reach the libraries.
+
+    The junction is re-created automatically on every startup so it survives
+    being copied to a different machine or drive letter.
+
+    Returns the junction path string on success, or None.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        libs_dir = (script_dir / "src" / "libs").resolve()
+        project_root = Path(script_dir).resolve()
+        # Drive letter is always derived dynamically from wherever the project lives.
+        # Works on C:, D:, E:, or any other drive — no hardcoded values.
+        drive = Path(libs_dir).drive
+        if not drive:
+            return None  # cannot determine drive — skip silently
+        link_path = Path(drive + "\\.mcuflasher-libs")
+
+        # If already correct, reuse (and re-apply hidden flag in case it was cleared).
+        if link_path.exists() or link_path.is_symlink():
+            try:
+                if link_path.resolve() == libs_dir:
+                    _hide_junction(link_path)
+                    return str(link_path)
+            except Exception:
+                pass
+            # Repair only the known legacy target (the project root). Leave
+            # unrelated non-empty root junctions untouched.
+            try:
+                existing_target = link_path.resolve()
+            except Exception:
+                existing_target = None
+            if existing_target != project_root:
+                try:
+                    is_empty = not any(link_path.iterdir())
+                except Exception:
+                    is_empty = False
+                if not is_empty:
+                    return None  # real data — don't touch it
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link_path)],
+                    check=True, capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except Exception:
+                return None
+
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link_path), str(libs_dir)],
+            check=True, capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        # Hide the junction entry itself, never the src/libs target.
+        _hide_junction(link_path)
+        return str(link_path)
+    except Exception:
+        return None
+
+
+def _configure_platformio_environment(script_dir: Path) -> str:
+    """Ensure all PlatformIO store directories (packages, cache, temp, libraries) live on the project's drive."""
+    try:
+        unhide_hidden_attribute(Path(script_dir))
+        unhide_hidden_attribute(Path(script_dir) / "src")
+        unhide_hidden_attribute(Path(script_dir) / "src" / "libs")
+    except Exception:
+        pass
+    core_dir = _get_safe_platformio_core_dir(script_dir)
+    os.environ["PLATFORMIO_CORE_DIR"] = core_dir
+
+    # Ensure the space-free libs junction exists on this machine.
+    _ensure_libs_junction(script_dir)
+
+    try:
+        c_path = Path(core_dir)
+        tmp_dir = c_path / ".tmp"
+        cache_dir = c_path / ".cache"
+        lib_dir = c_path / "lib"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        lib_dir.mkdir(parents=True, exist_ok=True)
+
+        os.environ["PLATFORMIO_CACHE_DIR"] = str(cache_dir)
+        os.environ["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir / "build")
+        os.environ["PLATFORMIO_GLOBALLIB_DIR"] = str(lib_dir)
+        os.environ["TMP"] = str(tmp_dir)
+        os.environ["TEMP"] = str(tmp_dir)
+        os.environ["TMPDIR"] = str(tmp_dir)
+    except Exception:
+        pass
+    return core_dir
+
+
+_configure_platformio_environment(SCRIPT_DIR)
+_neutralize_conflicting_global_platformio_config()
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PLATFORMIO_UNBUFFERED"] = "1"
+
+# Serialize every read/modify/write cycle that touches a generated platformio.ini.
+# Board changes, compile preparation, and the upload-speed callback can otherwise
+# overlap on fast clicks and make Windows report a transient sharing violation.
+_PLATFORMIO_INI_WRITE_LOCK = threading.RLock()
 
 def _available_memory_gb() -> float | None:
     try:
@@ -2476,7 +3008,7 @@ DEFAULT_BAUD = 115200
 DEFAULT_UPLOAD_SPEED = 460800
 VALID_BAUD_RATES = {
     300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800,
-    38400, 57600, 115200, 230400, 460800, 921600
+    38400, 57600, 115200, 230400, 460800, 512000, 921600
 }
 
 def _get_download_dir() -> str:
@@ -2489,115 +3021,390 @@ def _get_download_dir() -> str:
     Download Manager was open.
     """
     settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
+    default_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src"
+    settings = {}
     if settings_file.exists():
         try:
             settings = json.loads(settings_file.read_text(encoding="utf-8"))
-            download_dir = settings.get("download_dir", "")
-            if download_dir and os.path.isdir(download_dir):
-                return download_dir
         except Exception:
+            settings = {}
+
+    if isinstance(settings, dict):
+        download_dir = str(settings.get("download_dir", "") or "")
+        if download_dir:
+            current_dir = Path(os.path.expandvars(os.path.expanduser(download_dir)))
+            if current_dir.is_dir():
+                return str(current_dir)
+
+        # The settings file is copied with the project. Replace a stale
+        # absolute path from another account/machine with this user's default.
+        settings["download_dir"] = str(default_dir)
+        try:
+            temporary = settings_file.with_name(
+                settings_file.name + f".tmp-{os.getpid()}"
+            )
+            temporary.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+            os.replace(temporary, settings_file)
+        except Exception:
+            try:
+                temporary.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return str(default_dir)
+
+
+def _normalize_board_identity(value: object) -> str:
+    """Normalize a board/vendor/variant identifier for cross-ecosystem matching."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _board_name_tokens(value: object) -> set[str]:
+    """Return meaningful lowercase words from a board name or identifier."""
+    words = set(re.findall(r"[a-z0-9]+", str(value or "").lower()))
+    # Generic words add noise but no identity. Hardware family tokens such as
+    # esp32c3/esp32s3 are deliberately retained because they are useful signals.
+    return words - {
+        "board", "module", "device", "development", "dev", "kit", "version",
+        "rev", "revision", "the", "with", "for", "series",
+    }
+
+
+def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
+    """Parse every downloaded Arduino ``boards.txt`` into neutral board records.
+
+    No PlatformIO board IDs are guessed here.  The Arduino identity (id, name,
+    MCU, variant, USB IDs, etc.) is kept intact and is resolved against the
+    PlatformIO board catalog in a separate step.
+    """
+    records: list[dict] = []
+    if not boards_path.is_dir():
+        return records
+
+    for boards_file in sorted(boards_path.glob("**/boards.txt"), key=lambda x: str(x).lower()):
+        props_by_id: dict[str, dict[str, str]] = {}
+        try:
+            lines = boards_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            left, value = line.split("=", 1)
+            if "." not in left:
+                continue
+            board_id, key = left.split(".", 1)
+            board_id = board_id.strip()
+            key = key.strip()
+            if not board_id or not key or key.startswith("menu.") or ".menu." in key:
+                continue
+            props_by_id.setdefault(board_id, {})[key] = value.strip()
+
+        for board_id, props in props_by_id.items():
+            name = str(props.get("name") or "").strip()
+            if not name:
+                continue
+
+            hwids: set[tuple[int, int]] = set()
+            usb_parts: dict[str, dict[str, int]] = {}
+            for key, value in props.items():
+                match = re.match(r"^(?:upload_port\.)?(vid|pid)\.(\d+)$", key, re.IGNORECASE)
+                if not match:
+                    continue
+                field, index = match.groups()
+                try:
+                    usb_parts.setdefault(index, {})[field.lower()] = int(str(value), 0)
+                except ValueError:
+                    continue
+            for pair in usb_parts.values():
+                if "vid" in pair and "pid" in pair:
+                    hwids.add((pair["vid"], pair["pid"]))
+
+            records.append({
+                "arduino_id": board_id,
+                "name": name,
+                "mcu": str(props.get("build.mcu") or "").strip().lower(),
+                "variant": str(props.get("build.variant") or "").strip(),
+                "build_board": str(props.get("build.board") or "").strip(),
+                "core": str(props.get("build.core") or "").strip().lower(),
+                "flash_size": str(
+                    props.get("build.flash_size") or props.get("upload.flash_size") or ""
+                ).strip(),
+                "memory_type": str(props.get("build.memory_type") or "").strip(),
+                "flash_mode": str(props.get("build.flash_mode") or "").strip(),
+                "has_psram": any(
+                    "BOARD_HAS_PSRAM" in str(v) for k, v in props.items()
+                    if k == "build.defines" or k.startswith("build.extra_flags")
+                ),
+                "hwids": hwids,
+                "source_file": str(boards_file),
+                "source_core": boards_file.parent.name,
+                "properties": props,
+            })
+    return records
+
+
+def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[dict]:
+    """Read PlatformIO's *actual installed* board manifests dynamically.
+
+    PlatformIO officially searches custom/global boards and each installed
+    development platform's ``boards/*.json`` directory.  Scanning those same
+    manifests gives this GUI the canonical board ID that PlatformIO itself will
+    accept, instead of assuming an Arduino boards.txt key is interchangeable.
+    """
+    root_value = str(core_dir or os.environ.get("PLATFORMIO_CORE_DIR") or "").strip()
+    if not root_value:
+        return []
+    root = Path(os.path.expandvars(os.path.expanduser(root_value)))
+    candidates: list[tuple[Path, str]] = []
+
+    global_boards = root / "boards"
+    if global_boards.is_dir():
+        candidates.extend((p, "") for p in global_boards.glob("*.json"))
+
+    platforms_root = root / "platforms"
+    if platforms_root.is_dir():
+        try:
+            for platform_dir in platforms_root.iterdir():
+                board_dir = platform_dir / "boards"
+                if not platform_dir.is_dir() or not board_dir.is_dir():
+                    continue
+                platform_id = platform_dir.name.split("@", 1)[0]
+                candidates.extend((p, platform_id) for p in board_dir.glob("*.json"))
+        except OSError:
             pass
-    # Fallback to default download dir
-    return os.path.join(os.path.expanduser("~"), "Documents", "_MCUFlasherByNaph_src")
+
+    catalog: list[dict] = []
+    for manifest_path, platform_hint in candidates:
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        build = data.get("build") if isinstance(data.get("build"), dict) else {}
+        arduino_build = build.get("arduino") if isinstance(build.get("arduino"), dict) else {}
+        upload = data.get("upload") if isinstance(data.get("upload"), dict) else {}
+        frameworks = data.get("frameworks") or []
+        if isinstance(frameworks, str):
+            frameworks = [frameworks]
+        platform_value = data.get("platform") or data.get("platforms") or platform_hint
+        if isinstance(platform_value, list):
+            platform_value = platform_value[0] if platform_value else platform_hint
+
+        hwids: set[tuple[int, int]] = set()
+        for pair in build.get("hwids") or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            try:
+                hwids.add((int(str(pair[0]), 0), int(str(pair[1]), 0)))
+            except ValueError:
+                pass
+
+        extra_flags = build.get("extra_flags") or []
+        if isinstance(extra_flags, str):
+            extra_flags = [extra_flags]
+        defines = {
+            _normalize_board_identity(match.group(1))
+            for flag in extra_flags
+            for match in [re.search(r"-D\s*(ARDUINO_[A-Za-z0-9_]+)", str(flag), re.IGNORECASE)]
+            if match
+        }
+
+        catalog.append({
+            "id": manifest_path.stem,
+            "name": str(data.get("name") or manifest_path.stem).strip(),
+            "vendor": str(data.get("vendor") or "").strip(),
+            "platform": str(platform_value or platform_hint).strip(),
+            "frameworks": {str(x).lower() for x in frameworks},
+            "mcu": str(build.get("mcu") or "").strip().lower(),
+            "core": str(build.get("core") or "").strip().lower(),
+            "variant": str(build.get("variant") or "").strip(),
+            "memory_type": str(arduino_build.get("memory_type") or build.get("memory_type") or "").strip(),
+            "flash_mode": str(build.get("flash_mode") or "").strip(),
+            "flash_size": str(upload.get("flash_size") or "").strip(),
+            "has_psram": any("BOARD_HAS_PSRAM" in str(flag) for flag in extra_flags),
+            "hwids": hwids,
+            "arduino_defines": defines,
+            "manifest": str(manifest_path),
+        })
+    return catalog
+
+
+def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, list[str]]:
+    """Score one Arduino board record against one canonical PlatformIO board."""
+    frameworks = candidate.get("frameworks") or set()
+    if frameworks and "arduino" not in frameworks:
+        return -1.0, []
+
+    rec_mcu = str(record.get("mcu") or "").lower()
+    pio_mcu = str(candidate.get("mcu") or "").lower()
+    if rec_mcu and pio_mcu and _normalize_board_identity(rec_mcu) != _normalize_board_identity(pio_mcu):
+        return -1.0, []
+
+    score = 0.0
+    reasons: list[str] = []
+    rid = _normalize_board_identity(record.get("arduino_id"))
+    rname = _normalize_board_identity(record.get("name"))
+    rvariant = _normalize_board_identity(record.get("variant"))
+    rbuild = _normalize_board_identity(record.get("build_board"))
+    cid = _normalize_board_identity(candidate.get("id"))
+    cname = _normalize_board_identity(candidate.get("name"))
+    cvariant = _normalize_board_identity(candidate.get("variant"))
+
+    if rec_mcu and pio_mcu:
+        score += 45
+        reasons.append("mcu")
+    if rid and cid and rid == cid:
+        score += 170
+        reasons.append("id")
+    if rvariant and cvariant and rvariant == cvariant:
+        score += 190
+        reasons.append("variant")
+    if rname and cname and rname == cname:
+        score += 165
+        reasons.append("name")
+    if record.get("hwids") and candidate.get("hwids") and (record["hwids"] & candidate["hwids"]):
+        score += 185
+        reasons.append("usb")
+    if rbuild and rbuild in (candidate.get("arduino_defines") or set()):
+        score += 135
+        reasons.append("arduino-define")
+    elif rid and rid in (candidate.get("arduino_defines") or set()):
+        score += 120
+        reasons.append("arduino-define")
+
+    # Token/name similarity is a secondary signal only. Strong identity fields
+    # above (variant, USB IDs, Arduino define, exact name/id) dominate it.
+    import difflib
+    rec_words = _board_name_tokens(f"{record.get('name','')} {record.get('arduino_id','')}")
+    pio_words = _board_name_tokens(f"{candidate.get('name','')} {candidate.get('id','')} {candidate.get('vendor','')}")
+    if rec_words and pio_words:
+        overlap = len(rec_words & pio_words) / max(1, len(rec_words | pio_words))
+        score += overlap * 70.0
+    similarity = difflib.SequenceMatcher(
+        None,
+        str(record.get("name") or "").lower(),
+        str(candidate.get("name") or "").lower(),
+        autojunk=False,
+    ).ratio()
+    score += similarity * 45.0
+
+    return score, reasons
+
+
+def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | None:
+    """Resolve an Arduino board to a PlatformIO board, rejecting ambiguous guesses."""
+    ranked: list[tuple[float, dict, list[str]]] = []
+    for candidate in catalog:
+        score, reasons = _score_arduino_to_pio_board(record, candidate)
+        if score >= 0:
+            ranked.append((score, candidate, reasons))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: (-row[0], str(row[1].get("platform", "")), str(row[1].get("id", ""))))
+    best_score, best, reasons = ranked[0]
+    second_score = ranked[1][0] if len(ranked) > 1 else -999.0
+    strong = any(x in reasons for x in ("id", "variant", "name", "usb", "arduino-define"))
+    if best_score < (120.0 if strong else 105.0):
+        return None
+    if not strong and best_score - second_score < 18.0:
+        return None
+    return {
+        **best,
+        "match_score": round(best_score, 2),
+        "match_reasons": reasons,
+    }
 
 
 def load_dynamic_boards(default_boards: dict) -> dict:
-    """Scan the download directory for boards.txt platform definitions
-    and load all downloaded board types dynamically into the GUI.
+    """Load downloaded Arduino boards and resolve them to real PlatformIO IDs.
 
-    Besides the display name / PIO id / platform, each board entry also
-    carries hardware facts parsed from boards.txt so the compatibility
-    analysis can reason about real limits:
-
-      flash_mb  : default flash size (e.g. 4.0) from ``build.flash_size``
-      has_psram : True when the board's default build defines
-                  ``-DBOARD_HAS_PSRAM`` (menu entries are optional user
-                  selections — NOT board defaults — so they are ignored).
+    Arduino ``boards.txt`` identifiers and PlatformIO board IDs are different
+    namespaces.  The old loader treated them as interchangeable and could
+    therefore generate ``UnknownBoard`` failures.  This loader reads
+    PlatformIO's installed board JSON manifests and matches dynamically using
+    MCU, variant, board name, Arduino build define and USB VID/PID information.
     """
     boards = default_boards.copy()
-    
-    download_dir = _get_download_dir()
-        
-    boards_path = Path(download_dir) / "Boards"
-    if boards_path.is_dir():
-        # Scan subfolders for boards.txt
-        for p in boards_path.glob("**/boards.txt"):
-            parent_name = p.parent.name.lower()
-            if "esp32" in parent_name:
-                platform = "espressif32"
-            elif "esp8266" in parent_name:
-                platform = "espressif8266"
-            elif "avr" in parent_name or "uno" in parent_name:
-                platform = "atmelavr"
-            else:
-                platform = "espressif32"
+    boards_path = Path(_get_download_dir()) / "Boards"
+    records = _parse_downloaded_arduino_board_files(boards_path)
+    catalog = _load_platformio_board_catalog()
 
-            try:
-                board_props: dict[str, dict] = {}
-                for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if ".menu." in line:
-                        continue
-                    if ".name=" in line:
-                        parts = line.split(".name=", 1)
-                        if len(parts) == 2 and "." not in parts[0].strip():
-                            board_props.setdefault(parts[0].strip(), {})["name"] = parts[1].strip()
-                    elif ".build.flash_size=" in line:
-                        parts = line.split(".build.flash_size=", 1)
-                        if parts and "." not in parts[0].strip():
-                            board_props.setdefault(parts[0].strip(), {})["flash_size"] = parts[1].strip()
-                    elif ".build.defines=" in line and "BOARD_HAS_PSRAM" in line:
-                        board_id = line.split(".", 1)[0].strip()
-                        if board_id:
-                            board_props.setdefault(board_id, {})["psram"] = True
+    resolved_rows: list[tuple[dict, dict | None]] = [
+        (record, _resolve_arduino_board_record(record, catalog)) for record in records
+    ]
 
-                for board_id, props in board_props.items():
-                    display_name = props.get("name")
-                    if not display_name or display_name in boards:
-                        continue
-                    pio_board = board_id.lower()
-                    if pio_board in ("esp32", "esp32_family"):
-                        pio_board = "esp32dev"
-                    elif pio_board == "esp32s3":
-                        pio_board = "esp32-s3-devkitc-1"
-                    elif pio_board == "esp32c3":
-                        pio_board = "esp32-c3-devkit-m-1"
-                    elif pio_board == "esp32s2":
-                        pio_board = "esp32-s2-kaluga-1"
-                    elif pio_board == "esp32c6":
-                        pio_board = "esp32-c6-devkitc-1"
-                    elif pio_board == "nodemcu":
-                        pio_board = "nodemcuv2"
+    # Infer the PlatformIO platform for an entire downloaded Arduino core from
+    # the boards that matched confidently.  This lets an unsupported/new board
+    # retain the correct family without a folder-name -> platform hardcode.
+    source_platform_counts: dict[str, dict[str, int]] = {}
+    for record, match in resolved_rows:
+        if not match or not match.get("platform"):
+            continue
+        bucket = source_platform_counts.setdefault(record["source_file"], {})
+        platform = str(match["platform"])
+        bucket[platform] = bucket.get(platform, 0) + 1
+    inferred_source_platform: dict[str, str] = {}
+    for source_file, counts in source_platform_counts.items():
+        if counts:
+            inferred_source_platform[source_file] = max(
+                counts.items(), key=lambda item: (item[1], item[0])
+            )[0]
 
-                    entry: dict = {
-                        "platform": platform,
-                        "board": pio_board,
-                        "framework": "arduino",
-                        "flash_mb": None,
-                        "has_psram": False,
-                    }
-                    m = re.match(
-                        r"(\d+(?:\.\d+)?)\s*MB", props.get("flash_size", ""), re.IGNORECASE
-                    )
-                    if m:
-                        entry["flash_mb"] = float(m.group(1))
-                    entry["has_psram"] = bool(props.get("psram"))
-                    boards[display_name] = entry
-            except Exception:
-                pass
+    used_names: set[str] = set(boards)
+    for record, match in resolved_rows:
+        display_name = str(record.get("name") or record.get("arduino_id") or "Unknown board")
+        if display_name in used_names:
+            display_name = f"{display_name} ({record.get('arduino_id')})"
+        used_names.add(display_name)
+
+        platform = str((match or {}).get("platform") or inferred_source_platform.get(record["source_file"], ""))
+        pio_id = str((match or {}).get("id") or record.get("arduino_id") or "").strip()
+        pio_resolved = bool(match and platform and pio_id)
+
+        entry: dict = {
+            "platform": platform,
+            "board": pio_id,
+            "framework": "arduino",
+            "pio_resolved": pio_resolved,
+            "pio_match_score": (match or {}).get("match_score", 0.0),
+            "pio_match_reasons": list((match or {}).get("match_reasons") or []),
+            "arduino_board_id": str(record.get("arduino_id") or ""),
+            "arduino_variant": str(record.get("variant") or ""),
+            "arduino_build_board": str(record.get("build_board") or ""),
+            "mcu": str((match or {}).get("mcu") or record.get("mcu") or "").lower(),
+            "pio_name": str((match or {}).get("name") or ""),
+            "pio_vendor": str((match or {}).get("vendor") or ""),
+            "pio_manifest": str((match or {}).get("manifest") or ""),
+            "flash_mb": None,
+            # Compile-time options come from the resolved PlatformIO manifest
+            # first, because PlatformIO (not the downloaded Arduino core copy)
+            # is the compiler actually consuming them.
+            "has_psram": bool((match or {}).get("has_psram") or record.get("has_psram")),
+            "memory_type": str((match or {}).get("memory_type") or record.get("memory_type") or "") or None,
+            "flash_mode": str((match or {}).get("flash_mode") or record.get("flash_mode") or "") or None,
+            "source_core": str(record.get("source_core") or ""),
+        }
+        flash_raw = str((match or {}).get("flash_size") or record.get("flash_size") or "")
+        m = re.match(r"(\d+(?:\.\d+)?)\s*MB", flash_raw, re.IGNORECASE)
+        if m:
+            entry["flash_mb"] = float(m.group(1))
+        boards[display_name] = entry
     return boards
 
 
 SUPPORTED_BOARDS = load_dynamic_boards({})
 
 
-def load_downloaded_board_usb_ids() -> dict[tuple[int, int], str]:
-    """Map downloaded boards.txt VID/PID pairs to GUI board display names.
+def load_downloaded_board_usb_ids() -> dict[tuple[int, int], tuple[str, ...]]:
+    """Map VID/PID pairs to every downloaded board that declares them.
 
-    The old implementation returned a set even though descriptor detection
-    indexed it as a dictionary. Exact USB identity detection therefore failed.
+    ESP native-USB VID/PIDs are often shared or can be emitted by firmware, so
+    a single ``dict[pair] = board`` silently made the last board in boards.txt
+    win.  Preserve ambiguity and auto-select an exact board only when the pair
+    uniquely identifies one currently resolved board.
     """
     values: dict[tuple[str, str], dict[str, int]] = {}
     boards_path = Path(_get_download_dir()) / "Boards"
@@ -2624,18 +3431,22 @@ def load_downloaded_board_usb_ids() -> dict[tuple[int, int], str]:
 
     board_names_by_id: dict[str, str] = {}
     for display_name, info in SUPPORTED_BOARDS.items():
-        board_id = str(info.get("board", "")).strip().lower()
+        board_id = str(info.get("arduino_board_id") or info.get("board", "")).strip().lower()
         if board_id:
             board_names_by_id.setdefault(board_id, display_name)
 
-    mapped: dict[tuple[int, int], str] = {}
+    buckets: dict[tuple[int, int], set[str]] = {}
     for (board_id, _index), usb_id in values.items():
         if "vid" not in usb_id or "pid" not in usb_id:
             continue
         display_name = board_names_by_id.get(board_id)
         if display_name:
-            mapped[(usb_id["vid"], usb_id["pid"])] = display_name
-    return mapped
+            buckets.setdefault((usb_id["vid"], usb_id["pid"]), set()).add(display_name)
+    return {
+        pair: tuple(sorted(names, key=str.lower))
+        for pair, names in buckets.items()
+        if names
+    }
 
 
 DOWNLOADED_BOARD_USB_IDS = load_downloaded_board_usb_ids()
@@ -2991,6 +3802,10 @@ def find_arduino_cli_executable() -> str | None:
                 return path_str
         except Exception:
             pass
+        try:
+            cached_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     cli = shutil.which("arduino-cli")
     if cli:
@@ -3194,61 +4009,95 @@ def set_combobox_direction(combo: ttk.Combobox, direction: str = "above"):
 # BOARD COMPATIBILITY DETECTOR
 # ═══════════════════════════════════════════════════════════════
 def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None:
-    """Search SUPPORTED_BOARDS for a board matching *platform*
-    (e.g. "espressif32"), optionally preferring one whose PlatformIO
-    board id contains *variant_hint* (e.g. "s3" to prefer an S3-specific
-    entry over a generic ESP32 one when both exist).
+    """Return the safest resolved board for a platform / MCU-family hint.
 
-    Replaces the old approach of hardcoding a single guaranteed-to-exist
-    display name per platform/variant (e.g. always returning the literal
-    string "ESP32-S3 Dev Module"). Now that board entries are populated
-    by load_dynamic_boards from whatever boards.txt files are actually
-    downloaded, the real display name for "an ESP32-S3 board" varies by
-    what's installed and is never something this code can assume in
-    advance -- so this searches the live dict by platform/board-id
-    instead of returning a literal name.
-
-    Returns None if no board of the requested platform exists at all
-    (e.g. nothing has been downloaded yet) -- callers must handle that,
-    same as they previously had to handle SUPPORTED_BOARDS lookups
-    failing for any other reason.
+    A chip probe such as ``ESP32-S3 (QFN56)`` identifies the silicon family,
+    not the vendor PCB.  Many downloaded boards therefore share the exact same
+    ``build.mcu`` value.  Never break that tie by display-name length (which
+    previously made a short vendor name such as ``Bee S3`` win).  Instead,
+    prefer the Arduino core's generic family definition when one exists -- a
+    record whose Arduino board ID or variant equals its MCU family.  If the
+    family remains genuinely ambiguous, return ``None`` rather than inventing a
+    specific vendor board.
     """
-    variant_hint = variant_hint.lower()
-    
-    # Prioritize standard "ESP32 Dev Module" or "esp32dev" for plain ESP32 (no variant hint or esp32 / esp32dev)
-    if platform == "espressif32" and variant_hint in ("", "esp32", "esp32dev"):
-        for name, info in SUPPORTED_BOARDS.items():
-            if info.get("platform") == "espressif32" and name.lower() == "esp32 dev module":
-                return name
-        for name, info in SUPPORTED_BOARDS.items():
-            if info.get("platform") == "espressif32" and info.get("board") == "esp32dev":
-                return name
+    platform_norm = str(platform or "").lower().strip()
+    hint_norm = _normalize_board_identity(variant_hint)
+    rows: list[dict] = []
 
-    # Prioritize standard "ESP32-S3 Dev Module" over Octal / WROOM2 variants for ESP32-S3
-    if platform == "espressif32" and variant_hint in ("esp32s3", "s3", "esp32-s3"):
-        for name, info in SUPPORTED_BOARDS.items():
-            if info.get("platform") == "espressif32" and name.lower() in ("esp32-s3 dev module", "esp32s3 dev module"):
-                return name
-        for name, info in SUPPORTED_BOARDS.items():
-            if info.get("platform") == "espressif32" and info.get("board", "").lower() in ("esp32-s3-devkitc-1", "esp32s3dev"):
-                return name
-        for name, info in SUPPORTED_BOARDS.items():
-            if info.get("platform") == "espressif32" and ("esp32-s3 dev module" in name.lower() or "esp32s3 dev module" in name.lower()):
-                if "octal" not in name.lower():
-                    return name
-
-    fallback = None
     for name, info in SUPPORTED_BOARDS.items():
-        if info.get("platform") != platform:
+        if not info.get("pio_resolved", True):
             continue
-        if variant_hint and variant_hint in info.get("board", "").lower():
-            return name
-        if fallback is None:
-            fallback = name
-        # Prefer "Dev Module" entries over generic ones (e.g. "ESP32 Family Device")
-        elif "dev module" in name.lower() and "dev module" not in fallback.lower():
-            fallback = name
-    return fallback
+        if str(info.get("platform") or "").lower() != platform_norm:
+            continue
+
+        mcu_norm = _normalize_board_identity(info.get("mcu"))
+        board_norm = _normalize_board_identity(info.get("board"))
+        arduino_id_norm = _normalize_board_identity(info.get("arduino_board_id"))
+        variant_norm = _normalize_board_identity(info.get("arduino_variant"))
+        pio_name_norm = _normalize_board_identity(info.get("pio_name"))
+        display_norm = _normalize_board_identity(name)
+
+        if hint_norm:
+            fields = (mcu_norm, board_norm, arduino_id_norm, variant_norm, pio_name_norm, display_norm)
+            family_match = 0
+            if mcu_norm and mcu_norm == hint_norm:
+                family_match = 500
+            elif any(value == hint_norm for value in fields if value):
+                family_match = 420
+            elif mcu_norm and (hint_norm in mcu_norm or mcu_norm in hint_norm):
+                family_match = 340
+            elif any(hint_norm in value or value in hint_norm for value in fields if value):
+                family_match = 220
+            if family_match <= 0:
+                continue
+        else:
+            family_match = 0
+
+        # Generic-family score is derived from metadata, not a board-name list.
+        # Arduino's generic definitions normally use the MCU family itself as
+        # the boards.txt key and/or build.variant (esp32s3 -> esp32s3, etc.).
+        generic_score = 0
+        if mcu_norm:
+            if arduino_id_norm == mcu_norm:
+                generic_score += 600
+            if variant_norm == mcu_norm:
+                generic_score += 520
+            if board_norm == mcu_norm:
+                generic_score += 260
+        generic_words = f"{name} {info.get('pio_name','')}".lower()
+        if "dev module" in generic_words or "development module" in generic_words:
+            generic_score += 90
+        if "devkit" in generic_words:
+            generic_score += 40
+
+        rows.append({
+            "name": name,
+            "family_match": family_match,
+            "generic_score": generic_score,
+            "mcu_norm": mcu_norm,
+        })
+
+    if not rows:
+        return None
+
+    if hint_norm:
+        # If the hint exactly identifies an MCU family, restrict selection to
+        # that family before considering genericness.
+        exact_mcu = [row for row in rows if row["mcu_norm"] == hint_norm]
+        if exact_mcu:
+            rows = exact_mcu
+
+    rows.sort(key=lambda row: (-row["family_match"], -row["generic_score"], row["name"].lower()))
+    best = rows[0]
+
+    # A silicon-only detection must not manufacture a vendor-specific board.
+    # When multiple boards share the same exact MCU and none is identifiable as
+    # the generic family definition, leave the user's selection unchanged.
+    same_family = [row for row in rows if row["mcu_norm"] and row["mcu_norm"] == best["mcu_norm"]]
+    if hint_norm and len(same_family) > 1 and best["generic_score"] <= 0:
+        return None
+
+    return str(best["name"])
 
 
 def find_arduino_uno_board() -> str | None:
@@ -3268,18 +4117,43 @@ def is_s3_board(p_board: str) -> bool:
     """True when *p_board* (a PlatformIO board id, e.g. from
     board_info["board"]) identifies an ESP32-S3 variant.
 
-    Several compile-flag decisions (native-USB CDC build flags, dio
-    flash mode, upload_protocol=esptool) need to apply to "whichever
-    downloaded board is an S3", not to one specific hardcoded board id.
-    load_dynamic_boards normalizes any boards.txt entry whose .name= key
-    starts with esp32s3 to the PlatformIO id "esp32-s3-devkitc-1" -- so
-    checking for the substring "s3" in the id (rather than comparing
-    against that one exact string) tracks the same real distinction
-    while still matching if a differently-packaged S3 board ever
-    produces a differently-formatted id containing "s3", instead of
-    silently failing to recognize it.
+    Native-USB CDC build flags need to apply to whichever resolved board
+    targets an ESP32-S3 family MCU, not to one specific hardcoded board ID.
+    The canonical PlatformIO IDs discovered at runtime include the MCU family
+    token, so this helper remains independent of any particular vendor board.
     """
     return "s3" in (p_board or "").lower()
+
+
+def normalized_board_memory_options(board_info: dict | None) -> tuple[str | None, bool]:
+    """Return ``(PlatformIO flash size, has_psram)`` for either board schema.
+
+    Built-in entries historically used ``flash_size``/``psram`` while the
+    downloaded boards.txt loader exposes ``flash_mb``/``has_psram``.  Keeping
+    normalization in one place prevents main builds and reset builds from
+    silently disagreeing about the same physical board.
+    """
+    info = dict(board_info or {})
+    flash_size = info.get("flash_size")
+    if not flash_size and info.get("flash_mb") is not None:
+        try:
+            flash_size = f"{float(info['flash_mb']):g}MB"
+        except (TypeError, ValueError):
+            flash_size = None
+    has_psram = bool(info.get("psram") or info.get("has_psram"))
+    return (str(flash_size) if flash_size else None), has_psram
+
+
+def normalized_board_memory_type(board_info: dict | None) -> str:
+    """Return an explicit Arduino memory type, rejecting unresolved templates."""
+    value = str(dict(board_info or {}).get("memory_type") or "").strip().lower()
+    return value if re.fullmatch(r"[a-z0-9_]+", value) else ""
+
+
+def normalized_board_flash_mode(board_info: dict | None) -> str:
+    """Return an explicit flash mode only when the board declares one."""
+    value = str(dict(board_info or {}).get("flash_mode") or "").strip().lower()
+    return value if value in {"dio", "dout", "qio", "qout"} else ""
 
 
 def boards_by_platform(board_names, platforms: set[str]) -> set[str]:
@@ -3316,12 +4190,12 @@ def boards_by_platform(board_names, platforms: set[str]) -> set[str]:
 # rather than a fixed display-name string. Only ESP chips are detectable
 # this way; AVR boards use avrdude instead.
 _ESPTOOL_CHIP_TO_PLATFORM_HINT: dict[str, tuple[str, str]] = {
-    "ESP32-S3":   ("espressif32", "s3"),
-    "ESP32-S2":   ("espressif32", "s2"),
-    "ESP32-C3":   ("espressif32", "c3"),
-    "ESP32-C6":   ("espressif32", "c6"),
-    "ESP32-H2":   ("espressif32", "h2"),
-    "ESP32":      ("espressif32", ""),
+    "ESP32-S3":   ("espressif32", "esp32s3"),
+    "ESP32-S2":   ("espressif32", "esp32s2"),
+    "ESP32-C3":   ("espressif32", "esp32c3"),
+    "ESP32-C6":   ("espressif32", "esp32c6"),
+    "ESP32-H2":   ("espressif32", "esp32h2"),
+    "ESP32":      ("espressif32", "esp32"),
     "ESP8266EX":  ("espressif8266", ""),
     "ESP8266":    ("espressif8266", ""),
 }
@@ -3917,6 +4791,58 @@ del _os
 # a writable config file during the bootstrap/relaunch race.  --new-window is
 # the explicit opt-in used when a user really wants an independent task.
 _GUI_INSTANCE_MUTEX = None
+_RESET_CACHE_MUTEX_NAME = "Local\\MCUFlasherByNaph.ResetCache"
+
+
+def _try_acquire_reset_cache_lock():
+    """Acquire the Windows cross-process reset-cache mutex without waiting.
+
+    Hard Reset, Soft Reset, and Clean share app-level recovery folders even
+    when ``--new-window`` starts multiple processes.  Serializing those three
+    operations prevents one window from deleting a tree another is building
+    or flashing.  Windows abandons an owned mutex automatically on process
+    exit, so a crash cannot leave a permanent lock.
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (
+            wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR,
+        )
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel32.CreateMutexW(None, False, _RESET_CACHE_MUTEX_NAME)
+        if not handle:
+            return None
+        wait_result = kernel32.WaitForSingleObject(handle, 0)
+        if wait_result in (0x00000000, 0x00000080):  # acquired / abandoned
+            return int(handle)
+        kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    return None
+
+
+def _release_reset_cache_lock(handle) -> None:
+    """Release a handle returned by ``_try_acquire_reset_cache_lock``."""
+    if not handle or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.ReleaseMutex.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        native_handle = wintypes.HANDLE(handle)
+        kernel32.ReleaseMutex(native_handle)
+        kernel32.CloseHandle(native_handle)
+    except Exception:
+        pass
 
 
 def _claim_gui_instance() -> bool:
@@ -4626,33 +5552,25 @@ class ProjectSelectorDialog:
                 self.frame_new.pack(fill=tk.BOTH, expand=True)
 
     def _get_project_files(self, folder_path: Path | str) -> list[str]:
-        """Scan a project directory for .cpp, .ino, .h, .hpp, .txt files."""
+        """Scan only the selected project folder for user-owned source files.
+
+        ``src`` is a reserved build snapshot managed by MCU Flasher. It must
+        never make a folder look like a project or appear in the selector's
+        preview, because those copies are not the files the user edits.
+        """
         valid_exts = {".cpp", ".ino", ".h", ".hpp", ".txt"}
         found_files: list[tuple[int, str]] = []
         try:
             p = Path(folder_path)
             if not p.exists() or not p.is_dir():
                 return []
-            
-            dirs_to_check = [p]
-            src_dir = p / "src"
-            if src_dir.exists() and src_dir.is_dir():
-                dirs_to_check.append(src_dir)
 
-            seen = set()
-            for d in dirs_to_check:
-                try:
-                    for item in d.iterdir():
-                        if item.is_file():
-                            ext = item.suffix.lower()
-                            if ext in valid_exts:
-                                rel_path = item.name if d == p else f"src/{item.name}"
-                                if rel_path not in seen:
-                                    seen.add(rel_path)
-                                    prio = 0 if ext == ".ino" else (1 if ext in (".h", ".hpp") else (2 if ext == ".cpp" else 3))
-                                    found_files.append((prio, rel_path))
-                except Exception:
-                    pass
+            for item in p.iterdir():
+                if item.is_file():
+                    ext = item.suffix.lower()
+                    if ext in valid_exts:
+                        prio = 0 if ext == ".ino" else (1 if ext in (".h", ".hpp") else (2 if ext == ".cpp" else 3))
+                        found_files.append((prio, item.name))
         except Exception:
             pass
         
@@ -4733,16 +5651,86 @@ class ProjectSelectorDialog:
         self.existing_path_var.trace_add("write", _update_existing_contents)
         _update_existing_contents()
 
-        # Recent Projects list
+        # Recent Projects list — show a placeholder and scan on a background
+        # thread so the dialog window is responsive immediately.
+        self._recent_placeholder = tk.Label(
+            self.frame_existing,
+            text="Loading recent projects…",
+            font=f_sub, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+            anchor=tk.W,
+        )
+        self._recent_placeholder.pack(anchor=tk.W, pady=(8, 4))
+
+        import threading
+        threading.Thread(target=self._populate_recent_projects, daemon=True).start()
+
+    def _populate_recent_projects(self):
+        """Background-thread worker: scan recent projects and post the
+        results back to the main thread for rendering."""
         recent_list = load_recent_projects()
-        if self.initial_dir:
+        initial_dir = self.initial_dir
+        if initial_dir:
             try:
-                curr_resolved = str(Path(self.initial_dir).resolve())
+                curr_resolved = str(Path(initial_dir).resolve())
                 recent_list = [p for p in recent_list if str(Path(p).resolve()) != curr_resolved]
             except Exception:
-                recent_list = [p for p in recent_list if p != self.initial_dir]
+                recent_list = [p for p in recent_list if p != initial_dir]
 
-        if recent_list:
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+
+        # Pre-compute all the data we need off the main thread
+        entries = []
+        for path in recent_list:
+            try:
+                p_path = Path(path)
+                owner_pid = folder_lock_owner(p_path) if p_path.exists() else None
+                is_locked = owner_pid is not None
+                files = self._get_project_files(p_path) if p_path.exists() else []
+                if files:
+                    files_str = "📄 " + "  •  ".join(files[:6]) + (f" (+{len(files)-6} more)" if len(files) > 6 else "")
+                    files_color = Theme.CYAN_DIM
+                else:
+                    files_str = "📄 (No .cpp / .ino / .h / .txt files found)"
+                    files_color = Theme.TEXT_DIM
+
+                if is_locked:
+                    btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
+                    fg_color = Theme.RED
+                    bg_idle = Theme.BG_DARK
+                    bg_hover = Theme.BG_DARK
+                    cursor = "no" if sys.platform == "win32" else "X_cursor"
+                else:
+                    btn_text = f" 📁 {p_path.name}  —  {path}"
+                    fg_color = Theme.TEXT_BRIGHT
+                    bg_idle = Theme.BG_DARK
+                    bg_hover = Theme.BG_HOVER
+                    cursor = "hand2"
+
+                entries.append({
+                    "path": path,
+                    "btn_text": btn_text,
+                    "files_str": files_str,
+                    "files_color": files_color,
+                    "fg_color": fg_color,
+                    "bg_idle": bg_idle,
+                    "bg_hover": bg_hover,
+                    "cursor": cursor,
+                })
+            except Exception as ex:
+                print(f"[WARN] Error scanning recent path '{path}': {ex}")
+
+        # Post the render back to the main thread
+        self.win.after(0, lambda: self._render_recent_projects(entries))
+
+    def _render_recent_projects(self, entries: list[dict]):
+        """Replace the placeholder with the actual recent project list."""
+        if hasattr(self, "_recent_placeholder") and self._recent_placeholder:
+            self._recent_placeholder.destroy()
+            self._recent_placeholder = None
+
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+
+        if entries:
             tk.Label(
                 self.frame_existing, text="Recent Projects (double-click to open):", font=f_label,
                 fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor=tk.W
@@ -4785,52 +5773,30 @@ class ProjectSelectorDialog:
             recent_frame.bind("<Configure>", _on_recent_frame_configure)
             canvas.bind("<Configure>", _on_canvas_configure)
 
-            # Mousewheel scrolling — bind to canvas and all child labels
             def _on_mousewheel(event):
                 canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
             canvas.bind("<MouseWheel>", _on_mousewheel)
 
-            for path in recent_list:
+            for entry in entries:
                 try:
+                    path = entry["path"]
                     p_path = Path(path)
-                    owner_pid = folder_lock_owner(p_path) if p_path.exists() else None
-                    is_locked = owner_pid is not None
-                    files = self._get_project_files(p_path) if p_path.exists() else []
-                    if files:
-                        files_str = "📄 " + "  •  ".join(files[:6]) + (f" (+{len(files)-6} more)" if len(files) > 6 else "")
-                        files_color = Theme.CYAN_DIM
-                    else:
-                        files_str = "📄 (No .cpp / .ino / .h / .txt files found)"
-                        files_color = Theme.TEXT_DIM
 
-                    if is_locked:
-                        btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
-                        fg_color = Theme.RED
-                        bg_idle = Theme.BG_DARK
-                        bg_hover = Theme.BG_DARK  # no hover highlight; it's not openable
-                        cursor = "no" if sys.platform == "win32" else "X_cursor"
-                    else:
-                        btn_text = f" 📁 {p_path.name}  —  {path}"
-                        fg_color = Theme.TEXT_BRIGHT
-                        bg_idle = Theme.BG_DARK
-                        bg_hover = Theme.BG_HOVER
-                        cursor = "hand2"
-
-                    card = tk.Frame(recent_frame, bg=bg_idle, padx=8, pady=5, cursor=cursor)
+                    card = tk.Frame(recent_frame, bg=entry["bg_idle"], padx=8, pady=5, cursor=entry["cursor"])
                     card.pack(fill=tk.X, pady=3)
 
-                    lbl_title = tk.Label(card, text=btn_text, font=f_mono, fg=fg_color, bg=bg_idle, anchor=tk.W, cursor=cursor)
+                    lbl_title = tk.Label(card, text=entry["btn_text"], font=f_mono, fg=entry["fg_color"], bg=entry["bg_idle"], anchor=tk.W, cursor=entry["cursor"])
                     lbl_title.pack(fill=tk.X)
 
-                    lbl_files = tk.Label(card, text=f"    {files_str}", font=f_sub, fg=files_color, bg=bg_idle, anchor=tk.W, cursor=cursor)
+                    lbl_files = tk.Label(card, text=f"    {entry['files_str']}", font=f_sub, fg=entry["files_color"], bg=entry["bg_idle"], anchor=tk.W, cursor=entry["cursor"])
                     lbl_files.pack(fill=tk.X, pady=(2, 0))
 
                     card.bind("<MouseWheel>", _on_mousewheel)
                     lbl_title.bind("<MouseWheel>", _on_mousewheel)
                     lbl_files.bind("<MouseWheel>", _on_mousewheel)
 
-                    def _make_handlers(c=card, lt=lbl_title, lf=lbl_files, p=path, bg_h=bg_hover, bg_i=bg_idle):
+                    def _make_handlers(c=card, lt=lbl_title, lf=lbl_files, p=path, bg_h=entry["bg_hover"], bg_i=entry["bg_idle"]):
                         def on_enter(e):
                             c.configure(bg=bg_h)
                             lt.configure(bg=bg_h)
@@ -4848,11 +5814,10 @@ class ProjectSelectorDialog:
                             widget.bind("<Double-Button-1>", lambda e, p=p: (self.existing_path_var.set(p), self._on_open_existing()))
                     _make_handlers()
                 except Exception as ex:
-                    print(f"[WARN] Error rendering recent path '{path}': {ex}")
+                    print(f"[WARN] Error rendering recent path '{entry['path']}': {ex}")
         else:
-            # Fallback spacer
+            # No recent projects — add a spacer to keep layout clean
             tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST).pack(fill=tk.BOTH, expand=True)
-
 
     def _browse_existing(self):
         from tkinter import filedialog
@@ -5522,12 +6487,27 @@ class MCUUploadGUI:
         self._last_known_ports: set = set()  # for USB hotplug detection
         self._auto_start_after_id = None
         self._last_conn_attempt = {"port": "", "baud": 0, "board": "", "time": 0.0}
-        # High-baud serial devices can produce hundreds of lines per second.
-        # Batch those lines before touching Tk, whose widget updates must stay
-        # on the main thread.
-        self._serial_display_queue: list[tuple[str, str, bool]] = []
+        # High-baud serial devices can produce thousands of lines per second.
+        # The serial reader must never call Tk directly: it only pushes rows into
+        # this bounded deque.  A main-thread display pump drains it in small
+        # batches, and suspends expensive Text rendering while the Serial Monitor
+        # tab is not visible.  This prevents 921600-baud traffic from starving tab
+        # changes and other Tk events.
+        self._serial_display_queue: deque[tuple[str, str, bool]] = deque(maxlen=12000)
         self._serial_display_lock = threading.Lock()
-        self._serial_display_flush_scheduled = False
+        self._serial_display_flush_scheduled = False  # legacy state; pump owns scheduling
+        self._serial_display_dropped_rows = 0
+        self._serial_tab_visible = False
+        self._serial_display_pump_after_id = None
+        self._serial_last_trim_monotonic = 0.0
+        self._serial_last_autoscroll_monotonic = 0.0
+        # The monitor worker adapts this coalescing window to the selected baud.
+        self._serial_display_flush_delay_ms = 25
+        # Cross-thread UI callbacks are queued here and executed only by Tk's
+        # main thread.  Background workers must use _post_ui() instead of
+        # calling root.after()/widget methods themselves.
+        self._ui_dispatch_queue = queue.SimpleQueue()
+        self._ui_dispatch_after_id = self.root.after(16, self._drain_ui_dispatch_queue)
         # Track if we're at the start of a new line (for timestamp prefix)
         self._serial_at_line_start = True
         # Avoid repeating the same warning on automatic reconnects. A changed
@@ -5550,6 +6530,10 @@ class MCUUploadGUI:
         # so switching back to a previously-built board doesn't force a
         # needless rebuild just because a different board was compiled in between.
         self._compile_cache_by_board: dict[str, str] = {}
+        # Build-affecting platformio.ini fingerprint for each exact board.
+        # This lets A -> B -> A compare against A's configuration even while
+        # the single generated root ini still temporarily describes B.
+        self._build_config_hash_by_board: dict[str, str] = {}
         # Exact PlatformIO DEBUG/RAM/Flash rows from each successful build.
         # The direct esptool path intentionally skips PlatformIO's upload
         # wrapper, so this cache lets it restore the useful build summary
@@ -6628,7 +7612,7 @@ class MCUUploadGUI:
         self.serial_baud_combo = ttk.Combobox(
             self.serial_baud_group, textvariable=self.serial_baud_var, width=10,
             font=self.font_mono_sm, state="readonly",
-            values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"],
+            values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "512000", "921600"],
         )
         self.serial_baud_combo.pack(side=tk.LEFT, padx=(4, 0))
         self.serial_baud_combo.bind("<<ComboboxSelected>>", lambda e: self._on_serial_baud_changed())
@@ -6967,6 +7951,10 @@ class MCUUploadGUI:
         self.bottom_notebook.bind(
             "<ButtonRelease-1>", self._on_bottom_notebook_click_release, add="+"
         )
+        # Serial rendering is driven by one Tk-owned pump.  It keeps receiving
+        # bytes in the background at all times, but avoids repainting the hidden
+        # terminal while the user is working in another tab.
+        self._serial_display_pump_after_id = self.root.after(25, self._serial_display_pump)
 
         self.main_pane.add(bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
 
@@ -7706,7 +8694,10 @@ class MCUUploadGUI:
         inner = tk.Frame(win, bg=Theme.BG_MID, padx=8, pady=6)
         inner.pack(padx=1, pady=1)
 
-        # Build buttons with current labels from the real buttons
+        # Build buttons with current labels AND current enabled/disabled state
+        # from the real buttons.  The compact popup is only a second view of the
+        # same controls; it must never bypass the state enforced on the wide UI.
+        # Each entry is: (label, action, normal_bg, hover_bg, source_widget).
         entries = []
         if sys.platform == "win32" and win32gui is not None:
             detached = getattr(self, "editor_detached", False)
@@ -7715,14 +8706,15 @@ class MCUUploadGUI:
             else:
                 det_bg, det_bgh = "#2d7d46", "#38a058"
             entries.append((self.btn_detach_editor.cget("text"),
-                            self._toggle_editor_detachment, det_bg, det_bgh))
+                            self._toggle_editor_detachment, det_bg, det_bgh,
+                            self.btn_detach_editor))
         entries.append((self.btn_toggle_editor.cget("text"), self._toggle_editor_pane,
-                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, self.btn_toggle_editor))
         entries.append((self.btn_toggle_monitors.cget("text"),
                         self._toggle_monitors_pane,
-                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, self.btn_toggle_monitors))
         entries.append(("⚙ Settings", self._open_settings,
-                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H))
+                        Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, self.btn_settings))
         
         if self.ai_controller:
             ai_label = "🤖 AI Assistant"
@@ -7730,24 +8722,44 @@ class MCUUploadGUI:
             ai_action = self._toggle_ai_side_panel
             if getattr(self, "_ai_side_visible", False):
                 ai_label = "🤖 Hide AI"
-            entries.append((ai_label, ai_action, ai_bg, ai_bgh))
+            entries.append((ai_label, ai_action, ai_bg, ai_bgh,
+                            getattr(self, "btn_ai_assistant", None)))
 
-        for label, action, bg_c, bg_h in entries:
-            def make_cb(a=action):
+        for label, action, bg_c, bg_h, source_widget in entries:
+            def _source_is_disabled(widget=source_widget):
+                try:
+                    return widget is not None and str(widget.cget("state")) == str(tk.DISABLED)
+                except Exception:
+                    return False
+
+            def make_cb(a=action, source=source_widget):
                 def cb():
                     self._close_options_dropdown()
+                    # Re-check at click time as well.  An operation can begin
+                    # after the popup was opened but before the user clicks.
+                    try:
+                        if source is not None and str(source.cget("state")) == str(tk.DISABLED):
+                            return
+                    except Exception:
+                        pass
                     a()
                 return cb
+
+            disabled = _source_is_disabled()
             btn = tk.Button(
                 inner, text=label, command=make_cb(),
                 font=self.font_btn, fg=Theme.TEXT_BRIGHT, bg=bg_c,
                 activebackground=bg_h, activeforeground=Theme.TEXT_BRIGHT,
-                relief=tk.FLAT, borderwidth=0, padx=self._btn_padx, pady=self._btn_pady, cursor="hand2",
+                disabledforeground=Theme.TEXT_DIM,
+                relief=tk.FLAT, borderwidth=0, padx=self._btn_padx, pady=self._btn_pady,
+                cursor="arrow" if disabled else "hand2",
                 anchor=tk.CENTER,
+                state=tk.DISABLED if disabled else tk.NORMAL,
             )
             btn.pack(fill=tk.X, pady=2)
-            btn.bind("<Enter>", lambda e, b=btn, c=bg_h: b.configure(bg=c))
-            btn.bind("<Leave>", lambda e, b=btn, c=bg_c: b.configure(bg=c))
+            if not disabled:
+                btn.bind("<Enter>", lambda e, b=btn, c=bg_h: b.configure(bg=c))
+                btn.bind("<Leave>", lambda e, b=btn, c=bg_c: b.configure(bg=c))
 
         # Position below the dropdown trigger button
         self.root.update_idletasks()
@@ -7958,33 +8970,42 @@ class MCUUploadGUI:
             return default_cols
 
     def _append_progress(self, text: str, tag: str = "", action_type: str = ""):
-        """Append progress line, replacing the previous line only if it belongs to the SAME active action and isn't completed (100%)."""
+        """Append/update one live progress row for a specific action/package.
+
+        ``action_type`` may be ``Downloading:<package>`` or
+        ``Unpacking:<package>``.  Rows are only replaced when BOTH the phase and
+        package match, so progress for one PlatformIO package can never overwrite
+        another package's completed row.
+        """
         def _do():
             self.console.configure(state=tk.NORMAL)
             last_line = self.console.get("end-2c linestart", "end-2c lineend")
             last_low = last_line.lower()
 
             act_low = action_type.lower() if action_type else ""
+            if ":" in act_low:
+                act_kind, act_item = act_low.split(":", 1)
+            else:
+                act_kind, act_item = act_low, ""
+            act_kind = act_kind.strip()
+            act_item = act_item.strip()
 
-            # If switching to unpacking and previous line was downloading < 100%, finalize downloading to 100% first
-            if act_low == "unpacking" and "downloading" in last_low and "100%" not in last_line:
-                full_bar = "\u25b0" * 30
-                done_dl = f"  ✔ Downloading  {full_bar}  100%"
-                ts_match = re.match(r'^\[\d+:\d+:\d+\]\s*', last_line)
-                ts_prefix = ts_match.group(0) if ts_match else ""
-                self.console.delete("end-2c linestart", "end-1c")
-                self.console.insert(tk.END, ts_prefix, "timestamp")
-                self.console.insert(tk.END, done_dl + "\n", "success")
-                last_line = done_dl
-                last_low = done_dl.lower()
+            # Never fabricate a missing 100% row when PlatformIO jumps directly
+            # from downloading to unpacking.  Show exactly what PlatformIO
+            # reported and simply start a new phase row.
+            same_action = False
+            if act_kind:
+                same_action = act_kind in last_low
+                if same_action and act_item:
+                    same_action = act_item in last_low
+            else:
+                same_action = "downloading" in last_low or "unpacking" in last_low
 
-            same_action = (act_low in last_low) if act_low else ("downloading" in last_low or "unpacking" in last_low)
             is_completed = ("100%" in last_line or "✔" in last_line)
 
             if same_action and not is_completed:
                 ts_match = re.match(r'^\[\d+:\d+:\d+\]\s*', last_line)
                 ts_prefix = ts_match.group(0) if ts_match else ""
-                
                 self.console.delete("end-2c linestart", "end-1c")
                 self.console.insert(tk.END, ts_prefix, "timestamp")
                 self.console.insert(tk.END, text + "\n", tag)
@@ -8262,30 +9283,28 @@ class MCUUploadGUI:
         self.root.after(0, _do)
 
     def _load_persistent_notifications(self, category_filter: str | None = None):
-        """Load and display saved notifications from src/dbs/dbs_notif.json."""
-        def _do():
+        """Load notification data off-thread, but render it only on Tk's thread."""
+        def _read_records():
+            cat_query = None
+            lvl_query = None
+            if category_filter == "🔌 USB Devices":
+                cat_query = "device"
+            elif category_filter == "✖ Errors":
+                lvl_query = "error"
+
+            records = dbs_read.get_notifications(category=cat_query, level=lvl_query, limit=200)
+            if category_filter == "📦 Boards & Libraries":
+                records = [r for r in records if r.get("category") in ("board_install", "library_install")]
+            return list(reversed(records))
+
+        def _render(records):
             try:
-                cat_query = None
-                lvl_query = None
-                if category_filter == "🔌 USB Devices":
-                    cat_query = "device"
-                elif category_filter == "✖ Errors":
-                    lvl_query = "error"
-
-                records = dbs_read.get_notifications(category=cat_query, level=lvl_query, limit=200)
-
-                if category_filter == "📦 Boards & Libraries":
-                    records = [r for r in records if r.get("category") in ("board_install", "library_install")]
-
-                # Oldest first for chronological log list
-                records = list(reversed(records))
-
                 self.notif_console.configure(state=tk.NORMAL)
                 self.notif_console.delete("1.0", tk.END)
-
                 if not records:
                     self.notif_console.insert(tk.END, "  ℹ No saved notifications recorded yet.\n", "dim")
                 else:
+                    insert_args: list[object] = []
                     for r in records:
                         date_str = r.get("date", "")
                         time_str = r.get("time", "")
@@ -8293,22 +9312,22 @@ class MCUUploadGUI:
                         msg = r.get("message", "")
                         lvl = r.get("level", "info")
                         tag = lvl if lvl in ("success", "info", "warning", "error") else "info"
-
-                        self.notif_console.insert(tk.END, f"[{ts_display}] ", "timestamp")
-                        self.notif_console.insert(tk.END, f"{msg}\n", tag)
-
+                        insert_args.extend((f"[{ts_display}] ", "timestamp", f"{msg}\n", tag))
+                    if insert_args:
+                        self.notif_console.insert(tk.END, insert_args[0], *insert_args[1:])
                 self.notif_console.configure(state=tk.DISABLED)
                 self.notif_console.see(tk.END)
-            except Exception as e:
-                print(f"[MCU Flasher] Error loading persistent notifications: {e}")
+            except Exception as exc:
+                print(f"[MCU Flasher] Error rendering persistent notifications: {exc}")
 
-        threading.Thread(target=_do, daemon=True).start()
+        self._run_bg_task(_read_records, on_success=_render)
 
     def _append_tagged_line(self, line: str, is_newline: bool = True):
-        """Parse and color-code a serial monitor line → serial panel.
-        If is_newline is True, the line ends with a newline and we're at the
-        start of a new line. If False, it's a partial line (e.g., progress dots)
-        that should be displayed immediately without a timestamp.
+        """Queue one serial-monitor row without making any Tk call.
+
+        The queue is bounded so a hidden Serial Monitor cannot accumulate an
+        unbounded backlog.  At 921600 baud the reader remains free to drain the
+        OS driver even while Tk is busy painting another tab.
         """
         low = line.lower()
         if "error" in low or "fatal" in low or "fail" in low:
@@ -8323,58 +9342,125 @@ class MCUUploadGUI:
             tag = "system"
         else:
             tag = ""
+
         with self._serial_display_lock:
+            if self._serial_display_queue.maxlen and len(self._serial_display_queue) >= self._serial_display_queue.maxlen:
+                self._serial_display_dropped_rows += 1
             self._serial_display_queue.append((line, tag, is_newline))
-            if self._serial_display_flush_scheduled:
-                return
-            self._serial_display_flush_scheduled = True
-        # A very short coalescing window dramatically reduces Tk work on
-        # chatty devices while remaining indistinguishable to a user.
-        self.root.after(25, self._flush_tagged_serial_lines)
+
+    def _serial_monitor_is_selected(self) -> bool:
+        """Return whether the Serial Monitor tab is currently visible (Tk thread)."""
+        try:
+            if not getattr(self, "monitors_pane_visible", True):
+                return False
+            current = self.bottom_notebook.select()
+            return bool(current) and self.bottom_notebook.index(current) == self._serial_monitor_tab_index()
+        except Exception:
+            return False
+
+    def _serial_display_pump(self):
+        """Tk-owned serial display scheduler.
+
+        Bytes continue to be received on the serial worker while this tab is
+        hidden, but hidden Text-widget rendering is suspended.  When the user
+        returns, buffered rows are drained over multiple short frames instead of
+        one huge repaint that can freeze the application.
+        """
+        self._serial_display_pump_after_id = None
+        try:
+            visible = self._serial_monitor_is_selected()
+            self._serial_tab_visible = visible
+            if visible:
+                self._flush_tagged_serial_lines()
+            high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
+            delay_ms = 16 if (visible and high_rate) else (25 if visible else 120)
+            if self.root and self.root.winfo_exists():
+                self._serial_display_pump_after_id = self.root.after(delay_ms, self._serial_display_pump)
+        except Exception:
+            try:
+                self._serial_display_pump_after_id = self.root.after(120, self._serial_display_pump)
+            except Exception:
+                self._serial_display_pump_after_id = None
 
     def _flush_tagged_serial_lines(self):
-        """Flush queued device output in one Tk Text-widget transaction.
-        Handles both complete lines (with newlines) and partial chunks
-        (e.g., progress dots) for real-time display.
+        """Render a bounded serial batch on Tk's main thread.
+
+        Bounded batches protect tab switching and window interaction from a
+        sustained 921600-baud stream.  Remaining rows stay queued for the next
+        pump tick.
         """
+        if not getattr(self, "_serial_tab_visible", False):
+            return
+
+        high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
+        batch_limit = 700 if high_rate else 450
         with self._serial_display_lock:
-            lines = self._serial_display_queue
-            self._serial_display_queue = []
-            self._serial_display_flush_scheduled = False
-        if not lines:
+            take = min(batch_limit, len(self._serial_display_queue))
+            lines = [self._serial_display_queue.popleft() for _ in range(take)]
+            dropped = self._serial_display_dropped_rows
+            self._serial_display_dropped_rows = 0
+        if not lines and not dropped:
             return
 
         try:
             self.serial_console.configure(state=tk.NORMAL)
+            insert_args: list[object] = []
+
+            if dropped:
+                ts = datetime.now().strftime("%H:%M:%S")
+                insert_args.extend((f"[{ts}] ", "timestamp"))
+                insert_args.extend((f"… {dropped} serial rows skipped while the display was busy/hidden …\n", "warning"))
+                self._serial_at_line_start = True
+
             for text, tag, is_newline in lines:
                 clean_text = text
                 if getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get():
                     if ANSI_CLEAR_RE.search(clean_text):
+                        insert_args = []
                         self.serial_console.delete("1.0", tk.END)
                         self._serial_at_line_start = True
                         clean_text = ANSI_CLEAR_RE.sub("", clean_text)
-                
+
                 clean_text = ANSI_CSI_RE.sub("", clean_text)
                 if not clean_text and not is_newline:
                     continue
 
                 if self._serial_at_line_start and clean_text:
                     ts = datetime.now().strftime("%H:%M:%S")
-                    self.serial_console.insert(tk.END, f"[{ts}] ", "timestamp")
-                self.serial_console.insert(tk.END, clean_text + ("\n" if is_newline else ""), tag)
-                if is_newline:
-                    self._serial_at_line_start = True
-                else:
-                    self._serial_at_line_start = False
-            total_lines = int(self.serial_console.index("end-1c").split(".")[0])
-            if total_lines > 1500:
-                self.serial_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
+                    insert_args.extend((f"[{ts}] ", "timestamp"))
+
+                payload = clean_text + ("\n" if is_newline else "")
+                if payload:
+                    insert_args.extend((payload, tag or ""))
+                self._serial_at_line_start = bool(is_newline)
+
+            if insert_args:
+                self.serial_console.insert(tk.END, insert_args[0], *insert_args[1:])
+
+            now = time.monotonic()
+            # Text line counting/deletion forces layout work; do it at most twice
+            # per second instead of on every 16-25 ms serial frame.
+            if now - self._serial_last_trim_monotonic >= 0.5:
+                self._serial_last_trim_monotonic = now
+                total_lines = int(self.serial_console.index("end-1c").split(".")[0])
+                if total_lines > 2600:
+                    keep_lines = 1700
+                    self.serial_console.delete("1.0", f"{total_lines - keep_lines + 1}.0")
+
             self.serial_console.configure(state=tk.DISABLED)
-            if self.serial_autoscroll_var.get():
+            # see(END) can trigger an expensive geometry pass.  20 Hz is visually
+            # smooth while leaving time for clicks, tab changes, and editor paint.
+            if self.serial_autoscroll_var.get() and now - self._serial_last_autoscroll_monotonic >= 0.05:
+                self._serial_last_autoscroll_monotonic = now
                 self.serial_console.see(tk.END)
         except tk.TclError:
-            # The window can be closing while a monitor worker flushes.
             pass
+        finally:
+            try:
+                if str(self.serial_console.cget("state")) != str(tk.DISABLED):
+                    self.serial_console.configure(state=tk.DISABLED)
+            except Exception:
+                pass
 
     def _clear_console(self):
         self.console.configure(state=tk.NORMAL)
@@ -8388,7 +9474,8 @@ class MCUUploadGUI:
 
     def _clear_serial_console(self):
         with self._serial_display_lock:
-            self._serial_display_queue = []
+            self._serial_display_queue.clear()
+            self._serial_display_dropped_rows = 0
         self._serial_at_line_start = True
         def _do():
             self.serial_console.configure(state=tk.NORMAL)
@@ -8630,6 +9717,10 @@ class MCUUploadGUI:
                 self.btn_upload.configure(state=tk.DISABLED)
                 self.btn_new_project.configure(state=tk.DISABLED)
                 self.btn_settings.configure(state=tk.DISABLED)
+                # If compact OPTIONS was already open, discard the stale popup.
+                # Reopening it while busy rebuilds the menu from the real button
+                # states, so Settings appears disabled there as well.
+                self._close_options_dropdown()
                 if hasattr(self, "btn_reset_mcu") and self.btn_reset_mcu:
                     try:
                         if operation in ("upload", "flash", "reset"):
@@ -9418,22 +10509,57 @@ class MCUUploadGUI:
 
     # ──────────────────────────────────────────────────────────
     # PORT MANAGEMENT
+    def _post_ui(self, callback) -> None:
+        """Queue a callable for Tk's main thread without invoking Tk from a worker."""
+        if not callable(callback):
+            return
+        try:
+            self._ui_dispatch_queue.put(callback)
+        except Exception:
+            pass
+
+    def _drain_ui_dispatch_queue(self) -> None:
+        """Main-thread pump for callbacks produced by background workers.
+
+        The pump is deliberately bounded per tick so a burst of worker results
+        cannot monopolize the Tk event loop and make tab changes appear frozen.
+        """
+        self._ui_dispatch_after_id = None
+        processed = 0
+        try:
+            while processed < 120:
+                try:
+                    callback = self._ui_dispatch_queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    callback()
+                except Exception:
+                    pass
+                processed += 1
+        finally:
+            try:
+                if self.root and self.root.winfo_exists():
+                    self._ui_dispatch_after_id = self.root.after(8 if processed else 20, self._drain_ui_dispatch_queue)
+            except Exception:
+                self._ui_dispatch_after_id = None
+
     def _run_bg_task(self, task_func, *args, on_success=None, on_error=None):
-        """Submit a task to the central ThreadPoolExecutor.
-        Executes when CPU is ready, keeping the UI thread 100% smooth.
-        Callbacks are marshaled back to the main UI thread via root.after().
+        """Submit work to the central ThreadPoolExecutor.
+
+        Worker threads never touch Tk.  Completion callbacks are posted to the
+        main-thread dispatch queue, avoiding cross-thread Tcl calls that can
+        intermittently stall or deadlock the GUI on Windows.
         """
         def _worker():
             try:
                 result = task_func(*args)
                 if on_success and callable(on_success):
-                    if hasattr(self, "root") and self.root and self.root.winfo_exists():
-                        self.root.after(0, lambda: on_success(result))
+                    self._post_ui(lambda result=result: on_success(result))
                 return result
             except Exception as exc:
                 if on_error and callable(on_error):
-                    if hasattr(self, "root") and self.root and self.root.winfo_exists():
-                        self.root.after(0, lambda: on_error(exc))
+                    self._post_ui(lambda exc=exc: on_error(exc))
                 return None
 
         if hasattr(self, "_bg_executor") and self._bg_executor:
@@ -9588,12 +10714,22 @@ class MCUUploadGUI:
         return "break"
 
     def _on_bottom_notebook_tab_changed(self, _event=None):
-        if not self._compatible_devices_is_selected():
-            return
-        try:
-            self.root.after_idle(self._repair_compatible_devices_interaction)
-        except Exception:
-            pass
+        # This handler runs on Tk's thread, so it is the authoritative place to
+        # publish whether serial rendering should be active.  The serial reader
+        # itself never queries Tk widgets.
+        serial_selected = self._serial_monitor_is_selected()
+        self._serial_tab_visible = serial_selected
+        if serial_selected:
+            try:
+                self.root.after_idle(self._flush_tagged_serial_lines)
+            except Exception:
+                pass
+
+        if self._compatible_devices_is_selected():
+            try:
+                self.root.after_idle(self._repair_compatible_devices_interaction)
+            except Exception:
+                pass
 
     def _on_bottom_notebook_click_release(self, _event=None):
         """A real tab click should also reclaim focus from embedded native views."""
@@ -9651,6 +10787,7 @@ class MCUUploadGUI:
                 "reasons": list(reasons),
                 "updated_at": datetime.now().strftime("%H:%M:%S"),
             }
+            ensure_file_writable(path)
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             hide_hidden_attribute(path)
         except Exception:
@@ -9670,6 +10807,7 @@ class MCUUploadGUI:
             return
 
         cached = None
+        path = None
         try:
             path = self._compat_cache_file()
             if path and path.exists():
@@ -9682,6 +10820,14 @@ class MCUUploadGUI:
                 }
         except Exception:
             cached = None
+            # This is generated app state. A malformed file should be removed
+            # so the next successful compile can recreate it after a copy or
+            # interrupted write.
+            try:
+                if path:
+                    path.unlink(missing_ok=True)
+            except Exception:
+                pass
         self._compat_cache = cached
 
         if not cached:
@@ -10483,53 +11629,74 @@ class MCUUploadGUI:
         ).start()
 
     def _detect_board_from_descriptor(self, port: str) -> str | None:
-        """Inspect USB descriptor strings (VID/PID, Product, Manufacturer, Description)
-        to identify board type without opening or resetting the serial port.
+        """Apply only the three intentionally-supported passive port heuristics.
+
+        These mappings are deliberately conservative.  A USB descriptor normally
+        identifies the bridge/USB interface, not the exact PCB, so the application
+        does not try to infer XIAO/Bee/M5/etc. from VID/PID, vendor names, or generic
+        MCU-family clues here.
+
+        Supported common signatures only:
+          * Silicon Labs / CP210x-style descriptor -> generic ESP32 Dev Module
+          * USB-SERIAL (classic hyphenated WCH-style label) -> Arduino Uno
+          * USB-Enhanced-SERIAL / USB Enhanced SERIAL -> generic ESP32-S3 Dev Module
+
+        Anything else returns None and leaves the user's board selection untouched.
         """
         try:
+            port_device = self._extract_port_device(port) or str(port or '').strip()
+            if not port_device:
+                return None
+
             for candidate in serial.tools.list_ports.comports():
-                if candidate.device.upper() == port.upper():
-                    text = f"{candidate.description or ''} {candidate.product or ''} {candidate.manufacturer or ''} {candidate.hwid or ''}".lower()
-                    
-                    if any(k in text for k in ["usb-enhanced", "enhanced-serial", "ch343", "ch342", "ch9102", "esp32-s3", "esp32s3"]):
-                        return find_board_for_platform("espressif32", variant_hint="esp32s3") or "ESP32-S3 Dev Module"
-                    elif any(k in text for k in ["silicon labs", "cp210"]):
-                        return find_board_for_platform("espressif32", variant_hint="esp32dev") or "ESP32 Dev Module"
-                    elif "esp32-c3" in text or "esp32c3" in text:
-                        return find_board_for_platform("espressif32", variant_hint="esp32c3") or "ESP32-C3 Dev Module"
-                    elif "esp32-s2" in text or "esp32s2" in text:
-                        return find_board_for_platform("espressif32", variant_hint="esp32s2") or "ESP32-S2 Dev Module"
-                    elif "esp32" in text:
-                        return find_board_for_platform("espressif32", variant_hint="esp32") or "ESP32 Dev Module"
-                    elif "esp8266" in text or "nodemcu" in text:
-                        return find_board_for_platform("espressif8266") or "NodeMCU 1.0 (ESP-12E Module)"
-                    elif (
-                        any(k in text for k in (
-                            "usb-serial ch340", "usb serial ch340",
-                            "usb-serial ch341", "usb serial ch341",
-                            "wch ch340", "wch ch341",
-                            "ch340", "ch341", "ch340g", "ch340c"
-                        ))
-                        or (
-                            candidate.vid is not None
-                            and candidate.pid is not None
-                            and (candidate.vid, candidate.pid) in KNOWN_UNO_CLONE_USB_IDS
-                        )
-                    ):
-                        return find_arduino_uno_board() or "Arduino Uno"
-                    elif "uno" in text or "atmega328" in text:
-                        return find_arduino_uno_board() or "Arduino Uno"
-                    
-                    # Check downloaded board USB VID/PIDs
-                    if candidate.vid is not None and candidate.pid is not None:
-                        if (candidate.vid, candidate.pid) in DOWNLOADED_BOARD_USB_IDS:
-                            matched_board = DOWNLOADED_BOARD_USB_IDS[(candidate.vid, candidate.pid)]
-                            if matched_board in SUPPORTED_BOARDS:
-                                return matched_board
-                    break
+                if candidate.device.upper() != port_device.upper():
+                    continue
+
+                raw_text = " ".join((
+                    candidate.description or "",
+                    candidate.product or "",
+                    candidate.manufacturer or "",
+                    candidate.hwid or "",
+                ))
+                text = re.sub(r"\s+", " ", raw_text).strip().lower()
+                compact = re.sub(r"[^a-z0-9]+", "", text)
+
+                # 1) Common CP210x/Silicon Labs bridge used by classic ESP32
+                #    development modules.  Prefer the generic family board, never
+                #    a vendor-specific board sharing the same ESP32 silicon.
+                if "silicon labs" in text or "siliconlabs" in compact:
+                    return find_board_for_platform("espressif32", variant_hint="esp32")
+
+                # 2) Common S3 USB-enhanced serial descriptor.  Check this BEFORE
+                #    the generic USB-SERIAL rule so an enhanced S3 interface can
+                #    never fall through to Arduino Uno.
+                enhanced_serial = (
+                    "usb-enhanced-serial" in text
+                    or "usb enhanced serial" in text
+                    or "usb-enchanced-serial" in text  # tolerate common misspelling
+                    or "usbenhancedserial" in compact
+                    or "usbenchancedserial" in compact
+                )
+                if enhanced_serial:
+                    return find_board_for_platform("espressif32", variant_hint="esp32s3")
+
+                # 3) Classic Arduino/clone descriptor.  Intentionally require the
+                #    hyphenated USB-SERIAL spelling (or CH340/CH341 beside it) so a
+                #    generic Windows "USB Serial Device" CDC interface is NOT
+                #    misclassified as an Uno.
+                classic_usb_serial = (
+                    "usb-serial" in text
+                    and "enhanced" not in text
+                    and "enchanced" not in text
+                )
+                if classic_usb_serial:
+                    return find_arduino_uno_board()
+
+                return None
         except Exception:
             pass
         return None
+
 
     def _auto_detect_board_from_port(self, port: str, _attempt: int = 1, _max_attempts: int = 4):
         """Background worker: probe *port* to auto-select board safely.
@@ -10578,21 +11745,38 @@ class MCUUploadGUI:
         self.root.after(0, _non_disruptive_fallback)
 
     def _on_baud_changed(self):
-        """Handle baud rate selection change."""
-        baud = self.baud_var.get()
+        """Handle a real baud-rate change; ignore re-selecting the current value."""
+        baud = str(self.baud_var.get()).strip()
+        current_baud = (
+            str(self.serial_baud_var.get()).strip()
+            if hasattr(self, "serial_baud_var") else baud
+        )
+        # ttk.Combobox emits <<ComboboxSelected>> even when the user picks the
+        # item that is already selected.  Treat that as a no-op so it cannot
+        # restart the Serial Monitor or pulse/reset the attached MCU.
+        if baud == current_baud:
+            return
+
         self._set_status(f"Baud rate changed to {baud}", Theme.CYAN)
         self._set_serial_status("reconnecting")
-        # Also sync the serial monitor tab baud var
+        # Also sync the serial monitor tab baud var.
         if hasattr(self, "serial_baud_var"):
             self.serial_baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
 
     def _on_serial_baud_changed(self):
-        """Handle serial monitor tab baud rate change."""
-        baud = self.serial_baud_var.get()
+        """Handle a real Serial Monitor baud change; ignore same-value re-selection."""
+        baud = str(self.serial_baud_var.get()).strip()
+        current_baud = str(self.baud_var.get()).strip()
+        # Selecting the currently-active entry (for example 115200 -> 115200)
+        # still fires <<ComboboxSelected>>.  Do not convert that UI event into
+        # a reconnect/reset when the effective baud rate did not change.
+        if baud == current_baud:
+            return
+
         self._set_status(f"Serial monitor baud rate: {baud}", Theme.CYAN)
         self._set_serial_status("reconnecting")
-        # Also sync the main baud var
+        # Also sync the main/internal baud var.
         self.baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
 
@@ -10660,25 +11844,31 @@ class MCUUploadGUI:
 
         def _update_ini_task():
             ini_path = self.sketch_dir_path / "platformio.ini"
-            if ini_path.exists():
-                content = ini_path.read_text(encoding="utf-8")
-                if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
-                    content = re.sub(
-                        r"^upload_speed\s*=.*",
-                        f"upload_speed = {speed}",
-                        content,
-                        flags=re.MULTILINE,
+            with _PLATFORMIO_INI_WRITE_LOCK:
+                if ini_path.exists():
+                    content = ini_path.read_text(encoding="utf-8", errors="replace")
+                    if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
+                        content = re.sub(
+                            r"^upload_speed\s*=.*",
+                            f"upload_speed = {speed}",
+                            content,
+                            flags=re.MULTILINE,
+                        )
+                    else:
+                        content = re.sub(
+                            r"(\[env:[^\]]*\]\n)",
+                            r"\1" + f"upload_speed = {speed}\n",
+                            content,
+                            count=1,
+                        )
+                    if not self._force_write_text(ini_path, content):
+                        raise OSError(
+                        "platformio.ini update failed after retries" +
+                        (f": {getattr(self, '_last_platformio_ini_write_error', '')}"
+                         if getattr(self, '_last_platformio_ini_write_error', '') else "")
                     )
-                else:
-                    content = re.sub(
-                        r"(\[env:[^\]]*\]\n)",
-                        r"\1" + f"upload_speed = {speed}\n",
-                        content,
-                        count=1,
-                    )
-                self._force_write_text(ini_path, content)
-                return speed
-            return None
+                    return speed
+                return None
 
         def _on_done(res):
             if res:
@@ -10690,22 +11880,29 @@ class MCUUploadGUI:
         self._run_bg_task(_update_ini_task, on_success=_on_done, on_error=_on_err)
 
     def _auto_select_board(self, show_msg: bool = True) -> str | None:
-        """If this physical port has a board type on record from a previous
-        session, select it immediately. Otherwise, attempt USB descriptor-based
-        auto-detection (e.g. CH340 -> Arduino Uno, ESP32-S3 -> ESP32-S3 Dev Module)."""
+        """Auto-select only from the three explicitly-supported common descriptors.
+
+        Unrecognized ports never consume the remembered COM-port board cache and
+        never trigger a best-guess family mapping; the current/manual board choice
+        is left untouched.
+        """
         port_device = self._extract_port_device(self.port_var.get())
         if not port_device:
             return None
 
-        remembered = get_remembered_board_for_port(port_device)
-        detected = self._detect_board_from_descriptor(self.port_var.get()) or self._detect_board_from_descriptor(port_device)
-        
-        target_board = remembered or detected
+        detected = (
+            self._detect_board_from_descriptor(self.port_var.get())
+            or self._detect_board_from_descriptor(port_device)
+        )
+
+        # Only the three explicit descriptor signatures above are allowed to
+        # auto-select a board.  Do NOT restore a remembered COM-port mapping for
+        # an unrecognized descriptor: Windows can reuse COM numbers for entirely
+        # different hardware, and the user's requested behavior is to leave the
+        # current/manual board choice untouched in every other case.
+        target_board = detected
         if not target_board or target_board not in SUPPORTED_BOARDS:
-            if self._port_is_avr_only():
-                target_board = find_arduino_uno_board() or "Arduino Uno"
-            else:
-                return None
+            return None
 
         if self.board_var.get() == target_board:
             self._board_port_confirmed = True
@@ -10715,60 +11912,28 @@ class MCUUploadGUI:
         self._board_port_confirmed = True
         self._on_board_changed()
         if show_msg:
-            source = "Remembered" if remembered else "Auto-detected"
             self._append(
-                f"  🧠 {source} board for {port_device}: \"{target_board}\"",
+                f"  🔌 Auto-detected common port signature on {port_device}: \"{target_board}\"",
                 "info"
             )
         return target_board
 
     def _get_usb_chip_board_families(self) -> dict:
-        """Dynamically build the USB-to-board family mapping based on installed platforms."""
-        installed_platforms = {info.get("platform", "") for info in SUPPORTED_BOARDS.values()}
-        installed_platforms.discard("")
+        """Return only the three intentionally-recognized common port signatures.
 
-        # Fallback to standard ones if empty
-        if not installed_platforms:
-            installed_platforms = {"espressif32", "espressif8266", "atmelavr"}
-
-        esp_platforms = {p for p in installed_platforms if "espressif" in p or "esp" in p}
-        avr_platforms = {p for p in installed_platforms if "atmel" in p or "avr" in p}
-
-        if not esp_platforms:
-            esp_platforms = {"espressif32", "espressif8266"} & installed_platforms or {"espressif32"}
-        if not avr_platforms:
-            avr_platforms = {"atmelavr"} & installed_platforms or {"atmelavr"}
-
-        all_known = esp_platforms | avr_platforms | installed_platforms
-
+        This helper is used for lightweight port-family validation.  Keep it in
+        lockstep with ``_detect_board_from_descriptor`` so an unknown bridge never
+        becomes an implicit board guess elsewhere in the application.
+        """
         return {
-            "ch340":        (all_known, "CH340 (Arduino/ESP USB-serial)"),
-            "ch341":        (all_known, "CH341 (Arduino/ESP USB-serial)"),
-            "ch343":        (all_known, "CH343 (USB-Enhanced-SERIAL)"),
-            "ch342":        (all_known, "CH342 (USB-serial)"),
-            "cp210":        (all_known, "CP210x (Silicon Labs USB-serial)"),
-            "silicon labs": (all_known, "Silicon Labs CP210x (USB-serial)"),
-            "ch9102":       (all_known, "CH9102 (ESP32 USB-serial)"),
-            "ftdi":         (all_known, "FTDI (generic USB-serial)"),
-            "prolific":     (all_known, "Prolific USB-serial"),
-            "pl2303":       (all_known, "PL2303 USB-serial"),
-            "wch":          (all_known, "WCH USB-serial (generic)"),
-            "esp32-s3":     (esp_platforms, "ESP32-S3 Native USB"),
-            "esp32s3":      (esp_platforms, "ESP32-S3 Native USB"),
-            "esp32-c3":     (esp_platforms, "ESP32-C3 Native USB"),
-            "esp32c3":      (esp_platforms, "ESP32-C3 Native USB"),
-            "esp32-c6":     (esp_platforms, "ESP32-C6 Native USB"),
-            "esp32-s2":     (esp_platforms, "ESP32-S2 Native USB"),
-            "jtag":         (esp_platforms, "USB JTAG/serial debug unit"),
-            "usb bridge":   (esp_platforms, "ESP32 USB Bridge"),
-            "usb serial":   (all_known, "USB Serial (generic/CDC)"),
-            "usb-to-serial":(all_known, "USB-to-Serial (generic)"),
-            "usb to serial":(all_known, "USB to Serial (generic)"),
-            "communications port": (all_known, "Communications Port"),
-            "esp32":        (esp_platforms, "ESP32 Device"),
-            "esp8266":      (installed_platforms, "ESP8266 Device"),
-            "com":          (all_known, "COM Port (Serial)"),
+            # Check enhanced serial before generic USB-SERIAL.
+            "usb-enhanced-serial": ({"espressif32"}, "USB-Enhanced-SERIAL (common ESP32-S3)"),
+            "usb enhanced serial": ({"espressif32"}, "USB Enhanced SERIAL (common ESP32-S3)"),
+            "usb-enchanced-serial": ({"espressif32"}, "USB-Enchanced-SERIAL (common ESP32-S3)"),
+            "silicon labs":        ({"espressif32"}, "Silicon Labs USB-serial (common ESP32)"),
+            "usb-serial":          ({"atmelavr"}, "USB-SERIAL (common Arduino Uno/clone)"),
         }
+
 
     def _detect_port_chip(self) -> tuple[str, set, str] | None:
         """Identify which known USB-serial chip the selected port reports,
@@ -10810,23 +11975,22 @@ class MCUUploadGUI:
         return None
 
     def _port_is_avr_only(self) -> bool:
-        """True only when the selected port's USB-serial chip is one that can
-        NEVER be an ESP board (e.g. classic CH340/CH341 on a Uno/Nano clone).
+        """True only for the explicit USB-SERIAL -> Arduino Uno signature.
+
+        Unknown descriptors are intentionally ambiguous and therefore never
+        treated as AVR-only.
         """
         chip = self._detect_port_chip()
         if not chip:
             return False
         keyword, allowed_platforms, _label = chip
-        if keyword in ("ch340", "ch341"):
-            # A generic Windows descriptor such as "USB-SERIAL CH340" has no
-            # chip-family text. Treat that exact clone-board signature as Uno,
-            # while allowing descriptors that explicitly say ESP8266/NodeMCU to
-            # remain ESP boards.
+        if keyword == "usb-serial":
             descriptor_board = self._detect_board_from_descriptor(self._get_port() or "")
-            if descriptor_board:
-                return SUPPORTED_BOARDS.get(descriptor_board, {}).get("platform") == "atmelavr"
-        esp_platforms = {"espressif32", "espressif8266"}
-        return not (allowed_platforms & esp_platforms)
+            return bool(
+                descriptor_board
+                and SUPPORTED_BOARDS.get(descriptor_board, {}).get("platform") == "atmelavr"
+            )
+        return False
 
     def _is_board_recognized(self) -> bool:
         """True only once we have genuine confirmation of what's attached.
@@ -11026,141 +12190,159 @@ class MCUUploadGUI:
         if not reported_paths:
             return
         if build_root is None:
-            build_root = self.sketch_dir_path / ".pio" / "build"
-        _pio_build_root = build_root
-        for _stale_path_str in reported_paths:
-            _stale_path = Path(_stale_path_str)
+            build_root = self._board_build_root()
+        try:
+            safe_root = Path(build_root).resolve(strict=False)
+        except Exception:
+            safe_root = Path(build_root)
+        active_env = safe_root / env_name
+
+        for stale_text in reported_paths:
             try:
-                _stale_path_res = _stale_path.resolve()
+                stale_path = Path(stale_text).resolve(strict=False)
+                stale_path.relative_to(safe_root)
             except Exception:
-                _stale_path_res = _stale_path
-            if not _stale_path_res.exists():
+                self._append(
+                    f"  ⚠ Ignored unsafe stale-cache path outside the selected board workspace: {stale_text}",
+                    "warning",
+                )
                 continue
+            if not stale_path.exists():
+                continue
+
             if not build_ok:
-                # Build/upload FAILED — whatever is left is garbage; remove it all.
-                if robust_rmtree(_stale_path_res):
-                    self._append(f"  ✔ Auto-cleaned stale build directory: {_stale_path_res}", "success")
-                else:
-                    self._append(f"  ⚠ Stale build directory still locked (will be retried automatically on the next run): {_stale_path_res}", "warning")
-            elif _stale_path_res.parent == _pio_build_root:
-                # Build SUCCEEDED. The report usually names the whole
-                # .pio/build parent after PlatformIO's checksum-driven global
-                # clean aborted midway (WinError 145). The current env dir
-                # holds the FRESH build just produced — never delete it — but
-                # sibling env dirs left half-deleted by the aborted clean are
-                # pure stale debris.
+                # A failed run may be an ordinary compiler/linker or upload
+                # error.  Do not destroy valid partial objects before the
+                # caller classifies the actual diagnostics.
+                self._append(
+                    "  ℹ Preserved selected-board incremental state after the failed run; stale cleanup is deferred unless cache corruption is confirmed.",
+                    "dim",
+                )
+                continue
+
+            # A successful run proves that the active environment now contains
+            # valid fresh output.  Never delete it or an ancestor that contains
+            # it just because PlatformIO printed a delayed cleanup warning.
+            if build_ok:
                 try:
-                    _children = list(_stale_path_res.iterdir())
-                except Exception:
-                    _children = []
-                for _child in _children:
-                    if _child.name == env_name:
-                        continue
-                    try:
-                        if _child.is_dir():
-                            robust_rmtree(_child)
-                        else:
-                            _child.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                if _children and any(_c.exists() for _c in _children):
-                    self._append(f"  ✔ Auto-cleaned stale build debris under: {_stale_path_res}", "success")
+                    active_env.relative_to(stale_path)
+                    contains_active_env = True
+                except ValueError:
+                    contains_active_env = False
+                if stale_path == active_env or contains_active_env:
+                    self._append(
+                        "  ℹ Preserved the successful selected-board build despite a stale cleanup report.",
+                        "dim",
+                    )
+                    continue
+
+            # A failed checksum cleanup can leave an incompatible directory,
+            # but the board-specific root guarantees this repair cannot touch
+            # any other board.  Ordinary compiler errors do not reach here
+            # unless PlatformIO explicitly identified a stale path.
+            if robust_rmtree(stale_path):
+                self._append(
+                    f"  ✔ Repaired stale selected-board build path: {stale_path}",
+                    "success",
+                )
             else:
-                # Report names a single env dir — only delete it when it is
-                # NOT the env we just built (that one is freshly valid).
-                if _stale_path_res.name != env_name:
-                    if robust_rmtree(_stale_path_res):
-                        self._append(f"  ✔ Auto-cleaned stale build directory: {_stale_path_res}", "success")
+                self._append(
+                    f"  ⚠ Selected-board cache path is still locked; it will be retried next run: {stale_path}",
+                    "warning",
+                )
+
+    def _clean_targets(self) -> list[tuple[Path, str]]:
+        """Authoritative targets for manual Clean and its availability check."""
+        sketch = self.sketch_dir_path
+        return [
+            (sketch / ".pio", "all cached board workspaces"),
+            (sketch / "src", "generated build sources"),
+            (sketch / "platformio.ini", "generated PlatformIO configuration"),
+            (sketch / "build_artifacts", "board-specific binary archives"),
+            (sketch / ".build_artifacts", "legacy binary archives"),
+            (sketch / "compiled_builds", "legacy compiled binaries"),
+            (sketch / ".mcu_gui_cache.json", "legacy compile metadata"),
+            (self._get_cache_file_path(), "compile metadata"),
+            (get_project_temp_file(sketch, ".mcu_flash_syntax_errors.json"), "syntax metadata"),
+            (sketch / ".mcu_flash_syntax_errors.json", "legacy syntax metadata"),
+            (sketch / ".ai_edit_signal", "generated editor signal"),
+            # Reset builds are app-level, exact-board caches.  Manual Clean is
+            # intentionally the one operation that clears them all.
+            (SCRIPT_DIR / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
+            (SCRIPT_DIR / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
+            (SCRIPT_DIR / "soft_reset_project" / ".pio", "legacy ESP reset cache"),
+            (SCRIPT_DIR / "soft_reset_project_uno" / ".pio", "legacy Arduino reset cache"),
+            (SCRIPT_DIR / ".pio_cache", "legacy app-wide SCons cache"),
+        ]
 
     def _perform_clean(self) -> tuple[list[str], list[str]]:
         """Core clean execution: delete all build artifacts, temporary directories, and generated configs, leaving only sketch source files."""
-        sketch = self.sketch_dir_path
         removed: list[str] = []
         errors:  list[str] = []
 
-        targets = [
-            sketch / ".pio",
-            sketch / "src",
-            sketch / "platformio.ini",
-            sketch / "build_artifacts",
-            sketch / ".build_artifacts",
-            sketch / ".mcu_gui_cache.json",
-            sketch / ".mcu_flash_syntax_errors.json",
-            sketch / ".ai_edit_signal",
-            sketch / ".vscode",
-            sketch / ".clangd",
-            sketch / ".cache",
-            sketch / "_temp",
-        ]
-
-        for target in targets:
+        seen: set[str] = set()
+        for target, label in self._clean_targets():
+            target_key = os.path.normcase(os.path.abspath(str(target)))
+            if target_key in seen:
+                continue
+            seen.add(target_key)
             if not target.exists():
                 continue
             try:
                 if robust_rmtree(target):
-                    removed.append(target.name)
+                    removed.append(label)
+                else:
+                    errors.append(f"{label}: path remained locked")
             except Exception as exc:
-                errors.append(f"{target.name}: {exc}")
+                errors.append(f"{label}: {exc}")
 
         # Reset compile-state tracking so the next build starts clean
         self._last_compiled_board = None
         self._compile_cache_by_board = {}
+        self._build_config_hash_by_board = {}
         self._build_metadata_by_board = {}
         return removed, errors
 
     def _perform_clean_current_board(self) -> tuple[list[str], list[str]]:
-        """Clean only the CURRENTLY selected board's own build output —
-        .pio/build/<env> and .pio/libdeps/<env> — leaving every other
-        board's cached build (and the shared toolchain/platform packages)
-        untouched. This is what runs automatically before every actual
-        recompile, so a fresh build always starts clean for that board
-        without throwing away a different board's build when you switch
-        back and forth."""
+        """Repair only the selected board workspace, leaving all siblings and
+        shared toolchain/framework packages untouched.
+
+        This is reserved for an explicitly classified cache-integrity failure;
+        normal compiler/linker errors retain their partial incremental state.
+        """
         sketch = self.sketch_dir_path
-        env_name = self._pio_env_name()
         removed: list[str] = []
         errors: list[str] = []
 
-        targets = [
-            sketch / ".pio" / "build" / env_name,
-            sketch / ".pio" / "libdeps" / env_name,
-            sketch / ".pio" / "cache" / env_name,
-            SCRIPT_DIR / ".pio_cache" / env_name,
-        ]
+        # One exact workspace contains this board's build, libdeps and
+        # checksum state.  Other board workspaces are siblings and untouched.
+        targets = [self._board_workspace(sketch)]
         for target in targets:
             if not target.exists():
                 continue
             try:
                 if robust_rmtree(target):
-                    removed.append(f"{target.parent.name}/{target.name}")
+                    removed.append(f"boards/{target.name}")
+                else:
+                    errors.append(f"boards/{target.name}: path remained locked")
             except Exception as exc:
                 errors.append(f"{target.parent.name}/{target.name}: {exc}")
 
         # This board no longer has a valid cached hash once its build is wiped.
         board_name = self.board_var.get()
         if board_name:
-            self._compile_cache_by_board.pop(board_name, None)
+            cache_key = self._board_cache_key(board_name)
+            self._compile_cache_by_board.pop(cache_key, None)
+            self._compile_cache_by_board.pop(board_name, None)  # legacy cache key
+            self._build_config_hash_by_board.pop(cache_key, None)
+            self._build_config_hash_by_board.pop(board_name, None)
+            self._build_metadata_by_board.pop(cache_key, None)
             self._build_metadata_by_board.pop(board_name, None)
         return removed, errors
 
     def _has_cleanable_targets(self) -> bool:
         """Return True if any build artifacts or generated files exist that Clean would remove."""
-        sketch = self.sketch_dir_path
-        targets = [
-            sketch / ".pio",
-            sketch / "src",
-            sketch / "platformio.ini",
-            sketch / "build_artifacts",
-            sketch / ".build_artifacts",
-            sketch / ".mcu_gui_cache.json",
-            sketch / ".mcu_flash_syntax_errors.json",
-            sketch / ".ai_edit_signal",
-            sketch / ".vscode",
-            sketch / ".clangd",
-            sketch / ".cache",
-            sketch / "_temp",
-        ]
-        return any(t.exists() for t in targets)
+        return any(target.exists() for target, _label in self._clean_targets())
 
     def _show_toast(self, message: str, duration_ms: int = 2500):
         """Show a floating borderless toast notification centered over the main window that auto-dismisses."""
@@ -11228,15 +12410,16 @@ class MCUUploadGUI:
         except Exception:
             pass
 
-    def _do_clean(self, on_complete=None):
+    def _do_clean(self, on_complete=None, confirmed: bool = False):
         """Delete all generated/cached files, keeping only source files.
 
         Removes:
-          • .pio/          — PlatformIO build cache, toolchain downloads, libdeps
+          • .pio/          — every board's project-local build/libdeps cache
           • src/           — frozen PlatformIO copies of sketch files
           • platformio.ini — regenerated fresh on next compile/upload
+          • reset caches   — exact-board Hard/Soft Reset builds
 
-        Keeps everything else (*.ino, *.cpp, *.h, *.c, and any user files).
+        Keeps all source/user files and the shared framework/toolchain packages.
         Safe to call at any time (not during a busy operation).
         """
         if self.is_busy:
@@ -11249,7 +12432,26 @@ class MCUUploadGUI:
             self._update_clean_button_state()
             return
 
-        self._clean_retry_in_progress = True
+        if not confirmed:
+            proceed = messagebox.askyesno(
+                "Clear All Board Build Caches?",
+                "Clean will remove generated project configuration and ALL cached "
+                "builds for every board used with this sketch.\n\n"
+                "The app-wide Hard/Soft Reset board caches shared by all sketches "
+                "and windows, plus legacy compiled artifacts, will also be cleared. "
+                "The next Compile, Upload, Hard "
+                "Reset, or Soft Reset for those boards may need a first-time rebuild.\n\n"
+                "Your .ino/.cpp/.c/.h source files, other user files, and shared "
+                "PlatformIO frameworks/toolchains will NOT be removed.\n\n"
+                "Continue with Clean?",
+                icon="warning",
+                parent=self.root,
+            )
+            if not proceed:
+                self._set_status("Clean cancelled — caches preserved", Theme.YELLOW)
+                return
+
+        self._clean_retry_in_progress = bool(on_complete)
         self.is_busy = True
         self._stop_requested = False
         self._op_session_id += 1
@@ -11259,6 +12461,18 @@ class MCUUploadGUI:
         self._append("  🧹 CLEANING PROJECT...", "header")
 
         def _bg_clean():
+            reset_cache_lock = _try_acquire_reset_cache_lock()
+            if reset_cache_lock is None:
+                def _locked():
+                    self._append(
+                        "  ⚠ Clean cancelled: another window is using the Hard/Soft Reset cache.",
+                        "warning",
+                    )
+                    self._set_status("Clean blocked — reset cache is in use", Theme.YELLOW)
+                    self.is_busy = False
+                    self._set_buttons_state(False)
+                self.root.after(0, _locked)
+                return
             try:
                 removed, errors = self._perform_clean()
 
@@ -11291,19 +12505,20 @@ class MCUUploadGUI:
 
                 self.root.after(0, _done)
             except Exception as exc:
-                def _error():
+                def _error(exc=exc):
                     self._append(f"  ✖ Internal error during clean: {exc}", "error")
                     self._set_status("Clean FAILED", Theme.RED)
                     self.is_busy = False
                     self._set_buttons_state(False)
                 self.root.after(0, _error)
+            finally:
+                _release_reset_cache_lock(reset_cache_lock)
 
         threading.Thread(target=_bg_clean, daemon=True).start()
 
-    def _do_clean_then_compile(self):
+    def _do_clean_then_compile(self, confirmed: bool = False):
         """Clean the build cache and immediately start a fresh compile."""
-        self._clean_retry_in_progress = True
-        self._do_clean(on_complete=self._do_compile)
+        self._do_clean(on_complete=self._do_compile, confirmed=confirmed)
 
     def _block_action_for_pending_ai_review(self, action_name):
         editor_api = getattr(self, "editor_api", None)
@@ -11412,34 +12627,26 @@ class MCUUploadGUI:
         self._compile_background_lock.set()
         self._set_buttons_state(True, operation="compile")
 
-        # ── Smart compile check ──────────────────────────────────────────────
-        # "Skip recompile" checkbox behaviour:
-        #   UNCHECKED → always recompile, no cache check at all.
-        #   CHECKED   → skip recompile if (a) a prior build exists on disk AND
-        #               (b) sources/board haven't changed since that build.
-        #               If no prior build exists, compile normally even when checked.
-        if self.skip_compile_var.get():
-            if self._has_prior_build():
-                recompile_needed, reason = self._needs_recompile()
-                if not recompile_needed:
-                    self._append("")
-                    self._append("=" * 50, "header")
-                    self._append("  ⚙  COMPILE CHECK", "header")
-                    self._append("=" * 50, "header")
-                    self._append("")
-                    self._append("  ✔ Already compiled — sources unchanged.", "success")
-                    self._append("  No recompilation needed. Cached build is up-to-date.", "dim")
-                    self._append("  (Uncheck 'Skip recompile' or edit a source file to force rebuild)", "dim")
-                    self._set_status("Compile skipped — sources unchanged", Theme.GREEN)
-                    self.is_busy = False
-                    self._compile_background_lock.clear()
-                    self._set_buttons_state(False)
-                    return
-                # Prior build exists but sources changed — fall through to recompile
-            # No prior build at all — fall through to compile normally
-
         def _safe_compile():
             try:
+                # Final skip decision belongs in the worker because preparing
+                # PlatformIO can scan libraries and touch disk.  More
+                # importantly, A -> B -> A must restore A's generated config
+                # before comparing its build-config fingerprint.
+                if self.skip_compile_var.get() and self._has_prior_build():
+                    if self._ensure_platformio_ini():
+                        recompile_needed, _reason = self._needs_recompile()
+                        if not recompile_needed:
+                            self._append("")
+                            self._append("=" * 50, "header")
+                            self._append("  ⚙  COMPILE CHECK", "header")
+                            self._append("=" * 50, "header")
+                            self._append("")
+                            self._append("  ✔ Already compiled — sources unchanged.", "success")
+                            self._append("  No recompilation needed. Cached build is up-to-date.", "dim")
+                            self._append("  (Uncheck 'Skip recompile' or edit a source file to force rebuild)", "dim")
+                            self._set_status("Compile skipped — sources unchanged", Theme.GREEN)
+                            return
                 self._run_compile()
             except Exception as e:
                 import traceback
@@ -12434,10 +13641,19 @@ class MCUUploadGUI:
     def _save_compile_cache(self):
         """Snapshot source hashes after a successful compile and save to disk,
         keyed by board so each board keeps its own independent cache entry."""
-        self._compile_cache_hash = self._hash_sources()
         self._last_compiled_board = self.board_var.get()
         if self._last_compiled_board:
-            self._compile_cache_by_board[self._last_compiled_board] = self._compile_cache_hash
+            board_key = self._board_cache_key(self._last_compiled_board)
+            if not hasattr(self, "_build_config_hash_by_board"):
+                self._build_config_hash_by_board = {}
+            config_hash = self._build_config_fingerprint(
+                self._last_compiled_board, allow_cached=False
+            )
+            if config_hash:
+                self._build_config_hash_by_board[board_key] = config_hash
+        self._compile_cache_hash = self._hash_sources()
+        if self._last_compiled_board:
+            self._compile_cache_by_board[board_key] = self._compile_cache_hash
         if not hasattr(self, "_just_created_envs") or not isinstance(self._just_created_envs, set):
             self._just_created_envs = set()
         # Remove current env / board from newly created envs since compilation succeeded
@@ -12451,12 +13667,29 @@ class MCUUploadGUI:
                 "hash": self._compile_cache_hash,
                 "board": self._last_compiled_board,
                 "boards": self._compile_cache_by_board,
+                "build_configs": self._build_config_hash_by_board,
                 "build_metadata": getattr(self, "_build_metadata_by_board", {}),
                 "just_created_envs": list(self._just_created_envs),
             }
             cache_path = self._get_cache_file_path()
             ensure_file_writable(cache_path)
-            cache_path.write_text(json.dumps(cache_data), encoding="utf-8")
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = cache_path.with_name(
+                cache_path.name + f".tmp-{os.getpid()}-{threading.get_ident()}"
+            )
+            payload = json.dumps(cache_data)
+            temporary.write_text(payload, encoding="utf-8")
+            try:
+                os.replace(temporary, cache_path)
+            except PermissionError:
+                # Some removable Windows filesystems reject replacing a
+                # hidden destination even though it is writable.  Preserve
+                # the hidden attribute and fall back to an in-place write.
+                temporary.unlink(missing_ok=True)
+                if not self._force_write_text(cache_path, payload):
+                    raise
+            finally:
+                temporary.unlink(missing_ok=True)
             hide_hidden_attribute(cache_path)
         except Exception:
             pass
@@ -12464,6 +13697,7 @@ class MCUUploadGUI:
 
     def _load_compile_cache(self):
         """Load the compile cache from disk."""
+        cache_file = None
         try:
             cache_file = self._get_cache_file_path()
             if cache_file.exists():
@@ -12471,6 +13705,7 @@ class MCUUploadGUI:
                 self._compile_cache_hash = data.get("hash")
                 self._last_compiled_board = data.get("board")
                 self._compile_cache_by_board = data.get("boards") or {}
+                self._build_config_hash_by_board = data.get("build_configs") or {}
                 self._build_metadata_by_board = data.get("build_metadata") or {}
                 self._just_created_envs = set(data.get("just_created_envs") or [])
                 # Migrate an old single-slot cache file (no "boards" key yet)
@@ -12485,12 +13720,19 @@ class MCUUploadGUI:
                 self._compile_cache_hash = None
                 self._last_compiled_board = None
                 self._compile_cache_by_board = {}
+                self._build_config_hash_by_board = {}
                 self._build_metadata_by_board = {}
                 self._just_created_envs = set()
         except Exception:
+            try:
+                if cache_file:
+                    cache_file.unlink(missing_ok=True)
+            except Exception:
+                pass
             self._compile_cache_hash = None
             self._last_compiled_board = None
             self._compile_cache_by_board = {}
+            self._build_config_hash_by_board = {}
             self._build_metadata_by_board = {}
             self._just_created_envs = set()
 
@@ -12504,6 +13746,7 @@ class MCUUploadGUI:
         board_name = self.board_var.get()
         if not board_name:
             return
+        board_key = self._board_cache_key(board_name)
         captured: dict[str, str] = {}
         for raw in output_lines:
             line = _strip_terminal_escapes(raw)
@@ -12523,10 +13766,7 @@ class MCUUploadGUI:
             "source_hash": self._hash_sources(),
         }
         try:
-            firmware = (
-                self.sketch_dir_path / ".pio" / "build" /
-                self._pio_env_name() / "firmware.bin"
-            )
+            firmware = self._board_build_dir() / "firmware.bin"
             stat = firmware.stat()
             entry["firmware_size"] = stat.st_size
             entry["firmware_mtime_ns"] = stat.st_mtime_ns
@@ -12534,7 +13774,7 @@ class MCUUploadGUI:
             pass
         if not hasattr(self, "_build_metadata_by_board"):
             self._build_metadata_by_board = {}
-        self._build_metadata_by_board[board_name] = entry
+        self._build_metadata_by_board[board_key] = entry
 
     def _needs_recompile(self) -> tuple[bool, str]:
         """Return (needs_recompile, reason_string).
@@ -12559,7 +13799,11 @@ class MCUUploadGUI:
         if not self._has_prior_build():
             return True, "no firmware binary found for this board (build folder may have been cleaned)"
 
-        cached_hash = self._compile_cache_by_board.get(board_name)
+        board_key = self._board_cache_key(board_name)
+        cached_hash = self._compile_cache_by_board.get(board_key)
+        if cached_hash is None:
+            # One-time compatibility with cache JSON written by older builds.
+            cached_hash = self._compile_cache_by_board.get(board_name)
         if cached_hash is None:
             return True, "no previous compile for this board"
         current = self._hash_sources()
@@ -12699,15 +13943,128 @@ class MCUUploadGUI:
     def _get_cache_file_path(self) -> Path:
         return get_project_temp_file(self.sketch_dir_path, ".mcu_gui_cache.json")
 
+    @staticmethod
+    def _normalize_build_config(content: str) -> str:
+        """Canonicalize only PlatformIO options that can affect a binary.
+
+        The app owns upload speed/protocol and monitor settings; changing those
+        must not throw away an otherwise valid compile.  Everything else is
+        retained in order (including build flags, partitions, libraries,
+        extra scripts, and package pins), while comments and formatting noise
+        are ignored.
+        """
+        normalized: list[str] = []
+        skip_continuation = False
+        for raw_line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith((";", "#")):
+                continue
+            if raw_line[:1].isspace():
+                if not skip_continuation:
+                    normalized.append(stripped)
+                continue
+
+            skip_continuation = False
+            section_match = re.match(r"^\[([^]]+)]$", stripped)
+            if section_match:
+                section = section_match.group(1).strip().lower()
+                # Environment names are board-specific routing identifiers,
+                # not build inputs.  Their contents remain part of the hash.
+                normalized.append("[env]" if section.startswith("env:") else f"[{section}]")
+                continue
+
+            option_match = re.match(r"^([^=]+?)\s*=\s*(.*)$", stripped)
+            if not option_match:
+                normalized.append(stripped)
+                continue
+            key = option_match.group(1).strip().lower()
+            value = option_match.group(2).strip()
+            skip_continuation = (
+                key == "default_envs"
+                or key.startswith("monitor_")
+                or key.startswith("upload_")
+                or key.startswith("board_upload.")
+            )
+            if not skip_continuation:
+                normalized.append(f"{key}={value}")
+        return "\n".join(normalized)
+
+    def _build_config_fingerprint(self, board_name: str | None = None,
+                                  allow_cached: bool = True) -> str | None:
+        """Return this board's build-config digest without confusing B for A.
+
+        The generated root ``platformio.ini`` represents only the most recently
+        prepared board.  When another board is merely selected in the UI, use
+        its last successful fingerprint until preparation rewrites the file.
+        A compile/upload always prepares the selected board before the final
+        cache decision, so real user changes to build flags or partitions are
+        still observed before any binary can be flashed.
+        """
+        name = board_name if board_name is not None else self.board_var.get()
+        info = dict(SUPPORTED_BOARDS.get(name, {}))
+        if not info and board_name is None:
+            info = dict(self._resolve_board_info())
+        ini_path = self.sketch_dir_path / "platformio.ini"
+        try:
+            content = ini_path.read_text(encoding="utf-8", errors="replace")
+            platform_match = re.search(
+                r"^\s*platform\s*=\s*([^;#\r\n]+)", content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            board_match = re.search(
+                r"^\s*board\s*=\s*([^;#\r\n]+)", content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            expected_platform = str(info.get("platform", "")).strip().lower()
+            expected_board = str(info.get("board", "")).strip().lower()
+            current_platform = platform_match.group(1).strip().lower() if platform_match else ""
+            current_board = board_match.group(1).strip().lower() if board_match else ""
+            if (
+                expected_platform
+                and expected_board
+                and current_platform == expected_platform
+                and current_board == expected_board
+            ):
+                canonical = self._normalize_build_config(content)
+                return hashlib.sha256(canonical.encode("utf-8", errors="replace")).hexdigest()
+        except OSError:
+            pass
+
+        if allow_cached:
+            cache = getattr(self, "_build_config_hash_by_board", {})
+            key = self._board_cache_key(name)
+            return cache.get(key) or cache.get(name)  # legacy display-name key
+        return None
+
     def _hash_sources(self) -> str:
         """Return a single MD5 digest over the content of every source file
-        in the current sketch folder (.ino, .cpp, .h, .c) and platformio.ini.
-        Also factors in the currently selected board.
+        in the current sketch folder.  The desired board configuration is
+        included canonically; the mutable generated platformio.ini is not.
+
+        Excluding raw platformio.ini is important for A -> B -> A switching:
+        immediately after selecting A the file still describes B until the
+        next PlatformIO preparation step, which used to create a false source
+        change and disable A's valid cache.
         Files are sorted by name so the hash is order-stable."""
         h = hashlib.md5()
-        h.update(self.board_var.get().encode())
+        board_name = self.board_var.get()
+        h.update(self._board_cache_key(board_name).encode())
+        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        try:
+            h.update(json.dumps(board_info, sort_keys=True, default=str).encode())
+        except Exception:
+            pass
+        config_fingerprint = self._build_config_fingerprint(board_name)
+        h.update(b"build_config=")
+        h.update((config_fingerprint or "missing").encode("ascii", errors="replace"))
+        # Native-USB CDC flags affect the binary for relevant S3 boards.
+        try:
+            if is_s3_board(str(board_info.get("board", ""))):
+                h.update(b"native_usb=" + (b"1" if self._is_native_usb_port() else b"0"))
+        except Exception:
+            pass
         source_files = []
-        for ext in ["*.ino", "*.cpp", "*.h", "*.c", "platformio.ini"]:
+        for ext in ["*.ino", "*.cpp", "*.c", "*.h", "*.hpp"]:
             source_files.extend(self.sketch_dir_path.glob(ext))
         for f in sorted(source_files):
             try:
@@ -12745,34 +14102,10 @@ class MCUUploadGUI:
 
     def _has_prior_build(self) -> bool:
         """Return True if a compiled firmware binary exists for the CURRENTLY
-        selected board specifically. Checks .pio/build/<env>, compiled_builds/<mcu_folder>, and build_artifacts."""
-        env_name = self._pio_env_name()
-        mcu_folder = self._get_mcu_folder_name()
-        build_dir = self.sketch_dir_path / ".pio" / "build" / env_name
-        compiled_dir = self.sketch_dir_path / "compiled_builds" / mcu_folder
-        artifacts_dir = self.sketch_dir_path / "build_artifacts" / env_name
-
-        has_local = (
-            build_dir.exists() and (
-                (build_dir / "firmware.elf").exists() or
-                (build_dir / "firmware.hex").exists() or
-                (build_dir / "firmware.bin").exists()
-            )
-        )
-
-        # Auto-restore from project compiled_builds/<mcu_folder> or build_artifacts if .pio build folder was cleaned/deleted
-        if not has_local:
-            src_dir = compiled_dir if (compiled_dir.exists() and any(compiled_dir.glob("firmware.*"))) else (artifacts_dir if artifacts_dir.exists() else None)
-            if src_dir and src_dir.exists():
-                try:
-                    import shutil
-                    build_dir.mkdir(parents=True, exist_ok=True)
-                    for f in src_dir.glob("*"):
-                        if f.is_file():
-                            shutil.copy2(f, build_dir / f.name)
-                except Exception:
-                    pass
-
+        selected board specifically.  This check is deliberately read-only:
+        restoring family-bucketed binaries could flash one board's firmware to
+        another board and could also undo an explicit Clean."""
+        build_dir = self._board_build_dir()
         return (
             build_dir.exists() and (
                 (build_dir / "firmware.elf").exists() or
@@ -12841,13 +14174,18 @@ class MCUUploadGUI:
                     
                     # Scan headers in the root directory and inside 'src'
                     search_dirs = [item, item / "src"]
+                    seen_header_paths: set[Path] = set()
                     for s_dir in search_dirs:
                         if s_dir.exists() and s_dir.is_dir():
-                            for h_file in s_dir.glob("*.h"):
+                            # One recursive walk per search root.  The previous
+                            # nested rglob repeated the complete tree once for
+                            # every root header, which was costly on low-end and
+                            # removable storage.
+                            for h_file in s_dir.rglob("*.h"):
+                                if h_file in seen_header_paths:
+                                    continue
+                                seen_header_paths.add(h_file)
                                 header_map[h_file.name] = slug
-                                # Also map sub-directory headers (e.g. NimBLEDevice.h inside src/)
-                                for h_file_deep in s_dir.rglob("*.h"):
-                                    header_map[h_file_deep.name] = slug
         except Exception as e:
             self._append(f"  ⚠ Error scanning downloaded libraries: {e}", "warning")
 
@@ -13086,32 +14424,462 @@ class MCUUploadGUI:
             return False
 
     def _resolve_board_info(self) -> dict:
-        """Resolve the currently selected board name to its PlatformIO
-        platform/board/framework info, with the same stale-name fallback
-        used everywhere else. Centralized here so every caller (ini
-        generation, framework-repair check, etc.) stays in sync instead
-        of re-implementing the fallback logic — nothing about a specific
-        board/platform is hardcoded, it's whatever SUPPORTED_BOARDS
-        (populated dynamically from disk) currently contains.
+        """Resolve the selected display name to a canonical PlatformIO board.
+
+        A stale/unsupported board is never silently replaced with some unrelated
+        first entry.  If PlatformIO was updated after the GUI started, one live
+        reload is attempted so newly-supported boards become usable immediately.
         """
+        global SUPPORTED_BOARDS
         board_name = self.board_var.get()
-        # SUPPORTED_BOARDS["ESP32 Dev Module"] used to be a safe literal
-        # fallback because that key was hardcoded and always present.
-        # Now that ESP32/S3/8266 entries come purely from disk discovery
-        # (load_dynamic_boards), that key may not exist at all -- e.g. on
-        # a fresh install before "Download Boards/Libraries" has ever
-        # been run. Fall back to whatever board info IS actually
-        # available instead of a name that's no longer guaranteed to be
-        # there: prefer any board other than Arduino Uno first (since an
-        # unrecognized board_name during normal use is far more likely
-        # to be a slightly-stale ESP-family name than a stale Uno one),
-        # then Arduino Uno itself as the final guaranteed-present fallback.
-        if board_name in SUPPORTED_BOARDS:
-            return SUPPORTED_BOARDS[board_name]
-        elif SUPPORTED_BOARDS:
-            return next(iter(SUPPORTED_BOARDS.values()))
+        info = SUPPORTED_BOARDS.get(board_name)
+        if info and info.get("pio_resolved", True):
+            return info
+        if info:
+            try:
+                refreshed = load_dynamic_boards({})
+                refreshed_info = refreshed.get(board_name)
+                if refreshed_info:
+                    SUPPORTED_BOARDS = refreshed
+                    if refreshed_info.get("pio_resolved", False):
+                        return refreshed_info
+                    info = refreshed_info
+            except Exception:
+                pass
+            return info
+        return {
+            "platform": "",
+            "board": "",
+            "framework": "arduino",
+            "pio_resolved": False,
+            "resolution_error": f"Board '{board_name}' is not present in the current downloaded board catalog.",
+        }
+
+    def _board_cache_key(self, board_name: str | None = None) -> str:
+        """Return a short, collision-resistant key for one exact board config.
+
+        Display names are not safe identifiers (``Foo-Bar`` and ``Foo Bar``
+        normalize to the same slug), and family buckets such as ``ESP32`` can
+        mix incompatible binaries.  The readable prefix therefore comes from
+        PlatformIO's canonical platform/board ids while the digest covers the
+        complete board definition that can influence compilation.
+        """
+        if board_name is not None:
+            name = board_name
         else:
-            return {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
+            board_var = getattr(self, "board_var", None)
+            name = board_var.get() if board_var is not None else ""
+        info = dict(SUPPORTED_BOARDS.get(name, {}))
+        identity = {
+            # Display name is always part of the identity.  Downloaded board
+            # aliases can normalize to the same PlatformIO id/definition but
+            # the product contract is one cache folder per selectable board.
+            "display_name": name,
+            "platform": str(info.get("platform", "")),
+            "board": str(info.get("board", "")),
+            "framework": str(info.get("framework", "")),
+            "definition": info,
+        }
+        encoded = json.dumps(
+            identity, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8", errors="replace")
+        digest = hashlib.sha256(encoded).hexdigest()[:10]
+        readable = "_".join(
+            part for part in (
+                str(info.get("platform", "")),
+                str(info.get("board", "")),
+            ) if part
+        ) or str(name or "unknown_board")
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", readable).strip("_").lower()
+        # Keep this deliberately compact for Windows installations whose
+        # sketch path is already close to the legacy MAX_PATH limit.  The
+        # digest, rather than the readable prefix, provides uniqueness.
+        return f"{(slug or 'board')[:20]}_{digest}"
+
+    def _board_workspace(self, project_dir: Path | None = None,
+                         board_name: str | None = None) -> Path:
+        """Project-local PlatformIO workspace dedicated to one exact board."""
+        project = Path(project_dir or self.sketch_dir_path)
+        return project / ".pio" / "boards" / self._board_cache_key(board_name)
+
+    def _board_build_root(self, project_dir: Path | None = None,
+                          board_name: str | None = None) -> Path:
+        """Configured PlatformIO ``build_dir`` for one board."""
+        return self._board_workspace(project_dir, board_name) / "build"
+
+    def _board_build_dir(self, project_dir: Path | None = None,
+                         board_name: str | None = None,
+                         env_name: str | None = None) -> Path:
+        """Directory containing firmware and objects for one board/env."""
+        env = env_name or (
+            self._pio_env_name(board_name)
+            if board_name is not None else self._pio_env_name()
+        )
+        return self._board_build_root(project_dir, board_name) / env
+
+    def _migrate_legacy_board_cache(self, project_dir: Path | None = None,
+                                    board_name: str | None = None) -> None:
+        """Move the old shared-root env into the new isolated workspace once.
+
+        Renaming within the same project volume is cheap even for a large build
+        tree.  Migration is best-effort: PlatformIO can always rebuild safely.
+        """
+        project = Path(project_dir or self.sketch_dir_path)
+        env_name = (
+            self._pio_env_name(board_name)
+            if board_name is not None else self._pio_env_name()
+        )
+        destination_root = self._board_build_root(project, board_name)
+        destination_env = destination_root / env_name
+        legacy_root = project / ".pio" / "build"
+        legacy_env_names = [env_name, self._legacy_pio_env_name(board_name)]
+        try:
+            import shutil as _cache_shutil
+            for legacy_name in dict.fromkeys(legacy_env_names):
+                legacy_env = legacy_root / legacy_name
+                if legacy_env.is_dir() and not destination_env.exists():
+                    destination_root.mkdir(parents=True, exist_ok=True)
+                    _cache_shutil.move(str(legacy_env), str(destination_env))
+                    legacy_checksum = legacy_root / "project.checksum"
+                    if legacy_checksum.is_file():
+                        _cache_shutil.copy2(
+                            legacy_checksum, destination_root / "project.checksum"
+                        )
+                    break
+
+            # Also absorb a cache created by an early per-board build that
+            # still used the unbounded display-name environment.
+            old_workspace_env = destination_root / self._legacy_pio_env_name(board_name)
+            if old_workspace_env.is_dir() and not destination_env.exists():
+                _cache_shutil.move(str(old_workspace_env), str(destination_env))
+
+            destination_libdeps = (
+                self._board_workspace(project, board_name) / "libdeps" / env_name
+            )
+            for legacy_name in dict.fromkeys(legacy_env_names):
+                legacy_libdeps = project / ".pio" / "libdeps" / legacy_name
+                if legacy_libdeps.is_dir() and not destination_libdeps.exists():
+                    destination_libdeps.parent.mkdir(parents=True, exist_ok=True)
+                    _cache_shutil.move(str(legacy_libdeps), str(destination_libdeps))
+                    break
+        except Exception:
+            # Cache migration must never block a compile; a miss simply causes
+            # PlatformIO to populate the new workspace normally.
+            pass
+
+    def _platformio_subprocess_env(self, project_dir: Path | None = None,
+                                   board_name: str | None = None,
+                                   jobs: int | None = None) -> dict:
+        """Build a low-overhead PlatformIO environment for one board.
+
+        PlatformIO checksum-cleans its *entire* configured build_dir whenever
+        platformio.ini changes.  Pointing every board at a distinct build_dir
+        confines that cleanup to the selected board.  No separate SCons
+        BuildCache is configured: the retained build tree already supplies
+        incremental objects, avoiding a second object copy on low-storage PCs.
+        Framework/toolchain packages remain shared through PLATFORMIO_CORE_DIR.
+        """
+        project = Path(project_dir or self.sketch_dir_path)
+        self._migrate_legacy_board_cache(project, board_name)
+        workspace = self._board_workspace(project, board_name)
+        build_root = workspace / "build"
+        libdeps_root = workspace / "libdeps"
+        workspace.mkdir(parents=True, exist_ok=True)
+        hide_generated_directory(project / ".pio")
+
+        env = os.environ.copy()
+        env["PLATFORMIO_WORKSPACE_DIR"] = str(workspace)
+        env["PLATFORMIO_BUILD_DIR"] = str(build_root)
+        env["PLATFORMIO_LIBDEPS_DIR"] = str(libdeps_root)
+        # An app-global SCons CacheDir used to duplicate objects and share one
+        # signature database across projects.  Explicitly disable inheritance.
+        env.pop("PLATFORMIO_BUILD_CACHE_DIR", None)
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PYTHONDONTWRITEBYTECODE"] = "0"
+        if jobs is not None:
+            safe_jobs = max(1, int(jobs))
+            env["PLATFORMIO_BUILD_JOBS"] = str(safe_jobs)
+            env["SCONSFLAGS"] = f"-j{safe_jobs}"
+        return env
+
+    def _soft_reset_project_dir(self, board_name: str | None = None,
+                                board_info: dict | None = None) -> Path:
+        """Persistent, exact-board reset project shared by Hard/Soft Reset."""
+        name = board_name if board_name is not None else self.board_var.get()
+        info = dict(board_info or SUPPORTED_BOARDS.get(name, {}))
+        base = "soft_reset_project_uno" if info.get("platform") == "atmelavr" else "soft_reset_project"
+        return SCRIPT_DIR / base / "boards" / self._board_cache_key(name)
+
+    def _reset_project_contents(self, board_name: str,
+                                board_info: dict) -> tuple[str, str, str]:
+        """Return one canonical project template shared by Hard/Soft Reset.
+
+        Keeping byte-identical files means a Hard Reset genuinely warms the
+        following Soft Reset (and vice versa).  Board memory traits and S3 USB
+        mode are part of the template, so changing physical variants triggers
+        PlatformIO's normal incremental reconciliation inside only that exact
+        board folder.
+        """
+        info = dict(board_info or {})
+        platform = str(info.get("platform", "atmelavr"))
+        board_id = str(info.get("board", "uno"))
+        framework = str(info.get("framework", "arduino"))
+        is_avr = platform == "atmelavr"
+        is_s3 = is_s3_board(board_id)
+        is_native = bool(is_s3 and self._is_native_usb_port())
+        flash_size, has_psram = normalized_board_memory_options(info)
+        memory_type = normalized_board_memory_type(info)
+        flash_mode = normalized_board_flash_mode(info)
+        monitor_speed = "9600" if is_avr else "115200"
+        upload_speed = "115200" if is_avr else "460800"
+
+        env_lines = [
+            f"platform = {platform}",
+            f"board = {board_id}",
+            f"framework = {framework}",
+            f"monitor_speed = {monitor_speed}",
+        ]
+        if not is_native:
+            env_lines.append(f"upload_speed = {upload_speed}")
+        if platform in ("espressif32", "espressif8266"):
+            env_lines.append("upload_protocol = esptool")
+        if flash_mode:
+            env_lines.append(f"board_build.flash_mode = {flash_mode}")
+        if flash_size:
+            env_lines.extend((
+                f"board_build.flash_size = {flash_size}",
+                f"board_upload.flash_size = {flash_size}",
+            ))
+        if memory_type:
+            env_lines.append(
+                f"board_build.arduino.memory_type = {memory_type}"
+            )
+
+        build_flags: list[str] = []
+        if has_psram:
+            build_flags.append("-D BOARD_HAS_PSRAM")
+        if is_native:
+            build_flags.extend((
+                "-DARDUINO_USB_MODE=1",
+                "-DARDUINO_USB_CDC_ON_BOOT=1",
+            ))
+        if build_flags:
+            env_lines.append(
+                "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags)
+            )
+
+        ini_content = (
+            "; PlatformIO Project Configuration File for MCU Flasher Reset\n"
+            "[platformio]\n"
+            "src_dir = .\n"
+            "default_envs = mcu_flash\n\n"
+            "[env:mcu_flash]\n"
+            + "\n".join(env_lines)
+            + "\n"
+        )
+        cpp_content = (
+            "#include <Arduino.h>\n"
+            "void setup() {\n"
+            f"  Serial.begin({monitor_speed});\n"
+            "  Serial.println(\">>> ----- <<<\");\n"
+            "}\n"
+            "void loop() {\n"
+            "}\n"
+        )
+        return ini_content, cpp_content, monitor_speed
+
+    @staticmethod
+    def _reset_template_digest(ini_content: str, cpp_content: str) -> str:
+        payload = ini_content.encode("utf-8") + b"\0" + cpp_content.encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _installed_platform_version(platform: str) -> str:
+        """Best-effort installed PlatformIO platform version for reset reuse."""
+        roots = []
+        configured = os.environ.get("PLATFORMIO_CORE_DIR")
+        if configured:
+            roots.append(Path(configured))
+        roots.extend((
+            SCRIPT_DIR / "src" / "libs" / ".platformio-mcu-gui",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".platformio-mcu-gui",
+            Path.home() / ".platformio",
+        ))
+        for root in roots:
+            manifest_path = root / "platforms" / platform / "platform.json"
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                version = str(data.get("version", "")).strip()
+                if version:
+                    return version
+            except Exception:
+                continue
+        return ""
+
+    def _write_reset_manifest(self, project_dir: Path, board_name: str,
+                              board_info: dict) -> tuple[bool, str]:
+        """Record the exact reset template/package and image integrity data."""
+        ini_content, cpp_content, _monitor_speed = self._reset_project_contents(
+            board_name, board_info
+        )
+        build_dir = Path(project_dir) / ".pio" / "build" / "mcu_flash"
+        hashes: dict[str, str] = {}
+        platform = str(board_info.get("platform", ""))
+        image_names = (
+            ("firmware.bin",)
+            if platform == "espressif8266"
+            else ("bootloader.bin", "partitions.bin", "firmware.bin")
+        )
+        for filename in image_names:
+            image_path = build_dir / filename
+            if not image_path.is_file():
+                return False, f"Reset build is missing {filename}."
+            try:
+                hashes[filename] = hashlib.sha256(image_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                return False, f"Could not hash {filename}: {exc}"
+
+        manifest = {
+            "schema": 1,
+            "board_key": self._board_cache_key(board_name),
+            "board_name": board_name,
+            "platform": platform,
+            "board": str(board_info.get("board", "")),
+            "platform_version": self._installed_platform_version(
+                str(board_info.get("platform", ""))
+            ),
+            "template_sha256": self._reset_template_digest(
+                ini_content, cpp_content
+            ),
+            "sha256": hashes,
+            "partition_scheme": "board-specific reset project partition table",
+            "source_label": "MCU Flasher exact-board reset build",
+        }
+        manifest_path = Path(project_dir) / "hard_reset_manifest.json"
+        if not self._force_write_text(
+            manifest_path,
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        ):
+            return False, "Could not write reset-cache integrity manifest."
+        hide_hidden_attribute(manifest_path)
+        return True, ""
+
+    def _validate_reset_manifest(self, project_dir: Path, board_name: str,
+                                 board_info: dict,
+                                 required_images: tuple[str, ...]) -> tuple[dict | None, str]:
+        """Validate template, platform version, and exact cached image bytes."""
+        project_dir = Path(project_dir)
+        manifest_path = project_dir / "hard_reset_manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None, "reset cache has no valid integrity manifest"
+        if not isinstance(manifest, dict):
+            return None, "reset cache integrity manifest is malformed"
+
+        desired_ini, desired_cpp, _monitor_speed = self._reset_project_contents(
+            board_name, board_info
+        )
+        if manifest.get("board_key") != self._board_cache_key(board_name):
+            return None, "reset cache belongs to another selectable board"
+        if manifest.get("template_sha256") != self._reset_template_digest(
+            desired_ini, desired_cpp
+        ):
+            return None, "reset template changed"
+        try:
+            if (project_dir / "platformio.ini").read_text(encoding="utf-8") != desired_ini:
+                return None, "reset PlatformIO configuration changed"
+            if (project_dir / "main.cpp").read_text(encoding="utf-8") != desired_cpp:
+                return None, "reset sketch template changed"
+        except OSError:
+            return None, "reset project files are incomplete"
+
+        platform = str(board_info.get("platform", ""))
+        installed_version = self._installed_platform_version(platform)
+        cached_version = str(manifest.get("platform_version", ""))
+        if installed_version and cached_version and installed_version != cached_version:
+            return None, "board platform package changed"
+
+        expected_hashes = manifest.get("sha256")
+        if not isinstance(expected_hashes, dict):
+            return None, "reset image hashes are missing"
+        build_dir = project_dir / ".pio" / "build" / "mcu_flash"
+        for filename in required_images:
+            expected = str(expected_hashes.get(filename, "")).lower()
+            image_path = build_dir / filename
+            if not expected or not image_path.is_file():
+                return None, f"reset cache is missing validated {filename}"
+            try:
+                actual = hashlib.sha256(image_path.read_bytes()).hexdigest().lower()
+            except OSError as exc:
+                return None, f"could not read {filename}: {exc}"
+            if actual != expected:
+                return None, f"reset image integrity failed for {filename}"
+        return manifest, ""
+
+    def _reset_platformio_subprocess_env(self, project_dir: Path,
+                                         jobs: int | None = None) -> dict:
+        """PlatformIO environment for an already exact-board reset project."""
+        workspace = Path(project_dir) / ".pio"
+        env = os.environ.copy()
+        env["PLATFORMIO_WORKSPACE_DIR"] = str(workspace)
+        env["PLATFORMIO_BUILD_DIR"] = str(workspace / "build")
+        env["PLATFORMIO_LIBDEPS_DIR"] = str(workspace / "libdeps")
+        env.pop("PLATFORMIO_BUILD_CACHE_DIR", None)
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PYTHONDONTWRITEBYTECODE"] = "0"
+        if jobs is not None:
+            safe_jobs = max(1, int(jobs))
+            env["PLATFORMIO_BUILD_JOBS"] = str(safe_jobs)
+            env["SCONSFLAGS"] = f"-j{safe_jobs}"
+        return env
+
+    def _migrate_legacy_reset_project(self, board_name: str,
+                                      board_info: dict) -> None:
+        """Move a matching last-board reset cache into its exact-board folder."""
+        destination = self._soft_reset_project_dir(board_name, board_info)
+        if (destination / ".pio").exists():
+            return
+        legacy_base = SCRIPT_DIR / (
+            "soft_reset_project_uno"
+            if board_info.get("platform") == "atmelavr"
+            else "soft_reset_project"
+        )
+        legacy_ini = legacy_base / "platformio.ini"
+        if not legacy_ini.is_file():
+            return
+        try:
+            content = legacy_ini.read_text(encoding="utf-8", errors="replace")
+            board_match = re.search(
+                r"^\s*board\s*=\s*([^;#\r\n]+)", content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            platform_match = re.search(
+                r"^\s*platform\s*=\s*([^;#\r\n]+)", content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            if not board_match or not platform_match:
+                return
+            if board_match.group(1).strip().lower() != str(board_info.get("board", "")).lower():
+                return
+            if platform_match.group(1).strip().lower() != str(board_info.get("platform", "")).lower():
+                return
+            destination.mkdir(parents=True, exist_ok=True)
+            import shutil as _reset_shutil
+            legacy_pio = legacy_base / ".pio"
+            if legacy_pio.is_dir():
+                _reset_shutil.move(str(legacy_pio), str(destination / ".pio"))
+            for filename in ("platformio.ini", "main.cpp", "hard_reset_manifest.json"):
+                source = legacy_base / filename
+                target = destination / filename
+                if source.is_file() and not target.exists():
+                    _reset_shutil.copy2(source, target)
+        except Exception:
+            pass
 
     def _pio_env_name(self, board_name: str | None = None) -> str:
         """Stable PlatformIO [env:...] name / .pio/build subfolder for a
@@ -13123,7 +14891,18 @@ class MCUUploadGUI:
         name = board_name if board_name is not None else self.board_var.get()
         if not name:
             return "mcu_flash"
-        slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
+        # The surrounding workspace is already exact-board isolated, so the
+        # environment needs only a compact stable discriminator.  Bounding it
+        # prevents long downloaded-board display names from exceeding MAX_PATH.
+        digest = self._board_cache_key(name).rsplit("_", 1)[-1]
+        return f"mcu_{digest}"
+
+    def _legacy_pio_env_name(self, board_name: str | None = None) -> str:
+        """Environment name used before paths were bounded; migration only."""
+        name = board_name if board_name is not None else self.board_var.get()
+        if not name:
+            return "mcu_flash"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
         return f"mcu_flash_{slug}" if slug else "mcu_flash"
 
     def _get_mcu_folder_name(self, board_name: str | None = None) -> str:
@@ -13132,7 +14911,7 @@ class MCUUploadGUI:
         board_info = SUPPORTED_BOARDS.get(name, {})
         p_board = str(board_info.get("board", "")).lower()
         platform = str(board_info.get("platform", "")).lower()
-        
+
         if "uno" in p_board or "uno" in name.lower() or platform == "atmelavr":
             return "Arduino_UNO"
         elif "s3" in p_board or "s3" in name.lower():
@@ -13150,17 +14929,43 @@ class MCUUploadGUI:
             return slug or "Generic_MCU"
 
     def _ensure_platformio_ini(self) -> bool:
+        """Serialize platformio.ini preparation across all GUI/background writers."""
+        with _PLATFORMIO_INI_WRITE_LOCK:
+            return self._ensure_platformio_ini_impl()
+
+    def _ensure_platformio_ini_impl(self) -> bool:
         """Ensure platformio.ini exists and has all required library dependencies."""
         ini_path = self.sketch_dir_path / "platformio.ini"
 
         board_info = self._resolve_board_info()
+        if not board_info.get("pio_resolved", True):
+            selected_name = self.board_var.get()
+            arduino_id = str(board_info.get("arduino_board_id") or board_info.get("board") or "").strip()
+            inferred_platform = str(board_info.get("platform") or "").strip()
+            self._append(
+                f"  ✖ PlatformIO does not currently expose a canonical board manifest for: {selected_name}",
+                "error",
+            )
+            if arduino_id:
+                self._append(f"    Arduino board ID: {arduino_id}", "dim")
+            if inferred_platform:
+                self._append(f"    Detected PlatformIO family: {inferred_platform}", "dim")
+            self._append(
+                "    Bootstrap can prepare every toolchain family PlatformIO supports, but an unknown board ID cannot be fixed by downloading more compiler packages.",
+                "warning",
+            )
+            self._append(
+                "    Update/re-run Bootstrap so the PlatformIO board catalog can be refreshed, then retry.",
+                "info",
+            )
+            return False
         p_platform = board_info["platform"]
         p_board = board_info["board"]
         p_framework = board_info["framework"]
-        
+
         # 1. Scan for required libraries based on includes
         detected_libs = self._scan_includes_for_libs()
-        
+
         # Check if WiFiProv / BLE / large-stack libraries are used, OR if the
         # board is an ESP32 / ESP32-S3 (which benefits from huge_app by default).
         # WiFiProv.h is ESP32-only and requires wifi_provisioning headers that
@@ -13227,6 +15032,10 @@ class MCUUploadGUI:
             arduino_lib_dir = os.path.join(download_dir, "Libs").replace("\\", "/")
         except Exception:
             pass
+
+        flash_size, has_psram = normalized_board_memory_options(board_info)
+        memory_type = normalized_board_memory_type(board_info)
+        flash_mode = normalized_board_flash_mode(board_info)
         
         if not ini_path.exists():
             self._append(f"  📝 platformio.ini not found in {self.sketch_dir_path}.", "warning")
@@ -13242,8 +15051,8 @@ class MCUUploadGUI:
             # Without these the Serial monitor is silent even when the sketch runs.
             #   -DARDUINO_USB_MODE=1        → use TinyUSB (not ROM CDC)
             #   -DARDUINO_USB_CDC_ON_BOOT=1 → enable CDC-over-USB on boot
-            # board_build.flash_mode = dio is required on most S3 modules;
-            # qio can cause boot loops on boards that don't support it.
+            # Flash mode is taken from the board's actual manifest when it is
+            # explicit; S3 boards are not all DIO (some use QIO/DOUT).
             
             build_flags_list = []
             if p_platform == "espressif32" and needs_network_prov_compat:
@@ -13253,7 +15062,7 @@ class MCUUploadGUI:
                     "-D NETWORK_PROV_SECURITY_1=WIFI_PROV_SECURITY_1",
                 ])
             
-            s3_extra = ""
+            board_extra: list[str] = []
             _uspd = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
             # Arduino Uno's optiboot/stk500 bootloader only syncs at 115200 baud.
             # The upload_speed combobox is meant for esptool boards (ESP32/S3/8266) —
@@ -13263,13 +15072,8 @@ class MCUUploadGUI:
             if p_board == "uno":
                 _uspd = "115200"
             upload_speed_line = f"\nupload_speed = {_uspd}"
-            flash_size = board_info.get("flash_size")
-            has_psram = board_info.get("psram")
             if has_psram:
-                build_flags_list.extend([
-                    "-D BOARD_HAS_PSRAM",
-                    "-mfix-esp32-psram-cache-issue"
-                ])
+                build_flags_list.append("-D BOARD_HAS_PSRAM")
 
             if is_s3_board(p_board):
                 is_native = self._is_native_usb_port()
@@ -13279,10 +15083,10 @@ class MCUUploadGUI:
                         "-DARDUINO_USB_MODE=1",
                         "-DARDUINO_USB_CDC_ON_BOOT=1"
                     ])
-                s3_extra = (
-                    f"\nupload_protocol = esptool"
-                    f"\nboard_build.flash_mode = dio"
-                )
+            if p_platform in ("espressif32", "espressif8266"):
+                board_extra.append("upload_protocol = esptool")
+            if flash_mode:
+                board_extra.append(f"board_build.flash_mode = {flash_mode}")
 
             build_flags_str = (
                 "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags_list)
@@ -13302,17 +15106,16 @@ class MCUUploadGUI:
             if flash_size:
                 env_lines.append(f"board_build.flash_size = {flash_size}")
                 env_lines.append(f"board_upload.flash_size = {flash_size}")
-            if has_psram:
-                env_lines.append("board_build.arduino.memory_type = qio_opi")
+            if memory_type:
+                env_lines.append(
+                    f"board_build.arduino.memory_type = {memory_type}"
+                )
 
             # upload_speed only for non-native-USB boards (upload_speed_line is
             # "\nupload_speed = {speed}" when set, "" when skipped)
             if upload_speed_line:
                 env_lines.append(f"upload_speed = {_uspd}")
-            if s3_extra:
-                # s3_extra is "\nupload_protocol = esptool\nboard_build.flash_mode = dio"
-                for extra_line in s3_extra.strip().splitlines():
-                    env_lines.append(extra_line.strip())
+            env_lines.extend(board_extra)
             if build_flags_str:
                 env_lines.append(build_flags_str)
             if lib_extra_dirs_str:
@@ -13338,7 +15141,12 @@ default_envs = {self._pio_env_name()}
 {env_body}
 """
             try:
-                self._force_write_text(ini_path, content)
+                if not self._force_write_text(ini_path, content):
+                    raise OSError(
+                        "platformio.ini update failed after retries" +
+                        (f": {getattr(self, '_last_platformio_ini_write_error', '')}"
+                         if getattr(self, '_last_platformio_ini_write_error', '') else "")
+                    )
                 hide_internal_project_metadata(self.sketch_dir_path)
                 self._append("  ✔ Created default platformio.ini successfully.", "success")
                 self._append_notif(
@@ -13359,6 +15167,19 @@ default_envs = {self._pio_env_name()}
                     self._append("  ✔ Auto-healed stale library paths/symlinks in platformio.ini for current device.", "success")
                 content = ini_path.read_text(encoding="utf-8", errors="replace")
                 old_content = content
+                _previous_board_match = re.search(
+                    r"^\s*board\s*=\s*([^;#\r\n]+)", content,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                _previous_board_id = (
+                    _previous_board_match.group(1).strip()
+                    if _previous_board_match else ""
+                )
+                _previous_had_s3_settings = (
+                    is_s3_board(_previous_board_id)
+                    or "ARDUINO_USB_MODE" in content
+                    or "ARDUINO_USB_CDC_ON_BOOT" in content
+                )
 
 
                 # ── Per-board env rename ────────────────────────────────────────
@@ -13371,6 +15192,10 @@ default_envs = {self._pio_env_name()}
                 # previously-built board's folder is left untouched on disk.
                 target_env = self._pio_env_name()
                 _env_hdr_match = re.search(r"^\[env:([^\]]*)\]", content, re.MULTILINE)
+                _switching_board_env = bool(
+                    _env_hdr_match
+                    and _env_hdr_match.group(1) != target_env
+                )
                 if _env_hdr_match and _env_hdr_match.group(1) != target_env:
                     old_env = _env_hdr_match.group(1)
                     content = re.sub(
@@ -13424,10 +15249,13 @@ default_envs = {self._pio_env_name()}
                     ini_path.unlink(missing_ok=True)
                     # Also wipe the stale build cache — it was compiled against the
                     # wrong board/flags and will cause "no input files" on next build.
-                    _stale_build = self.sketch_dir_path / ".pio" / "build" / target_env
-                    if _stale_build.exists():
-                        if robust_rmtree(_stale_build):
-                            self._append(f"  🗑 Cleared stale build cache (.pio/build/{target_env}).", "warning")
+                    _stale_workspace = self._board_workspace()
+                    if _stale_workspace.exists():
+                        if robust_rmtree(_stale_workspace):
+                            self._append(
+                                "  🗑 Repaired malformed configuration cache for the selected board only.",
+                                "warning",
+                            )
                     return self._ensure_platformio_ini()
 
                 # Remove src_dir=. if present.  With src_dir=., PlatformIO's
@@ -13547,118 +15375,115 @@ default_envs = {self._pio_env_name()}
                         flags=re.MULTILINE | re.IGNORECASE,
                     )
 
-                # Inject ESP32-S3 required build flags if missing.
-                # These are needed for USB-Serial (Serial monitor) to work and
-                # to avoid boot loops caused by wrong flash mode on S3 modules.
-                if is_s3_board(p_board):
-                    is_native = self._is_native_usb_port()
-                    if is_native:
-                        s3_flags = ["-DARDUINO_USB_MODE=1", "-DARDUINO_USB_CDC_ON_BOOT=1"]
-                        existing_build_flags = re.search(r"^build_flags\s*=", content, re.MULTILINE)
-                        if existing_build_flags:
-                            # Append any missing flags to the existing build_flags block
-                            for flag in s3_flags:
-                                if flag not in content:
-                                    content = re.sub(
-                                        r"(^build_flags\s*=.*(?:\n[ \t]+\S.*)*)",
-                                        lambda m, f=flag: m.group(0).rstrip() + f"\n    {f}",
-                                        content, count=1, flags=re.MULTILINE
-                                    )
-                        else:
-                            # No build_flags at all — add the whole block after [env:...]
-                            flags_block = (
-                                "build_flags =\n"
-                                "    -DARDUINO_USB_MODE=1\n"
-                                "    -DARDUINO_USB_CDC_ON_BOOT=1\n"
-                            )
-                            content = re.sub(
-                                r"(\[env:[^\]]*\]\n)",
-                                r"\1" + flags_block,
-                                content, count=1
-                            )
+                # Reconcile every GUI-owned board option on every switch.  The
+                # previous implementation nested all cleanup under the *new*
+                # board being S3, so S3 USB/PSRAM/flash settings leaked into
+                # Uno and ordinary ESP32 environments.
+                def _set_env_option(key: str, value: str) -> None:
+                    nonlocal content
+                    pattern = rf"^{re.escape(key)}\s*=.*$"
+                    replacement = f"{key} = {value}"
+                    if re.search(pattern, content, re.MULTILINE):
+                        content = re.sub(
+                            pattern, replacement, content, count=1,
+                            flags=re.MULTILINE,
+                        )
                     else:
-                        # Remove USB CDC build flags to ensure Serial goes to the hardware UART port (CH343/CP2102)
-                        content = re.sub(r"^[ \t]*-DARDUINO_USB_MODE=.*\n?", "", content, flags=re.MULTILINE)
-                        content = re.sub(r"^[ \t]*-DARDUINO_USB_CDC_ON_BOOT=.*\n?", "", content, flags=re.MULTILINE)
-                        # If build_flags block is empty, clean it up.
-                        # The negative lookahead prevents stripping `build_flags =` when
-                        # indented continuation lines (the actual flags) follow on the next line.
-                        content = re.sub(r"^build_flags[ \t]*=[ \t]*$(?:\n[ \t]*$)*(?!\n[ \t]+\S)", "", content, flags=re.MULTILINE)
-                    if not re.search(r"^board_build\.flash_mode\s*=", content, re.MULTILINE):
                         content = re.sub(
                             r"(\[env:[^\]]*\]\n)",
-                            r"\1board_build.flash_mode = dio\n",
-                            content, count=1
+                            lambda m: m.group(1) + replacement + "\n",
+                            content, count=1,
                         )
-                    # Inject or remove PSRAM configurations based on selected board properties
-                    if board_info.get("psram"):
-                        if not re.search(r"^board_build\.arduino\.memory_type\s*=", content, re.MULTILINE):
-                            content = re.sub(
-                                r"(\[env:[^\]]*\]\n)",
-                                r"\1board_build.arduino.memory_type = qio_opi\n",
-                                content, count=1
-                            )
-                        else:
-                            content = re.sub(r"^board_build\.arduino\.memory_type\s*=.*", "board_build.arduino.memory_type = qio_opi", content, flags=re.MULTILINE)
-                        
-                        existing_build_flags = re.search(r"^build_flags\s*=", content, re.MULTILINE)
-                        psram_flags = ["-D BOARD_HAS_PSRAM", "-mfix-esp32-psram-cache-issue"]
-                        if existing_build_flags:
-                            for flag in psram_flags:
-                                if flag not in content:
-                                    content = re.sub(
-                                        r"(^build_flags\s*=.*(?:\n[ \t]+\S.*)*)",
-                                        lambda m, f=flag: m.group(0).rstrip() + f"\n    {f}",
-                                        content, count=1, flags=re.MULTILINE
-                                    )
-                        else:
-                            flags_block = "build_flags =\n" + "".join(f"    {f}\n" for f in psram_flags)
-                            content = re.sub(
-                                r"(\[env:[^\]]*\]\n)",
-                                r"\1" + flags_block,
-                                content, count=1
-                            )
-                    else:
-                        # Actively remove board_build.arduino.memory_type if it is set to qio_opi to prevent boot loops on modules without Octal PSRAM
-                        content = re.sub(r"^board_build\.arduino\.memory_type\s*=\s*qio_opi\s*$", "", content, flags=re.MULTILINE)
-                        content = re.sub(r"^[ \t]*-D\s*BOARD_HAS_PSRAM\n?", "", content, flags=re.MULTILINE)
-                        content = re.sub(r"^[ \t]*-mfix-esp32-psram-cache-issue\n?", "", content, flags=re.MULTILINE)
 
-                    # Inject or remove custom flash size configuration based on board info
-                    flash_size = board_info.get("flash_size")
-                    if flash_size:
-                        if not re.search(r"^board_build\.flash_size\s*=", content, re.MULTILINE):
-                            content = re.sub(
-                                r"(\[env:[^\]]*\]\n)",
-                                f"\\1board_build.flash_size = {flash_size}\nboard_upload.flash_size = {flash_size}\n",
-                                content, count=1
-                            )
-                        else:
-                            content = re.sub(r"^board_build\.flash_size\s*=.*", f"board_build.flash_size = {flash_size}", content, flags=re.MULTILINE)
-                            content = re.sub(r"^board_upload\.flash_size\s*=.*", f"board_upload.flash_size = {flash_size}", content, flags=re.MULTILINE)
-                    else:
-                        content = re.sub(r"^board_build\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
-                        content = re.sub(r"^board_upload\.flash_size\s*=.*\n?", "", content, flags=re.MULTILINE)
+                def _remove_env_option(key: str, value_pattern: str = r".*") -> None:
+                    nonlocal content
+                    content = re.sub(
+                        rf"^{re.escape(key)}\s*=\s*{value_pattern}\s*\n?",
+                        "", content, flags=re.MULTILINE | re.IGNORECASE,
+                    )
 
-                    # Inject upload_protocol (forced to esptool to avoid OpenOCD JTAG driver failures on ESP32)
-                    # and remove upload_resetmethod.
-                    if p_platform in ("espressif32", "espressif8266"):
-                        if re.search(r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b", content, re.MULTILINE):
-                            content = re.sub(r"^upload_protocol\s*=.*", "upload_protocol = esptool", content, flags=re.MULTILINE)
-                        elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
-                            content = re.sub(
-                                r"(\[env:[^\]]*\]\n)",
-                                r"\1upload_protocol = esptool\n",
-                                content, count=1
-                            )
+                def _ensure_build_flag(flag: str) -> None:
+                    nonlocal content
+                    if re.search(
+                        rf"^[ \t]*{re.escape(flag)}[ \t]*$",
+                        content, re.MULTILINE,
+                    ):
+                        return
+                    block = re.search(
+                        r"^build_flags\s*=.*(?:\n[ \t]+\S.*)*",
+                        content, re.MULTILINE,
+                    )
+                    if block:
+                        replacement = block.group(0).rstrip() + f"\n    {flag}"
+                        content = content[:block.start()] + replacement + content[block.end():]
                     else:
-                        # For Atmel AVR / Arduino Uno, remove any stale upload_protocol = esptool
-                        content = re.sub(r"^upload_protocol\s*=.*\n?", "", content, flags=re.MULTILINE)
-                    # Remove upload_resetmethod as it is JTAG-specific
-                    content = re.sub(r"^upload_resetmethod\s*=.*\n?", "", content, flags=re.MULTILINE)
-                    # Remove upload_speed for native USB — baud rate is irrelevant
-                    # and can interfere with the USB reset signaling.
-                    content = re.sub(r"^upload_speed\s*=.*\n?", "", content, flags=re.MULTILINE)
+                        if not content.endswith("\n"):
+                            content += "\n"
+                        content += f"\nbuild_flags =\n    {flag}\n"
+
+                # Remove app-generated flags before applying this board's
+                # exact traits.  User-defined unrelated flags remain intact.
+                for _managed_flag_pattern in (
+                    r"^[ \t]*-D\s*ARDUINO_USB_MODE\s*=.*\n?",
+                    r"^[ \t]*-D\s*ARDUINO_USB_CDC_ON_BOOT\s*=.*\n?",
+                    r"^[ \t]*-D\s*BOARD_HAS_PSRAM\s*\n?",
+                    r"^[ \t]*-mfix-esp32-psram-cache-issue\s*\n?",
+                ):
+                    content = re.sub(
+                        _managed_flag_pattern, "", content,
+                        flags=re.MULTILINE,
+                    )
+
+                current_is_s3 = is_s3_board(p_board)
+                is_native = current_is_s3 and self._is_native_usb_port()
+                if flash_mode:
+                    _set_env_option("board_build.flash_mode", flash_mode)
+                elif _switching_board_env or _previous_had_s3_settings:
+                    # Remove a value injected by older blanket-S3 handling and
+                    # let the exact PlatformIO board manifest choose its mode.
+                    _remove_env_option("board_build.flash_mode")
+                if is_native:
+                    _ensure_build_flag("-DARDUINO_USB_MODE=1")
+                    _ensure_build_flag("-DARDUINO_USB_CDC_ON_BOOT=1")
+
+                if memory_type:
+                    _set_env_option(
+                        "board_build.arduino.memory_type", memory_type
+                    )
+                else:
+                    _remove_env_option("board_build.arduino.memory_type")
+                if has_psram:
+                    _ensure_build_flag("-D BOARD_HAS_PSRAM")
+
+                if flash_size:
+                    _set_env_option("board_build.flash_size", str(flash_size))
+                    _set_env_option("board_upload.flash_size", str(flash_size))
+                else:
+                    _remove_env_option("board_build.flash_size")
+                    _remove_env_option("board_upload.flash_size")
+
+                # Upload options do not affect object reuse, but must match the
+                # selected board so a cached A -> B -> A upload is safe.
+                if p_platform in ("espressif32", "espressif8266"):
+                    if re.search(
+                        r"^upload_protocol\s*=\s*(?:esp-builtin|esp-usb-jtag)\b",
+                        content, re.MULTILINE | re.IGNORECASE,
+                    ):
+                        _set_env_option("upload_protocol", "esptool")
+                    elif not re.search(r"^upload_protocol\s*=", content, re.MULTILINE):
+                        _set_env_option("upload_protocol", "esptool")
+                else:
+                    _remove_env_option("upload_protocol")
+                _remove_env_option("upload_resetmethod")
+                if is_native:
+                    _remove_env_option("upload_speed")
+
+                # Drop an empty generated build_flags key after managed flags
+                # were removed for a board that does not need them.
+                content = re.sub(
+                    r"^build_flags[ \t]*=[ \t]*$(?:\n[ \t]*$)*(?!\n[ \t]+\S)",
+                    "", content, flags=re.MULTILINE,
+                )
 
                 def _lib_key(slug: str) -> str:
                     # 'dhrubasaha08/DHT11 @ ^2.1.0'                       -> 'dht11'
@@ -13735,14 +15560,19 @@ default_envs = {self._pio_env_name()}
 
 
                 if content != old_content:
-                    self._force_write_text(ini_path, content)
+                    if not self._force_write_text(ini_path, content):
+                        raise OSError(
+                        "platformio.ini update failed after retries" +
+                        (f": {getattr(self, '_last_platformio_ini_write_error', '')}"
+                         if getattr(self, '_last_platformio_ini_write_error', '') else "")
+                    )
                     if "upload_protocol = esptool" in content and "upload_protocol = esptool" not in old_content:
-                        pio_dir = self.sketch_dir_path / ".pio"
-                        if pio_dir.exists():
-                            if robust_rmtree(pio_dir):
-                                self._append("  📝 Cleared SCons build cache (.pio) to apply the new serial upload protocol.", "info")
+                        self._append(
+                            "  📝 Serial upload protocol updated; PlatformIO will reconcile the selected board incrementally.",
+                            "info",
+                        )
                     if _has_stale_symlink and target_env:
-                        libdeps_dir = self.sketch_dir_path / ".pio" / "libdeps" / target_env
+                        libdeps_dir = self._board_workspace() / "libdeps" / target_env
                         if libdeps_dir.exists():
                             if robust_rmtree(libdeps_dir):
                                 self._append("  📝 Cleared stale .pio/libdeps cache (cross-device library paths healed).", "info")
@@ -13753,27 +15583,106 @@ default_envs = {self._pio_env_name()}
                 return True
             except Exception as e:
                 self._append(f"  ⚠ Failed to inspect/update existing platformio.ini: {e}", "warning")
-                return True
+                return False
 
-    def _force_write_text(self, path: Path, content: str, attempts: int = 6, delay: float = 0.15) -> bool:
-        """Write text to `path`, forcing past transient Windows locks/read-only flags.
+    def _force_write_text(self, path: Path, content: str, attempts: int = 14, delay: float = 0.08) -> bool:
+        """Reliably update a generated text file without requiring administrator rights.
 
-        Retries through the common causes of WinError 5 / Errno 13 on files like
-        platformio.ini: another process briefly holding a handle (editor, PlatformIO
-        language server, OneDrive sync, AV scan) or a stale read-only attribute.
-        Failures are swallowed after the final attempt — callers treat this as
-        best-effort and shouldn't surface retry mechanics to the user.
+        The old implementation repeatedly opened the destination with ``write_text``.
+        That is vulnerable to a short Windows sharing violation when Monaco, Defender,
+        OneDrive, or another GUI callback has the file open.  This version serializes
+        app-owned writers, writes a fully flushed sibling temporary file, then uses an
+        atomic replace.  If the destination handle permits writing but not replacement,
+        it falls back to an in-place rewrite for that attempt.
+
+        A board switch should never need UAC: the sketch belongs to the signed-in user.
+        Elevating only changes the security context and can create files owned by a
+        different administrator account; it does not solve a sharing-mode lock.
         """
+        path = Path(path)
         last_exc = None
-        for i in range(attempts):
+        with _PLATFORMIO_INI_WRITE_LOCK:
             try:
-                ensure_file_writable(path)
-                path.write_text(content, encoding="utf-8")
-                return True
-            except Exception as e:
-                last_exc = e
-                time.sleep(delay * (i + 1))
-        return False
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+
+            for i in range(max(1, int(attempts))):
+                temp_path = None
+                try:
+                    # A previous writer may already have completed the exact update.
+                    if path.exists():
+                        try:
+                            if path.read_text(encoding="utf-8", errors="replace") == content:
+                                self._last_platformio_ini_write_error = ""
+                                return True
+                        except Exception:
+                            pass
+
+                    ensure_file_writable(path)
+                    fd, temp_name = tempfile.mkstemp(
+                        prefix=f".{path.name}.mcu-write-",
+                        suffix=".tmp",
+                        dir=str(path.parent),
+                    )
+                    temp_path = Path(temp_name)
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8", errors="strict", newline="") as stream:
+                            stream.write(content)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                    except Exception:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                        raise
+
+                    ensure_file_writable(path)
+                    try:
+                        os.replace(str(temp_path), str(path))
+                        temp_path = None
+                        self._last_platformio_ini_write_error = ""
+                        return True
+                    except Exception as replace_exc:
+                        last_exc = replace_exc
+                        # Some Windows handles deny delete/rename sharing but still allow
+                        # an ordinary write. Try that before waiting for the next retry.
+                        try:
+                            ensure_file_writable(path)
+                            with open(path, "w", encoding="utf-8", errors="strict", newline="") as stream:
+                                stream.write(content)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                            self._last_platformio_ini_write_error = ""
+                            return True
+                        except Exception as direct_exc:
+                            last_exc = direct_exc
+                except Exception as exc:
+                    last_exc = exc
+                finally:
+                    if temp_path is not None:
+                        try:
+                            temp_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
+                # Short capped backoff: enough for AV/editor handles to release without
+                # making a compile look frozen. Total wait is only a few seconds.
+                if i < attempts - 1:
+                    time.sleep(min(0.45, delay * (i + 1)))
+
+            # One final equality check handles the case where another serialized writer
+            # won the race immediately after our last failed filesystem operation.
+            try:
+                matched = path.exists() and path.read_text(encoding="utf-8", errors="replace") == content
+                if matched:
+                    self._last_platformio_ini_write_error = ""
+                    return True
+            except Exception as final_exc:
+                last_exc = final_exc
+            self._last_platformio_ini_write_error = str(last_exc or "unknown Windows file-sharing/permission error")
+            return False
 
     def _check_libraries_installed(self) -> bool:
         """Query arduino-cli for installed libraries and check if required ones are missing."""
@@ -14079,19 +15988,40 @@ default_envs = {self._pio_env_name()}
         """
         src_dir = self.sketch_dir_path / "src"
         src_dir.mkdir(exist_ok=True)
-        hide_hidden_attribute(src_dir)
+        hide_generated_directory(src_dir)
 
         sketch_files: dict[str, Path] = {}
-        for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
+        for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.hpp"):
             for f in self.sketch_dir_path.glob(ext):
                 sketch_files[f.name] = f
 
-        # Replace every current source with an independent point-in-time copy.
-        # Always replacing also upgrades legacy src/ hard links created by older
-        # releases; merely comparing mtimes/inodes would leave those links live.
+        # Replace only changed sources.  Rewriting every staged file on every
+        # action needlessly invalidated SCons nodes and generated .ino.cpp files
+        # on low-end/slow storage.  Legacy hard links are still always replaced
+        # so the frozen build boundary remains independent from editor writes.
         for name, src_path in sketch_files.items():
             unhide_hidden_attribute(src_path)
             dst_path = src_dir / name
+            should_replace = True
+            if dst_path.is_file():
+                try:
+                    is_legacy_hardlink = os.path.samefile(src_path, dst_path)
+                except OSError:
+                    is_legacy_hardlink = False
+                if not is_legacy_hardlink:
+                    try:
+                        src_stat = src_path.stat()
+                        dst_stat = dst_path.stat()
+                        if src_stat.st_size == dst_stat.st_size:
+                            # Never trust timestamps here. FAT/exFAT can retain
+                            # the same coarse mtime for a same-length edit; if
+                            # that stale copy were compiled, the cache hash
+                            # could incorrectly bless the wrong firmware.
+                            should_replace = src_path.read_bytes() != dst_path.read_bytes()
+                    except OSError:
+                        should_replace = True
+            if not should_replace:
+                continue
             file_descriptor, temporary_name = tempfile.mkstemp(
                 prefix=f".{name}.freeze-", suffix=".tmp", dir=str(src_dir)
             )
@@ -14105,50 +16035,38 @@ default_envs = {self._pio_env_name()}
             finally:
                 temporary_path.unlink(missing_ok=True)
 
-        # Remove any stale entries that no longer have a source file
+        # Preserve PlatformIO's generated <sketch>.ino.cpp for unchanged .ino
+        # files.  Deleting it on every action defeated incremental conversion
+        # and made the old interruption detector erase valid SCons state.
+        generated_ino_cpp = {
+            f.name + ".cpp" for f in sketch_files.values() if f.suffix.lower() == ".ino"
+        }
+        allowed_names = set(sketch_files) | generated_ino_cpp
+
+        # Remove stale entries that no longer have a source file.
         for dst_path in list(src_dir.iterdir()):
-            if dst_path.name not in sketch_files:
+            if dst_path.name not in allowed_names:
                 try:
                     dst_path.unlink()
                 except OSError:
                     pass
 
-        # ── Interrupted-compile recovery ──────────────────────────────────
-        # After a mid-compile kill PlatformIO may leave behind:
-        #   (a) .ino.cpp MISSING  + .sconsign.dblite PRESENT
-        #       → SCons trusts its cache, skips InoToCPPConverter, g++ gets no input
-        #   (b) .ino.cpp PRESENT but corrupt/partial
-        #       → g++ produces "Error 1" with no error message at ~1.7 s
+        # ── Preserve SCons incremental signatures ─────────────────────────
+        # Do NOT pre-emptively delete .sconsign*.dblite here based on whether a
+        # generated <sketch>.ino.cpp happens to be present in src/. PlatformIO
+        # owns the generated INO translation and its exact on-disk location and
+        # lifetime can differ between framework/build-system versions. Treating
+        # "signature DB exists + src/<name>.ino.cpp is absent" as proof of an
+        # interrupted build destroys SCons' dependency signatures on an ordinary
+        # healthy recompile and therefore forces the selected board to rebuild
+        # from the beginning.
         #
-        # The correct trigger is: .sconsign.dblite exists BUT a corresponding
-        # .ino.cpp is absent — that combination is only possible after a kill.
-        # On a clean first-run neither file exists, so we do nothing.
-        # On a normal re-compile both exist and are consistent — also do nothing.
-        # Only the mismatched state (db present, cpp absent) needs recovery.
-        #
-        # Recovery: delete the stale .sconsign.dblite so SCons rebuilds its
-        # dependency graph from scratch, and delete any partial .ino.cpp so
-        # InoToCPPConverter regenerates it cleanly.
-        sconsign = (
-            self.sketch_dir_path / ".pio" / "build" / self._pio_env_name() / ".sconsign.dblite"
-        )
-        ino_files = [f for f in sketch_files.values() if f.suffix == ".ino"]
-        interrupted = sconsign.exists() and any(
-            not (src_dir / (f.name + ".cpp")).exists() for f in ino_files
-        )
-        if interrupted:
-            # Wipe the stale SCons signature DB
-            try:
-                sconsign.unlink()
-            except OSError:
-                pass
-            # Delete any partial/corrupt .ino.cpp files left in src/
-            for f in list(src_dir.iterdir()):
-                if f.suffix == ".cpp" and f.stem.endswith(".ino"):
-                    try:
-                        f.unlink()
-                    except OSError:
-                        pass
+        # Recovery is already handled safely *after* a real PlatformIO failure:
+        # classify_platformio_failure() recognizes explicit cache-corruption
+        # diagnostics (including "no input files" / corrupt sconsign), and then
+        # _perform_clean_current_board() clears only this board's workspace once
+        # before retrying. Normal successful builds keep every valid signature,
+        # framework object, library object, and unchanged source object intact.
 
     def _freeze_build_sources_at_boundary(self, action_name: str) -> bool:
         """Stage immutable build inputs between two synchronous AI scans.
@@ -14184,43 +16102,25 @@ default_envs = {self._pio_env_name()}
         self._append("=" * 50, "header")
         self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
         self._append(f"  Tool   : PlatformIO Core", "dim")
+        self._append(f"  Store  : {os.environ.get('PLATFORMIO_CORE_DIR', '(default)')}", "dim")
         self._append("")
 
         if is_upload and not self.skip_compile_var.get():
             self._append("  🔄 Skip recompile unchecked — recompiling before upload.", "info")
 
-        # Clean compile directory only when switching board targets to keep
-        # incremental builds fast.  Each board's build lives in its own
-        # .pio/build/<env> folder (see _pio_env_name), so switching back
-        # to a previously-compiled board reuses its cached objects — no
-        # full rebuild needed.  We only wipe the new board's folder when
-        # it has NEVER been built before (no firmware binary on disk).
+        # Never equate "no final firmware yet" with "no reusable cache".
+        # A normal compiler error can leave many valid framework/object files;
+        # deleting those on the retry forced a complete rebuild after every
+        # source fix.  The exact board workspace is either new/empty or safe to
+        # retain, and PlatformIO incrementally reconciles changed inputs.
         current_board = self.board_var.get()
-        if self._last_compiled_board != current_board:
-            if self._has_prior_build():
-                # This board was already compiled in a previous session —
-                # keep its cached build for fast incremental compilation.
-                self._append("  ♻ Board switch — reusing cached build for this board.", "info")
-                self._append("  ℹ Incremental build enabled (only changed files will recompile).", "info")
-            else:
-                removed, clean_errors = self._perform_clean_current_board()
-                self._append("  🧹 Clean (pre-compile due to board switch)", "header")
-                if removed:
-                    self._append(f"  Removed: {', '.join(removed)}", "success")
-                    self._append_notif(
-                        f"  🧹 Pre-compile clean: removed {len(removed)} build artifact(s) (board switched to {current_board})",
-                        tag="info", category="clean", title="Build Cache Cleared"
-                    )
-                else:
-                    self._append("  Nothing to remove — this board already clean.", "info")
-                    self._append_notif(
-                        f"  🧹 Pre-compile clean: nothing to remove — {current_board} already clean.",
-                        tag="dim", category="clean", title="Build Cache Already Clean"
-                    )
-                for e in clean_errors:
-                    self._append(f"  ⚠ Could not remove {e}", "warning")
+        self._migrate_legacy_board_cache()
+        if self._board_workspace().exists():
+            if self._last_compiled_board != current_board:
+                self._append("  ♻ Board switch — restored this board's isolated cache.", "info")
+            self._append("  ℹ Incremental build enabled; successful objects are preserved.", "info")
         else:
-            self._append("  ℹ Keeping cached build directories (incremental build enabled).", "info")
+            self._append("  🔧 First build for this board — creating its isolated workspace.", "info")
 
         if not self._ensure_platformio_ini():
             self.is_busy = False
@@ -14324,14 +16224,8 @@ default_envs = {self._pio_env_name()}
         )
         self._append("")
 
-        # The pre-compile clean above already wiped this board's own
-        # .pio/build/<env>, so this is always effectively a fresh build for
-        # whichever board is currently selected — other boards' cached
-        # builds are untouched and will be picked up as-is if/when you
-        # switch back to them with an unchanged sketch.
-        self._append("  ℹ Fresh build for this board.", "info")
-        self._append("    PlatformIO will build the core framework from scratch, which takes longer.", "dim")
-        self._append("    Subsequent uploads without source changes can reuse it.", "dim")
+        self._append("  ℹ Selected-board workspace is isolated from every other board.", "info")
+        self._append("    PlatformIO will compile only missing or changed units.", "dim")
         self._append("")
 
         # Freeze sketch files into src/ so PlatformIO uses its default src_dir.
@@ -14357,19 +16251,7 @@ default_envs = {self._pio_env_name()}
         self._append("    SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...", "purple_dim")
         self._set_status("Initializing PlatformIO build engine...", Theme.YELLOW)
 
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PLATFORMIO_UNBUFFERED"] = "1"
-        env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
-        env["PYTHONDONTWRITEBYTECODE"] = "0"
-        env["SCONSFLAGS"] = f"-j{jobs}"
-        cache_dir = SCRIPT_DIR / ".pio_cache" / env_name
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            env["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir)
-        except Exception:
-            pass
+        env = self._platformio_subprocess_env(jobs=jobs)
 
         # Normal process priority keeps Tk, WebView2, USB handling, and the
         # serial reader responsive while compiler workers are busy.
@@ -14427,6 +16309,9 @@ default_envs = {self._pio_env_name()}
         # LTO, framework archive linking, or slow first-time builds).
         _spinner_active = [True]
         _spin_frame     = [0]
+        _package_check_active = [False]
+        _package_check_start = [None]
+        _package_check_item = [""]
 
         def _spin_loop():
             while _spinner_active[0] and not getattr(self, "_stop_requested", False):
@@ -14435,11 +16320,23 @@ default_envs = {self._pio_env_name()}
                     frame   = spinner[_spin_frame[0] % len(spinner)]
                     _spin_frame[0] += 1
                     self._set_status(
-                        f"{frame} Downloading Framework... ({elapsed}s elapsed)",
+                        f"{frame} Downloading/Unpacking PlatformIO package... ({elapsed}s elapsed)",
+                        Theme.YELLOW,
+                    )
+                elif _package_check_active[0]:
+                    started = _package_check_start[0] or compile_start
+                    elapsed = int(time.time() - started)
+                    item = _package_check_item[0] or "required package"
+                    if len(item) > 40:
+                        item = item[:37] + "..."
+                    frame = spinner[_spin_frame[0] % len(spinner)]
+                    _spin_frame[0] += 1
+                    self._set_status(
+                        f"{frame} Checking PlatformIO package {item}... ({elapsed}s)",
                         Theme.YELLOW,
                     )
                 else:
-                    # Only show the pure build timer — downloading is done and accounted for
+                    # Only show the pure build timer — package preparation is done.
                     build_elapsed = int(time.time() - (_build_start[0] or compile_start))
                     frame   = spinner[_spin_frame[0] % len(spinner)]
                     _spin_frame[0] += 1
@@ -14461,6 +16358,16 @@ default_envs = {self._pio_env_name()}
         _tool_dl_active = [False]
         _tool_dl_start = [None]
         _tool_dl_total = [0.0]
+
+        # One framework/toolchain setup session can contain many PlatformIO
+        # packages (platform, framework, compiler, uploader, etc.).  Keep the
+        # safety banner session-scoped so it is printed once, then label every
+        # package phase with the actual package currently being processed.
+        _framework_banner_shown = [False]
+        _current_framework_item = [""]
+        _current_framework_kind = ["Package"]
+        _framework_logged_installs: set[str] = set()
+        _framework_logged_done: set[str] = set()
 
         _first_divider_printed = [False]
         _has_intermediate_content = [False]
@@ -14485,6 +16392,24 @@ default_envs = {self._pio_env_name()}
             if _first_divider_printed[0] and _has_intermediate_content[0] and not _init_divider_closed[0]:
                 _init_divider_closed[0] = True
                 self._append("  ──────────────────────────────────────────────────", "purple_dim")
+
+        def _ensure_framework_download_banner():
+            """Show the critical package warning only after real download/unpack starts.
+
+            PlatformIO often emits ``Tool Manager: Installing ...`` even while it
+            is only checking an already-installed package.  Treating that line as
+            proof of a download caused false first-time warnings on every clean.
+            """
+            if _framework_banner_shown[0]:
+                return
+            _framework_banner_shown[0] = True
+            self._append("", "")
+            self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+            self._append("  ⚠ Preparing required core framework & toolchain packages...", "warning")
+            self._append("    A required shared PlatformIO package is actually being downloaded/unpacked.", "info")
+            self._append("    Keep the application open until package preparation finishes.", "info")
+            self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
+            self._append("", "")
 
         def _classify_and_display(stripped):
             """Classify a single PlatformIO / GCC output line and display it using a stateful parser."""
@@ -14549,21 +16474,30 @@ default_envs = {self._pio_env_name()}
                 is_scons_wrapper
             )
 
+            # Package-manager completion lines ("has been installed") are NOT
+            # the end of framework setup: PlatformIO commonly installs several
+            # packages back-to-back.  Only genuine SCons build work ends the
+            # framework/toolchain phase.
+            is_real_build_progress = any(kw in low for kw in (
+                "compiling", "archiving", "linking", "building",
+                "checking size", "retrieving maximum", "took",
+            ))
+
             if is_scons_progress or "has been installed" in low:
                 _in_error_block[0] = False
+
+            if is_real_build_progress:
+                _package_check_active[0] = False
+                _package_check_start[0] = None
+                _package_check_item[0] = ""
                 if _tool_dl_active[0]:
                     if _tool_dl_start[0] is not None:
                         _tool_dl_total[0] += (time.time() - _tool_dl_start[0])
                     _tool_dl_active[0] = False
                     _tool_dl_start[0] = None
-                # Real build progress (compiling/linking/archiving/building/took)
-                # means the download/install phase is over. Clear the flag so the
-                # status bar and spinner switch back to "Compiling..." instead of
-                # staying stuck on "Framework Downloading/Installing...".
+                # Real build progress means all package preparation has finished.
                 if getattr(self, "_framework_download_active", False):
                     self._framework_download_active = False
-                    # Start the pure-build timer NOW — from this point forward
-                    # only actual code compilation/linking is running.
                     if _build_start[0] is None:
                         _build_start[0] = time.time()
                     try:
@@ -14634,23 +16568,30 @@ default_envs = {self._pio_env_name()}
                 self._append(f"  ✖ {stripped}", "error")
             elif "warning" in low:
                 self._append(f"  ⚠ {stripped}", "warning")
-            elif any(kw in low for kw in ("tool manager:", "platform manager:", "library manager:", "downloading", "unpacking", "installing", "removing", "processing")):
-                # "Library Manager:" lines just mean PlatformIO is syncing this
-                # project's lib_deps (ESP32Servo, NimBLE-BLE, HX711, etc.) from
-                # the local Libs folder into .pio/libdeps. That's a normal,
-                # fast, purely-local copy that happens on basically every
-                # compile once a project has any lib_deps — it is NOT touching
-                # the core framework/toolchain, so it should not trip the
-                # "do NOT stop the compile" safety banner. Only Tool Manager
-                # (toolchains/compilers) and Platform Manager (framework/board
-                # packages) downloads are the risky, network-heavy operations
-                # that banner is meant to protect against.
+            elif any(kw in low for kw in ("tool manager:", "platform manager:", "library manager:", "downloading", "unpacking", "installing", "installed", "removing", "processing")):
+                # Library Manager activity is project-local dependency linking.
+                # Tool/Platform Manager activity is the one-time core framework
+                # setup.  Keep those two categories visually distinct.
                 is_library_manager_line = "library manager:" in low
-                is_core_framework_event = (
-                    "tool manager:" in low or "platform manager:" in low
-                )
+                is_tool_manager_line = "tool manager:" in low
+                is_platform_manager_line = "platform manager:" in low
+                is_core_framework_event = is_tool_manager_line or is_platform_manager_line
 
-                # Log notifications for auto-installed/linked libraries or framework tools
+                def _pio_item_from_manager_line(raw: str) -> str:
+                    value = re.sub(
+                        r"^(?:Tool|Platform) Manager:\s*", "", raw,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    value = re.sub(
+                        r"^(?:Installing|Downloading|Unpacking|Removing)\s+", "",
+                        value, flags=re.IGNORECASE,
+                    ).strip()
+                    value = re.split(
+                        r"\s+has been installed!?$", value,
+                        flags=re.IGNORECASE,
+                    )[0].strip()
+                    return value or "PlatformIO package"
+
                 if is_library_manager_line and ("installing" in low or "linking" in low):
                     installed_item = line.split("installing")[-1].split("linking")[-1].strip()
                     verb = "Linked" if ("symlink" in low or "linking" in low or "installing" in low) else "Installed"
@@ -14658,58 +16599,85 @@ default_envs = {self._pio_env_name()}
                         f"  📚 PlatformIO Auto-{verb} Library: {installed_item}",
                         tag="success", category="library_install", title=f"Library {verb}"
                     )
-                elif is_core_framework_event and ("installing" in low or "downloading" in low):
-                    installed_item = line.split(":")[-1].strip()
-                    self._append_notif(
-                        f"  📦 PlatformIO Auto-Installed Core Tool/Framework: {installed_item}",
-                        tag="info", category="board_install", title="Board/Framework Tool Installed"
-                    )
+                elif is_core_framework_event:
+                    manager_kind = "Toolchain/Tool" if is_tool_manager_line else "Platform/Framework"
+                    item = _pio_item_from_manager_line(stripped)
 
-                # Check if we should activate framework download safety mode & timing tracker
-                if is_core_framework_event:
-                    if not _tool_dl_active[0]:
-                        _tool_dl_active[0] = True
-                        _tool_dl_start[0] = time.time()
-                    if not getattr(self, "_framework_download_active", False):
-                        self._framework_download_active = True
-                        self._append("", "")
-                        self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
-                        self._append("  ⚠ CRITICAL: Preparing/Installing core framework & toolchain packages...", "warning")
-                        self._append("    This might take a while and is highly important. Please do NOT stop the compile", "info")
-                        self._append("    or close the app to prevent PlatformIO core/toolchain corruption.", "warning")
-                        self._append("    Notice: One-time setup of core framework packages (~760 MB) may take up", "info")
-                        self._append("    to 5 minutes even on a stable internet connection.", "info")
-                        self._append("  ────────────────────────────────────────────────────────────────────────────", "warning")
-                        self._append("", "")
-                        
-                        # Disable the stop button to prevent interruption
-                        self.btn_stop.configure(state=tk.DISABLED)
-                elif is_library_manager_line:
+                    # ``... Manager: Installing`` is not proof that bytes are
+                    # being installed; PlatformIO also emits it while checking an
+                    # already-present package.  Record the candidate item now, but
+                    # only enter framework-download mode when a real Downloading or
+                    # Unpacking progress line arrives.
+                    if "installing" in low:
+                        _current_framework_item[0] = item
+                        _current_framework_kind[0] = manager_kind
+                        _package_check_active[0] = True
+                        _package_check_start[0] = time.time()
+                        _package_check_item[0] = item
+                        key = f"{manager_kind}:{item}"
+                        if key not in _framework_logged_installs:
+                            _framework_logged_installs.add(key)
+                            self._append(f"  🔎 Checking {manager_kind}: {item}", "info")
+                    elif "has been installed" in low or ("installed" in low and "installing" not in low):
+                        _package_check_active[0] = False
+                        _package_check_start[0] = None
+                        _package_check_item[0] = ""
+                        # Completion belongs to the item named on this manager
+                        # line; use it rather than whichever previous package was
+                        # active when the last progress percentage arrived.
+                        _current_framework_item[0] = item
+                        _current_framework_kind[0] = manager_kind
+                        key = f"{manager_kind}:{item}"
+                        if key not in _framework_logged_done:
+                            _framework_logged_done.add(key)
+                            self._append(f"  ✔ Installed {manager_kind}: {item}", "success")
+                    return
+
+                if is_library_manager_line:
                     _has_intermediate_content[0] = True
                     if not _first_divider_printed[0]:
                         _first_divider_printed[0] = True
                         self._append("  ──────────────────────────────────────────────────", "purple_dim")
-                    # Replace 'Installing' with 'Linking' and 'installed' with 'linked' for Library Manager lines
                     formatted_lib_line = stripped
                     formatted_lib_line = re.sub(r'\bInstalling\b', 'Linking', formatted_lib_line)
                     formatted_lib_line = re.sub(r'\binstalling\b', 'linking', formatted_lib_line)
                     formatted_lib_line = re.sub(r'\bhas been installed\b', 'has been linked', formatted_lib_line, flags=re.IGNORECASE)
                     formatted_lib_line = re.sub(r'\bInstalled\b', 'Linked', formatted_lib_line)
-                    # Quiet, informational only — no critical banner, no stop-button lock.
                     self._append(f"    {formatted_lib_line}", "info")
                     return
 
-                # Format progress bar nicely
+                # Bare PlatformIO progress rows normally follow the preceding
+                # Tool/Platform Manager line, so annotate them with that package.
                 if "downloading" in low or "unpacking" in low:
+                    _package_check_active[0] = False
+                    _package_check_start[0] = None
+                    _package_check_item[0] = ""
+                    if not _tool_dl_active[0]:
+                        _tool_dl_active[0] = True
+                        _tool_dl_start[0] = time.time()
+                    self._framework_download_active = True
+                    try:
+                        self.btn_stop.configure(state=tk.DISABLED)
+                    except Exception:
+                        pass
+                    _ensure_framework_download_banner()
                     pcts = re.findall(r'(\d+)%', stripped)
                     if pcts:
                         pct = int(pcts[-1])
                         filled = int(pct / 100 * 30)
                         bar = "\u25b0" * filled + "\u25b1" * (30 - filled)
                         act_name = "Downloading" if "downloading" in low else "Unpacking"
+                        item = _current_framework_item[0] or "PlatformIO package"
+                        # Keep the package label readable without allowing an
+                        # unusually long registry string to consume the console.
+                        item_label = item if len(item) <= 44 else item[:41] + "..."
                         icon = "✔ " if pct >= 100 else "  "
-                        progress_text = f"  {icon}{act_name:<11}  {bar}  {pct:3d}%"
-                        self._append_progress(progress_text, "success", action_type=act_name)
+                        progress_text = f"  {icon}{act_name:<11} [{item_label}]  {bar}  {pct:3d}%"
+                        self._append_progress(
+                            progress_text,
+                            "success" if pct >= 100 else "info",
+                            action_type=f"{act_name}:{item_label}",
+                        )
                         return
 
                 if stripped.startswith("Processing") or ("processing " in low and "(" in low):
@@ -14811,13 +16779,20 @@ default_envs = {self._pio_env_name()}
             _tool_dl_total[0] += (time.time() - _tool_dl_start[0])
             _tool_dl_active[0] = False
 
-        # ── Auto-clean stale build paths reported by PlatformIO ───────────
+        rc = self.process.returncode
+
+        # ── Auto-repair stale paths explicitly reported by PlatformIO ─────
         # The build process has exited, so handles it could not release while
         # running are gone now. Retry the removal with robust_rmtree (which
         # also falls back to a hidden rename) so the next run starts clean
         # without any manual user intervention.
         if _stale_clean_paths:
-            self._auto_clean_stale_build_paths(_stale_clean_paths, env_name, build_ok=(rc == 0))
+            self._auto_clean_stale_build_paths(
+                _stale_clean_paths,
+                env_name,
+                build_ok=(rc == 0),
+                build_root=self._board_build_root(),
+            )
 
         total_sec    = round(time.time() - compile_start, 1)
         tool_dl_sec  = round(_tool_dl_total[0], 1)
@@ -14831,7 +16806,6 @@ default_envs = {self._pio_env_name()}
             build_sec = max(0.0, round(total_sec - tool_dl_sec, 1))
 
         # Check if killed by user (returncode is negative on SIGTERM/SIGKILL, or _stop_requested set)
-        rc = self.process.returncode
         was_killed = getattr(self, "_stop_requested", False) or (sys.platform != "win32" and rc < 0)
 
 
@@ -14921,23 +16895,6 @@ default_envs = {self._pio_env_name()}
                     self.root.after(100, _show_severe_gpio_popup)
 
             self._save_compile_cache()  # snapshot so upload can skip recompile
-            # Automatically back up compiled binary artifacts into project folder compiled_builds/<mcu_folder>/
-            try:
-                build_dir = self.sketch_dir_path / ".pio" / "build" / self._pio_env_name()
-                artifacts_dir = self.sketch_dir_path / "build_artifacts" / self._pio_env_name()
-                mcu_folder = self._get_mcu_folder_name()
-                compiled_dir = self.sketch_dir_path / "compiled_builds" / mcu_folder
-                if build_dir.exists():
-                    import shutil
-                    artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    compiled_dir.mkdir(parents=True, exist_ok=True)
-                    for pattern in ["bootloader.bin", "partitions.bin", "firmware.bin", "firmware.elf", "firmware.hex"]:
-                        for f in build_dir.glob(pattern):
-                            shutil.copy2(f, artifacts_dir / f.name)
-                            shutil.copy2(f, compiled_dir / f.name)
-                    self._append(f"  💾 Saved compiled binaries to compiled_builds/{mcu_folder}/", "success")
-            except Exception:
-                pass
 
             # Automatically update the Skip Compile checkbox on successful compilation
             self.root.after(0, self._update_skip_compile_state)
@@ -15100,70 +17057,49 @@ default_envs = {self._pio_env_name()}
                 self._append("─" * 50, "error")
 
             self._set_status("Compile FAILED", Theme.RED)
-
-            if parsed_errors:
-                # If there are syntax/compilation issues in files, do NOT prompt for clean build cache
-                self.is_busy = False
-                self._set_buttons_busy(False)
-            else:
-                # Detect the "silent Error 1" pattern (no real compiler diagnostics, only
-                # SCons wrapper lines) — this is the signature of a stale board-switch build
-                # cache.  When uploading, retry automatically with a full .pio wipe so the
-                # user never sees a silent dead-end after switching boards.
-                _has_build_activity = any("linking" in l.lower() or "compiling" in l.lower() or "building" in l.lower() for l in output_lines)
-                _is_silent_error = not error_lines and not _has_build_activity and not was_killed
-                if is_upload and _is_silent_error and not is_clean_retry:
+            failure_kind = classify_platformio_failure(output_lines)
+            if failure_kind == "cache" and not is_clean_retry:
+                self._append(
+                    "  ⚠ PlatformIO reported explicit selected-board cache corruption.",
+                    "warning",
+                )
+                removed, repair_errors = self._perform_clean_current_board()
+                if removed and not repair_errors:
                     self._append(
-                        "  ⚠ First compile attempt produced no diagnostic output — retrying with "
-                        "a full clean (likely stale board-switch cache)…",
-                        "warning"
+                        "  ♻ Repaired only this board's workspace; every other board cache was preserved.",
+                        "info",
                     )
-                    # Wipe the entire .pio directory (not just build/libdeps) to clear
-                    # SCons dependency graph + any partially-installed package metadata.
-                    pio_dir = self.sketch_dir_path / ".pio"
-                    if pio_dir.exists():
-                        import shutil as _sr_shutil
-                        try:
-                            _sr_shutil.rmtree(str(pio_dir), ignore_errors=True)
-                            self._append("  ♻ Full .pio directory cleared.", "dim")
-                        except Exception as _e:
-                            self._append(f"  ⚠ Could not clear .pio: {_e}", "warning")
-                    # Reset busy state so _run_compile can reset it properly on re-entry
                     self.is_busy = False
                     self._set_buttons_busy(False)
                     self._clean_retry_in_progress = True
-                    # Return None to signal "please retry" to _run_upload
-                    return None  # type: ignore[return-value]
-                elif is_clean_retry:
-                    # We ALREADY performed a clean build for this compilation attempt!
-                    # Do NOT offer clean-and-recompile again to prevent an infinite loop.
-                    self._append("  ℹ Project was already cleaned before this compilation attempt.", "info")
-                    self._append("  ⚠ Automatic clean-and-recompile skipped to prevent an infinite build loop.", "warning")
-                    self._append("  💡 Clean build failed. Common causes to check:", "info")
-                    self._append("     1. Locked files (OneDrive syncing, antivirus scanning .pio/build)", "dim")
-                    self._append("     2. Library symbol mismatch or missing dependencies in platformio.ini", "dim")
-                    self._append("     3. Incorrect board variant selected for this sketch", "dim")
-                    self.is_busy = False
-                    self._set_buttons_busy(False)
-                else:
-                    # Offer clean + recompile via a messagebox on the main thread since it's likely a tool/cache error.
-                    # The dialog callback owns is_busy / _set_buttons_busy for this path.
-                    def _ask_clean_recompile():
-                        from tkinter import messagebox
-                        if messagebox.askyesno(
-                            "Compilation Failed",
-                            "Compilation failed.\n\nClean the build cache and recompile?",
-                            icon="warning",
-                            parent=self.root,
-                        ):
-                            self.is_busy = False
-                            self._set_buttons_busy(False)
-                            self._clean_retry_in_progress = True
-                            self._do_clean_then_compile()
-                        else:
-                            self.is_busy = False
-                            self._set_buttons_busy(False)
-                    self.root.after(0, _ask_clean_recompile)
+                    if is_upload:
+                        # _run_upload owns one bounded retry.
+                        return None  # type: ignore[return-value]
+                    return self._run_compile(is_upload=False)
+                for repair_error in repair_errors:
+                    self._append(f"  ⚠ Cache repair could not remove {repair_error}", "warning")
+            elif failure_kind == "cache":
+                self._append(
+                    "  ⚠ Selected-board cache repair was already attempted once; preserving diagnostics and stopping.",
+                    "warning",
+                )
+            elif failure_kind == "source":
+                self._append(
+                    "  ℹ Incremental cache preserved — fix the code and compile again; only changed/failed units rebuild.",
+                    "info",
+                )
+            elif failure_kind == "configuration":
+                self._append(
+                    "  ℹ Build cache preserved — correct the board/library/configuration issue and retry.",
+                    "info",
+                )
+            else:
+                self._append(
+                    "  ℹ Build cache preserved. No evidence of cache corruption was found, so Clean is not required.",
+                    "info",
+                )
+            self.is_busy = False
+            self._set_buttons_busy(False)
             return rc == 0
 
         hide_internal_project_metadata(self.sketch_dir_path)
@@ -15359,6 +17295,18 @@ default_envs = {self._pio_env_name()}
         # ── Smart compile check (upload path) ──────────────────────────────
         need_compile = True
         if self.skip_compile_var.get() and self._has_prior_build():
+            # The root ini may still describe board B while this exact cached
+            # binary belongs to board A.  Restore/reconcile A first so both
+            # the config fingerprint and PlatformIO's fallback uploader see
+            # the correct environment.  This is intentionally done before
+            # deciding whether the compile can be skipped.
+            if not self._ensure_platformio_ini():
+                self._append("  ✖ Could not prepare the selected board configuration.", "error")
+                self.is_busy = False
+                self._set_buttons_busy(False)
+                self._set_buttons_state(False)
+                self._set_status("Upload failed: board configuration", Theme.RED)
+                return False
             recompile_needed, reason = self._needs_recompile()
             if not recompile_needed:
                 self._append("")
@@ -15374,8 +17322,9 @@ default_envs = {self._pio_env_name()}
         if need_compile:
             compile_result = self._run_compile(is_upload=True)
             if compile_result is None:
-                # Silent-error auto-retry: _run_compile wiped .pio, retry compile once.
-                self._append("  🔄 Retrying compilation after full clean…", "info")
+                # Explicit cache-integrity failure: _run_compile repaired only
+                # the selected board workspace. Retry once; siblings survive.
+                self._append("  🔄 Retrying after selected-board cache repair…", "info")
                 compile_result = self._run_compile(is_upload=True)
             if not compile_result:
                 self.is_busy = False
@@ -15620,6 +17569,7 @@ default_envs = {self._pio_env_name()}
                 board_info.get("platform", ""),
                 env_name=self._pio_env_name(),
                 upload_speed=upload_speed,
+                build_dir=self._board_build_dir(),
             )
 
         fast_upload_attempted = False
@@ -15759,21 +17709,7 @@ default_envs = {self._pio_env_name()}
             "--upload-port", port
         ]
 
-        import os
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PLATFORMIO_UNBUFFERED"] = "1"
-        env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-        env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
-        env["PYTHONDONTWRITEBYTECODE"] = "0"
-        env["SCONSFLAGS"] = f"-j{jobs}"
-        cache_dir = SCRIPT_DIR / ".pio_cache" / env_name
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            hide_hidden_attribute(SCRIPT_DIR / ".pio_cache")
-            env["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir)
-        except Exception:
-            pass
+        env = self._platformio_subprocess_env(jobs=jobs)
 
         hide_internal_project_metadata(self.sketch_dir_path)
 
@@ -15846,7 +17782,9 @@ default_envs = {self._pio_env_name()}
                             display_model, _chip_info["Features"]
                         )
                     if "Flash Size" not in _chip_info:
-                        configured_flash = board_info.get("flash_size")
+                        configured_flash, _has_psram = normalized_board_memory_options(
+                            board_info
+                        )
                         if configured_flash:
                             _chip_info["Flash Size"] = f"{configured_flash} (configured, not auto-detected)"
                     self._print_chip_info_box(display_model, list(_chip_info.items()))
@@ -16337,20 +18275,10 @@ default_envs = {self._pio_env_name()}
                 self._append("")
             else:
                 self._append("  ⚠ Upload failure was not caused by BOOT mode connection timing.", "warning")
-                self._append("  💡 Build artifacts or cache may be corrupted or out of sync.", "info")
-                self._append("  👉 Prompting for a Clean Upload of the sketch project...", "info")
-                def _prompt_clean_upload():
-                    from tkinter import messagebox
-                    if messagebox.askyesno(
-                        "Clean Upload Recommended",
-                        "Upload failed after connecting to the MCU.\n\n"
-                        "The issue appears to be corrupted or out-of-sync build artifacts rather than BOOT button timing.\n\n"
-                        "Would you like to clean the project build cache and perform a Clean Upload?",
-                        icon="warning",
-                        parent=self.root,
-                    ):
-                        self._do_clean_then_compile()
-                self.root.after(0, _prompt_clean_upload)
+                self._append(
+                    "  ℹ Compiled output and every board cache were preserved; upload failures do not require Clean.",
+                    "info",
+                )
 
             self._append("  ✖ Upload FAILED.", "error")
             if has_port_busy_error:
@@ -16362,13 +18290,10 @@ default_envs = {self._pio_env_name()}
             self.root.after(0, self._update_skip_compile_state)
 
             if has_jtag_error:
-                pio_dir = self.sketch_dir_path / ".pio"
-                if pio_dir.exists():
-                    if robust_rmtree(pio_dir):
-                        self._append("  📝 Cleared SCons build cache (.pio) to resolve the JTAG config conflict.", "warning")
-                        self._append("  👉 Please click UPLOAD again! It will now compile and upload cleanly over serial.", "info")
-                    else:
-                        self._append(f"  ⚠ Failed to auto-clear .pio folder: {pio_dir}", "warning")
+                self._append(
+                    "  💡 JTAG uploader conflict detected. The generated configuration now prefers serial esptool; retry Upload without clearing builds.",
+                    "info",
+                )
 
         self.is_busy = False
         self._current_op_phase = None
@@ -16579,6 +18504,16 @@ default_envs = {self._pio_env_name()}
         is_first_connect = not getattr(self, "_first_connect_done", False)
         is_manual_reset = getattr(self, "_manual_reset_pending", False)
 
+        # High-throughput receive tuning.  460800 and 921600 baud can deliver
+        # data faster than a Tk terminal can render if the GUI performs tiny
+        # reads/inserts.  The reader therefore uses larger OS/Python batches and
+        # the display side coalesces them for a few extra milliseconds.
+        high_speed_serial = int(baud) >= 460800
+        self._serial_display_flush_delay_ms = 40 if high_speed_serial else 25
+        serial_read_cap = 131072 if high_speed_serial else 32768
+        serial_no_newline_cap = 262144 if high_speed_serial else 65536
+        serial_partial_idle_s = 0.12 if high_speed_serial else 0.08
+
         if not is_uno:
             if is_first_connect or is_manual_reset:
                 # First connect: board is already running, no boot delay needed.
@@ -16611,10 +18546,27 @@ default_envs = {self._pio_env_name()}
                 conn.rts = False
                 conn.port = port
                 conn.baudrate = baud
-                conn.timeout = 0.1
+                # A shorter blocking read timeout keeps the worker draining the
+                # Windows receive queue promptly at 921600 without busy-spinning.
+                conn.timeout = 0.02 if high_speed_serial else 0.1
                 conn.dsrdtr = False
                 conn.rtscts = False
                 conn.open()
+
+                # pyserial exposes the underlying Windows SetupComm receive queue
+                # through set_buffer_size() where supported.  Request a generous
+                # RX queue so short GUI/CPU scheduling pauses do not immediately
+                # overflow the driver at 921600 baud.  Drivers are allowed to
+                # ignore/reject the hint, so this is intentionally best-effort.
+                if hasattr(conn, "set_buffer_size"):
+                    try:
+                        conn.set_buffer_size(
+                            rx_size=(1024 * 1024 if high_speed_serial else 262144),
+                            tx_size=65536,
+                        )
+                    except Exception:
+                        pass
+
                 self.serial_conn = conn
                 self._last_monitor_error = ""
 
@@ -16689,101 +18641,198 @@ default_envs = {self._pio_env_name()}
         # clear it here so future connects/messages aren't silenced forever.
         self._silent_reset = False
 
-        # ── ESP boot-loop banner detection ──────────────────────────────────
-        _boot_banner_seen = [0]
+        # ── ESP boot-loop detection (complete-line only) ─────────────────────
+        # Never inspect/delete arbitrary raw byte chunks here. Windows/pyserial is
+        # free to split one ROM line anywhere, e.g. ``rst:0x3 (RTC_SW_SYS`` in
+        # one read and ``_RST),boot:...`` in the next. Filtering before CR/LF
+        # reconstruction was the cause of truncated Serial Monitor rows such as
+        # ``_RST),boot:0x8``. Detect reset loops only after a complete line has
+        # been reconstructed. Detection is informational only; no complete ROM
+        # lines are hidden, so a blank Hard Reset board remains visibly active.
+        _boot_cycle_seen = [0]
         _boot_loop_notified = [False]
-        _BOOT_BANNER_PREFIXES = (
-            "build:", "rst:0x", "saved pc:", "spiwp:", "mode:",
-            "load:0x", "entry 0x",
+        _BOOT_LINE_PREFIXES = (
+            "esp-rom:", "build:", "rst:0x", "saved pc:", "spiwp:",
+            "configsip:", "clk_drv:", "mode:", "load:0x", "entry 0x",
+        )
+        _OLD_ESP_ROM_BANNER_RE = re.compile(
+            r"^ets\s+[a-z]{3}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}",
+            re.IGNORECASE,
         )
 
-        def _is_boot_loop_noise(raw_text: str) -> bool:
-            low_t = raw_text.strip().lower()
-            if low_t.startswith("esp-rom:"):
-                _boot_banner_seen[0] += 1
-                if _boot_banner_seen[0] >= 5:
-                    if not _boot_loop_notified[0]:
-                        _boot_loop_notified[0] = True
-                        self._append_notif("", "")
-                        self._append_notif(
-                            f"  ⚠ {board_name}'s bootloader was burned, but no sketch is "
-                            "running — the chip is stuck resetting in a loop.",
-                            "warning",
-                        )
-                        self._append_notif("  📤 Please upload your sketch to continue.", "info")
-                    return True
-                return False
-            
-            if _boot_loop_notified[0] and low_t.startswith(_BOOT_BANNER_PREFIXES):
-                return True
-            
-            return False
+        def _is_boot_cycle_start(raw_text: str) -> bool:
+            text = raw_text.strip()
+            low_t = text.lower()
+            return low_t.startswith("esp-rom:") or bool(_OLD_ESP_ROM_BANNER_RE.match(text))
 
-        def _filter_boot_loop_from_buffer(byte_buf: bytes) -> bytes:
-            """Remove ESP32 boot loop banner patterns only if an infinite loop is detected."""
+        def _observe_complete_boot_loop_line(raw_text: str) -> None:
+            """Observe complete ESP ROM lines without ever suppressing serial output.
+
+            A Hard Reset intentionally leaves ESP-family boards without application
+            firmware, so the ROM/second-stage bootloader can restart repeatedly.  The
+            Serial Monitor must remain a faithful live terminal: after detecting a
+            reset loop we emit one informational notification, but every complete ROM
+            line continues to be displayed.
+            """
+            text = raw_text.strip()
+            if not text:
+                return
+
+            if _is_boot_cycle_start(text):
+                _boot_cycle_seen[0] += 1
+                if _boot_cycle_seen[0] >= 5 and not _boot_loop_notified[0]:
+                    _boot_loop_notified[0] = True
+                    self._append_notif("", "")
+                    self._append_notif(
+                        f"  ⚠ Repeated ESP boot resets detected on {board_name}.",
+                        "warning",
+                    )
+                    self._append_notif(
+                        "  ℹ Serial Monitor will keep showing every complete ROM boot "
+                        "line. If this followed Hard Reset, upload a sketch to install "
+                        "application firmware.",
+                        "info",
+                    )
+
+        def _resync_complete_boot_line(raw_text: str) -> str:
+            """Recover a known ESP ROM banner after a reset tears an UART line.
+
+            A very fast reset can interrupt a line in flight and the next ROM banner
+            can begin immediately, occasionally yielding text such as
+            ``Build\ufffdESP-ROM:esp32s3-...``.  This is not a byte-buffer slicing bug;
+            it is an incomplete line followed by a fresh, recognizable banner.  When
+            the replacement-character marker proves the prefix was damaged, discard
+            only that damaged prefix and resume at the canonical ROM banner.
+            """
+            text = str(raw_text or "")
+            low_t = text.lower()
+            marker = low_t.find("esp-rom:")
+            if marker > 0 and "\ufffd" in text[:marker]:
+                return text[marker:]
+            return text
+
+        def _buffer_looks_like_boot_line(byte_buf: bytes) -> bool:
+            """Keep a partial ROM line buffered until its CR/LF terminator arrives."""
             if not byte_buf:
-                return byte_buf
-            if _boot_loop_notified[0]:
-                text = byte_buf.decode("utf-8", errors="replace")
-                low_text = text.lower()
-                if low_text.startswith("esp-rom:") or "rst:0x" in low_text:
-                    return b""
-            return byte_buf
+                return False
+            text = byte_buf.decode("utf-8", errors="replace").lstrip()
+            low_t = text.lower()
+            if low_t.startswith(_BOOT_LINE_PREFIXES) or low_t.startswith("esp-rom:"):
+                return True
+            # Classic ESP32 ROM banner: ``ets Jul 29 2019 12:21:46``. The
+            # prefix can arrive before the full date/time, so preserve any ``ets ``
+            # partial as well instead of flushing it after the 80 ms idle window.
+            return low_t.startswith("ets ")
+
+        def _drain_complete_serial_lines(byte_buf: bytearray) -> list[bytes]:
+            """Remove and return every complete CR/LF-delimited line in one scan.
+
+            Repeated ``bytes.find`` + front slicing is fine at 115200, but at
+            921600 a single driver read can contain many lines.  Scan that chunk
+            once, preserve the incomplete tail, and treat CRLF/LFCR as one line
+            ending.  Empty separator-only rows are harmless and ignored later.
+            """
+            if not byte_buf:
+                return []
+
+            complete: list[bytes] = []
+            start = 0
+            i = 0
+            size = len(byte_buf)
+            while i < size:
+                value = byte_buf[i]
+                if value not in (10, 13):  # LF / CR
+                    i += 1
+                    continue
+
+                complete.append(bytes(byte_buf[start:i]))
+                first_sep = value
+                i += 1
+                if i < size and byte_buf[i] in (10, 13) and byte_buf[i] != first_sep:
+                    i += 1
+                start = i
+
+            if start:
+                del byte_buf[:start]
+            return complete
 
         # ── Read loop ────────────────────────────────────────────────────
         # This is the actual monitor: keep pulling bytes off the port and
         # pushing complete lines into the Serial Monitor panel until either
         # the connection drops or something (pause/restart/port-removal)
         # flips serial_running/_monitor_should_run off.
-        buf = b""
-        last_read_time = time.time()
+        buf = bytearray()
+        last_read_time = time.monotonic()
         try:
             while self.serial_running and self._monitor_should_run:
                 try:
-                    n = self.serial_conn.in_waiting
-                    chunk = self.serial_conn.read(n if n else 1)
+                    waiting = int(self.serial_conn.in_waiting or 0)
+                    if waiting > 0:
+                        # Drain what the driver already has, but cap a single Python
+                        # allocation so a pathological producer cannot monopolize the
+                        # monitor thread for an arbitrarily large read.
+                        chunk = self.serial_conn.read(min(waiting, serial_read_cap))
+                    else:
+                        # Block for just one byte.  As soon as the first byte arrives,
+                        # the next pass drains the rest of the driver's queue in bulk.
+                        chunk = self.serial_conn.read(1)
                 except (serial.SerialException, OSError) as e:
                     if self.serial_running:
                         self._append_notif(f"  ✖ Serial connection lost: {e}", "error")
                     break
 
                 if not chunk:
-                    # If we have buffered text without a newline for > 80ms, display it immediately
-                    if buf and (time.time() - last_read_time) > 0.08:
-                        text = buf.decode("utf-8", errors="replace").rstrip("\r")
-                        buf = b""
-                        if text and not self._monitor_paused and not _is_boot_loop_noise(text):
+                    # Preserve partial ESP ROM/bootloader lines until a real CR/LF
+                    # arrives. Ordinary application progress text may still be shown
+                    # promptly when it intentionally has no newline. High baud gets a
+                    # slightly longer idle threshold to avoid manufacturing fragments
+                    # from a line whose bytes are still arriving in another USB packet.
+                    if (
+                        buf
+                        and (time.monotonic() - last_read_time) > serial_partial_idle_s
+                        and not _buffer_looks_like_boot_line(bytes(buf))
+                    ):
+                        text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                        buf.clear()
+                        if text and not self._monitor_paused:
                             self._append_tagged_line(text, is_newline=False)
                     continue
 
-                last_read_time = time.time()
-                buf += chunk
-                # Filter boot loop noise from buffer before processing
-                buf = _filter_boot_loop_from_buffer(buf)
-                # Guard against unbounded buffer growth (e.g. \r-only lines)
-                if len(buf) > 16384:
-                    buf = buf[-8192:]
-                while b"\n" in buf or b"\r" in buf:
-                    # Treat \r as a line separator too (ESP ROM output uses \r\n or bare \r)
-                    sep = b"\n" if b"\n" in buf else b"\r"
-                    raw, buf = buf.split(sep, 1)
-                    # Remove leftover \r or \n from the front of remaining buffer
-                    if buf.startswith(b"\r") and sep == b"\n":
-                        pass
-                    elif buf.startswith(b"\n") and sep == b"\r":
-                        buf = buf[1:]
-                    text = raw.decode("utf-8", errors="replace").rstrip("\r")
-                    if self._monitor_paused:
-                        continue
-                    if text and not _is_boot_loop_noise(text):
-                        self._append_tagged_line(text, is_newline=True)
+                last_read_time = time.monotonic()
+                buf.extend(chunk)
+
+                # Pull every complete row from the current RX batch in one linear
+                # scan.  This keeps the reader comfortably ahead of a 921600-baud
+                # producer instead of repeatedly rescanning the same prefix.
+                complete_rows = _drain_complete_serial_lines(buf)
+                if not self._monitor_paused:
+                    for raw in complete_rows:
+                        if not raw:
+                            continue
+                        text = raw.decode("utf-8", errors="replace").rstrip("\r")
+                        if text:
+                            text = _resync_complete_boot_line(text)
+                            _observe_complete_boot_loop_line(text)
+                            self._append_tagged_line(text, is_newline=True)
+
+                # Guard against an application/binary stream that never emits a
+                # line ending.  Flush a large bounded chunk rather than allowing RAM
+                # to grow indefinitely.  Normal textual monitor traffic never hits
+                # this path.
+                if len(buf) > serial_no_newline_cap:
+                    text = bytes(buf).decode("utf-8", errors="replace")
+                    buf.clear()
+                    if text and not self._monitor_paused:
+                        self._append_tagged_line(text, is_newline=False)
         finally:
             is_active_thread = (getattr(self, "serial_thread", None) is cur_thread)
             if is_active_thread:
                 # Flush any trailing partial line that never got a newline.
                 if buf:
-                    text = buf.decode("utf-8", errors="replace").rstrip("\r")
-                    if text and not self._monitor_paused and not _is_boot_loop_noise(text):
+                    text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                    if text and not self._monitor_paused:
+                        text = _resync_complete_boot_line(text)
+                        _observe_complete_boot_loop_line(text)
                         self._append_tagged_line(text, is_newline=True)
 
                 self.serial_running = False
@@ -17065,8 +19114,18 @@ default_envs = {self._pio_env_name()}
 
         # ── Line highlighting tracker ─────────────────────────────────────
         def _update_line_highlight(text_widget: tk.Text):
-            text_widget.tag_remove("active_line", "1.0", tk.END)
-            text_widget.tag_add("active_line", "insert linestart", "insert lineend + 1c")
+            # Do not scan the entire document on every click/tab switch.  Remove
+            # only the previously highlighted line, then tag the new one.
+            previous = getattr(text_widget, "_mcu_active_line_range", None)
+            if previous:
+                try:
+                    text_widget.tag_remove("active_line", previous[0], previous[1])
+                except Exception:
+                    pass
+            start = text_widget.index("insert linestart")
+            end = text_widget.index("insert lineend + 1c")
+            text_widget.tag_add("active_line", start, end)
+            text_widget._mcu_active_line_range = (start, end)
 
         # ── Find & Replace Panel & Logic ──────────────────────────────────
         find_panel = tk.Frame(parent_frame, bg=Theme.BG_MID, pady=6, padx=12)
@@ -18784,6 +20843,7 @@ default_envs = {self._pio_env_name()}
             order_file = self.sketch_dir_path / ".mcu_flash_tab_order.json"
             try:
                 import json
+                ensure_file_writable(order_file)
                 order_file.write_text(json.dumps(paths, indent=2), encoding="utf-8")
                 hide_hidden_attribute(order_file)
             except Exception:
@@ -20383,6 +22443,18 @@ default_envs = {self._pio_env_name()}
         os._exit(0)
 
     def _open_settings(self):
+        # Settings are intentionally locked while an operation is active.  The
+        # wide Settings button is disabled by _set_buttons_state(); keep this
+        # guard as the final authority so compact-menu/keyboard/programmatic
+        # paths cannot bypass that lock.
+        try:
+            settings_disabled = str(self.btn_settings.cget("state")) == str(tk.DISABLED)
+        except Exception:
+            settings_disabled = False
+        if getattr(self, "is_busy", False) or settings_disabled:
+            self._set_status("Busy — Settings are available when the current operation finishes", Theme.YELLOW)
+            return
+
         # Create dialog
         dlg = tk.Toplevel(self.root)
         dlg.title("MCU Flasher Settings")
@@ -20457,6 +22529,7 @@ default_envs = {self._pio_env_name()}
             try:
                 editor_note.configure(wraplength=note_wrap)
                 autosave_note.configure(wraplength=note_wrap)
+                fast_start_note.configure(wraplength=note_wrap)
             except (NameError, tk.TclError):
                 pass
             narrow = (event.width / settings_scale) < 470
@@ -20717,6 +22790,38 @@ default_envs = {self._pio_env_name()}
         autosave_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
 
         # Horizontal separator
+        sep_startup = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
+        sep_startup.pack(fill=tk.X, padx=sp(25), pady=sp(10))
+
+        # Section: Startup
+        tk.Label(settings_body, text="Startup", font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=(0, sp(5)))
+
+        startup_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        startup_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+        try:
+            current_fast_start_enabled = bool(
+                _load_raw_config().get("shared", {}).get("skip_bootstrap_when_verified", False)
+            )
+        except Exception:
+            current_fast_start_enabled = False
+        fast_start_var = tk.BooleanVar(value=current_fast_start_enabled)
+        cb_fast_start = tk.Checkbutton(
+            startup_frame, text="Fast start after verified Bootstrap", variable=fast_start_var,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_DARKEST,
+            activeforeground=Theme.TEXT,
+        )
+        cb_fast_start.pack(side=tk.LEFT)
+
+        fast_start_note = tk.Label(
+            settings_body,
+            text="Requires a recent successful verification for this Windows user and this app copy.",
+            font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+            wraplength=sp(440), justify=tk.LEFT,
+        )
+        fast_start_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
+
+        # Horizontal separator
         sep = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
         sep.pack(fill=tk.X, padx=sp(25), pady=sp(10))
 
@@ -20774,6 +22879,7 @@ default_envs = {self._pio_env_name()}
             monitor_font_var.set("12")
             editor_var.set(default_label)
             editor_var._monaco_confirmed = False
+            fast_start_var.set(False)
             self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
             
         reset_btn = self._make_btn(btn_frame, "Reset Defaults", reset_settings, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
@@ -20795,6 +22901,7 @@ default_envs = {self._pio_env_name()}
                 monitor_font_size_new = 12
 
             autosave_enabled_new = autosave_var.get()
+            fast_start_enabled_new = fast_start_var.get()
             try:
                 autosave_delay_new = max(200, int(autosave_delay_var.get()))
             except (TypeError, ValueError):
@@ -20811,6 +22918,7 @@ default_envs = {self._pio_env_name()}
                 data["shared"]["autosave_enabled"] = autosave_enabled_new
                 data["shared"]["autosave_delay_ms"] = autosave_delay_new
                 data["shared"]["periodic_reload_enabled"] = False
+                data["shared"]["skip_bootstrap_when_verified"] = fast_start_enabled_new
 
                 if editor_var.get() == monaco_label:
                     new_editor_mode = "monaco"
@@ -20868,6 +22976,16 @@ default_envs = {self._pio_env_name()}
                         )
                     else:
                         self._append("  ✔ Auto-Save: OFF.", "success")
+
+                if fast_start_enabled_new != current_fast_start_enabled:
+                    self._append_notif(
+                        "Fast start enabled; Bootstrap will still run unless a current verified record passes its health check."
+                        if fast_start_enabled_new
+                        else "Fast start disabled; Bootstrap will run normally on the next launch.",
+                        "success",
+                        category="system",
+                        title="Fast start setting updated",
+                    )
 
                 self.periodic_reload_enabled = False
 
@@ -21042,7 +23160,8 @@ default_envs = {self._pio_env_name()}
         if not selected_board_id:
             return None, "The selected board has no PlatformIO board identifier."
 
-        project_dir = SCRIPT_DIR / "soft_reset_project"
+        self._migrate_legacy_reset_project(board_name, board_info)
+        project_dir = self._soft_reset_project_dir(board_name, board_info)
         build_dir = project_dir / ".pio" / "build" / "mcu_flash"
         manifest_path = project_dir / "hard_reset_manifest.json"
         manifest = {}
@@ -21053,6 +23172,37 @@ default_envs = {self._pio_env_name()}
                     manifest = loaded
             except Exception:
                 manifest = {}
+
+        desired_ini, desired_cpp, _monitor_speed = self._reset_project_contents(
+            board_name, board_info
+        )
+        desired_template_hash = self._reset_template_digest(
+            desired_ini, desired_cpp
+        )
+        if not manifest:
+            return None, "The reset cache needs one incremental validation build."
+        if manifest.get("board_key") != self._board_cache_key(board_name):
+            return None, "The reset cache belongs to a different selectable board."
+        if manifest.get("template_sha256") != desired_template_hash:
+            return None, "The reset project configuration changed and must be rebuilt."
+        current_platform_version = self._installed_platform_version(
+            str(board_info.get("platform", ""))
+        )
+        cached_platform_version = str(manifest.get("platform_version", ""))
+        if (
+            current_platform_version
+            and cached_platform_version
+            and current_platform_version != cached_platform_version
+        ):
+            return None, "The board platform package changed and reset images must be rebuilt."
+
+        try:
+            if (project_dir / "platformio.ini").read_text(encoding="utf-8") != desired_ini:
+                return None, "The reset PlatformIO configuration changed and must be rebuilt."
+            if (project_dir / "main.cpp").read_text(encoding="utf-8") != desired_cpp:
+                return None, "The reset sketch template changed and must be rebuilt."
+        except OSError:
+            return None, "The reset project files are incomplete."
 
         recovery_platform = str(manifest.get("platform", "")).strip().lower()
         recovery_board_id = str(manifest.get("board", "")).strip().lower()
@@ -21099,17 +23249,18 @@ default_envs = {self._pio_env_name()}
             )
 
         expected_hashes = manifest.get("sha256", {})
-        if isinstance(expected_hashes, dict):
-            for key, path in (("bootloader.bin", bootloader), ("partitions.bin", partitions)):
-                expected = str(expected_hashes.get(key, "")).strip().lower()
-                if not expected:
-                    continue
-                try:
-                    actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
-                except Exception as exc:
-                    return None, f"Could not read recovery image {path.name}: {exc}"
-                if actual != expected:
-                    return None, f"Recovery image integrity check failed for {path.name}."
+        if not isinstance(expected_hashes, dict):
+            return None, "The reset cache has no valid recovery-image hashes."
+        for key, path in (("bootloader.bin", bootloader), ("partitions.bin", partitions)):
+            expected = str(expected_hashes.get(key, "")).strip().lower()
+            if not expected:
+                return None, f"The reset cache has no validated hash for {path.name}."
+            try:
+                actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
+            except Exception as exc:
+                return None, f"Could not read recovery image {path.name}: {exc}"
+            if actual != expected:
+                return None, f"Recovery image integrity check failed for {path.name}."
 
         return {
             "project_dir": project_dir,
@@ -21127,6 +23278,102 @@ default_envs = {self._pio_env_name()}
                 manifest.get("source_label") or "Soft Reset recovery build"
             ),
         }, ""
+
+    def _build_hard_reset_recovery_images(self, board_name: str,
+                                          board_info: dict):
+        """Build the exact board's reset bundle on first Hard Reset use.
+
+        This compiles only a tiny known-good reset sketch and never uses the
+        active user's firmware.  Its project folder is also the one Soft Reset
+        uses, so either operation warms the same exact-board cache.
+        """
+        project_dir = self._soft_reset_project_dir(board_name, board_info)
+        self._migrate_legacy_reset_project(board_name, board_info)
+        try:
+            project_dir.mkdir(parents=True, exist_ok=True)
+            hide_generated_directory(project_dir.parent)
+            hide_generated_directory(project_dir)
+        except Exception as exc:
+            return None, f"Could not create the reset cache folder: {exc}"
+
+        ini_content, cpp_content, _monitor_speed = self._reset_project_contents(
+            board_name, board_info
+        )
+        try:
+            ini_path = project_dir / "platformio.ini"
+            cpp_path = project_dir / "main.cpp"
+            if (
+                not ini_path.is_file()
+                or ini_path.read_text(encoding="utf-8") != ini_content
+            ) and not self._force_write_text(ini_path, ini_content):
+                return None, "Could not update reset platformio.ini."
+            if (
+                not cpp_path.is_file()
+                or cpp_path.read_text(encoding="utf-8") != cpp_content
+            ) and not self._force_write_text(cpp_path, cpp_content):
+                return None, "Could not update reset main.cpp."
+        except Exception as exc:
+            return None, f"Could not prepare reset project files: {exc}"
+
+        pio_path = find_pio_executable() or ensure_platformio()
+        if not pio_path:
+            return None, "PlatformIO is unavailable."
+        jobs = self._get_cpu_cores_jobs()
+        cmd = pio_path + ["run", "-e", "mcu_flash", "-j", str(jobs)]
+        self._append(
+            "  🔧 First Hard/Soft Reset for this board — building its persistent recovery cache…",
+            "warning",
+        )
+        self._set_status("Building exact-board reset cache...", Theme.YELLOW)
+        output_lines: list[str] = []
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                cwd=str(project_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+                env=self._reset_platformio_subprocess_env(project_dir, jobs),
+            )
+            for raw in iter(self.process.stdout.readline, ""):
+                line = raw.rstrip()
+                if not line:
+                    continue
+                output_lines.append(line)
+                low = line.lower()
+                if any(token in low for token in (
+                    "compiling", "linking", "building", "error", "warning", "success", "took"
+                )):
+                    tag = "error" if "error" in low else (
+                        "warning" if "warning" in low else "dim"
+                    )
+                    self._append(f"  {line}", tag)
+            self.process.wait()
+        except Exception as exc:
+            return None, f"Reset cache build could not start: {exc}"
+        if self.process.returncode != 0:
+            tail = next(
+                (line for line in reversed(output_lines) if "error" in line.lower()),
+                f"PlatformIO exited with code {self.process.returncode}",
+            )
+            return None, f"Reset cache build failed: {tail}"
+        manifest_ok, manifest_error = self._write_reset_manifest(
+            project_dir, board_name, board_info
+        )
+        if not manifest_ok:
+            return None, manifest_error
+        images, error = self._locate_hard_reset_recovery_images(
+            board_name, board_info
+        )
+        if images:
+            self._append("  ✔ Exact-board reset cache built and saved for future use.", "success")
+        return images, error
 
     def _do_hard_reset(self, parent_dlg):
         # A boot loop is a valid reason to perform the ESP32 full-erase hard reset.
@@ -21176,23 +23423,9 @@ default_envs = {self._pio_env_name()}
         platform_name = str(board_info.get("platform", "")).lower()
         self._hard_reset_recovery_images = None
         if platform_name == "espressif32":
-            recovery_images, recovery_error = self._locate_hard_reset_recovery_images(
+            recovery_images, _recovery_error = self._locate_hard_reset_recovery_images(
                 board_name, board_info
             )
-            if recovery_images is None:
-                from tkinter import messagebox
-                messagebox.showwarning(
-                    "Hard Reset Recovery Images Required",
-                    "Hard Reset uses the persistent compiled Soft Reset project as a "
-                    "known-good recovery source, so the active sketch does not need "
-                    "to be compiled.\n\n"
-                    f"{recovery_error}\n\n"
-                    "Install the supplied soft_reset_project recovery bundle, or run "
-                    "Soft Reset once for this exact board to create matching images.\n\n"
-                    "No flash data was erased or written.",
-                    parent=parent_dlg,
-                )
-                return
             self._hard_reset_recovery_images = recovery_images
 
         # 2. Show confirmation
@@ -21206,7 +23439,10 @@ default_envs = {self._pio_env_name()}
             "the dedicated compiled Soft Reset recovery project, plus boot_app0. The "
             "Soft Reset application firmware and the active project firmware will NOT "
             "be uploaded.\n\n"
-            "Esptool will start immediately and show a live BOOT connection indicator. "
+            "If this board has no saved reset cache yet, the app will build its tiny "
+            "known-good recovery project once before erasing anything. Future Hard/Soft "
+            "Resets will reuse that exact board folder.\n\n"
+            "After preparation, esptool will show a live BOOT connection indicator. "
             "Press and HOLD BOOT until the indicator turns green, then release it.\n\n"
             "Continue with the full erase?",
             parent=parent_dlg
@@ -21232,7 +23468,15 @@ default_envs = {self._pio_env_name()}
         # silently discarded by _auto_start_monitor() while operation="reset".
         self._hard_reset_reconnect_monitor = False
         self._hard_reset_completed_successfully = False
+        reset_cache_lock = _try_acquire_reset_cache_lock()
         try:
+            if reset_cache_lock is None:
+                self._append(
+                    "  ⚠ Hard Reset blocked: another window is using the shared reset cache.",
+                    "warning",
+                )
+                self._set_status("Hard Reset blocked — reset cache is in use", Theme.YELLOW)
+                return
             self._run_hard_reset_inner(port)
         except Exception as e:
             import traceback
@@ -21248,6 +23492,7 @@ default_envs = {self._pio_env_name()}
                 self._append(f"Log: {hard_reset_log}", "dim")
             self._set_status("Hard Reset FAILED", Theme.RED)
         finally:
+            _release_reset_cache_lock(reset_cache_lock)
             reconnect_monitor = bool(
                 getattr(self, "_hard_reset_reconnect_monitor", False)
             )
@@ -21288,6 +23533,36 @@ default_envs = {self._pio_env_name()}
                     self.root.after(0, _restore_hard_reset_monitor)
                 except Exception:
                     pass
+
+    def _esptool_target(self, board_name: str | None = None,
+                        board_info: dict | None = None) -> tuple[str | None, str]:
+        """Resolve esptool chip name and bootloader offset from canonical ids."""
+        name = board_name if board_name is not None else self.board_var.get()
+        info = dict(board_info or SUPPORTED_BOARDS.get(name, {}))
+        platform = str(info.get("platform", "")).lower()
+        identity = " ".join((
+            str(info.get("mcu", "")),
+            str(info.get("board", "")),
+            str(name or ""),
+        )).lower().replace("-", "").replace("_", "")
+        variants = (
+            ("esp32p4", "esp32p4", "0x0"),
+            ("esp32c6", "esp32c6", "0x0"),
+            ("esp32c5", "esp32c5", "0x0"),
+            ("esp32c3", "esp32c3", "0x0"),
+            ("esp32c2", "esp32c2", "0x0"),
+            ("esp32h2", "esp32h2", "0x0"),
+            ("esp32s3", "esp32s3", "0x0"),
+            ("esp32s2", "esp32s2", "0x1000"),
+        )
+        for marker, chip, address in variants:
+            if marker in identity:
+                return chip, address
+        if platform == "espressif8266" or "esp8266" in identity:
+            return "esp8266", "0x0"
+        if platform == "espressif32" or "esp32" in identity:
+            return "esp32", "0x1000"
+        return None, "0x0"
 
     def _get_esptool_cmd(self) -> list[str]:
         """Dynamically resolve the most reliable esptool command across Windows environments."""
@@ -21390,9 +23665,13 @@ default_envs = {self._pio_env_name()}
                     self._set_status("Hard Reset failed", Theme.RED)
                     return
                 cmd = pio_path + [
-                    "run", "-t", "bootloader", "-j", str(self._get_cpu_cores_jobs()),
+                    "run", "-e", self._pio_env_name(), "-t", "bootloader",
+                    "-j", str(self._get_cpu_cores_jobs()),
                     "--upload-port", port,
                 ]
+                pio_env = self._platformio_subprocess_env(
+                    jobs=self._get_cpu_cores_jobs()
+                )
                 self.process = subprocess.Popen(
                     cmd,
                     cwd=str(self.sketch_dir_path),
@@ -21402,6 +23681,7 @@ default_envs = {self._pio_env_name()}
                     bufsize=1,
                     encoding="utf-8",
                     errors="replace",
+                    env=pio_env,
                     creationflags=(
                         subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                     ),
@@ -21451,6 +23731,10 @@ default_envs = {self._pio_env_name()}
             recovery_error = ""
             if not image_set:
                 image_set, recovery_error = self._locate_hard_reset_recovery_images(
+                    board_name, board_info
+                )
+            if not image_set:
+                image_set, recovery_error = self._build_hard_reset_recovery_images(
                     board_name, board_info
                 )
 
@@ -21559,12 +23843,10 @@ default_envs = {self._pio_env_name()}
             self._set_status("Waiting for BOOT / ESP32 download mode...", Theme.YELLOW)
             self._append_boot_connection_progress(0)
 
-            target_mcu = str(board_info.get("mcu", "esp32")).lower().replace("-", "")
-            bootloader_addr = (
-                "0x0"
-                if target_mcu in ("esp32s3", "esp32c3", "esp32c6", "esp32h2", "esp32c2")
-                else "0x1000"
+            target_mcu, bootloader_addr = self._esptool_target(
+                board_name, board_info
             )
+            target_mcu = target_mcu or "esp32"
             burn_cmd = self._get_esptool_cmd() + [
                 "--chip", target_mcu,
                 "--port", port,
@@ -21827,31 +24109,34 @@ default_envs = {self._pio_env_name()}
 
     def _locate_soft_reset_fast_binaries(self, project_dir: Path, board_name: str,
                                          p_platform: str, env_name: str = "mcu_flash",
-                                         upload_speed: str = "460800") -> dict | None:
+                                         upload_speed: str = "460800",
+                                         build_dir: Path | None = None,
+                                         require_reset_manifest: bool = False) -> dict | None:
         """
         Check whether a previously compiled Soft Reset build is still usable
         for a direct esptool flash, skipping "pio run" entirely. Returns None
         if any required binary can't be found — the caller then falls back to
         the normal "pio run -t upload" path.
         """
-        mcu_folder = self._get_mcu_folder_name(board_name)
-        build_dir = project_dir / ".pio" / "build" / env_name
-        compiled_dir = project_dir / "compiled_builds" / mcu_folder
-
-        firmware_bin = build_dir / "firmware.bin"
-        if not firmware_bin.exists() and compiled_dir.exists():
-            try:
-                import shutil
-                build_dir.mkdir(parents=True, exist_ok=True)
-                for f in compiled_dir.glob("*"):
-                    if f.is_file():
-                        shutil.copy2(f, build_dir / f.name)
-            except Exception:
-                pass
-
+        build_dir = Path(build_dir) if build_dir is not None else (
+            project_dir / ".pio" / "build" / env_name
+        )
         firmware_bin = build_dir / "firmware.bin"
         if not firmware_bin.exists():
             return None
+
+        if require_reset_manifest:
+            board_info = dict(SUPPORTED_BOARDS.get(board_name, {}))
+            required_images = (
+                ("firmware.bin",)
+                if p_platform == "espressif8266"
+                else ("bootloader.bin", "partitions.bin", "firmware.bin")
+            )
+            manifest, _manifest_error = self._validate_reset_manifest(
+                project_dir, board_name, board_info, required_images
+            )
+            if manifest is None:
+                return None
 
         # Check sketch source modification times (main.cpp, src/*, *.ino, *.cpp, *.h)
         # Note: We deliberately do NOT check platformio.ini mtime because platformio.ini is modified when switching boards!
@@ -21894,8 +24179,9 @@ default_envs = {self._pio_env_name()}
         if boot_app0_bin is None:
             return None
 
-        upper = board_name.upper()
-        bootloader_addr = "0x0" if any(x in upper for x in ("S3", "C3", "C6", "H2")) else "0x1000"
+        _chip_name, bootloader_addr = self._esptool_target(
+            board_name, SUPPORTED_BOARDS.get(board_name, {})
+        )
 
         return {
             "platform": p_platform,
@@ -22129,8 +24415,10 @@ default_envs = {self._pio_env_name()}
 
     def _cached_build_metadata(self, fast_bins: dict) -> dict:
         board_name = self.board_var.get()
+        board_key = self._board_cache_key(board_name)
+        metadata = getattr(self, "_build_metadata_by_board", {}) or {}
         entry = dict(
-            (getattr(self, "_build_metadata_by_board", {}) or {}).get(board_name) or {}
+            metadata.get(board_key) or metadata.get(board_name) or {}
         )
         if not entry:
             return {}
@@ -22322,24 +24610,13 @@ default_envs = {self._pio_env_name()}
         # esptool.exe wrapper crashes when running in background subprocesses.
         esptool_cmd_base = self._get_esptool_cmd()
 
-        # Determine target chip for esptool to avoid autodetect reset glitches
+        # Determine target chip from authoritative PlatformIO board metadata to
+        # avoid autodetect reset glitches and display-name-only mistakes.
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
-        target_mcu = str(board_info.get("mcu") or board_info.get("board") or "").lower()
-        if "s3" in target_mcu or "esp32s3" in target_mcu or "esp32-s3" in target_mcu or is_s3_board(board_info.get("board", "")) or "s3" in board_name.lower():
-            chip_name = "esp32s3"
-        elif "c3" in target_mcu or "esp32c3" in target_mcu:
-            chip_name = "esp32c3"
-        elif "c6" in target_mcu or "esp32c6" in target_mcu:
-            chip_name = "esp32c6"
-        elif "h2" in target_mcu or "esp32h2" in target_mcu:
-            chip_name = "esp32h2"
-        elif "s2" in target_mcu or "esp32s2" in target_mcu:
-            chip_name = "esp32s2"
-        elif fast_bins.get("platform") == "espressif32":
-            chip_name = "esp32"
-        else:
-            chip_name = None
+        chip_name, _bootloader_address = self._esptool_target(
+            board_name, board_info
+        )
 
         write_cmd = esptool_cmd_base + []
         if chip_name:
@@ -22675,7 +24952,15 @@ default_envs = {self._pio_env_name()}
         threading.Thread(target=self._run_soft_reset, args=(port,), daemon=True).start()
 
     def _run_soft_reset(self, port: str):
+        reset_cache_lock = _try_acquire_reset_cache_lock()
         try:
+            if reset_cache_lock is None:
+                self._append(
+                    "  ⚠ Soft Reset blocked: another window is using the shared reset cache.",
+                    "warning",
+                )
+                self._set_status("Soft Reset blocked — reset cache is in use", Theme.YELLOW)
+                return
             self._run_soft_reset_inner(port)
         except Exception as e:
             import traceback
@@ -22687,6 +24972,7 @@ default_envs = {self._pio_env_name()}
             self._append(f"  ✖ Internal error in soft reset thread: {e}", "error")
             self._set_status("Soft Reset FAILED", Theme.RED)
         finally:
+            _release_reset_cache_lock(reset_cache_lock)
             # Guarantee busy state is always cleared
             self.is_busy = False
             self._set_buttons_state(False)
@@ -22753,18 +25039,25 @@ default_envs = {self._pio_env_name()}
             if was_monitoring:
                 self._resume_monitor()
             from tkinter import messagebox
-            messagebox.showerror("Soft Reset Error", "PlatformIO not found! Could not perform soft reset.", parent=self.root)
+            self.root.after(0, lambda: messagebox.showerror(
+                "Soft Reset Error",
+                "PlatformIO not found! Could not perform soft reset.",
+                parent=self.root,
+            ))
             return
 
-        # ── Use a persistent project directory inside the app folder ───────────
-        # This preserves the PlatformIO build cache (.pio/build/) between runs
-        # so subsequent soft resets skip compilation (upload-only ≈ 5s vs 30-60s).
+        # ── Use an exact-board persistent reset project ────────────────────────
+        # A/B/A board switching returns to A's own .pio tree instead of
+        # rewriting and deleting the last board's shared reset build.
         import shutil
 
         self._set_status("Soft Reset: Preparing project files...", Theme.YELLOW)
-        project_dir = SCRIPT_DIR / ("soft_reset_project_uno" if is_avr else "soft_reset_project")
+        project_dir = self._soft_reset_project_dir(board_name, board_info)
+        self._migrate_legacy_reset_project(board_name, board_info)
         try:
             project_dir.mkdir(parents=True, exist_ok=True)
+            hide_generated_directory(project_dir.parent)
+            hide_generated_directory(project_dir)
         except Exception as e:
             self._append(f"  ✖ Failed to create soft reset project directory:\n  {e}", "error")
             self.is_busy = False
@@ -22773,52 +25066,24 @@ default_envs = {self._pio_env_name()}
             if was_monitoring:
                 self._resume_monitor()
             from tkinter import messagebox
-            messagebox.showerror("Soft Reset Error", f"Failed to create project directory:\n{e}", parent=self.root)
+            self.root.after(0, lambda e=e: messagebox.showerror(
+                "Soft Reset Error",
+                f"Failed to create project directory:\n{e}",
+                parent=self.root,
+            ))
             return
 
-        # Write platformio.ini and main.cpp. Keep a separate Uno project so
-        # switching between ESP32 and AVR never destroys either build cache.
-        upload_speed = "115200" if is_avr else "460800"
-        monitor_speed = "9600" if is_avr else "115200"
-
-        ini_content = f"""; PlatformIO Project Configuration File for Soft Reset
-[platformio]
-src_dir = .
-default_envs = mcu_flash
-
-[env:mcu_flash]
-platform = {p_platform}
-board = {p_board}
-framework = {p_framework}
-monitor_speed = {monitor_speed}
-upload_speed = {upload_speed}
-"""
+        # Hard and Soft Reset deliberately use the same byte-identical project
+        # template so either operation warms this exact board's cache.
+        ini_content, cpp_content, monitor_speed = self._reset_project_contents(
+            board_name, board_info
+        )
 
         if is_avr:
-            cpp_content = """#include <Arduino.h>
-void setup() {
-  Serial.begin(9600);
-  Serial.println(">>> ----- <<<");
-}
-
-void loop() {
-
-}
-"""
             # Force the GUI monitor to the same baud before it reconnects.
-            self.baud_var.set("9600")
+            self.baud_var.set(monitor_speed)
             if hasattr(self, "serial_baud_var"):
-                self.serial_baud_var.set("9600")
-        else:
-            cpp_content = """#include <Arduino.h>
-void setup() {
-  Serial.begin(115200);
-  Serial.println(">>> ----- <<<");
-}
-
-void loop() {
-}
-"""
+                self.serial_baud_var.set(monitor_speed)
 
         # ── Board-aware caching: only rewrite files if content changed ─────────
         # When the board changes, the ini_content changes → we detect that,
@@ -22826,8 +25091,6 @@ void loop() {
         # entirely and PlatformIO will see "nothing changed" → upload only.
         ini_path = project_dir / "platformio.ini"
         cpp_path = project_dir / "main.cpp"
-        build_dir = project_dir / ".pio" / "build"
-
         files_changed = False
         try:
             existing_ini = ini_path.read_text(encoding="utf-8") if ini_path.exists() else ""
@@ -22837,16 +25100,12 @@ void loop() {
                 files_changed = True
                 env_build_dir = project_dir / ".pio" / "build" / "mcu_flash"
                 is_first_time = not env_build_dir.exists()
-                # Board or content changed — clear build cache to force recompile
-                if build_dir.exists():
-                    self._append("  ↻ Board changed — clearing cached build...", "dim")
-                    shutil.rmtree(build_dir, ignore_errors=True)
                 self._force_write_text(ini_path, ini_content)
                 self._force_write_text(cpp_path, cpp_content)
                 if is_first_time:
                     self._append("  🔧 First-time setup for this board — this may take a minute. Subsequent Soft Resets will be instant.", "warning")
                 else:
-                    self._append("  ✔ Project files updated (will compile).", "dim")
+                    self._append("  ✔ Reset project updated; its existing incremental objects were preserved.", "dim")
             else:
                 self._append("  ✔ Using cached build (no recompilation needed).", "success")
         except Exception as e:
@@ -22857,11 +25116,16 @@ void loop() {
             if was_monitoring:
                 self._resume_monitor()
             from tkinter import messagebox
-            messagebox.showerror("Soft Reset Error", f"Failed to write project files:\n{e}", parent=self.root)
+            self.root.after(0, lambda e=e: messagebox.showerror(
+                "Soft Reset Error",
+                f"Failed to write project files:\n{e}",
+                parent=self.root,
+            ))
             return
 
         # Run parallel build + upload
         jobs = self._get_cpu_cores_jobs()
+        reset_env = self._reset_platformio_subprocess_env(project_dir, jobs)
 
         # ── FAST PATH: nothing changed + ESP32/ESP8266 board ────────────────────
         # "pio run -t upload" always pays PlatformIO's SCons project-scan cost
@@ -22874,7 +25138,10 @@ void loop() {
         is_esp = p_platform in ("espressif32", "espressif8266")
         fast_bins = None
         if not files_changed and is_esp:
-            fast_bins = self._locate_soft_reset_fast_binaries(project_dir, board_name, p_platform)
+            fast_bins = self._locate_soft_reset_fast_binaries(
+                project_dir, board_name, p_platform,
+                require_reset_manifest=True,
+            )
 
         # ── Spinner thread for Soft Reset ──────────────────────────────────────
         _sr_state   = ["Uploading" if not files_changed else "Compiling"]
@@ -23001,6 +25268,7 @@ void loop() {
                         text=True, bufsize=1, encoding="utf-8", errors="replace",
                         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                         cwd=str(project_dir),
+                        env=reset_env,
                     )
                     for line in iter(self.process.stdout.readline, ""):
                         stripped = line.rstrip()
@@ -23152,6 +25420,16 @@ void loop() {
         # NOTE: Do NOT delete project_dir — preserving it is the whole point.
         # The .pio/build/ cache inside it makes subsequent soft resets instant.
 
+        if ok and p_platform in ("espressif32", "espressif8266"):
+            manifest_ok, manifest_error = self._write_reset_manifest(
+                project_dir, board_name, board_info
+            )
+            if not manifest_ok:
+                self._append(
+                    f"  ⚠ Reset completed, but cache integrity metadata was not saved: {manifest_error}",
+                    "warning",
+                )
+
         if ok:
             # Land on the Serial Monitor tab once the lock clears below so the
             # user immediately sees the freshly-flashed board boot output.
@@ -23177,7 +25455,11 @@ void loop() {
             self._append("")
             self._append("  ✔ Soft Reset completed successfully!", "success")
             self._set_status("Soft Reset: SUCCESS", Theme.GREEN)
-            messagebox.showinfo("Soft Reset Success", "Soft Reset (flash memory reset) completed successfully!", parent=self.root)
+            self.root.after(0, lambda: messagebox.showinfo(
+                "Soft Reset Success",
+                "Soft Reset (flash memory reset) completed successfully!",
+                parent=self.root,
+            ))
         else:
             self._append("")
             self._append_connecting_progress(_MAX_CONNECT_RETRIES, _MAX_CONNECT_RETRIES, failed=True)
@@ -23186,21 +25468,22 @@ void loop() {
             is_connection_error = getattr(self, "_last_fast_upload_failure_kind", "") == "connection"
             if not is_connection_error:
                 self._append("  ⚠ Failure was not caused by BOOT mode connection timing.", "warning")
-                self._append("  💡 Build artifacts or cache may be corrupted or out of sync.", "info")
-                self._append("  👉 Prompting for a Clean Upload of the sketch project...", "info")
-                def _prompt_clean_soft_reset():
-                    if messagebox.askyesno(
-                        "Clean Upload Recommended",
-                        "Soft Reset failed after connecting to the MCU.\n\n"
-                        "The issue appears to be corrupted or out-of-sync build artifacts rather than BOOT button timing.\n\n"
-                        "Would you like to clean the project build cache and perform a Clean Upload of your sketch project?",
-                        icon="warning",
-                        parent=self.root,
-                    ):
-                        self._do_clean_then_compile()
-                self.root.after(0, _prompt_clean_soft_reset)
+                self._append(
+                    "  ℹ The active sketch and all other board caches were preserved.",
+                    "info",
+                )
+                dialog_message = (
+                    f"Soft Reset failed.\n{err_msg}\n\n"
+                    "The selected board's reset cache was preserved for diagnosis."
+                )
             else:
-                messagebox.showerror("Soft Reset Failed", f"Soft Reset failed.\n{err_msg}\nCheck if the device is connected to {port}.", parent=self.root)
+                dialog_message = (
+                    f"Soft Reset failed.\n{err_msg}\n"
+                    f"Check if the device is connected to {port}."
+                )
+            self.root.after(0, lambda message=dialog_message: messagebox.showerror(
+                "Soft Reset Failed", message, parent=self.root
+            ))
 
     # ──────────────────────────────────────────────────────────
     # CLEANUP
@@ -23426,9 +25709,8 @@ void loop() {
                 try:
                     cpus = os.cpu_count() or 4
                     sleep_time = 3.5 if cpus <= 2 else (2.5 if cpus <= 4 else 1.2)
-                    if not tk.TclError and self.root and self.root.winfo_exists():
-                        time.sleep(sleep_time)
-                    else:
+                    time.sleep(sleep_time)
+                    if not getattr(self, "_syntax_bg_active", False):
                         break
                 except Exception:
                     break
@@ -23445,10 +25727,7 @@ void loop() {
                         continue
 
                 # Run lightweight background check (no auto-save)
-                try:
-                    self.root.after(0, self._run_bg_syntax_check)
-                except Exception:
-                    pass
+                self._post_ui(self._run_bg_syntax_check)
 
         bg_thread = threading.Thread(target=_syntax_bg_loop, daemon=True)
         bg_thread.start()
@@ -23483,8 +25762,7 @@ void loop() {
                         except Exception:
                             pass
 
-                if hasattr(self, "root") and self.root and self.root.winfo_exists():
-                    self.root.after(0, lambda: self._update_syntax_check_ui(all_errors))
+                self._post_ui(lambda all_errors=all_errors: self._update_syntax_check_ui(all_errors))
             except Exception:
                 pass
 
@@ -24025,6 +26303,11 @@ def main():
                 root_val.destroy()
                 os._exit(0)
         root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
+
+        # The UI and selected project are now fully initialized. Confirm this
+        # back to Bootstrap; a mere child-process spawn is never enough to
+        # earn a future fast-start bypass.
+        _bootstrap_confirm_healthy_startup()
 
         startup_state["stage"] = "starting the main Tk event loop"
         root_ready.set()

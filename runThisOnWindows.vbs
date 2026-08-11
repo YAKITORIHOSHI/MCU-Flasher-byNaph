@@ -20,6 +20,28 @@ Set shell = CreateObject("WScript.Shell")
 ' ── Locate this file's own directory ──
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName) & "\"
 
+' ── Prevent Python from writing or using compiled .pyc bytecode files ──
+shell.Environment("PROCESS")("PYTHONDONTWRITEBYTECODE") = "1"
+
+' ── Verify storage drive type (SSD/HDD only; block USB flash drives) ──
+Dim driveLetter, driveObj
+driveLetter = fso.GetDriveName(scriptDir)
+If fso.DriveExists(driveLetter) Then
+    On Error Resume Next
+    Set driveObj = fso.GetDrive(driveLetter)
+    If Err.Number = 0 Then
+        If driveObj.DriveType = 1 Then ' 1 = Removable media (USB flash drive / SD card)
+            MsgBox "MCU Uploader IDE by Naph cannot be run directly from a USB flash drive or removable disk (" & driveLetter & ")." & vbCrLf & vbCrLf & _
+                   "High-speed disk access (SSD/HDD) is required for toolchain compilation and workspace storage." & vbCrLf & vbCrLf & _
+                   "Please copy the entire MCU Flasher folder to an internal SSD or HDD (e.g. C:\ or D:\ drive) and launch it from there.", _
+                   vbCritical, "MCU Uploader IDE by Naph — Storage Location Notice"
+            WScript.Quit 1
+        End If
+    End If
+    Err.Clear
+    On Error GoTo 0
+End If
+
 ' ── Find the launcher script ──
 Dim bootstrapFile
 bootstrapFile = scriptDir & "launcher.py"
@@ -56,19 +78,33 @@ If fso.FileExists(forceRebuildFile) Then
     On Error GoTo 0
 End If
 
-' 1. Check portable Python first as host Python candidate
-If fso.FileExists(portablePython) Then
+' 1. Check existing project virtual environment (`env`) first
+If fso.FileExists(envPython) Then
+    ' Never execute a venv whose pyvenv.cfg points back to its own
+    ' env\Scripts\python.exe. That malformed state recursively launches the
+    ' interpreter and can create thousands of Python processes before the
+    ' application can repair itself. Skip it so the real host Python is found
+    ' below, then RepairVenvInPlace can rewrite the venv safely.
+    If Not VenvConfigNeedsRepair(envFolder) Then
+        If IsPythonExeValid(envPython) Then
+            hostPython = envPython
+        End If
+    End If
+End If
+
+' 2. Check portable Python next
+If hostPython = "" And fso.FileExists(portablePython) Then
     If IsPythonExeValid(portablePython) Then
         hostPython = portablePython
     End If
 End If
 
-' 2. Check registry for registered Python installation
+' 3. Check registry for registered Python installation
 If hostPython = "" Then
     hostPython = FindPythonFromRegistry()
 End If
 
-' 3. Dynamically scan known Python install directories
+' 4. Dynamically scan known Python install directories
 If hostPython = "" Then
     Dim localApp, progFiles, progFiles86
     localApp   = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
@@ -112,25 +148,26 @@ If hostPython = "" Then
     Next
 End If
 
-' 4. Fall back to `py` launcher via PATH
+' 5. Fall back to `py` launcher via PATH (if valid and not a WindowsApps stub)
 If hostPython = "" Then
-    result = -1
-    On Error Resume Next
-    result = shell.Run("py -3.14 -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)""", 0, True)
-    If result <> 0 Then
-        result = shell.Run("py -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)""", 0, True)
+    Dim resolvedPyLauncher
+    resolvedPyLauncher = ResolvePythonExePath("py")
+    If resolvedPyLauncher <> "" And resolvedPyLauncher <> "py" Then
+        If IsPythonExeValid(resolvedPyLauncher) Then
+            hostPython = resolvedPyLauncher
+        End If
     End If
-    On Error GoTo 0
-    If result = 0 Then hostPython = "py"
 End If
 
-' 5. Fall back to `python` command via PATH
+' 6. Fall back to `python` command via PATH (if valid and not a WindowsApps stub)
 If hostPython = "" Then
-    result = -1
-    On Error Resume Next
-    result = shell.Run("python -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)""", 0, True)
-    On Error GoTo 0
-    If result = 0 Then hostPython = "python"
+    Dim resolvedSysPython
+    resolvedSysPython = ResolvePythonExePath("python")
+    If resolvedSysPython <> "" And resolvedSysPython <> "python" Then
+        If IsPythonExeValid(resolvedSysPython) Then
+            hostPython = resolvedSysPython
+        End If
+    End If
 End If
 
 ' 6. If no host Python found, install via winget
@@ -239,7 +276,10 @@ resolvedHostPython = ResolvePythonExePath(hostPython)
 
 ' ── Check and in-place repair existing virtual environment (`env`) ──
 If fso.FolderExists(envFolder) And fso.FileExists(envPython) Then
-    If resolvedHostPython <> "" Then
+    ' Never repair a venv with the venv interpreter itself. Doing that writes
+    ' a self-referential pyvenv.cfg and makes the next Python invocation
+    ' recursively spawn. Only a real host/portable Python may repair it.
+    If resolvedHostPython <> "" And LCase(resolvedHostPython) <> LCase(envPython) Then
         RepairVenvInPlace envFolder, resolvedHostPython
     End If
     If IsPythonExeValid(envPython) Then
@@ -272,9 +312,9 @@ If systemPython <> "" And systemPython <> "py" And systemPython <> "python" Then
 End If
 
 If InStr(launchPython, "\") > 0 Then
-    runCmd = """" & launchPython & """ """ & bootstrapFile & """ --hidden"
+    runCmd = """" & launchPython & """ -B """ & bootstrapFile & """ --hidden"
 Else
-    runCmd = launchPython & " """ & bootstrapFile & """ --hidden"
+    runCmd = launchPython & " -B """ & bootstrapFile & """ --hidden"
 End If
 
 On Error Resume Next
@@ -296,18 +336,77 @@ On Error GoTo 0
 '  HELPERS
 ' ═════════════════════════════════════════════
 
+' ── Detect a self-referential/corrupt venv before executing it ──
+Function VenvConfigNeedsRepair(venvDir)
+    VenvConfigNeedsRepair = False
+    Dim cfgPath, ts, cfgText, cfgLower, venvLower, cfgLines, cfgLine, cfgEq, homePath, executablePath, idx
+    cfgPath = venvDir & "\pyvenv.cfg"
+    If Not fso.FileExists(cfgPath) Then Exit Function
+
+    On Error Resume Next
+    Set ts = fso.OpenTextFile(cfgPath, 1)
+    If Err.Number <> 0 Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    cfgText = ts.ReadAll
+    ts.Close
+    On Error GoTo 0
+
+    cfgLower = LCase(Replace(cfgText, "/", "\"))
+    venvLower = LCase(Replace(fso.GetAbsolutePathName(venvDir), "/", "\"))
+    If InStr(cfgLower, venvLower & "\scripts") > 0 Then
+        VenvConfigNeedsRepair = True
+        Exit Function
+    End If
+
+    ' A copied venv may still reference a Python installation from another
+    ' Windows user or another PC. Detect that before executing the venv so the
+    ' normal host-Python discovery can repair it first.
+    cfgLines = Split(cfgText, vbCrLf)
+    homePath = ""
+    executablePath = ""
+    For idx = 0 To UBound(cfgLines)
+        cfgLine = Trim(cfgLines(idx))
+        If InStr(LCase(cfgLine), "home =") = 1 Or InStr(LCase(cfgLine), "home=") = 1 Then
+            cfgEq = InStr(cfgLine, "=")
+            If cfgEq > 0 Then homePath = Trim(Mid(cfgLine, cfgEq + 1))
+        ElseIf InStr(LCase(cfgLine), "executable =") = 1 Or InStr(LCase(cfgLine), "executable=") = 1 Then
+            cfgEq = InStr(cfgLine, "=")
+            If cfgEq > 0 Then executablePath = Trim(Mid(cfgLine, cfgEq + 1))
+        End If
+    Next
+    If homePath = "" Or Not fso.FolderExists(homePath) Then
+        VenvConfigNeedsRepair = True
+    ElseIf executablePath = "" Or Not fso.FileExists(executablePath) Then
+        VenvConfigNeedsRepair = True
+    End If
+End Function
+
 ' ── Check if a Python executable is valid and working ──
 Function IsPythonExeValid(exePath)
     IsPythonExeValid = False
     If Not fso.FileExists(exePath) Then Exit Function
 
+    ' Ignore Windows Store App Execution Alias 0-byte stubs
+    If InStr(LCase(exePath), "\windowsapps\") > 0 Then Exit Function
+    On Error Resume Next
+    If fso.GetFile(exePath).Size < 4096 Then Exit Function
+    If Err.Number <> 0 Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
     ' Test if the Python executable is actually functional by importing core modules
     Dim runCmd, exitCode
     On Error Resume Next
     If InStr(LCase(exePath), "\env\") > 0 Then
-        runCmd = """" & exePath & """ -c ""import sys, encodings, pip, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -B -c ""import sys, encodings, pip, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     Else
-        runCmd = """" & exePath & """ -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -B -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     End If
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number <> 0 Or exitCode <> 0 Then

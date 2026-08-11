@@ -606,17 +606,10 @@ def _fetch_url(url: str, timeout: int = 8) -> str | None:
 
 
 def _pip_installed_version(pkg_import: str, pkg_name: str) -> str | None:
-    """Return the installed version string for a pip package, or None."""
+    """Return a package version without starting another Python process."""
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", pkg_name],
-            capture_output=True, text=True, timeout=8,
-            encoding="utf-8", errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        for line in result.stdout.splitlines():
-            if line.lower().startswith("version:"):
-                return line.split(":", 1)[1].strip()
+        from importlib import metadata
+        return metadata.version(pkg_name)
     except Exception:
         pass
     return None
@@ -774,6 +767,12 @@ def check_arduino_cli_update() -> dict:
 
 def _pio_installed_version() -> str | None:
     """Return the installed platformio version string, e.g. '6.1.16'."""
+    try:
+        from importlib import metadata
+        return metadata.version("platformio")
+    except Exception:
+        pass
+
     pio = find_pio()
     if not pio:
         return None
@@ -881,17 +880,21 @@ def check_python_update() -> dict:
 
 def run_update_checks(auto_update: bool = False):
     """
-    Check all managed utilities for updates, running checks in parallel.
+    Check all managed utilities for updates, using a small bounded worker pool.
+
+    This is retained for an explicit/manual update action. It is not called
+    during startup, so a short-lived bootstrap process cannot leave update
+    probes alive after the GUI is launched.
+
     If auto_update=True, upgrade pip packages automatically (arduino-cli
     requires a manual MSI re-run, so we only notify for that one).
     """
     section("Checking for updates")
     status("Querying PyPI, GitHub, and winget...", DIM)
 
-    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     results: dict[str, dict] = {}
-    lock = threading.Lock()
 
     checks = [
         ("python",     lambda: check_python_update()),
@@ -906,16 +909,23 @@ def run_update_checks(auto_update: bool = False):
     if sys.platform == "win32":
         checks.append(("pywin32", lambda: check_pip_package_update("pywin32")))
 
-    def _run(key, fn):
-        r = fn()
-        with lock:
-            results[key] = r
-
-    threads = [threading.Thread(target=_run, args=(k, fn), daemon=True) for k, fn in checks]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=15)   # max 15 s total (network-bound)
+    with ThreadPoolExecutor(
+        max_workers=min(3, len(checks)),
+        thread_name_prefix="MCUUpdateCheck",
+    ) as executor:
+        futures = {executor.submit(fn): key for key, fn in checks}
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                results[key] = {
+                    "name": key,
+                    "installed": None,
+                    "latest": None,
+                    "update_available": False,
+                    "error": f"check failed: {exc}",
+                }
 
     # ── Display results ──────────────────────────────────────
     updates_found: list[dict] = []
@@ -2489,7 +2499,11 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             return
 
         # ── Update checks ─────────────────────────────────────────────
-        run_update_checks(auto_update=False)
+        # Keep online probes out of the short-lived bootstrap process. They
+        # remain available through an explicit/manual caller.
+        gui.root.after(0, lambda: gui.log_dim(
+            "Online update checks are deferred until explicitly requested."
+        ))
 
         # ── Summary & launch ─────────────────────────────────────────
         def _finish():

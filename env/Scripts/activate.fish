@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV 'D:\QuickAccess\NAPH\Documents\_MCU_Flash_GUI_V6.0\env'
+set -gx VIRTUAL_ENV 'C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env'
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"Scripts $PATH

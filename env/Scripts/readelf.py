@@ -1,4 +1,4 @@
-#!D:\QuickAccess\NAPH\Documents\_MCU_Flash_GUI_V6.0\env\Scripts\python.exe
+#!C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\python.exe
 #-------------------------------------------------------------------------------
 # scripts/readelf.py
 #

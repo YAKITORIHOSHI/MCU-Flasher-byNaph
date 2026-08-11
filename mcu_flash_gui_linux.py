@@ -24,27 +24,47 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, font as tkfont
 from pathlib import Path
 from datetime import datetime
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import ensure_platformio_penv_with_hook
-except ImportError:
-    def ensure_platformio_penv_with_hook(*args, **kwargs):
+# ── Lazy imports from bootstrap ──────────────────────────────
+_bootstrap_module = None
+
+
+def _get_bootstrap():
+    global _bootstrap_module
+    if _bootstrap_module is None:
+        try:
+            import bootstrap
+            _bootstrap_module = bootstrap
+        except ImportError:
+            _bootstrap_module = False
+    return _bootstrap_module if _bootstrap_module else None
+
+
+def ensure_platformio_penv_with_hook(*args, **kwargs):
+    b = _get_bootstrap()
+    if b is None:
         return False
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import find_arduino_cli as _bootstrap_find_arduino_cli
-except ImportError:
-    _bootstrap_find_arduino_cli = None
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import ensure_arduino_cli as _bootstrap_ensure_arduino_cli
-except ImportError:
-    _bootstrap_ensure_arduino_cli = None
-try:
-    # pyrefly: ignore [missing-import]
-    from bootstrap import get_last_arduino_cli_error as _bootstrap_get_last_arduino_cli_error
-except ImportError:
-    _bootstrap_get_last_arduino_cli_error = None
+    return b.ensure_platformio_penv_with_hook(*args, **kwargs)
+
+
+def _bootstrap_find_arduino_cli():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.find_arduino_cli()
+
+
+def _bootstrap_ensure_arduino_cli():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.ensure_arduino_cli()
+
+
+def _bootstrap_get_last_arduino_cli_error():
+    b = _get_bootstrap()
+    if b is None:
+        return None
+    return b.get_last_arduino_cli_error()
 
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = Path(sys.executable).resolve().parent
@@ -2041,25 +2061,35 @@ class ProjectSelectorDialog:
         self.existing_path_var.trace_add("write", _update_existing_contents)
         _update_existing_contents()
 
-        # Recent Projects list
+        # Recent Projects list — show a placeholder and scan on a background
+        # thread so the dialog window is responsive immediately.
+        self._recent_placeholder = tk.Label(
+            self.frame_existing,
+            text="Loading recent projects…",
+            font=f_sub, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+            anchor=tk.W, padx=10, pady=6,
+        )
+        self._recent_placeholder.pack(anchor=tk.W, pady=(8, 4))
+
+        import threading
+        threading.Thread(target=self._populate_recent_projects, daemon=True).start()
+
+    def _populate_recent_projects(self):
+        """Background-thread worker: scan recent projects and post the
+        results back to the main thread for rendering."""
         recent_list = load_recent_projects()
-        if self.initial_dir:
+        initial_dir = self.initial_dir
+        if initial_dir:
             try:
-                curr_resolved = str(Path(self.initial_dir).resolve())
+                curr_resolved = str(Path(initial_dir).resolve())
                 recent_list = [p for p in recent_list if str(Path(p).resolve()) != curr_resolved]
             except Exception:
-                recent_list = [p for p in recent_list if p != self.initial_dir]
+                recent_list = [p for p in recent_list if p != initial_dir]
 
-        if recent_list:
-            tk.Label(
-                self.frame_existing, text="Recent Projects (double-click to open):", font=f_label,
-                fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor=tk.W
-            ).pack(anchor=tk.W, pady=(8, 4))
-            
-            recent_frame = tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST)
-            recent_frame.pack(fill=tk.BOTH, expand=True)
-            
-            for path in recent_list:
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+        entries = []
+        for path in recent_list:
+            try:
                 p_path = Path(path)
                 owner_pid = folder_lock_owner(p_path)
                 is_locked = owner_pid is not None
@@ -2075,7 +2105,7 @@ class ProjectSelectorDialog:
                     btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
                     fg_color = Theme.RED
                     bg_idle = Theme.BG_DARK
-                    bg_hover = Theme.BG_DARK  # no hover highlight; it's not openable
+                    bg_hover = Theme.BG_DARK
                     cursor = "no" if sys.platform == "win32" else "X_cursor"
                 else:
                     btn_text = f" 📁 {p_path.name}  —  {path}"
@@ -2084,24 +2114,60 @@ class ProjectSelectorDialog:
                     bg_hover = Theme.BG_HOVER
                     cursor = "hand2"
 
-                lbl = tk.Label(
-                    recent_frame, text=btn_text, font=f_mono,
-                    fg=fg_color, bg=bg_idle, anchor=tk.W,
-                    padx=10, pady=6, cursor=cursor
-                )
-                lbl.pack(fill=tk.X, pady=2)
+                entries.append({
+                    "path": path,
+                    "btn_text": btn_text,
+                    "files_str": files_str,
+                    "files_color": files_color,
+                    "fg_color": fg_color,
+                    "bg_idle": bg_idle,
+                    "bg_hover": bg_hover,
+                    "cursor": cursor,
+                })
+            except Exception as ex:
+                print(f"[WARN] Error scanning recent path '{path}': {ex}")
 
-                def _make_handlers(w=lbl, p=path, bg_h=bg_hover, bg_i=bg_idle):
-                    w.bind("<Enter>", lambda e: w.configure(bg=bg_h))
-                    w.bind("<Leave>", lambda e: w.configure(bg=bg_i))
-                    w.bind("<Button-1>", lambda e: self.existing_path_var.set(p))
-                    # Double-click always routes through _on_open_existing(), which
-                    # re-checks the lock and shows "Project In Use" if it's still
-                    # held elsewhere — so a locked row can't be force-opened here.
-                    w.bind("<Double-Button-1>", lambda e: (self.existing_path_var.set(p), self._on_open_existing()))
-                _make_handlers()
+        self.win.after(0, lambda: self._render_recent_projects(entries))
+
+    def _render_recent_projects(self, entries: list[dict]):
+        """Replace the placeholder with the actual recent project list."""
+        if hasattr(self, "_recent_placeholder") and self._recent_placeholder:
+            self._recent_placeholder.destroy()
+            self._recent_placeholder = None
+
+        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
+
+        if entries:
+            tk.Label(
+                self.frame_existing, text="Recent Projects (double-click to open):", font=f_label,
+                fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor=tk.W
+            ).pack(anchor=tk.W, pady=(8, 4))
+
+            recent_frame = tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST)
+            recent_frame.pack(fill=tk.BOTH, expand=True)
+
+            for entry in entries:
+                try:
+                    path = entry["path"]
+                    p_path = Path(path)
+
+                    lbl = tk.Label(
+                        recent_frame, text=entry["btn_text"], font=f_mono,
+                        fg=entry["fg_color"], bg=entry["bg_idle"], anchor=tk.W,
+                        padx=10, pady=6, cursor=entry["cursor"]
+                    )
+                    lbl.pack(fill=tk.X, pady=2)
+
+                    def _make_handlers(w=lbl, p=path, bg_h=entry["bg_hover"], bg_i=entry["bg_idle"]):
+                        w.bind("<Enter>", lambda e: w.configure(bg=bg_h))
+                        w.bind("<Leave>", lambda e: w.configure(bg=bg_i))
+                        w.bind("<Button-1>", lambda e: self.existing_path_var.set(p))
+                        w.bind("<Double-Button-1>", lambda e: (self.existing_path_var.set(p), self._on_open_existing()))
+                    _make_handlers()
+                except Exception as ex:
+                    print(f"[WARN] Error rendering recent path '{path}': {ex}")
         else:
-            # Fallback spacer
+            # No recent projects — add a spacer to keep layout clean
             tk.Frame(self.frame_existing, bg=Theme.BG_DARKEST).pack(fill=tk.BOTH, expand=True)
 
     def _browse_existing(self):

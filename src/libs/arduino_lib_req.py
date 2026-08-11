@@ -241,12 +241,20 @@ def _open_code_viewer(file_path, all_paths=None):
 
 
 def _load_settings() -> dict:
-    """Load persisted settings from disk. Returns defaults on any error."""
+    """Load settings and repair copied-machine download paths in place."""
+    settings = {}
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+            settings = loaded if isinstance(loaded, dict) else {}
     except (OSError, ValueError, json.JSONDecodeError):
-        return {}
+        settings = {}
+
+    saved_dir = str(settings.get("download_dir", "") or "")
+    if not saved_dir or not os.path.isdir(os.path.expandvars(os.path.expanduser(saved_dir))):
+        settings["download_dir"] = DEFAULT_DOWNLOAD_DIR
+        _save_settings(settings)
+    return settings
 
 
 def _save_settings(settings: dict):
@@ -2142,7 +2150,13 @@ class ArduinoBrowser:
                 with open(cache_file, "r", encoding="utf-8") as fh:
                     return json.load(fh)
             except Exception:
-                pass
+                # A copied or interrupted index cache must be discarded before
+                # the refresh attempt, otherwise an offline launch retries the
+                # same malformed JSON forever.
+                try:
+                    os.unlink(cache_file)
+                except OSError:
+                    pass
 
         def _update_overlay():
             self._set_status(f"Downloading {label} index…")

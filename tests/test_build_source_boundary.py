@@ -62,6 +62,17 @@ class BuildSourceBoundaryTests(unittest.TestCase):
         self.assertIn('_freeze_build_sources_at_boundary("Upload")', upload_source)
         self.assertIn('_block_action_for_pending_ai_review("Upload")', upload_source)
 
+    def test_project_selector_excludes_reserved_src_snapshot(self):
+        (self.project / "sketch.ino").write_text("void setup() {}", encoding="utf-8")
+        reserved_src = self.project / "src"
+        reserved_src.mkdir()
+        (reserved_src / "snapshot.ino").write_text("void setup() {}", encoding="utf-8")
+        (reserved_src / "snapshot.cpp").write_text("void loop() {}", encoding="utf-8")
+
+        selector = gui_module.ProjectSelectorDialog.__new__(gui_module.ProjectSelectorDialog)
+
+        self.assertEqual(selector._get_project_files(self.project), ["sketch.ino"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,8 @@
 .pio/
 .pioenvs/
 .piolibdeps/
+.platformio-mcu-gui/
+src/libs/.platformio-mcu-gui/
 env/*
 !env/Scripts/
 !env/Scripts/python.exe
@@ -76,9 +78,10 @@ src/gui_config.json
 *.dblite
 
 .pio_cache/
+soft_reset_project/boards/
+soft_reset_project_uno/boards/
 "index_json/library_index.json"
 
 # === MCU Flasher dedicated internal app directories ===
 MCU-FLASHER-SRC/
 MCU_FLASHER_SRC/
-
