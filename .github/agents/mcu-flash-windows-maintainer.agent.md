@@ -1,4 +1,5 @@
 ---
+name: mcu-flash-windows-maintainer
 description: "Windows MCU Flasher maintainer for board-isolated incremental builds, compile/upload/reset flows, generated-project hygiene, and safe low-end-device optimizations."
 tools: [read, search, edit, execute]
 user-invocable: true
