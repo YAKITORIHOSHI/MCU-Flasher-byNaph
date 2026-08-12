@@ -241,13 +241,13 @@ def _apply_defender_exclusions():
     # Add new directories here as the project evolves.
     EXCLUDED_PATHS = [
         # Real PlatformIO package store: everything actually downloads here now.
-        SCRIPT_DIR / "src" / "libs" / ".platformio-mcu-gui",
+        SCRIPT_DIR / "src" / ".platformio-mcu-gui",
         # LocalAppData is only a directory junction back to the path above,
         # but Defender exclusions don't reliably follow junctions on every
         # Windows build, so list it explicitly too -- excluding it never
         # excludes anything real beyond what's already covered above.
         Path(local_appdata) / ".platformio-mcu-gui",
-        # Last-resort portable fallback store (only used if src/libs isn't writable).
+        # Last-resort portable fallback store (only used if src isn't writable).
         SCRIPT_DIR / "src" / "_board-frameworks" / ".platformio",
         # The MCU Flasher app directory itself (build output, logs, etc.)
         SCRIPT_DIR,
@@ -304,10 +304,10 @@ if (sys.platform == "win32" and
     import threading as _threading
     _threading.Thread(target=_apply_defender_exclusions, daemon=True, name="DefenderExclusions").start()
 
-# Add src/libs to sys.path
-libs_path = SCRIPT_DIR / "src" / "libs"
-if str(libs_path) not in sys.path:
-    sys.path.insert(0, str(libs_path))
+# Add src/modules to sys.path
+modules_path = SCRIPT_DIR / "src" / "modules"
+if str(modules_path) not in sys.path:
+    sys.path.insert(0, str(modules_path))
 
 # Run bootstrap with safety crash dialog
 try:

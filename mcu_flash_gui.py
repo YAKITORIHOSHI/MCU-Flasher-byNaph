@@ -6,12 +6,12 @@ MCU Flasher by Naph — ESP32 Compile, Upload & Serial Monitor
 A modern dark-themed GUI tool for Arduino ESP32 development.
 """
 
-# Add src/libs to sys.path so we can import moved utility modules
+# Add src/modules to sys.path so we can import moved utility modules
 import sys
 from pathlib import Path
-_libs_path = Path(__file__).resolve().parent / "src" / "libs"
-if str(_libs_path) not in sys.path:
-    sys.path.insert(0, str(_libs_path))
+_modules_path = Path(__file__).resolve().parent / "src" / "modules"
+if str(_modules_path) not in sys.path:
+    sys.path.insert(0, str(_modules_path))
 
 sys.dont_write_bytecode = True
 import os
@@ -52,6 +52,7 @@ def _get_bootstrap():
     global _bootstrap_module
     if _bootstrap_module is None:
         try:
+            # pyrefly: ignore [missing-import]
             import bootstrap
             _bootstrap_module = bootstrap
         except ImportError:
@@ -1119,7 +1120,8 @@ def hide_internal_project_metadata(sketch_dir) -> None:
         if is_codebase_root:
             unhide_hidden_attribute(s_dir)
             unhide_hidden_attribute(s_dir / "src")
-            unhide_hidden_attribute(s_dir / "src" / "libs")
+            unhide_hidden_attribute(s_dir / "src" / "modules")
+            unhide_hidden_attribute(s_dir / "platformio.ini")
         
         # Ensure platformio.ini is always editable
         ini_p = s_dir / "platformio.ini"
@@ -1204,7 +1206,7 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
         old_content = content
 
         try:
-            from src.libs.arduino_lib_req import heal_library_path_on_current_device
+            from src.modules.arduino_lib_req import heal_library_path_on_current_device
         except Exception:
             heal_library_path_on_current_device = lambda s: s
 
@@ -2706,9 +2708,8 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     Clean.  PlatformIO's platform/framework/compiler packages must live in a
     separate persistent store so cleaning a sketch cannot trigger downloads.
 
-    Store lives at ``<PROJECT_FOLDER>/src/libs/.platformio-mcu-gui`` so the
-    whole project — including its downloaded toolchains/frameworks — stays
-    self-contained under one folder. A directory junction/symlink is left at
+    Store lives at ``<PROJECT_FOLDER>/src/.platformio-mcu-gui`` so the
+    project stays self-contained. A directory junction/symlink is left at
     ``%LOCALAPPDATA%\\.platformio-mcu-gui`` pointing back at the real store,
     purely as a convenience pointer for anything that goes looking there.
 
@@ -2718,8 +2719,11 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     ``C:\\.platformio-mcu-gui``) and returned as PLATFORMIO_CORE_DIR so the
     toolchain binary path that GCC constructs never contains spaces.
 
-    When Bootstrap launches the GUI, preserve its PLATFORMIO_CORE_DIR exactly
-    so both processes always agree on the same store.
+    When the GUI is launched by Bootstrap, preserve the inherited
+    PLATFORMIO_CORE_DIR verbatim.  A standalone GUI launch derives the exact
+    same per-user location.  Keeping one core_dir is critical: PlatformIO stores
+    development platforms, frameworks, SDKs and toolchains below this directory,
+    so two different values make the same packages download twice.
     """
     inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
     if inherited:
@@ -2731,7 +2735,7 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
         except Exception:
             pass
 
-    target_dir = script_dir / "src" / "libs" / ".platformio-mcu-gui"
+    target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         _make_localappdata_shortcut(target_dir)
@@ -2747,7 +2751,7 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     except Exception:
         pass
 
-    # Portable last resort only, if src/libs isn't writable for some reason.
+    # Portable last resort only, if src/modules isn't writable for some reason.
     fallback = script_dir / "src" / "_board-frameworks" / ".platformio"
     try:
         fallback.mkdir(parents=True, exist_ok=True)
@@ -2817,26 +2821,29 @@ def _neutralize_conflicting_global_platformio_config() -> None:
         pass
 
 
-def _ensure_libs_junction(script_dir: Path) -> str | None:
-    r"""Best-effort: create a space-free root-drive junction pointing at src/libs.
+def _ensure_modules_junction(script_dir: Path) -> str | None:
+    r"""Best-effort: create a space-free root-drive junction pointing at src/modules.
 
     The project folder name contains spaces (e.g. "MCU Flasher by Naph - Stable Release").
     Some tools (GCC's internal CreateProcess, Arduino CLI) cannot handle spaces in paths.
-    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/libs``
+    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/modules``
     so those tools always have a clean, space-free path to reach the libraries.
 
     The junction is re-created automatically on every startup so it survives
     being copied to a different machine or drive letter.
+
+    ``script_dir`` is the project root. The drive letter is derived
+    dynamically from the resolved ``src/modules`` path, so this works on C:, D:,
+    E:, or any other drive letter without any hardcoded values.
 
     Returns the junction path string on success, or None.
     """
     if sys.platform != "win32":
         return None
     try:
-        libs_dir = (script_dir / "src" / "libs").resolve()
+        libs_dir = (script_dir / "src" / "modules").resolve()
         project_root = Path(script_dir).resolve()
         # Drive letter is always derived dynamically from wherever the project lives.
-        # Works on C:, D:, E:, or any other drive — no hardcoded values.
         drive = Path(libs_dir).drive
         if not drive:
             return None  # cannot determine drive — skip silently
@@ -2844,19 +2851,15 @@ def _ensure_libs_junction(script_dir: Path) -> str | None:
 
         # If already correct, reuse (and re-apply hidden flag in case it was cleared).
         if link_path.exists() or link_path.is_symlink():
+            existing_target = None
             try:
-                if link_path.resolve() == libs_dir:
+                existing_target = link_path.resolve()
+                if existing_target == libs_dir:
                     _hide_junction(link_path)
                     return str(link_path)
             except Exception:
                 pass
-            # Repair only the known legacy target (the project root). Leave
-            # unrelated non-empty root junctions untouched.
-            try:
-                existing_target = link_path.resolve()
-            except Exception:
-                existing_target = None
-            if existing_target != project_root:
+            if existing_target != libs_dir:
                 try:
                     is_empty = not any(link_path.iterdir())
                 except Exception:
@@ -2889,14 +2892,14 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     try:
         unhide_hidden_attribute(Path(script_dir))
         unhide_hidden_attribute(Path(script_dir) / "src")
-        unhide_hidden_attribute(Path(script_dir) / "src" / "libs")
+        unhide_hidden_attribute(Path(script_dir) / "src" / "modules")
     except Exception:
         pass
     core_dir = _get_safe_platformio_core_dir(script_dir)
     os.environ["PLATFORMIO_CORE_DIR"] = core_dir
 
     # Ensure the space-free libs junction exists on this machine.
-    _ensure_libs_junction(script_dir)
+    _ensure_modules_junction(script_dir)
 
     try:
         c_path = Path(core_dir)
@@ -12137,7 +12140,7 @@ class MCUUploadGUI:
             f"the installed Download Boards/Libraries definitions - {reason}. "
             "COM1 is commonly a built-in PC serial port.\n"
             "  💡 Note: The board definition for this MCU might not be downloaded yet. "
-            "You can download it using the Download Manager (src/libs/arduino_lib_req.py)."
+            "You can download it using the Download Manager (src/modules/arduino_lib_req.py)."
         )
 
     def _extract_port_device(self, port_label: str) -> str:
@@ -14703,7 +14706,7 @@ class MCUUploadGUI:
         if configured:
             roots.append(Path(configured))
         roots.extend((
-            SCRIPT_DIR / "src" / "libs" / ".platformio-mcu-gui",
+            SCRIPT_DIR / "src" / ".platformio-mcu-gui",
             Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".platformio-mcu-gui",
             Path.home() / ".platformio",
         ))
@@ -21368,7 +21371,7 @@ default_envs = {self._pio_env_name()}
 
         def _bg_launch_worker():
             script_dir = SCRIPT_DIR
-            script_path = script_dir / "src" / "libs" / "arduino_lib_req.py"
+            script_path = script_dir / "src" / "modules" / "arduino_lib_req.py"
 
             # Check if a persistent Download Manager process is already sleeping in background
             active_proc = None

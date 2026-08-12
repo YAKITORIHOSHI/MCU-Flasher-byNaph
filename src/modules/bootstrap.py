@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import importlib.util
 from pathlib import Path
 from typing import Optional
@@ -108,6 +109,32 @@ def get_bootstrap_log_file() -> Path:
     return _BOOTSTRAP_LOG_FILE
 
 
+def _find_installer_file(filename: str) -> Path:
+    """Find a bundled installer file in SCRIPT_DIR/installers or parent project root installers."""
+    candidates = [
+        SCRIPT_DIR / "installers" / filename,
+        SCRIPT_DIR.parent / "installers" / filename,
+        SCRIPT_DIR.parent.parent / "installers" / filename,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return SCRIPT_DIR / "installers" / filename
+
+
+def _find_installer_dir(dirname: str) -> Path:
+    """Find a bundled installer directory in SCRIPT_DIR/installers or parent project root installers."""
+    candidates = [
+        SCRIPT_DIR / "installers" / dirname,
+        SCRIPT_DIR.parent / "installers" / dirname,
+        SCRIPT_DIR.parent.parent / "installers" / dirname,
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return SCRIPT_DIR / "installers" / dirname
+
+
 def _record_bootstrap_log(level: str, message: str) -> None:
     """Append one timestamped event to the durable per-run bootstrap log."""
     try:
@@ -165,7 +192,7 @@ def _fast_start_source_fingerprint() -> str | None:
         SCRIPT_DIR / "launcher.py",
         SCRIPT_DIR / "mcu_flash_gui.py",
         SCRIPT_DIR / "runThisOnWindows.vbs",
-        SCRIPT_DIR / "src" / "libs" / "bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
     )
     try:
         digest = hashlib.sha256()
@@ -528,7 +555,7 @@ def _ensure_codebase_visible(script_dir: Path = SCRIPT_DIR) -> None:
     try:
         root = Path(script_dir).resolve(strict=False)
         # SCRIPT_DIR is the project root for both source and frozen launches.
-        for path in (root, root / "src", root / "src" / "libs"):
+        for path in (root, root / "src", root / "src" / "modules"):
             unhide_hidden_attribute(path)
     except Exception:
         pass
@@ -708,7 +735,7 @@ def _make_root_drive_junction(real_dir: Path) -> str | None:
 def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     """Return the one canonical PlatformIO package store used by Bootstrap and the GUI.
 
-    Store lives at ``<PROJECT_FOLDER>/src/libs/.platformio-mcu-gui`` so the
+    Store lives at ``<PROJECT_FOLDER>/src/.platformio-mcu-gui`` so the
     project stays self-contained. A directory junction/symlink is left at
     ``%LOCALAPPDATA%\\.platformio-mcu-gui`` pointing back at the real store,
     purely as a convenience pointer for anything that goes looking there.
@@ -735,7 +762,7 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
         except Exception:
             pass
 
-    target_dir = script_dir / "src" / "libs" / ".platformio-mcu-gui"
+    target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         _make_localappdata_shortcut(target_dir)
@@ -751,7 +778,7 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     except Exception:
         pass
 
-    # Last-resort portable fallback, if src/libs isn't writable for some
+    # Last-resort portable fallback, if src isn't writable for some
     # reason.  Both Bootstrap and the GUI use this same fallback, so they
     # still cannot silently diverge into separate stores.
     fallback = script_dir / "src" / "_board-frameworks" / ".platformio"
@@ -820,19 +847,19 @@ def _neutralize_conflicting_global_platformio_config() -> None:
         pass
 
 
-def _ensure_libs_junction(script_dir: Path) -> str | None:
-    r"""Best-effort: create a space-free root-drive junction pointing at src/libs.
+def _ensure_modules_junction(script_dir: Path) -> str | None:
+    r"""Best-effort: create a space-free root-drive junction pointing at src/modules.
 
     The project folder name contains spaces (e.g. "MCU Flasher by Naph - Stable Release").
     Some tools (GCC's internal CreateProcess, Arduino CLI) cannot handle spaces in paths.
-    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/libs``
+    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/modules``
     so those tools always have a clean, space-free path to reach the libraries.
 
     The junction is re-created automatically on every startup so it survives
     being copied to a different machine or drive letter.
 
     ``script_dir`` is the project root. The drive letter is derived
-    dynamically from the resolved ``src/libs`` path, so this works on C:, D:,
+    dynamically from the resolved ``src/modules`` path, so this works on C:, D:,
     E:, or any other drive letter without any hardcoded values.
 
     Returns the junction path string on success, or None.
@@ -840,7 +867,7 @@ def _ensure_libs_junction(script_dir: Path) -> str | None:
     if sys.platform != "win32":
         return None
     try:
-        libs_dir = (script_dir / "src" / "libs").resolve()
+        libs_dir = (script_dir / "src" / "modules").resolve()
         project_root = Path(script_dir).resolve()
         # Drive letter is always derived dynamically from wherever the project lives.
         drive = Path(libs_dir).drive
@@ -907,7 +934,7 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     os.environ["PLATFORMIO_CORE_DIR"] = core_dir
 
     # Ensure the space-free libs junction exists on this machine.
-    _ensure_libs_junction(script_dir)
+    _ensure_modules_junction(script_dir)
 
     try:
         c_path = Path(core_dir)
@@ -3261,7 +3288,7 @@ def ensure_webview2_runtime() -> bool:
         return True
 
     section("Installing Microsoft Edge WebView2 Runtime")
-    installer = SCRIPT_DIR / "installers" / "MicrosoftEdgeWebview2Setup.exe"
+    installer = _find_installer_file("MicrosoftEdgeWebview2Setup.exe")
 
     if not _is_valid_exe(installer):
         warn(f"WebView2 Runtime installer is missing or invalid: {installer}")
@@ -4886,16 +4913,16 @@ def ensure_esp32_board_folder() -> bool:
             for boards_txt in dest_dir.glob("**/boards.txt"):
                 rel = "/".join(part.lower() for part in boards_txt.relative_to(dest_dir).parts)
                 if "esp32" in rel:
-                    ok(f"ESP32 Arduino boards core is already downloaded as a folder ({boards_txt.parent.name}).")
+                    ok(f"ESP32 boards core is already downloaded as a folder ({boards_txt.parent.name}).")
                     return True
         except Exception:
             pass
 
-    section("Preparing ESP32 Arduino Boards (Folder)")
-    status("Resolving latest stable ESP32 Arduino board core from Espressif...")
+    section("Preparing ESP32 Boards (Folder)")
+    status("Resolving latest stable ESP32 board core from Espressif...")
     release = _load_latest_esp32_board_release()
     if not release:
-        warn("Could not resolve the ESP32 Arduino board-core archive. PlatformIO ESP32 support can still be prepared separately.")
+        warn("Could not resolve the ESP32 board-core archive. PlatformIO ESP32 support can still be prepared separately.")
         return False
 
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -4903,18 +4930,18 @@ def ensure_esp32_board_folder() -> bool:
     folder_path = dest_dir / _archive_folder_name(release["archive"])
 
     try:
-        status(f"Downloading ESP32 Arduino Boards {release['version']} (Folder Only)...")
-        _download_file(release["url"], archive_path, timeout=120, attempts=3)
-        status(f"Unpacking ESP32 Arduino Boards {release['version']} into {folder_path.name}...")
+        status(f"Downloading ESP32 Boards {release['version']} (Folder Only)...")
+        _download_file(release["url"], archive_path, timeout=300, attempts=3)
+        status(f"Unpacking ESP32 Boards {release['version']} into {folder_path.name}...")
         if _gui:
             _gui.set_progress_percent(0)
         if not _extract_board_archive_folder_only(archive_path, folder_path):
             warn("ESP32 board-core archive extracted, but boards.txt could not be verified.")
             return False
-        ok(f"ESP32 Arduino Boards {release['version']} downloaded as folder: Boards/{folder_path.name}")
+        ok(f"ESP32 Boards {release['version']} downloaded as folder: Boards/{folder_path.name}")
         return True
     except Exception as exc:
-        warn(f"Failed to download ESP32 Arduino Boards folder: {exc}")
+        warn(f"Failed to download ESP32 Boards folder: {exc}")
         return False
 
 
@@ -5004,9 +5031,17 @@ def _download_file(url: str, dest: Path, timeout: int = 45, attempts: int = 3):
     try:
         for attempt in range(1, attempts + 1):
             try:
-                status(f"Downloading {dest.name} ({attempt}/{attempts})...")
+                if attempt == 1:
+                    status(f"Downloading {dest.name}...")
+                else:
+                    status(f"Retrying download of {dest.name} ({attempt}/{attempts})...")
+
                 request = urllib.request.Request(
-                    url, headers={"User-Agent": "mcu-flash-gui-bootstrap/1.0"}
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "*/*",
+                    },
                 )
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     total = int(response.headers.get("Content-Length", "0") or 0)
@@ -5035,7 +5070,6 @@ def _download_file(url: str, dest: Path, timeout: int = 45, attempts: int = 3):
                 except OSError:
                     pass
                 if attempt < attempts:
-                    warn(f"Download attempt {attempt} failed; retrying...")
                     time.sleep(attempt)
     finally:
         if _gui:
@@ -5335,25 +5369,35 @@ def _arduino_cli_msi_url(version: str | None = None) -> str:
     everything else gets the 64-bit x86 build (the vast majority of PCs).
     """
     import platform
+    import urllib.request
     machine = platform.machine().lower()
     if machine == "arm64":
         arch_label = "Windows_ARM64"
     else:
         arch_label = "Windows_64bit"
 
+    if not version:
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/arduino/arduino-cli/releases/latest",
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                version = data.get("tag_name", "").lstrip("v")
+        except Exception:
+            pass
+
     if version:
-        # Pinned URL: github.com/.../releases/download/vX.Y.Z/arduino-cli_vX.Y.Z_Windows_64bit.msi
-        # Arduino uses both "v"-prefixed tags and bare version strings in the asset name.
         v = version.lstrip("v")
         return (
             f"https://github.com/arduino/arduino-cli/releases/download/"
-            f"v{v}/arduino-cli_{arch_label}.msi"
+            f"v{v}/arduino-cli_{v}_{arch_label}.msi"
         )
     else:
-        # /latest/download/ resolves via a redirect — no tag needed.
         return (
-            f"https://github.com/arduino/arduino-cli/releases/latest/download/"
-            f"arduino-cli_{arch_label}.msi"
+            f"https://github.com/arduino/arduino-cli/releases/download/"
+            f"v1.5.1/arduino-cli_1.5.1_{arch_label}.msi"
         )
 
 
@@ -5895,7 +5939,7 @@ def ensure_cp210x() -> bool:
         return True
 
     section("Installing CP210x Driver")
-    driver_dir = SCRIPT_DIR / "installers" / "CP210x"
+    driver_dir = _find_installer_dir("CP210x")
 
     import platform
     is_64bit = platform.machine().endswith("64") or sys.maxsize > 2**32
@@ -6036,6 +6080,15 @@ def check_opencode_cli() -> Optional[str]:
                 if candidate.exists():
                     return str(candidate)
 
+        user_prof = os.environ.get("USERPROFILE", "")
+        if user_prof:
+            for candidate in [
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
+            ]:
+                if candidate.exists():
+                    return str(candidate)
+
         node_npm_opencode = Path(r"C:\Program Files\nodejs\opencode.cmd")
         if node_npm_opencode.exists():
             return str(node_npm_opencode)
@@ -6088,6 +6141,13 @@ def _windows_node_dirs() -> list[Path]:
     appdata = os.environ.get("APPDATA", "")
     if appdata:
         dirs.append(Path(appdata) / "npm")
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    if local_app:
+        dirs.append(Path(local_app) / "npm")
+        dirs.append(Path(local_app) / "Programs" / "nodejs")
+    user_prof = os.environ.get("USERPROFILE", "")
+    if user_prof:
+        dirs.append(Path(user_prof) / "AppData" / "Roaming" / "npm")
     return dirs
 
 
@@ -6100,6 +6160,7 @@ def _tool_runs(candidate: str | Path, args: list[str], timeout: int = 15) -> boo
     try:
         result = subprocess.run(
             [str(candidate), *args],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -6175,38 +6236,183 @@ def _find_winget_cmd() -> Optional[str]:
 def _install_nodejs_lts_with_winget() -> bool:
     winget_bin = _find_winget_cmd()
     if not winget_bin:
-        warn("winget is unavailable; Node.js LTS cannot be installed automatically.")
+        warn("winget is unavailable; falling back to direct installer.")
         return False
 
     try:
         cmd = [
             winget_bin, "install", "-e", "--id", "OpenJS.NodeJS.LTS",
             "--accept-source-agreements", "--accept-package-agreements",
-            "--silent", "--disable-interactivity",
+            "--silent", "--disable-interactivity", "--no-upgrade",
         ]
         status("Running: winget install -e --id OpenJS.NodeJS.LTS...")
-        res = subprocess.run(
+        # Use Popen with explicit timeout kill guard instead of subprocess.run
+        # to prevent winget from hanging indefinitely on MSIX registration.
+        proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
             creationflags=_hidden_subprocess_flags(),
-            timeout=300,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=90)
+        except subprocess.TimeoutExpired:
+            warn("winget Node.js install timed out after 90s; terminating...")
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            _refresh_node_npm_path()
+            return _find_usable_npm_cmd() is not None
+
         _refresh_node_npm_path()
-        if res.returncode == 0 and _find_usable_npm_cmd():
-            ok("Node.js LTS installed successfully via winget.")
+        # Check if npm is usable *before* inspecting the return code.
+        # winget returns 0x8A150061 (PACKAGE_ALREADY_INSTALLED) when
+        # Node.js is already present — that's a non-zero code but means
+        # Node *is* installed.  Checking npm first avoids a false
+        # negative that would waste time falling through to the MSI.
+        if _find_usable_npm_cmd():
+            if proc.returncode == 0:
+                ok("Node.js LTS installed successfully via winget.")
+            else:
+                ok("Node.js LTS is already present (winget confirmed).")
             return True
-        detail = _summarize_process_output(res)
-        if detail:
-            warn(f"winget Node.js install exited with code {res.returncode}: {detail}")
+        output = "\n".join(part.strip() for part in (stdout or "", stderr or "") if part and part.strip())
+        if output:
+            warn(f"winget Node.js install exited with code {proc.returncode}: {output[:400]}")
         else:
-            warn(f"winget Node.js install exited with code {res.returncode}.")
+            warn(f"winget Node.js install exited with code {proc.returncode}.")
     except Exception as e:
-        warn(f"winget execution failed: {e}")
+        warn(f"winget execution failed or timed out: {e}")
     return _find_usable_npm_cmd() is not None
+
+
+def _resolve_node_lts_msi_url() -> str:
+    """Pick the correct Node.js LTS MSI URL for this machine's architecture.
+
+    Queries the official Node.js release index to find the current LTS
+    version.  Falls back to a hardcoded version if the query fails.
+    Selects x64 or arm64 based on ``platform.machine()``.
+    """
+    import platform as _platform
+    import urllib.request
+
+    # ── Architecture mapping (x64-only project, arm64 for native perf) ──
+    machine = _platform.machine().lower()
+    if machine in ("aarch64", "arm64"):
+        arch = "arm64"
+    else:
+        arch = "x64"
+
+    # ── Dynamic version discovery ───────────────────────────────────
+    fallback_version = "v22.16.0"
+    version = fallback_version
+    try:
+        req = urllib.request.Request(
+            "https://nodejs.org/dist/index.json",
+            headers={"User-Agent": "MCU-Flash-GUI-Bootstrap/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            entries = json.loads(resp.read().decode("utf-8"))
+        for entry in entries:
+            if entry.get("lts"):
+                version = entry["version"]   # e.g. "v22.16.0"
+                break
+    except Exception:
+        pass  # network down / timeout — use fallback
+
+    return f"https://nodejs.org/dist/{version}/node-{version}-{arch}.msi"
+
+
+def _install_nodejs_lts_direct() -> bool:
+    """Fallback installer: download official Node.js LTS MSI and install silently."""
+    if sys.platform != "win32":
+        return False
+
+    import tempfile
+    import urllib.request
+
+    msi_url = _resolve_node_lts_msi_url()
+    status(f"Downloading Node.js LTS installer ({msi_url.rsplit('/', 1)[-1]})...")
+    temp_dir = Path(tempfile.gettempdir()) / "mcu_flash_node_install"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    msi_path = temp_dir / "node_lts.msi"
+
+    try:
+        req = urllib.request.Request(
+            msi_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
+        response = urllib.request.urlopen(req, timeout=60)
+        try:
+            total = int(response.headers.get("Content-Length", 0) or 0)
+            if total:
+                status(f"Downloading Node.js LTS ({total / 1048576:.1f} MB)...")
+            downloaded = 0
+            chunk_size = 256 * 1024  # 256 KB
+            with open(msi_path, "wb") as out_file:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    if total and _gui:
+                        pct = min(int(downloaded * 100 / total), 100)
+                        _gui.root.after(0, lambda p=pct: _gui.update_step(
+                            f"Downloading Node.js LTS... {p}%"
+                        ) if hasattr(_gui, 'update_step') else None)
+        finally:
+            response.close()
+
+        if not msi_path.exists() or msi_path.stat().st_size < 1000000:
+            warn("Downloaded Node.js installer appears incomplete.")
+            return False
+
+        # Use ShellExecuteEx/runas for msiexec so Windows shows the UAC
+        # consent dialog.  A plain subprocess.run() with CREATE_NO_WINDOW
+        # cannot trigger UAC — the install silently fails with Access
+        # Denied (exit 5) or hangs indefinitely on standard-user PCs.
+        status("Installing Node.js LTS via msiexec (may request Administrator)...")
+        msi_args = ["/i", str(msi_path), "/qn", "/norestart"]
+        try:
+            exit_code = _shell_execute_elevated_wait("msiexec", msi_args, timeout=180)
+        except PermissionError:
+            warn("Administrator permission was declined for Node.js MSI install.")
+            return _find_usable_npm_cmd() is not None
+        except Exception as msi_exc:
+            warn(f"Could not launch Node.js MSI installer: {msi_exc}")
+            return _find_usable_npm_cmd() is not None
+
+        _refresh_node_npm_path()
+        if exit_code == 0 and _find_usable_npm_cmd():
+            ok("Node.js LTS installed successfully via MSI.")
+            return True
+        else:
+            warn(f"msiexec exited with code {exit_code}.")
+    except Exception as exc:
+        warn(f"Direct Node.js MSI installation failed: {exc}")
+    finally:
+        try:
+            if msi_path.exists():
+                msi_path.unlink()
+        except Exception:
+            pass
+
+    return _find_usable_npm_cmd() is not None
+
+
+def _install_nodejs_lts() -> bool:
+    """Attempt installing Node.js LTS via winget first, falling back to direct MSI download."""
+    if _install_nodejs_lts_with_winget():
+        return True
+    status("Trying direct Node.js installer fallback...")
+    return _install_nodejs_lts_direct()
 
 
 def ensure_opencode_cli() -> bool:
@@ -6218,6 +6424,7 @@ def ensure_opencode_cli() -> bool:
         try:
             result = subprocess.run(
                 [path, "--version"],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -6239,11 +6446,11 @@ def ensure_opencode_cli() -> bool:
     npm_cmd = _find_usable_npm_cmd()
 
     if not npm_cmd:
-        status("Node.js / npm not usable. Installing Node.js LTS via winget...")
+        status("Node.js / npm not usable. Installing Node.js LTS...")
         if _gui:
             _gui.start_busy()
         try:
-            _install_nodejs_lts_with_winget()
+            _install_nodejs_lts()
         finally:
             if _gui:
                 _gui.stop_busy(restore_step=True)
@@ -6266,42 +6473,65 @@ def ensure_opencode_cli() -> bool:
         except Exception:
             pass
 
-    status("Refreshing OpenCode AI Assistant installation...")
+    status("Refreshing OpenCode AI Assistant installation via npm...")
     if _gui:
         _gui.start_busy()
 
-    try:
-        uninstall_cmd = [npm_cmd, "uninstall", "-g", "opencode-ai"]
-        uninstall_res = subprocess.run(
-            uninstall_cmd,
+    def _npm_run_with_kill_guard(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
+        """Run an npm command with explicit timeout kill guard to prevent hangs."""
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
             creationflags=_hidden_subprocess_flags(),
-            timeout=300,
         )
-        if uninstall_res.returncode != 0:
-            _save_npm_failure("npm uninstall", uninstall_cmd, uninstall_res.stdout or "")
+        try:
+            stdout, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            warn(f"npm command timed out after {timeout}s; terminating...")
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            return subprocess.CompletedProcess(cmd, returncode=1, stdout="(timed out)")
+        return subprocess.CompletedProcess(cmd, returncode=proc.returncode, stdout=stdout or "")
+
+    try:
+        uninstall_cmd = [
+            npm_cmd,
+            "uninstall",
+            "-g",
+            "--no-audit",
+            "--no-fund",
+            "--no-update-notifier",
+            "opencode-ai",
+        ]
+        try:
+            _npm_run_with_kill_guard(uninstall_cmd, timeout=15)
+        except Exception:
+            pass
 
         install_cmd = [
             npm_cmd,
             "install",
             "-g",
+            "--no-audit",
+            "--no-fund",
+            "--no-update-notifier",
+            "--loglevel=error",
+            "--fetch-retries=2",
+            "--fetch-retry-mintimeout=2000",
+            "--fetch-retry-maxtimeout=10000",
             "--allow-scripts=opencode-ai",
             "opencode-ai",
         ]
-        install_res = subprocess.run(
-            install_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=_hidden_subprocess_flags(),
-            timeout=600,
-        )
+        status("Installing OpenCode AI Assistant (this may take a moment)...")
+        install_res = _npm_run_with_kill_guard(install_cmd, timeout=90)
 
         _refresh_node_npm_path()
         cli_path = check_opencode_cli()
@@ -6309,6 +6539,53 @@ def ensure_opencode_cli() -> bool:
         if install_res.returncode == 0 and _cli_works(cli_path):
             ok(f"OpenCode AI Assistant installed successfully ({cli_path})")
             return True
+
+        # When npm install succeeds (returncode==0) but the --version
+        # probe timed out, treat as soft success — the binary exists but
+        # its first-run initialization is slow. Don't waste time retrying.
+        if install_res.returncode == 0 and cli_path:
+            ok(f"OpenCode AI Assistant installed ({cli_path}); first-run probe was slow.")
+            _save_npm_failure("npm install (soft success)", install_cmd, install_res.stdout)
+            return True
+
+        # Only retry with a user-level prefix when the global install
+        # returned a non-zero exit code (usually EACCES / EPERM on a
+        # non-admin account).  When returncode==0 but _cli_works failed,
+        # the binary exists but its --version probe timed out (e.g. a
+        # Go binary phoning home on first run).  Retrying with --prefix
+        # won't help that case and would waste another 90 seconds.
+        if install_res.returncode != 0:
+            appdata = os.environ.get("APPDATA", "")
+            if appdata and sys.platform == "win32":
+                user_npm_dir = Path(appdata) / "npm"
+                user_npm_dir.mkdir(parents=True, exist_ok=True)
+                status("Retrying OpenCode installation with user prefix...")
+                user_install_cmd = [
+                    npm_cmd,
+                    "install",
+                    "-g",
+                    f"--prefix={user_npm_dir}",
+                    "--no-audit",
+                    "--no-fund",
+                    "--no-update-notifier",
+                    "--loglevel=error",
+                    "--fetch-retries=2",
+                    "--allow-scripts=opencode-ai",
+                    "opencode-ai",
+                ]
+                user_install_res = _npm_run_with_kill_guard(user_install_cmd, timeout=90)
+                _refresh_node_npm_path()
+                cli_path = check_opencode_cli()
+                if user_install_res.returncode == 0 and _cli_works(cli_path):
+                    ok(f"OpenCode AI Assistant installed successfully ({cli_path})")
+                    return True
+                # Soft success for user-prefix install too
+                if user_install_res.returncode == 0 and cli_path:
+                    ok(f"OpenCode AI Assistant installed ({cli_path}); first-run probe was slow.")
+                    return True
+                # Use the retry result and command for failure logging
+                install_res = user_install_res
+                install_cmd = user_install_cmd
 
         output = install_res.stdout or ""
         _save_npm_failure("npm install", install_cmd, output)
@@ -6325,6 +6602,141 @@ def ensure_opencode_cli() -> bool:
     finally:
         if _gui:
             _gui.stop_busy(restore_step=True)
+
+def _heal_private_python_runtime() -> bool:
+    """Auto-heal the private Python runtime at src/_python/.
+
+    If the runtime is missing or broken and a bundled Python installer is
+    available under ``installers/.handsoff/``, reinstall it silently to the
+    same location, then re-apply the Windows Hidden attribute so the folder
+    stays invisible to Windows Search and Explorer.
+
+    Returns True if the runtime is healthy (either already fine or
+    successfully healed), False if healing was needed but failed.
+    """
+    if sys.platform != "win32":
+        return True
+
+    private_python_dir = SCRIPT_DIR / "src" / "_python"
+    private_python_exe = private_python_dir / "python.exe"
+
+    # ── Quick health check ─────────────────────────────────────────
+    def _is_runtime_healthy() -> bool:
+        if not private_python_exe.exists():
+            return False
+        try:
+            res = subprocess.run(
+                [str(private_python_exe), "-c", "import sys, encodings; print(sys.version)"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    if _is_runtime_healthy():
+        return True
+
+    # ── Locate the bundled Python installer ─────────────────────────
+    handsoff_dir = None
+    for candidate_dir in [
+        SCRIPT_DIR / "installers" / ".handsoff",
+        SCRIPT_DIR.parent / "installers" / ".handsoff",
+        SCRIPT_DIR.parent.parent / "installers" / ".handsoff",
+    ]:
+        if candidate_dir.is_dir():
+            handsoff_dir = candidate_dir
+            break
+
+    if not handsoff_dir:
+        warn("Private Python runtime is broken but no bundled installer directory found.")
+        return False
+
+    # Auto-detect any python-*-amd64.exe in the .handsoff directory
+    installer_candidates = sorted(
+        handsoff_dir.glob("python-*-amd64.exe"),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    if not installer_candidates:
+        warn("Private Python runtime is broken but no python-*-amd64.exe installer found.")
+        return False
+
+    installer_path = installer_candidates[0]
+    status(f"Auto-healing private Python runtime from {installer_path.name}...")
+
+    # ── Clean up old broken installation ─────────────────────────────
+    if private_python_dir.exists():
+        try:
+            # Remove hidden attribute before deletion
+            subprocess.run(
+                ["attrib", "-h", str(private_python_dir)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+            )
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(private_python_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    # ── Run the Python installer silently ────────────────────────────
+    log_path = SCRIPT_DIR / "logs" / "python_heal_install.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    install_args = [
+        "/quiet",
+        f"TargetDir={private_python_dir}",
+        "InstallAllUsers=0",
+        "PrependPath=0",
+        "Include_test=0",
+        "Include_doc=0",
+        "Include_launcher=0",
+        f"/log", str(log_path),
+    ]
+
+    try:
+        status("Installing private Python runtime (may request Administrator)...")
+        exit_code = _shell_execute_elevated_wait(
+            str(installer_path), install_args, timeout=180.0
+        )
+    except PermissionError:
+        warn("Administrator permission was declined for Python runtime repair.")
+        return False
+    except Exception as exc:
+        fail(f"Could not launch Python installer: {exc}")
+        return False
+
+    if exit_code != 0:
+        fail(f"Python installer exited with code {exit_code}. Check log: {log_path}")
+        return False
+
+    # ── Post-install: apply hidden attribute ────────────────────────
+    if private_python_dir.exists():
+        try:
+            subprocess.run(
+                ["attrib", "+h", str(private_python_dir)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    # ── Verify the repair ───────────────────────────────────────────
+    if _is_runtime_healthy():
+        ok(f"Private Python runtime healed successfully from {installer_path.name}.")
+        return True
+    else:
+        fail("Python installer completed but the runtime still fails health check.")
+        return False
 
 
 def ensure_python_system_environment() -> bool:
@@ -6804,12 +7216,13 @@ def _run_privileged_first_run_tasks() -> bool:
     )
     critical_ok = bool(installer_results.get("arduino_cli", False))
 
-    # Best effort: if Node/npm is absent, let the already-elevated helper ask
-    # winget to install Node LTS now.  OpenCode itself is still installed later
-    # by the NORMAL user process so npm -g targets that user's APPDATA.
+    # Best effort: if Node/npm is absent, let the already-elevated helper
+    # install Node LTS now (winget first, then direct MSI fallback).  OpenCode
+    # itself is still installed later by the NORMAL user process so npm -g
+    # targets that user's APPDATA.
     try:
         if not _find_usable_npm_cmd():
-            _install_nodejs_lts_with_winget()
+            _install_nodejs_lts()
     except Exception:
         pass
 
@@ -7002,6 +7415,16 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             except Exception:
                 pass
 
+        # ── Auto-heal Private Python Runtime ───────────────────────────
+        if sys.platform == "win32":
+            gui.root.after(0, lambda: gui.log_section("Checking Private Python Runtime"))
+            heal_result = _heal_private_python_runtime()
+            if not heal_result:
+                gui.root.after(0, lambda: gui.log_warn(
+                    "Private Python runtime could not be healed. The app will "
+                    "attempt to continue with the current interpreter."
+                ))
+
         # ── Python System Environment Variable (Global Base Python) ────
         gui.root.after(0, lambda: gui.log_section("Checking Python System Environment"))
         if sys.platform == "win32" and not ensure_python_system_environment():
@@ -7037,7 +7460,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 ))
 
         if not is_in_venv:
-            is_portable = (SCRIPT_DIR / "_python").resolve() in current_python.parents
+            is_portable = ((SCRIPT_DIR / "src" / "_python").resolve() in current_python.parents or (SCRIPT_DIR / "_python").resolve() in current_python.parents)
 
             gui.root.after(0, lambda: gui.log_section("Setting up Python Environment"))
 
@@ -7123,7 +7546,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
             if venv_created:
                 try:
-                    reset_script = SCRIPT_DIR / "src" / "libs" / "reset_editor.py"
+                    reset_script = SCRIPT_DIR / "src" / "modules" / "reset_editor.py"
                     if reset_script.exists():
                         subprocess.run(
                             [sys.executable, str(reset_script)],
@@ -7260,8 +7683,14 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             )
 
         gui.root.after(0, lambda: gui.log_section("Checking OpenCode AI Assistant"))
-        if sys.platform == "win32" and not ensure_opencode_cli():
-            gui.root.after(0, lambda: gui.log_warn("OpenCode AI Assistant is missing or could not be installed automatically."))
+        if sys.platform == "win32":
+            if not _is_network_reachable(timeout=3.0):
+                gui.root.after(0, lambda: gui.log_warn(
+                    "Network is unreachable; skipping OpenCode AI Assistant installation. "
+                    "It will be installed automatically on the next launch with internet."
+                ))
+            elif not ensure_opencode_cli():
+                gui.root.after(0, lambda: gui.log_warn("OpenCode AI Assistant is missing or could not be installed automatically."))
 
         # ── Refresh Python System Environment Variable (including env) ─
         gui.root.after(0, lambda: gui.log_section("Updating Python System Environment"))

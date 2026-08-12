@@ -62,7 +62,10 @@ systemPython = ""
 
 ' Check for portable python or env python paths
 Dim portablePython, envPython, envFolder
-portablePython = scriptDir & "_python\python.exe"
+portablePython = scriptDir & "src\_python\python.exe"
+If Not fso.FileExists(portablePython) Then
+    portablePython = scriptDir & "_python\python.exe"
+End If
 envFolder      = scriptDir & "env"
 envPython      = envFolder & "\Scripts\python.exe"
 

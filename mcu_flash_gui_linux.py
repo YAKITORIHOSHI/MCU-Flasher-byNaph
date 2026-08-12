@@ -5,12 +5,12 @@ MCU Flasher by Naph — ESP32 Compile, Upload & Serial Monitor
 A modern dark-themed GUI tool for Arduino ESP32 development.
 """
 
-# Add src/libs to sys.path so we can import moved utility modules
+# Add src/modules to sys.path so we can import moved utility modules
 import sys
 from pathlib import Path
-_libs_path = Path(__file__).resolve().parent / "src" / "libs"
-if str(_libs_path) not in sys.path:
-    sys.path.insert(0, str(_libs_path))
+_modules_path = Path(__file__).resolve().parent / "src" / "modules"
+if str(_modules_path) not in sys.path:
+    sys.path.insert(0, str(_modules_path))
 
 import hashlib
 import json
@@ -32,6 +32,7 @@ def _get_bootstrap():
     global _bootstrap_module
     if _bootstrap_module is None:
         try:
+            # pyrefly: ignore [missing-import]
             import bootstrap
             _bootstrap_module = bootstrap
         except ImportError:

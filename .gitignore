@@ -36,6 +36,8 @@ dist/
 .venv/
 venv/
 env_gui/
+_python/
+src/_python/
 
 # PyInstaller output (rebuildable, often large)
 *.build/
@@ -85,3 +87,13 @@ soft_reset_project_uno/boards/
 # === MCU Flasher dedicated internal app directories ===
 MCU-FLASHER-SRC/
 MCU_FLASHER_SRC/
+
+# === Others ===
+tests/flashertester
+tests/env/
+tests/index_json/
+tests/logs/
+tests/src/
+.pio_bootstrap_first_use_*
+cleaner
+DANGER-ZONE

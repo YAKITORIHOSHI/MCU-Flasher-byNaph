@@ -226,11 +226,11 @@ import sys
 from pathlib import Path
 
 _root = Path({str(root)!r})
-_libs = _root / "src" / "libs"
+_modules = _root / "src" / "modules"
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
-if str(_libs) not in sys.path:
-    sys.path.insert(0, str(_libs))
+if str(_modules) not in sys.path:
+    sys.path.insert(0, str(_modules))
 
 if sys.platform == "win32":
     try:

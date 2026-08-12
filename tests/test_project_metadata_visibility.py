@@ -206,7 +206,7 @@ class ProjectMetadataVisibilityTests(unittest.TestCase):
 
     def test_codebase_root_keeps_source_tree_visible(self):
         codebase = self.project / "codebase"
-        (codebase / "src" / "libs").mkdir(parents=True)
+        (codebase / "src" / "modules").mkdir(parents=True)
         (codebase / "platformio.ini").write_text("[platformio]\n", encoding="utf-8")
         (codebase / "index_json").mkdir()
 
@@ -224,10 +224,10 @@ class ProjectMetadataVisibilityTests(unittest.TestCase):
         shown_paths = {Path(call.args[0]) for call in show_path.call_args_list}
         self.assertIn(codebase / "index_json", hidden_dirs)
         self.assertNotIn(codebase / "src", hidden_dirs)
-        self.assertNotIn(codebase / "src" / "libs", hidden_dirs)
+        self.assertNotIn(codebase / "src" / "modules", hidden_dirs)
         self.assertIn(codebase, shown_paths)
         self.assertIn(codebase / "src", shown_paths)
-        self.assertIn(codebase / "src" / "libs", shown_paths)
+        self.assertIn(codebase / "src" / "modules", shown_paths)
         self.assertIn(codebase / "platformio.ini", shown_paths)
         self.assertFalse(hide_file.called)
 

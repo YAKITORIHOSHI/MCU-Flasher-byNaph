@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "libs" / "bootstrap.py"
+BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "modules" / "bootstrap.py"
 
 
 class PycachePurgeTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class PycachePurgeTests(unittest.TestCase):
         spec.loader.exec_module(bootstrap)
 
         # Create dummy pycache directory and pyc file
-        sub_dir = self.test_dir / "src" / "libs"
+        sub_dir = self.test_dir / "src" / "modules"
         sub_dir.mkdir(parents=True, exist_ok=True)
         
         pycache_dir = sub_dir / "__pycache__"

@@ -1,1 +1,1 @@
-C:\Program Files\Arduino CLI\arduino-cli.exe
+C:\Program Files\Arduino CLI\arduino-cli.EXE

@@ -69,11 +69,11 @@ if ! python3 -c "import tkinter" &> /dev/null; then
 fi
 
 # 7. Run the bootstrap/GUI script
-if [ -f "$SCRIPT_DIR/src/libs/bootstrap_linux.py" ]; then
-    python3 "$SCRIPT_DIR/src/libs/bootstrap_linux.py"
+if [ -f "$SCRIPT_DIR/src/modules/bootstrap_linux.py" ]; then
+    python3 "$SCRIPT_DIR/src/modules/bootstrap_linux.py"
 elif [ -f "$SCRIPT_DIR/mcu_flash_gui_linux.py" ]; then
     python3 "$SCRIPT_DIR/mcu_flash_gui_linux.py"
 else
-    echo "Error: Neither src/libs/bootstrap_linux.py nor mcu_flash_gui_linux.py was found in $SCRIPT_DIR."
+    echo "Error: Neither src/modules/bootstrap_linux.py nor mcu_flash_gui_linux.py was found in $SCRIPT_DIR."
     exit 1
 fi

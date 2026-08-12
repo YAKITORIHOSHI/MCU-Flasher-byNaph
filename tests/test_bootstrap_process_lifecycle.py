@@ -8,7 +8,7 @@ from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "libs" / "bootstrap.py"
+BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "modules" / "bootstrap.py"
 
 
 def load_bootstrap_module():

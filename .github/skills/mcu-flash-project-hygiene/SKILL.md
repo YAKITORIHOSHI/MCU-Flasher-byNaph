@@ -16,9 +16,10 @@ Classify paths before changing attributes or deleting anything:
   `.ino`, `.cpp`, `.c`, `.h`, `.hpp`, `.txt`, documentation, assets, and
   unrecognized files or directories. Keep them visible and writable.
 - Treat only known app-created paths as generated. Examples include `.pio/`,
+  `src/_python/` (private Python runtime), `src/env/` (virtual environment),
   `src/`, `platformio.ini`, `build_artifacts/`, `compiled_builds/`,
-  `.mcu_ai_edits/`, app cache JSON files, `.opencodeignore`, and generated
-  `AGENTS.md`.
+  `.mcu_ai_edits/`, app cache JSON files, `.opencodeignore`, `.pio_bootstrap_first_use_*`,
+  and generated `AGENTS.md`.
 - Never infer that an unknown extension is app-generated. Use an explicit
   generated-path allowlist.
 - Treat generic legacy names such as `SKILL.md`, `READ-FIRST.md`, `temp.json`,

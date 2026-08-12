@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$FullReset,
     [switch]$DryRun,
@@ -759,8 +759,7 @@ function Remove-PythonBootstrapPackages {
     $pythonDirs = @(
         $knownPythonDirs +
         (Get-PythonInstallDirectories) +
-        $envDir +
-        (Join-Path $projectRoot "_python")
+        $envDir
     ) | Where-Object { $_ } | Sort-Object -Unique
     Remove-PathEntriesForTargets $pythonDirs
 
@@ -839,7 +838,6 @@ function Remove-DefenderExclusions {
 function Initialize-ApprovedResetTargets {
     $targets = @(
         $envDir,
-        (Join-Path $projectRoot "_python"),
         (Join-Path $projectRoot ".pio"),
         (Join-Path $projectRoot ".pio_cache"),
         (Join-Path $projectRoot ".cache"),
@@ -930,7 +928,6 @@ try {
     Start-Step "Removing project-local runtime folders..."
     $projectRuntimeTargets = @(
         $envDir,
-        (Join-Path $projectRoot "_python"),
         (Join-Path $projectRoot ".pio"),
         (Join-Path $projectRoot ".cache"),
         (Join-Path $projectRoot "__pycache__"),

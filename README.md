@@ -59,9 +59,18 @@ MCU Flasher by Naph/
 ├── dedicated_AI.py       # AI assistant for code help
 ├── runThisOnWindows.vbs  # Windows launcher (elevates, hides console)
 ├── runThisOnLinux.sh     # Linux launcher
+├── soft_reset_project/    # Default ESP32 hard/soft reset workspace template
+├── soft_reset_project_uno/# Default Arduino AVR reset workspace template
+├── installers/           # Drivers & offline installers (tracked via Git LFS)
+│   ├── .handsoff/        # Portable Python runtime installer (auto-heal)
+│   ├── CP210x/           # Silicon Labs USB-to-UART drivers
+│   ├── arduino-cli.msi   # Bundled Arduino CLI installer
+│   ├── MicrosoftEdgeWebview2Setup.exe
+│   └── msys2-*.exe       # MinGW toolchain for PlatformIO
 ├── src/
-│   ├── libs/             # Core utilities
-│   │   ├── bootstrap.py         # Dependency & toolchain installer
+│   ├── _python/          # Private Python 3 runtime (auto-healed on launch)
+│   ├── modules/          # Core utilities
+│   │   ├── bootstrap.py         # Dependency & toolchain installer (auto-heal)
 │   │   ├── bootstrap_linux.py   # Linux bootstrap
 │   │   ├── win_subprocess_hide.py # Windows hidden subprocess helper
 │   │   └── arduino_lib_req.py   # Arduino library resolver
@@ -69,11 +78,6 @@ MCU Flasher by Naph/
 │   ├── editor/           # Monaco/QScintilla editor assets
 │   ├── fonts/            # Montserrat font family
 │   └── gui_config.json   # Persisted UI preferences
-├── installers/           # Drivers & toolchains (tracked via Git LFS)
-│   ├── CP210x/           # Silicon Labs USB-to-UART drivers
-│   ├── msys2-*.exe       # MinGW toolchain for PlatformIO
-│   ├── arduino-ide_.AppImage # Linux Arduino IDE
-│   └── MicrosoftEdgeWebview2Setup.exe
 ├── bin/                  # Bundled arduino-cli binary
 ├── index_json/           # Arduino library/package indexes
 ├── .github/
@@ -143,6 +147,7 @@ python mcu_flash_gui.py
 Large binaries are stored via Git LFS (see `.gitattributes`):
 
 - `installers/**/*.exe`
+- `installers/**/*.msi`
 - `installers/**/*.AppImage`
 - `bin/arduino-cli`
 

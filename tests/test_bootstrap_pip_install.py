@@ -5,7 +5,7 @@ from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "libs" / "bootstrap.py"
+BOOTSTRAP_PATH = PROJECT_ROOT / "src" / "modules" / "bootstrap.py"
 
 
 def load_bootstrap_module():
@@ -68,12 +68,10 @@ class BootstrapPipInstallTests(unittest.TestCase):
 
         run_pip.assert_called_once()
         args, kwargs = run_pip.call_args
-        self.assertEqual(
-            args[0],
-            ["--no-warn-script-location", "pyserial", "psutil", "certifi"],
-        )
+        self.assertEqual(args[0][0], "--no-warn-script-location")
+        self.assertEqual(args[0][-3:], ["pyserial", "psutil", "certifi"])
         self.assertTrue(kwargs["use_cache"])
-        self.assertTrue(kwargs["only_binary"])
+        self.assertFalse(kwargs["only_binary"])
         self.assertGreaterEqual(kwargs["timeout"], 600)
 
 

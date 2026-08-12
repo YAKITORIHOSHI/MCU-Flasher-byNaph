@@ -1,71 +1,5 @@
 [
   {
-    "id": "notif_1786367588_906",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"CNRS AW2ETH\"",
-    "details": {}
-  },
-  {
-    "id": "notif_1786367588_911",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"Namino Bianco\"",
-    "details": {}
-  },
-  {
-    "id": "notif_1786367588_921",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"OLIMEX ESP32-POE-ISO\"",
-    "details": {}
-  },
-  {
-    "id": "notif_1786367588_928",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"Crabik Slot ESP32-S3\"",
-    "details": {}
-  },
-  {
-    "id": "notif_1786367588_938",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"Heltec Wireless Bridge\"",
-    "details": {}
-  },
-  {
-    "id": "notif_1786367588_944",
-    "timestamp": "2026-08-10T21:13:08",
-    "date": "2026-08-10",
-    "time": "21:13:08",
-    "category": "board_install",
-    "level": "success",
-    "title": "Board Package Installed",
-    "message": "📦 New Board Installed: \"LOLIN C3 Pico\"",
-    "details": {}
-  },
-  {
     "id": "notif_1786367588_954",
     "timestamp": "2026-08-10T21:13:08",
     "date": "2026-08-10",
@@ -5497,6 +5431,72 @@
     "level": "warning",
     "title": "✖ No board/port selected — choose a board and plug",
     "message": "✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554001_949",
+    "timestamp": "2026-08-13T01:00:01",
+    "date": "2026-08-13",
+    "time": "01:00:01",
+    "category": "library_install",
+    "level": "info",
+    "title": "No known library #includes detected",
+    "message": "No known library #includes detected",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554001_966",
+    "timestamp": "2026-08-13T01:00:01",
+    "date": "2026-08-13",
+    "time": "01:00:01",
+    "category": "board_install",
+    "level": "warning",
+    "title": "✖ No board/port selected — choose a board and plug",
+    "message": "✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554011_128",
+    "timestamp": "2026-08-13T01:00:11",
+    "date": "2026-08-13",
+    "time": "01:00:11",
+    "category": "library_install",
+    "level": "info",
+    "title": "No known library #includes detected",
+    "message": "No known library #includes detected",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554011_145",
+    "timestamp": "2026-08-13T01:00:11",
+    "date": "2026-08-13",
+    "time": "01:00:11",
+    "category": "board_install",
+    "level": "warning",
+    "title": "✖ No board/port selected — choose a board and plug",
+    "message": "✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554024_473",
+    "timestamp": "2026-08-13T01:00:24",
+    "date": "2026-08-13",
+    "time": "01:00:24",
+    "category": "board_install",
+    "level": "info",
+    "title": "ℹ Launching Download Boards/Libraries Manager...",
+    "message": "ℹ Launching Download Boards/Libraries Manager...",
+    "details": {}
+  },
+  {
+    "id": "notif_1786554024_479",
+    "timestamp": "2026-08-13T01:00:24",
+    "date": "2026-08-13",
+    "time": "01:00:24",
+    "category": "board_install",
+    "level": "success",
+    "title": "✔ Download Boards/Libraries Manager process ready.",
+    "message": "✔ Download Boards/Libraries Manager process ready.",
     "details": {}
   }
 ]

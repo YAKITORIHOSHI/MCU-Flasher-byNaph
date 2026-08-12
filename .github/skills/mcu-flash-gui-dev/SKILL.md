@@ -77,59 +77,57 @@ The project provides a cross-platform desktop interface for compiling, flashing,
    - Managed via modular CRUD operations: `dbs_create.py`, `dbs_read.py`, `dbs_update.py`, and `dbs_delete.py`.
    - Stores build warnings, upload events, status logs, and MCU reset notifications.
 
-8. **Toolchain Execution & Utilities (`src/libs/`)**
-   - `bootstrap.py`: Manages PlatformIO virtual environments (`penv`) and Arduino CLI binaries. Junctions PlatformIO core to `C:\.platformio-mcu-gui` on Windows to avoid MAX_PATH (>260 char) issues.
-   - `bootstrap_linux.py`: Linux-specific path resolution and environment bootstrapper.
-   - `arduino_lib_req.py`: Resolves required C++ headers and auto-downloads missing Arduino libraries.
-   - `detector.py`: Cross-platform USB serial port auto-detection and board identification.
-   - `win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
-   - `reset_editor.py`: Utility to reset cached editor configuration and state.
+8. **Toolchain Execution & Utilities (`src/modules/` & `src/libs/`)**
+   - `src/modules/bootstrap.py`: Manages private Python environment setup/auto-heal, PlatformIO virtual environments (`penv`), Arduino CLI binaries, Node.js LTS, and OpenCode AI Assistant. Junctions PlatformIO core to avoid MAX_PATH (>260 char) issues.
+   - `_heal_private_python_runtime()`: Self-repair mechanism that detects missing or damaged portable Python at `src/_python/`, reinstalling it silently from `installers/.handsoff/python-*-amd64.exe` with `attrib +h` project isolation.
+   - `src/modules/bootstrap_linux.py`: Linux-specific path resolution and environment bootstrapper.
+   - `src/libs/arduino_lib_req.py`: Resolves required C++ headers and auto-downloads missing Arduino libraries.
+   - `src/libs/detector.py`: Cross-platform USB serial port auto-detection and board identification.
+   - `src/libs/win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
+   - `src/libs/reset_editor.py`: Utility to reset cached editor configuration and state.
 
 ---
 
 ## File Map
 
 ```
-_MCU_Flash_GUI_V6.0/
+MCU Flasher by Naph/
 ├── mcu_flash_gui.py           # Main GUI application (~17k lines, monolithic)
 ├── mcu_flash_gui_linux.py     # Linux port of the main GUI
 ├── dedicated_AI.py            # OpenCode AI controller (pywebview + xterm.js + pywinpty)
 ├── launcher.py                # Python entry point / bootstrapper
 ├── runThisOnWindows.vbs       # Windows VBS launcher
-├── runThisOnLinux.sh           # Linux shell launcher
+├── runThisOnLinux.sh          # Linux shell launcher
 ├── arduino_cli_path.txt       # Arduino CLI path config
 ├── arduino_browser_settings.json
 ├── bootstrap_config.json
+├── installers/                # Bundled silent installers & drivers
+│   ├── .handsoff/             # Offline Python runtime installers (python-*-amd64.exe)
+│   ├── CP210x/                # CP210x USB-to-UART drivers
+│   ├── arduino-cli.msi        # Bundled Arduino CLI installer
+│   ├── MicrosoftEdgeWebview2Setup.exe # Bundled WebView2 installer
+│   └── msys2-*.exe            # Bundled MSYS2 build tools
 ├── src/                       # Application core modules and assets
+│   ├── _python/               # Private portable Python 3 runtime (hidden attribute)
+│   ├── env/                   # Virtual environment created on bootstrap
 │   ├── gui_config.json        # Persisted GUI settings (editor_mode, autosave, baud rates, themes)
 │   ├── syntax_checker.py      # Realtime C++ syntax linter & AST analyzer
 │   ├── qscintilla_editor.py   # QScintilla code editor component (PyQt5)
 │   ├── qscintilla_viewer.py   # QScintilla read-only viewer component (PyQt5)
 │   ├── launcher.cpp           # Native Windows executable wrapper (suppresses console popup)
-│   ├── resources.rc           # Windows PE resource description file
-│   ├── resources.res          # Windows compiled binary resource file
-│   ├── mcu_icon.ico           # Application icon asset
 │   ├── editor/                # Monaco Editor offline Web UI
 │   │   ├── index.html         # Monaco Editor HTML (tabs, toolbar, diff glows, hover, go-to-def)
 │   │   ├── bundle.js          # Monaco Editor offline JS bundle (no CDN dependency)
-│   │   ├── 18.bundle.js       # Monaco Editor chunk
-│   │   ├── editor.worker.js   # Monaco web worker
 │   │   └── *.ttf              # Offline icon and font assets
-│   ├── libs/                  # Core utility modules & environment bootstrappers
-│   │   ├── bootstrap.py       # PlatformIO/Arduino CLI bootstrapper & penv manager
-│   │   ├── bootstrap_linux.py # Linux-specific bootstrapper and path resolver
+│   ├── modules/               # Core bootstrap and environment management
+│   │   ├── bootstrap.py       # Windows dependency & runtime bootstrapper (auto-heal, penv, tools)
+│   │   └── bootstrap_linux.py # Linux-specific bootstrapper and path resolver
+│   ├── libs/                  # Additional utility libraries
 │   │   ├── arduino_lib_req.py # Arduino library dependency resolver & downloader
 │   │   ├── detector.py        # USB serial port auto-detection & board probing
 │   │   ├── win_subprocess_hide.py  # Windows subprocess console suppression
-│   │   ├── reset_editor.py    # Editor state reset utility
-│   │   ├── setup_ide_paths.py # IDE path resolution
-│   │   └── get-platformio.py  # PlatformIO installer script
+│   │   └── reset_editor.py    # Editor state reset utility
 │   ├── dbs/                   # Persistent JSON notification & event database store
-│   │   ├── dbs_create.py      # Database record insertion helper
-│   │   ├── dbs_read.py        # Database record query & fetching helper
-│   │   ├── dbs_update.py      # Database record modification helper
-│   │   ├── dbs_delete.py      # Database record deletion / purge helper
-│   │   └── dbs_notif.json     # Persistent notification store (JSON)
 │   └── fonts/                 # Bundled custom font assets (Montserrat, etc.)
 └── index_json/                # Arduino board/library index caches
 ```
