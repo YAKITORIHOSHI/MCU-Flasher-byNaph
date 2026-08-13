@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls C:\\\\\\\\Users\\\\\\\\napht\\\\\\\\Documents\\\\\\\\MCU Flasher by Naph - Stable Release\\\\\\\\installers *)",
+      "Bash(ls *)",
+      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\napht\\\\\\\\Documents\\\\\\\\MCU Flasher by Naph - Stable Release\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/libs/bootstrap.py', encoding='utf-8'\\).read\\(\\)\\); print\\('bootstrap.py parses cleanly'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/libs/bootstrap.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}

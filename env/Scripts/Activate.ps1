@@ -217,9 +217,9 @@ deactivate -nondestructive
 
 # Now set the environment variable VIRTUAL_ENV, used by many tools to determine
 # that there is an activated venv.
-$env:VIRTUAL_ENV = $VenvDir
+$env:VIRTUAL_ENV="C:\Users\napht\Documents\MCU Flasher by Naph - Experimental\env"
 
-$env:VIRTUAL_ENV_PROMPT = $Prompt
+$env:VIRTUAL_ENV="C:\Users\napht\Documents\MCU Flasher by Naph - Experimental\env"
 
 if (-not $Env:VIRTUAL_ENV_DISABLE_PROMPT) {
 

@@ -1,4 +1,4 @@
-#!C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\python.exe
+#!C:\Users\napht\Documents\MCU Flasher by Naph - Experimental\env\Scripts\python.exe
 # -*- coding: utf-8 -*-
 from __future__ import print_function
 """

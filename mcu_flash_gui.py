@@ -124,7 +124,7 @@ sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 UPLOAD_CONNECTION_ATTEMPTS = 10
-MCU_FLASH_PATCH_VERSION = "v24-ui-responsive-serial-pump"
+MCU_FLASH_PATCH_VERSION = "v25-ui-responsive-serial-pump-app-namespace"
 
 def hide_hidden_attribute(path) -> None:
     """Set the Windows hidden attribute (FILE_ATTRIBUTE_HIDDEN = 0x02) on
@@ -2557,213 +2557,300 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-def _make_localappdata_shortcut(real_dir: Path) -> None:
-    """Best-effort: point %LOCALAPPDATA%\\.platformio-mcu-gui at real_dir.
-
-    This is a convenience pointer only — a directory junction on Windows
-    (a symlink elsewhere) — so anything that still goes looking under
-    LocalAppData (manual poking around, an old hardcoded fallback path,
-    etc.) transparently lands in the real, project-local store instead.
-    It is never load-bearing: every actual read/write of packages goes
-    through PLATFORMIO_CORE_DIR / real_dir directly, so if this fails we
-    just skip it silently.
-    """
-    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
-    if not local_appdata:
-        local_appdata = str(Path.home() / "AppData" / "Local")
-    link_path = Path(local_appdata) / ".platformio-mcu-gui"
-
+def _is_windows_reparse_point(path: Path) -> bool:
+    """Return True when *path* is a Windows junction or symbolic-link reparse point."""
+    if sys.platform != "win32":
+        return False
     try:
+        if hasattr(path, "is_junction") and path.is_junction():
+            return True
+        if path.is_symlink():
+            return True
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        return attrs != -1 and bool(attrs & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+    except Exception:
+        return False
+
+
+def _ensure_junction(link_path: Path, real_dir: Path) -> str | None:
+    """Create or repair an app-owned directory alias for ``real_dir``.
+
+    Existing junctions/symlinks are safe to repoint because deleting the
+    reparse-point entry does not delete the target directory. A normal,
+    non-empty directory is never removed, so unrelated user data is protected.
+    """
+    try:
+        real_dir = Path(real_dir)
+        real_dir.mkdir(parents=True, exist_ok=True)
         real_dir_resolved = real_dir.resolve()
     except Exception:
-        real_dir_resolved = real_dir
+        return None
 
     try:
-        if link_path.is_symlink():
+        # ``Path.exists`` is False for some broken reparse points, so include
+        # the explicit reparse/symlink probes in the existence test.
+        link_present = (
+            link_path.exists()
+            or link_path.is_symlink()
+            or _is_windows_reparse_point(link_path)
+        )
+        if link_present:
             try:
                 if link_path.resolve() == real_dir_resolved:
-                    return
-            except Exception:
-                pass
-            try:
-                link_path.unlink()
-            except Exception:
-                return
-        elif link_path.exists():
-            if link_path.is_dir():
-                # Could be a pre-existing real folder (e.g. before this
-                # migration) OR a Windows junction (which also reports as
-                # a directory and is not a symlink). Try to tell them apart
-                # by checking whether it already resolves to our target.
-                try:
-                    already_correct = link_path.resolve() == real_dir_resolved
-                except Exception:
-                    already_correct = False
-                if already_correct:
-                    return
-                try:
-                    is_empty = not any(link_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if not is_empty:
-                    # Real user data sitting here — don't touch it, leave as-is.
-                    return
-                try:
-                    os.rmdir(link_path)  # unlinks an empty dir or a junction stub
-                except Exception:
-                    return
-            else:
-                return  # a plain file with this name — leave it alone
-
-        if sys.platform == "win32":
-            try:
-                subprocess.run(
-                    ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
-                    check=True,
-                    capture_output=True,
-                )
-            except Exception:
-                pass
-        else:
-            try:
-                link_path.symlink_to(real_dir, target_is_directory=True)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
-def _make_root_drive_junction(real_dir: Path) -> str | None:
-    """Best-effort: create <drive>:\\.platformio-mcu-gui as a junction to real_dir.
-
-    GCC (the Xtensa/RISC-V ESP32 cross-compiler) uses Windows CreateProcess
-    internally to spawn cc1plus.exe. Unlike subprocess.Popen, it does NOT
-    quote paths that contain spaces, so it fails with:
-
-        xtensa-esp32s3-elf-g++: error: CreateProcess: No such file or directory
-
-    when PLATFORMIO_CORE_DIR (and therefore the toolchain binary path) contains
-    spaces. Creating a junction at the root of the current drive (no spaces)
-    and using that as PLATFORMIO_CORE_DIR works around this GCC limitation.
-
-    Returns the junction path string on success, or None if the junction could
-    not be created (e.g. non-Windows OS, no write access to root, junction
-    already points somewhere unrelated, etc.).
-    """
-    if sys.platform != "win32":
-        return None
-    try:
-        # Use the same drive as the real store so the junction always lives on
-        # a locally writable drive even if the project is on a non-C: drive.
-        drive = Path(real_dir).drive or "C:"
-        link_path = Path(drive + "\\.platformio-mcu-gui")
-
-        try:
-            real_dir_resolved = real_dir.resolve()
-        except Exception:
-            real_dir_resolved = real_dir
-
-        # If the junction already points at our real store, reuse it.
-        if link_path.exists() or link_path.is_symlink():
-            try:
-                existing_target = link_path.resolve()
-                if existing_target == real_dir_resolved:
                     return str(link_path)
             except Exception:
                 pass
-            # Junction points somewhere else or is broken — leave it alone to
-            # avoid stomping another tool's data, unless it is an empty stub.
-            try:
+
+            if sys.platform == "win32" and _is_windows_reparse_point(link_path):
+                # rmdir removes only the junction/symlink entry, never its target.
+                try:
+                    subprocess.run(
+                        ["cmd", "/c", "rmdir", str(link_path)],
+                        check=True,
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                except Exception:
+                    return None
+            elif link_path.is_symlink():
+                try:
+                    link_path.unlink()
+                except Exception:
+                    return None
+            elif link_path.is_dir():
                 try:
                     is_empty = not any(link_path.iterdir())
                 except Exception:
                     is_empty = False
                 if not is_empty:
-                    return None  # has real data — don't touch it
-                subprocess.run(
-                    ["cmd", "/c", "rmdir", str(link_path)],
-                    check=True,
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            except Exception:
+                    return None
+                try:
+                    os.rmdir(link_path)
+                except Exception:
+                    return None
+            else:
                 return None
 
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
-            check=True,
-            capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+        try:
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        if sys.platform == "win32":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir_resolved)],
+                check=True,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            link_path.symlink_to(real_dir_resolved, target_is_directory=True)
+
+        try:
+            if link_path.resolve() != real_dir_resolved:
+                return None
+        except Exception:
+            return None
         return str(link_path)
     except Exception:
         return None
 
 
-def _get_safe_platformio_core_dir(script_dir: Path) -> str:
-    """Return the single shared PlatformIO package store used by Bootstrap and GUI.
+_MCUFLASHER_APP_DIRNAME = ".mcuflasher-app"
+_PLATFORMIO_ALIAS_NAME = ".platformio-mcu-gui"
+_MODULES_ALIAS_NAME = ".mcuflasher-libs"
 
-    Never put frameworks/toolchains in the active sketch's ``src`` directory.
-    ``sketch/src`` is generated build input and is intentionally removable by
-    Clean.  PlatformIO's platform/framework/compiler packages must live in a
-    separate persistent store so cleaning a sketch cannot trigger downloads.
 
-    Store lives at ``<PROJECT_FOLDER>/src/.platformio-mcu-gui`` so the
-    project stays self-contained. A directory junction/symlink is left at
-    ``%LOCALAPPDATA%\\.platformio-mcu-gui`` pointing back at the real store,
-    purely as a convenience pointer for anything that goes looking there.
+def _prepare_mcuflasher_app_root(app_root: Path) -> Path | None:
+    """Create the app-owned namespace as a NORMAL hidden, writable directory.
 
-    On Windows, when the project path contains spaces, GCC's internal
-    CreateProcess call fails to spawn cc1plus.exe because it does not quote
-    paths. In that case a space-free root-drive junction is created (e.g.
-    ``C:\\.platformio-mcu-gui``) and returned as PLATFORMIO_CORE_DIR so the
-    toolchain binary path that GCC constructs never contains spaces.
-
-    When the GUI is launched by Bootstrap, preserve the inherited
-    PLATFORMIO_CORE_DIR verbatim.  A standalone GUI launch derives the exact
-    same per-user location.  Keeping one core_dir is critical: PlatformIO stores
-    development platforms, frameworks, SDKs and toolchains below this directory,
-    so two different values make the same packages download twice.
+    The parent itself must never be a symlink/junction.  If an unrelated file,
+    directory reparse point, or other object already occupies the requested
+    location, leave it untouched and let the caller try its fallback location.
     """
-    inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
-    if inherited:
+    try:
+        app_root = Path(app_root)
+        if (
+            app_root.exists()
+            or app_root.is_symlink()
+            or _is_windows_reparse_point(app_root)
+        ):
+            if _is_windows_reparse_point(app_root) or app_root.is_symlink():
+                return None
+            if not app_root.is_dir():
+                return None
+        else:
+            app_root.mkdir(parents=True, exist_ok=True)
+
+        if _is_windows_reparse_point(app_root) or not app_root.is_dir():
+            return None
+
+        # Keep the namespace ordinary and writable.  Hidden is the only Windows
+        # attribute intentionally applied to the parent directory.
         try:
-            inherited_path = Path(os.path.expandvars(os.path.expanduser(inherited)))
-            inherited_path.mkdir(parents=True, exist_ok=True)
-            _make_localappdata_shortcut(inherited_path)
-            return str(inherited_path)
+            os.chmod(app_root, 0o777)
         except Exception:
             pass
+        hide_hidden_attribute(app_root)
+        return app_root
+    except Exception:
+        return None
 
+
+def _mcuflasher_app_root(real_dir: Path) -> Path | None:
+    r"""Return the writable ``.mcuflasher-app`` namespace for this app.
+
+    Prefer ``<drive>:\.mcuflasher-app`` so PlatformIO/compiler paths remain
+    short.  If the drive root cannot be used without touching unrelated data,
+    fall back to ``%LOCALAPPDATA%\.mcuflasher-app``.  Both are normal folders;
+    only their children are junctions.
+    """
+    if sys.platform != "win32":
+        return None
+
+    real_dir = Path(real_dir)
+    drive = real_dir.drive or Path(SCRIPT_DIR).drive or "C:"
+    candidates = [Path(drive + "\\.mcuflasher-app")]
+
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_appdata:
+        local_appdata = str(Path.home() / "AppData" / "Local")
+    candidates.append(Path(local_appdata) / _MCUFLASHER_APP_DIRNAME)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(str(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        prepared = _prepare_mcuflasher_app_root(candidate)
+        if prepared is not None:
+            return prepared
+    return None
+
+
+def _remove_legacy_app_junction(path: Path) -> bool:
+    """Remove one exact legacy MCU Flasher junction ENTRY, never its target.
+
+    Normal files/directories are deliberately ignored.  The target is not
+    inspected, adopted, migrated, or otherwise treated as related state.
+    """
+    if sys.platform != "win32":
+        return False
+    path = Path(path)
+    try:
+        if not _is_windows_reparse_point(path):
+            return False
+        # Legacy aliases were hidden in older builds.  /L changes only the
+        # junction entry attributes, not the target directory.
+        subprocess.run(
+            ["attrib", "/L", "-h", "-s", str(path)],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        subprocess.run(
+            ["cmd", "/c", "rmdir", str(path)],
+            check=True,
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return not _is_windows_reparse_point(path)
+    except Exception:
+        return False
+
+
+def _cleanup_legacy_app_aliases(script_dir: Path) -> None:
+    r"""Remove the old top-level alias entries after the new namespace is live.
+
+    These exact app-owned legacy names are cleaned up only when they are
+    reparse points.  A real directory at any of these locations is never
+    removed.  Removing a junction with ``rmdir`` deletes the link entry only.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        drive = Path(script_dir).drive or Path(SCRIPT_DIR).drive or "C:"
+        legacy = [
+            Path(drive + "\\.mcuflasher-libs"),
+            Path(drive + "\\.platformio-mcu-gui"),
+        ]
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if not local_appdata:
+            local_appdata = str(Path.home() / "AppData" / "Local")
+        legacy.append(Path(local_appdata) / ".platformio-mcu-gui")
+        for old_alias in legacy:
+            _remove_legacy_app_junction(old_alias)
+    except Exception:
+        pass
+
+
+def _short_platformio_core_alias(real_dir: Path) -> str:
+    r"""Return the app-namespace alias for one physical PlatformIO store.
+
+    Preferred layout::
+
+        <drive>:\.mcuflasher-app\                 (normal hidden folder)
+            .platformio-mcu-gui -> <project>\src\.platformio-mcu-gui
+            .mcuflasher-libs    -> <project>\src\modules
+
+    Nesting adds only a small path prefix while retaining ample headroom below
+    Windows' CreateProcess command-line limit.  If the drive-root namespace is
+    unavailable, the same two-child layout is used under LOCALAPPDATA.
+    """
+    real_dir = Path(real_dir)
+    if sys.platform != "win32":
+        return str(real_dir)
+
+    app_root = _mcuflasher_app_root(real_dir)
+    if app_root is not None:
+        alias = _ensure_junction(app_root / _PLATFORMIO_ALIAS_NAME, real_dir)
+        if alias:
+            return alias
+
+    # Last-resort safety: preserve functionality rather than creating or
+    # deleting unrelated filesystem objects when no namespace is writable.
+    return str(real_dir)
+
+
+def _get_safe_platformio_core_dir(script_dir: Path) -> str:
+    """Return this main project's PlatformIO core path.
+
+    The physical package store belongs only to this application copy at
+    ``<PROJECT_FOLDER>/src/.platformio-mcu-gui``. On Windows, PlatformIO is
+    pointed at a short junction to that same directory so ESP32 GCC does not
+    exceed the CreateProcess command-line limit.
+
+    An inherited ``PLATFORMIO_CORE_DIR`` is accepted only when it resolves to
+    this exact project-local store. Any inherited path resolving somewhere else
+    is ignored; it is never adopted, migrated, or treated as related state.
+    """
     target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        _make_localappdata_shortcut(target_dir)
-        # On Windows, when the real store path contains spaces, GCC's internal
-        # CreateProcess cannot launch cc1plus.exe without quoting the path.
-        # Offer a space-free root-drive junction as PLATFORMIO_CORE_DIR so
-        # the toolchain binary path never contains spaces.
-        if sys.platform == "win32" and " " in str(target_dir):
-            junction = _make_root_drive_junction(target_dir)
-            if junction:
-                return junction
-        return str(target_dir)
+        target_resolved = target_dir.resolve()
+
+        inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
+        if inherited:
+            try:
+                inherited_path = Path(os.path.expandvars(os.path.expanduser(inherited)))
+                inherited_resolved = inherited_path.resolve()
+                if os.path.normcase(str(inherited_resolved)) == os.path.normcase(str(target_resolved)):
+                    return _short_platformio_core_alias(target_dir)
+            except Exception:
+                pass
+
+        return _short_platformio_core_alias(target_dir)
     except Exception:
         pass
 
-    # Portable last resort only, if src/modules isn't writable for some reason.
     fallback = script_dir / "src" / "_board-frameworks" / ".platformio"
     try:
         fallback.mkdir(parents=True, exist_ok=True)
-        hide_generated_directory(fallback.parent)
-        _make_localappdata_shortcut(fallback)
-        if sys.platform == "win32" and " " in str(fallback):
-            junction = _make_root_drive_junction(fallback)
-            if junction:
-                return junction
+        return _short_platformio_core_alias(fallback)
     except Exception:
-        pass
-    return str(fallback)
+        return str(fallback)
+
 
 def _neutralize_conflicting_global_platformio_config() -> None:
     """Stop PlatformIO's own global config from silently overriding PLATFORMIO_CORE_DIR.
@@ -2822,67 +2909,20 @@ def _neutralize_conflicting_global_platformio_config() -> None:
 
 
 def _ensure_modules_junction(script_dir: Path) -> str | None:
-    r"""Best-effort: create a space-free root-drive junction pointing at src/modules.
+    r"""Create the modules junction INSIDE the shared MCU Flasher namespace.
 
-    The project folder name contains spaces (e.g. "MCU Flasher by Naph - Stable Release").
-    Some tools (GCC's internal CreateProcess, Arduino CLI) cannot handle spaces in paths.
-    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/modules``
-    so those tools always have a clean, space-free path to reach the libraries.
-
-    The junction is re-created automatically on every startup so it survives
-    being copied to a different machine or drive letter.
-
-    ``script_dir`` is the project root. The drive letter is derived
-    dynamically from the resolved ``src/modules`` path, so this works on C:, D:,
-    E:, or any other drive letter without any hardcoded values.
-
-    Returns the junction path string on success, or None.
+    The target is always this running project's own ``src/modules`` directory.
+    The namespace parent is a normal hidden/writable directory; this child is a
+    junction.  No external target is searched for or adopted.
     """
     if sys.platform != "win32":
         return None
     try:
-        libs_dir = (script_dir / "src" / "modules").resolve()
-        project_root = Path(script_dir).resolve()
-        # Drive letter is always derived dynamically from wherever the project lives.
-        drive = Path(libs_dir).drive
-        if not drive:
-            return None  # cannot determine drive — skip silently
-        link_path = Path(drive + "\\.mcuflasher-libs")
-
-        # If already correct, reuse (and re-apply hidden flag in case it was cleared).
-        if link_path.exists() or link_path.is_symlink():
-            existing_target = None
-            try:
-                existing_target = link_path.resolve()
-                if existing_target == libs_dir:
-                    _hide_junction(link_path)
-                    return str(link_path)
-            except Exception:
-                pass
-            if existing_target != libs_dir:
-                try:
-                    is_empty = not any(link_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if not is_empty:
-                    return None  # real data — don't touch it
-            try:
-                subprocess.run(
-                    ["cmd", "/c", "rmdir", str(link_path)],
-                    check=True, capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            except Exception:
-                return None
-
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link_path), str(libs_dir)],
-            check=True, capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        # Hide the junction entry itself, never the src/libs target.
-        _hide_junction(link_path)
-        return str(link_path)
+        libs_dir = (Path(script_dir) / "src" / "modules").resolve()
+        app_root = _mcuflasher_app_root(libs_dir)
+        if app_root is None:
+            return None
+        return _ensure_junction(app_root / _MODULES_ALIAS_NAME, libs_dir)
     except Exception:
         return None
 
@@ -2898,8 +2938,19 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     core_dir = _get_safe_platformio_core_dir(script_dir)
     os.environ["PLATFORMIO_CORE_DIR"] = core_dir
 
-    # Ensure the space-free libs junction exists on this machine.
-    _ensure_modules_junction(script_dir)
+    # Build both aliases under one app-owned namespace.  Only after both
+    # junctions exist do we remove the old top-level junction entries.
+    modules_alias = _ensure_modules_junction(script_dir)
+    try:
+        core_path = Path(core_dir)
+        using_new_namespace = (
+            core_path.name == _PLATFORMIO_ALIAS_NAME
+            and core_path.parent.name == _MCUFLASHER_APP_DIRNAME
+        )
+    except Exception:
+        using_new_namespace = False
+    if using_new_namespace and modules_alias:
+        _cleanup_legacy_app_aliases(script_dir)
 
     try:
         c_path = Path(core_dir)
@@ -6479,6 +6530,16 @@ class MCUUploadGUI:
         self._monitor_should_run = False   # intent flag: True = keep reconnecting
         self._first_connect_done = False    # becomes True after the first successful serial connect
         self._monitor_paused = False       # True = keep reading the port, but hold back display
+        # Serial concurrency is generation-based.  Each connection owns its own
+        # cancellation Event and local pyserial handle, so a stale reconnect
+        # worker can never read from/close a newer connection through self.serial_conn.
+        self._serial_state_lock = threading.RLock()
+        self._serial_generation = 0
+        self._serial_stop_event = threading.Event()
+        # Outbound terminal writes are consumed by the serial I/O worker instead
+        # of blocking Tk's event loop in Serial.write().
+        self._serial_tx_queue: queue.Queue = queue.Queue(maxsize=256)
+        self._tk_thread_id = threading.get_ident()
         self.process: subprocess.Popen | None = None
         self._download_managers: list[subprocess.Popen] = []
         self.is_busy = False
@@ -9269,7 +9330,8 @@ class MCUUploadGUI:
                 self.notif_console.configure(state=tk.DISABLED)
                 self.notif_console.see(tk.END)
 
-            # Persist to database in background
+            # Persist to database through the shared worker pool instead of
+            # creating one new OS thread for every notification.
             if persist and text.strip():
                 def _bg_persist():
                     try:
@@ -9281,9 +9343,9 @@ class MCUUploadGUI:
                         )
                     except Exception:
                         pass
-                threading.Thread(target=_bg_persist, daemon=True).start()
+                self._run_bg_task(_bg_persist)
 
-        self.root.after(0, _do)
+        self._post_ui(_do)
 
     def _load_persistent_notifications(self, category_filter: str | None = None):
         """Load notification data off-thread, but render it only on Tk's thread."""
@@ -9326,30 +9388,41 @@ class MCUUploadGUI:
         self._run_bg_task(_read_records, on_success=_render)
 
     def _append_tagged_line(self, line: str, is_newline: bool = True):
-        """Queue one serial-monitor row without making any Tk call.
+        """Queue one parsed serial row; retained for all existing callers."""
+        self._append_tagged_lines([(line, is_newline)])
 
-        The queue is bounded so a hidden Serial Monitor cannot accumulate an
-        unbounded backlog.  At 921600 baud the reader remains free to drain the
-        OS driver even while Tk is busy painting another tab.
+    def _append_tagged_lines(self, rows):
+        """Classify and enqueue a serial batch with one lock acquisition.
+
+        The read worker often receives dozens/hundreds of complete lines in one
+        USB packet.  Locking the display deque once per packet substantially
+        reduces contention at high baud while preserving per-line tags/order.
         """
-        low = line.lower()
-        if "error" in low or "fatal" in low or "fail" in low:
-            tag = "error"
-        elif "warning" in low or "warn" in low:
-            tag = "warning"
-        elif any(k in low for k in ["ok", "success", "done", "ready", "established"]):
-            tag = "success"
-        elif "[debug]" in low:
-            tag = "dim"
-        elif line.startswith("[") and "]" in line:
-            tag = "system"
-        else:
-            tag = ""
+        if not rows:
+            return
+        entries = []
+        for line, is_newline in rows:
+            low = line.lower()
+            if "error" in low or "fatal" in low or "fail" in low:
+                tag = "error"
+            elif "warning" in low or "warn" in low:
+                tag = "warning"
+            elif any(k in low for k in ("ok", "success", "done", "ready", "established")):
+                tag = "success"
+            elif "[debug]" in low:
+                tag = "dim"
+            elif line.startswith("[") and "]" in line:
+                tag = "system"
+            else:
+                tag = ""
+            entries.append((line, tag, bool(is_newline)))
 
         with self._serial_display_lock:
-            if self._serial_display_queue.maxlen and len(self._serial_display_queue) >= self._serial_display_queue.maxlen:
-                self._serial_display_dropped_rows += 1
-            self._serial_display_queue.append((line, tag, is_newline))
+            maxlen = self._serial_display_queue.maxlen
+            if maxlen:
+                overflow = max(0, len(self._serial_display_queue) + len(entries) - maxlen)
+                self._serial_display_dropped_rows += overflow
+            self._serial_display_queue.extend(entries)
 
     def _serial_monitor_is_selected(self) -> bool:
         """Return whether the Serial Monitor tab is currently visible (Tk thread)."""
@@ -9362,21 +9435,31 @@ class MCUUploadGUI:
             return False
 
     def _serial_display_pump(self):
-        """Tk-owned serial display scheduler.
-
-        Bytes continue to be received on the serial worker while this tab is
-        hidden, but hidden Text-widget rendering is suspended.  When the user
-        returns, buffered rows are drained over multiple short frames instead of
-        one huge repaint that can freeze the application.
-        """
+        """Tk-owned serial renderer; never lets terminal painting own a frame."""
         self._serial_display_pump_after_id = None
         try:
             visible = self._serial_monitor_is_selected()
             self._serial_tab_visible = visible
             if visible:
                 self._flush_tagged_serial_lines()
+
+            with self._serial_display_lock:
+                backlog = len(self._serial_display_queue)
             high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
-            delay_ms = 16 if (visible and high_rate) else (25 if visible else 120)
+
+            if not visible:
+                delay_ms = 120
+            elif backlog > 4000:
+                delay_ms = 12
+            elif backlog > 1000:
+                delay_ms = 16
+            elif high_rate:
+                delay_ms = 20
+            elif backlog:
+                delay_ms = 25
+            else:
+                delay_ms = 40
+
             if self.root and self.root.winfo_exists():
                 self._serial_display_pump_after_id = self.root.after(delay_ms, self._serial_display_pump)
         except Exception:
@@ -9386,20 +9469,29 @@ class MCUUploadGUI:
                 self._serial_display_pump_after_id = None
 
     def _flush_tagged_serial_lines(self):
-        """Render a bounded serial batch on Tk's main thread.
+        """Render a row/character-bounded batch on Tk's main thread.
 
-        Bounded batches protect tab switching and window interaction from a
-        sustained 921600-baud stream.  Remaining rows stay queued for the next
-        pump tick.
+        Character budgeting matters because one newline-free/binary chunk can be
+        far more expensive than hundreds of short log rows.  The limits below
+        comfortably exceed 921600-baud input throughput while bounding the work
+        handed to a single Tk Text.insert call.
         """
         if not getattr(self, "_serial_tab_visible", False):
             return
 
         high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
-        batch_limit = 700 if high_rate else 450
+        max_rows = 300 if high_rate else 220
+        max_chars = 32768 if high_rate else 24576
+        lines = []
+        chars = 0
         with self._serial_display_lock:
-            take = min(batch_limit, len(self._serial_display_queue))
-            lines = [self._serial_display_queue.popleft() for _ in range(take)]
+            while self._serial_display_queue and len(lines) < max_rows:
+                item = self._serial_display_queue[0]
+                item_chars = len(item[0]) + 1
+                if lines and chars + item_chars > max_chars:
+                    break
+                lines.append(self._serial_display_queue.popleft())
+                chars += item_chars
             dropped = self._serial_display_dropped_rows
             self._serial_display_dropped_rows = 0
         if not lines and not dropped:
@@ -9408,29 +9500,27 @@ class MCUUploadGUI:
         try:
             self.serial_console.configure(state=tk.NORMAL)
             insert_args: list[object] = []
+            batch_ts = datetime.now().strftime("%H:%M:%S")
 
             if dropped:
-                ts = datetime.now().strftime("%H:%M:%S")
-                insert_args.extend((f"[{ts}] ", "timestamp"))
+                insert_args.extend((f"[{batch_ts}] ", "timestamp"))
                 insert_args.extend((f"… {dropped} serial rows skipped while the display was busy/hidden …\n", "warning"))
                 self._serial_at_line_start = True
 
-            for text, tag, is_newline in lines:
-                clean_text = text
-                if getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get():
-                    if ANSI_CLEAR_RE.search(clean_text):
-                        insert_args = []
-                        self.serial_console.delete("1.0", tk.END)
-                        self._serial_at_line_start = True
-                        clean_text = ANSI_CLEAR_RE.sub("", clean_text)
+            ansi_clear_enabled = bool(getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get())
+            for clean_text, tag, is_newline in lines:
+                if ansi_clear_enabled and ANSI_CLEAR_RE.search(clean_text):
+                    insert_args = []
+                    self.serial_console.delete("1.0", tk.END)
+                    self._serial_at_line_start = True
+                    clean_text = ANSI_CLEAR_RE.sub("", clean_text)
 
                 clean_text = ANSI_CSI_RE.sub("", clean_text)
                 if not clean_text and not is_newline:
                     continue
 
                 if self._serial_at_line_start and clean_text:
-                    ts = datetime.now().strftime("%H:%M:%S")
-                    insert_args.extend((f"[{ts}] ", "timestamp"))
+                    insert_args.extend((f"[{batch_ts}] ", "timestamp"))
 
                 payload = clean_text + ("\n" if is_newline else "")
                 if payload:
@@ -9441,9 +9531,7 @@ class MCUUploadGUI:
                 self.serial_console.insert(tk.END, insert_args[0], *insert_args[1:])
 
             now = time.monotonic()
-            # Text line counting/deletion forces layout work; do it at most twice
-            # per second instead of on every 16-25 ms serial frame.
-            if now - self._serial_last_trim_monotonic >= 0.5:
+            if now - self._serial_last_trim_monotonic >= 0.75:
                 self._serial_last_trim_monotonic = now
                 total_lines = int(self.serial_console.index("end-1c").split(".")[0])
                 if total_lines > 2600:
@@ -9451,9 +9539,7 @@ class MCUUploadGUI:
                     self.serial_console.delete("1.0", f"{total_lines - keep_lines + 1}.0")
 
             self.serial_console.configure(state=tk.DISABLED)
-            # see(END) can trigger an expensive geometry pass.  20 Hz is visually
-            # smooth while leaving time for clicks, tab changes, and editor paint.
-            if self.serial_autoscroll_var.get() and now - self._serial_last_autoscroll_monotonic >= 0.05:
+            if self.serial_autoscroll_var.get() and now - self._serial_last_autoscroll_monotonic >= 0.06:
                 self._serial_last_autoscroll_monotonic = now
                 self.serial_console.see(tk.END)
         except tk.TclError:
@@ -9480,18 +9566,18 @@ class MCUUploadGUI:
             self._serial_display_queue.clear()
             self._serial_display_dropped_rows = 0
         self._serial_at_line_start = True
+
         def _do():
-            self.serial_console.configure(state=tk.NORMAL)
-            self.serial_console.delete("1.0", tk.END)
-            self.serial_console.configure(state=tk.DISABLED)
-        self.root.after(0, _do)
+            try:
+                self.serial_console.configure(state=tk.NORMAL)
+                self.serial_console.delete("1.0", tk.END)
+                self.serial_console.configure(state=tk.DISABLED)
+            except tk.TclError:
+                pass
+        self._post_ui(_do)
 
     def _append_serial(self, text: str, tag: str = "", newline: bool = True):
-        """Append a manual/status line (connect, reset, pause, send, errors)
-        to the Serial Monitor panel (thread-safe). This is distinct from
-        _append_tagged_line(), which queues live device output — status
-        lines from button actions go straight to the widget so they show
-        up immediately rather than waiting on the flush timer."""
+        """Append a manual/status line to Serial Monitor without cross-thread Tk."""
         def _do():
             try:
                 self.serial_console.configure(state=tk.NORMAL)
@@ -9505,15 +9591,14 @@ class MCUUploadGUI:
                 if newline:
                     self._serial_at_line_start = True
                 total_lines = int(self.serial_console.index("end-1c").split(".")[0])
-                if total_lines > 1500:
+                if total_lines > 1800:
                     self.serial_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
                 self.serial_console.configure(state=tk.DISABLED)
                 if self.serial_autoscroll_var.get():
                     self.serial_console.see(tk.END)
             except tk.TclError:
-                # Window can be closing while this fires.
                 pass
-        self.root.after(0, _do)
+        self._post_ui(_do)
 
     def _toggle_serial_pause(self):
         """Pause/resume the Serial Monitor's live display. While paused, the
@@ -9574,39 +9659,30 @@ class MCUUploadGUI:
                     except Exception:
                         pass
 
-        try:
-            self.root.after(0, _activate)
-        except Exception:
-            pass
+        self._post_ui(_activate)
 
     def _send_serial(self, event=None):
-        """Send the text in the serial input box to the connected board,
-        appending the selected line ending, then clear the input box."""
+        """Queue terminal TX for the serial I/O worker; never block Tk on write()."""
         text = self.serial_input.get()
         if not text:
             return "break" if event else None
 
-        if not (self.serial_conn and self.serial_conn.is_open) or not self.serial_running:
+        with self._serial_state_lock:
+            conn = self.serial_conn
+            running = bool(self.serial_running)
+            generation = self._serial_generation
+        if not (conn and getattr(conn, "is_open", False) and running):
             self._append_serial("  ✖ Not connected — open the Serial Monitor first.", "error")
             self.serial_input.delete(0, tk.END)
             return "break" if event else None
 
-        ending_map = {
-            "None": "",
-            "\\n": "\n",
-            "\\r": "\r",
-            "\\r\\n": "\r\n",
-        }
+        ending_map = {"None": "", "\\n": "\n", "\\r": "\r", "\\r\\n": "\r\n"}
         ending = ending_map.get(self.line_ending_var.get(), "\r\n")
-
+        payload = (text + ending).encode("utf-8", errors="replace")
         try:
-            self.serial_conn.write((text + ending).encode("utf-8", errors="replace"))
-            self._append_serial(f"  » {text}", "dim")
-        except Exception as exc:
-            self._append_serial(f"  ✖ Send failed: {exc}", "error")
-            self.serial_input.delete(0, tk.END)
-            return "break" if event else None
-
+            self._serial_tx_queue.put_nowait((generation, payload, text))
+        except queue.Full:
+            self._append_serial("  ✖ Send queue is busy — try again in a moment.", "error")
         self.serial_input.delete(0, tk.END)
         return "break" if event else None
 
@@ -9688,21 +9764,24 @@ class MCUUploadGUI:
 
     def _set_serial_status(self, connected):
         if connected is True or connected == "connected":
-            self._serial_status_state = "connected"
+            state = "connected"
         elif str(connected).lower().startswith("reconnect"):
-            self._serial_status_state = "reconnecting"
+            state = "reconnecting"
         else:
-            self._serial_status_state = "disconnected"
+            state = "disconnected"
+        self._serial_status_state = state
 
-        def _do():
-            st = getattr(self, "_serial_status_state", "disconnected")
+        def _do(expected_state=state):
+            # Render the newest state only; an old queued callback must not
+            # overwrite a newer connection transition.
+            st = getattr(self, "_serial_status_state", expected_state)
             if st == "connected":
                 self.serial_status.configure(text="● Connected", fg=Theme.GREEN)
             elif st == "reconnecting":
                 self.serial_status.configure(text="● Reconnecting...", fg=Theme.YELLOW)
             else:
                 self.serial_status.configure(text="● Disconnected", fg=Theme.RED)
-        self.root.after(0, _do)
+        self._post_ui(_do)
 
     def _set_buttons_busy(self, busy: bool):
         """Disable/enable action buttons during operations (legacy helper).
@@ -10513,8 +10592,17 @@ class MCUUploadGUI:
     # ──────────────────────────────────────────────────────────
     # PORT MANAGEMENT
     def _post_ui(self, callback) -> None:
-        """Queue a callable for Tk's main thread without invoking Tk from a worker."""
+        """Run/queue *callback* on Tk's owning thread without cross-thread Tcl calls."""
         if not callable(callback):
+            return
+        # Tk callbacks that are already on the owning thread can execute directly.
+        # Worker threads only enqueue plain Python callables; they never call
+        # root.after(), Variable.get(), or any widget API themselves.
+        if threading.get_ident() == getattr(self, "_tk_thread_id", None):
+            try:
+                callback()
+            except Exception:
+                pass
             return
         try:
             self._ui_dispatch_queue.put(callback)
@@ -10522,15 +10610,17 @@ class MCUUploadGUI:
             pass
 
     def _drain_ui_dispatch_queue(self) -> None:
-        """Main-thread pump for callbacks produced by background workers.
+        """Main-thread callback pump with a small per-frame time budget.
 
-        The pump is deliberately bounded per tick so a burst of worker results
-        cannot monopolize the Tk event loop and make tab changes appear frozen.
+        A count-only limit still allows 100+ expensive callbacks to monopolize
+        one Tk frame.  Bound both callback count and wall-clock time so serial,
+        editor, tab, and window events keep getting turns under bursty workloads.
         """
         self._ui_dispatch_after_id = None
         processed = 0
+        deadline = time.perf_counter() + 0.004  # ~4 ms of worker callbacks/frame
         try:
-            while processed < 120:
+            while processed < 80 and time.perf_counter() < deadline:
                 try:
                     callback = self._ui_dispatch_queue.get_nowait()
                 except queue.Empty:
@@ -10543,7 +10633,11 @@ class MCUUploadGUI:
         finally:
             try:
                 if self.root and self.root.winfo_exists():
-                    self._ui_dispatch_after_id = self.root.after(8 if processed else 20, self._drain_ui_dispatch_queue)
+                    # If we consumed work, yield briefly to paint/input before
+                    # continuing the queue.  Idle polling stays inexpensive.
+                    self._ui_dispatch_after_id = self.root.after(
+                        4 if processed else 20, self._drain_ui_dispatch_queue
+                    )
             except Exception:
                 self._ui_dispatch_after_id = None
 
@@ -11293,15 +11387,14 @@ class MCUUploadGUI:
                         occupancy_changed = current_occupied != getattr(self, "_last_known_occupied_ports", set())
 
                     if hardware_changed or occupancy_changed:
-                        try:
-                            self.root.after(0, self._handle_port_change, current_ports, current_occupied)
-                        except Exception:
-                            pass
+                        self._post_ui(
+                            lambda ports=current_ports, occupied=current_occupied:
+                                self._handle_port_change(ports, occupied)
+                        )
                 except Exception as e:
-                    try:
-                        self.root.after(0, lambda: self._append_notif(f"  ✖ Port poll thread error: {e}", "error"))
-                    except Exception:
-                        pass
+                    self._post_ui(
+                        lambda exc=e: self._append_notif(f"  ✖ Port poll thread error: {exc}", "error")
+                    )
 
 
         self._port_poll_thread = threading.Thread(target=_poll_thread_worker, name="RealtimePortMonitorThread", daemon=True)
@@ -11349,12 +11442,7 @@ class MCUUploadGUI:
             if removed_devs and current_port and (current_port in removed_devs or current_port not in new_devices):
                 # Stop active serial monitor connection immediately
                 self._monitor_should_run = False
-                self.serial_running = False
-                if self.serial_conn and self.serial_conn.is_open:
-                    try:
-                        self.serial_conn.close()
-                    except Exception:
-                        pass
+                self._stop_serial_session()
                 self._set_serial_status(False)
                 self._board_port_confirmed = False
                 self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
@@ -11617,11 +11705,9 @@ class MCUUploadGUI:
         # Fast local auto-select based on project files + port chip description
         self._auto_select_board(show_msg=True)
 
-        # Only skip the esptool probe when the port's chip is confirmed
-        # AVR-only (e.g. CH340/CH341). For anything else — including cases
-        # where the static heuristic above guessed wrong and left the board
-        # on "Arduino Uno" — let esptool make the real determination.
-        if self._port_is_avr_only() or not port_name:
+        # Skip esptool chip probing when the port or selected board is confirmed
+        # non-Espressif (e.g. AVR, STM32, RP2040).
+        if self._port_is_non_espressif() or not port_name:
             return
             
         # Kick off chip auto-detection in background — non-blocking
@@ -11939,17 +12025,24 @@ class MCUUploadGUI:
 
 
     def _detect_port_chip(self) -> tuple[str, set, str] | None:
-        """Identify which known USB-serial chip the selected port reports,
-        if any. Returns (matched_keyword, allowed_platforms_set, human_label)
-        or None if the port description doesn't match any known chip."""
+        """UI-facing selected-port wrapper around the snapshot-safe detector."""
         port = self._get_port()
         if not port:
             return None
+        return self._detect_port_chip_for(port, self.port_var.get())
 
-        search_targets = [self.port_var.get().lower(), port.lower()]
+    def _detect_port_chip_for(self, port: str, port_label: str = "") -> tuple[str, set, str] | None:
+        """Detect a USB/serial family without reading Tk Variables.
+
+        This variant is safe for serial/background workers because all UI state
+        arrives as immutable strings captured on the Tk thread.
+        """
+        if not port:
+            return None
+        search_targets = [str(port_label or "").lower(), str(port).lower()]
         try:
             for candidate in serial.tools.list_ports.comports():
-                if candidate.device.upper() == port.upper():
+                if candidate.device.upper() == str(port).upper():
                     if candidate.description:
                         search_targets.append(candidate.description.lower())
                     if candidate.manufacturer:
@@ -11962,19 +12055,17 @@ class MCUUploadGUI:
 
         full_text = " ".join(search_targets)
         families = self._get_usb_chip_board_families()
-
         for keyword, (allowed_platforms, label) in families.items():
             if keyword == "com":
                 continue
             if keyword in full_text:
                 return (keyword, allowed_platforms, label)
 
-        if re.match(r"^(COM\d+|/dev/\S+)", port, re.IGNORECASE):
+        if re.match(r"^(COM\d+|/dev/\S+)", str(port), re.IGNORECASE):
             installed_platforms = {info.get("platform", "") for info in SUPPORTED_BOARDS.values()} - {""}
             if not installed_platforms:
                 installed_platforms = {"espressif32", "espressif8266", "atmelavr"}
             return ("com", installed_platforms, f"Serial Port ({port})")
-
         return None
 
     def _port_is_avr_only(self) -> bool:
@@ -11993,6 +12084,17 @@ class MCUUploadGUI:
                 descriptor_board
                 and SUPPORTED_BOARDS.get(descriptor_board, {}).get("platform") == "atmelavr"
             )
+        return False
+
+    def _port_is_non_espressif(self) -> bool:
+        """True when the current board or port descriptor is explicitly a non-Espressif platform (AVR, STM32, RP2040, etc.)."""
+        if self._port_is_avr_only():
+            return True
+        current_board = self.board_var.get() if hasattr(self, "board_var") else ""
+        if current_board and current_board in SUPPORTED_BOARDS:
+            platform = str(SUPPORTED_BOARDS[current_board].get("platform", "")).lower()
+            if platform and platform not in ("espressif32", "espressif8266"):
+                return True
         return False
 
     def _is_board_recognized(self) -> bool:
@@ -12030,21 +12132,21 @@ class MCUUploadGUI:
                     pass
 
     def _is_native_usb_port(self) -> bool:
-        port_label = self.port_var.get().lower()
-        if not port_label:
-            return False
-        native_keywords = ["esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug"]
-        uart_keywords = ["ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch"]
-        has_native = any(k in port_label for k in native_keywords)
-        has_uart = any(k in port_label for k in uart_keywords)
-        if has_native and not has_uart:
-            return True
+        port_label = self.port_var.get()
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
+        low_label = port_label.lower()
+        if not low_label:
+            return False
+        native_keywords = ("esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug")
+        uart_keywords = ("ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch")
+        has_native = any(k in low_label for k in native_keywords)
+        has_uart = any(k in low_label for k in uart_keywords)
         p_board = board_info.get("board", "")
-        if (is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart:
-            return True
-        return False
+        return bool(
+            (has_native and not has_uart)
+            or ((is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart)
+        )
 
     def _is_valid_port(self) -> bool:
         """Check if the selected port's USB-serial chip is actually sold
@@ -12087,42 +12189,30 @@ class MCUUploadGUI:
         allowed = " or ".join(platform_labels.get(p, p) for p in sorted(allowed_platforms))
         return f"{label} detected — that's a {allowed} board, not \"{board_name}\""
 
-    def _unrecognized_mcu_port_warning(self, port: str) -> str | None:
-        """Return a warning when *port* cannot be identified as an installed MCU.
-
-        ``SUPPORTED_BOARDS`` is built from the board packages downloaded by
-        arduino_lib_req.py. A port is known only if its USB descriptor maps to
-        one of those installed board platforms, or esptool has confirmed it.
-        The monitor remains available for manual/legacy serial devices.
-        """
+    def _unrecognized_mcu_port_warning(self, port: str, port_label: str | None = None) -> str | None:
+        """Return the existing unrecognized-port warning using an optional UI snapshot."""
         if getattr(self, "_board_port_confirmed", False):
             return None
 
-        port_label = self.port_var.get()
-        descriptor = port_label
+        if port_label is None:
+            port_label = self.port_var.get()
+        descriptor = str(port_label or "")
         port_info = None
         try:
             for candidate in serial.tools.list_ports.comports():
                 if candidate.device.upper() == port.upper():
                     port_info = candidate
-                    descriptor = candidate.description or port_label
+                    descriptor = candidate.description or descriptor
                     break
         except Exception:
             pass
 
-        # Preferred evidence: an exact VID/PID pair declared in a boards.txt
-        # file from a package the user actually downloaded.
         if port_info is not None and port_info.vid is not None and port_info.pid is not None:
             if (port_info.vid, port_info.pid) in DOWNLOADED_BOARD_USB_IDS:
                 return None
 
-        # Some clone boards expose only their USB-serial bridge VID/PID, not
-        # the board VID/PID in boards.txt. Keep the descriptor fallback for
-        # those legitimate devices.
-        installed_platforms = {
-            info.get("platform", "") for info in SUPPORTED_BOARDS.values()
-        } - {""}
-        chip = self._detect_port_chip()
+        installed_platforms = {info.get("platform", "") for info in SUPPORTED_BOARDS.values()} - {""}
+        chip = self._detect_port_chip_for(port, str(port_label or ""))
         if chip is not None and (chip[1] & installed_platforms):
             return None
 
@@ -12276,6 +12366,8 @@ class MCUUploadGUI:
             (SCRIPT_DIR / "soft_reset_project" / ".pio", "legacy ESP reset cache"),
             (SCRIPT_DIR / "soft_reset_project_uno" / ".pio", "legacy Arduino reset cache"),
             (SCRIPT_DIR / ".pio_cache", "legacy app-wide SCons cache"),
+            (Path.home() / ".mcu_flash_gui" / "ai-reviews", "external AI review transcripts"),
+            (Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".mcuflasher-app" / ".tmp", "external temporary app cache"),
         ]
 
     def _perform_clean(self) -> tuple[list[str], list[str]]:
@@ -12748,33 +12840,32 @@ class MCUUploadGUI:
         threading.Thread(target=_safe_run, daemon=True).start()
 
     def _schedule_auto_start_monitor(self, delay_ms: int):
-        """Schedule _auto_start_monitor while canceling any previously scheduled attempts."""
+        """Schedule monitor start on Tk's thread; worker callers are marshaled."""
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            self._post_ui(lambda d=int(delay_ms): self._schedule_auto_start_monitor(d))
+            return
         if getattr(self, "_auto_start_after_id", None):
             try:
                 self.root.after_cancel(self._auto_start_after_id)
             except Exception:
                 pass
-        self._auto_start_after_id = self.root.after(delay_ms, self._auto_start_monitor)
+        self._auto_start_after_id = self.root.after(max(0, int(delay_ms)), self._auto_start_monitor)
 
     def _auto_start_monitor(self):
-        """Start serial monitor if a port is selected and not already running."""
+        """Start one generation-owned serial worker from a main-thread config snapshot."""
+        self._auto_start_after_id = None
         if self.is_busy and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"):
             return
-        if self.serial_thread and self.serial_thread.is_alive():
-            # Previous thread is still cleaning up/closing the port.
-            # Reschedule and check again shortly to prevent port access clashes.
-            self._schedule_auto_start_monitor(100)
+
+        with self._serial_state_lock:
+            current_thread = self.serial_thread
+            current_running = self.serial_running
+        if current_thread and current_thread.is_alive():
+            self._schedule_auto_start_monitor(60)
             return
-        if self.serial_running:
+        if current_running:
             return
-        # Check silently — this is a routine background check (fires on
-        # startup, after loading a project, after switching boards, etc.)
-        # and it's completely normal for no port to be selected yet at
-        # those times. _get_port() itself always logs "No port selected!"
-        # as an error, which is correct for user-initiated actions (Upload,
-        # Reset...) but was noisy and misleading here, since it made a
-        # totally expected "nothing plugged in yet" state look like a
-        # failure right in the middle of the project-load log.
+
         port_raw = self.port_var.get()
         self._board_changed_no_port_msg = None
         if not port_raw or port_raw.startswith("─"):
@@ -12789,16 +12880,61 @@ class MCUUploadGUI:
                 self._append_notif("  ✖ Monitor blocked: No boards are currently installed.", "error")
                 self._append_notif("    Please download a board framework first via the 'Download Boards/Libraries' manager.", "error")
             return
-        # NOTE: unlike Upload, the Serial Monitor doesn't care whether the
-        # selected board *type* matches the chip actually on this port —
-        # it just opens the raw serial port at the chosen baud rate, so any
-        # MCU attached can be monitored regardless of the board dropdown.
-        self._last_monitor_error = "" # Clear error since it started successfully!
+
+        # Capture every Tk Variable needed by the worker here.  The background
+        # monitor never calls Variable.get()/set() or widget APIs.
+        board_name = self.board_var.get()
+        board_info = dict(SUPPORTED_BOARDS.get(board_name, {}))
+        clear_on_connect = bool(
+            getattr(self, "clear_serial_on_upload_var", None)
+            and self.clear_serial_on_upload_var.get()
+        )
+        if clear_on_connect:
+            # Clear synchronously on Tk before RX starts so the first boot bytes
+            # cannot be rendered and then erased by a delayed UI callback.
+            self._clear_serial_console()
+        silent = bool(getattr(self, "_silent_reset", False))
+        is_manual_reset = bool(getattr(self, "_manual_reset_pending", False))
+        is_first_connect = not bool(getattr(self, "_first_connect_done", False))
+        port_label = str(port_raw)
+
+        native_keywords = ("esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug")
+        uart_keywords = ("ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch")
+        low_label = port_label.lower()
+        has_native = any(k in low_label for k in native_keywords)
+        has_uart = any(k in low_label for k in uart_keywords)
+        p_board = board_info.get("board", "")
+        is_native_usb = bool(
+            (has_native and not has_uart)
+            or ((is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart)
+        )
+
+        self._last_monitor_error = ""
         self._monitor_should_run = True
-        self.serial_running = True  # Prevent duplicate thread spawns
-        baud = int(self.baud_var.get())
-        self.serial_thread = threading.Thread(target=self._run_monitor, args=(port, baud), daemon=True)
-        self.serial_thread.start()
+        with self._serial_state_lock:
+            self._serial_generation += 1
+            generation = self._serial_generation
+            stop_event = threading.Event()
+            self._serial_stop_event = stop_event
+            self.serial_running = True
+            config = {
+                "board_name": board_name,
+                "board_info": board_info,
+                "port_label": port_label,
+                "clear_on_connect": clear_on_connect,
+                "silent": silent,
+                "is_manual_reset": is_manual_reset,
+                "is_first_connect": is_first_connect,
+                "is_native_usb": is_native_usb,
+            }
+            worker = threading.Thread(
+                target=self._run_monitor,
+                args=(port, int(self.baud_var.get()), generation, stop_event, config),
+                daemon=True,
+                name=f"SerialMonitor-{generation}",
+            )
+            self.serial_thread = worker
+        worker.start()
 
     def _do_stop(self):
         """Stop compile/upload process (does NOT stop serial monitor).
@@ -12849,87 +12985,93 @@ class MCUUploadGUI:
             self._set_status("Ready", Theme.GREEN)
             self._append("  ℹ Busy state was stale — cleared.", "info")
 
+    def _stop_serial_session(self):
+        """Cancel/detach the active serial generation without joining the caller.
+
+        close()/cancel_read() releases the COM handle immediately; the stale worker
+        then exits on its Event using only its local connection object.  This keeps
+        Upload/Reset and reconnect paths responsive even when a driver is sluggish.
+        """
+        with self._serial_state_lock:
+            self._serial_generation += 1
+            stop_event = self._serial_stop_event
+            try:
+                stop_event.set()
+            except Exception:
+                pass
+            conn = self.serial_conn
+            thread = self.serial_thread
+            self.serial_conn = None
+            self.serial_thread = None
+            self.serial_running = False
+
+        # Drop TX belonging to the retired generation.
+        while True:
+            try:
+                self._serial_tx_queue.get_nowait()
+            except queue.Empty:
+                break
+            except Exception:
+                break
+
+        if conn:
+            try:
+                if hasattr(conn, "cancel_read"):
+                    conn.cancel_read()
+            except Exception:
+                pass
+            try:
+                if hasattr(conn, "cancel_write"):
+                    conn.cancel_write()
+            except Exception:
+                pass
+            try:
+                if getattr(conn, "is_open", False):
+                    conn.close()
+            except Exception:
+                pass
+        return thread
+
     def _pause_monitor(self) -> bool:
-        """Pause serial monitor temporarily for uploading, ensuring COM port is completely closed and released."""
-        was_running = self.serial_running or getattr(self, "_monitor_should_run", False)
+        """Pause for upload/reset and release the port without a blocking join."""
+        was_running = bool(self.serial_running or getattr(self, "_monitor_should_run", False))
         self._monitor_should_run = False
-        self.serial_running = False
-        old_conn = self.serial_conn
-        old_thread = self.serial_thread
-        self.serial_conn = None
-        self.serial_thread = None
-
-        if old_conn:
-            try:
-                if old_conn.is_open:
-                    old_conn.close()
-            except Exception:
-                pass
-
-        if old_thread and old_thread.is_alive():
-            try:
-                old_thread.join(timeout=0.8)
-            except Exception:
-                pass
-
+        self._stop_serial_session()
         self._set_serial_status(False)
         if was_running:
             self._append_notif("  ⏸ Paused for upload…", "dim")
         return was_running
 
     def _resume_monitor(self):
-        """Resume serial monitor after upload completes, triggering MCU reset so setup() output is captured."""
-        # Re-arm the intent flag: _pause_monitor() clears it, and every caller
-        # of _resume_monitor() explicitly wants the monitor back (they are all
-        # guarded by "was_monitoring"). Without this re-arm the monitor never
-        # restarts and the DTR/RTS reset pulse after a successful Hard/Soft
-        # Reset is never sent.
-        self._monitor_should_run = True
-        self._manual_reset_pending = True
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
-        is_avr = (board_info.get("platform", "") == "atmelavr")
-        delay_ms = 100 if is_avr else 150
-        self.root.after(delay_ms, lambda: self._schedule_auto_start_monitor(0))
+        """Resume monitor after an operation; Tk configuration stays on Tk's thread."""
+        def _resume_on_ui():
+            self._monitor_should_run = True
+            self._manual_reset_pending = True
+            board_name = self.board_var.get()
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            is_avr = (board_info.get("platform", "") == "atmelavr")
+            self._schedule_auto_start_monitor(100 if is_avr else 150)
+        self._post_ui(_resume_on_ui)
 
     def _restart_monitor(self, reason: str):
-        """Stop and relaunch the serial monitor with the current port/baud.
-        Used when a setting that affects the monitor connection changes
-        (baud rate, board selection, port selection) while the monitor
-        is connected or idle."""
+        """Cancel the current generation and relaunch without spawning a join thread."""
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            self._post_ui(lambda r=str(reason): self._restart_monitor(r))
+            return
         self._monitor_should_run = False
-        was_running = self.serial_running
-        self.serial_running = False
+        was_running = bool(self.serial_running)
+        self._stop_serial_session()
 
         if was_running or "baud" in reason.lower() or "reconnect" in reason.lower():
             self._set_serial_status("reconnecting")
             self._append_notif(f"  ↻ Restarting monitor — {reason}…", "dim")
-            # Separator so the new session is visually distinct
             self._append_notif("─" * 40, "dim")
 
-        # Auto Clear serial monitor when connecting, if enabled
         if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
             self._clear_serial_console()
 
-        old_conn = self.serial_conn
-        old_thread = self.serial_thread
-        self.serial_thread = None  # Detach old thread reference so it exits quietly without stomping new monitor
-
-        def _bg_restart():
-            if old_conn:
-                try:
-                    if old_conn.is_open:
-                        old_conn.close()
-                except Exception:
-                    pass
-            if old_thread and old_thread.is_alive():
-                try:
-                    old_thread.join(timeout=0.5)
-                except Exception:
-                    pass
-            self.root.after(0, lambda: self._schedule_auto_start_monitor(10))
-
-        threading.Thread(target=_bg_restart, daemon=True, name="Monitor-BG-Restart").start()
+        self._monitor_should_run = True
+        self._schedule_auto_start_monitor(20)
 
     def _open_sketch_in_explorer(self):
         """Open the current project folder in Windows File Explorer."""
@@ -14707,7 +14849,7 @@ class MCUUploadGUI:
             roots.append(Path(configured))
         roots.extend((
             SCRIPT_DIR / "src" / ".platformio-mcu-gui",
-            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".platformio-mcu-gui",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".mcuflasher-app" / ".platformio-mcu-gui",
             Path.home() / ".platformio",
         ))
         for root in roots:
@@ -14909,14 +15051,17 @@ class MCUUploadGUI:
         return f"mcu_flash_{slug}" if slug else "mcu_flash"
 
     def _get_mcu_folder_name(self, board_name: str | None = None) -> str:
-        """Return clean, user-friendly folder name for storing compiled binaries per MCU family (e.g. ESP32, ESP32S3, Arduino_UNO)."""
+        """Return clean, user-friendly folder name for storing compiled binaries per MCU family (e.g. ESP32, ESP32S3, Arduino_UNO, Arduino_Mega)."""
         name = board_name if board_name is not None else self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(name, {})
         p_board = str(board_info.get("board", "")).lower()
         platform = str(board_info.get("platform", "")).lower()
 
-        if "uno" in p_board or "uno" in name.lower() or platform == "atmelavr":
+        if "uno" in p_board or "uno" in name.lower():
             return "Arduino_UNO"
+        elif platform == "atmelavr":
+            clean_board = re.sub(r'[^a-zA-Z0-9]+', '_', p_board or name).strip('_')
+            return f"AVR_{clean_board.upper()}"
         elif "s3" in p_board or "s3" in name.lower():
             return "ESP32S3"
         elif "c3" in p_board or "c3" in name.lower():
@@ -15067,13 +15212,17 @@ class MCUUploadGUI:
             
             board_extra: list[str] = []
             _uspd = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
-            # Arduino Uno's optiboot/stk500 bootloader only syncs at 115200 baud.
-            # The upload_speed combobox is meant for esptool boards (ESP32/S3/8266) —
-            # honoring a higher value here makes avrdude retry sync for ~100s before
-            # giving up with "Error 1" / "avrdude: stk500_recv(): programmer is not
-            # responding". Force the bootloader-correct speed for AVR instead.
-            if p_board == "uno":
-                _uspd = "115200"
+            # AVR bootloader speeds vary by chip/bootloader version:
+            # - Uno: 115200
+            # - Nano (old bootloader) / Mega 2560: 57600
+            # - Pro Mini (8MHz): 38400 / 57600
+            if p_platform == "atmelavr":
+                if p_board in ("nanoatmega328", "nano", "pro8MHz", "pro16MHz", "megaatmega2560", "mega", "nanoatmega168"):
+                    _uspd = "57600"
+                elif p_board in ("pro384", "pro384MHz"):
+                    _uspd = "38400"
+                else:
+                    _uspd = "115200"
             upload_speed_line = f"\nupload_speed = {_uspd}"
             if has_psram:
                 build_flags_list.append("-D BOARD_HAS_PSRAM")
@@ -15088,14 +15237,14 @@ class MCUUploadGUI:
                     ])
             if p_platform in ("espressif32", "espressif8266"):
                 board_extra.append("upload_protocol = esptool")
-            if flash_mode:
-                board_extra.append(f"board_build.flash_mode = {flash_mode}")
+                if flash_mode:
+                    board_extra.append(f"board_build.flash_mode = {flash_mode}")
 
             build_flags_str = (
                 "build_flags =\n" + "\n".join(f"    {flag}" for flag in build_flags_list)
                 if build_flags_list else ""
             )
-            partition_str = "board_build.partitions = huge_app.csv\n" if needs_huge_app else ""
+            partition_str = "board_build.partitions = huge_app.csv\n" if (needs_huge_app and p_platform == "espressif32") else ""
 
             # Build the [env:mcu_flash] body line-by-line so no key ever gets
             # concatenated onto the tail of another key's value line.
@@ -15362,15 +15511,15 @@ default_envs = {self._pio_env_name()}
                     # indented continuation lines (the actual flags) follow on the next line.
                     content = re.sub(r"^build_flags[ \t]*=[ \t]*$(?:\n[ \t]*$)*(?!\n[ \t]+\S)", "", content, flags=re.MULTILINE)
 
-                # Ensure huge_app.csv partitions are selected when needed to accommodate larger libraries
-                if needs_huge_app:
+                # Ensure huge_app.csv partitions are selected when needed for ESP32, and purged for non-ESP platforms
+                if needs_huge_app and p_platform == "espressif32":
                     if not re.search(r"^board_build\.partitions\s*=", content, re.MULTILINE):
                         content = re.sub(
                             r"(\[env:[^\]]*\]\n)",
                             r"\1board_build.partitions = huge_app.csv\n",
                             content, count=1
                         )
-                elif p_platform != "espressif32":
+                else:
                     content = re.sub(
                         r"^board_build\.partitions\s*=\s*huge_app\.csv\s*\n?",
                         "",
@@ -18352,11 +18501,12 @@ default_envs = {self._pio_env_name()}
             return False
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
-        is_uno = (board_info.get("platform", "") == "atmelavr")
+        platform = str(board_info.get("platform", "")).lower()
+        is_uno = (platform == "atmelavr")
         self._append(f"  🔄 Triggering hardware reset on {port}...", "info")
         try:
-            # 1. Native USB-CDC (ESP32-S3) 1200-baud touch reset fallback
-            if not is_uno and self._is_native_usb_port():
+            # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
+            if not is_uno and (self._is_native_usb_port() or platform in ("raspberrypi", "samd")):
                 try:
                     with serial.Serial(port, baudrate=1200, timeout=0.1) as c1200:
                         c1200.dtr = False
@@ -18368,16 +18518,25 @@ default_envs = {self._pio_env_name()}
                     pass
                 time.sleep(0.3)
 
-            # 2. Standard esptool.py DTR/RTS hardware reset pulse
+            # 2. Architecture-correct hardware reset pulse
             with serial.Serial(port, baudrate=115200, timeout=0.1, dsrdtr=False, rtscts=False) as conn:
                 if is_uno:
+                    # AVR / Arduino Optiboot reset pulse
                     conn.dtr = False
                     time.sleep(0.05)
                     conn.dtr = True
                     time.sleep(0.05)
                     conn.dtr = False
+                elif platform in ("ststm32", "raspberrypi", "ch32v", "samd"):
+                    # ARM / RISC-V pulse reset (prevents ESP32 transistor inversion lockup)
+                    conn.dtr = False
+                    conn.rts = False
+                    time.sleep(0.05)
+                    conn.dtr = True
+                    time.sleep(0.05)
+                    conn.dtr = False
                 else:
-                    # Official esptool hard_reset sequence:
+                    # Official esptool hard_reset sequence for ESP32 / ESP8266 auto-reset circuit
                     # DTR=False, RTS=True -> pulls EN low (Reset)
                     # RTS=False -> EN goes high (MCU boots sketch)
                     conn.dtr = False
@@ -18386,7 +18545,7 @@ default_envs = {self._pio_env_name()}
                     conn.rts = False
                     conn.dtr = False
                 time.sleep(0.05)
-            self._append("  ✔ Reset(DTR/RTS) pulse completed.", "success")
+            self._append("  ✔ Reset pulse completed successfully.", "success")
             self._skip_reconnect_reset = True
             return True
         except Exception as e:
@@ -18397,7 +18556,7 @@ default_envs = {self._pio_env_name()}
     # SERIAL MONITOR (always-on, right panel)
     # ──────────────────────────────────────────────────────────
     def _reset_mcu_from_monitor(self):
-        """Reset the MCU via DTR/RTS pulse and restart the serial monitor."""
+        """Reset via the existing reconnect pulse, without blocking/joining Tk."""
         port = self._get_port()
         if not port:
             self._append_notif("  ⚠ No port selected — cannot reset.", "warning")
@@ -18409,16 +18568,11 @@ default_envs = {self._pio_env_name()}
         if self.is_busy and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"):
             self._append_notif("  ⚠ Reset blocked — an operation (uploading/resetting) is currently in progress.", "warning")
             return
-
         if not self._is_board_recognized():
             if not getattr(self, "_silent_reset", False):
                 self._append_notif("  ⚠ Reset blocked — board on this port hasn't been recognized yet.", "warning")
             return
 
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
-        is_uno = (board_info.get("platform", "") == "atmelavr")
-        
         silent = getattr(self, "_silent_reset", False)
         if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
             self._clear_serial_console()
@@ -18426,34 +18580,44 @@ default_envs = {self._pio_env_name()}
             self._append_notif(f"  ↺ Resetting MCU on {port}…", "dim")
             self._append_serial(f"  ↺ Resetting MCU on {port}…", "dim")
 
-        def _reset_worker():
-            was_monitoring = self.serial_running
-            if was_monitoring:
-                self.serial_running = False
-                if self.serial_conn and self.serial_conn.is_open:
-                    try:
-                        self.serial_conn.close()
-                    except Exception:
-                        pass
-                if self.serial_thread and self.serial_thread.is_alive() and threading.current_thread() != self.serial_thread:
-                    self.serial_thread.join(timeout=1.0)
-                self.root.after(0, lambda: self._set_serial_status(False))
+        self._monitor_should_run = False
+        self._stop_serial_session()
+        self._set_serial_status(False)
+        self._manual_reset_pending = True
+        self._monitor_should_run = True
+        self._schedule_auto_start_monitor(100)
 
-            self._manual_reset_pending = True
-            self.root.after(0, lambda: self._schedule_auto_start_monitor(100))
-
-        import threading
-        threading.Thread(target=_reset_worker, daemon=True, name="MCU-Reset-Worker").start()
-
-    def _run_monitor(self, port: str, baud: int):
+    def _run_monitor(self, port: str, baud: int, generation: int, stop_event: threading.Event, config: dict):
         cur_thread = threading.current_thread()
-        silent = getattr(self, "_silent_reset", False)
+        conn = None
+        silent = bool(config.get("silent", False))
+        board_name = str(config.get("board_name", ""))
+        board_info = dict(config.get("board_info", {}))
+        port_label = str(config.get("port_label", port))
+        is_native_usb = bool(config.get("is_native_usb", False))
+        is_first_connect = bool(config.get("is_first_connect", False))
+        is_manual_reset = bool(config.get("is_manual_reset", False))
+        clear_on_connect = bool(config.get("clear_on_connect", False))
+
+        def _session_current() -> bool:
+            with self._serial_state_lock:
+                return bool(
+                    not stop_event.is_set()
+                    and self._serial_generation == generation
+                    and self.serial_thread is cur_thread
+                )
+
+        if not _session_current():
+            return
         self._set_serial_status("reconnecting")
 
         owner_pid = port_occupied_owner(port)
+        if not _session_current():
+            return
         if owner_pid:
             self._append_notif(f"  ⚠ Serial Monitor blocked: {port} is in use by another window (PID {owner_pid}).", "warning")
-            self.serial_running = False
+            with self._serial_state_lock:
+                self.serial_running = False
             self._set_serial_status(False)
             return
 
@@ -18473,8 +18637,6 @@ default_envs = {self._pio_env_name()}
         #     moment we control.
         #  3. Start reading immediately — the bootloader and setup() output
         #     will both be captured.
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
         is_uno = (board_info.get("platform", "") == "atmelavr")
 
         # Determine if this connection attempt is a rapid duplicate of a failed attempt
@@ -18487,7 +18649,7 @@ default_envs = {self._pio_env_name()}
         )
 
         if not is_duplicate:
-            port_warning = self._unrecognized_mcu_port_warning(port)
+            port_warning = self._unrecognized_mcu_port_warning(port, port_label)
             if port_warning:
                 self._append_notif(port_warning, "warning")
             if is_uno:
@@ -18503,9 +18665,6 @@ default_envs = {self._pio_env_name()}
             "time": current_time,
         }
 
-        is_native_usb = self._is_native_usb_port()
-        is_first_connect = not getattr(self, "_first_connect_done", False)
-        is_manual_reset = getattr(self, "_manual_reset_pending", False)
 
         # High-throughput receive tuning.  460800 and 921600 baud can deliver
         # data faster than a Tk terminal can render if the GUI performs tiny
@@ -18514,7 +18673,7 @@ default_envs = {self._pio_env_name()}
         high_speed_serial = int(baud) >= 460800
         self._serial_display_flush_delay_ms = 40 if high_speed_serial else 25
         serial_read_cap = 131072 if high_speed_serial else 32768
-        serial_no_newline_cap = 262144 if high_speed_serial else 65536
+        serial_no_newline_cap = 65536 if high_speed_serial else 32768
         serial_partial_idle_s = 0.12 if high_speed_serial else 0.08
 
         if not is_uno:
@@ -18528,17 +18687,17 @@ default_envs = {self._pio_env_name()}
                 # running sketch permanently.
                 pass
             else:
-                time.sleep(1.0)   # ESP32/ESP8266: brief pause while board boots
+                if stop_event.wait(1.0):
+                    return
 
         # Try to open the port with retries to handle transient OS/driver locks (silently up to 5s)
         max_attempts = 25
         attempt = 0
         while attempt < max_attempts:
             # Gracefully abort immediately if busy with upload/flash/reset, or if monitor is stopped/paused
-            if (not getattr(self, "_monitor_should_run", False)
-                    or not getattr(self, "serial_running", False)
+            if (not _session_current()
+                    or not getattr(self, "_monitor_should_run", False)
                     or (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset"))):
-                self.serial_running = False
                 return
             try:
                 # Construct serial object and set DTR/RTS to False BEFORE opening
@@ -18551,7 +18710,11 @@ default_envs = {self._pio_env_name()}
                 conn.baudrate = baud
                 # A shorter blocking read timeout keeps the worker draining the
                 # Windows receive queue promptly at 921600 without busy-spinning.
-                conn.timeout = 0.02 if high_speed_serial else 0.1
+                # A short timeout keeps cancellation/TX latency bounded without
+                # busy-spinning; write timeout prevents a stalled device from
+                # pinning the serial worker indefinitely.
+                conn.timeout = 0.02
+                conn.write_timeout = 0.25
                 conn.dsrdtr = False
                 conn.rtscts = False
                 conn.open()
@@ -18570,7 +18733,14 @@ default_envs = {self._pio_env_name()}
                     except Exception:
                         pass
 
-                self.serial_conn = conn
+                if not _session_current():
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    return
+                with self._serial_state_lock:
+                    self.serial_conn = conn
                 self._last_monitor_error = ""
 
                 # On Native USB / ESP32-S3 CDC ports, set DTR=True to signal CDC terminal active
@@ -18581,10 +18751,6 @@ default_envs = {self._pio_env_name()}
                     except Exception:
                         pass
 
-                # Auto Clear serial monitor when connecting, if enabled
-                if getattr(self, "clear_serial_on_upload_var", None) and self.clear_serial_on_upload_var.get():
-                    self._clear_serial_console()
-
                 # Pulse reset only after an explicit Upload/Reset request. For
                 # Uno, opening with DTR=False avoids an uncontrolled reset; the
                 # deliberate False -> True -> False pulse below then starts the
@@ -18593,46 +18759,62 @@ default_envs = {self._pio_env_name()}
                 if is_manual_reset:
                     try:
                         if is_uno:
-                            self.serial_conn.rts = False
-                            self.serial_conn.dtr = False
-                            time.sleep(0.05)
-                            self.serial_conn.dtr = True
-                            time.sleep(0.10)
-                            self.serial_conn.dtr = False
-                            time.sleep(0.05)
+                            conn.rts = False
+                            conn.dtr = False
+                            if stop_event.wait(0.05):
+                                return
+                            conn.dtr = True
+                            if stop_event.wait(0.10):
+                                return
+                            conn.dtr = False
+                            if stop_event.wait(0.05):
+                                return
                         elif not is_native_usb:
-                            self.serial_conn.dtr = False
-                            self.serial_conn.rts = True
-                            time.sleep(0.15)
-                            self.serial_conn.rts = False
-                            self.serial_conn.dtr = False
-                            time.sleep(0.05)
+                            conn.dtr = False
+                            conn.rts = True
+                            if stop_event.wait(0.15):
+                                return
+                            conn.rts = False
+                            conn.dtr = False
+                            if stop_event.wait(0.05):
+                                return
                     except Exception:
                         pass
-                    self._manual_reset_pending = False
+                    if _session_current():
+                        self._manual_reset_pending = False
 
                 break
             except serial.SerialException as e:
                 attempt += 1
                 if attempt < max_attempts:
-                    time.sleep(0.2)
+                    if stop_event.wait(0.2):
+                        return
                 else:
                     err_msg = str(e)
                     if getattr(self, "_last_monitor_error", "") != err_msg:
                         self._last_monitor_error = err_msg
                         self._append_notif(f"  ✖ Cannot open {port}: {e}", "error")
-                    if getattr(self, "serial_thread", None) is cur_thread:
-                        self.serial_running = False
+                    if _session_current():
+                        with self._serial_state_lock:
+                            self.serial_running = False
+                            if self.serial_conn is conn:
+                                self.serial_conn = None
                         self._set_serial_status(False)
                         self._silent_reset = False
-                        # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
                         if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
                             self._schedule_auto_start_monitor(2000)
                     return
 
-        self.serial_running = True
+        if not _session_current():
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return
+        with self._serial_state_lock:
+            self.serial_running = True
         self._monitor_should_run = True
-        self._first_connect_done = True      # mark so future reconnects reset the MCU
+        self._first_connect_done = True
         self._set_serial_status(True)
         if is_uno:
             self._append_notif(f"  ✔ Connected — {port} @ {baud}  [Output captured]", "success")
@@ -18766,21 +18948,37 @@ default_envs = {self._pio_env_name()}
         # flips serial_running/_monitor_should_run off.
         buf = bytearray()
         last_read_time = time.monotonic()
-        try:
-            while self.serial_running and self._monitor_should_run:
+        def _drain_tx_queue() -> None:
+            for _ in range(32):
                 try:
-                    waiting = int(self.serial_conn.in_waiting or 0)
+                    tx_generation, payload, display_text = self._serial_tx_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if tx_generation != generation:
+                    continue
+                try:
+                    conn.write(payload)
+                    self._append_serial(f"  » {display_text}", "dim")
+                except (serial.SerialException, OSError) as exc:
+                    self._append_serial(f"  ✖ Send failed: {exc}", "error")
+                    break
+
+        try:
+            while _session_current() and self._monitor_should_run:
+                _drain_tx_queue()
+                try:
+                    waiting = int(conn.in_waiting or 0)
                     if waiting > 0:
                         # Drain what the driver already has, but cap a single Python
                         # allocation so a pathological producer cannot monopolize the
                         # monitor thread for an arbitrarily large read.
-                        chunk = self.serial_conn.read(min(waiting, serial_read_cap))
+                        chunk = conn.read(min(waiting, serial_read_cap))
                     else:
                         # Block for just one byte.  As soon as the first byte arrives,
                         # the next pass drains the rest of the driver's queue in bulk.
-                        chunk = self.serial_conn.read(1)
+                        chunk = conn.read(1)
                 except (serial.SerialException, OSError) as e:
-                    if self.serial_running:
+                    if _session_current():
                         self._append_notif(f"  ✖ Serial connection lost: {e}", "error")
                     break
 
@@ -18808,7 +19006,8 @@ default_envs = {self._pio_env_name()}
                 # scan.  This keeps the reader comfortably ahead of a 921600-baud
                 # producer instead of repeatedly rescanning the same prefix.
                 complete_rows = _drain_complete_serial_lines(buf)
-                if not self._monitor_paused:
+                if not self._monitor_paused and complete_rows:
+                    display_rows = []
                     for raw in complete_rows:
                         if not raw:
                             continue
@@ -18816,38 +19015,65 @@ default_envs = {self._pio_env_name()}
                         if text:
                             text = _resync_complete_boot_line(text)
                             _observe_complete_boot_loop_line(text)
-                            self._append_tagged_line(text, is_newline=True)
+                            # Keep a giant single-line payload from becoming one
+                            # giant Tk Text.insert operation.  Segments preserve
+                            # every character; only the final segment ends the row.
+                            segment_size = 16384
+                            if len(text) > segment_size:
+                                for pos in range(0, len(text), segment_size):
+                                    end = min(len(text), pos + segment_size)
+                                    display_rows.append((text[pos:end], end >= len(text)))
+                            else:
+                                display_rows.append((text, True))
+                    self._append_tagged_lines(display_rows)
 
                 # Guard against an application/binary stream that never emits a
                 # line ending.  Flush a large bounded chunk rather than allowing RAM
                 # to grow indefinitely.  Normal textual monitor traffic never hits
                 # this path.
                 if len(buf) > serial_no_newline_cap:
-                    text = bytes(buf).decode("utf-8", errors="replace")
-                    buf.clear()
+                    flush_size = 32768 if high_speed_serial else 16384
+                    raw_partial = bytes(buf[:flush_size])
+                    del buf[:flush_size]
+                    text = raw_partial.decode("utf-8", errors="replace")
                     if text and not self._monitor_paused:
                         self._append_tagged_line(text, is_newline=False)
         finally:
-            is_active_thread = (getattr(self, "serial_thread", None) is cur_thread)
-            if is_active_thread:
-                # Flush any trailing partial line that never got a newline.
-                if buf:
-                    text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
-                    if text and not self._monitor_paused:
-                        text = _resync_complete_boot_line(text)
-                        _observe_complete_boot_loop_line(text)
-                        self._append_tagged_line(text, is_newline=True)
+            # This worker owns only `conn`; never close whatever a newer
+            # generation may have installed into self.serial_conn.
+            active_before_close = _session_current()
+            if active_before_close and buf and not self._monitor_paused:
+                text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                if text:
+                    text = _resync_complete_boot_line(text)
+                    _observe_complete_boot_loop_line(text)
+                    self._append_tagged_line(text, is_newline=True)
 
-                self.serial_running = False
-                self._set_serial_status(False)
+            if conn is not None:
                 try:
-                    if self.serial_conn and self.serial_conn.is_open:
-                        self.serial_conn.close()
+                    if hasattr(conn, "cancel_read"):
+                        conn.cancel_read()
+                except Exception:
+                    pass
+                try:
+                    if getattr(conn, "is_open", False):
+                        conn.close()
                 except Exception:
                     pass
 
-                # Auto-reconnect if it's supposed to be running and not busy with upload/flash/reset
-                if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
+            active = _session_current()
+            if active:
+                with self._serial_state_lock:
+                    self.serial_running = False
+                    if self.serial_conn is conn:
+                        self.serial_conn = None
+                    if self.serial_thread is cur_thread:
+                        self.serial_thread = None
+                self._set_serial_status(False)
+                if getattr(self, "_monitor_should_run", False) and not (
+                    getattr(self, "is_busy", False)
+                    and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")
+                ):
                     self._schedule_auto_start_monitor(2000)
 
     def _build_editor(self, parent_frame):
@@ -25627,16 +25853,9 @@ default_envs = {self._pio_env_name()}
                 self._bg_executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
-        # Stop serial monitor on close
+        # Stop serial monitor on close without blocking Tk on thread.join().
         self._monitor_should_run = False
-        self.serial_running = False
-        if self.serial_conn and self.serial_conn.is_open:
-            try:
-                self.serial_conn.close()
-            except Exception:
-                pass
-        if self.serial_thread and self.serial_thread.is_alive():
-            self.serial_thread.join(timeout=1.0)
+        self._stop_serial_session()
 
         # Clean up this instance configuration from the shared file
         try:

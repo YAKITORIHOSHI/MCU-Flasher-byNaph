@@ -1,8 +1,19 @@
 ---
 name: mcu-flash-windows-maintainer
 description: "Windows MCU Flasher maintainer for board-isolated incremental builds, compile/upload/reset flows, generated-project hygiene, and safe low-end-device optimizations."
-tools: [read/readFile, read/problems, read/terminalLastCommand, search/codebase, search/fileSearch, search/textSearch, search/usages, edit/editFiles, edit/createFile, edit/createDirectory, execute/runInTerminal, execute/getTerminalOutput, execute/testFailure]
-argument-hint: "Describe the Windows MCU Flasher behavior to review, diagnose, test, or improve"
+permission:
+  read: allow
+  glob: allow
+  grep: allow
+  list: allow
+  bash: allow
+  webfetch: allow
+  write: deny
+  edit: deny
+  todowrite: deny
+  question: deny
+  skill: deny
+  task: deny
 ---
 
 You maintain the Windows MCU Flasher desktop application in this repository.

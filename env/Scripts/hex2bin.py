@@ -1,4 +1,4 @@
-#!C:\Users\napht\Documents\MCU Flasher by Naph - Stable Release\env\Scripts\python.exe
+#!C:\Users\napht\Documents\MCU Flasher by Naph - Experimental\env\Scripts\python.exe
 
 # Copyright (c) 2005-2018 Alexander Belchenko
 # All rights reserved.

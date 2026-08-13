@@ -574,142 +574,53 @@ def _hide_junction(path: Path) -> None:
     except Exception:
         pass
 
-def _make_localappdata_shortcut(real_dir: Path) -> None:
-    """Best-effort: point %LOCALAPPDATA%\\.platformio-mcu-gui at real_dir.
-
-    Convenience pointer only — a directory junction on Windows (a symlink
-    elsewhere) — so anything that still goes looking under LocalAppData
-    lands in the real, project-local store instead. Never load-bearing:
-    every actual read/write of packages goes through PLATFORMIO_CORE_DIR /
-    real_dir directly, so if this fails we just skip it silently.
-    """
-    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
-    if not local_appdata:
-        local_appdata = str(Path.home() / "AppData" / "Local")
-    link_path = Path(local_appdata) / ".platformio-mcu-gui"
-
+def _is_windows_reparse_point(path: Path) -> bool:
+    """Return True when *path* is a Windows junction or symbolic-link reparse point."""
+    if sys.platform != "win32":
+        return False
     try:
+        if hasattr(path, "is_junction") and path.is_junction():
+            return True
+        if path.is_symlink():
+            return True
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        return attrs != -1 and bool(attrs & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+    except Exception:
+        return False
+
+
+def _ensure_junction(link_path: Path, real_dir: Path) -> str | None:
+    """Create or repair an app-owned directory alias for ``real_dir``.
+
+    Existing junctions/symlinks are safe to repoint because deleting the
+    reparse-point entry does not delete the target directory. A normal,
+    non-empty directory is never removed, so unrelated user data is protected.
+    """
+    try:
+        real_dir = Path(real_dir)
+        real_dir.mkdir(parents=True, exist_ok=True)
         real_dir_resolved = real_dir.resolve()
     except Exception:
-        real_dir_resolved = real_dir
+        return None
 
     try:
-        if link_path.is_symlink():
+        # ``Path.exists`` is False for some broken reparse points, so include
+        # the explicit reparse/symlink probes in the existence test.
+        link_present = (
+            link_path.exists()
+            or link_path.is_symlink()
+            or _is_windows_reparse_point(link_path)
+        )
+        if link_present:
             try:
                 if link_path.resolve() == real_dir_resolved:
-                    _hide_junction(link_path)
-                    return
-            except Exception:
-                pass
-            try:
-                link_path.unlink()
-            except Exception:
-                return
-        elif link_path.exists():
-            if link_path.is_dir():
-                try:
-                    already_correct = link_path.resolve() == real_dir_resolved
-                except Exception:
-                    already_correct = False
-                if already_correct:
-                    _hide_junction(link_path)
-                    return
-                try:
-                    is_empty = not any(link_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if not is_empty:
-                    return  # real user data here — don't touch it
-                try:
-                    os.rmdir(link_path)  # unlinks an empty dir or a junction stub
-                except Exception:
-                    return
-            else:
-                return
-
-        if sys.platform == "win32":
-            try:
-                subprocess.run(
-                    ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
-                    check=True,
-                    capture_output=True,
-                )
-            except Exception:
-                pass
-        else:
-            try:
-                link_path.symlink_to(real_dir, target_is_directory=True)
-            except Exception:
-                pass
-        _hide_junction(link_path)
-    except Exception:
-        pass
-
-
-def _make_root_drive_junction(real_dir: Path) -> str | None:
-    r"""Best-effort: create C:\.platformio-mcu-gui as a junction to real_dir.
-
-    GCC (the Xtensa/RISC-V ESP32 cross-compiler) uses Windows CreateProcess
-    internally to spawn cc1plus.exe. Unlike subprocess.Popen, it does NOT
-    quote paths that contain spaces, so it fails with:
-
-        xtensa-esp32s3-elf-g++: error: CreateProcess: No such file or directory
-
-    when PLATFORMIO_CORE_DIR (and therefore the toolchain binary path) contains
-    spaces. Creating a junction at the root of the current drive (no spaces)
-    and using that as PLATFORMIO_CORE_DIR works around this GCC limitation.
-
-    Returns the junction path string on success, or None if the junction could
-    not be created (e.g. non-Windows OS, no write access to C:\, junction
-    already points somewhere unrelated, etc.).
-    """
-    if sys.platform != "win32":
-        return None
-    try:
-        # Use the same drive as SCRIPT_DIR so the junction always lives on a
-        # locally writable drive even if the project is on a non-C: drive.
-        drive = Path(real_dir).drive or "C:"
-        link_path = Path(drive + "\\.platformio-mcu-gui")
-
-        try:
-            real_dir_resolved = real_dir.resolve()
-        except Exception:
-            real_dir_resolved = real_dir
-
-        # If the junction already points at our real store, reuse it.
-        if link_path.exists() or link_path.is_symlink():
-            existing_target = None
-            try:
-                existing_target = link_path.resolve()
-                if existing_target == real_dir_resolved:
-                    _hide_junction(link_path)
                     return str(link_path)
             except Exception:
                 pass
-            # A previous bootstrap incorrectly pointed this known junction at
-            # the project root. Repair that exact legacy target, but leave any
-            # unrelated non-empty junction alone.
-            try:
-                if existing_target == Path(real_dir).parent.parent.parent.resolve():
-                    subprocess.run(
-                        ["cmd", "/c", "rmdir", str(link_path)],
-                        check=True,
-                        capture_output=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                else:
-                    existing_target = None
-            except Exception:
-                existing_target = None
-            if existing_target is None:
-                try:
-                    # Only remove it if it resolves to our own store (already
-                    # checked above) or if it is an empty stub junction we own.
-                    is_empty = not any(link_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if not is_empty:
-                    return None  # has real data — don't touch it
+
+            if sys.platform == "win32" and _is_windows_reparse_point(link_path):
+                # rmdir removes only the junction/symlink entry, never its target.
                 try:
                     subprocess.run(
                         ["cmd", "/c", "rmdir", str(link_path)],
@@ -719,79 +630,237 @@ def _make_root_drive_junction(real_dir: Path) -> str | None:
                     )
                 except Exception:
                     return None
+            elif link_path.is_symlink():
+                try:
+                    link_path.unlink()
+                except Exception:
+                    return None
+            elif link_path.is_dir():
+                try:
+                    is_empty = not any(link_path.iterdir())
+                except Exception:
+                    is_empty = False
+                if not is_empty:
+                    return None
+                try:
+                    os.rmdir(link_path)
+                except Exception:
+                    return None
+            else:
+                return None
 
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir)],
-            check=True,
-            capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        _hide_junction(link_path)
+        try:
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        if sys.platform == "win32":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_path), str(real_dir_resolved)],
+                check=True,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            link_path.symlink_to(real_dir_resolved, target_is_directory=True)
+
+        try:
+            if link_path.resolve() != real_dir_resolved:
+                return None
+        except Exception:
+            return None
         return str(link_path)
     except Exception:
         return None
 
 
+_MCUFLASHER_APP_DIRNAME = ".mcuflasher-app"
+_PLATFORMIO_ALIAS_NAME = ".platformio-mcu-gui"
+_MODULES_ALIAS_NAME = ".mcuflasher-libs"
+
+
+def _prepare_mcuflasher_app_root(app_root: Path) -> Path | None:
+    """Create the app-owned namespace as a NORMAL hidden, writable directory.
+
+    The parent itself must never be a symlink/junction.  If an unrelated file,
+    directory reparse point, or other object already occupies the requested
+    location, leave it untouched and let the caller try its fallback location.
+    """
+    try:
+        app_root = Path(app_root)
+        if (
+            app_root.exists()
+            or app_root.is_symlink()
+            or _is_windows_reparse_point(app_root)
+        ):
+            if _is_windows_reparse_point(app_root) or app_root.is_symlink():
+                return None
+            if not app_root.is_dir():
+                return None
+        else:
+            app_root.mkdir(parents=True, exist_ok=True)
+
+        if _is_windows_reparse_point(app_root) or not app_root.is_dir():
+            return None
+
+        # Keep the namespace ordinary and writable.  Hidden is the only Windows
+        # attribute intentionally applied to the parent directory.
+        try:
+            os.chmod(app_root, 0o777)
+        except Exception:
+            pass
+        hide_hidden_attribute(app_root)
+        return app_root
+    except Exception:
+        return None
+
+
+def _mcuflasher_app_root(real_dir: Path) -> Path | None:
+    r"""Return the writable ``.mcuflasher-app`` namespace for this app.
+
+    Prefer ``<drive>:\.mcuflasher-app`` so PlatformIO/compiler paths remain
+    short.  If the drive root cannot be used without touching unrelated data,
+    fall back to ``%LOCALAPPDATA%\.mcuflasher-app``.  Both are normal folders;
+    only their children are junctions.
+    """
+    if sys.platform != "win32":
+        return None
+
+    real_dir = Path(real_dir)
+    drive = real_dir.drive or Path(SCRIPT_DIR).drive or "C:"
+    candidates = [Path(drive + "\\.mcuflasher-app")]
+
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_appdata:
+        local_appdata = str(Path.home() / "AppData" / "Local")
+    candidates.append(Path(local_appdata) / _MCUFLASHER_APP_DIRNAME)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(str(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        prepared = _prepare_mcuflasher_app_root(candidate)
+        if prepared is not None:
+            return prepared
+    return None
+
+
+def _remove_legacy_app_junction(path: Path) -> bool:
+    """Remove one exact legacy MCU Flasher junction ENTRY, never its target.
+
+    Normal files/directories are deliberately ignored.  The target is not
+    inspected, adopted, migrated, or otherwise treated as related state.
+    """
+    if sys.platform != "win32":
+        return False
+    path = Path(path)
+    try:
+        if not _is_windows_reparse_point(path):
+            return False
+        # Legacy aliases were hidden in older builds.  /L changes only the
+        # junction entry attributes, not the target directory.
+        subprocess.run(
+            ["attrib", "/L", "-h", "-s", str(path)],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        subprocess.run(
+            ["cmd", "/c", "rmdir", str(path)],
+            check=True,
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return not _is_windows_reparse_point(path)
+    except Exception:
+        return False
+
+
+def _cleanup_legacy_app_aliases(script_dir: Path) -> None:
+    r"""Remove the old top-level alias entries after the new namespace is live.
+
+    These exact app-owned legacy names are cleaned up only when they are
+    reparse points.  A real directory at any of these locations is never
+    removed.  Removing a junction with ``rmdir`` deletes the link entry only.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        drive = Path(script_dir).drive or Path(SCRIPT_DIR).drive or "C:"
+        legacy = [
+            Path(drive + "\\.mcuflasher-libs"),
+            Path(drive + "\\.platformio-mcu-gui"),
+        ]
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if not local_appdata:
+            local_appdata = str(Path.home() / "AppData" / "Local")
+        legacy.append(Path(local_appdata) / ".platformio-mcu-gui")
+        for old_alias in legacy:
+            _remove_legacy_app_junction(old_alias)
+    except Exception:
+        pass
+
+
+def _short_platformio_core_alias(real_dir: Path) -> str:
+    r"""Return the app-namespace alias for one physical PlatformIO store.
+
+    Preferred layout::
+
+        <drive>:\.mcuflasher-app\                 (normal hidden folder)
+            .platformio-mcu-gui -> <project>\src\.platformio-mcu-gui
+            .mcuflasher-libs    -> <project>\src\modules
+
+    Nesting adds only a small path prefix while retaining ample headroom below
+    Windows' CreateProcess command-line limit.  If the drive-root namespace is
+    unavailable, the same two-child layout is used under LOCALAPPDATA.
+    """
+    real_dir = Path(real_dir)
+    if sys.platform != "win32":
+        return str(real_dir)
+
+    app_root = _mcuflasher_app_root(real_dir)
+    if app_root is not None:
+        alias = _ensure_junction(app_root / _PLATFORMIO_ALIAS_NAME, real_dir)
+        if alias:
+            return alias
+
+    # Last-resort safety: preserve functionality rather than creating or
+    # deleting unrelated filesystem objects when no namespace is writable.
+    return str(real_dir)
+
+
 def _get_safe_platformio_core_dir(script_dir: Path) -> str:
-    """Return the one canonical PlatformIO package store used by Bootstrap and the GUI.
+    """Return the PlatformIO core path used by Bootstrap and the GUI.
 
-    Store lives at ``<PROJECT_FOLDER>/src/.platformio-mcu-gui`` so the
-    project stays self-contained. A directory junction/symlink is left at
-    ``%LOCALAPPDATA%\\.platformio-mcu-gui`` pointing back at the real store,
-    purely as a convenience pointer for anything that goes looking there.
-
-    On Windows, when the project path contains spaces, GCC's internal
-    CreateProcess call fails to spawn cc1plus.exe because it does not quote
-    paths. In that case a space-free root-drive junction is created (e.g.
-    ``C:\\.platformio-mcu-gui``) and returned as PLATFORMIO_CORE_DIR so the
-    toolchain binary path that GCC constructs never contains spaces.
-
-    When the GUI is launched by Bootstrap, preserve the inherited
-    PLATFORMIO_CORE_DIR verbatim.  A standalone GUI launch derives the exact
-    same per-user location.  Keeping one core_dir is critical: PlatformIO stores
-    development platforms, frameworks, SDKs and toolchains below this directory,
-    so two different values make the same packages download twice.
+    The physical package store remains project-local at
+    ``<PROJECT_FOLDER>/src/.platformio-mcu-gui``. On Windows, PlatformIO is
+    pointed at a short junction to that same store so ESP32 GCC does not exceed
+    the CreateProcess command-line limit. A stale app-owned junction is repaired
+    automatically.
     """
     inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
     if inherited:
         try:
             inherited_path = Path(os.path.expandvars(os.path.expanduser(inherited)))
             inherited_path.mkdir(parents=True, exist_ok=True)
-            _make_localappdata_shortcut(inherited_path)
-            return str(inherited_path)
+            return _short_platformio_core_alias(inherited_path)
         except Exception:
             pass
 
     target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        _make_localappdata_shortcut(target_dir)
-        # On Windows, when the real store path contains spaces, GCC's internal
-        # CreateProcess cannot launch cc1plus.exe without quoting the path.
-        # Offer a space-free root-drive junction as PLATFORMIO_CORE_DIR so
-        # the toolchain binary path never contains spaces.
-        if sys.platform == "win32" and " " in str(target_dir):
-            junction = _make_root_drive_junction(target_dir)
-            if junction:
-                return junction
-        return str(target_dir)
+        return _short_platformio_core_alias(target_dir)
     except Exception:
         pass
 
-    # Last-resort portable fallback, if src isn't writable for some
-    # reason.  Both Bootstrap and the GUI use this same fallback, so they
-    # still cannot silently diverge into separate stores.
     fallback = script_dir / "src" / "_board-frameworks" / ".platformio"
     try:
         fallback.mkdir(parents=True, exist_ok=True)
-        _make_localappdata_shortcut(fallback)
-        if sys.platform == "win32" and " " in str(fallback):
-            junction = _make_root_drive_junction(fallback)
-            if junction:
-                return junction
+        return _short_platformio_core_alias(fallback)
     except Exception:
-        pass
-    return str(fallback)
+        return str(fallback)
 
 
 def _neutralize_conflicting_global_platformio_config() -> None:
@@ -848,83 +917,22 @@ def _neutralize_conflicting_global_platformio_config() -> None:
 
 
 def _ensure_modules_junction(script_dir: Path) -> str | None:
-    r"""Best-effort: create a space-free root-drive junction pointing at src/modules.
+    r"""Create the modules junction INSIDE the shared MCU Flasher namespace.
 
-    The project folder name contains spaces (e.g. "MCU Flasher by Naph - Stable Release").
-    Some tools (GCC's internal CreateProcess, Arduino CLI) cannot handle spaces in paths.
-    This creates ``<drive>:\.mcuflasher-libs`` as a directory junction to ``src/modules``
-    so those tools always have a clean, space-free path to reach the libraries.
-
-    The junction is re-created automatically on every startup so it survives
-    being copied to a different machine or drive letter.
-
-    ``script_dir`` is the project root. The drive letter is derived
-    dynamically from the resolved ``src/modules`` path, so this works on C:, D:,
-    E:, or any other drive letter without any hardcoded values.
-
-    Returns the junction path string on success, or None.
+    The target is always this running project's own ``src/modules`` directory.
+    The namespace parent is a normal hidden/writable directory; this child is a
+    junction.  No external target is searched for or adopted.
     """
     if sys.platform != "win32":
         return None
     try:
-        libs_dir = (script_dir / "src" / "modules").resolve()
-        project_root = Path(script_dir).resolve()
-        # Drive letter is always derived dynamically from wherever the project lives.
-        drive = Path(libs_dir).drive
-        if not drive:
-            return None  # cannot determine drive — skip silently
-        link_path = Path(drive + "\\.mcuflasher-libs")
-
-        # If already correct, reuse (and re-apply hidden flag in case it was cleared).
-        if link_path.exists() or link_path.is_symlink():
-            try:
-                if link_path.resolve() == libs_dir:
-                    _hide_junction(link_path)
-                    return str(link_path)
-            except Exception:
-                pass
-            # Repair the exact legacy bug where this app linked to the whole
-            # codebase. Never remove an unrelated non-empty root junction.
-            try:
-                existing_target = link_path.resolve()
-            except Exception:
-                existing_target = None
-            if existing_target == project_root:
-                try:
-                    subprocess.run(
-                        ["cmd", "/c", "rmdir", str(link_path)],
-                        check=True, capture_output=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                except Exception:
-                    return None
-            else:
-                try:
-                    is_empty = not any(link_path.iterdir())
-                except Exception:
-                    is_empty = False
-                if not is_empty:
-                    return None  # real data — don't touch it
-                try:
-                    subprocess.run(
-                        ["cmd", "/c", "rmdir", str(link_path)],
-                        check=True, capture_output=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                except Exception:
-                    return None
-
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link_path), str(libs_dir)],
-            check=True, capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        # Hide the junction entry itself, never the src/libs target.
-        _hide_junction(link_path)
-        return str(link_path)
+        libs_dir = (Path(script_dir) / "src" / "modules").resolve()
+        app_root = _mcuflasher_app_root(libs_dir)
+        if app_root is None:
+            return None
+        return _ensure_junction(app_root / _MODULES_ALIAS_NAME, libs_dir)
     except Exception:
         return None
-
 
 
 def _configure_platformio_environment(script_dir: Path) -> str:
@@ -933,8 +941,19 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     core_dir = _get_safe_platformio_core_dir(script_dir)
     os.environ["PLATFORMIO_CORE_DIR"] = core_dir
 
-    # Ensure the space-free libs junction exists on this machine.
-    _ensure_modules_junction(script_dir)
+    # Build both aliases under one app-owned namespace.  Only after both
+    # junctions exist do we remove the old top-level junction entries.
+    modules_alias = _ensure_modules_junction(script_dir)
+    try:
+        core_path = Path(core_dir)
+        using_new_namespace = (
+            core_path.name == _PLATFORMIO_ALIAS_NAME
+            and core_path.parent.name == _MCUFLASHER_APP_DIRNAME
+        )
+    except Exception:
+        using_new_namespace = False
+    if using_new_namespace and modules_alias:
+        _cleanup_legacy_app_aliases(script_dir)
 
     try:
         c_path = Path(core_dir)
@@ -4775,6 +4794,7 @@ def ensure_board_toolchains() -> bool:
 
 
 ESP32_BOARD_INDEX_URL = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+ESP32_BOARD_INDEX_MIRROR_URL = "https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_esp32_index_cn.json"
 
 
 def _archive_folder_name(archive_name: str) -> str:
@@ -4785,63 +4805,109 @@ def _archive_folder_name(archive_name: str) -> str:
     return Path(archive_name).stem
 
 
-def _load_latest_esp32_board_release() -> dict | None:
-    """Resolve the latest stable Arduino-ESP32 board-core archive.
+def _normalize_sha256(value: object) -> str:
+    """Return a lowercase 64-hex SHA-256 from Boards Manager metadata."""
+    match = re.search(r"([0-9a-fA-F]{64})", str(value or ""))
+    return match.group(1).lower() if match else ""
 
-    Uses Espressif's official stable Boards Manager index and keeps a local copy
-    so a temporary network/index outage does not invalidate an already usable
-    bootstrap installation path.
-    """
-    cache_dir = SCRIPT_DIR / "index_json"
-    cache_file = cache_dir / "package_esp32_index.json"
-    data = None
 
-    body = _fetch_url(ESP32_BOARD_INDEX_URL, timeout=20)
-    if body:
-        try:
-            data = json.loads(body)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(body, encoding="utf-8")
-        except Exception:
-            data = None
-
-    if data is None and cache_file.is_file():
-        try:
-            data = json.loads(cache_file.read_text(encoding="utf-8"))
-        except Exception:
-            data = None
-            # A truncated/copied cache must not poison future launches.
-            safe_unlink(cache_file)
-
+def _esp32_release_from_index(data: object, target_version: str | None = None) -> dict | None:
+    """Select one stable ESP32 platform entry and retain integrity metadata."""
     if not isinstance(data, dict):
         return None
 
-    candidates = []
+    target_base = re.sub(r"-cn$", "", str(target_version or "").strip(), flags=re.IGNORECASE)
+    candidates: list[dict] = []
     for package in data.get("packages", []):
-        if not isinstance(package, dict):
-            continue
-        if str(package.get("name", "")).lower() != "esp32":
+        if not isinstance(package, dict) or str(package.get("name", "")).lower() != "esp32":
             continue
         for platform in package.get("platforms", []):
             if not isinstance(platform, dict):
                 continue
             if str(platform.get("architecture", "")).lower() != "esp32":
                 continue
+
             version = str(platform.get("version", "")).strip()
+            version_base = re.sub(r"-cn$", "", version, flags=re.IGNORECASE)
             url = str(platform.get("url", "")).strip()
             archive = str(platform.get("archiveFileName", "")).strip() or url.rsplit("/", 1)[-1]
-            # Stable index should already contain stable releases, but keep this
-            # guard so prerelease tags never outrank a normal numbered release.
-            if version and url and archive and not re.search(r"(?:alpha|beta|rc|dev)", version, re.IGNORECASE):
-                candidates.append((version, url, archive))
+            if not version or not url or not archive:
+                continue
+            if re.search(r"(?:alpha|beta|rc|dev)", version, re.IGNORECASE):
+                continue
+            if target_base and version_base.lower() != target_base.lower():
+                continue
+
+            try:
+                expected_size = int(platform.get("size", 0) or 0)
+            except (TypeError, ValueError):
+                expected_size = 0
+            candidates.append({
+                "version": version,
+                "version_base": version_base,
+                "url": url,
+                "archive": archive,
+                "size": max(0, expected_size),
+                "sha256": _normalize_sha256(platform.get("checksum", "")),
+            })
 
     if not candidates:
         return None
+    candidates.sort(key=lambda item: _version_tuple(item["version_base"]), reverse=True)
+    return candidates[0]
 
-    candidates.sort(key=lambda item: _version_tuple(item[0]), reverse=True)
-    version, url, archive = candidates[0]
-    return {"version": version, "url": url, "archive": archive}
 
+def _load_esp32_index(url: str, cache_name: str, timeout: int = 25) -> dict | None:
+    """Fetch one official ESP32 index with a validated local JSON fallback."""
+    cache_dir = SCRIPT_DIR / "index_json"
+    cache_file = cache_dir / cache_name
+    data = None
+
+    body = _fetch_url(url, timeout=timeout)
+    if body:
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                data = parsed
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(body, encoding="utf-8")
+        except Exception:
+            data = None
+
+    if data is None and cache_file.is_file():
+        try:
+            parsed = json.loads(cache_file.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            safe_unlink(cache_file)
+
+    return data if isinstance(data, dict) else None
+
+
+def _load_latest_esp32_board_release() -> dict | None:
+    """Resolve the latest stable Arduino-ESP32 board-core archive.
+
+    The canonical source is Espressif's stable Boards Manager index.  Size and
+    SHA-256 metadata are retained so an interrupted/resumed download is never
+    accepted merely because the HTTP connection happened to finish.
+    """
+    data = _load_esp32_index(
+        ESP32_BOARD_INDEX_URL,
+        "package_esp32_index.json",
+        timeout=25,
+    )
+    return _esp32_release_from_index(data)
+
+
+def _load_esp32_mirror_release(version: str) -> dict | None:
+    """Resolve the matching release from Espressif's documented JihuLab mirror."""
+    data = _load_esp32_index(
+        ESP32_BOARD_INDEX_MIRROR_URL,
+        "package_esp32_index_cn.json",
+        timeout=30,
+    )
+    return _esp32_release_from_index(data, target_version=version)
 
 def _extract_board_archive_folder_only(archive_path: Path, folder_path: Path) -> bool:
     """Extract one board archive into a folder and remove the archive afterward."""
@@ -4902,10 +4968,11 @@ def _extract_board_archive_folder_only(archive_path: Path, folder_path: Path) ->
 def ensure_esp32_board_folder() -> bool:
     """Download the latest stable Arduino-ESP32 board core as a folder.
 
-    This mirrors the Board Browser's "Folder Only" option under
-    <download_dir>/Boards instead of leaving the downloaded archive behind.
-    PlatformIO still uses its own package store for compilation; this folder is
-    the application's portable/downloaded board-core copy.
+    Large GitHub release assets are downloaded resumably and verified against
+    Espressif's Boards Manager size/SHA-256 metadata.  If the primary release
+    asset remains unreachable, try Espressif's documented JihuLab mirror and,
+    finally, the official GitHub source tag archive.  PlatformIO remains a
+    separate package store; this is the app's portable Board Browser folder.
     """
     dest_dir = _get_board_download_dir() / "Boards"
     if dest_dir.is_dir():
@@ -4922,28 +4989,98 @@ def ensure_esp32_board_folder() -> bool:
     status("Resolving latest stable ESP32 board core from Espressif...")
     release = _load_latest_esp32_board_release()
     if not release:
-        warn("Could not resolve the ESP32 board-core archive. PlatformIO ESP32 support can still be prepared separately.")
-        return False
+        # A regional mirror can also supply the stable index itself.  This is
+        # especially useful where GitHub Pages is slow or blocked.
+        mirror_data = _load_esp32_index(
+            ESP32_BOARD_INDEX_MIRROR_URL,
+            "package_esp32_index_cn.json",
+            timeout=30,
+        )
+        release = _esp32_release_from_index(mirror_data)
+        if release:
+            release["source"] = "Espressif JihuLab mirror"
+        else:
+            warn("Could not resolve the ESP32 board-core archive from either official index. PlatformIO ESP32 support can still be prepared separately.")
+            return False
 
+    release.setdefault("source", "Espressif stable index")
     dest_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dest_dir / release["archive"]
     folder_path = dest_dir / _archive_folder_name(release["archive"])
+    partial_path = archive_path.with_name(archive_path.name + ".part")
 
+    primary_error = None
     try:
         status(f"Downloading ESP32 Boards {release['version']} (Folder Only)...")
-        _download_file(release["url"], archive_path, timeout=300, attempts=3)
-        status(f"Unpacking ESP32 Boards {release['version']} into {folder_path.name}...")
+        _download_file(
+            release["url"],
+            archive_path,
+            timeout=300,
+            attempts=5,
+            expected_size=release.get("size", 0),
+            expected_sha256=release.get("sha256", ""),
+        )
+    except Exception as exc:
+        primary_error = exc
+
+        # Do not append bytes from a different mirror/archive to the primary
+        # partial file. Each source starts with a clean partial artifact.
+        safe_unlink(partial_path)
+        safe_unlink(archive_path)
+
+        mirror = _load_esp32_mirror_release(release["version_base"])
+        if mirror and mirror.get("url") and mirror.get("url") != release.get("url"):
+            try:
+                status(f"Primary ESP32 download was interrupted; trying Espressif mirror for {release['version_base']}...")
+                _download_file(
+                    mirror["url"],
+                    archive_path,
+                    timeout=300,
+                    attempts=4,
+                    expected_size=mirror.get("size", 0),
+                    expected_sha256=mirror.get("sha256", ""),
+                )
+                primary_error = None
+            except Exception as mirror_exc:
+                primary_error = RuntimeError(f"primary source: {exc}; mirror: {mirror_exc}")
+                safe_unlink(partial_path)
+                safe_unlink(archive_path)
+
+        # Last source-only fallback. This is still Espressif's official GitHub
+        # repository, but unlike the Boards Manager release asset it travels via
+        # GitHub's tag/codeload path and therefore avoids the release-assets CDN.
+        if primary_error is not None:
+            source_version = release["version_base"]
+            source_url = f"https://github.com/espressif/arduino-esp32/archive/refs/tags/{source_version}.zip"
+            try:
+                status(f"Trying official ESP32 source archive for {source_version}...")
+                _download_file(
+                    source_url,
+                    archive_path,
+                    timeout=300,
+                    attempts=4,
+                )
+                primary_error = None
+            except Exception as source_exc:
+                primary_error = RuntimeError(f"{primary_error}; source archive: {source_exc}")
+
+    if primary_error is not None:
+        warn(f"Failed to download ESP32 Boards folder from all official sources: {primary_error}")
+        return False
+
+    try:
+        status(f"Unpacking ESP32 Boards {release['version_base']} into {folder_path.name}...")
         if _gui:
             _gui.set_progress_percent(0)
         if not _extract_board_archive_folder_only(archive_path, folder_path):
-            warn("ESP32 board-core archive extracted, but boards.txt could not be verified.")
+            warn("ESP32 board-core archive was downloaded, but boards.txt could not be verified after extraction.")
+            safe_rmtree(folder_path)
             return False
-        ok(f"ESP32 Boards {release['version']} downloaded as folder: Boards/{folder_path.name}")
+        ok(f"ESP32 Boards {release['version_base']} downloaded as folder: Boards/{folder_path.name}")
         return True
     except Exception as exc:
-        warn(f"Failed to download ESP32 Boards folder: {exc}")
+        warn(f"Failed to prepare ESP32 Boards folder: {exc}")
         return False
-
 
 def ensure_arduino_avr_board() -> bool:
     """Pre-download and extract Arduino AVR Boards framework if not present."""
@@ -5018,64 +5155,284 @@ def ensure_arduino_avr_board() -> bool:
 
 
 # ── Download helper ───────────────────────────────────────────
-def _download_file(url: str, dest: Path, timeout: int = 45, attempts: int = 3):
-    """Download atomically with retries so failed downloads never poison an installer."""
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest().lower()
+
+
+def _download_matches_expectations(
+    path: Path,
+    expected_size: int = 0,
+    expected_sha256: str = "",
+) -> tuple[bool, str]:
+    """Validate a completed/partial artifact against official metadata."""
+    if not path.is_file():
+        return False, "file does not exist"
+
+    size = path.stat().st_size
+    if size <= 0:
+        return False, "file is empty"
+    if expected_size and size != expected_size:
+        return False, f"size mismatch ({size} of {expected_size} bytes)"
+
+    expected_hash = _normalize_sha256(expected_sha256)
+    if expected_hash:
+        actual_hash = _file_sha256(path)
+        if actual_hash != expected_hash:
+            return False, f"SHA-256 mismatch ({actual_hash[:12]}... != {expected_hash[:12]}...)"
+    return True, "verified"
+
+
+def _curl_resume_download(
+    url: str,
+    partial: Path,
+    *,
+    timeout: int,
+    expected_size: int = 0,
+) -> None:
+    """Use Windows/system curl as a second HTTP stack when urllib keeps dropping."""
+    curl = shutil.which("curl.exe") or shutil.which("curl")
+    if not curl:
+        raise RuntimeError("curl is not available")
+
+    def _run(resume: bool) -> subprocess.CompletedProcess:
+        cmd = [
+            curl,
+            "--location",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--retry", "4",
+            "--retry-delay", "2",
+            "--retry-all-errors",
+            "--connect-timeout", "20",
+            "--speed-time", "45",
+            "--speed-limit", "1024",
+            "--output", str(partial),
+        ]
+        if resume and partial.exists() and partial.stat().st_size > 0:
+            cmd.extend(["--continue-at", "-"])
+        cmd.append(url)
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(180, timeout * 2),
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+
+    if _gui:
+        _gui.start_busy()
+
+    had_partial = partial.exists() and partial.stat().st_size > 0
+    result = _run(resume=had_partial)
+    if result.returncode != 0 and had_partial:
+        # Some CDNs reject Range even though a normal full transfer works.
+        safe_unlink(partial)
+        result = _run(resume=False)
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or f"curl exit {result.returncode}").strip()
+        raise RuntimeError(detail[-500:])
+
+    if expected_size and partial.stat().st_size != expected_size:
+        raise OSError(f"curl returned {partial.stat().st_size} of {expected_size} bytes")
+
+
+def _download_file(
+    url: str,
+    dest: Path,
+    timeout: int = 45,
+    attempts: int = 3,
+    expected_size: int | str | None = None,
+    expected_sha256: str | None = None,
+):
+    """Download atomically, resumably, and (when metadata exists) cryptographically verify it.
+
+    Interrupted transfers keep ``.part`` and resume with HTTP Range instead of
+    restarting a large ESP32 archive from byte zero.  If urllib repeatedly
+    encounters a remote disconnect, curl is tried as an independent HTTP/TLS
+    implementation before the caller moves to another official source.
+    """
+    import urllib.error
     import urllib.request
+
+    try:
+        expected_size_i = max(0, int(expected_size or 0))
+    except (TypeError, ValueError):
+        expected_size_i = 0
+    expected_hash = _normalize_sha256(expected_sha256 or "")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_name(dest.name + ".part")
     last_error = None
+
+    # Reuse an already completed file only when it passes the same validation
+    # that a new network transfer would receive.
+    if dest.is_file():
+        verified, reason = _download_matches_expectations(dest, expected_size_i, expected_hash)
+        if verified:
+            ok(f"Using verified {dest.name}")
+            if _gui:
+                _gui.set_progress_percent(100)
+            return
+        safe_unlink(dest)
+
+    if partial.is_file() and expected_size_i and partial.stat().st_size > expected_size_i:
+        safe_unlink(partial)
+
     if _gui:
         _gui.set_progress_percent(0)
 
     try:
-        for attempt in range(1, attempts + 1):
+        for attempt in range(1, max(1, attempts) + 1):
+            resume_from = partial.stat().st_size if partial.is_file() else 0
             try:
                 if attempt == 1:
-                    status(f"Downloading {dest.name}...")
+                    if resume_from:
+                        status(f"Resuming {dest.name} from {resume_from / 1048576:.1f} MB...")
+                    else:
+                        status(f"Downloading {dest.name}...")
                 else:
-                    status(f"Retrying download of {dest.name} ({attempt}/{attempts})...")
+                    status(f"Retrying {dest.name} ({attempt}/{attempts}) — keeping partial download...")
 
-                request = urllib.request.Request(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Accept": "*/*",
-                    },
-                )
+                headers = {
+                    "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; ESP32 bootstrap)",
+                    "Accept": "*/*",
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                }
+                if resume_from > 0:
+                    headers["Range"] = f"bytes={resume_from}-"
+
+                request = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(request, timeout=timeout) as response:
-                    total = int(response.headers.get("Content-Length", "0") or 0)
-                    received = 0
-                    with open(partial, "wb") as output:
+                    status_code = int(getattr(response, "status", response.getcode()) or 200)
+                    content_range = str(response.headers.get("Content-Range", "") or "")
+
+                    # A correct resume must be HTTP 206 and start exactly at the
+                    # local partial length. If a CDN ignores Range (HTTP 200),
+                    # safely restart this response from byte zero instead.
+                    write_mode = "ab" if resume_from > 0 and status_code == 206 else "wb"
+                    base_received = resume_from if write_mode == "ab" else 0
+                    if write_mode == "ab":
+                        match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
+                        if match and int(match.group(1)) != resume_from:
+                            raise OSError(
+                                f"server resumed at byte {match.group(1)} instead of {resume_from}"
+                            )
+
+                    response_length = int(response.headers.get("Content-Length", "0") or 0)
+                    response_total = 0
+                    range_match = re.search(r"/(\d+)$", content_range)
+                    if range_match:
+                        response_total = int(range_match.group(1))
+                    elif response_length:
+                        response_total = base_received + response_length
+                    total = expected_size_i or response_total
+
+                    with open(partial, write_mode) as output:
+                        received = base_received
                         while True:
-                            block = response.read(1024 * 256)
+                            block = response.read(1024 * 1024)
                             if not block:
                                 break
                             output.write(block)
                             received += len(block)
                             if _gui:
                                 if total:
-                                    _gui.set_progress_percent(int(received * 100 / total))
+                                    _gui.set_progress_percent(min(99, int(received * 100 / total)))
                                 else:
                                     _gui.start_busy()
-                if received <= 0 or (total and received != total):
-                    raise OSError(f"incomplete download ({received} of {total or 'unknown'} bytes)")
+                        output.flush()
+
+                # If the server advertised a complete size, treat an early EOF
+                # as an interrupted request and retain the partial for Range retry.
+                current_size = partial.stat().st_size if partial.is_file() else 0
+                final_total = expected_size_i or response_total
+                if final_total and current_size != final_total:
+                    raise OSError(f"incomplete download ({current_size} of {final_total} bytes)")
+                if current_size <= 0:
+                    raise OSError("download produced an empty file")
+
+                verified, reason = _download_matches_expectations(
+                    partial,
+                    expected_size_i,
+                    expected_hash,
+                )
+                if not verified:
+                    # A hash mismatch is not resumable: the accumulated bytes
+                    # are wrong, so discard them and retry cleanly.
+                    if "SHA-256 mismatch" in reason:
+                        safe_unlink(partial)
+                    raise OSError(reason)
+
                 os.replace(partial, dest)
-                ok(f"Saved to {dest.name}")
+                if _gui:
+                    _gui.set_progress_percent(100)
+                ok(f"Saved and verified {dest.name}" if (expected_size_i or expected_hash) else f"Saved to {dest.name}")
                 return
+
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                # HTTP 416 can mean the partial already reached the expected
+                # length. Verify before throwing away potentially complete data.
+                if exc.code == 416 and partial.is_file():
+                    verified, _ = _download_matches_expectations(partial, expected_size_i, expected_hash)
+                    if verified:
+                        os.replace(partial, dest)
+                        if _gui:
+                            _gui.set_progress_percent(100)
+                        ok(f"Saved and verified {dest.name}")
+                        return
+                    safe_unlink(partial)
             except Exception as exc:
                 last_error = exc
-                try:
-                    partial.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                if attempt < attempts:
-                    time.sleep(attempt)
+
+            if attempt < attempts:
+                # 1, 3, 7, 12... seconds: long enough for a throttled/CDN route
+                # to recover without making the bootstrap spin aggressively.
+                delay = min(12, (2 ** attempt) - 1)
+                time.sleep(delay)
+
+        # urllib is the most portable path, but Windows ships curl on supported
+        # releases. A second HTTP/TLS implementation handles machines where
+        # urllib repeatedly sees RemoteDisconnected on GitHub release assets.
+        try:
+            status(f"Python download was interrupted repeatedly; trying system curl for {dest.name}...")
+            _curl_resume_download(
+                url,
+                partial,
+                timeout=timeout,
+                expected_size=expected_size_i,
+            )
+            verified, reason = _download_matches_expectations(partial, expected_size_i, expected_hash)
+            if not verified:
+                safe_unlink(partial)
+                raise OSError(reason)
+            os.replace(partial, dest)
+            if _gui:
+                _gui.set_progress_percent(100)
+            ok(f"Saved and verified {dest.name}" if (expected_size_i or expected_hash) else f"Saved to {dest.name}")
+            return
+        except Exception as curl_exc:
+            last_error = RuntimeError(f"urllib: {last_error}; curl: {curl_exc}")
+
     finally:
         if _gui:
             _gui.stop_busy(restore_step=True)
 
-    raise RuntimeError(f"download failed after {attempts} attempts: {last_error}")
+    # Keep a valid-looking partial so a later app launch can continue it. Only
+    # corrupt hash data and cross-source switches explicitly delete .part.
+    raise RuntimeError(f"download failed after resumable retries: {last_error}")
 
 
 # ── pip install helper (quiet output + drives the progress bar) ─────
@@ -7415,20 +7772,17 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             except Exception:
                 pass
 
-        # ── Auto-heal Private Python Runtime ───────────────────────────
+        # ── Auto-heal Private Python Runtime & Environment ─────────────
         if sys.platform == "win32":
-            gui.root.after(0, lambda: gui.log_section("Checking Private Python Runtime"))
+            gui.root.after(0, lambda: gui.log_section("Checking Python Runtime Environment"))
             heal_result = _heal_private_python_runtime()
             if not heal_result:
                 gui.root.after(0, lambda: gui.log_warn(
                     "Private Python runtime could not be healed. The app will "
                     "attempt to continue with the current interpreter."
                 ))
-
-        # ── Python System Environment Variable (Global Base Python) ────
-        gui.root.after(0, lambda: gui.log_section("Checking Python System Environment"))
-        if sys.platform == "win32" and not ensure_python_system_environment():
-            gui.root.after(0, lambda: gui.log_warn("Could not permanently update System environment variables."))
+            if not ensure_python_system_environment():
+                gui.root.after(0, lambda: gui.log_warn("Could not permanently update System environment variables."))
 
         # ── Venv setup ────────────────────────────────────────────────
         venv_dir = SCRIPT_DIR / "env"
@@ -7692,10 +8046,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             elif not ensure_opencode_cli():
                 gui.root.after(0, lambda: gui.log_warn("OpenCode AI Assistant is missing or could not be installed automatically."))
 
-        # ── Refresh Python System Environment Variable (including env) ─
-        gui.root.after(0, lambda: gui.log_section("Updating Python System Environment"))
-        if sys.platform == "win32" and not ensure_python_system_environment():
-            gui.root.after(0, lambda: gui.log_warn("Could not permanently update System environment variables."))
 
         # ── Update checks ─────────────────────────────────────────────
         # An enabled update check uses a bounded pool of network requests,
