@@ -1,104 +1,5 @@
 [
   {
-    "id": "notif_1786371541_604",
-    "timestamp": "2026-08-10T22:19:01",
-    "date": "2026-08-10",
-    "time": "22:19:01",
-    "category": "system",
-    "level": "info",
-    "title": "Connecting to COM12 @ 115200…",
-    "message": "Connecting to COM12 @ 115200…",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371541_831",
-    "timestamp": "2026-08-10T22:19:01",
-    "date": "2026-08-10",
-    "time": "22:19:01",
-    "category": "device",
-    "level": "success",
-    "title": "✔ Connected — COM12 @ 115200",
-    "message": "✔ Connected — COM12 @ 115200",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371548_656",
-    "timestamp": "2026-08-10T22:19:08",
-    "date": "2026-08-10",
-    "time": "22:19:08",
-    "category": "pio_ini",
-    "level": "success",
-    "title": "platformio.ini Created",
-    "message": "📄 platformio.ini created for ESP32 Dev Module in C:\\Users\\napht\\Documents\\TRYLANG",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371548_663",
-    "timestamp": "2026-08-10T22:19:08",
-    "date": "2026-08-10",
-    "time": "22:19:08",
-    "category": "entry_points",
-    "level": "success",
-    "title": "Entry Points Verified",
-    "message": "✔ Entry points OK — setup()/loop() found in: TRYLANG.ino",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371560_536",
-    "timestamp": "2026-08-10T22:19:20",
-    "date": "2026-08-10",
-    "time": "22:19:20",
-    "category": "system",
-    "level": "info",
-    "title": "⏸ Paused for upload…",
-    "message": "⏸ Paused for upload…",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371574_680",
-    "timestamp": "2026-08-10T22:19:34",
-    "date": "2026-08-10",
-    "time": "22:19:34",
-    "category": "system",
-    "level": "info",
-    "title": "Connecting to COM12 @ 115200…",
-    "message": "Connecting to COM12 @ 115200…",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371574_907",
-    "timestamp": "2026-08-10T22:19:34",
-    "date": "2026-08-10",
-    "time": "22:19:34",
-    "category": "device",
-    "level": "success",
-    "title": "✔ Connected — COM12 @ 115200",
-    "message": "✔ Connected — COM12 @ 115200",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371949_968",
-    "timestamp": "2026-08-10T22:25:49",
-    "date": "2026-08-10",
-    "time": "22:25:49",
-    "category": "board_install",
-    "level": "success",
-    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
-    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371949_981",
-    "timestamp": "2026-08-10T22:25:49",
-    "date": "2026-08-10",
-    "time": "22:25:49",
-    "category": "system",
-    "level": "info",
-    "title": "Connecting to COM12 @ 115200…",
-    "message": "Connecting to COM12 @ 115200…",
-    "details": {}
-  },
-  {
     "id": "notif_1786371950_14",
     "timestamp": "2026-08-10T22:25:50",
     "date": "2026-08-10",
@@ -5497,6 +5398,105 @@
     "level": "info",
     "title": "ℹ Active AI Assistant process closed (project chan",
     "message": "ℹ Active AI Assistant process closed (project changed).",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605710_915",
+    "timestamp": "2026-08-13T15:21:50",
+    "date": "2026-08-13",
+    "time": "15:21:50",
+    "category": "board_install",
+    "level": "success",
+    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605711_595",
+    "timestamp": "2026-08-13T15:21:51",
+    "date": "2026-08-13",
+    "time": "15:21:51",
+    "category": "system",
+    "level": "info",
+    "title": "Connecting to COM22 @ 115200…",
+    "message": "Connecting to COM22 @ 115200…",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605711_789",
+    "timestamp": "2026-08-13T15:21:51",
+    "date": "2026-08-13",
+    "time": "15:21:51",
+    "category": "device",
+    "level": "success",
+    "title": "✔ Connected — COM22 @ 115200",
+    "message": "✔ Connected — COM22 @ 115200",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605713_36",
+    "timestamp": "2026-08-13T15:21:53",
+    "date": "2026-08-13",
+    "time": "15:21:53",
+    "category": "library_install",
+    "level": "info",
+    "title": "No known library #includes detected",
+    "message": "No known library #includes detected",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605717_608",
+    "timestamp": "2026-08-13T15:21:57",
+    "date": "2026-08-13",
+    "time": "15:21:57",
+    "category": "pio_ini",
+    "level": "success",
+    "title": "platformio.ini Created",
+    "message": "📄 platformio.ini created for ESP32 Dev Module in D:\\QuickAccess\\NAPH\\Documents\\PRACTICE",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605717_850",
+    "timestamp": "2026-08-13T15:21:57",
+    "date": "2026-08-13",
+    "time": "15:21:57",
+    "category": "entry_points",
+    "level": "success",
+    "title": "Entry Points Verified",
+    "message": "✔ Entry points OK — setup()/loop() found in: PRACTICE.ino",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605782_544",
+    "timestamp": "2026-08-13T15:23:02",
+    "date": "2026-08-13",
+    "time": "15:23:02",
+    "category": "pio_ini",
+    "level": "success",
+    "title": "platformio.ini Created",
+    "message": "📄 platformio.ini created for ESP32 Dev Module in D:\\QuickAccess\\NAPH\\Documents\\LOAD_CELL",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605783_89",
+    "timestamp": "2026-08-13T15:23:03",
+    "date": "2026-08-13",
+    "time": "15:23:03",
+    "category": "entry_points",
+    "level": "success",
+    "title": "Entry Points Verified",
+    "message": "✔ Entry points OK — setup()/loop() found in: LOAD_CELL.ino",
+    "details": {}
+  },
+  {
+    "id": "notif_1786605796_1",
+    "timestamp": "2026-08-13T15:23:16",
+    "date": "2026-08-13",
+    "time": "15:23:16",
+    "category": "library_install",
+    "level": "success",
+    "title": "Library Linked",
+    "message": "📚 PlatformIO Auto-Linked Library: Library Manager: Installing symlink://C:/Users/Admin/Documents/_MCUFlasherByNaph_src/Libs/HX711-0.6.4",
     "details": {}
   }
 ]

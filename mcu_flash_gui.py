@@ -3005,20 +3005,23 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     """Return a build/background concurrency level that will not swamp small PCs.
 
     Compiler processes are memory-heavy, so CPU count alone is not a safe
-    multiplier. Reserve one logical CPU on low-end systems or two on systems
+    multiplier. Reserve one logical CPU on low-end/midrange systems or two on systems
     with 8+ logical CPUs for Tk/WebView/serial handling, then cap workers by
-    currently available RAM (roughly 750 MB per compiler job).
+    currently available RAM (~450 MB per compiler job).
     """
     cpus = max(1, int(total_cpus or os.cpu_count() or 2))
     memory_gb = _available_memory_gb() if available_gb is None else available_gb
     cpu_budget = max(1, cpus - _system_reserved_cpu_count(cpus))
     if memory_gb is not None:
-        memory_budget = max(1, int(max(0.75, memory_gb - 1.0) / 0.75))
+        if memory_gb < 0.5:
+            memory_budget = 1
+        else:
+            memory_budget = max(1, int((memory_gb - 0.25) / 0.45))
         cpu_budget = min(cpu_budget, memory_budget)
 
     normalized = str(mode or "HIGH").upper()
     if normalized == "LOW":
-        return max(1, min(2, cpu_budget))
+        return max(1, min(max(1, cpus // 2), cpu_budget))
     if normalized == "MEDIUM":
         return max(1, min(cpu_budget, max(2, (cpus + 1) // 2)))
     if normalized in ("ULTRA", "MAX", "MAXIMUM"):

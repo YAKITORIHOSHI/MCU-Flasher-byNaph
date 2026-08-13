@@ -30,7 +30,7 @@
 
 ```cmd
 # Double-click the launcher
-runThisOnWindows.vbs
+MCU_Flasher.exe (or runThisOnWindows.vbs)
 ```
 
 > **First run** will automatically:
