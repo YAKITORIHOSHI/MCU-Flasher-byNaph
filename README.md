@@ -2,25 +2,25 @@
 
 > **A modern, dark-themed GUI tool for ESP32/Arduino development — compile, upload, and monitor serial output in one sleek interface.**
 
-![Version](https://img.shields.io/badge/version-V6.0-blue)
+![Version](https://img.shields.io/badge/version-V9.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python](https://img.shields.io/badge/python-3.14%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
 ## ✨ Features
 
-| Feature | Description |
-|---------|-------------|
-| **🔨 One-Click Build & Flash** | Compile and upload to ESP32 via Arduino CLI or PlatformIO |
-| **📟 Serial Monitor** | Built-in terminal with ANSI color support, timestamps, and baud rate control |
-| **🎨 Modern Dark UI** | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
-| **✏️ Integrated Code Editor** | Syntax-highlighted editor (QScintilla / Monaco) with project file management |
-| **🤖 AI Assistant** | Built-in `dedicated_AI.py` for code generation, debugging, and explanations |
-| **📦 Driver & Toolchain Management** | Auto-installs CP210x drivers, Arduino CLI, PlatformIO, msys2, and more |
-| **🔒 Single-Instance Guard** | Prevents accidental double-launch during bootstrap/venv setup |
-| **📱 Cross-Platform** | Windows (`.vbs` launcher) and Linux (`.sh` + `.AppImage`) support |
+| Feature                              | Description                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| **🔨 One-Click Build & Flash**       | Compile and upload to ESP32 via Arduino CLI or PlatformIO                      |
+| **📟 Serial Monitor**                | Built-in terminal with ANSI color support, timestamps, and baud rate control   |
+| **🎨 Modern Dark UI**                | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
+| **✏️ Integrated Code Editor**        | Syntax-highlighted editor (QScintilla / Monaco) with project file management   |
+| **🤖 AI Assistant**                  | Built-in `dedicated_AI.py` for code generation, debugging, and explanations    |
+| **📦 Driver & Toolchain Management** | Auto-installs CP210x drivers, Arduino CLI, PlatformIO, msys2, and more         |
+| **🔒 Single-Instance Guard**         | Prevents accidental double-launch during bootstrap/venv setup                  |
+| **📱 Cross-Platform**                | Windows (`.vbs` launcher) and Linux (`.sh` launcher) support                   |
 
 ---
 
@@ -34,6 +34,7 @@ runThisOnWindows.vbs
 ```
 
 > **First run** will automatically:
+>
 > 1. Create a Python virtual environment (`env/`)
 > 2. Install dependencies (pyserial, tkinter, etc.)
 > 3. Download Arduino CLI / PlatformIO if needed
@@ -105,6 +106,7 @@ The GUI saves preferences to `src/gui_config.json`:
 ```
 
 **Board Manager URLs** (auto-configured):
+
 - `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
 
 ---
@@ -112,6 +114,7 @@ The GUI saves preferences to `src/gui_config.json`:
 ## 🛠️ Development
 
 ### Requirements
+
 - Python 3.10+
 - Windows 10/11 or Linux (tested on Ubuntu 22.04+)
 - Git LFS (`git lfs install`) for large binaries
@@ -148,10 +151,10 @@ Large binaries are stored via Git LFS (see `.gitattributes`):
 
 - `installers/**/*.exe`
 - `installers/**/*.msi`
-- `installers/**/*.AppImage`
 - `bin/arduino-cli`
 
 Clone with LFS:
+
 ```bash
 git lfs install
 git clone https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph.git
