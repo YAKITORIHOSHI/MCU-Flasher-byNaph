@@ -45,12 +45,16 @@ class BootstrapOpenCodeTests(unittest.TestCase):
             stderr="",
         )
 
+        fake_popen = mock.MagicMock()
+        fake_popen.communicate.return_value = ("installed", "")
+        fake_popen.returncode = 0
+
         with (
             mock.patch.object(b.sys, "platform", "win32"),
             mock.patch.object(b, "check_opencode_cli", side_effect=[None, "C:\\Users\\tester\\AppData\\Roaming\\npm\\opencode.cmd", "C:\\Users\\tester\\AppData\\Roaming\\npm\\opencode.cmd"]),
             mock.patch.object(b, "_find_usable_npm_cmd", side_effect=[None, "C:\\Program Files\\nodejs\\npm.cmd", "C:\\Program Files\\nodejs\\npm.cmd"]),
             mock.patch.object(b, "_install_nodejs_lts_with_winget", return_value=True) as install_node,
-            mock.patch.object(b.subprocess, "run", return_value=completed) as run,
+            mock.patch.object(b.subprocess, "Popen", return_value=fake_popen) as popen,
             mock.patch.object(b, "section"),
             mock.patch.object(b, "status"),
             mock.patch.object(b, "ok"),
@@ -59,7 +63,7 @@ class BootstrapOpenCodeTests(unittest.TestCase):
 
         install_node.assert_called_once()
         # Verify npm install was called with non-interactive flags and DEVNULL stdin
-        calls = [c for c in run.call_args_list if "install" in c.args[0]]
+        calls = [c for c in popen.call_args_list if "install" in c.args[0]]
         self.assertTrue(len(calls) >= 1)
         self.assertEqual(calls[0].kwargs.get("stdin"), subprocess.DEVNULL)
 

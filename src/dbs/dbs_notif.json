@@ -1,82 +1,5 @@
 [
   {
-    "id": "notif_1786371950_14",
-    "timestamp": "2026-08-10T22:25:50",
-    "date": "2026-08-10",
-    "time": "22:25:50",
-    "category": "device",
-    "level": "success",
-    "title": "✔ Connected — COM12 @ 115200",
-    "message": "✔ Connected — COM12 @ 115200",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371950_599",
-    "timestamp": "2026-08-10T22:25:50",
-    "date": "2026-08-10",
-    "time": "22:25:50",
-    "category": "library_install",
-    "level": "info",
-    "title": "No known library #includes detected",
-    "message": "No known library #includes detected",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371954_34",
-    "timestamp": "2026-08-10T22:25:54",
-    "date": "2026-08-10",
-    "time": "22:25:54",
-    "category": "pio_ini",
-    "level": "success",
-    "title": "platformio.ini Created",
-    "message": "📄 platformio.ini created for ESP32 Dev Module in C:\\Users\\napht\\Documents\\TRYLANG",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371954_40",
-    "timestamp": "2026-08-10T22:25:54",
-    "date": "2026-08-10",
-    "time": "22:25:54",
-    "category": "entry_points",
-    "level": "success",
-    "title": "Entry Points Verified",
-    "message": "✔ Entry points OK — setup()/loop() found in: TRYLANG.ino",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371963_561",
-    "timestamp": "2026-08-10T22:26:03",
-    "date": "2026-08-10",
-    "time": "22:26:03",
-    "category": "system",
-    "level": "info",
-    "title": "⏸ Paused for upload…",
-    "message": "⏸ Paused for upload…",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371963_610",
-    "timestamp": "2026-08-10T22:26:03",
-    "date": "2026-08-10",
-    "time": "22:26:03",
-    "category": "system",
-    "level": "info",
-    "title": "Connecting to COM12 @ 115200…",
-    "message": "Connecting to COM12 @ 115200…",
-    "details": {}
-  },
-  {
-    "id": "notif_1786371984_98",
-    "timestamp": "2026-08-10T22:26:24",
-    "date": "2026-08-10",
-    "time": "22:26:24",
-    "category": "system",
-    "level": "info",
-    "title": "Connecting to COM12 @ 115200…",
-    "message": "Connecting to COM12 @ 115200…",
-    "details": {}
-  },
-  {
     "id": "notif_1786371984_325",
     "timestamp": "2026-08-10T22:26:24",
     "date": "2026-08-10",
@@ -5497,6 +5420,83 @@
     "level": "success",
     "title": "Library Linked",
     "message": "📚 PlatformIO Auto-Linked Library: Library Manager: Installing symlink://C:/Users/Admin/Documents/_MCUFlasherByNaph_src/Libs/HX711-0.6.4",
+    "details": {}
+  },
+  {
+    "id": "notif_1786617874_947",
+    "timestamp": "2026-08-13T18:44:34",
+    "date": "2026-08-13",
+    "time": "18:44:34",
+    "category": "library_install",
+    "level": "info",
+    "title": "No known library #includes detected",
+    "message": "No known library #includes detected",
+    "details": {}
+  },
+  {
+    "id": "notif_1786617874_955",
+    "timestamp": "2026-08-13T18:44:34",
+    "date": "2026-08-13",
+    "time": "18:44:34",
+    "category": "board_install",
+    "level": "warning",
+    "title": "✖ No board/port selected — choose a board and plug",
+    "message": "✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.",
+    "details": {}
+  },
+  {
+    "id": "notif_1786617882_758",
+    "timestamp": "2026-08-13T18:44:42",
+    "date": "2026-08-13",
+    "time": "18:44:42",
+    "category": "board_install",
+    "level": "success",
+    "title": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "message": ">>> Board set to \"ESP32 Dev Module\" <<<",
+    "details": {}
+  },
+  {
+    "id": "notif_1786617884_684",
+    "timestamp": "2026-08-13T18:44:44",
+    "date": "2026-08-13",
+    "time": "18:44:44",
+    "category": "pio_ini",
+    "level": "success",
+    "title": "platformio.ini Created",
+    "message": "📄 platformio.ini created for ESP32 Dev Module in C:\\Users\\napht\\Documents\\TRYLANG",
+    "details": {}
+  },
+  {
+    "id": "notif_1786617884_698",
+    "timestamp": "2026-08-13T18:44:44",
+    "date": "2026-08-13",
+    "time": "18:44:44",
+    "category": "entry_points",
+    "level": "success",
+    "title": "Entry Points Verified",
+    "message": "✔ Entry points OK — setup()/loop() found in: TRYLANG.ino",
+    "details": {}
+  },
+  {
+    "id": "notif_1786618525_458",
+    "timestamp": "2026-08-13T18:55:25",
+    "date": "2026-08-13",
+    "time": "18:55:25",
+    "category": "library_install",
+    "level": "info",
+    "title": "No known library #includes detected",
+    "message": "No known library #includes detected",
+    "details": {}
+  },
+  {
+    "id": "notif_1786618525_465",
+    "timestamp": "2026-08-13T18:55:25",
+    "date": "2026-08-13",
+    "time": "18:55:25",
+    "category": "board_install",
+    "level": "warning",
+    "title": "✖ No board/port selected — choose a board and plug",
+    "message": "✖ No board/port selected — choose a board and plug in your device to enable Compile/Upload/Monitor.",
     "details": {}
   }
 ]

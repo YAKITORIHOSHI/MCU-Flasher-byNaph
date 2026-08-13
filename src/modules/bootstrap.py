@@ -975,6 +975,291 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     return core_dir
 
 
+# ── Pre-built PlatformIO core directory (cloud seed) ────────
+# Instead of waiting for PlatformIO to download/unpack/install all board
+# toolchains from scratch on first run (easily 10–30+ minutes), a pre-built
+# snapshot of .platformio-mcu-gui is hosted as a zip on Google Drive.  When
+# the local store is empty, bootstrap downloads and extracts the snapshot so
+# PlatformIO finds an already-populated core directory.  Future board
+# additions simply increment into the same folder.
+#
+# The file ID is the only stable part of a Google Drive link — session tokens,
+# UUIDs, and `at` parameters all expire.  _resolve_gdrive_download_url()
+# constructs the real download URL and handles virus-scan confirmation pages.
+_PLATFORMIO_PREBUILT_GDRIVE_FILE_ID = "1Fq9CWcIjprbGNlDJcM8MXHzCZ3S_AbZK"
+_PLATFORMIO_PREBUILT_ZIP_NAME = "platformio-mcu-gui-prebuilt.zip"
+
+
+def _platformio_core_is_populated(script_dir: Path) -> bool:
+    """Return True when the PlatformIO core store already has platform/package content.
+
+    This is deliberately a shallow check: if the directories exist and contain
+    at least one child entry, we treat the store as populated.  PlatformIO's own
+    platform/package integrity checks will repair anything missing later.
+    """
+    pio_dir = script_dir / "src" / ".platformio-mcu-gui"
+    if not pio_dir.is_dir():
+        return False
+    packages = pio_dir / "packages"
+    platforms = pio_dir / "platforms"
+    try:
+        has_packages = packages.is_dir() and any(packages.iterdir())
+        has_platforms = platforms.is_dir() and any(platforms.iterdir())
+        return has_packages and has_platforms
+    except Exception:
+        return False
+
+
+def _extract_gdrive_file_id(url: str) -> str | None:
+    """Extract the Google Drive file ID from any share/download/open URL.
+
+    Handles all common Google Drive URL formats:
+      - https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+      - https://drive.google.com/uc?export=download&id=FILE_ID
+      - https://drive.google.com/open?id=FILE_ID
+      - https://drive.usercontent.google.com/download?id=FILE_ID&...
+    """
+    patterns = [
+        r"/file/d/([a-zA-Z0-9_-]+)",
+        r"/uc\?.*?id=([a-zA-Z0-9_-]+)",
+        r"/open\?id=([a-zA-Z0-9_-]+)",
+        r"[?&]id=([a-zA-Z0-9_-]+)",
+        r"/d/([a-zA-Z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _resolve_gdrive_download_url(file_id: str) -> str:
+    """Resolve a Google Drive file ID to a direct download URL.
+
+    Google Drive serves an HTML virus-scan confirmation page for large files
+    instead of the binary.  This function follows the same proven pattern as
+    ``src/modules/downloader.py``:
+
+      1. Hit ``/uc?export=download&id=FILE_ID``
+      2. If the response is HTML, parse the ``<form id="download-form">``
+         action URL + hidden fields, or fall back to a ``confirm=TOKEN`` param.
+      3. Return the resolved direct-download URL for ``_download_file()``.
+
+    Adapted to use ``urllib`` (stdlib) instead of ``requests`` because this
+    runs before pip packages are installed.
+    """
+    import urllib.request
+    import urllib.parse
+
+    base_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    headers = {
+        "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; PlatformIO bootstrap)",
+    }
+
+    try:
+        req = urllib.request.Request(base_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            # Binary response means the file is small enough — no confirmation.
+            if "text/html" not in content_type:
+                return base_url
+            body = resp.read(65536).decode("utf-8", errors="replace")
+    except Exception:
+        return base_url
+
+    # Try up to 3 confirmation-page redirects (matching downloader.py logic).
+    for _ in range(3):
+        # Strategy 1: parse the <form id="download-form"> action + hidden fields.
+        form_match = re.search(
+            r'<form[^>]+id="download-form"[^>]+action="([^"]+)"', body
+        )
+        if form_match:
+            action = form_match.group(1).replace("&amp;", "&")
+            fields = re.findall(
+                r'<input type="hidden" name="([^"]+)" value="([^"]*)">', body
+            )
+            if fields:
+                params = "&".join(
+                    f"{name}={urllib.parse.quote(value, safe='')}"
+                    for name, value in fields
+                )
+                resolved = f"{action}?{params}" if "?" not in action else f"{action}&{params}"
+                # Verify this URL returns binary, not another HTML page.
+                try:
+                    req2 = urllib.request.Request(resolved, headers=headers)
+                    with urllib.request.urlopen(req2, timeout=20) as resp2:
+                        ct2 = str(resp2.headers.get("Content-Type", "")).lower()
+                        if "text/html" not in ct2:
+                            return resolved
+                        body = resp2.read(65536).decode("utf-8", errors="replace")
+                        continue
+                except Exception:
+                    return resolved
+
+        # Strategy 2: extract a confirm=TOKEN value from the page.
+        confirm_match = re.search(
+            r'name="confirm"\s+value="([0-9A-Za-z_-]+)"', body
+        )
+        if confirm_match:
+            confirmed_url = (
+                f"https://drive.google.com/uc?export=download"
+                f"&confirm={confirm_match.group(1)}&id={file_id}"
+            )
+            return confirmed_url
+
+        # Strategy 3: look for a direct href to /uc?export=download.
+        href_match = re.search(r'href="(/uc\?export=download[^"]+)"', body)
+        if href_match:
+            return f"https://drive.google.com{href_match.group(1).replace('&amp;', '&')}"
+
+        break
+
+    # All strategies exhausted — return the base URL and let _download_file()
+    # handle the error with its retry/curl fallback logic.
+    return base_url
+
+
+
+def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
+    """Download and extract the pre-built PlatformIO core directory if empty.
+
+    This seeds ``src/.platformio-mcu-gui`` from a cloud-hosted zip so that
+    PlatformIO finds an already-populated core store on first launch.  If the
+    store already contains packages and platforms, this is a no-op.
+
+    The zip is treated as a baseline: future ``pio platform install`` calls
+    will add new boards into the same directory without conflict.
+
+    Returns True if the store is populated (either already or after extraction),
+    False if the download/extraction failed (non-fatal — PlatformIO will fall
+    back to its normal slow first-run install).
+    """
+    import zipfile
+
+    if _platformio_core_is_populated(SCRIPT_DIR):
+        ok("Pre-built PlatformIO core already populated.")
+        return True
+
+    pio_dir = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
+    zip_dest = SCRIPT_DIR / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
+
+    # ── Step 1: Download ────────────────────────────────────────────
+    status("Downloading pre-built PlatformIO toolchains...")
+    if gui:
+        gui.set_status("Downloading pre-built PlatformIO toolchains...")
+
+    try:
+        download_url = _resolve_gdrive_download_url(_PLATFORMIO_PREBUILT_GDRIVE_FILE_ID)
+        _download_file(
+            download_url,
+            zip_dest,
+            timeout=120,
+            attempts=3,
+        )
+    except Exception as exc:
+        _record_bootstrap_exception("Pre-built PlatformIO zip download failed")
+        warn(f"Could not download pre-built PlatformIO zip: {exc}")
+        warn("PlatformIO will install toolchains from scratch (this may take a while).")
+        safe_unlink(zip_dest)
+        return False
+
+    if not zip_dest.is_file() or zip_dest.stat().st_size < 1024:
+        warn("Downloaded file is missing or too small; skipping extraction.")
+        safe_unlink(zip_dest)
+        return False
+
+    # ── Step 2: Extract ─────────────────────────────────────────────
+    status("Extracting pre-built PlatformIO toolchains...")
+    if gui:
+        gui.set_status("Extracting pre-built PlatformIO toolchains...")
+        gui.set_progress_percent(0)
+
+    try:
+        pio_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(zip_dest), "r") as zf:
+            infos = zf.infolist()
+            total_files = len(infos)
+            if total_files == 0:
+                raise RuntimeError("Zip archive is empty")
+
+            total_uncompressed_bytes = sum(info.file_size for info in infos)
+
+            # Detect whether the zip has a top-level directory wrapper.
+            # e.g. all members start with ".platformio-mcu-gui/" — strip it
+            # so we extract directly into pio_dir.
+            first_parts = {info.filename.split("/", 1)[0] for info in infos if "/" in info.filename}
+            has_wrapper = (
+                len(first_parts) == 1
+                and first_parts.pop().replace(".", "").replace("-", "").replace("_", "").lower()
+                in (
+                    "platformiomcugui",
+                    "platformiomcuguiprebuilt",
+                )
+            )
+
+            last_extract_time = 0.0
+            extracted_bytes = 0
+
+            for idx, info in enumerate(infos, 1):
+                member = info.filename
+                extracted_bytes += info.file_size
+
+                # Skip directory entries (they're created implicitly).
+                if member.endswith("/"):
+                    if gui and total_files > 0:
+                        gui.set_progress_percent(min(99, int(idx * 100 / total_files)))
+                    continue
+
+                if has_wrapper:
+                    # Strip the top-level wrapper directory from the path.
+                    _, _, relative = member.partition("/")
+                    if not relative:
+                        continue
+                    target = pio_dir / relative
+                else:
+                    target = pio_dir / member
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+                now = time.time()
+                if gui and total_files > 0 and (now - last_extract_time >= 0.15 or idx == total_files):
+                    last_extract_time = now
+                    pct = min(99.0, (idx / total_files) * 100.0)
+                    filled = int(pct / 100.0 * 30)
+                    bar = "▰" * filled + "▱" * (30 - filled)
+
+                    ext_mb = extracted_bytes / (1024 * 1024)
+                    tot_mb = total_uncompressed_bytes / (1024 * 1024)
+                    size_info = f"{ext_mb:.1f}/{tot_mb:.1f} MB" if total_uncompressed_bytes > 0 else f"{idx}/{total_files} files"
+
+                    extract_block = (
+                        f"  Extracting {zip_dest.name}...\n"
+                        f"  {bar}  {pct:5.1f}% ({idx}/{total_files} files • {size_info})"
+                    )
+                    gui.update_platformio_progress_block(extract_block)
+                    gui.set_status(f"Extracting {zip_dest.name}... {idx}/{total_files} files ({pct:.1f}%)")
+                    gui.set_progress_percent(pct)
+
+        if gui:
+            gui.clear_platformio_progress_block()
+            gui.set_progress_percent(100)
+        ok("Pre-built PlatformIO core extracted successfully.")
+    except Exception as exc:
+        _record_bootstrap_exception("Pre-built PlatformIO zip extraction failed")
+        warn(f"Failed to extract pre-built PlatformIO zip: {exc}")
+        warn("PlatformIO will install toolchains from scratch (this may take a while).")
+        return False
+    finally:
+        if gui:
+            gui.clear_platformio_progress_block()
+        # ── Step 3: Clean up the zip ────────────────────────────────
+        safe_unlink(zip_dest)
+
+    return _platformio_core_is_populated(SCRIPT_DIR)
+
+
 # One store only: Bootstrap and every GUI subprocess must resolve the same core_dir.
 _configure_platformio_environment(SCRIPT_DIR)
 _neutralize_conflicting_global_platformio_config()
@@ -5341,18 +5626,51 @@ def _download_file(
 
                     with open(partial, write_mode) as output:
                         received = base_received
+                        start_time = time.time()
+                        last_update_time = 0.0
                         while True:
-                            block = response.read(1024 * 1024)
+                            block = response.read(128 * 1024)
                             if not block:
                                 break
                             output.write(block)
                             received += len(block)
-                            if _gui:
-                                if total:
-                                    _gui.set_progress_percent(min(99, int(received * 100 / total)))
+
+                            now = time.time()
+                            if _gui and (now - last_update_time >= 0.15 or (total and received >= total)):
+                                last_update_time = now
+                                elapsed = now - start_time
+                                speed_bps = (received - base_received) / elapsed if elapsed > 0 else 0
+                                if speed_bps >= 1024 * 1024:
+                                    speed_str = f"{speed_bps / (1024 * 1024):.2f} MB/s"
                                 else:
+                                    speed_str = f"{speed_bps / 1024:.1f} KB/s"
+
+                                if total > 0:
+                                    pct = min(99.0, (received / total) * 100.0)
+                                    filled = int(pct / 100.0 * 30)
+                                    bar = "▰" * filled + "▱" * (30 - filled)
+                                    rec_mb = received / (1024 * 1024)
+                                    tot_mb = total / (1024 * 1024)
+                                    progress_block = (
+                                        f"  Downloading {dest.name}...\n"
+                                        f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {tot_mb:.2f} MB) • {speed_str}"
+                                    )
+                                    _gui.set_progress_percent(pct)
+                                    _gui.set_status(f"Downloading {dest.name}... {rec_mb:.1f}/{tot_mb:.1f} MB ({pct:.1f}%) • {speed_str}")
+                                else:
+                                    rec_mb = received / (1024 * 1024)
+                                    progress_block = (
+                                        f"  Downloading {dest.name}...\n"
+                                        f"  {rec_mb:.2f} MB downloaded • {speed_str}"
+                                    )
                                     _gui.start_busy()
+                                    _gui.set_status(f"Downloading {dest.name}... {rec_mb:.1f} MB • {speed_str}")
+
+                                _gui.update_platformio_progress_block(progress_block)
                         output.flush()
+
+                    if _gui:
+                        _gui.clear_platformio_progress_block()
 
                 # If the server advertised a complete size, treat an early EOF
                 # as an interrupted request and retain the partial for Range retry.
@@ -5375,8 +5693,10 @@ def _download_file(
                         safe_unlink(partial)
                     raise OSError(reason)
 
-                os.replace(partial, dest)
+                if not safe_replace_file(partial, dest):
+                    raise OSError(f"Could not replace '{partial}' with '{dest}'")
                 if _gui:
+                    _gui.clear_platformio_progress_block()
                     _gui.set_progress_percent(100)
                 ok(f"Saved and verified {dest.name}" if (expected_size_i or expected_hash) else f"Saved to {dest.name}")
                 return
@@ -5388,8 +5708,10 @@ def _download_file(
                 if exc.code == 416 and partial.is_file():
                     verified, _ = _download_matches_expectations(partial, expected_size_i, expected_hash)
                     if verified:
-                        os.replace(partial, dest)
+                        if not safe_replace_file(partial, dest):
+                            raise OSError(f"Could not replace '{partial}' with '{dest}'")
                         if _gui:
+                            _gui.clear_platformio_progress_block()
                             _gui.set_progress_percent(100)
                         ok(f"Saved and verified {dest.name}")
                         return
@@ -5418,8 +5740,10 @@ def _download_file(
             if not verified:
                 safe_unlink(partial)
                 raise OSError(reason)
-            os.replace(partial, dest)
+            if not safe_replace_file(partial, dest):
+                raise OSError(f"Could not replace '{partial}' with '{dest}'")
             if _gui:
+                _gui.clear_platformio_progress_block()
                 _gui.set_progress_percent(100)
             ok(f"Saved and verified {dest.name}" if (expected_size_i or expected_hash) else f"Saved to {dest.name}")
             return
@@ -5428,6 +5752,7 @@ def _download_file(
 
     finally:
         if _gui:
+            _gui.clear_platformio_progress_block()
             _gui.stop_busy(restore_step=True)
 
     # Keep a valid-looking partial so a later app launch can continue it. Only
@@ -7992,7 +8317,13 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         # ── PlatformIO + Board Toolchains (combined step) ───────────────
         gui.root.after(0, lambda: gui.log_section("Checking PlatformIO & Board Toolchains"))
-        
+
+        # Seed the PlatformIO core directory from a pre-built zip if it's
+        # empty.  This avoids the very long first-run download/unpack/install
+        # wait by providing a ready-made baseline that PlatformIO will accept
+        # and incrementally update when new boards are added later.
+        _ensure_platformio_core_prebuilt(gui)
+
         # Check PlatformIO
         if not ensure_platformio():
             _fail_and_exit("PlatformIO Core", "Failed to install PlatformIO Core.")
