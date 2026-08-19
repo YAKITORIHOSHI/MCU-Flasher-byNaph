@@ -16,11 +16,10 @@ env.platformio.cache/
 # Arduino CLI / IDE bootstrap artifacts
 **/arduino-cli*
 !installers/arduino-cli.msi
-!installers/arduino-cli_Linux.tar.gz
 **/find_arduino_cli*
 **/bootstrap_arduino_cli*
 
-# NOTE: installers/*.exe and installers/*.AppImage are intentionally NOT
+# NOTE: installers/*.exe and installers/*.msi are intentionally NOT
 # ignored here — they're tracked via Git LFS (see .gitattributes).
 
 # === Python ===

@@ -22,22 +22,7 @@ def is_laptop():
     if chassis_types:
         return any(t in laptop_types for t in chassis_types)
     
-    # Fallback 1: check Linux DMI chassis / battery info
-    try:
-        import os
-        if os.path.exists("/sys/class/dmi/id/chassis_type"):
-            with open("/sys/class/dmi/id/chassis_type", "r") as f:
-                chassis = f.read().strip()
-                if chassis.isdigit() and int(chassis) in laptop_types:
-                    return True
-        if os.path.exists("/sys/class/power_supply"):
-            for supply in os.listdir("/sys/class/power_supply"):
-                if supply.startswith("BAT"):
-                    return True
-    except Exception:
-        pass
-
-    # Fallback 2: check battery status using ctypes (Windows)
+    # Fallback: check battery status using ctypes (Windows)
     try:
         import ctypes
         from ctypes import wintypes

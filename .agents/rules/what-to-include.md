@@ -2,15 +2,11 @@
 trigger: always_on
 ---
 
-## Platform Scope (Windows vs Linux)
+## Platform Scope (Windows 10/11)
 
-This project has separate Windows and Linux code paths. When a request concerns only one platform:
-
-- **Windows-only concern** → Only read/edit Windows-specific files (e.g. `bootstrap.py`, `win_subprocess_hide.py`, `installers/CP210x`, `installers/arduino-cli.msi`, `installers/msys2-*.exe`, `installers/MicrosoftEdgeWebview2Setup.exe`). Do not open or modify Linux-specific files (e.g. `bootstrap_linux.py`, `installers/readme-ubuntu.txt`).
-- **Linux-only concern** → Only read/edit Linux-specific files (e.g. `bootstrap_linux.py`, `installers/readme-ubuntu.txt`, and anything with a `_linux` / `-linux` / `ubuntu` naming pattern). Do not open or modify Windows-specific files.
-- Treat a file as platform-specific based on its name/suffix first; if that's ambiguous, check its contents before deciding.
-- Only touch both platforms' files if the user explicitly says to update both, or the file is clearly shared/OS-agnostic core logic.
-- If it's unclear which platform a request applies to, ask before editing either.
+This project is built and optimized specifically for Windows 10 and 11 environments. Core files include `mcu_flash_gui.py`, `launcher.py`, `dedicated_AI.py`, `runThisOnWindows.vbs`, `src/modules/bootstrap.py`, `src/modules/win_subprocess_hide.py`, and Windows-bundled installers in `installers/` (`CP210x/`, `arduino-cli.msi`, `msys2-*.exe`, `MicrosoftEdgeWebview2Setup.exe`).
+- All toolchain setup, subprocess execution, file hiding attributes (`attrib +h`), win32 APIs, and path handling are tailored for Windows.
+- Always use Windows-compatible paths, subprocess flags (e.g. `CREATE_NO_WINDOW`), and ctypes Win32 calls.
 
 ## Environment Scope (Experimental vs Actual)
 

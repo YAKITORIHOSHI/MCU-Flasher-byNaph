@@ -3077,7 +3077,9 @@ def _get_download_dir() -> str:
     same, up-to-date path — even if the user changed it while the
     Download Manager was open.
     """
-    settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
+    settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
+    if not settings_file.exists() and (SCRIPT_DIR / "arduino_browser_settings.json").exists():
+        settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
     default_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src"
     settings = {}
     if settings_file.exists():
@@ -3851,7 +3853,9 @@ def find_arduino_cli_executable() -> str | None:
 
     # Check cached path file first
     script_dir = SCRIPT_DIR
-    cached_file = script_dir / "arduino_cli_path.txt"
+    cached_file = script_dir / "src" / "dbs" / "arduino_cli_path.txt"
+    if not cached_file.exists() and (script_dir / "arduino_cli_path.txt").exists():
+        cached_file = script_dir / "arduino_cli_path.txt"
     if cached_file.exists():
         try:
             path_str = cached_file.read_text(encoding="utf-8").strip()
@@ -6479,6 +6483,8 @@ class MCUUploadGUI:
         self.root = root
         self.editor_mode = globals().get("_RESOLVED_EDITOR_MODE") or get_editor_mode()
         self.editor_detached = False
+        self._is_attaching_editor = False       # re-entrancy guard for _attach_editor
+        self._poll_detached_after_id = None     # tracks the _poll_detached_window timer
         self.autosave_enabled, self.autosave_delay_ms = get_autosave_settings()
         self.periodic_reload_enabled, self.periodic_reload_interval_s = get_periodic_reload_settings()
         self._periodic_reload_after_id = None
@@ -10254,6 +10260,32 @@ class MCUUploadGUI:
         self._append_notif("  ✓ Code editor detached to separate window.", "success")
 
     def _attach_editor(self):
+        """Re-embed the detached editor into the main window.
+
+        Guarded against re-entrancy: both the pywebview ``on_closing``
+        event (fires on the WinForms thread) and the Tk-side
+        ``_poll_detached_window`` timer can trigger this near-simultaneously.
+        Only the first caller proceeds; subsequent calls bail out.
+        """
+        if getattr(self, "_is_attaching_editor", False):
+            return
+        self._is_attaching_editor = True
+        # Cancel any pending poll timer so it cannot fire a duplicate
+        # _attach_editor() call while we are mid-attach.
+        poll_id = getattr(self, "_poll_detached_after_id", None)
+        if poll_id is not None:
+            try:
+                self.root.after_cancel(poll_id)
+            except Exception:
+                pass
+            self._poll_detached_after_id = None
+        try:
+            self._attach_editor_impl()
+        finally:
+            self._is_attaching_editor = False
+
+    def _attach_editor_impl(self):
+        """Internal attach logic — always called via _attach_editor()."""
         mode = getattr(self, "editor_mode", "default")
         if mode == "monaco":
             if not sys.platform == "win32" or win32gui is None:
@@ -10265,7 +10297,21 @@ class MCUUploadGUI:
             # Hide placeholder
             if hasattr(self, "_editor_placeholder"):
                 self._editor_placeholder.place_forget()
-                
+
+            # 0. Hide the detached window and reclaim OS focus BEFORE
+            #    reparenting.  This prevents Windows from dispatching
+            #    synchronous cross-thread WM_ACTIVATE / WM_WINDOWPOSCHANGED
+            #    messages during SetParent(), which is the primary deadlock
+            #    trigger when the AI Assistant WebView is also active.
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+            try:
+                self.root.focus_force()
+            except Exception:
+                pass
+
             # 1. Reparent back to editor frame
             try:
                 frame = self._editor_embed_frame
@@ -10359,7 +10405,10 @@ class MCUUploadGUI:
             self._update_pane_toggle_buttons()
             
         self.root.after_idle(self._apply_dynamic_button_scale)
-        self._sync_ai_and_editor_layout()
+        # Defer layout sync so Tk geometry and the Win32 reparent fully
+        # settle before the PanedWindow orientation / AI container are
+        # reshuffled — avoids DWM paint deadlocks with two WebView2 HWNDs.
+        self.root.after(100, self._sync_ai_and_editor_layout)
         self._append_notif("  ✓ Code editor re-attached to the main window.", "success")
 
     def _close_detached_editor_window(self):
@@ -10536,21 +10585,23 @@ class MCUUploadGUI:
 
     def _poll_detached_window(self):
         if not getattr(self, "editor_detached", False) or not self._editor_hwnd:
+            self._poll_detached_after_id = None
             return
         # Grace period: allow 1.5s after detaching before checking visibility
         detach_time = getattr(self, "_detach_timestamp", 0)
         if time.time() - detach_time < 1.5:
-            self.root.after(300, self._poll_detached_window)
+            self._poll_detached_after_id = self.root.after(300, self._poll_detached_window)
             return
         try:
             import win32gui
             if not win32gui.IsWindowVisible(self._editor_hwnd):
                 # The user hid/closed the detached window — re-attach it!
+                self._poll_detached_after_id = None
                 self._attach_editor()
                 return
         except Exception:
             pass
-        self.root.after(500, self._poll_detached_window)
+        self._poll_detached_after_id = self.root.after(500, self._poll_detached_window)
 
     def _update_detach_button_style(self):
         if not hasattr(self, "btn_detach_editor") or not self.btn_detach_editor.winfo_exists():
@@ -12749,7 +12800,9 @@ class MCUUploadGUI:
             except Exception as e:
                 import traceback
                 try:
-                    with open("error_log.txt", "w", encoding="utf-8") as f:
+                    err_log = SCRIPT_DIR / "logs" / "error_log.txt"
+                    err_log.parent.mkdir(parents=True, exist_ok=True)
+                    with open(err_log, "w", encoding="utf-8") as f:
                         traceback.print_exc(file=f)
                 except Exception:
                     pass
@@ -12825,7 +12878,9 @@ class MCUUploadGUI:
             except Exception as e:
                 import traceback
                 try:
-                    with open("error_log.txt", "w", encoding="utf-8") as f:
+                    err_log = SCRIPT_DIR / "logs" / "error_log.txt"
+                    err_log.parent.mkdir(parents=True, exist_ok=True)
+                    with open(err_log, "w", encoding="utf-8") as f:
                         traceback.print_exc(file=f)
                 except Exception:
                     pass
@@ -20705,8 +20760,8 @@ default_envs = {self._pio_env_name()}
                     t.yview_scroll(3, "units")
                 return "break"
             lineno_text.bind("<MouseWheel>", _on_lineno_scroll)
-            lineno_text.bind("<Button-4>", _on_lineno_scroll)   # Linux scroll up
-            lineno_text.bind("<Button-5>", _on_lineno_scroll)   # Linux scroll down
+            lineno_text.bind("<Button-4>", _on_lineno_scroll)   # Scroll up fallback
+            lineno_text.bind("<Button-5>", _on_lineno_scroll)   # Scroll down fallback
 
             # Configure syntax-highlight tag colours
             for tag, color in SYN_COLORS.items():
@@ -20788,7 +20843,7 @@ default_envs = {self._pio_env_name()}
             txt.bind("<Return>",        lambda e, t=txt: _on_return(e, t))
             txt.bind("<Tab>",           lambda e, t=txt: _on_tab(e, t))
             txt.bind("<Shift-Tab>",     lambda e, t=txt: _on_shift_tab(e, t))
-            txt.bind("<ISO_Left_Tab>",  lambda e, t=txt: _on_shift_tab(e, t))  # Linux
+            txt.bind("<ISO_Left_Tab>",  lambda e, t=txt: _on_shift_tab(e, t))  # Shift-Tab binding fallback
             txt.bind("<BackSpace>",     lambda e, t=txt: _on_backspace(e, t))
             txt.bind("<braceleft>",     lambda e, t=txt: _on_open_pair(e, t, "{"))
             txt.bind("<braceright>",    lambda e, t=txt: _on_closing_brace(e, t))
@@ -25197,7 +25252,9 @@ default_envs = {self._pio_env_name()}
         except Exception as e:
             import traceback
             try:
-                with open("error_log.txt", "w", encoding="utf-8") as f:
+                err_log = SCRIPT_DIR / "logs" / "error_log.txt"
+                err_log.parent.mkdir(parents=True, exist_ok=True)
+                with open(err_log, "w", encoding="utf-8") as f:
                     traceback.print_exc(file=f)
             except Exception:
                 pass
@@ -26222,7 +26279,9 @@ def main():
     # If not run from bootstrap, launch the VBS launcher to check for updates and setup dependencies
     if "--from-bootstrap" not in sys.argv:
         import subprocess
-        vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
+        vbs_launcher = SCRIPT_DIR / "direct" / "runThisOnWindows.vbs"
+        if not vbs_launcher.exists():
+            vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
         if vbs_launcher.exists():
             try:
                 # Sanitize PyInstaller environment variables so they don't pollute the VBS launcher
@@ -26348,7 +26407,8 @@ def main():
                 if selected_path:
                     try:
                         script_dir = SCRIPT_DIR
-                        cached_file = script_dir / "arduino_cli_path.txt"
+                        cached_file = script_dir / "src" / "dbs" / "arduino_cli_path.txt"
+                        cached_file.parent.mkdir(parents=True, exist_ok=True)
                         cached_file.write_text(selected_path, encoding="utf-8")
                         mb.showinfo("Success", f"Arduino CLI path saved successfully:\n{selected_path}", parent=root)
                         root.destroy()
@@ -26379,7 +26439,8 @@ def main():
                     try:
                         # Save to arduino_cli_path.txt
                         script_dir = SCRIPT_DIR
-                        cached_file = script_dir / "arduino_cli_path.txt"
+                        cached_file = script_dir / "src" / "dbs" / "arduino_cli_path.txt"
+                        cached_file.parent.mkdir(parents=True, exist_ok=True)
                         cached_file.write_text(selected_path, encoding="utf-8")
                         mb.showinfo("Success", f"Arduino CLI path saved successfully:\n{selected_path}", parent=root)
                         root.destroy()
@@ -26688,6 +26749,16 @@ def main():
             # It's embedded in the main window now — there's nowhere
             # separate for it to "close" to, so just ignore the close.
             return False
+        # Cancel any active polling timer — on_closing takes sole
+        # responsibility for re-attachment from here, preventing a
+        # duplicate _attach_editor() call from the poll timer.
+        poll_id = getattr(app_val, "_poll_detached_after_id", None)
+        if poll_id is not None:
+            try:
+                root_val.after_cancel(poll_id)
+            except Exception:
+                pass
+            app_val._poll_detached_after_id = None
         # If it is detached, close event should trigger re-attachment back to main window
         root_val.after(0, app_val._attach_editor)
         return False  # Intercept close and just hide/re-parent

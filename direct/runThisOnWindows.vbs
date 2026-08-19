@@ -17,8 +17,16 @@ Set shell = CreateObject("WScript.Shell")
 ' when a system-wide driver or component genuinely needs it.
 
 
-' ── Locate this file's own directory ──
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName) & "\"
+' ── Locate the project root directory (supports running from direct\ or project root) ──
+Dim currentFolder
+currentFolder = fso.GetParentFolderName(WScript.ScriptFullName)
+If fso.FolderExists(currentFolder & "\src\modules") Then
+    scriptDir = currentFolder & "\"
+ElseIf fso.FolderExists(fso.GetParentFolderName(currentFolder) & "\src\modules") Then
+    scriptDir = fso.GetParentFolderName(currentFolder) & "\"
+Else
+    scriptDir = currentFolder & "\"
+End If
 
 ' ── Prevent Python from writing or using compiled .pyc bytecode files ──
 shell.Environment("PROCESS")("PYTHONDONTWRITEBYTECODE") = "1"
@@ -44,10 +52,10 @@ End If
 
 ' ── Find the launcher script ──
 Dim bootstrapFile
-bootstrapFile = scriptDir & "launcher.py"
+bootstrapFile = scriptDir & "src\modules\launcher.py"
 If Not fso.FileExists(bootstrapFile) Then
-    MsgBox "launcher.py not found in:" & vbCrLf & scriptDir & vbCrLf & vbCrLf & _
-           "Please make sure launcher.py is in the same folder as this launcher.", _
+    MsgBox "launcher.py not found in:" & vbCrLf & scriptDir & "src\modules\" & vbCrLf & vbCrLf & _
+           "Please make sure launcher.py is in the src\modules folder.", _
            vbCritical, "MCU Uploader IDE by Naph"
     WScript.Quit 1
 End If

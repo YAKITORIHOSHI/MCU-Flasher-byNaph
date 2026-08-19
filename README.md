@@ -3,7 +3,7 @@
 > **A modern, dark-themed GUI tool for ESP32/Arduino development — compile, upload, and monitor serial output in one sleek interface.**
 
 ![Version](https://img.shields.io/badge/version-V9.0-blue)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.14%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -17,20 +17,18 @@
 | **📟 Serial Monitor**                | Built-in terminal with ANSI color support, timestamps, and baud rate control   |
 | **🎨 Modern Dark UI**                | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
 | **✏️ Integrated Code Editor**        | Syntax-highlighted editor (QScintilla / Monaco) with project file management   |
-| **🤖 AI Assistant**                  | Built-in `dedicated_AI.py` for code generation, debugging, and explanations    |
+| **🤖 AI Assistant**                  | Built-in `src/modules/dedicated_AI.py` for code generation, debugging, and explanations    |
 | **📦 Driver & Toolchain Management** | Auto-installs CP210x drivers, Arduino CLI, PlatformIO, msys2, and more         |
 | **🔒 Single-Instance Guard**         | Prevents accidental double-launch during bootstrap/venv setup                  |
-| **📱 Cross-Platform**                | Windows (`.vbs` launcher) and Linux (`.sh` launcher) support                   |
+| **🖥️ Native Windows Integration**   | Optimized for Windows 10/11 with `.vbs` and `.exe` silent launchers            |
 
 ---
 
 ## 🚀 Quick Start
 
-### Windows
-
 ```cmd
 # Double-click the launcher
-MCU_Flasher.exe (or runThisOnWindows.vbs)
+MCU_Flasher.exe (or direct\runThisOnWindows.vbs)
 ```
 
 > **First run** will automatically:
@@ -41,25 +39,15 @@ MCU_Flasher.exe (or runThisOnWindows.vbs)
 > 4. Install CP210x USB-to-UART drivers
 > 5. Launch the GUI
 
-### Linux
-
-```bash
-chmod +x runThisOnLinux.sh
-./runThisOnLinux.sh
-```
-
 ---
 
 ## 📁 Project Structure
 
 ```
 MCU Flasher by Naph/
-├── launcher.py           # Entry point — single-instance guard, AppUserModelID
 ├── mcu_flash_gui.py      # Main GUI application (Tkinter)
-├── mcu_flash_gui_linux.py # Linux-specific GUI variant
-├── dedicated_AI.py       # AI assistant for code help
-├── runThisOnWindows.vbs  # Windows launcher (elevates, hides console)
-├── runThisOnLinux.sh     # Linux launcher
+├── direct/
+│   └── runThisOnWindows.vbs  # Windows launcher (elevates, hides console)
 ├── soft_reset_project/    # Default ESP32 hard/soft reset workspace template
 ├── soft_reset_project_uno/# Default Arduino AVR reset workspace template
 ├── installers/           # Drivers & offline installers (tracked via Git LFS)
@@ -70,16 +58,16 @@ MCU Flasher by Naph/
 │   └── msys2-*.exe       # MinGW toolchain for PlatformIO
 ├── src/
 │   ├── _python/          # Private Python 3 runtime (auto-healed on launch)
-│   ├── modules/          # Core utilities
+│   ├── modules/          # Core utilities & modules
+│   │   ├── launcher.py          # Entry point — single-instance guard, AppUserModelID
+│   │   ├── dedicated_AI.py      # AI assistant for code help
 │   │   ├── bootstrap.py         # Dependency & toolchain installer (auto-heal)
-│   │   ├── bootstrap_linux.py   # Linux bootstrap
 │   │   ├── win_subprocess_hide.py # Windows hidden subprocess helper
 │   │   └── arduino_lib_req.py   # Arduino library resolver
 │   ├── dbs/              # Tiny JSON database (project settings, boards)
 │   ├── editor/           # Monaco/QScintilla editor assets
 │   ├── fonts/            # Montserrat font family
 │   └── gui_config.json   # Persisted UI preferences
-├── bin/                  # Bundled arduino-cli binary
 ├── index_json/           # Arduino library/package indexes
 ├── .github/
 │   ├── agents/           # Copilot agent definitions
@@ -116,30 +104,21 @@ The GUI saves preferences to `src/gui_config.json`:
 ### Requirements
 
 - Python 3.10+
-- Windows 10/11 or Linux (tested on Ubuntu 22.04+)
+- Windows 10/11
 - Git LFS (`git lfs install`) for large binaries
 
 ### Run from Source
 
 ```bash
-# Windows
 python launcher.py
-
-# Linux
-python3 launcher.py
 ```
 
 ### Virtual Environment
 
 The bootstrap creates `env/` automatically. To use manually:
 
-```bash
-# Windows
+```cmd
 .\env\Scripts\activate
-
-# Linux
-source env/bin/activate
-
 python mcu_flash_gui.py
 ```
 
@@ -151,7 +130,6 @@ Large binaries are stored via Git LFS (see `.gitattributes`):
 
 - `installers/**/*.exe`
 - `installers/**/*.msi`
-- `bin/arduino-cli`
 
 Clone with LFS:
 

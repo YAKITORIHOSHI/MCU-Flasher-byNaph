@@ -90,7 +90,11 @@ def purge_python_cache(root_dir: Path | str = SCRIPT_DIR) -> None:
     except Exception:
         pass
 
-BOOTSTRAP_CONFIG_FILE = SCRIPT_DIR / "bootstrap_config.json"
+BOOTSTRAP_CONFIG_FILE = (
+    SCRIPT_DIR / "src" / "dbs" / "bootstrap_config.json"
+    if (SCRIPT_DIR / "src" / "dbs" / "bootstrap_config.json").exists() or not (SCRIPT_DIR / "bootstrap_config.json").exists()
+    else SCRIPT_DIR / "bootstrap_config.json"
+)
 _ORIGINAL_PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 DEFAULT_SKIP_UPDATES = True
 _BOOTSTRAP_LOG_LOCK = threading.Lock()
@@ -189,9 +193,9 @@ def _fast_start_source_fingerprint() -> str | None:
     import hashlib
 
     critical_files = (
-        SCRIPT_DIR / "launcher.py",
+        SCRIPT_DIR / "src" / "modules" / "launcher.py" if (SCRIPT_DIR / "src" / "modules" / "launcher.py").exists() else SCRIPT_DIR / "launcher.py",
         SCRIPT_DIR / "mcu_flash_gui.py",
-        SCRIPT_DIR / "runThisOnWindows.vbs",
+        SCRIPT_DIR / "direct" / "runThisOnWindows.vbs" if (SCRIPT_DIR / "direct" / "runThisOnWindows.vbs").exists() else SCRIPT_DIR / "runThisOnWindows.vbs",
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
     )
     try:
@@ -2570,7 +2574,9 @@ def run_update_checks(auto_update: bool = False):
                     pass
                 
                 # Relaunch runThisOnWindows.vbs and exit current process
-                vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
+                vbs_launcher = SCRIPT_DIR / "direct" / "runThisOnWindows.vbs"
+                if not vbs_launcher.exists():
+                    vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
                 if vbs_launcher.exists():
                     try:
                         subprocess.Popen(["wscript.exe", str(vbs_launcher)], cwd=str(SCRIPT_DIR))
@@ -3708,7 +3714,9 @@ def _get_board_download_dir() -> Path:
     use, so bootstrap can see which board cores the user has downloaded via
     the Board Downloader. Mirrors mcu_flash_gui.py's _get_download_dir()."""
     default_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src"
-    settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
+    settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
+    if not settings_file.exists():
+        settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
     settings = {}
     if settings_file.exists():
         try:
@@ -5944,7 +5952,11 @@ def _run_pip_install(
 
 
 # Arduino CLI cache shared with the main GUI.
-ARDUINO_CLI_CACHE_FILE = SCRIPT_DIR / "arduino_cli_path.txt"
+ARDUINO_CLI_CACHE_FILE = (
+    SCRIPT_DIR / "src" / "dbs" / "arduino_cli_path.txt"
+    if (SCRIPT_DIR / "src" / "dbs" / "arduino_cli_path.txt").exists() or not (SCRIPT_DIR / "arduino_cli_path.txt").exists()
+    else SCRIPT_DIR / "arduino_cli_path.txt"
+)
 
 
 def _cache_arduino_cli_path(path: str) -> None:
@@ -6687,10 +6699,9 @@ def _ensure_bundled_windows_installers(
 ) -> dict[str, bool]:
     """Install every Windows prerequisite intentionally bundled with the app.
 
-    The ``installers`` directory also contains Linux assets, so it is not safe
-    to execute every file found there. This explicit allowlist covers the three
-    Windows components the application actually depends on: WebView2, Arduino
-    CLI, and the Silicon Labs CP210x USB serial driver.
+    This explicit allowlist covers the Windows components the application
+    actually depends on: WebView2, Arduino CLI, and the Silicon Labs CP210x
+    USB serial driver.
     """
     if sys.platform != "win32":
         return {}

@@ -57,7 +57,7 @@ def _configure_windows_dpi_awareness():
 _configure_windows_dpi_awareness()
 
 # Ensure workspace 'env' site-packages is on sys.path
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 AI_STARTUP_PATCH_VERSION = "v21-readiness-gated"
 ENV_DIR = SCRIPT_DIR / "env"
 ENV_SITE_PACKAGES = ENV_DIR / "Lib" / "site-packages"

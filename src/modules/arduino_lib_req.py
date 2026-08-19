@@ -36,16 +36,22 @@ else:
     SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 VENV_DIR = os.path.join(SCRIPT_DIR, "env")
-if os.path.isdir(VENV_DIR) and not getattr(sys, 'frozen', False):
+if __name__ == "__main__" and not getattr(sys, 'frozen', False):
     current_exe = os.path.normpath(sys.executable).lower()
     venv_exe = os.path.normpath(os.path.join(VENV_DIR, "Scripts", "python.exe")).lower()
     venv_exew = os.path.normpath(os.path.join(VENV_DIR, "Scripts", "pythonw.exe")).lower()
-    if current_exe != venv_exe and current_exe != venv_exew:
-        exe_to_use = venv_exew if current_exe.endswith("pythonw.exe") else venv_exe
-        subprocess.Popen([exe_to_use] + sys.argv)
-        sys.exit(0)
+    if os.path.isfile(venv_exe) and current_exe != venv_exe and current_exe != venv_exew:
+        exe_to_use = venv_exew if current_exe.endswith("pythonw.exe") and os.path.isfile(venv_exew) else venv_exe
+        try:
+            subprocess.Popen([exe_to_use] + sys.argv)
+            sys.exit(0)
+        except Exception:
+            pass
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -61,7 +67,12 @@ BOARD_CACHE_FILE = os.path.join(INDEX_CACHE_DIR, "package_index.json")
 CACHE_MAX_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 
 # Settings cache (remembers download folder across sessions)
-SETTINGS_FILE = os.path.join(SCRIPT_DIR, "arduino_browser_settings.json")
+SETTINGS_FILE = (
+    os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json"))
+    or not os.path.exists(os.path.join(SCRIPT_DIR, "arduino_browser_settings.json"))
+    else os.path.join(SCRIPT_DIR, "arduino_browser_settings.json")
+)
 
 # Default download location
 DEFAULT_DOWNLOAD_DIR = os.path.join(

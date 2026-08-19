@@ -22,10 +22,8 @@ hardware safety.
 
 ## Scope
 
-- Work in `mcu_flash_gui.py`, Windows launchers, Windows helpers, and focused
+- Work in `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`), Windows helpers (`win_subprocess_hide.py`, `bootstrap.py`), and focused
   tests when the request authorizes implementation.
-- Do not edit `mcu_flash_gui_linux.py`, `runThisOnLinux.sh`, or Linux-specific
-  helpers unless the user explicitly asks for Linux work.
 - Do not run a real flash, upload, reset, destructive Clean, installer, or COM
   port operation during automated verification.
 - Preserve unrelated working-tree changes. Never delete or rewrite a user

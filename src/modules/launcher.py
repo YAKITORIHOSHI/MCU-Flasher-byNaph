@@ -19,7 +19,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 
 # Disable python bytecode file creation
 sys.dont_write_bytecode = True

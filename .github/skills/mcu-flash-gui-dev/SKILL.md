@@ -1,17 +1,15 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for the Windows MCU Flash GUI (mcu_flash_gui.py, launcher.py, dedicated_AI.py). Use when modifying, debugging, or enhancing the Tkinter flasher interface, serial monitor, Arduino CLI or PlatformIO pipelines, board caches, or Windows launchers. Do not use it to modify the Linux port unless the user explicitly requests Linux work."
+description: "Developer and troubleshooting guide for the Windows MCU Flash GUI (mcu_flash_gui.py, launcher.py, dedicated_AI.py). Use when modifying, debugging, or enhancing the Tkinter flasher interface, serial monitor, Arduino CLI or PlatformIO pipelines, board caches, or Windows launchers."
 ---
 
 # MCU Flash GUI V6.0 Development & Maintenance Skill
 
-Use this skill when developing, debugging, or extending the **MCU Flash GUI V6.0** desktop application (`mcu_flash_gui.py`) and its supporting execution ecosystem.
+Use this skill when developing, debugging, or extending the **MCU Flash GUI V6.0** desktop application (`mcu_flash_gui.py`) and its supporting execution ecosystem on Windows 10/11.
 
 ## Platform Scope
 
-- Default to the Windows main app, `mcu_flash_gui.py`, and Windows launchers.
-- Do not mirror changes into `mcu_flash_gui_linux.py` or Linux scripts unless the
-  user explicitly expands the task to Linux.
+- Focus on the Windows main app, `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`, `src/launcher.cpp`), and supporting modules.
 - Treat real sketch files and unknown user content as visible, user-owned data.
   Hide only known app-generated project metadata, and keep it writable.
 
@@ -19,7 +17,7 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI V6.0
 
 ## Core Architecture Overview
 
-The project provides a cross-platform desktop interface for compiling, flashing, and monitoring ESP32 / Arduino microcontrollers. The main file (`mcu_flash_gui.py`, ~17 000 lines) is a monolithic Tkinter application with an embedded code editor, dual toolchain support, and an integrated AI assistant.
+The project provides a modern Windows desktop interface for compiling, flashing, and monitoring ESP32 / Arduino microcontrollers. The main file (`mcu_flash_gui.py`, ~17 000 lines) is a monolithic Tkinter application with an embedded code editor, dual toolchain support, and an integrated AI assistant.
 
 ### Key Components
 
@@ -66,7 +64,7 @@ The project provides a cross-platform desktop interface for compiling, flashing,
 5. **Launchers & Native Wrappers**
    - `launcher.py`: Python entry point for initializing configuration and launching the main GUI.
    - `src/launcher.cpp`: Native C++ executable wrapper that initializes environment variables and launches `launcher.py` / `mcu_flash_gui.py` silently on Windows without popping a console window.
-   - `runThisOnWindows.vbs` / `runThisOnLinux.sh`: OS-specific bootstrap launchers.
+   - `runThisOnWindows.vbs`: Windows bootstrap launcher (elevates when needed, hides console).
 
 6. **Realtime C++ Syntax Linter (`src/syntax_checker.py`)**
    - Lightweight C++ AST & regex engine for validating `.ino`, `.cpp`, and `.h` files without invoking full compiler runs.
@@ -80,9 +78,8 @@ The project provides a cross-platform desktop interface for compiling, flashing,
 8. **Toolchain Execution & Utilities (`src/modules/` & `src/libs/`)**
    - `src/modules/bootstrap.py`: Manages private Python environment setup/auto-heal, PlatformIO virtual environments (`penv`), Arduino CLI binaries, Node.js LTS, and OpenCode AI Assistant. Junctions PlatformIO core to avoid MAX_PATH (>260 char) issues.
    - `_heal_private_python_runtime()`: Self-repair mechanism that detects missing or damaged portable Python at `src/_python/`, reinstalling it silently from `installers/.handsoff/python-*-amd64.exe` with `attrib +h` project isolation.
-   - `src/modules/bootstrap_linux.py`: Linux-specific path resolution and environment bootstrapper.
    - `src/libs/arduino_lib_req.py`: Resolves required C++ headers and auto-downloads missing Arduino libraries.
-   - `src/libs/detector.py`: Cross-platform USB serial port auto-detection and board identification.
+   - `src/libs/detector.py`: Windows USB serial port auto-detection and board identification.
    - `src/libs/win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
    - `src/libs/reset_editor.py`: Utility to reset cached editor configuration and state.
 
@@ -93,11 +90,9 @@ The project provides a cross-platform desktop interface for compiling, flashing,
 ```
 MCU Flasher by Naph/
 ├── mcu_flash_gui.py           # Main GUI application (~17k lines, monolithic)
-├── mcu_flash_gui_linux.py     # Linux port of the main GUI
 ├── dedicated_AI.py            # OpenCode AI controller (pywebview + xterm.js + pywinpty)
 ├── launcher.py                # Python entry point / bootstrapper
 ├── runThisOnWindows.vbs       # Windows VBS launcher
-├── runThisOnLinux.sh          # Linux shell launcher
 ├── arduino_cli_path.txt       # Arduino CLI path config
 ├── arduino_browser_settings.json
 ├── bootstrap_config.json
@@ -120,8 +115,7 @@ MCU Flasher by Naph/
 │   │   ├── bundle.js          # Monaco Editor offline JS bundle (no CDN dependency)
 │   │   └── *.ttf              # Offline icon and font assets
 │   ├── modules/               # Core bootstrap and environment management
-│   │   ├── bootstrap.py       # Windows dependency & runtime bootstrapper (auto-heal, penv, tools)
-│   │   └── bootstrap_linux.py # Linux-specific bootstrapper and path resolver
+│   │   └── bootstrap.py       # Windows dependency & runtime bootstrapper (auto-heal, penv, tools)
 │   ├── libs/                  # Additional utility libraries
 │   │   ├── arduino_lib_req.py # Arduino library dependency resolver & downloader
 │   │   ├── detector.py        # USB serial port auto-detection & board probing

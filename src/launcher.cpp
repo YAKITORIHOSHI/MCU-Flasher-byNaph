@@ -21,15 +21,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   }
   std::wstring dirPath = exeStr.substr(0, lastBackslash);
 
-  // 3. Construct target VBS script path
-  std::wstring vbsPath = dirPath + L"\\runThisOnWindows.vbs";
-
-  // 4. Verify the VBS file exists
+  // 3. Construct target VBS script path (prefer direct\runThisOnWindows.vbs)
+  std::wstring vbsPath = dirPath + L"\\direct\\runThisOnWindows.vbs";
   DWORD attrib = GetFileAttributesW(vbsPath.c_str());
   if (attrib == INVALID_FILE_ATTRIBUTES ||
       (attrib & FILE_ATTRIBUTE_DIRECTORY)) {
+    vbsPath = dirPath + L"\\runThisOnWindows.vbs";
+    attrib = GetFileAttributesW(vbsPath.c_str());
+  }
+
+  // 4. Verify the VBS file exists
+  if (attrib == INVALID_FILE_ATTRIBUTES ||
+      (attrib & FILE_ATTRIBUTE_DIRECTORY)) {
     MessageBoxW(NULL,
-                L"Launcher script 'runThisOnWindows.vbs' was not found in the "
+                L"Launcher script 'runThisOnWindows.vbs' was not found in 'direct' or the "
                 L"application directory.",
                 L"Error", MB_ICONERROR | MB_OK);
     return 1;

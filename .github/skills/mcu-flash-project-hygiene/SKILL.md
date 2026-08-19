@@ -5,8 +5,7 @@ description: Audit and improve Windows MCU Flasher project hygiene, including ge
 
 # MCU Flasher Project Hygiene
 
-Work on the Windows main app, `mcu_flash_gui.py`. Do not edit
-`mcu_flash_gui_linux.py` unless the user explicitly expands the scope to Linux.
+Work on the Windows main app, `mcu_flash_gui.py`, Windows launchers, and supporting utilities.
 
 ## Preserve ownership boundaries
 
