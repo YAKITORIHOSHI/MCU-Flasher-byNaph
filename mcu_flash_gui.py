@@ -3068,6 +3068,59 @@ VALID_BAUD_RATES = {
     38400, 57600, 115200, 230400, 460800, 512000, 921600
 }
 
+# ─── Standard C / C++ headers ────────────────────────────────────
+# Every header shipped with the C standard library, the C++ standard
+# library (C++98 → C++23), the C++ <c...> compatibility wrappers, and
+# the common POSIX/OS headers.  These are provided by the compiler /
+# toolchain, never by an installable Arduino/PlatformIO library, so the
+# include-scanners must always treat them as built-in.  (All lowercase
+# to match the normalised comparisons used across this file.)
+STANDARD_C_CPP_HEADERS = frozenset({
+    # C standard library (C89 / C99 / C11 / C17 / C23)
+    "assert.h", "complex.h", "ctype.h", "errno.h", "fenv.h", "float.h",
+    "inttypes.h", "iso646.h", "limits.h", "locale.h", "math.h",
+    "setjmp.h", "signal.h", "stdalign.h", "stdarg.h", "stdatomic.h",
+    "stdbit.h", "stdbool.h", "stddef.h", "stdint.h", "stdio.h",
+    "stdlib.h", "stdnoreturn.h", "string.h", "tgmath.h", "threads.h",
+    "time.h", "uchar.h", "wchar.h", "wctype.h",
+
+    # C++ <c...> compatibility wrappers
+    "cassert", "ccomplex", "cctype", "cerrno", "cfenv", "cfloat",
+    "cinttypes", "ciso646", "climits", "clocale", "cmath", "csetjmp",
+    "csignal", "cstdalign", "cstdarg", "cstdbool", "cstddef", "cstdint",
+    "cstdio", "cstdlib", "cstring", "ctime", "ctgmath", "cuchar",
+    "cwchar", "cwctype",
+
+    # C++ standard library (C++98 → C++23)
+    "algorithm", "any", "array", "atomic", "barrier", "bit", "bitset",
+    "charconv", "chrono", "codecvt", "compare", "complex", "concepts",
+    "condition_variable", "coroutine", "deque", "exception", "execution",
+    "expected", "filesystem", "flat_map", "flat_set", "format",
+    "forward_list", "fstream", "functional", "future", "generator",
+    "initializer_list", "iomanip", "ios", "iosfwd", "iostream", "istream",
+    "iterator", "latch", "limits", "list", "locale", "map", "mdspan",
+    "memory", "memory_resource", "mutex", "new", "numbers", "numeric",
+    "optional", "ostream", "print", "queue", "random", "ranges", "ratio",
+    "regex", "scoped_allocator", "semaphore", "set", "shared_mutex",
+    "source_location", "span", "sstream", "stack", "stacktrace",
+    "stdexcept", "stop_token", "streambuf", "string", "string_view",
+    "syncstream", "system_error", "thread", "tuple", "type_traits",
+    "typeindex", "typeinfo", "unordered_map", "unordered_set", "utility",
+    "valarray", "variant", "vector", "version",
+
+    # Common POSIX / OS headers used by embedded & desktop code
+    "unistd.h", "fcntl.h", "dirent.h", "strings.h", "alloca.h",
+    "libgen.h", "endian.h", "byteswap.h",
+    "sys/types.h", "sys/stat.h", "sys/time.h", "sys/times.h", "sys/wait.h",
+    "sys/ioctl.h", "sys/socket.h", "sys/select.h", "sys/uio.h",
+    "sys/mman.h", "sys/param.h", "sys/resource.h", "sys/un.h", "sys/file.h",
+    "sys/errno.h", "sys/statvfs.h", "sys/utsname.h", "sys/ipc.h",
+    "sys/msg.h", "sys/shm.h", "sys/sem.h", "sys/poll.h", "sys/syscall.h",
+    "sys/random.h", "sys/ttydefaults.h",
+    "netinet/in.h", "netinet/tcp.h", "arpa/inet.h", "netdb.h", "poll.h",
+    "termios.h", "pthread.h", "semaphore.h", "dlfcn.h", "mqueue.h",
+})
+
 def _get_download_dir() -> str:
     """Read the download directory from the shared settings file.
 
@@ -14412,13 +14465,8 @@ class MCUUploadGUI:
         """Dynamically detect built-in headers for the selected platform
         by scanning the platform core files in the Boards directory.
         """
-        core_headers = {
-            # Standard C / C++ library
-            "vector", "string", "map", "set", "list", "algorithm", "cmath",
-            "cstdio", "cstdlib", "cstring", "iostream", "sstream", "memory",
-            "utility", "stdint.h", "stdlib.h", "string.h", "math.h", "stdio.h",
-            "stdbool.h", "time.h", "limits.h", "assert.h", "stddef.h",
-            "stdarg.h", "ctype.h", "inttypes.h", "cstdint", "cstddef", "climits",
+        core_headers = set(STANDARD_C_CPP_HEADERS) | {
+            # Arduino / framework built-ins
             "arduino.h", "pins_arduino.h", "pgmspace.h",
         }
 
@@ -15920,12 +15968,7 @@ default_envs = {self._pio_env_name()}
                         pass
 
         # Builtin/standard libraries to ignore
-        BUILTIN_AND_STD = {
-            # Standard C/C++ headers
-            "vector", "string", "map", "set", "list", "algorithm", "cmath", "cstdio", "cstdlib",
-            "cstring", "iostream", "sstream", "memory", "utility", "stdint.h", "stdlib.h",
-            "string.h", "math.h", "stdio.h", "stdbool.h", "time.h", "limits.h", "assert.h",
-            "stddef.h", "stdarg.h", "ctype.h", "inttypes.h", "cstdint", "cstddef", "climits",
+        BUILTIN_AND_STD = set(STANDARD_C_CPP_HEADERS) | {
             # Arduino/ESP32 core standard builtins
             "arduino.h", "wifi.h", "wire.h", "spi.h", "fs.h", "sd.h", "bledevice.h",
             "update.h", "webserver.h", "wificlient.h", "wificlientsecure.h", "ticker.h",
