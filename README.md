@@ -40,7 +40,7 @@ MCU_Flasher.exe (or direct\runThisOnWindows.vbs)
 4. Install CP210x USB-to-UART drivers
 
 > [!NOTE]
-> **Storage Requirement:** Expect approximately **5GB of starting storage** for initial setup, dependencies, and core toolchains. Storage requirements may increment as additional libraries and board platforms are installed.
+> **Storage Requirement**: Initial installation requires approximately **5GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
 
 ---
 
@@ -119,6 +119,9 @@ The GUI saves preferences to `src/gui_config.json`:
 - Windows 10/11 (Internal SSD / HDD recommended)
 - **5GB+** starting storage (may increment as libraries and boards increase)
 - Git LFS (`git lfs install`) for large binaries
+
+> [!NOTE]
+> **Storage Requirement**: Initial installation requires approximately **5GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
 
 ### Run from Source
 
