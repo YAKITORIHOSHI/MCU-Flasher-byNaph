@@ -32,15 +32,16 @@
 MCU_Flasher.exe (or direct\runThisOnWindows.vbs)
 ```
 
-> **First run** will automatically:
->
-> 1. Create a Python virtual environment (`env/`)
-> 2. Install dependencies (pyserial, tkinter, etc.)
-> 3. Download Arduino CLI / PlatformIO if needed
-> 4. Install CP210x USB-to-UART drivers
->
-> > [!NOTE]
-> > **Storage Requirement:** Expect approximately **5GB of starting storage** for initial setup, dependencies, and core toolchains. Storage requirements may increment as additional libraries and board platforms are installed.
+**First run** will automatically:
+
+1. Create a Python virtual environment (`env/`)
+2. Install dependencies (pyserial, tkinter, etc.)
+3. Download Arduino CLI / PlatformIO if needed
+4. Install CP210x USB-to-UART drivers
+
+> [!NOTE]
+> **Storage Requirement:** Expect approximately **5GB of starting storage** for initial setup, dependencies, and core toolchains. Storage requirements may increment as additional libraries and board platforms are installed.
+
 ---
 
 ## 🌐 Remote & Network UNC Share Support
