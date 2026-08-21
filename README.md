@@ -38,6 +38,9 @@ MCU_Flasher.exe (or direct\runThisOnWindows.vbs)
 > 2. Install dependencies (pyserial, tkinter, etc.)
 > 3. Download Arduino CLI / PlatformIO if needed
 > 4. Install CP210x USB-to-UART drivers
+>
+> > [!NOTE]
+> > **Storage Requirement:** Expect approximately **5GB of starting storage** for initial setup, dependencies, and core toolchains. Storage requirements may increment as additional libraries and board platforms are installed.
 ---
 
 ## 🌐 Remote & Network UNC Share Support
@@ -112,7 +115,8 @@ The GUI saves preferences to `src/gui_config.json`:
 ### Requirements
 
 - Python 3.10+
-- Windows 10/11
+- Windows 10/11 (Internal SSD / HDD recommended)
+- **5GB+** starting storage (may increment as libraries and boards increase)
 - Git LFS (`git lfs install`) for large binaries
 
 ### Run from Source

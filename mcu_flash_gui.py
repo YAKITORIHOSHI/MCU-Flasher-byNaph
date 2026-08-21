@@ -1341,6 +1341,7 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
 
 
 try:
+    # pyrefly: ignore [missing-import]
     from dedicated_AI import AIController, is_opencode_installed
 except Exception:
     AIController = None
@@ -22228,6 +22229,7 @@ default_envs = {self._pio_env_name()}
         proceed = messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root)
         if proceed:
             try:
+                # pyrefly: ignore [missing-import]
                 from dedicated_AI import launch_opencode_elevated_cmd
                 launch_opencode_elevated_cmd(str(self.sketch_dir_path))
             except Exception as e:
@@ -22252,6 +22254,7 @@ default_envs = {self._pio_env_name()}
                 was_closed = self.ai_controller.dispose()
             else:
                 try:
+                    # pyrefly: ignore [missing-import]
                     from dedicated_AI import close_active_opencode
                     was_closed = close_active_opencode()
                 except Exception:
@@ -22283,6 +22286,7 @@ default_envs = {self._pio_env_name()}
         else:
             if getattr(self, "ai_controller", None):
                 try:
+                    # pyrefly: ignore [missing-import]
                     from dedicated_AI import is_opencode_running
                     if not is_opencode_running():
                         # Prompt the disclaimer first BEFORE popping up the AI panel
@@ -22399,6 +22403,7 @@ default_envs = {self._pio_env_name()}
         if elapsed >= 45.0 and embedded:
             running = False
             try:
+                # pyrefly: ignore [missing-import]
                 from dedicated_AI import is_opencode_running
                 running = bool(is_opencode_running())
             except Exception:
@@ -22447,6 +22452,7 @@ default_envs = {self._pio_env_name()}
 
         # Display the readiness-driven loading overlay only on first launch.
         # Subsequent hide/unhide toggles keep the already-running terminal visible.
+        # pyrefly: ignore [missing-import]
         from dedicated_AI import is_opencode_running
         if not getattr(self, "_has_shown_ai_first_time_loader", False) or not is_opencode_running():
             self._has_shown_ai_first_time_loader = True
@@ -22463,6 +22469,7 @@ default_envs = {self._pio_env_name()}
         # Trigger launch if AI process is not running
         if getattr(self, "ai_controller", None):
             try:
+                # pyrefly: ignore [missing-import]
                 from dedicated_AI import is_opencode_running
                 if not is_opencode_running() and not getattr(self.ai_controller, "is_launching", False):
                     started = self.ai_controller.toggle_ai()
