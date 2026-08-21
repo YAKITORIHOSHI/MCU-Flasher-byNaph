@@ -46,6 +46,9 @@ Classify paths before changing attributes or deleting anything:
 
 - Keep each exact board under its canonical `.pio/boards/<board-key>/`
   workspace. Do not restore family-bucketed binaries into an exact-board build.
+- For remote/UNC network projects, workspaces are isolated on local fast storage
+  (under `remote_workspaces/`) to prevent SMB signature file errors and network latency,
+  and are cleanly registered for manual Clean operations.
 - Preserve incremental objects after ordinary source or linker failures. Repair
   only the selected board workspace after explicit cache-corruption evidence.
 - Manual Clean may remove generated configuration, metadata, compiled caches,

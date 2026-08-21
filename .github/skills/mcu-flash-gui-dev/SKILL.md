@@ -83,6 +83,11 @@ The project provides a modern Windows desktop interface for compiling, flashing,
    - `src/libs/win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
    - `src/libs/reset_editor.py`: Utility to reset cached editor configuration and state.
 
+9. **Remote UNC & Network Share Pipeline (`mcu_flash_gui.py`)**
+   - `is_unc_or_network_path()`, `_unc_share_root()`: Dynamically detects Windows UNC paths (`\\server\share`) and remote drive types.
+   - `_map_unc_for_build()` / `_unmap_unc_after_build()`: Dynamically maps the remote share to a free drive letter (`Z:` to `A:`) for subprocess CWD compatibility and cleanly removes it in `finally:` blocks.
+   - `_remote_workspace_root()`: Automatically routes PlatformIO build workspaces (`PLATFORMIO_WORKSPACE_DIR`, `PLATFORMIO_BUILD_DIR`, `PLATFORMIO_LIBDEPS_DIR`) to local fast storage (`remote_workspaces/<project>_<hash>/`), avoiding Samba/SMB file-locking errors on `.sconsign*.dblite` while reading source files directly from the network.
+
 ---
 
 ## File Map

@@ -18,6 +18,7 @@
 | **🎨 Modern Dark UI**                | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
 | **✏️ Integrated Code Editor**        | Syntax-highlighted editor (QScintilla / Monaco) with project file management   |
 | **🤖 AI Assistant**                  | Built-in `src/modules/dedicated_AI.py` for code generation, debugging, and explanations    |
+| **🌐 Remote & Network Drive Support** | Seamlessly compile & flash projects located on Windows UNC shares (`\\server\share`) or mapped network drives with automated drive mapping and local SSD build acceleration |
 | **📦 Driver & Toolchain Management** | Auto-installs CP210x drivers, Arduino CLI, PlatformIO, msys2, and more         |
 | **🔒 Single-Instance Guard**         | Prevents accidental double-launch during bootstrap/venv setup                  |
 | **🖥️ Native Windows Integration**   | Optimized for Windows 10/11 with `.vbs` and `.exe` silent launchers            |
@@ -37,7 +38,14 @@ MCU_Flasher.exe (or direct\runThisOnWindows.vbs)
 > 2. Install dependencies (pyserial, tkinter, etc.)
 > 3. Download Arduino CLI / PlatformIO if needed
 > 4. Install CP210x USB-to-UART drivers
-> 5. Launch the GUI
+---
+
+## 🌐 Remote & Network UNC Share Support
+
+MCU Flasher natively supports compiling and flashing sketches stored on **remote network shares** (e.g. `\\server\share\sketch` or `\\192.168.x.x\share\sketch`) and mapped network drives (`Z:\...`):
+
+- **Dynamic Drive Mapping:** Bypasses Windows/SCons UNC working directory limitations by dynamically mounting the share to a temporary drive letter (`Z:` down to `A:`) during build/upload sessions and cleanly unmapping it upon completion.
+- **Local Fast SSD Build Acceleration:** Intermediate `.o` and `.d` object files, SCons signature databases (`.sconsign*.dblite`), and dependency caches are automatically isolated on your local fast SSD (`remote_workspaces/`). This eliminates Samba/SMB file-locking conflicts, avoids network bandwidth bottlenecks, and keeps remote folders free of build clutter.
 
 ---
 

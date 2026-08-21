@@ -301,32 +301,81 @@ def classify_platformio_failure(output_lines) -> str:
     return "tool"
 
 
+def is_unc_or_network_path(path) -> bool:
+    """Return True if *path* is a UNC path (``\\\\server\\share``) or lives on
+    a mapped network drive.  Works for both raw UNC and IP-based paths."""
+    s = str(path)
+    if s.startswith("\\\\") or s.startswith("//"):
+        return True
+    # A mapped drive letter (e.g. Z:) can also point to a remote share.
+    drive = os.path.splitdrive(s)[0]
+    if drive and sys.platform == "win32":
+        try:
+            import ctypes
+            _DRIVE_REMOTE = 4
+            return ctypes.windll.kernel32.GetDriveTypeW(drive + os.sep) == _DRIVE_REMOTE
+        except Exception:
+            pass
+    return False
+
+
+def _unc_share_root(path) -> str:
+    """Extract the UNC share root (``\\\\server\\share``) from a UNC path.
+
+    Returns an empty string when *path* is not UNC."""
+    s = str(path).replace("/", "\\")
+    if not s.startswith("\\\\"):
+        return ""
+    parts = s.lstrip("\\").split("\\")
+    if len(parts) >= 2:
+        return f"\\\\{parts[0]}\\{parts[1]}"
+    return ""
+
+
+def _volume_cache_key_for(path) -> str:
+    """Return a stable cache key representing the volume that *path* lives on.
+
+    For regular drive-letter paths this is the drive root (``C:\\``).  For UNC
+    paths it is the share root (``\\\\server\\share``).  Returns ``""`` if
+    neither can be determined."""
+    s = str(path)
+    if s.startswith("\\\\") or s.startswith("//"):
+        return _unc_share_root(s)
+    drive = os.path.splitdrive(s)[0]
+    return (drive + os.sep) if drive else ""
+
+
 _volume_info_cache: dict = {}
 
 def get_volume_info(path) -> tuple:
     """Return (filesystem_name, drive_type_label) for the volume containing
     `path`, e.g. ('NTFS', 'Fixed'), ('exFAT', 'Removable'), ('', '').
-    Results are cached per volume."""
+    UNC paths are recognised as ('Network', 'Network') unless the share's
+    actual filesystem can be queried.  Results are cached per volume."""
     try:
-        drive = os.path.splitdrive(str(path))[0]
-        if not drive:
+        cache_key = _volume_cache_key_for(path)
+        if not cache_key:
             return "", ""
-        root = drive + os.sep
-        cached = _volume_info_cache.get(root)
+        cached = _volume_info_cache.get(cache_key)
         if cached is not None:
             return cached
         fs_name, type_label = "", ""
         if sys.platform == "win32":
             import ctypes
             _type_names = {2: "Removable", 3: "Fixed", 4: "Network", 5: "CD/DVD", 6: "RAM"}
-            _dt = ctypes.windll.kernel32.GetDriveTypeW(root)
-            type_label = _type_names.get(_dt, "")
+            # For UNC paths, GetDriveTypeW needs the share root with a trailing backslash.
+            is_unc = cache_key.startswith("\\\\")
+            probe_root = (cache_key.rstrip("\\") + "\\") if is_unc else cache_key
+            _dt = ctypes.windll.kernel32.GetDriveTypeW(probe_root)
+            type_label = _type_names.get(_dt, "Network" if is_unc else "")
             _buf = ctypes.create_unicode_buffer(64)
             if ctypes.windll.kernel32.GetVolumeInformationW(
-                root, None, 0, None, None, None, _buf, 64
+                probe_root, None, 0, None, None, None, _buf, 64
             ):
                 fs_name = _buf.value
-        _volume_info_cache[root] = (fs_name, type_label)
+            elif is_unc:
+                fs_name = "Network"
+        _volume_info_cache[cache_key] = (fs_name, type_label)
         return fs_name, type_label
     except Exception:
         return "", ""
@@ -345,18 +394,19 @@ def is_volume_writable(path) -> bool:
     """Probe whether the volume containing `path` accepts writes.  Catches
     USB flash drives with the hardware lock switch engaged, read-only
     mounts, and volumes flagged dirty after an unsafe removal.  Result is
-    cached per volume."""
+    cached per volume.  Handles both drive-letter and UNC paths."""
     try:
-        drive = os.path.splitdrive(str(path))[0]
-        if not drive or drive in _writability_cache:
-            return _writability_cache.get(drive, True)
+        cache_key = _volume_cache_key_for(path)
+        if not cache_key or cache_key in _writability_cache:
+            return _writability_cache.get(cache_key, True)
         # Probe inside the nearest existing directory along the path.  Never
         # probe the volume root itself — roots are frequently unwritable for
         # standard users (e.g. C:\) even though the volume works fine.
         probe_dir = os.path.abspath(str(path))
         if not os.path.isdir(probe_dir):
             probe_dir = os.path.dirname(probe_dir)
-        volume_root = drive + os.sep
+        # For UNC paths, volume_root is the share root.
+        volume_root = cache_key
         while probe_dir and not os.path.isdir(probe_dir):
             _parent = os.path.dirname(probe_dir)
             if _parent == probe_dir or os.path.normpath(_parent) == os.path.normpath(volume_root):
@@ -379,7 +429,7 @@ def is_volume_writable(path) -> bool:
         result = False
     except Exception:
         result = True
-    _writability_cache[drive] = result
+    _writability_cache[cache_key] = result
     return result
 
 
@@ -12454,7 +12504,8 @@ class MCUUploadGUI:
     def _clean_targets(self) -> list[tuple[Path, str]]:
         """Authoritative targets for manual Clean and its availability check."""
         sketch = self.sketch_dir_path
-        return [
+        remote_root = self._remote_workspace_root(sketch)
+        targets = [
             (sketch / ".pio", "all cached board workspaces"),
             (sketch / "src", "generated build sources"),
             (sketch / "platformio.ini", "generated PlatformIO configuration"),
@@ -12476,6 +12527,9 @@ class MCUUploadGUI:
             (Path.home() / ".mcu_flash_gui" / "ai-reviews", "external AI review transcripts"),
             (Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / ".mcuflasher-app" / ".tmp", "external temporary app cache"),
         ]
+        if remote_root is not None:
+            targets.append((remote_root, "remote project local build workspace"))
+        return targets
 
     def _perform_clean(self) -> tuple[list[str], list[str]]:
         """Core clean execution: delete all build artifacts, temporary directories, and generated configs, leaving only sketch source files."""
@@ -12866,6 +12920,8 @@ class MCUUploadGUI:
                 self.is_busy = False
                 self._compile_background_lock.clear()
                 self._set_buttons_state(False)
+                # Clean up any temporary UNC drive mapping created during compile.
+                self._unmap_unc_after_build()
 
         threading.Thread(target=_safe_compile, daemon=True).start()
 
@@ -12944,6 +13000,8 @@ class MCUUploadGUI:
                 self._compile_background_lock.clear()
                 self._set_buttons_busy(False)
                 self._set_buttons_state(False)
+                # Clean up any temporary UNC drive mapping created during upload.
+                self._unmap_unc_after_build()
 
 
         self.is_busy = True
@@ -14076,6 +14134,17 @@ class MCUUploadGUI:
         self._append("=" * 50, "header")
         self._append(f"  Path : {self.sketch_dir_path}", "dim")
 
+        # ── Network / UNC path notice ─────────────────────────────────────
+        _is_network = is_unc_or_network_path(self.sketch_dir_path)
+        if _is_network:
+            _share = _unc_share_root(self.sketch_dir_path) or str(self.sketch_dir_path)
+            self._append(f"  🌐 Source : Network share ({_share})", "info")
+            self._append(
+                "  ℹ Network paths are supported. A temporary drive mapping will "
+                "be created automatically during compile/upload.",
+                "dim",
+            )
+
         # ── Drive / volume health report ──────────────────────────────────
         # Sketches may live on any volume type (NTFS, exFAT, FAT32, flash
         # drives, external disks, network shares).  Surface the facts that
@@ -14747,10 +14816,57 @@ class MCUUploadGUI:
         # digest, rather than the readable prefix, provides uniqueness.
         return f"{(slug or 'board')[:20]}_{digest}"
 
+    def _mapped_or_sketch_dir(self, project_dir: Path | None = None) -> Path:
+        """Return the effective sketch directory, rewriting to the mapped drive
+        letter if a UNC mapping is currently active."""
+        project = Path(project_dir or self.sketch_dir_path)
+        drive_spec = getattr(self, "_unc_mapped_drive", None)
+        if not drive_spec or not is_unc_or_network_path(project):
+            return project
+        share_root = _unc_share_root(project)
+        if not share_root:
+            return project
+        relative_part = str(project).replace("/", "\\")
+        share_norm = share_root.rstrip("\\")
+        if relative_part.lower().startswith(share_norm.lower()):
+            relative_part = relative_part[len(share_norm):]
+        return Path(f"{drive_spec}{relative_part}")
+
+    def _remote_workspace_root(self, project_dir: Path | None = None) -> Path | None:
+        """For a remote/UNC project (e.g. ``\\\\server\\share\\...`` or mapped network drives),
+        return the local fast workspace root on the local SSD.
+
+        Building intermediate objects and SCons signature databases (``.sconsign*.dblite``)
+        directly over SMB/network shares causes file locking failures and network latency.
+        Routing remote project workspaces to local storage guarantees 100% reliable builds
+        and high-speed compilation while preserving the remote source files.
+
+        Returns None for local drive projects (which build in ``project/.pio`` as normal).
+        """
+        project = Path(project_dir or self.sketch_dir_path)
+        if not is_unc_or_network_path(project):
+            return None
+        import hashlib
+        import re
+        proj_hash = hashlib.sha1(str(project).lower().encode("utf-8")).hexdigest()[:12]
+        proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', project.name) or "project"
+        core_store = os.environ.get("PLATFORMIO_CORE_DIR")
+        base = Path(core_store) if core_store else SCRIPT_DIR
+        return base / "remote_workspaces" / f"{proj_name}_{proj_hash}"
+
     def _board_workspace(self, project_dir: Path | None = None,
                          board_name: str | None = None) -> Path:
-        """Project-local PlatformIO workspace dedicated to one exact board."""
-        project = Path(project_dir or self.sketch_dir_path)
+        """Project-local PlatformIO workspace dedicated to one exact board.
+
+        For remote/UNC network projects, automatically resolves to the local fast
+        storage workspace under ``remote_workspaces/<project>_<hash>/boards/<board_key>``.
+        For local projects, resolves to ``<project>/.pio/boards/<board_key>``.
+        """
+        remote_root = self._remote_workspace_root(project_dir)
+        if remote_root is not None:
+            return remote_root / "boards" / self._board_cache_key(board_name)
+
+        project = self._mapped_or_sketch_dir(project_dir)
         return project / ".pio" / "boards" / self._board_cache_key(board_name)
 
     def _board_build_root(self, project_dir: Path | None = None,
@@ -14775,7 +14891,7 @@ class MCUUploadGUI:
         Renaming within the same project volume is cheap even for a large build
         tree.  Migration is best-effort: PlatformIO can always rebuild safely.
         """
-        project = Path(project_dir or self.sketch_dir_path)
+        project = self._mapped_or_sketch_dir(project_dir)
         env_name = (
             self._pio_env_name(board_name)
             if board_name is not None else self._pio_env_name()
@@ -14830,13 +14946,16 @@ class MCUUploadGUI:
         incremental objects, avoiding a second object copy on low-storage PCs.
         Framework/toolchain packages remain shared through PLATFORMIO_CORE_DIR.
         """
-        project = Path(project_dir or self.sketch_dir_path)
+        project = self._mapped_or_sketch_dir(project_dir)
         self._migrate_legacy_board_cache(project, board_name)
         workspace = self._board_workspace(project, board_name)
         build_root = workspace / "build"
         libdeps_root = workspace / "libdeps"
-        workspace.mkdir(parents=True, exist_ok=True)
-        hide_generated_directory(project / ".pio")
+        try:
+            workspace.mkdir(parents=True, exist_ok=True)
+            hide_generated_directory(project / ".pio")
+        except Exception:
+            pass
 
         env = os.environ.copy()
         env["PLATFORMIO_WORKSPACE_DIR"] = str(workspace)
@@ -14854,6 +14973,149 @@ class MCUUploadGUI:
             env["PLATFORMIO_BUILD_JOBS"] = str(safe_jobs)
             env["SCONSFLAGS"] = f"-j{safe_jobs}"
         return env
+
+    # ── UNC / network-path drive mapping ──────────────────────────────────
+    # Windows cannot use a UNC path (\\server\share\...) as the current
+    # working directory for a subprocess.  When that happens, cmd.exe (and
+    # most build tools) silently falls back to C:\Windows, which causes
+    # PlatformIO to create .pio inside C:\Windows → PermissionError, and
+    # SCons to resolve relative source paths against the wrong root →
+    # "No such file or directory".
+    #
+    # The fix is to temporarily map the UNC share root to a free drive
+    # letter via `net use`, translate the CWD to that drive, and clean up
+    # the mapping when the build finishes.
+
+    def _map_unc_for_build(self, project_path: Path | None = None) -> Path:
+        """If the sketch is on a UNC share, map it to a temporary drive letter.
+
+        Returns the effective project path to use as subprocess CWD.
+        Stores cleanup state in ``self._unc_mapped_drive`` (the drive spec
+        like ``"Z:"``) so ``_unmap_unc_after_build()`` can undo it.  If the
+        path is local or mapping fails gracefully, returns the original path
+        and sets ``self._unc_mapped_drive = None``.
+        """
+        project = Path(project_path or self.sketch_dir_path)
+        self._unc_mapped_drive = None
+
+        if not is_unc_or_network_path(project):
+            return project
+
+        share_root = _unc_share_root(project)
+        if not share_root:
+            return project
+
+        # Check if the share is already mapped to an existing drive letter.
+        # `net use` lists current mappings.
+        try:
+            existing = subprocess.run(
+                ["net", "use"], capture_output=True, text=True, timeout=10,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+            )
+            share_lower = share_root.lower().rstrip("\\")
+            for line in existing.stdout.splitlines():
+                parts = line.split()
+                # Typical line: "OK  Z:  \\server\share  Microsoft Windows Network"
+                for idx, part in enumerate(parts):
+                    if len(part) == 2 and part[1] == ":" and part[0].isalpha():
+                        # Found a drive letter — check if the next token matches our share.
+                        if idx + 1 < len(parts) and parts[idx + 1].lower().rstrip("\\") == share_lower:
+                            # Already mapped — reuse it without creating a new one.
+                            drive_spec = part.upper()
+                            relative_part = str(project).replace("/", "\\")
+                            share_norm = share_root.rstrip("\\")
+                            if relative_part.lower().startswith(share_norm.lower()):
+                                relative_part = relative_part[len(share_norm):]
+                            mapped_path = Path(f"{drive_spec}{relative_part}")
+                            self._append(
+                                f"  🌐 Using existing drive mapping {drive_spec} → {share_root}",
+                                "info",
+                            )
+                            # Don't set _unc_mapped_drive — we didn't create this mapping.
+                            return mapped_path
+        except Exception:
+            pass
+
+        # Find a free drive letter (Z: down to A:).
+        import string
+        mapped_letter = None
+        for letter in reversed(string.ascii_uppercase):
+            test_root = f"{letter}:\\"
+            if not os.path.exists(test_root):
+                mapped_letter = letter
+                break
+
+        if mapped_letter is None:
+            self._append(
+                "  ⚠ Could not find a free drive letter for the network "
+                "share — trying UNC path directly.",
+                "warning",
+            )
+            return project
+
+        drive_spec = f"{mapped_letter}:"
+        try:
+            map_cmd = ["net", "use", drive_spec, share_root]
+            map_result = subprocess.run(
+                map_cmd, capture_output=True, text=True, timeout=30,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+            )
+            if map_result.returncode != 0:
+                self._append(
+                    f"  ⚠ Could not map {share_root} → {drive_spec} "
+                    f"({map_result.stderr.strip()}) — trying UNC path directly.",
+                    "warning",
+                )
+                return project
+
+            self._unc_mapped_drive = drive_spec
+            self._append(
+                f"  🌐 Mapped network share → {drive_spec} "
+                f"(temporary, for this build session)",
+                "info",
+            )
+
+            # Rewrite the project path: \\server\share\sub\folder → Z:\sub\folder
+            relative_part = str(project).replace("/", "\\")
+            share_norm = share_root.rstrip("\\")
+            if relative_part.lower().startswith(share_norm.lower()):
+                relative_part = relative_part[len(share_norm):]
+            return Path(f"{drive_spec}{relative_part}")
+
+        except Exception as exc:
+            self._append(
+                f"  ⚠ Drive-mapping failed ({exc}) — trying UNC path directly.",
+                "warning",
+            )
+            return project
+
+    def _unmap_unc_after_build(self) -> None:
+        """Remove the temporary drive mapping created by _map_unc_for_build.
+
+        Safe to call even if no mapping was created (no-op)."""
+        drive_spec = getattr(self, "_unc_mapped_drive", None)
+        if not drive_spec:
+            return
+        try:
+            unmap_cmd = ["net", "use", drive_spec, "/delete", "/y"]
+            subprocess.run(
+                unmap_cmd, capture_output=True, text=True, timeout=15,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+            )
+            self._append(
+                f"  🌐 Unmapped temporary drive {drive_spec}",
+                "dim",
+            )
+        except Exception:
+            pass
+        finally:
+            self._unc_mapped_drive = None
 
     def _soft_reset_project_dir(self, board_name: str | None = None,
                                 board_info: dict | None = None) -> Path:
@@ -16356,6 +16618,9 @@ default_envs = {self._pio_env_name()}
         self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
         self._append(f"  Tool   : PlatformIO Core", "dim")
         self._append(f"  Store  : {os.environ.get('PLATFORMIO_CORE_DIR', '(default)')}", "dim")
+        if is_unc_or_network_path(self.sketch_dir_path):
+            _share = _unc_share_root(self.sketch_dir_path) or str(self.sketch_dir_path)
+            self._append(f"  🌐 Source  : Network share ({_share})", "info")
         self._append("")
 
         if is_upload and not self.skip_compile_var.get():
@@ -16502,9 +16767,13 @@ default_envs = {self._pio_env_name()}
 
         self._append("  ⚙ Initializing PlatformIO build engine & dependency tree...", "purple_header")
         self._append("    SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...", "purple_dim")
-        self._set_status("Initializing PlatformIO build engine...", Theme.YELLOW)
+        # ── UNC/network-path support ─────────────────────────────────────
+        # Map the sketch directory to a local drive letter if it's on a UNC
+        # share.  The mapping is cleaned up at the end of this function and
+        # as a safety net in _safe_compile()'s finally block.
+        effective_cwd = self._map_unc_for_build()
 
-        env = self._platformio_subprocess_env(jobs=jobs)
+        env = self._platformio_subprocess_env(project_dir=effective_cwd, jobs=jobs)
 
         # Normal process priority keeps Tk, WebView2, USB handling, and the
         # serial reader responsive while compiler workers are busy.
@@ -16517,7 +16786,7 @@ default_envs = {self._pio_env_name()}
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, encoding="utf-8", errors="replace",
                 creationflags=creation_flags,
-                cwd=str(self.sketch_dir_path),
+                cwd=str(effective_cwd),
                 env=env,
             )
         except FileNotFoundError:
@@ -17962,16 +18231,19 @@ default_envs = {self._pio_env_name()}
             "--upload-port", port
         ]
 
-        env = self._platformio_subprocess_env(jobs=jobs)
-
         hide_internal_project_metadata(self.sketch_dir_path)
+
+        # ── UNC/network-path support (upload) ────────────────────────────
+        effective_cwd = self._map_unc_for_build()
+
+        env = self._platformio_subprocess_env(project_dir=effective_cwd, jobs=jobs)
 
         try:
             self.process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, encoding="utf-8", errors="replace",
                 creationflags=subprocess.CREATE_NO_WINDOW,
-                cwd=str(self.sketch_dir_path),
+                cwd=str(effective_cwd),
                 env=env,
             )
         except FileNotFoundError:
@@ -18448,7 +18720,7 @@ default_envs = {self._pio_env_name()}
                         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, bufsize=1, encoding="utf-8", errors="replace",
                         creationflags=subprocess.CREATE_NO_WINDOW,
-                        cwd=str(self.sketch_dir_path),
+                        cwd=str(effective_cwd),
                         env=env,
                     )
                 except Exception:
@@ -23823,6 +24095,8 @@ default_envs = {self._pio_env_name()}
             self._set_status("Hard Reset FAILED", Theme.RED)
         finally:
             _release_reset_cache_lock(reset_cache_lock)
+            # Clean up any temporary UNC drive mapping created during hard reset.
+            self._unmap_unc_after_build()
             reconnect_monitor = bool(
                 getattr(self, "_hard_reset_reconnect_monitor", False)
             )
@@ -23999,12 +24273,14 @@ default_envs = {self._pio_env_name()}
                     "-j", str(self._get_cpu_cores_jobs()),
                     "--upload-port", port,
                 ]
+                effective_cwd = self._map_unc_for_build()
                 pio_env = self._platformio_subprocess_env(
+                    project_dir=effective_cwd,
                     jobs=self._get_cpu_cores_jobs()
                 )
                 self.process = subprocess.Popen(
                     cmd,
-                    cwd=str(self.sketch_dir_path),
+                    cwd=str(effective_cwd),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
