@@ -216,10 +216,11 @@ def _fast_start_venv_is_healthy() -> bool:
     venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
     if not venv_python.is_file():
         return False
+    # The current application uses Tkinter and Monaco/pywebview.  PyQt5,
+    # QScintilla, winpty, and the old pywin32 terminal helpers belong to the
+    # retired editor/terminal path and must not invalidate fast start.
     probe = (
-        "import serial, platformio, esptool, webview, psutil, certifi, websockets; "
-        "from PyQt5 import QtWidgets, Qsci; "
-        "import win32gui, win32con, winpty"
+        "import serial, platformio, esptool, webview, psutil, certifi, websockets"
     )
     try:
         result = subprocess.run(
@@ -306,9 +307,10 @@ def _fast_start_record_is_good() -> tuple[bool, str]:
             return False, "the verified bootstrap record belongs to a different virtual environment"
     except Exception:
         return False, "the verified bootstrap record contains invalid paths"
-    fingerprint = _fast_start_source_fingerprint()
-    if not fingerprint or record.get("source_fingerprint") != fingerprint:
-        return False, "app files changed since the last verified bootstrap"
+    # Fast start is meant to remain useful after normal application updates.
+    # The environment health probe below is the authority for dependency
+    # readiness; invalidating the option on every Python source edit made it
+    # ineffective during routine development and app updates.
     if not _fast_start_venv_is_healthy():
         return False, "the portable virtual environment did not pass its health check"
     return True, "recent verified bootstrap record and virtual environment health check passed"
@@ -982,16 +984,23 @@ def _configure_platformio_environment(script_dir: Path) -> str:
 # ── Pre-built PlatformIO core directory (cloud seed) ────────
 # Instead of waiting for PlatformIO to download/unpack/install all board
 # toolchains from scratch on first run (easily 10–30+ minutes), a pre-built
-# snapshot of .platformio-mcu-gui is hosted as a zip on Google Drive.  When
-# the local store is empty, bootstrap downloads and extracts the snapshot so
-# PlatformIO finds an already-populated core directory.  Future board
-# additions simply increment into the same folder.
-#
-# The file ID is the only stable part of a Google Drive link — session tokens,
-# UUIDs, and `at` parameters all expire.  _resolve_gdrive_download_url()
-# constructs the real download URL and handles virus-scan confirmation pages.
-_PLATFORMIO_PREBUILT_GDRIVE_FILE_ID = "1Fq9CWcIjprbGNlDJcM8MXHzCZ3S_AbZK"
+# snapshot of .platformio-mcu-gui is hosted as a release asset. When the
+# local store is empty, bootstrap downloads and extracts the snapshot so
+# PlatformIO finds an already-populated core directory. GitHub Releases
+# provides a CDN-backed, resumable asset download. This is intentionally the
+# only source: a failed or unavailable release must be reported rather than
+# silently switching to a slower or different host.
 _PLATFORMIO_PREBUILT_ZIP_NAME = "platformio-mcu-gui-prebuilt.zip"
+_PLATFORMIO_PREBUILT_GITHUB_URL = (
+    "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/download/"
+    "v1.0.0-assets/platformio-mcu-gui.zip"
+)
+# Metadata for the GitHub Release asset. The local destination keeps the
+# historical name above so existing cleanup/resume behavior is unchanged.
+_PLATFORMIO_PREBUILT_EXPECTED_SIZE = 1785358455
+_PLATFORMIO_PREBUILT_EXPECTED_SHA256 = (
+    "b284708a25c46143827b94ec423d7fe4242729d5c39e4c3324556b9b7af8b7c2"
+)
 
 
 def _platformio_core_is_populated(script_dir: Path) -> bool:
@@ -1014,120 +1023,10 @@ def _platformio_core_is_populated(script_dir: Path) -> bool:
         return False
 
 
-def _extract_gdrive_file_id(url: str) -> str | None:
-    """Extract the Google Drive file ID from any share/download/open URL.
-
-    Handles all common Google Drive URL formats:
-      - https://drive.google.com/file/d/FILE_ID/view?usp=sharing
-      - https://drive.google.com/uc?export=download&id=FILE_ID
-      - https://drive.google.com/open?id=FILE_ID
-      - https://drive.usercontent.google.com/download?id=FILE_ID&...
-    """
-    patterns = [
-        r"/file/d/([a-zA-Z0-9_-]+)",
-        r"/uc\?.*?id=([a-zA-Z0-9_-]+)",
-        r"/open\?id=([a-zA-Z0-9_-]+)",
-        r"[?&]id=([a-zA-Z0-9_-]+)",
-        r"/d/([a-zA-Z0-9_-]+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _resolve_gdrive_download_url(file_id: str) -> str:
-    """Resolve a Google Drive file ID to a direct download URL.
-
-    Google Drive serves an HTML virus-scan confirmation page for large files
-    instead of the binary.  This function follows the same proven pattern as
-    ``src/modules/downloader.py``:
-
-      1. Hit ``/uc?export=download&id=FILE_ID``
-      2. If the response is HTML, parse the ``<form id="download-form">``
-         action URL + hidden fields, or fall back to a ``confirm=TOKEN`` param.
-      3. Return the resolved direct-download URL for ``_download_file()``.
-
-    Adapted to use ``urllib`` (stdlib) instead of ``requests`` because this
-    runs before pip packages are installed.
-    """
-    import urllib.request
-    import urllib.parse
-
-    base_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    headers = {
-        "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; PlatformIO bootstrap)",
-    }
-
-    try:
-        req = urllib.request.Request(base_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            content_type = str(resp.headers.get("Content-Type", "")).lower()
-            # Binary response means the file is small enough — no confirmation.
-            if "text/html" not in content_type:
-                return base_url
-            body = resp.read(65536).decode("utf-8", errors="replace")
-    except Exception:
-        return base_url
-
-    # Try up to 3 confirmation-page redirects (matching downloader.py logic).
-    for _ in range(3):
-        # Strategy 1: parse the <form id="download-form"> action + hidden fields.
-        form_match = re.search(
-            r'<form[^>]+id="download-form"[^>]+action="([^"]+)"', body
-        )
-        if form_match:
-            action = form_match.group(1).replace("&amp;", "&")
-            fields = re.findall(
-                r'<input type="hidden" name="([^"]+)" value="([^"]*)">', body
-            )
-            if fields:
-                params = "&".join(
-                    f"{name}={urllib.parse.quote(value, safe='')}"
-                    for name, value in fields
-                )
-                resolved = f"{action}?{params}" if "?" not in action else f"{action}&{params}"
-                # Verify this URL returns binary, not another HTML page.
-                try:
-                    req2 = urllib.request.Request(resolved, headers=headers)
-                    with urllib.request.urlopen(req2, timeout=20) as resp2:
-                        ct2 = str(resp2.headers.get("Content-Type", "")).lower()
-                        if "text/html" not in ct2:
-                            return resolved
-                        body = resp2.read(65536).decode("utf-8", errors="replace")
-                        continue
-                except Exception:
-                    return resolved
-
-        # Strategy 2: extract a confirm=TOKEN value from the page.
-        confirm_match = re.search(
-            r'name="confirm"\s+value="([0-9A-Za-z_-]+)"', body
-        )
-        if confirm_match:
-            confirmed_url = (
-                f"https://drive.google.com/uc?export=download"
-                f"&confirm={confirm_match.group(1)}&id={file_id}"
-            )
-            return confirmed_url
-
-        # Strategy 3: look for a direct href to /uc?export=download.
-        href_match = re.search(r'href="(/uc\?export=download[^"]+)"', body)
-        if href_match:
-            return f"https://drive.google.com{href_match.group(1).replace('&amp;', '&')}"
-
-        break
-
-    # All strategies exhausted — return the base URL and let _download_file()
-    # handle the error with its retry/curl fallback logic.
-    return base_url
-
-
-
 def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
     """Download and extract the pre-built PlatformIO core directory if empty.
 
-    This seeds ``src/.platformio-mcu-gui`` from a cloud-hosted zip so that
+    This seeds ``src/.platformio-mcu-gui`` from a release-hosted zip so that
     PlatformIO finds an already-populated core store on first launch.  If the
     store already contains packages and platforms, this is a no-op.
 
@@ -1135,8 +1034,8 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
     will add new boards into the same directory without conflict.
 
     Returns True if the store is populated (either already or after extraction),
-    False if the download/extraction failed (non-fatal — PlatformIO will fall
-    back to its normal slow first-run install).
+    False if the GitHub download or extraction failed. The caller treats this
+    as fatal so PlatformIO never silently switches to a second bootstrap source.
     """
     import zipfile
 
@@ -1153,22 +1052,26 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
         gui.set_status("Downloading pre-built PlatformIO toolchains...")
 
     try:
-        download_url = _resolve_gdrive_download_url(_PLATFORMIO_PREBUILT_GDRIVE_FILE_ID)
+        # GitHub Releases is the only source. Its asset CDN supports HTTP
+        # Range requests, so an existing .part file can continue safely.
+        status(f"Downloading {zip_dest.name} from GitHub Releases...")
         _download_file(
-            download_url,
+            _PLATFORMIO_PREBUILT_GITHUB_URL,
             zip_dest,
             timeout=120,
             attempts=3,
+            expected_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE,
+            expected_sha256=_PLATFORMIO_PREBUILT_EXPECTED_SHA256,
         )
     except Exception as exc:
         _record_bootstrap_exception("Pre-built PlatformIO zip download failed")
         warn(f"Could not download pre-built PlatformIO zip: {exc}")
-        warn("PlatformIO will install toolchains from scratch (this may take a while).")
+        warn("GitHub Releases is required; bootstrap cannot continue without the pre-built archive.")
         safe_unlink(zip_dest)
         return False
 
     if not zip_dest.is_file() or zip_dest.stat().st_size < 1024:
-        warn("Downloaded file is missing or too small; skipping extraction.")
+        warn("GitHub archive is missing or too small; bootstrap cannot continue.")
         safe_unlink(zip_dest)
         return False
 
@@ -1253,7 +1156,7 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
     except Exception as exc:
         _record_bootstrap_exception("Pre-built PlatformIO zip extraction failed")
         warn(f"Failed to extract pre-built PlatformIO zip: {exc}")
-        warn("PlatformIO will install toolchains from scratch (this may take a while).")
+        warn("GitHub archive extraction is required; bootstrap cannot continue.")
         return False
     finally:
         if gui:
@@ -5540,6 +5443,192 @@ def _curl_resume_download(
         raise OSError(f"curl returned {partial.stat().st_size} of {expected_size} bytes")
 
 
+class _RangeDownloadUnsupported(RuntimeError):
+    """Raised when the GitHub/CDN endpoint does not honor byte ranges."""
+
+
+def _parallel_range_download(
+    url: str,
+    partial: Path,
+    *,
+    expected_size: int,
+    display_name: str,
+    timeout: int,
+) -> None:
+    """Download a large artifact using a few resumable HTTP range requests.
+
+    Each range has its own checkpoint, so a dropped connection only costs the
+    affected segment. The final ``.part`` file is assembled without a second
+    full-size copy and is still validated by ``_download_file`` before
+    promotion to the target.
+    """
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if expected_size <= 0:
+        raise ValueError("parallel download requires an expected size")
+
+    parts_dir = partial.with_name(partial.name + ".parts")
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    assemble_path = partial.with_name(partial.name + ".assemble")
+    # Clean up an abandoned temporary from an older interrupted implementation.
+    safe_unlink(assemble_path)
+
+    prefix_size = partial.stat().st_size if partial.is_file() else 0
+    if prefix_size > expected_size:
+        safe_unlink(partial)
+        prefix_size = 0
+
+    chunk_size = 64 * 1024 * 1024
+    chunk_count = (expected_size + chunk_size - 1) // chunk_size
+    cpu_count = os.cpu_count() or 1
+    worker_count = 1 if cpu_count <= 1 else (2 if cpu_count <= 5 else 3)
+    worker_count = min(worker_count, chunk_count)
+
+    chunk_specs: list[tuple[int, int, Path, int]] = []
+    for index in range(chunk_count):
+        chunk_start = index * chunk_size
+        chunk_end = min(expected_size, chunk_start + chunk_size) - 1
+        chunk_path = parts_dir / f"{index:05d}.part"
+
+        # A pre-existing single-stream prefix owns these bytes.  Discard an
+        # overlapping checkpoint because its original byte offset is unknown.
+        if chunk_end < prefix_size:
+            safe_unlink(chunk_path)
+            continue
+        effective_start = max(chunk_start, prefix_size)
+        if chunk_start < prefix_size:
+            safe_unlink(chunk_path)
+
+        expected_chunk_size = chunk_end - effective_start + 1
+        current_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+        if current_size > expected_chunk_size:
+            safe_unlink(chunk_path)
+            current_size = 0
+        chunk_specs.append((index, effective_start, chunk_path, expected_chunk_size))
+
+    bytes_by_chunk = [0] * chunk_count
+    for index, _start, chunk_path, expected_chunk_size in chunk_specs:
+        current_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+        bytes_by_chunk[index] = min(current_size, expected_chunk_size)
+
+    progress_lock = threading.Lock()
+    started_at = time.time()
+    last_ui_update = 0.0
+    initial_received = prefix_size + sum(bytes_by_chunk)
+
+    def report_progress(force: bool = False) -> None:
+        nonlocal last_ui_update
+        if not _gui:
+            return
+        now = time.time()
+        with progress_lock:
+            if not force and now - last_ui_update < 0.20:
+                return
+            received = prefix_size + sum(bytes_by_chunk)
+            last_ui_update = now
+            elapsed = max(0.001, now - started_at)
+            speed_bps = max(0, received - initial_received) / elapsed
+            speed_str = (
+                f"{speed_bps / (1024 * 1024):.2f} MB/s"
+                if speed_bps >= 1024 * 1024
+                else f"{speed_bps / 1024:.1f} KB/s"
+            )
+            pct = min(99.0, (received / expected_size) * 100.0)
+            filled = int(pct / 100.0 * 30)
+            bar = "▰" * filled + "▱" * (30 - filled)
+            rec_mb = received / (1024 * 1024)
+            total_mb = expected_size / (1024 * 1024)
+            progress_block = (
+                f"  Downloading {display_name} (parallel)...\n"
+                f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {total_mb:.2f} MB) • {speed_str}"
+            )
+            _gui.set_progress_percent(pct)
+            _gui.set_status(
+                f"Downloading {display_name}... {rec_mb:.1f}/{total_mb:.1f} MB ({pct:.1f}%) • {speed_str}"
+            )
+            _gui.update_platformio_progress_block(progress_block)
+
+    def download_chunk(spec: tuple[int, int, Path, int]) -> None:
+        index, start, chunk_path, expected_chunk_size = spec
+        existing_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+        if existing_size >= expected_chunk_size:
+            with progress_lock:
+                bytes_by_chunk[index] = expected_chunk_size
+            report_progress()
+            return
+
+        request_start = start + existing_size
+        headers = {
+            "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; ESP32 bootstrap)",
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+            "Connection": "close",
+            "Range": f"bytes={request_start}-{start + expected_chunk_size - 1}",
+        }
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status_code = int(getattr(response, "status", response.getcode()) or 200)
+            content_range = str(response.headers.get("Content-Range", "") or "")
+            match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
+            if status_code != 206 or not match or int(match.group(1)) != request_start:
+                raise _RangeDownloadUnsupported(
+                    f"range request was not honored for bytes {request_start}-{start + expected_chunk_size - 1}"
+                )
+            if match.group(3) != "*" and int(match.group(3)) != expected_size:
+                raise _RangeDownloadUnsupported("range response reported an unexpected total size")
+
+            with open(chunk_path, "ab" if existing_size else "wb") as output:
+                received = existing_size
+                while True:
+                    block = response.read(1024 * 1024)
+                    if not block:
+                        break
+                    output.write(block)
+                    received += len(block)
+                    with progress_lock:
+                        bytes_by_chunk[index] = min(received, expected_chunk_size)
+                    report_progress()
+                output.flush()
+
+        final_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+        if final_size != expected_chunk_size:
+            raise OSError(f"incomplete range {index} ({final_size} of {expected_chunk_size} bytes)")
+        with progress_lock:
+            bytes_by_chunk[index] = expected_chunk_size
+        report_progress()
+
+    if _gui:
+        _gui.start_busy()
+    report_progress(force=True)
+
+    executor = ThreadPoolExecutor(max_workers=max(1, worker_count), thread_name_prefix="mcu-download")
+    try:
+        futures = [executor.submit(download_chunk, spec) for spec in chunk_specs]
+        for future in as_completed(futures):
+            future.result()
+    finally:
+        executor.shutdown(wait=True)
+
+    if prefix_size + sum(bytes_by_chunk) != expected_size:
+        raise OSError("parallel download did not produce all expected bytes")
+
+    # All ranges are complete. Append them in byte order to the contiguous
+    # prefix. If the process stops during this step, the resulting partial is
+    # still a valid prefix and can be continued on the next launch.
+    with open(partial, "ab") as output:
+        for index in range(chunk_count):
+            chunk_path = parts_dir / f"{index:05d}.part"
+            if chunk_path.is_file():
+                with open(chunk_path, "rb") as chunk:
+                    shutil.copyfileobj(chunk, output, length=1024 * 1024)
+        output.flush()
+
+    if partial.stat().st_size != expected_size:
+        raise OSError(f"assembled download is {partial.stat().st_size} of {expected_size} bytes")
+    safe_rmtree(parts_dir)
+
+
 def _download_file(
     url: str,
     dest: Path,
@@ -5553,7 +5642,7 @@ def _download_file(
     Interrupted transfers keep ``.part`` and resume with HTTP Range instead of
     restarting a large ESP32 archive from byte zero.  If urllib repeatedly
     encounters a remote disconnect, curl is tried as an independent HTTP/TLS
-    implementation before the caller moves to another official source.
+    implementation against the same official GitHub source.
     """
     import urllib.error
     import urllib.request
@@ -5584,6 +5673,50 @@ def _download_file(
 
     if _gui:
         _gui.set_progress_percent(0)
+
+    # GitHub release assets support byte ranges.  Use a small number of
+    # segments so low-end machines get better throughput without creating a
+    # large CPU, memory, or connection burden.  The normal resumable stream
+    # below remains available when a CDN/proxy does not honor ranges.
+    parallel_parts = partial.with_name(partial.name + ".parts")
+    if expected_size_i >= 256 * 1024 * 1024 and "github.com" in url.lower():
+        try:
+            status(f"Downloading {dest.name} from GitHub using parallel ranges...")
+            _parallel_range_download(
+                url,
+                partial,
+                expected_size=expected_size_i,
+                display_name=dest.name,
+                timeout=timeout,
+            )
+            verified, reason = _download_matches_expectations(
+                partial,
+                expected_size_i,
+                expected_hash,
+            )
+            if not verified:
+                safe_unlink(partial)
+                raise OSError(reason)
+            if not safe_replace_file(partial, dest):
+                raise OSError(f"Could not replace '{partial}' with '{dest}'")
+            safe_rmtree(parallel_parts)
+            if _gui:
+                _gui.clear_platformio_progress_block()
+                _gui.set_progress_percent(100)
+            ok(f"Saved and verified {dest.name}")
+            return
+        except _RangeDownloadUnsupported as exc:
+            # Keep the same GitHub URL and use the existing resumable stream.
+            # This is a protocol compatibility path, not a source fallback.
+            safe_rmtree(parallel_parts)
+            last_error = exc
+            status(f"GitHub range download unavailable; continuing {dest.name} with a resumable stream...")
+        except Exception as exc:
+            # Preserve completed range checkpoints so a later invocation can
+            # resume them.  The single-stream retry loop remains the safety net.
+            last_error = exc
+            if _gui:
+                _gui.clear_platformio_progress_block()
 
     try:
         for attempt in range(1, max(1, attempts) + 1):
@@ -5703,6 +5836,7 @@ def _download_file(
 
                 if not safe_replace_file(partial, dest):
                     raise OSError(f"Could not replace '{partial}' with '{dest}'")
+                safe_rmtree(parallel_parts)
                 if _gui:
                     _gui.clear_platformio_progress_block()
                     _gui.set_progress_percent(100)
@@ -5718,6 +5852,7 @@ def _download_file(
                     if verified:
                         if not safe_replace_file(partial, dest):
                             raise OSError(f"Could not replace '{partial}' with '{dest}'")
+                        safe_rmtree(parallel_parts)
                         if _gui:
                             _gui.clear_platformio_progress_block()
                             _gui.set_progress_percent(100)
@@ -5750,6 +5885,7 @@ def _download_file(
                 raise OSError(reason)
             if not safe_replace_file(partial, dest):
                 raise OSError(f"Could not replace '{partial}' with '{dest}'")
+            safe_rmtree(parallel_parts)
             if _gui:
                 _gui.clear_platformio_progress_block()
                 _gui.set_progress_percent(100)
@@ -7610,12 +7746,6 @@ def _is_env_healthy() -> bool:
         # pyrefly: ignore [missing-import]
         import websockets  # noqa: F401
         # pyrefly: ignore [missing-import]
-        from PyQt5 import QtWidgets, Qsci  # noqa: F401
-        if sys.platform == "win32":
-            import win32gui  # noqa: F401
-            import win32con  # noqa: F401
-            # pyrefly: ignore [missing-import]
-            import winpty  # noqa: F401
     except ImportError:
         return False
 
@@ -8333,7 +8463,13 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # empty.  This avoids the very long first-run download/unpack/install
         # wait by providing a ready-made baseline that PlatformIO will accept
         # and incrementally update when new boards are added later.
-        _ensure_platformio_core_prebuilt(gui)
+        if not _ensure_platformio_core_prebuilt(gui):
+            _fail_and_exit(
+                "PlatformIO Pre-built Toolchains",
+                "GitHub Releases could not provide the required PlatformIO archive. "
+                "Bootstrap stopped without using another download source.",
+            )
+            return
 
         # Check PlatformIO
         if not ensure_platformio():
