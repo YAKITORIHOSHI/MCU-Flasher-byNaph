@@ -14832,6 +14832,34 @@ class MCUUploadGUI:
             relative_part = relative_part[len(share_norm):]
         return Path(f"{drive_spec}{relative_part}")
 
+    def _canonical_sketch_path(self, project_dir: Path | None = None) -> Path:
+        """Return the canonical, stable path for a sketch directory.
+        For mapped network drives, resolves to the underlying UNC path so
+        workspace hashes and cache keys remain identical regardless of whether
+        a temporary drive mapping is currently mounted.
+        """
+        project = Path(project_dir or self.sketch_dir_path)
+        p_str = str(project).replace("/", "\\").rstrip("\\")
+        mapped_drive = getattr(self, "_unc_mapped_drive", None)
+        if mapped_drive and p_str.upper().startswith(mapped_drive.upper()):
+            rel = p_str[len(mapped_drive):].lstrip("\\")
+            share_root = _unc_share_root(self.sketch_dir_path)
+            if share_root:
+                return Path(share_root) / rel if rel else Path(share_root)
+        if sys.platform == "win32" and len(p_str) >= 2 and p_str[1] == ":":
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(512)
+                cb = ctypes.c_ulong(512)
+                res = ctypes.windll.mpr.WNetGetConnectionW(p_str[:2], buf, ctypes.byref(cb))
+                if res == 0 and buf.value:
+                    unc_root = buf.value.rstrip("\\")
+                    rel = p_str[2:].lstrip("\\")
+                    return Path(f"{unc_root}\\{rel}" if rel else unc_root)
+            except Exception:
+                pass
+        return project
+
     def _remote_workspace_root(self, project_dir: Path | None = None) -> Path | None:
         """For a remote/UNC project (e.g. ``\\\\server\\share\\...`` or mapped network drives),
         return the local fast workspace root on the local SSD.
@@ -14843,13 +14871,13 @@ class MCUUploadGUI:
 
         Returns None for local drive projects (which build in ``project/.pio`` as normal).
         """
-        project = Path(project_dir or self.sketch_dir_path)
-        if not is_unc_or_network_path(project):
+        canonical = self._canonical_sketch_path(project_dir)
+        if not is_unc_or_network_path(canonical):
             return None
         import hashlib
         import re
-        proj_hash = hashlib.sha1(str(project).lower().encode("utf-8")).hexdigest()[:12]
-        proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', project.name) or "project"
+        proj_hash = hashlib.sha1(str(canonical).lower().encode("utf-8")).hexdigest()[:12]
+        proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', canonical.name) or "project"
         core_store = os.environ.get("PLATFORMIO_CORE_DIR")
         base = Path(core_store) if core_store else SCRIPT_DIR
         return base / "remote_workspaces" / f"{proj_name}_{proj_hash}"
@@ -25237,8 +25265,8 @@ default_envs = {self._pio_env_name()}
             # caller already reopens the Serial Monitor with a controlled DTR/RTS
             # pulse, which both resets the MCU and captures setup() output.
             "--after", "no-reset",
-            # One serial sync per visible retry keeps the 1/10 progress row
-            # truthful while avoiding PlatformIO/SCons startup overhead.
+            # Allow multiple sync packets per connection attempt so that holding
+            # the physical BOOT button or slow capacitor auto-reset catches sync.
             "--connect-attempts", "1",
             "write-flash",
             "--flash-mode", "keep",
