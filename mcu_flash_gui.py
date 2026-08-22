@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import subprocess
 if len(sys.argv) > 1:
@@ -37,6 +38,360 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font as tkfont
 from pathlib import Path
 from datetime import datetime
+
+
+class _ShellTerminalBuffer:
+    """Small ANSI/VT screen model for the embedded Windows PTY.
+
+    PowerShell's PSReadLine redraws the current command after nearly every
+    keystroke.  Appending those redraws to a Tk Text widget makes one command
+    look duplicated and hides the real command/error flow.  This deliberately
+    lightweight screen model handles the control sequences used by cmd.exe,
+    Windows PowerShell, and PSReadLine without adding another dependency.
+    """
+
+    def __init__(self, columns=120, max_rows=2500):
+        self.columns = max(40, int(columns))
+        self.max_rows = max(200, int(max_rows))
+        self.rows = [[]]
+        self.row_styles = [[]]
+        self.row = 0
+        self.column = 0
+        self.saved_position = (0, 0)
+        self.escape = ""
+        self.style = {
+            "foreground": None,
+            "background": None,
+            "bold": False,
+            "dim": False,
+            "underline": False,
+        }
+
+    def _ensure_row(self, row=None):
+        row = self.row if row is None else max(0, int(row))
+        while len(self.rows) <= row:
+            self.rows.append([])
+            self.row_styles.append([])
+        return self.rows[row]
+
+    def _trim_scrollback(self):
+        if len(self.rows) <= self.max_rows:
+            return
+        trim = len(self.rows) - self.max_rows
+        del self.rows[:trim]
+        del self.row_styles[:trim]
+        self.row = max(0, self.row - trim)
+        saved_row, saved_col = self.saved_position
+        self.saved_position = (max(0, saved_row - trim), saved_col)
+
+    def _clear_all(self):
+        self.rows = [[]]
+        self.row_styles = [[]]
+        self.row = 0
+        self.column = 0
+        self.style = {
+            "foreground": None,
+            "background": None,
+            "bold": False,
+            "dim": False,
+            "underline": False,
+        }
+
+    def _style_name(self):
+        """Return a compact Tk tag name for the active ANSI text style."""
+        foreground = self.style.get("foreground") or "default"
+        flags = []
+        if self.style.get("bold"):
+            flags.append("bold")
+        if self.style.get("dim"):
+            flags.append("dim")
+        if self.style.get("underline"):
+            flags.append("underline")
+        suffix = "_".join(flags) if flags else "normal"
+        # xterm's background is fixed to the dark terminal surface here; keep
+        # foreground and emphasis in the tag so every visible ANSI color maps
+        # to a configured Tk style.
+        return f"ansi_{foreground}_{suffix}"
+
+    def _erase_line(self, mode):
+        line = self._ensure_row()
+        styles = self.row_styles[self.row]
+        if mode == 1:
+            for index in range(min(self.column, len(line))):
+                line[index] = " "
+                if index < len(styles):
+                    styles[index] = self._style_name()
+        elif mode == 2:
+            line[:] = []
+            styles[:] = []
+        else:
+            del line[self.column:]
+            del styles[self.column:]
+
+    def _erase_display(self, mode):
+        if mode in (2, 3):
+            self._clear_all()
+            return
+        if mode == 1:
+            for index in range(min(self.row, len(self.rows))):
+                self.rows[index] = []
+                self.row_styles[index] = []
+            line = self._ensure_row()
+            styles = self.row_styles[self.row]
+            for index in range(min(self.column + 1, len(line))):
+                line[index] = " "
+                if index < len(styles):
+                    styles[index] = self._style_name()
+            return
+        self._erase_line(0)
+        for index in range(self.row + 1, len(self.rows)):
+            self.rows[index] = []
+            self.row_styles[index] = []
+        while self.rows and not self.rows[-1]:
+            self.rows.pop()
+            if self.row_styles:
+                self.row_styles.pop()
+        if not self.rows:
+            self.rows = [[]]
+            self.row_styles = [[]]
+
+    @staticmethod
+    def _params(raw):
+        raw = str(raw or "").lstrip("?>")
+        if not raw:
+            return []
+        values = []
+        for value in raw.split(";"):
+            value = value.strip()
+            if not value:
+                values.append(1)
+                continue
+            try:
+                values.append(int(value))
+            except ValueError:
+                values.append(0)
+        return values
+
+    def _csi(self, raw, final):
+        params = self._params(raw)
+        first = params[0] if params else 1
+
+        if final in ("H", "f"):
+            self.row = max(0, (params[0] if len(params) > 0 else 1) - 1)
+            self.column = max(0, (params[1] if len(params) > 1 else 1) - 1)
+            self._ensure_row()
+        elif final == "A":
+            self.row = max(0, self.row - first)
+        elif final == "B":
+            self.row += first
+            self._ensure_row()
+        elif final == "C":
+            self.column += first
+        elif final == "D":
+            self.column = max(0, self.column - first)
+        elif final in ("G", "`"):
+            self.column = max(0, first - 1)
+        elif final == "d":
+            self.row = max(0, first - 1)
+            self._ensure_row()
+        elif final == "E":
+            self.row += first
+            self.column = 0
+            self._ensure_row()
+        elif final == "F":
+            self.row = max(0, self.row - first)
+            self.column = 0
+        elif final == "J":
+            self._erase_display(params[0] if params else 0)
+        elif final == "K":
+            self._erase_line(params[0] if params else 0)
+        elif final == "m":
+            self._apply_sgr(params)
+        elif final == "s":
+            self.saved_position = (self.row, self.column)
+        elif final == "u":
+            self.row, self.column = self.saved_position
+            self._ensure_row()
+        elif final == "P":
+            line = self._ensure_row()
+            styles = self.row_styles[self.row]
+            count = max(1, first)
+            del line[self.column:self.column + count]
+            del styles[self.column:self.column + count]
+        elif final == "@":
+            line = self._ensure_row()
+            styles = self.row_styles[self.row]
+            count = max(1, first)
+            line[self.column:self.column] = [" "] * count
+            styles[self.column:self.column] = [self._style_name()] * count
+        elif final == "X":
+            line = self._ensure_row()
+            styles = self.row_styles[self.row]
+            count = max(1, first)
+            while len(line) < self.column + count:
+                line.append(" ")
+                styles.append(self._style_name())
+            for index in range(self.column, self.column + count):
+                line[index] = " "
+                styles[index] = self._style_name()
+        elif final == "L":
+            count = max(1, first)
+            self.rows[self.row:self.row] = ([[] for _ in range(count)])
+            self.row_styles[self.row:self.row] = ([[] for _ in range(count)])
+        elif final == "M":
+            count = max(1, first)
+            del self.rows[self.row:self.row + count]
+            del self.row_styles[self.row:self.row + count]
+            if not self.rows:
+                self.rows = [[]]
+                self.row_styles = [[]]
+            self.row = min(self.row, len(self.rows) - 1)
+        # Cursor visibility, device status, and mode changes are intentionally
+        # ignored; they do not change the visible text model.
+
+    def _apply_sgr(self, params):
+        """Track the ANSI SGR subset used by cmd, PowerShell, and OpenCode."""
+        if not params:
+            params = [0]
+        foregrounds = {
+            30: "black", 31: "red", 32: "green", 33: "yellow",
+            34: "blue", 35: "magenta", 36: "cyan", 37: "white",
+            90: "bright_black", 91: "bright_red", 92: "bright_green",
+            93: "bright_yellow", 94: "bright_blue", 95: "bright_magenta",
+            96: "bright_cyan", 97: "bright_white",
+        }
+        backgrounds = {
+            40: "black", 41: "red", 42: "green", 43: "yellow",
+            44: "blue", 45: "magenta", 46: "cyan", 47: "white",
+            100: "bright_black", 101: "bright_red", 102: "bright_green",
+            103: "bright_yellow", 104: "bright_blue",
+            105: "bright_magenta", 106: "bright_cyan", 107: "bright_white",
+        }
+        for value in params:
+            if value == 0:
+                self.style = {
+                    "foreground": None,
+                    "background": None,
+                    "bold": False,
+                    "dim": False,
+                    "underline": False,
+                }
+            elif value == 1:
+                self.style["bold"] = True
+                self.style["dim"] = False
+            elif value == 2:
+                self.style["dim"] = True
+            elif value == 4:
+                self.style["underline"] = True
+            elif value == 22:
+                self.style["bold"] = False
+                self.style["dim"] = False
+            elif value == 24:
+                self.style["underline"] = False
+            elif value == 39:
+                self.style["foreground"] = None
+            elif value == 49:
+                self.style["background"] = None
+            elif value in foregrounds:
+                self.style["foreground"] = foregrounds[value]
+            elif value in backgrounds:
+                self.style["background"] = backgrounds[value]
+
+    def _put(self, char):
+        line = self._ensure_row()
+        styles = self.row_styles[self.row]
+        while len(line) <= self.column:
+            line.append(" ")
+            styles.append(self._style_name())
+        line[self.column] = char
+        styles[self.column] = self._style_name()
+        self.column += 1
+        if self.column >= self.columns:
+            self.column = self.columns
+
+    def feed(self, data):
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", errors="replace")
+        for char in str(data or ""):
+            if self.escape:
+                self.escape += char
+                if self.escape.startswith("\x1b]"):
+                    if char == "\x07" or self.escape.endswith("\x1b\\"):
+                        self.escape = ""
+                    continue
+                if self.escape == "\x1b[":
+                    continue
+                if self.escape.startswith("\x1b["):
+                    if "@" <= char <= "~":
+                        self._csi(self.escape[2:-1], char)
+                        self.escape = ""
+                    continue
+                if len(self.escape) == 2:
+                    if char == "7":
+                        self.saved_position = (self.row, self.column)
+                    elif char == "8":
+                        self.row, self.column = self.saved_position
+                        self._ensure_row()
+                    elif char == "c":
+                        self._clear_all()
+                    self.escape = ""
+                continue
+
+            if char == "\x1b":
+                self.escape = char
+            elif char in ("\r",):
+                self.column = 0
+            elif char in ("\n", "\v", "\f"):
+                self.row += 1
+                self.column = 0
+                self._ensure_row()
+            elif char == "\b":
+                self.column = max(0, self.column - 1)
+            elif char == "\t":
+                self.column = min(self.columns, ((self.column // 8) + 1) * 8)
+                self._ensure_row()
+            elif char == "\x07" or ord(char) < 0x20:
+                continue
+            else:
+                self._put(char)
+        self._trim_scrollback()
+
+    def render(self):
+        last = self._last_visible_row()
+        lines = ["".join(row).rstrip() for row in self.rows[:last + 1]]
+        return "\n".join(lines)
+
+    def _last_visible_row(self):
+        last = max(self.row, 0)
+        while last + 1 < len(self.rows) and not self.rows[last + 1]:
+            last += 1
+        return last
+
+    def render_styled(self):
+        """Return visible rows as ``[(text, tag), ...]`` runs for Tk."""
+        last = self._last_visible_row()
+        rendered = []
+        for row, styles in zip(self.rows[:last + 1], self.row_styles[:last + 1]):
+            end = len(row)
+            while end and row[end - 1] == " ":
+                end -= 1
+            row = row[:end]
+            styles = styles[:end]
+            runs = []
+            if row:
+                start = 0
+                current = styles[0] if styles else "ansi_default_normal"
+                for index in range(1, len(row)):
+                    tag = styles[index] if index < len(styles) else current
+                    if tag != current:
+                        runs.append(("".join(row[start:index]), current))
+                        start = index
+                        current = tag
+                runs.append(("".join(row[start:]), current))
+            rendered.append(runs)
+        return rendered
+
+
 # ── Lazy imports from bootstrap ──────────────────────────────
 # The original code eagerly did `from bootstrap import X` at module top,
 # which forces Python to fully execute the ~7000-line bootstrap.py module
@@ -88,19 +443,6 @@ def _bootstrap_get_last_arduino_cli_error():
     return b.get_last_arduino_cli_error()
 
 
-def _bootstrap_confirm_healthy_startup() -> bool:
-    """Let Bootstrap save its fast-start record after the GUI is genuinely ready."""
-    if "--from-bootstrap" not in sys.argv:
-        return False
-    b = _get_bootstrap()
-    if b is None:
-        return False
-    try:
-        return bool(b._write_fast_start_record())
-    except Exception:
-        return False
-
-
 def _platform_already_installed(pio_core_dir, platform):
     b = _get_bootstrap()
     if b is None:
@@ -125,6 +467,172 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 UPLOAD_CONNECTION_ATTEMPTS = 10
 MCU_FLASH_PATCH_VERSION = "v25-ui-responsive-serial-pump-app-namespace"
+PROJECT_BUILD_CACHE_DIR = ".mcu_flasher_build_cache"
+PROJECT_BUILD_CACHE_MARKER = ".mcu_flasher_cache_marker"
+_PROJECT_CACHE_MIGRATION_LOCK = threading.RLock()
+
+
+def get_project_build_cache_root(project_dir, create=True) -> Path:
+    """Return the one hidden folder owned by MCU Flasher for a sketch.
+
+    User source files stay at the sketch root.  PlatformIO's staged ``src``
+    tree, build objects, generated configuration, editor metadata, and AI
+    recovery files all live below this directory instead.
+    """
+    project = Path(project_dir).expanduser().resolve(strict=False)
+    root = project / PROJECT_BUILD_CACHE_DIR
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            marker = root / PROJECT_BUILD_CACHE_MARKER
+            if not marker.exists():
+                marker.write_text(
+                    "MCU Flasher by Naph project build cache\n",
+                    encoding="utf-8",
+                )
+        except OSError:
+            pass
+        hide_generated_directory(root)
+    return root
+
+
+def _looks_like_mcu_generated_staged_src(project: Path, src_dir: Path) -> bool:
+    """Recognize the old app-created staged ``src`` directory conservatively."""
+    try:
+        entries = [entry for entry in src_dir.iterdir() if entry.is_file()]
+        if not entries:
+            return False
+        if any(entry.name.lower().endswith(".ino.cpp") for entry in entries):
+            return True
+        root_names = {
+            entry.name.lower()
+            for entry in project.iterdir()
+            if entry.is_file()
+        }
+        return all(entry.name.lower() in root_names for entry in entries)
+    except OSError:
+        return False
+
+
+def _migrate_legacy_project_generated_files(project_dir) -> Path:
+    """Move known MCU Flasher artifacts from the old sketch root into one cache.
+
+    Migration is deliberately one-way and best-effort.  It never deletes an
+    unrecognized user file and leaves a locked legacy entry in place for the
+    next run rather than risking data loss.
+    """
+    project = Path(project_dir).expanduser().resolve(strict=False)
+    cache = get_project_build_cache_root(project, create=True)
+    with _PROJECT_CACHE_MIGRATION_LOCK:
+        import shutil
+
+        def move_if_possible(source: Path, destination: Path, predicate=True):
+            if not predicate or not source.exists():
+                return
+            try:
+                target = destination
+                if target.exists():
+                    # A previous interrupted migration may have left both
+                    # copies. Keep the old generated copy inside the hidden
+                    # cache rather than leaving it visible at the project root.
+                    legacy_dir = cache / "legacy"
+                    legacy_dir.mkdir(parents=True, exist_ok=True)
+                    target = legacy_dir / source.name
+                    suffix = 2
+                    while target.exists():
+                        target = legacy_dir / f"{source.name}.{suffix}"
+                        suffix += 1
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(target))
+            except (OSError, shutil.Error):
+                pass
+
+        # These names were exclusively created by earlier MCU Flasher builds.
+        for name in (
+            ".mcu_gui_cache.json",
+            ".mcu_flash_syntax_errors.json",
+            ".mcu_gui_compat_cache.json",
+            ".mcu_flash_tab_order.json",
+            ".ai_edit_signal",
+            ".ai_ready_signal",
+            "MCU-FLASHER-SRC",
+            "MCU_FLASHER_SRC",
+            "compiled_builds",
+            "build_artifacts",
+            ".build_artifacts",
+            ".pio_cache",
+            ".mcu_ai_edits",
+        ):
+            move_if_possible(project / name, cache / name)
+
+        old_ini = project / "platformio.ini"
+        cache_ini = cache / "platformio.ini"
+        try:
+            ini_text = old_ini.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            ini_text = ""
+        generated_ini = (
+            "Generated automatically by MCU Flasher by Naph" in ini_text
+            or "Generated automatically by MCU Flash GUI" in ini_text
+        )
+        if generated_ini:
+            move_if_possible(old_ini, cache_ini)
+        elif old_ini.is_file() and not cache_ini.exists():
+            # Preserve a user-authored configuration at the root while giving
+            # the app a private working copy that it can safely rewrite.
+            try:
+                shutil.copy2(old_ini, cache_ini)
+            except OSError:
+                pass
+
+        old_src = project / "src"
+        move_if_possible(
+            old_src,
+            cache / "src",
+            predicate=old_src.is_dir()
+            and (
+                generated_ini
+                or _looks_like_mcu_generated_staged_src(project, old_src)
+            ),
+        )
+
+        # PlatformIO's old shared object tree is app-created in this workflow.
+        # Keep it intact under the cache so incremental objects survive the
+        # upgrade; the board migration below can then isolate its env.
+        move_if_possible(project / ".pio", cache / ".pio")
+
+        # AGENTS/.opencodeignore were generated by this app in older releases.
+        # They are moved only after their contents prove MCU Flasher ownership.
+        for name in (
+            ".opencodeignore", "AGENTS.md", "READ-FIRST.md", ".READ-FIRST.md",
+            "SKILL.md", ".SKILL.md", "OPENCODE.md", ".ignore",
+        ):
+            candidate = project / name
+            move_if_possible(
+                candidate,
+                cache / name,
+                predicate=_is_mcu_generated_instruction_file(candidate),
+            )
+
+        hide_generated_directory(cache)
+    return cache
+
+
+def _set_windows_file_attributes(path: Path, attributes: int,
+                                 attempts: int = 6) -> bool:
+    """Apply Windows attributes with a short retry for scanner interference."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    for attempt in range(max(1, int(attempts))):
+        try:
+            if ctypes.windll.kernel32.SetFileAttributesW(str(path), attributes):
+                return True
+        except Exception:
+            pass
+        if attempt < attempts - 1:
+            time.sleep(min(0.25, 0.04 * (attempt + 1)))
+    return False
 
 def hide_hidden_attribute(path) -> None:
     """Set the Windows hidden attribute (FILE_ATTRIBUTE_HIDDEN = 0x02) on
@@ -143,7 +651,7 @@ def hide_hidden_attribute(path) -> None:
         if attrs != -1:
             desired = (attrs & ~0x01) | 0x02
             if desired != attrs:
-                ctypes.windll.kernel32.SetFileAttributesW(str(p), desired)
+                _set_windows_file_attributes(p, desired)
     except Exception:
         pass
 
@@ -168,7 +676,7 @@ def hide_generated_directory(path) -> None:
         if attrs != -1:
             desired = (attrs & ~0x01) | 0x02
             if desired != attrs:
-                ctypes.windll.kernel32.SetFileAttributesW(str(p), desired)
+                _set_windows_file_attributes(p, desired)
     except Exception:
         pass
 
@@ -183,7 +691,7 @@ def unhide_hidden_attribute(path) -> None:
             import ctypes
             attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
             if attrs != -1 and ((attrs & 0x02) or (attrs & 0x04)):
-                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x02 & ~0x04)
+                _set_windows_file_attributes(p, attrs & ~0x02 & ~0x04)
     except Exception:
         pass
 
@@ -236,6 +744,81 @@ def is_nonfatal_pio_clean_report(text: str) -> bool:
         ("[winerror" in low and "is not empty" in low)
         or "manually remove the file" in low
     )
+
+
+_TRANSIENT_FILE_LOCK_WINERRORS = {5, 32, 33, 145}
+
+
+def is_transient_file_lock_error(error: BaseException) -> bool:
+    """Return whether *error* looks like a short-lived Windows file lock.
+
+    Defender, search indexing, and file preview providers can briefly open a
+    newly-created compiler object or archive.  These are safe to retry; real
+    source/configuration errors are not.
+    """
+    if sys.platform != "win32":
+        return False
+    winerror = getattr(error, "winerror", None)
+    if winerror in _TRANSIENT_FILE_LOCK_WINERRORS:
+        return True
+    text = str(error).lower()
+    return any(marker in text for marker in (
+        "being used by another process",
+        "sharing violation",
+        "cannot access the file",
+        "access is denied",
+        "permission denied",
+        "directory is not empty",
+    ))
+
+
+def retry_transient_file_operation(operation, attempts: int = 8,
+                                   delay: float = 0.08):
+    """Run one filesystem operation, retrying only transient lock failures."""
+    last_error = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            return operation()
+        except OSError as error:
+            last_error = error
+            if not is_transient_file_lock_error(error) or attempt >= attempts - 1:
+                raise
+            time.sleep(min(0.5, delay * (attempt + 1)))
+    if last_error is not None:
+        raise last_error
+
+
+def is_transient_platformio_lock_report(output_lines) -> bool:
+    """Identify a build failure likely caused by a temporary AV/indexer lock."""
+    joined = "\n".join(str(line or "") for line in (output_lines or [])).lower()
+    if not joined:
+        return False
+
+    # A genuine compiler diagnostic must remain authoritative.  Do not retry
+    # a code error merely because a later SCons summary mentions a file.
+    if re.search(r":\d+(?::\d+)?:\s+(?:fatal\s+error|error)\s*:", joined):
+        return False
+    if any(marker in joined for marker in (
+        "undefined reference to", "multiple definition of", "cannot find -l",
+        "unknown board", "missing package", "library dependency finder",
+    )):
+        return False
+
+    lock_markers = (
+        "winerror 5", "winerror 32", "winerror 33", "winerror 145",
+        "permissionerror", "sharing violation",
+        "being used by another process", "cannot access the file",
+        "access is denied", "permission denied", "directory is not empty",
+        "manually remove the file",
+    )
+    if not any(marker in joined for marker in lock_markers):
+        return False
+
+    # Restrict the automatic retry to build-system/file-operation context.
+    return any(marker in joined for marker in (
+        ".pio", "scons", "compiler", "compiling", "archiving",
+        "deleting", "removing", "renaming", "build",
+    ))
 
 
 def classify_platformio_failure(output_lines) -> str:
@@ -529,26 +1112,10 @@ def robust_rmtree(path, max_attempts: int = 5) -> bool:
 
 
 def get_project_temp_file(project_dir, filename: str) -> Path:
-    """Store temporary metadata & cache files in system temp directory based on project path hash so the sketch directory stays completely clean."""
+    """Return an app-owned metadata file inside the project's hidden cache."""
     try:
-        p = Path(project_dir).resolve()
-        h = hashlib.md5(str(p).encode("utf-8")).hexdigest()[:12]
-        temp_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_cache"
-        temp_dir.mkdir(exist_ok=True)
-        # Only migrate/remove names that this helper owns. A future caller
-        # must not cause an arbitrary user JSON/text file in the project root
-        # to be deleted merely because it requested a temp path.
-        owned_names = {
-            ".mcu_gui_cache.json",
-            ".mcu_flash_syntax_errors.json",
-        }
-        legacy_file = p / filename
-        if filename in owned_names and legacy_file.exists():
-            try:
-                legacy_file.unlink()
-            except Exception:
-                pass
-        return temp_dir / f"{h}_{filename}"
+        cache = _migrate_legacy_project_generated_files(project_dir)
+        return cache / filename
     except Exception:
         return Path(tempfile.gettempdir()) / filename
 
@@ -586,7 +1153,11 @@ def get_ai_project_storage_root(project_dir, create=True) -> Path:
     if not project_path.is_dir():
         raise OSError(f"Sketch project folder is unavailable: {project_path}")
 
-    root = project_path / AI_PROJECT_STORAGE_DIR
+    cache_root = (
+        _migrate_legacy_project_generated_files(project_path)
+        if create else get_project_build_cache_root(project_path, create=False)
+    )
+    root = cache_root / AI_PROJECT_STORAGE_DIR
     if not create:
         return root
 
@@ -999,15 +1570,16 @@ def _is_mcu_generated_instruction_file(path) -> bool:
 
 def ensure_hidden_read_first_md(sketch_dir) -> None:
     """
-    Generate hidden .opencodeignore and AGENTS.md in sketch_dir.
+    Generate hidden .opencodeignore and AGENTS.md in the project build cache.
     Instructs OpenCode CLI to ONLY read root sketch files (*.ino, *.h, *.cpp) and NOTE.txt.
-    Excludes src/ and platformio.ini from OpenCode file scans.
+    Excludes the private build cache from OpenCode file scans.
     Removes redundant duplicate instruction files and applies Windows hidden attribute so Windows Explorer stays 100% clean.
     """
     try:
         s_dir = Path(sketch_dir)
         if not s_dir.exists() or not s_dir.is_dir():
             return
+        cache_dir = get_project_build_cache_root(s_dir, create=True)
 
         # 1. Clean up old duplicate instruction & ignore files from project root
         redundant_files = (
@@ -1015,7 +1587,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "OPENCODE.md", ".ignore"
         )
         for r_name in redundant_files:
-            rf = s_dir / r_name
+            rf = cache_dir / r_name
             if _is_mcu_generated_instruction_file(rf):
                 try:
                     rf.unlink(missing_ok=True)
@@ -1025,9 +1597,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         # 2. Single native OpenCode ignore configuration (.opencodeignore)
         ignore_content = (
             "# Auto-generated by MCU Flash GUI for OpenCode AI\n"
-            "src/\n"
-            ".pio/\n"
-            "platformio.ini\n"
+            f"{PROJECT_BUILD_CACHE_DIR}/\n"
             "build_artifacts/\n"
             ".build_artifacts/\n"
             ".mcu_gui_cache.json\n"
@@ -1036,9 +1606,9 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             ".vscode/\n"
             ".clangd/\n"
             ".cache/\n"
-            ".mcu_ai_edits/.state/\n"
+            f"{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}/.state/\n"
         )
-        opencode_ign = s_dir / ".opencodeignore"
+        opencode_ign = cache_dir / ".opencodeignore"
         try:
             if (
                 not opencode_ign.exists()
@@ -1066,26 +1636,24 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "  - `*.cpp` / `*.c` (C/C++ source files at root)\n"
             "  - `NOTE.txt` / `*.txt` (Authorized notes & project documentation files created by AI)\n\n"
             "### 2. DO NOT READ OR EDIT BUILD & INTERNAL TOOLCHAIN FILES\n"
-            "- **IGNORE** `platformio.ini` (managed automatically by MCU Flash GUI).\n"
-            "- **IGNORE** `.pio/` directory and internal build artifacts.\n"
+            f"- **IGNORE** `{PROJECT_BUILD_CACHE_DIR}/` (managed automatically by MCU Flash GUI).\n"
             "- **IGNORE** `.vscode/`, `.git/`, `.cache/`, `.clangd/`, `env/`, `node_modules/`, `_temp/`.\n\n"
-            "### 3. EXCLUDE `src/` BACKUP & EXTRA DIRECTORY\n"
-            "- **IGNORE** all files inside `src/` (`src/*`).\n"
-            "- Files inside `src/` are internal backups/extras used by MCU Flash GUI and must **NOT** be read, edited, or modified by the AI.\n"
+            "### 3. EXCLUDE THE PRIVATE BUILD CACHE\n"
+            f"- Files inside `{PROJECT_BUILD_CACHE_DIR}/` are internal build inputs, backups, and toolchain data and must **NOT** be read, edited, or modified by the AI.\n"
             "- Work ONLY with active sketch files (`.ino`, `.h`, `.cpp`) and authorized project notes (`NOTE.txt`) at the project root level.\n\n"
             "### 4. AI EDIT BACKUP & RECOVERY\n"
             f"- Backup root: `{ai_backup_root}`\n"
             "- Folder layout: `M-D-YY/sessionN/editN.txt`. Each edit file contains exact BEFORE, AI/AFTER, current-applied, and Undo-target copies.\n"
-            "- The hidden `.mcu_ai_edits` folder travels with this sketch project across drives and computers.\n"
+            f"- The hidden `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}` folder travels with this sketch project across drives and computers.\n"
             "- Treat the backup tree as READ-ONLY. Never modify, rename, or delete backup files.\n"
-            "- Never read or edit `.mcu_ai_edits/.state`; it is application journal data.\n"
+            f"- Never read or edit `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}/.state`; it is application journal data.\n"
             "- When the user explicitly asks to recover or compare an earlier AI edit, locate the matching project/file entry and restore only the requested content section.\n"
             "- The current app session keeps live Undo/Redo bodies in RAM; these text files are crash-recovery copies, not a workspace to edit directly.\n\n"
             "---\n"
             "*Generated automatically by MCU Flash GUI by Naph for OpenCode AI Assistant.*\n"
         )
 
-        agents_md = s_dir / "AGENTS.md"
+        agents_md = cache_dir / "AGENTS.md"
         try:
             if not agents_md.exists() or _is_mcu_generated_instruction_file(agents_md):
                 ensure_file_writable(agents_md)
@@ -1110,7 +1678,7 @@ def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
         ".git", ".vscode", "env", "node_modules", "__pycache__",
         ".platformio", "build", ".pio", "src", "mcu-flasher-src", "mcu_flasher_src",
         "compiled_builds", "build_artifacts", ".build_artifacts", ".clangd", ".cache", "_temp",
-        ".mcu_ai_edits", "logs",
+        ".mcu_ai_edits", PROJECT_BUILD_CACHE_DIR, "logs",
     }
     
     results = []
@@ -1177,8 +1745,7 @@ def get_mcu_flasher_src_dir(sketch_dir) -> Path:
     """Return dedicated MCU-FLASHER-SRC folder inside sketch_dir for app-generated files,
     ensuring it exists and is marked as a hidden directory on Windows."""
     try:
-        s_dir = Path(sketch_dir)
-        mcu_src = s_dir / "MCU-FLASHER-SRC"
+        mcu_src = _migrate_legacy_project_generated_files(sketch_dir) / "MCU-FLASHER-SRC"
         mcu_src.mkdir(parents=True, exist_ok=True)
         hide_generated_directory(mcu_src)
         return mcu_src
@@ -1198,6 +1765,12 @@ def hide_internal_project_metadata(sketch_dir) -> None:
         if not s_dir.exists():
             return
 
+        # Callers that already have the staged cache must still operate on the
+        # project root; otherwise instruction files would be nested forever.
+        if s_dir.name.lower() == PROJECT_BUILD_CACHE_DIR.lower():
+            s_dir = s_dir.parent
+        _migrate_legacy_project_generated_files(s_dir)
+
         try:
             is_codebase_root = s_dir.resolve(strict=False) == SCRIPT_DIR.resolve(strict=False)
         except Exception:
@@ -1211,16 +1784,12 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             unhide_hidden_attribute(s_dir / "src" / "modules")
             unhide_hidden_attribute(s_dir / "platformio.ini")
         
-        # Ensure platformio.ini is always editable
-        ini_p = s_dir / "platformio.ini"
-        if ini_p.exists():
-            ensure_file_writable(ini_p)
-
         # Ensure OpenCode ignore files & instructions exist first before anything else
         ensure_hidden_read_first_md(s_dir)
 
         internal_names = [
-            ".pio", "platformio.ini", "src", "MCU-FLASHER-SRC", "MCU_FLASHER_SRC",
+            PROJECT_BUILD_CACHE_DIR,
+            ".pio", "MCU-FLASHER-SRC", "MCU_FLASHER_SRC",
             "compiled_builds", "build_artifacts", ".build_artifacts",
             ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
             ".mcu_gui_compat_cache.json", ".mcu_flash_tab_order.json",
@@ -1235,7 +1804,7 @@ def hide_internal_project_metadata(sketch_dir) -> None:
                 ".build_artifacts", ".mcu_gui_cache.json",
                 ".mcu_flash_syntax_errors.json", ".mcu_gui_compat_cache.json",
                 ".mcu_flash_tab_order.json", ".ai_edit_signal", ".pio_cache",
-                ".mcu_ai_edits",
+                ".mcu_ai_edits", PROJECT_BUILD_CACHE_DIR, "env", "logs",
             ]
         for name in internal_names:
             p = s_dir / name
@@ -1256,24 +1825,17 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             if _is_mcu_generated_instruction_file(p):
                 hide_hidden_attribute(p)
 
-        # Inverse sweep: only the explicit allowlist above is app-owned.  Any
-        # other root-level file may be part of the user's project (including
-        # .hpp, README.md, schematics, custom JSON, and future file types), so
-        # restore its visibility instead of guessing from its extension.
-        try:
-            internal_lower = {name.lower() for name in internal_names}
-            for entry in s_dir.iterdir():
-                if entry.name.lower() in internal_lower:
-                    continue
-                if entry.is_dir():
-                    # Repair folders hidden by the legacy inverse sweep while
-                    # leaving conventional dot-directories alone.
-                    if not entry.name.startswith("."):
-                        unhide_hidden_attribute(entry)
-                    continue
-                unhide_hidden_attribute(entry)
-        except Exception:
-            pass
+        # The allowlist is authoritative.  Do not sweep and unhide unknown
+        # entries: they may be user-hidden files, private assets, or files
+        # created by another tool.  This also prevents a scanner/other process
+        # from being needlessly disturbed by attribute churn on user files.
+        if is_codebase_root:
+            for generated_dir in (
+                s_dir / "src" / ".platformio-mcu-gui",
+                s_dir / "src" / "_board-frameworks",
+            ):
+                if generated_dir.is_dir():
+                    hide_generated_directory(generated_dir)
     except Exception:
         pass
 
@@ -1369,7 +1931,9 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
                     for s in symlink_pattern.findall(old_content)
                 )
                 if _healed_stale:
-                    libdeps_dir = sketch_dir / ".pio" / "libdeps"
+                    libdeps_dir = get_project_build_cache_root(
+                        sketch_dir, create=False
+                    ) / ".pio" / "libdeps"
                     if libdeps_dir.exists():
                         robust_rmtree(libdeps_dir)
             return True
@@ -1533,7 +2097,7 @@ class MonacoAutosaveWorker:
 
         if hasattr(self.gui, "root") and self.gui.root:
             try:
-                self.gui.root.after(0, _do_save)
+                self.gui._post_ui(_do_save)
             except Exception:
                 pass
 
@@ -2316,10 +2880,9 @@ class EditorApi:
                     title=f"AI edit {verb}",
                 )
 
-        root = getattr(self._gui, "root", None)
-        if root:
+        if self._gui:
             try:
-                root.after(0, _notify_resolution)
+                self._gui._post_ui(_notify_resolution)
             except Exception:
                 pass
         result = {
@@ -2465,10 +3028,9 @@ class EditorApi:
                     title=f"{verb} AI decision",
                 )
 
-        root = getattr(self._gui, "root", None)
-        if root:
+        if self._gui:
             try:
-                root.after(0, _notify_history_change)
+                self._gui._post_ui(_notify_history_change)
             except Exception:
                 pass
 
@@ -2519,9 +3081,22 @@ class EditorApi:
             return []
         supported_suffixes = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
         files = get_sketch_files_fast(sketch_dir, supported_suffixes)
+        # A project file must have one editor tab even if a network share,
+        # junction, or overlapping directory refresh reports the same path
+        # more than once. Keep the first filesystem entry and compare paths
+        # case-insensitively on Windows.
+        unique_files = []
+        seen_paths = set()
+        for file_path in files:
+            key = os.path.normcase(os.path.abspath(str(file_path)))
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            unique_files.append(file_path)
+        files = unique_files
         files.sort(key=lambda item: str(item.relative_to(sketch_dir)).lower())
 
-        order_file = sketch_dir / ".mcu_flash_tab_order.json"
+        order_file = get_project_build_cache_root(sketch_dir, create=False) / ".mcu_flash_tab_order.json"
         if order_file.exists():
             try:
                 import json
@@ -2532,11 +3107,15 @@ class EditorApi:
                         rel = str(f.relative_to(sketch_dir))
                     except Exception:
                         rel = str(f)
-                    file_map[rel] = f
+                    file_map.setdefault(os.path.normcase(rel), f)
                 ordered_files = []
+                ordered_keys = set()
                 for name in saved_order:
-                    if name in file_map:
-                        ordered_files.append(file_map.pop(name))
+                    key = os.path.normcase(str(name))
+                    if key in file_map and key not in ordered_keys:
+                        ordered_files.append(file_map[key])
+                        ordered_keys.add(key)
+                        file_map.pop(key, None)
                 ordered_files.extend(file_map.values())
                 files = ordered_files
             except Exception:
@@ -2547,19 +3126,24 @@ class EditorApi:
     def save_tab_order(self, paths):
         if not self._gui or not self._gui.sketch_dir_path:
             return {"success": False}
-        order_file = self._gui.sketch_dir_path / ".mcu_flash_tab_order.json"
+        order_file = get_project_build_cache_root(self._gui.sketch_dir_path) / ".mcu_flash_tab_order.json"
         try:
             import json
             normalized_paths = []
+            seen_paths = set()
             for p in paths:
                 try:
                     path_obj = Path(p)
                     if path_obj.is_absolute():
-                        normalized_paths.append(str(path_obj.relative_to(self._gui.sketch_dir_path)))
+                        value = str(path_obj.relative_to(self._gui.sketch_dir_path))
                     else:
-                        normalized_paths.append(p)
+                        value = str(p)
                 except Exception:
-                    normalized_paths.append(p)
+                    value = str(p)
+                key = os.path.normcase(value)
+                if key not in seen_paths:
+                    seen_paths.add(key)
+                    normalized_paths.append(value)
             ensure_file_writable(order_file)
             order_file.write_text(json.dumps(normalized_paths, indent=2), encoding="utf-8")
             hide_hidden_attribute(order_file)
@@ -2593,8 +3177,8 @@ class EditorApi:
                 self._gui.ai_controller.note_local_save(path, content)
             # Trigger skip compile check in Tkinter GUI (thread-safe after call)
             if self._gui:
-                self._gui.root.after(0, self._gui._update_skip_compile_state)
-                self._gui.root.after(0, self._gui._update_editor_info)
+                self._gui._post_ui(self._gui._update_skip_compile_state)
+                self._gui._post_ui(self._gui._update_editor_info)
             return {"success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
@@ -2604,12 +3188,12 @@ class EditorApi:
         if is_modified and self._gui and hasattr(self._gui, "_monaco_autosave_worker"):
             self._gui._monaco_autosave_worker.notify_edit()
         if self._gui:
-            self._gui.root.after(0, self._gui._update_skip_compile_state)
+            self._gui._post_ui(self._gui._update_skip_compile_state)
 
     def set_active_file(self, path):
         self.active_file_path = path
         if self._gui:
-            self._gui.root.after(0, self._gui._update_editor_info)
+            self._gui._post_ui(self._gui._update_editor_info)
 
     def realtime_check_syntax(self, file_path, content):
         if not self._gui:
@@ -2623,7 +3207,8 @@ class EditorApi:
             defined_funcs = self._gui._get_project_defined_functions()
             errors = analyze_cpp_syntax(content, p, defined_funcs)
             
-            # Write errors to the temporary json file for external readers (like QScintilla) to stay in sync
+            # Write errors to the project-cache JSON so external readers (like
+            # QScintilla) stay in sync without recreating root metadata.
             if self._gui.sketch_dir_path:
                 err_file = get_project_temp_file(self._gui.sketch_dir_path, ".mcu_flash_syntax_errors.json")
                 try:
@@ -2633,8 +3218,8 @@ class EditorApi:
                 except Exception:
                     pass
             
-            # Update the bottom panel in Tkinter thread-safely!
-            self._gui.root.after(0, lambda: self._gui._update_syntax_check_ui(errors))
+            # Update the bottom panel through the Tk owner's dispatch queue.
+            self._gui._post_ui(lambda: self._gui._update_syntax_check_ui(errors))
             
             # Return JSON string of errors to JavaScript
             return json.dumps(errors)
@@ -2659,7 +3244,7 @@ class EditorApi:
         command = actions.get(str(action))
         if command is None:
             return {"success": False, "error": "Unknown action"}
-        self._gui.root.after(0, command)
+        self._gui._post_ui(command)
         return {"success": True}
 
 # ─── Suppress console window flashes on Windows ─────────────────────────────
@@ -2712,7 +3297,11 @@ def _ensure_junction(link_path: Path, real_dir: Path) -> str | None:
         )
         if link_present:
             try:
-                if link_path.resolve() == real_dir_resolved:
+                # A broken junction can still resolve textually to the target
+                # even though the target is unavailable.  It is not usable by
+                # PlatformIO unless the link itself currently exists as a
+                # directory, so never accept a dead reparse point here.
+                if link_path.is_dir() and link_path.resolve() == real_dir_resolved:
                     return str(link_path)
             except Exception:
                 pass
@@ -2763,7 +3352,7 @@ def _ensure_junction(link_path: Path, real_dir: Path) -> str | None:
             link_path.symlink_to(real_dir_resolved, target_is_directory=True)
 
         try:
-            if link_path.resolve() != real_dir_resolved:
+            if not link_path.is_dir() or link_path.resolve() != real_dir_resolved:
                 return None
         except Exception:
             return None
@@ -3091,6 +3680,59 @@ _configure_platformio_environment(SCRIPT_DIR)
 _neutralize_conflicting_global_platformio_config()
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PLATFORMIO_UNBUFFERED"] = "1"
+
+
+def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple[Path, bool]:
+    """Verify the app-owned PlatformIO core alias before each build.
+
+    The junction can become stale after a copied project is moved, a cleanup
+    tool removes its target, or security software temporarily interrupts its
+    creation.  PlatformIO then reports missing frameworks/toolchains even
+    though the real store is present.  Re-resolve the alias, recreate the
+    known app-owned target when needed, and use the direct target as a safe
+    fallback if Windows refuses the junction operation.
+    """
+    target_dir = Path(script_dir) / "src" / ".platformio-mcu-gui"
+    configured_raw = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
+    configured_valid = False
+    target_resolved = None
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_resolved = target_dir.resolve()
+        configured_path = Path(configured_raw) if configured_raw else None
+        configured_valid = bool(
+            configured_path
+            and configured_path.is_dir()
+            and configured_path.resolve() == target_resolved
+        )
+    except Exception:
+        configured_path = None
+
+    refreshed_raw = _get_safe_platformio_core_dir(Path(script_dir))
+    refreshed_path = Path(refreshed_raw)
+    refreshed_valid = False
+    try:
+        refreshed_valid = bool(
+            refreshed_path.is_dir()
+            and target_resolved is not None
+            and refreshed_path.resolve() == target_resolved
+        )
+    except Exception:
+        pass
+
+    # A direct local path is preferable to passing a known-broken junction to
+    # the compiler.  It remains on the same project drive and still contains
+    # the exact app-owned PlatformIO store.
+    effective_path = refreshed_path if refreshed_valid else target_dir
+    try:
+        effective_path.mkdir(parents=True, exist_ok=True)
+        for child in ("packages", ".tmp", ".cache", "lib"):
+            (effective_path / child).mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    os.environ["PLATFORMIO_CORE_DIR"] = str(effective_path)
+    return effective_path, (not configured_valid or not refreshed_valid)
 
 # Serialize every read/modify/write cycle that touches a generated platformio.ini.
 # Board changes, compile preparation, and the upload-speed callback can otherwise
@@ -5967,8 +6609,14 @@ class ProjectSelectorDialog:
         )
         self._recent_placeholder.pack(anchor=tk.W, pady=(8, 4))
 
+        # Tk widgets belong to the thread that created the dialog.  The worker
+        # only computes recent-project data; the Tk-owned poller below performs
+        # the final render so startup handoff cannot emit a cross-thread Tcl
+        # exception while the selector is opening.
+        self._recent_projects_queue = queue.Queue(maxsize=1)
         import threading
         threading.Thread(target=self._populate_recent_projects, daemon=True).start()
+        self.win.after(40, self._poll_recent_projects_result)
 
     def _populate_recent_projects(self):
         """Background-thread worker: scan recent projects and post the
@@ -6025,8 +6673,29 @@ class ProjectSelectorDialog:
             except Exception as ex:
                 print(f"[WARN] Error scanning recent path '{path}': {ex}")
 
-        # Post the render back to the main thread
-        self.win.after(0, lambda: self._render_recent_projects(entries))
+        try:
+            self._recent_projects_queue.put_nowait(entries)
+        except Exception:
+            pass
+
+    def _poll_recent_projects_result(self):
+        """Render recent-project results from the dialog's Tk thread."""
+        try:
+            entries = self._recent_projects_queue.get_nowait()
+        except queue.Empty:
+            try:
+                if self.win.winfo_exists():
+                    self.win.after(40, self._poll_recent_projects_result)
+            except Exception:
+                pass
+            return
+        except Exception:
+            return
+        try:
+            if self.win.winfo_exists():
+                self._render_recent_projects(entries)
+        except Exception:
+            pass
 
     def _render_recent_projects(self, entries: list[dict]):
         """Replace the placeholder with the actual recent project list."""
@@ -6826,6 +7495,23 @@ class MCUUploadGUI:
         self._serial_last_autoscroll_monotonic = 0.0
         # The monitor worker adapts this coalescing window to the selected baud.
         self._serial_display_flush_delay_ms = 25
+        # Local shell tabs use one dedicated PTY thread per shell.  They do not
+        # consume the compile/upload executor: a shell can remain open for the
+        # entire life of the GUI without delaying a build or upload callback.
+        self._shell_state_lock = threading.RLock()
+        self._shell_sessions: dict[str, dict] = {}
+        self._shell_active_kind = "pwsh"
+        # Keep the same launch directory a native console would show before
+        # the selected project is opened.  The project command is sent only
+        # after that shell has printed its own banner and first prompt.
+        try:
+            self._shell_initial_cwd = Path.cwd()
+        except Exception:
+            self._shell_initial_cwd = Path.home()
+        self._shell_terminal_tab_id = None
+        self._shell_terminal_pump_after_id = None
+        self._shell_prewarm_after_id = None
+        self._shells_prewarmed = False
         # Cross-thread UI callbacks are queued here and executed only by Tk's
         # main thread.  Background workers must use _post_ui() instead of
         # calling root.after()/widget methods themselves.
@@ -7012,12 +7698,10 @@ class MCUUploadGUI:
             pass
         self.root.after(500, self._unset_main_topmost)
         # Keep the cover until the active editor reports that it is usable.
-        # The safety timer only prevents a broken editor integration from
-        # trapping the whole application behind a spinner forever.
+        # There is intentionally no fixed safety dismissal here: a cold
+        # first-run WebView/editor must remain covered until its real ready
+        # handshake arrives.
         self.root.after(100, self._poll_startup_readiness)
-        self._startup_overlay_safety_job = self.root.after(
-            45000, self._startup_overlay_safety_timeout
-        )
 
         # Re-tune button padding/font live as the window is resized, so
         # buttons keep shrinking a bit further if the user makes the window
@@ -7215,6 +7899,7 @@ class MCUUploadGUI:
             return
         self._startup_ready = True
         self._startup_ready_reason = str(reason or "Ready")
+        self._schedule_shell_prewarm()
         self._set_startup_overlay_message(
             "⚡ MCU Flasher by Naph", f"✔ {self._startup_ready_reason}"
         )
@@ -7233,21 +7918,6 @@ class MCUUploadGUI:
             self._startup_overlay_dismiss_job = self.root.after(
                 delay_ms, self._dismiss_startup_overlay
             )
-        except Exception:
-            self._dismiss_startup_overlay()
-
-    def _startup_overlay_safety_timeout(self):
-        """Last-resort escape hatch for a failed editor/webview initialization."""
-        if getattr(self, "_startup_ready", False):
-            return
-        self._startup_ready = True
-        self._startup_ready_reason = "Startup took longer than expected"
-        self._set_startup_overlay_message(
-            "⚠ MCU Flasher by Naph",
-            "The main window is ready; the editor can finish loading in the background…",
-        )
-        try:
-            self.root.after(900, self._dismiss_startup_overlay)
         except Exception:
             self._dismiss_startup_overlay()
 
@@ -8427,6 +9097,128 @@ class MCUUploadGUI:
 
         self.bottom_notebook.add(syntax_check_frame, text="  🔍 Syntax Check  ")
 
+        # ── TAB 5: Project Terminal ──
+        # Keep the terminal lazy: creating the tab is cheap, and the first PTY
+        # is only started when the user opens this tab.  This avoids adding a
+        # shell startup cost to the normal editor/compile path.
+        terminal_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
+        self._shell_terminal_frame = terminal_frame
+
+        terminal_header = tk.Frame(terminal_frame, bg=Theme.BG_MID, pady=7, padx=12)
+        terminal_header.pack(fill=tk.X)
+        self.lbl_shell_terminal_title = tk.Label(
+            terminal_header, text="⌘ PROJECT TERMINAL",
+            font=self.monitor_heading_font, fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_shell_terminal_title.pack(side=tk.LEFT)
+        self.lbl_shell_terminal_status = tk.Label(
+            terminal_header, text="Click this tab to start a shell",
+            font=self.font_mono_sm, fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
+            anchor=tk.W,
+        )
+        self.lbl_shell_terminal_status.pack(side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True)
+
+        self.btn_shell_restart = self._make_btn(
+            terminal_header, "↻ Restart", self._shell_restart,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm,
+        )
+        self.btn_shell_restart.pack(side=tk.RIGHT)
+
+        tk.Frame(terminal_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
+
+        terminal_body = tk.Frame(terminal_frame, bg=Theme.BG_DARKEST)
+        terminal_body.pack(fill=tk.BOTH, expand=True)
+
+        shell_switcher = tk.Frame(
+            terminal_body, bg=Theme.BG_DARKEST, width=116,
+            highlightthickness=1, highlightbackground=Theme.BORDER,
+        )
+        shell_switcher.pack(side=tk.RIGHT, fill=tk.Y)
+        shell_switcher.pack_propagate(False)
+        tk.Label(
+            shell_switcher, text="SHELLS", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
+        ).pack(fill=tk.X, padx=8, pady=(10, 6), anchor=tk.W)
+        self._shell_switch_buttons = {}
+        for shell_kind, shell_label in (("pwsh", "▣ PowerShell"), ("cmd", "▣ Command Prompt")):
+            shell_btn = tk.Button(
+                shell_switcher, text=shell_label, anchor=tk.W,
+                font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_DARK,
+                activeforeground=Theme.TEXT_BRIGHT, activebackground=Theme.BG_HOVER,
+                relief=tk.FLAT, borderwidth=0, padx=9, pady=7, cursor="hand2",
+                takefocus=True,
+            )
+            shell_btn.bind(
+                "<ButtonRelease-1>",
+                lambda event, kind=shell_kind: self._shell_switch_button_click(event, kind),
+            )
+            shell_btn.bind(
+                "<Return>",
+                lambda _event, kind=shell_kind: self._shell_select(kind),
+            )
+            shell_btn.bind(
+                "<space>",
+                lambda _event, kind=shell_kind: self._shell_select(kind),
+            )
+            shell_btn.pack(fill=tk.X, padx=5, pady=2)
+            self._shell_switch_buttons[shell_kind] = shell_btn
+
+        shell_left = tk.Frame(terminal_body, bg=Theme.BG_DARKEST)
+        shell_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        shell_scroll = ttk.Scrollbar(shell_left, orient=tk.VERTICAL)
+        self.shell_console = tk.Text(
+            shell_left, bg="#0c0d10", fg="#cccccc",
+            insertbackground="#ffffff", selectbackground="#264f78",
+            selectforeground="#ffffff", font=self.font_mono,
+            relief=tk.FLAT, borderwidth=0, highlightthickness=0,
+            padx=12, pady=8, wrap=tk.NONE, state=tk.NORMAL,
+            spacing1=0, spacing2=0, spacing3=0,
+            cursor="xterm", undo=False,
+        )
+        shell_scroll.configure(command=self.shell_console.yview)
+        self.shell_console.configure(yscrollcommand=shell_scroll.set)
+        shell_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.shell_console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._configure_shell_ansi_tags()
+        self._configure_shell_selection_highlight()
+        # Keep the output selectable, but make this a real PTY terminal: key
+        # presses are forwarded to the selected shell instead of being inserted
+        # into the Text widget.
+        self._setup_selectable_read_only_text(
+            self.shell_console,
+        )
+        # Keep native shell semantics for Ctrl+C when there is no selection,
+        # while allowing the familiar terminal copy behavior when text is
+        # selected.  The generic read-only viewer bindings would otherwise
+        # consume these keys before they reached the PTY.
+        for _sequence in (
+            "<Control-c>", "<Control-C>", "<Control-a>", "<Control-A>",
+            "<Control-v>", "<Control-V>", "<Control-Shift-c>",
+            "<Control-Shift-C>", "<Control-Insert>",
+        ):
+            self.shell_console.unbind(_sequence)
+        # Replace the widget's generic key binding instead of appending to it.
+        # Appending allowed Tk's Text class binding to insert the character
+        # after it had already been sent to the PTY, producing doubled input.
+        self.shell_console.bind("<KeyPress>", self._shell_console_key)
+        self.shell_console.bind("<Control-c>", self._shell_console_copy_or_interrupt)
+        self.shell_console.bind("<Control-C>", self._shell_console_copy_or_interrupt)
+        self.shell_console.bind("<Control-v>", self._shell_console_paste)
+        self.shell_console.bind("<Control-V>", self._shell_console_paste)
+        self.shell_console.bind("<Shift-Insert>", self._shell_console_paste)
+        # Keep editing keys entirely in the PTY.  These explicit bindings
+        # prevent Tk's Text class from applying its own deletion behavior.
+        self.shell_console.bind("<BackSpace>", self._shell_console_backspace)
+        self.shell_console.bind("<Delete>", self._shell_console_delete)
+        self.shell_console.bind("<Control-Shift-c>", self._shell_console_copy)
+        self.shell_console.bind("<Control-Shift-C>", self._shell_console_copy)
+        self.shell_console.bind("<Control-Insert>", self._shell_console_copy)
+
+        self.bottom_notebook.add(terminal_frame, text="  ⌘ Terminal  ")
+        self._shell_terminal_tab_id = terminal_frame
+        self._shell_refresh_switcher()
+
         # ── Tab order: keep Build Console and Serial Monitor side by side ──
         # Tabs are added in construction order (Build Console, Compatible
         # Devices, Serial Monitor, …), which placed the Compatible Devices
@@ -8450,6 +9242,7 @@ class MCUUploadGUI:
         # bytes in the background at all times, but avoids repainting the hidden
         # terminal while the user is working in another tab.
         self._serial_display_pump_after_id = self.root.after(25, self._serial_display_pump)
+        self._shell_terminal_pump_after_id = self.root.after(40, self._shell_output_pump)
 
         self.main_pane.add(bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
 
@@ -8592,7 +9385,11 @@ class MCUUploadGUI:
 
         def _on_copy(event=None):
             try:
-                sel = text_widget.get("sel.first", "sel.last")
+                selection_tag = "shell_selection" if text_widget.tag_ranges("shell_selection") else "sel"
+                ranges = text_widget.tag_ranges(selection_tag)
+                if not ranges:
+                    return "break"
+                sel = text_widget.get(ranges[0], ranges[1])
                 if sel:
                     self.root.clipboard_clear()
                     self.root.clipboard_append(sel)
@@ -8635,7 +9432,10 @@ class MCUUploadGUI:
         def _show_context_menu(event):
             text_widget.focus_set()
             try:
-                has_sel = bool(text_widget.tag_ranges("sel"))
+                has_sel = bool(
+                    text_widget.tag_ranges("sel")
+                    or text_widget.tag_ranges("shell_selection")
+                )
                 menu.entryconfig(0, state=tk.NORMAL if has_sel else tk.DISABLED)
             except Exception:
                 pass
@@ -8782,6 +9582,10 @@ class MCUUploadGUI:
             self.font_mono.configure(size=max(8, round(10 * scale)))
             self.font_mono_sm.configure(size=max(8, round(9 * scale)))
             self.font_status.configure(size=max(8, round(9 * scale)))
+            if getattr(self, "_shell_bold_font", None):
+                self._shell_bold_font.configure(
+                    size=max(8, round(10 * scale))
+                )
         except Exception:
             pass
 
@@ -10553,7 +11357,7 @@ class MCUUploadGUI:
           2. If AI Assistant is visible, configure h_split_pane to orient=VERTICAL,
              stacking OpenCode AI Assistant (top) and Build Console (bottom) in two rows.
         - When editor is attached:
-          1. Show editor frame on the main window.
+          1. Preserve the user's editor visibility choice.
           2. Configure h_split_pane to orient=HORIZONTAL, placing OpenCode AI Assistant
              in a right-side column alongside main_pane.
         """
@@ -10600,6 +11404,7 @@ class MCUUploadGUI:
                     pass
         else:
             # Editor is ATTACHED
+            editor_should_be_visible = getattr(self, "editor_pane_visible", True)
             # 1. Configure h_split_pane orientation back to HORIZONTAL
             try:
                 self.h_split_pane.configure(orient=tk.HORIZONTAL)
@@ -10610,8 +11415,11 @@ class MCUUploadGUI:
             except Exception:
                 pass
 
-            # 2. Restore editor frame in main_pane
-            if hasattr(self, "editor_frame"):
+            # 2. Restore or keep the editor frame according to the user's
+            # current Hide/Show Editor choice.  Previously this branch always
+            # re-added the editor, so opening AI after hiding it left an empty
+            # editor-sized region above the build console.
+            if hasattr(self, "editor_frame") and editor_should_be_visible:
                 try:
                     main_panes = [str(p) for p in self.main_pane.panes()]
                     if str(self.editor_frame) not in main_panes and self.editor_frame not in self.main_pane.panes():
@@ -10625,9 +11433,17 @@ class MCUUploadGUI:
                                                 height=getattr(self, "_editor_height", 400))
                 except Exception:
                     pass
-            self.editor_pane_visible = True
+            elif hasattr(self, "editor_frame") and not editor_should_be_visible:
+                try:
+                    if self.editor_frame in self.main_pane.panes() or str(self.editor_frame) in [str(p) for p in self.main_pane.panes()]:
+                        self.main_pane.forget(self.editor_frame)
+                except Exception:
+                    pass
+            self.editor_pane_visible = editor_should_be_visible
             if hasattr(self, "btn_toggle_editor") and self.btn_toggle_editor and self.btn_toggle_editor.winfo_exists():
-                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
+                self.btn_toggle_editor.configure(
+                    text="🗖 Hide Editor" if editor_should_be_visible else "🗖 Show Editor"
+                )
 
             # 3. If AI Assistant is visible, place it on the right column of h_split_pane
             if ai_visible:
@@ -11391,6 +12207,666 @@ class MCUUploadGUI:
             pass
         return "break"
 
+    # ──────────────────────────────────────────────────────────
+    # PROJECT TERMINAL (dedicated PTY workers)
+    def _shell_terminal_is_selected(self) -> bool:
+        """Return whether the lazy Project Terminal tab is visible."""
+        try:
+            if not getattr(self, "monitors_pane_visible", True):
+                return False
+            tab_id = getattr(self, "_shell_terminal_tab_id", None)
+            current = self.bottom_notebook.select()
+            return bool(tab_id and current) and str(current) == str(tab_id)
+        except Exception:
+            return False
+
+    def _configure_shell_ansi_tags(self):
+        """Mirror the OpenCode/xterm dark palette on the Tk terminal surface."""
+        palette = {
+            "default": "#cccccc",
+            # OpenCode uses ANSI black for muted placeholder/help text. Pure
+            # black disappears against the application's dark terminal
+            # surface, so use a readable muted gray for the normal ANSI slot.
+            "black": "#8a8f9d",
+            "red": "#cd3131",
+            "green": "#0dbc79",
+            "yellow": "#e5e510",
+            "blue": "#2472c8",
+            "magenta": "#bc3fbc",
+            "cyan": "#11a8cd",
+            "white": "#e5e5e5",
+            "bright_black": "#666666",
+            "bright_red": "#f14c4c",
+            "bright_green": "#23d18b",
+            "bright_yellow": "#f5f543",
+            "bright_blue": "#3b8eea",
+            "bright_magenta": "#d670d6",
+            "bright_cyan": "#29b8db",
+            "bright_white": "#ffffff",
+        }
+        try:
+            self._shell_bold_font = tkfont.Font(
+                family="Consolas",
+                size=int(self.font_mono.cget("size")),
+                weight="bold",
+            )
+        except Exception:
+            self._shell_bold_font = self.font_mono
+        suffixes = (
+            "normal", "bold", "dim", "underline", "bold_underline", "dim_underline",
+        )
+        for name, foreground in palette.items():
+            for suffix in suffixes:
+                tag = f"ansi_{name}_{suffix}"
+                self.shell_console.tag_configure(
+                    tag,
+                    foreground=foreground,
+                    background="#0c0d10",
+                    font=(self._shell_bold_font if "bold" in suffix else self.font_mono),
+                    underline=("underline" in suffix),
+                )
+
+    def _configure_shell_selection_highlight(self):
+        """Use a compact xterm-style selection instead of Tk's full-row fill."""
+        self._shell_selected_range = None
+        self._shell_selection_syncing = False
+        self._shell_selection_release_id = None
+        self.shell_console.configure(
+            # The native ``sel`` tag paints empty cells through the remainder
+            # of a visual row.  Hide that layer and paint only the selected
+            # character range with our own tag below.
+            selectbackground="#0c0d10",
+            selectforeground="#cccccc",
+            inactiveselectbackground="#0c0d10",
+        )
+        self.shell_console.tag_configure(
+            "shell_selection",
+            background="#264f78",
+            foreground="#ffffff",
+        )
+
+        def sync_selection(_event=None):
+            if self._shell_selection_syncing:
+                return
+            self._shell_selection_syncing = True
+            try:
+                ranges = self.shell_console.tag_ranges("sel")
+                self.shell_console.tag_remove("shell_selection", "1.0", tk.END)
+                if ranges:
+                    start, end = str(ranges[0]), str(ranges[1])
+                    self._shell_selected_range = (start, end)
+                    self.shell_console.tag_add("shell_selection", start, end)
+                    # Keep Tk's native range alive.  Removing it during or
+                    # after <<Selection>> prevents the Text class binding
+                    # from extending the selection and can also trigger a
+                    # delayed empty-selection event.  Its visual colors are
+                    # hidden above, while this exact-range tag supplies the
+                    # compact xterm-style highlight.
+                else:
+                    self._shell_selected_range = None
+            finally:
+                self._shell_selection_syncing = False
+
+        def clear_selection_on_press(_event=None):
+            # Start each new mouse selection from a clean custom overlay.
+            self._shell_selected_range = None
+            self.shell_console.tag_remove("shell_selection", "1.0", tk.END)
+
+        def finalize_selection(_event=None):
+            # Let Tk's class binding finish the drag/double-click selection
+            # before replacing its row-wide visual with our compact tag.
+            try:
+                if self._shell_selection_release_id is not None:
+                    self.shell_console.after_cancel(self._shell_selection_release_id)
+            except Exception:
+                pass
+            self._shell_selection_release_id = self.shell_console.after_idle(
+                sync_selection
+            )
+
+        self._sync_shell_selection = sync_selection
+        self.shell_console.bind("<<Selection>>", sync_selection, add="+")
+        self.shell_console.bind("<Button-1>", clear_selection_on_press, add="+")
+        self.shell_console.bind("<ButtonRelease-1>", finalize_selection, add="+")
+
+    def _shell_refresh_switcher(self):
+        """Paint the narrow shell switcher without rebuilding its widgets."""
+        active = getattr(self, "_shell_active_kind", "pwsh")
+        sessions = getattr(self, "_shell_sessions", {})
+        for kind, button in getattr(self, "_shell_switch_buttons", {}).items():
+            selected = kind == active
+            running = bool(sessions.get(kind, {}).get("running"))
+            button.configure(
+                bg=Theme.BG_HOVER if selected else Theme.BG_DARK,
+                fg=Theme.TEXT_BRIGHT if selected else (Theme.GREEN if running else Theme.TEXT),
+                state=tk.NORMAL,
+            )
+
+    def _shell_switch_button_click(self, event, kind: str):
+        """Activate a shell switcher button on the Tk thread immediately."""
+        try:
+            event.widget.focus_set()
+        except Exception:
+            pass
+        try:
+            self.root.after(0, lambda: self._shell_select(kind))
+        except Exception:
+            self._shell_select(kind)
+        return "break"
+
+    def _shell_current_target(self) -> Path:
+        """Use the active sketch path, including an existing remote mapping."""
+        try:
+            target = self._mapped_or_sketch_dir(self.sketch_dir_path)
+        except Exception:
+            target = self.sketch_dir_path
+        return Path(target or Path.home())
+
+    @staticmethod
+    def _shell_executable(kind: str) -> str | None:
+        if kind == "cmd":
+            # Use the native system command processor, not a COMSPEC shim that
+            # may have been overridden by another CLI or launcher.
+            system_root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+            if system_root:
+                native_cmd = Path(system_root) / "System32" / "cmd.exe"
+                if native_cmd.exists():
+                    return str(native_cmd)
+            return shutil.which("cmd.exe") or os.environ.get("COMSPEC") or "cmd.exe"
+        # The PowerShell slot is intentionally Windows PowerShell, not an
+        # arbitrary `pwsh`/profile/CLI shim. This keeps the prompt and editing
+        # behavior identical to a normal powershell.exe console.
+        system_root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+        if system_root:
+            native_powershell = (
+                Path(system_root) / "System32" / "WindowsPowerShell" /
+                "v1.0" / "powershell.exe"
+            )
+            if native_powershell.exists():
+                return str(native_powershell)
+        return shutil.which("powershell.exe") or shutil.which("powershell")
+
+    @staticmethod
+    def _shell_display_name(kind: str) -> str:
+        return "PowerShell" if kind == "pwsh" else "Command Prompt"
+
+    @staticmethod
+    def _shell_clean_output(data) -> str:
+        """Normalize PTY control output for a Tk Text surface."""
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", errors="replace")
+        text_value = str(data or "")
+        # Shell prompts occasionally include ANSI CSI sequences and OSC title
+        # updates. Tk's Text widget cannot interpret them; leaving an OSC title
+        # update behind produces visible ``]0;Administrator`` garbage.
+        text_value = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", text_value)
+        text_value = re.sub(r"(?:\x1b)?\]0;[^\r\n]*(?:\x07|\x1b\\)?", "", text_value)
+        text_value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text_value)
+        text_value = text_value.replace("\x1b", "").replace("\x07", "")
+        # The remote-path bootstrap uses one quieting command before pushd;
+        # keep that implementation detail out of the visible terminal.
+        text_value = re.sub(r"(?im)^.*@echo\s+off.*(?:\n|$)", "", text_value)
+        return text_value.replace("\r\n", "\n").replace("\r", "\n")
+
+    @staticmethod
+    def _shell_quote_powershell(path: str) -> str:
+        return "'" + str(path).replace("'", "''") + "'"
+
+    def _shell_cd_command(self, kind: str, target: str) -> str:
+        if kind == "cmd":
+            # pushd handles UNC folders by assigning a temporary drive letter;
+            # cd /d handles ordinary local or already-mapped paths.
+            if is_unc_or_network_path(Path(target)):
+                return f'pushd "{target}"\r\n'
+            return f'cd /d "{target}"\r\n'
+        return f"Set-Location -LiteralPath {self._shell_quote_powershell(target)}\r\n"
+
+    def _shell_select(self, kind: str):
+        """Switch shell sessions and start the selected one on demand."""
+        if kind not in ("pwsh", "cmd"):
+            return "break"
+        self._shell_active_kind = kind
+        self._shell_refresh_switcher()
+        session = self._shell_sessions.get(kind)
+        if not session or not session.get("running"):
+            self._shell_start(kind)
+        else:
+            target = str(self._shell_current_target())
+            if session.get("target") != target:
+                try:
+                    session["pty"].write(self._shell_cd_command(kind, target))
+                    session["target"] = target
+                except Exception:
+                    pass
+        self._shell_render_session(kind)
+        try:
+            self.shell_console.focus_set()
+        except Exception:
+            pass
+        return "break"
+
+    def _schedule_shell_prewarm(self):
+        """Start both shells shortly after the real app-ready handshake.
+
+        Shell creation stays out of the critical startup path.  Once the
+        editor is usable and the startup cover is being dismissed, both PTYs
+        are prepared in their own worker threads so switching tabs never shows
+        a cold Windows shell or its startup banner.
+        """
+        if getattr(self, "_shells_prewarmed", False):
+            return
+        if getattr(self, "_shell_prewarm_after_id", None) is not None:
+            return
+        try:
+            self._shell_prewarm_after_id = self.root.after(
+                650, self._prewarm_project_terminals
+            )
+        except Exception:
+            self._shell_prewarm_after_id = None
+
+    def _prewarm_project_terminals(self):
+        self._shell_prewarm_after_id = None
+        if getattr(self, "_shells_prewarmed", False):
+            return
+        if not getattr(self, "_startup_ready", False):
+            return
+        self._shells_prewarmed = True
+        for kind in ("pwsh", "cmd"):
+            try:
+                self._shell_start(kind)
+            except Exception:
+                pass
+        try:
+            self._shell_set_status("Shells ready • click PowerShell or Command Prompt to switch")
+        except Exception:
+            pass
+
+    def _shell_start(self, kind: str):
+        """Create one independent PTY worker; never run shell startup on Tk."""
+        target = str(self._shell_current_target())
+        with self._shell_state_lock:
+            existing = self._shell_sessions.get(kind)
+            if existing and existing.get("running"):
+                return
+            session = {
+                "kind": kind,
+                "target": target,
+                "running": True,
+                "pty": None,
+                "output": "",
+                "styled": [],
+                "pending": deque(),
+                "terminal": _ShellTerminalBuffer(columns=120),
+            }
+            self._shell_sessions[kind] = session
+        self._shell_refresh_switcher()
+        self._shell_set_status(f"Starting {self._shell_display_name(kind)} in {target}…")
+        thread = threading.Thread(
+            target=self._shell_worker, args=(session,),
+            name=f"MCUShell-{kind}", daemon=True,
+        )
+        session["thread"] = thread
+        thread.start()
+
+    def _shell_append_output(self, session: dict, data):
+        with self._shell_state_lock:
+            terminal = session.setdefault("terminal", _ShellTerminalBuffer(columns=120))
+            terminal.feed(data)
+            text_value = terminal.render()
+            styled_value = terminal.render_styled()
+            session["output"] = text_value[-220000:]
+            session["styled"] = styled_value
+            pending = session.setdefault("pending", deque())
+            # A snapshot replaces the previous screen; appending each redraw
+            # would recreate the duplicated PSReadLine input problem.
+            pending.append(styled_value)
+            while len(pending) > 500:
+                pending.popleft()
+
+    def _shell_worker(self, session: dict):
+        kind = session["kind"]
+        target = session["target"]
+        try:
+            from winpty import PtyProcess
+        except Exception as exc:
+            self._shell_append_output(session, f"\r\n[MCU Flasher] PTY support is unavailable: {exc}\r\n")
+            with self._shell_state_lock:
+                session["running"] = False
+            return
+
+        executable = self._shell_executable(kind)
+        if not executable:
+            self._shell_append_output(
+                session,
+                f"\r\n[MCU Flasher] Could not find {'PowerShell' if kind == 'pwsh' else 'Command Prompt'}.\r\n",
+            )
+            with self._shell_state_lock:
+                session["running"] = False
+            return
+
+        # Start at the directory from which MCU Flasher was launched so the
+        # native banner and initial prompt remain visible, then visibly navigate
+        # to the active project.  This matches the normal CMD/PowerShell
+        # startup transcript while still leaving the shell in the project dir.
+        try:
+            launch_cwd = Path(getattr(self, "_shell_initial_cwd", Path.cwd()))
+            if not launch_cwd.is_dir():
+                launch_cwd = Path.home()
+        except Exception:
+            launch_cwd = Path.home()
+        spawn_cwd = str(launch_cwd)
+        argv = (
+            [executable, "-NoProfile", "-NoExit"]
+            if kind == "pwsh" else [executable, "/D"]
+        )
+        pty = None
+        try:
+            pty = PtyProcess.spawn(argv, cwd=spawn_cwd, dimensions=(30, 120))
+            with self._shell_state_lock:
+                session["pty"] = pty
+
+            # Wait until the native shell has printed its first prompt before
+            # sending the project-directory command.  Sending it immediately
+            # races cmd.exe's banner on slower machines, which made the
+            # startup transcript appear to be cleared.
+            cd_pending = os.path.normcase(os.path.normpath(spawn_cwd)) != os.path.normcase(
+                os.path.normpath(target)
+            )
+            startup_probe = ""
+            # PowerShell can take several seconds to print its first prompt on
+            # a cold Windows profile.  Give the native banner plenty of time to
+            # arrive; cmd.exe normally completes this path much sooner.
+            startup_deadline = time.monotonic() + 30.0
+
+            while True:
+                with self._shell_state_lock:
+                    if not session.get("running"):
+                        break
+                try:
+                    data = pty.read(4096)
+                except Exception:
+                    break
+                if data:
+                    self._shell_append_output(session, data)
+                    if cd_pending:
+                        startup_probe = session.get("output", "")[-6000:]
+                        prompt_seen = bool(
+                            re.search(r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$", startup_probe)
+                        )
+                        if prompt_seen or time.monotonic() >= startup_deadline:
+                            try:
+                                # Keep the navigation visible, then perform one
+                                # native clear so the session settles on a
+                                # clean project prompt:
+                                # ``PS D:\project> cls`` / ``D:\project>cls``.
+                                pty.write(self._shell_cd_command(kind, target) + "cls\r\n")
+                            except Exception:
+                                pass
+                            cd_pending = False
+                elif cd_pending and time.monotonic() >= startup_deadline:
+                    try:
+                        pty.write(self._shell_cd_command(kind, target) + "cls\r\n")
+                    except Exception:
+                        pass
+                    cd_pending = False
+        except Exception as exc:
+            self._shell_append_output(session, f"\r\n[MCU Flasher] Could not start {kind}: {exc}\r\n")
+        finally:
+            with self._shell_state_lock:
+                session["running"] = False
+                if session.get("pty") is pty:
+                    session["pty"] = None
+            try:
+                if pty:
+                    pty.close(force=True)
+            except Exception:
+                pass
+
+    def _shell_set_status(self, text_value: str):
+        try:
+            self.lbl_shell_terminal_status.configure(text=text_value)
+        except Exception:
+            pass
+
+    def _shell_insert_snapshot(self, snapshot, fallback=""):
+        """Paint one xterm-style snapshot without losing ANSI color runs."""
+        self._shell_selected_range = None
+        if isinstance(snapshot, str):
+            if snapshot:
+                self.shell_console.insert(tk.END, snapshot)
+            return
+        if not snapshot:
+            if fallback:
+                self.shell_console.insert(tk.END, fallback)
+            return
+        for row_index, runs in enumerate(snapshot):
+            for text_value, tag in runs:
+                if text_value:
+                    self.shell_console.insert(tk.END, text_value, tag)
+            if row_index < len(snapshot) - 1:
+                self.shell_console.insert(tk.END, "\n")
+
+    def _shell_render_session(self, kind: str):
+        with self._shell_state_lock:
+            session = self._shell_sessions.get(kind)
+            output = session.get("output", "") if session else ""
+            styled = session.get("styled", []) if session else []
+            running = bool(session and session.get("running"))
+            target = session.get("target", "") if session else str(self._shell_current_target())
+        try:
+            self._shell_selected_range = None
+            self.shell_console.configure(state=tk.NORMAL)
+            self.shell_console.delete("1.0", tk.END)
+            if styled or output:
+                self._shell_insert_snapshot(styled, output)
+                self.shell_console.see(tk.END)
+            self.shell_console.configure(state=tk.NORMAL)
+            self._shell_set_status(
+                f"{'Running' if running else 'Stopped'} • {target}"
+            )
+        except Exception:
+            pass
+
+    def _shell_output_pump(self):
+        """Render bounded PTY batches on Tk, never from a shell thread."""
+        self._shell_terminal_pump_after_id = None
+        try:
+            active = self._shell_active_kind
+            active_snapshot = None
+            with self._shell_state_lock:
+                for session in self._shell_sessions.values():
+                    pending = session.setdefault("pending", deque())
+                    if session.get("kind") == active:
+                        while pending:
+                            active_snapshot = pending.popleft()
+                    else:
+                        pending.clear()
+                current = self._shell_sessions.get(active)
+                running = bool(current and current.get("running"))
+                target = current.get("target", "") if current else ""
+            if active_snapshot is not None and self._shell_terminal_is_selected():
+                self.shell_console.configure(state=tk.NORMAL)
+                self.shell_console.delete("1.0", tk.END)
+                self._shell_insert_snapshot(active_snapshot)
+                # Keep Tk's widget itself bounded in addition to the session
+                # buffer, so long-lived shells cannot grow the UI indefinitely.
+                try:
+                    line_count = int(self.shell_console.index(tk.END).split(".")[0])
+                    if line_count > 5000:
+                        self.shell_console.delete("1.0", f"{line_count - 4500}.0")
+                except Exception:
+                    pass
+                self.shell_console.see(tk.END)
+                self.shell_console.configure(state=tk.NORMAL)
+            if self._shell_terminal_is_selected() and current:
+                self._shell_set_status(f"{'Running' if running else 'Stopped'} • {target}")
+            self._shell_refresh_switcher()
+        except Exception:
+            pass
+        try:
+            if self.root and self.root.winfo_exists():
+                self._shell_terminal_pump_after_id = self.root.after(40, self._shell_output_pump)
+        except Exception:
+            self._shell_terminal_pump_after_id = None
+
+    def _shell_write_input(self, payload: str) -> bool:
+        """Write keystrokes directly to the active shell's PTY."""
+        if not payload:
+            return False
+        with self._shell_state_lock:
+            session = self._shell_sessions.get(self._shell_active_kind)
+            pty = session.get("pty") if session else None
+            running = bool(session and session.get("running"))
+        if not running or pty is None:
+            self._shell_select(self._shell_active_kind)
+            return False
+        try:
+            pty.write(payload)
+            return True
+        except Exception as exc:
+            if session:
+                self._shell_append_output(session, f"\r\n[MCU Flasher] Shell input failed: {exc}\r\n")
+            return False
+
+    def _shell_console_key(self, event):
+        """Translate Tk keystrokes into native console/PTY input."""
+        keysym = str(getattr(event, "keysym", "") or "")
+        state = int(getattr(event, "state", 0) or 0)
+        ctrl = bool(state & 0x0004)
+        shift = bool(state & 0x0001)
+        key_lower = keysym.lower()
+
+        control_keys = {
+            "a": "\x01", "b": "\x02", "c": "\x03", "d": "\x04",
+            "e": "\x05", "f": "\x06", "h": "\x08", "k": "\x0b",
+            "l": "\x0c", "n": "\x0e", "p": "\x10", "r": "\x12",
+            "t": "\x14", "u": "\x15", "w": "\x17", "x": "\x18",
+            "y": "\x19", "z": "\x1a",
+        }
+        special_keys = {
+            "return": "\r", "kp_enter": "\r", "backspace": "\x08",
+            "tab": "\x1b[Z" if shift else "\t", "escape": "\x1b",
+            "up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C",
+            "left": "\x1b[D", "home": "\x1b[H", "end": "\x1b[F",
+            "delete": "\x1b[3~", "insert": "\x1b[2~",
+            "prior": "\x1b[5~", "next": "\x1b[6~",
+        }
+
+        if ctrl and key_lower in control_keys:
+            payload = control_keys[key_lower]
+        elif key_lower in special_keys:
+            payload = special_keys[key_lower]
+        else:
+            payload = str(getattr(event, "char", "") or "")
+            if ctrl:
+                payload = ""
+
+        if payload:
+            self._shell_write_input(payload)
+        return "break"
+
+    def _shell_console_backspace(self, _event=None):
+        """Send one native Backspace keystroke to the active shell only."""
+        self._shell_write_input("\x08")
+        return "break"
+
+    def _shell_console_delete(self, _event=None):
+        """Send one native Delete keystroke to the active shell only."""
+        self._shell_write_input("\x1b[3~")
+        return "break"
+
+    def _shell_console_copy_or_interrupt(self, _event=None):
+        """Use Windows Terminal semantics: copy a selection, else send ^C."""
+        try:
+            if getattr(self, "_shell_selected_range", None) or self.shell_console.tag_ranges("sel"):
+                return self._shell_console_copy(_event)
+        except Exception:
+            pass
+        self._shell_write_input("\x03")
+        return "break"
+
+    def _shell_console_paste(self, _event=None):
+        try:
+            value = self.root.clipboard_get()
+        except Exception:
+            value = ""
+        if value:
+            # A console Enter is CR; preserve pasted line breaks as console
+            # submits instead of sending bare LF characters.
+            value = str(value).replace("\r\n", "\r").replace("\n", "\r")
+            self._shell_write_input(value)
+        return "break"
+
+    def _shell_console_copy(self, _event=None):
+        try:
+            selected_range = getattr(self, "_shell_selected_range", None)
+            if selected_range:
+                selected = self.shell_console.get(*selected_range)
+            else:
+                selected = self.shell_console.get("sel.first", "sel.last")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected)
+        except Exception:
+            pass
+        return "break"
+
+    def _shell_clear_output(self):
+        with self._shell_state_lock:
+            session = self._shell_sessions.get(self._shell_active_kind)
+            if session:
+                session["output"] = ""
+                session["styled"] = []
+                session.setdefault("pending", deque()).clear()
+                session["terminal"] = _ShellTerminalBuffer(columns=120)
+        try:
+            self._shell_selected_range = None
+            self.shell_console.configure(state=tk.NORMAL)
+            self.shell_console.delete("1.0", tk.END)
+            self.shell_console.configure(state=tk.NORMAL)
+        except Exception:
+            pass
+
+    def _shell_stop(self, kind: str):
+        with self._shell_state_lock:
+            session = self._shell_sessions.get(kind)
+            if not session:
+                return
+            session["running"] = False
+            pty = session.get("pty")
+        try:
+            if pty:
+                pty.close(force=True)
+        except Exception:
+            pass
+        self._shell_refresh_switcher()
+
+    def _shell_restart(self, kind: str | None = None):
+        """Restart only the selected Project Terminal shell."""
+        kind = kind or getattr(self, "_shell_active_kind", "pwsh")
+        if kind not in ("pwsh", "cmd"):
+            return "break"
+
+        # Restart is intentionally scoped to one PTY.  The other shell keeps
+        # its process, scrollback, and current command untouched.
+        self._shell_stop(kind)
+        if kind == getattr(self, "_shell_active_kind", "pwsh"):
+            self._shell_clear_output()
+        self._shell_set_status(f"Restarting {self._shell_display_name(kind)}…")
+        self._shell_start(kind)
+        self._shell_render_session(kind)
+        try:
+            self.shell_console.focus_set()
+        except Exception:
+            pass
+        return "break"
+
+    def _shell_stop_all(self):
+        for kind in ("pwsh", "cmd"):
+            try:
+                self._shell_stop(kind)
+            except Exception:
+                pass
+
     def _on_bottom_notebook_tab_changed(self, _event=None):
         # This handler runs on Tk's thread, so it is the authoritative place to
         # publish whether serial rendering should be active.  The serial reader
@@ -11406,6 +12882,12 @@ class MCUUploadGUI:
         if self._compatible_devices_is_selected():
             try:
                 self.root.after_idle(self._repair_compatible_devices_interaction)
+            except Exception:
+                pass
+
+        if self._shell_terminal_is_selected():
+            try:
+                self.root.after_idle(lambda: self._shell_select(self._shell_active_kind))
             except Exception:
                 pass
 
@@ -11452,7 +12934,7 @@ class MCUUploadGUI:
         the last successful compile so the tab survives app restarts."""
         if not self.sketch_dir_path:
             return None
-        return Path(self.sketch_dir_path) / ".mcu_gui_compat_cache.json"
+        return get_project_build_cache_root(self.sketch_dir_path) / ".mcu_gui_compat_cache.json"
 
     def _save_compat_cache(self, boards, reasons, src_hash) -> None:
         try:
@@ -11473,7 +12955,7 @@ class MCUUploadGUI:
 
     def _load_compat_cache(self) -> None:
         """Reload the compatible-devices list cached at the last successful
-        compile (project folder → .mcu_gui_compat_cache.json).
+        compile (project cache → .mcu_gui_compat_cache.json).
 
         The analysis is compile-driven, so opening a project just restores
         the cached snapshot: not yet compiled → 'Please compile…', already
@@ -12513,7 +13995,7 @@ class MCUUploadGUI:
         self._set_status(f"Upload speed changed to {speed}", Theme.CYAN)
 
         def _update_ini_task():
-            ini_path = self.sketch_dir_path / "platformio.ini"
+            ini_path = self._platformio_ini_path()
             with _PLATFORMIO_INI_WRITE_LOCK:
                 if ini_path.exists():
                     content = ini_path.read_text(encoding="utf-8", errors="replace")
@@ -12858,7 +14340,7 @@ class MCUUploadGUI:
 
         Safe-guards: when the build succeeded, the CURRENT env's fresh build
         output is never deleted; only stale debris from the aborted clean is
-        removed. ``build_root`` overrides the default sketch .pio/build root
+        removed. ``build_root`` overrides the selected board's cache build root
         for projects that build elsewhere (e.g. the bundled soft_reset
         project)."""
         if not reported_paths:
@@ -12930,6 +14412,7 @@ class MCUUploadGUI:
         sketch = self.sketch_dir_path
         remote_root = self._remote_workspace_root(sketch)
         targets = [
+            (get_project_build_cache_root(sketch, create=False), "MCU Flasher project build cache"),
             (sketch / ".pio", "all cached board workspaces"),
             (sketch / "src", "generated build sources"),
             (sketch / "platformio.ini", "generated PlatformIO configuration"),
@@ -12937,9 +14420,13 @@ class MCUUploadGUI:
             (sketch / ".build_artifacts", "legacy binary archives"),
             (sketch / "compiled_builds", "legacy compiled binaries"),
             (sketch / ".mcu_gui_cache.json", "legacy compile metadata"),
-            (self._get_cache_file_path(), "compile metadata"),
-            (get_project_temp_file(sketch, ".mcu_flash_syntax_errors.json"), "syntax metadata"),
+            (get_project_build_cache_root(sketch, create=False) / ".mcu_gui_cache.json", "compile metadata"),
+            (get_project_build_cache_root(sketch, create=False) / ".mcu_flash_syntax_errors.json", "syntax metadata"),
             (sketch / ".mcu_flash_syntax_errors.json", "legacy syntax metadata"),
+            (sketch / ".mcu_gui_compat_cache.json", "legacy compatible-devices metadata"),
+            (sketch / ".mcu_flash_tab_order.json", "legacy editor tab order"),
+            (sketch / ".mcu_ai_edits", "legacy AI edit backups"),
+            (sketch / "MCU-FLASHER-SRC", "legacy generated source cache"),
             (sketch / ".ai_edit_signal", "generated editor signal"),
             # Reset builds are app-level, exact-board caches.  Manual Clean is
             # intentionally the one operation that clears them all.
@@ -13094,9 +14581,7 @@ class MCUUploadGUI:
         """Delete all generated/cached files, keeping only source files.
 
         Removes:
-          • .pio/          — every board's project-local build/libdeps cache
-          • src/           — frozen PlatformIO copies of sketch files
-          • platformio.ini — regenerated fresh on next compile/upload
+          • .mcu_flasher_build_cache/ — staged sources, board builds, metadata, and generated configuration
           • reset caches   — exact-board Hard/Soft Reset builds
 
         Keeps all source/user files and the shared framework/toolchain packages.
@@ -14313,7 +15798,7 @@ class MCUUploadGUI:
         self._set_status(f"Project: {self.sketch_dir_path.name}", Theme.CYAN)
         self._save_active_folder(self.sketch_dir_path)
         try:
-            heal_platformio_ini_symlinks_and_dirs(self.sketch_dir_path / "platformio.ini", self.sketch_dir_path)
+            heal_platformio_ini_symlinks_and_dirs(self._platformio_ini_path(), self.sketch_dir_path)
             if not is_unc_or_network_path(self.sketch_dir_path):
                 hide_internal_project_metadata(self.sketch_dir_path)
         except Exception:
@@ -14659,7 +16144,7 @@ class MCUUploadGUI:
         except Exception:
             pass
 
-        ini_path = project_dir / "platformio.ini"
+        ini_path = self._platformio_ini_path(project_dir)
         if ini_path.exists():
             self._append("  ✔ platformio.ini found", "success")
         else:
@@ -14794,7 +16279,7 @@ class MCUUploadGUI:
                                   allow_cached: bool = True) -> str | None:
         """Return this board's build-config digest without confusing B for A.
 
-        The generated root ``platformio.ini`` represents only the most recently
+        The generated cache ``platformio.ini`` represents only the most recently
         prepared board.  When another board is merely selected in the UI, use
         its last successful fingerprint until preparation rewrites the file.
         A compile/upload always prepares the selected board before the final
@@ -14805,7 +16290,7 @@ class MCUUploadGUI:
         info = dict(SUPPORTED_BOARDS.get(name, {}))
         if not info and board_name is None:
             info = dict(self._resolve_board_info())
-        ini_path = self.sketch_dir_path / "platformio.ini"
+        ini_path = self._platformio_ini_path()
         try:
             content = ini_path.read_text(encoding="utf-8", errors="replace")
             platform_match = re.search(
@@ -15351,7 +16836,8 @@ class MCUUploadGUI:
         Routing remote project workspaces to local storage guarantees 100% reliable builds
         and high-speed compilation while preserving the remote source files.
 
-        Returns None for local drive projects (which build in ``project/.pio`` as normal).
+        Returns None for local drive projects (which build in the hidden
+        ``project/.mcu_flasher_build_cache`` folder).
         """
         canonical = self._canonical_sketch_path(project_dir)
         if not is_unc_or_network_path(canonical):
@@ -15370,14 +16856,16 @@ class MCUUploadGUI:
 
         For remote/UNC network projects, automatically resolves to the local fast
         storage workspace under ``remote_workspaces/<project>_<hash>/boards/<board_key>``.
-        For local projects, resolves to ``<project>/.pio/boards/<board_key>``.
+        For local projects, resolves to
+        ``<project>/.mcu_flasher_build_cache/boards/<board_key>``.
         """
         remote_root = self._remote_workspace_root(project_dir)
         if remote_root is not None:
             return remote_root / "boards" / self._board_cache_key(board_name)
 
         project = self._mapped_or_sketch_dir(project_dir)
-        return project / ".pio" / "boards" / self._board_cache_key(board_name)
+        cache_root = _migrate_legacy_project_generated_files(project)
+        return cache_root / "boards" / self._board_cache_key(board_name)
 
     def _platformio_project_dir(self, project_dir: Path | None = None,
                                 board_name: str | None = None) -> Path:
@@ -15387,15 +16875,23 @@ class MCUUploadGUI:
         SCons repeatedly reads the project tree and writes generated files,
         which is both slow and prone to SMB/UNC locking errors.  Remote
         projects therefore use their local, board-isolated workspace as a
-        complete staged PlatformIO project.  Local projects retain their
-        existing path behavior.
+        complete staged PlatformIO project.  Local projects use the hidden
+        project build cache so the sketch root contains only user-authored
+        files.
         """
         project = Path(project_dir or self.sketch_dir_path)
         if self._remote_workspace_root(project) is not None:
             workspace = self._board_workspace(project, board_name)
             workspace.mkdir(parents=True, exist_ok=True)
             return workspace
-        return self._mapped_or_sketch_dir(project)
+        return _migrate_legacy_project_generated_files(
+            self._mapped_or_sketch_dir(project)
+        )
+
+    def _platformio_ini_path(self, project_dir: Path | None = None,
+                             board_name: str | None = None) -> Path:
+        """Return the private PlatformIO configuration for this project."""
+        return self._platformio_project_dir(project_dir, board_name) / "platformio.ini"
 
     def _board_build_root(self, project_dir: Path | None = None,
                           board_name: str | None = None) -> Path:
@@ -15434,7 +16930,9 @@ class MCUUploadGUI:
         )
         destination_root = self._board_build_root(project, board_name)
         destination_env = destination_root / env_name
-        legacy_root = project / ".pio" / "build"
+        legacy_root = (
+            _migrate_legacy_project_generated_files(project) / ".pio" / "build"
+        )
         legacy_env_names = [env_name, self._legacy_pio_env_name(board_name)]
         try:
             import shutil as _cache_shutil
@@ -15460,7 +16958,10 @@ class MCUUploadGUI:
                 self._board_workspace(project, board_name) / "libdeps" / env_name
             )
             for legacy_name in dict.fromkeys(legacy_env_names):
-                legacy_libdeps = project / ".pio" / "libdeps" / legacy_name
+                legacy_libdeps = (
+                    _migrate_legacy_project_generated_files(project)
+                    / ".pio" / "libdeps" / legacy_name
+                )
                 if legacy_libdeps.is_dir() and not destination_libdeps.exists():
                     destination_libdeps.parent.mkdir(parents=True, exist_ok=True)
                     _cache_shutil.move(str(legacy_libdeps), str(destination_libdeps))
@@ -15490,11 +16991,22 @@ class MCUUploadGUI:
         try:
             workspace.mkdir(parents=True, exist_ok=True)
             if self._remote_workspace_root(project) is None:
-                hide_generated_directory(project / ".pio")
+                hide_generated_directory(
+                    _migrate_legacy_project_generated_files(project)
+                )
         except Exception:
             pass
 
         env = os.environ.copy()
+        core_dir, _core_was_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
+        # Reassert this in the child environment instead of relying on a
+        # possibly stale inherited value from an earlier app launch.
+        env["PLATFORMIO_CORE_DIR"] = str(core_dir)
+        env["PLATFORMIO_CACHE_DIR"] = str(core_dir / ".cache")
+        env["PLATFORMIO_GLOBALLIB_DIR"] = str(core_dir / "lib")
+        env["TMP"] = str(core_dir / ".tmp")
+        env["TEMP"] = str(core_dir / ".tmp")
+        env["TMPDIR"] = str(core_dir / ".tmp")
         env["PLATFORMIO_WORKSPACE_DIR"] = str(workspace)
         env["PLATFORMIO_BUILD_DIR"] = str(build_root)
         env["PLATFORMIO_LIBDEPS_DIR"] = str(libdeps_root)
@@ -15893,6 +17405,13 @@ class MCUUploadGUI:
         """PlatformIO environment for an already exact-board reset project."""
         workspace = Path(project_dir) / ".pio"
         env = os.environ.copy()
+        core_dir, _core_was_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
+        env["PLATFORMIO_CORE_DIR"] = str(core_dir)
+        env["PLATFORMIO_CACHE_DIR"] = str(core_dir / ".cache")
+        env["PLATFORMIO_GLOBALLIB_DIR"] = str(core_dir / "lib")
+        env["TMP"] = str(core_dir / ".tmp")
+        env["TEMP"] = str(core_dir / ".tmp")
+        env["TMPDIR"] = str(core_dir / ".tmp")
         env["PLATFORMIO_WORKSPACE_DIR"] = str(workspace)
         env["PLATFORMIO_BUILD_DIR"] = str(workspace / "build")
         env["PLATFORMIO_LIBDEPS_DIR"] = str(workspace / "libdeps")
@@ -16007,7 +17526,7 @@ class MCUUploadGUI:
 
     def _ensure_platformio_ini_impl(self) -> bool:
         """Ensure platformio.ini exists and has all required library dependencies."""
-        ini_path = self.sketch_dir_path / "platformio.ini"
+        ini_path = self._platformio_ini_path()
 
         board_info = self._resolve_board_info()
         if not board_info.get("pio_resolved", True):
@@ -16108,7 +17627,7 @@ class MCUUploadGUI:
         flash_mode = normalized_board_flash_mode(board_info)
         
         if not ini_path.exists():
-            self._append(f"  📝 platformio.ini not found in {self.sketch_dir_path}.", "warning")
+            self._append(f"  📝 platformio.ini not found in {ini_path.parent}.", "warning")
             self._append("  Creating a default platformio.ini with detected dependencies...", "info")
             
             lib_deps_str = ""
@@ -16225,7 +17744,7 @@ default_envs = {self._pio_env_name()}
                     hide_internal_project_metadata(self.sketch_dir_path)
                 self._append("  ✔ Created default platformio.ini successfully.", "success")
                 self._append_notif(
-                    f"  📄 platformio.ini created for {self.board_var.get()} in {self.sketch_dir_path}",
+                    f"  📄 platformio.ini created for {self.board_var.get()} in {ini_path.parent}",
                     tag="success", category="pio_ini", title="platformio.ini Created"
                 )
                 if detected_libs:
@@ -17082,7 +18601,7 @@ default_envs = {self._pio_env_name()}
         # PlatformIO also needs the generated configuration beside the staged
         # src/ directory.  Keep the user-facing copy on the remote share, but
         # give the compiler a local copy for remote projects.
-        source_ini = source_root / "platformio.ini"
+        source_ini = self._platformio_ini_path(source_root)
         destination_ini = destination_root / "platformio.ini"
         if destination_ini != source_ini and source_ini.is_file():
             ini_content = source_ini.read_text(encoding="utf-8", errors="replace")
@@ -17130,11 +18649,25 @@ default_envs = {self._pio_env_name()}
             temporary_path = Path(temporary_name)
             try:
                 import shutil as _sh
-                _sh.copy2(src_path, temporary_path)
+                # Antivirus/indexer scans can briefly hold either the source
+                # snapshot or the temporary destination.  Retry only those
+                # short-lived sharing violations; persistent errors still
+                # surface normally to the compile worker.
+                retry_transient_file_operation(
+                    lambda: _sh.copy2(src_path, temporary_path)
+                )
                 ensure_file_writable(dst_path)
-                os.replace(temporary_path, dst_path)
+                retry_transient_file_operation(
+                    lambda: os.replace(temporary_path, dst_path)
+                )
             finally:
-                temporary_path.unlink(missing_ok=True)
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    # A scanner may still be releasing the temporary file;
+                    # it is harmless and will be cleaned on the next staging
+                    # pass rather than masking the real build result.
+                    pass
 
         # Preserve PlatformIO's generated <sketch>.ino.cpp for unchanged .ino
         # files.  Deleting it on every action defeated incremental conversion
@@ -17213,7 +18746,13 @@ default_envs = {self._pio_env_name()}
         self._append("=" * 50, "header")
         self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
         self._append(f"  Tool   : PlatformIO Core", "dim")
-        self._append(f"  Store  : {os.environ.get('PLATFORMIO_CORE_DIR', '(default)')}", "dim")
+        core_dir, core_was_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
+        self._append(f"  Store  : {core_dir}", "dim")
+        if core_was_refreshed:
+            self._append(
+                "  ✔ PlatformIO core/junction path verified for this build.",
+                "info",
+            )
         if is_unc_or_network_path(self.sketch_dir_path):
             _share = _unc_share_root(self.sketch_dir_path) or str(self.sketch_dir_path)
             self._append(f"  🌐 Source  : Network share ({_share})", "info")
@@ -17381,7 +18920,7 @@ default_envs = {self._pio_env_name()}
         # serial reader responsive while compiler workers are busy.
         creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
-        hide_internal_project_metadata(effective_cwd)
+        hide_generated_directory(effective_cwd)
 
         try:
             self.process = subprocess.Popen(
@@ -18240,6 +19779,43 @@ default_envs = {self._pio_env_name()}
                 self._append("─" * 50, "error")
 
             self._set_status("Compile FAILED", Theme.RED)
+            av_lock_failure = is_transient_platformio_lock_report(output_lines)
+
+            # Windows security/indexing software can briefly lock a freshly
+            # generated object, archive, or SCons database after PlatformIO
+            # has already exited.  Give that narrow failure one clean retry;
+            # the incremental workspace is preserved, so successful objects
+            # do not need to be rebuilt.  Never loop indefinitely and never
+            # retry a real compiler diagnostic.
+            if (
+                av_lock_failure
+                and not getattr(self, "_av_compile_retry_in_progress", False)
+                and not was_killed
+            ):
+                self._append(
+                    "  ⚠ A temporary antivirus/file lock interrupted the build; retrying once…",
+                    "warning",
+                )
+                self._append(
+                    "    Successful incremental objects are being preserved.",
+                    "dim",
+                )
+                self._av_compile_retry_in_progress = True
+                completed_process = self.process
+                try:
+                    try:
+                        if completed_process and completed_process.stdout:
+                            completed_process.stdout.close()
+                    except Exception:
+                        pass
+                    self.process = None
+                    self.is_busy = False
+                    self._set_buttons_busy(False)
+                    time.sleep(0.8)
+                    return self._run_compile(is_upload=is_upload)
+                finally:
+                    self._av_compile_retry_in_progress = False
+
             failure_kind = classify_platformio_failure(output_lines)
             if failure_kind == "cache" and not is_clean_retry:
                 self._append(
@@ -18285,7 +19861,7 @@ default_envs = {self._pio_env_name()}
             self._set_buttons_busy(False)
             return rc == 0
 
-        hide_internal_project_metadata(self._platformio_project_dir(self.sketch_dir_path))
+        hide_generated_directory(self._platformio_project_dir(self.sketch_dir_path))
         self.process = None
         if not is_upload or rc != 0:
             self.is_busy = False
@@ -20232,7 +21808,9 @@ default_envs = {self._pio_env_name()}
         parent_frame.bind("<Configure>", self._resize_embedded_editor)
 
         # Initialize callbacks to evaluate_js on the webview window
-        self._load_editor_files = lambda: self.editor_window.evaluate_js("loadProject()") if hasattr(self, "editor_window") else None
+        self._load_editor_files = lambda: self.editor_window.evaluate_js(
+            "(window.safeLoadProject ? window.safeLoadProject() : window.loadProject())"
+        ) if hasattr(self, "editor_window") else None
         self._save_all_editor_files = lambda: self.editor_window.evaluate_js("saveAllFiles()") if hasattr(self, "editor_window") else None
         self._save_current_editor_file = lambda: self.editor_window.evaluate_js("saveActiveFile()") if hasattr(self, "editor_window") else None
         self._reload_current_editor_file = lambda: self.editor_window.evaluate_js("reloadActiveFile()") if hasattr(self, "editor_window") else None
@@ -22035,11 +23613,11 @@ default_envs = {self._pio_env_name()}
                         _deferred_highlight_tabs.append(tab_id)
             else:
                 sketch_dir = self.sketch_dir_path
-                files = []
-                for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.txt"):
-                    files.extend(sorted(sketch_dir.glob(ext)))
+                files = get_project_root_source_files(
+                    sketch_dir, (".ino", ".cpp", ".c", ".h", ".txt")
+                )
 
-                order_file = sketch_dir / ".mcu_flash_tab_order.json"
+                order_file = get_project_build_cache_root(sketch_dir, create=False) / ".mcu_flash_tab_order.json"
                 if order_file.exists():
                     try:
                         import json
@@ -22050,11 +23628,15 @@ default_envs = {self._pio_env_name()}
                                 rel = str(f.relative_to(sketch_dir))
                             except Exception:
                                 rel = str(f)
-                            file_map[rel] = f
+                            file_map.setdefault(os.path.normcase(rel), f)
                         ordered_files = []
+                        ordered_keys = set()
                         for name in saved_order:
-                            if name in file_map:
-                                ordered_files.append(file_map.pop(name))
+                            key = os.path.normcase(str(name))
+                            if key in file_map and key not in ordered_keys:
+                                ordered_files.append(file_map[key])
+                                ordered_keys.add(key)
+                                file_map.pop(key, None)
                         ordered_files.extend(file_map.values())
                         files = ordered_files
                     except Exception:
@@ -22173,6 +23755,7 @@ default_envs = {self._pio_env_name()}
             if not self.sketch_dir_path:
                 return
             paths = []
+            seen_paths = set()
             for tab_id in nb.tabs():
                 widget = nb.nametowidget(tab_id)
                 data = tab_data.get(widget)
@@ -22181,8 +23764,11 @@ default_envs = {self._pio_env_name()}
                         rel = str(data["path"].relative_to(self.sketch_dir_path))
                     except Exception:
                         rel = str(data["path"])
-                    paths.append(rel)
-            order_file = self.sketch_dir_path / ".mcu_flash_tab_order.json"
+                    key = os.path.normcase(rel)
+                    if key not in seen_paths:
+                        seen_paths.add(key)
+                        paths.append(rel)
+            order_file = get_project_build_cache_root(self.sketch_dir_path) / ".mcu_flash_tab_order.json"
             try:
                 import json
                 ensure_file_writable(order_file)
@@ -22334,15 +23920,6 @@ default_envs = {self._pio_env_name()}
                 pass
             self._editor_spinner_job = None
 
-    def _force_reveal_editor_timeout(self):
-        """Safety fallback: if the editor native window was embedded cleanly,
-        force-reveal the editor UI after a short timeout even if the page load
-        event notification was delayed or dropped by pywebview.
-        """
-        if getattr(self, "_editor_embedded", False) and not getattr(self, "_editor_content_loaded", False):
-            setattr(self, "_editor_content_loaded", True)
-            self._reveal_editor_if_ready()
-
     def _reveal_editor_if_ready(self):
         """Only hide the loading placeholder once BOTH the native window
         is reparented+shown AND the page itself reports it finished
@@ -22482,9 +24059,6 @@ default_envs = {self._pio_env_name()}
             self._editor_status_lbl.configure(text="📝 Rendering editor…")
             self._editor_desc_lbl.configure(text="Waiting for the editor page to finish loading…")
             self._reveal_editor_if_ready()
-            # Safety watchdog: force-reveal if webview page load event was missed or delayed
-            self.root.after(1500, self._force_reveal_editor_timeout)
-            
         except Exception as e:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
@@ -22535,10 +24109,10 @@ default_envs = {self._pio_env_name()}
             if detached:
                 self._editor_attach_ok = False
                 self._editor_attached_threads = None
-                # Tk's Tcl notifier should start servicing its message
-                # queue again immediately after detaching — schedule the
-                # notice through root.after rather than touching widgets
-                # directly from this background thread.
+                # Tk's Tcl notifier should start servicing its message queue
+                # again immediately after detaching. Queue the notice through
+                # the GUI dispatch bridge rather than touching Tk directly
+                # from this background thread.
                 def _notify():
                     self._append(
                         "  ⚠ Detected the editor freezing the app right after embedding — "
@@ -22549,7 +24123,7 @@ default_envs = {self._pio_env_name()}
                     self._editor_hwnd = None
                     self._show_editor_fallback_button()
                 try:
-                    self.root.after(0, _notify)
+                    self._post_ui(_notify)
                 except Exception:
                     pass
 
@@ -22948,8 +24522,8 @@ default_envs = {self._pio_env_name()}
         
         return _resource_safe_worker_count(setting)
 
-    def _launch_opencode_ai_assistant(self):
-        """Prompt user with beta & copyright disclaimer before launching elevated OpenCode AI."""
+    def _confirm_ai_assistant_launch(self) -> bool:
+        """Ask for consent before importing or starting the AI integration."""
         disclaimer_title = "OpenCode AI Assistant (Beta Test)"
         disclaimer_msg = (
             "🤖 OpenCode AI Assistant\n"
@@ -22964,7 +24538,11 @@ default_envs = {self._pio_env_name()}
             "Do you want to proceed and launch OpenCode AI as Administrator?"
         )
         
-        proceed = messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root)
+        return bool(messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root))
+
+    def _launch_opencode_ai_assistant(self):
+        """Prompt user with beta & copyright disclaimer before launching elevated OpenCode AI."""
+        proceed = self._confirm_ai_assistant_launch()
         if proceed:
             try:
                 # pyrefly: ignore [missing-import]
@@ -23002,15 +24580,23 @@ default_envs = {self._pio_env_name()}
         except Exception:
             pass
 
-    def _ensure_ai_controller(self) -> bool:
-        """Initialize the optional AI controller on first use."""
+    def _ensure_ai_controller(self, module=None) -> bool:
+        """Initialize the optional AI controller on the Tk thread.
+
+        Importing ``dedicated_AI`` can load optional native packages and may
+        perform a one-time package check.  The first-click path prepares that
+        module in the background and passes it here after the worker finishes;
+        this method itself must remain UI-thread-only because it constructs a
+        controller that owns Tk callbacks.
+        """
         if getattr(self, "ai_controller", None) is not None:
             return True
-        module = _load_dedicated_ai()
+        module_was_prepared = module is not None
+        module = module or _load_dedicated_ai()
         if module is None:
             return False
         try:
-            if not module.is_opencode_installed():
+            if not module_was_prepared and not module.is_opencode_installed():
                 return False
             controller_class = getattr(module, "AIController", None)
             if controller_class is None:
@@ -23028,6 +24614,46 @@ default_envs = {self._pio_env_name()}
             self.ai_controller = None
             return False
 
+    def _prepare_ai_controller_background(self):
+        """Load and validate the optional AI integration away from Tk."""
+        module = _load_dedicated_ai()
+        if module is None:
+            raise RuntimeError("The AI Assistant integration could not be loaded.")
+        if not module.is_opencode_installed():
+            raise RuntimeError("OpenCode is not installed or is not available on PATH.")
+        return module
+
+    def _finish_ai_controller_background(self, module):
+        """Attach a worker-prepared AI module without blocking the UI."""
+        if not getattr(self, "_ai_side_visible", False):
+            return
+        if not self._ensure_ai_controller(module):
+            self._dismiss_ai_loading_overlay()
+            self._hide_ai_side_panel()
+            messagebox.showerror(
+                "AI Assistant",
+                "The AI Assistant could not be initialized.",
+                parent=self.root,
+            )
+            return
+
+        # The first-click consent was already accepted before the worker was
+        # scheduled, so this launch must not display the controller's prompt
+        # a second time.
+        self.ai_controller.disclaimer_accepted = True
+        if getattr(self.ai_controller, "is_launching", False) or module.is_opencode_running():
+            return
+        started = self.ai_controller.toggle_ai()
+        if not started:
+            self._hide_ai_side_panel()
+
+    def _ai_controller_background_error(self, exc):
+        """Report a first-use AI preparation failure on the Tk thread."""
+        self._dismiss_ai_loading_overlay()
+        if getattr(self, "_ai_side_visible", False):
+            self._hide_ai_side_panel()
+        messagebox.showerror("AI Assistant", str(exc), parent=self.root)
+
     def _update_ai_button_label(self):
         """Update top toolbar AI button text to '🤖 Hide AI' when open and '🤖 AI Assistant' when hidden."""
         btn = getattr(self, "btn_ai_assistant", None)
@@ -23044,23 +24670,51 @@ default_envs = {self._pio_env_name()}
 
     def _toggle_ai_side_panel(self):
         """Toggle right-side OpenCode AI Assistant container panel visibility."""
-        self._ensure_ai_controller()
         is_visible = getattr(self, "_ai_side_visible", False)
         if is_visible:
             self._hide_ai_side_panel()
-        else:
-            if getattr(self, "ai_controller", None):
-                try:
-                    # pyrefly: ignore [missing-import]
-                    from dedicated_AI import is_opencode_running
-                    if not is_opencode_running():
-                        # Prompt the disclaimer first BEFORE popping up the AI panel
-                        started = self.ai_controller.toggle_ai()
-                        if not started:
-                            return  # User declined/cancelled disclaimer prompt; don't open panel
-                except Exception:
-                    pass
-            self._show_ai_side_panel()
+            return
+
+        # The consent dialog must be the first action on the first click.
+        # Do not show the panel, import optional WebView packages, or start a
+        # worker until the user has explicitly accepted it.
+        if not getattr(self, "ai_controller", None):
+            if getattr(self, "_ai_controller_init_pending", False):
+                return
+            if not self._confirm_ai_assistant_launch():
+                return
+            self._ai_controller_init_pending = True
+
+        # Show the shell and loader immediately.  The optional AI module can
+        # import native WebView/PTY packages (and may perform a package check),
+        # so doing that before returning to Tk makes the first click appear
+        # frozen on slower or antivirus-scanned machines.
+        self._show_ai_side_panel()
+        if getattr(self, "ai_controller", None):
+            try:
+                # pyrefly: ignore [missing-import]
+                from dedicated_AI import is_opencode_running
+                if not is_opencode_running():
+                    started = self.ai_controller.toggle_ai()
+                    if not started:
+                        self._hide_ai_side_panel()
+            except Exception as exc:
+                self._ai_controller_background_error(exc)
+            return
+
+        def _on_ready(module):
+            self._ai_controller_init_pending = False
+            self._finish_ai_controller_background(module)
+
+        def _on_error(exc):
+            self._ai_controller_init_pending = False
+            self._ai_controller_background_error(exc)
+
+        self._run_bg_task(
+            self._prepare_ai_controller_background,
+            on_success=_on_ready,
+            on_error=_on_error,
+        )
 
     def _show_ai_loading_overlay_4s(self):
         """Show a non-blocking loader while the AI WebView is attaching.
@@ -23127,7 +24781,6 @@ default_envs = {self._pio_env_name()}
                     marker_ready = marker_reason in {
                         "opencode-ready",
                         "pty-settled",
-                        "startup-fallback-ready",
                     }
         except Exception:
             pass
@@ -23162,30 +24815,6 @@ default_envs = {self._pio_env_name()}
             self._dismiss_ai_loading_overlay()
             return
 
-        # Emergency fallback only after a very conservative timeout. This
-        # prevents permanent overlays if a filesystem blocks marker creation,
-        # without repeating the old early-dismiss behavior.
-        if elapsed >= 45.0 and embedded:
-            running = False
-            try:
-                # pyrefly: ignore [missing-import]
-                from dedicated_AI import is_opencode_running
-                running = bool(is_opencode_running())
-            except Exception:
-                pass
-            if running:
-                self._dismiss_ai_loading_overlay()
-                try:
-                    self._append_notif(
-                        "  ⚠ AI readiness confirmation timed out; showing the running terminal.",
-                        "warning",
-                        category="system",
-                        title="AI startup fallback",
-                    )
-                except Exception:
-                    pass
-                return
-
         self._ai_overlay_retry_count = getattr(self, "_ai_overlay_retry_count", 0) + 1
         if hasattr(self, "root") and self.root:
             self._ai_overlay_timer_id = self.root.after(150, self._poll_ai_ready_dismiss)
@@ -23217,9 +24846,16 @@ default_envs = {self._pio_env_name()}
 
         # Display the readiness-driven loading overlay only on first launch.
         # Subsequent hide/unhide toggles keep the already-running terminal visible.
-        # pyrefly: ignore [missing-import]
-        from dedicated_AI import is_opencode_running
-        if not getattr(self, "_has_shown_ai_first_time_loader", False) or not is_opencode_running():
+        # Do not import dedicated_AI here: its first import can load native
+        # WebView/PTY dependencies and must stay off the Tk thread.
+        ai_module = _dedicated_ai_module if _dedicated_ai_module else None
+        ai_running = False
+        if ai_module is not None:
+            try:
+                ai_running = bool(ai_module.is_opencode_running())
+            except Exception:
+                ai_running = False
+        if not getattr(self, "_has_shown_ai_first_time_loader", False) or not ai_running:
             self._has_shown_ai_first_time_loader = True
             self._show_ai_loading_overlay_4s()
 
@@ -23231,18 +24867,20 @@ default_envs = {self._pio_env_name()}
             except Exception:
                 pass
 
-        # Trigger launch if AI process is not running
+        # Trigger launch if AI process is not running.  If the optional module
+        # is still being prepared, the background completion callback will do
+        # this later; no import or package probe belongs on the Tk thread.
         if getattr(self, "ai_controller", None):
             try:
-                # pyrefly: ignore [missing-import]
-                from dedicated_AI import is_opencode_running
-                if not is_opencode_running() and not getattr(self.ai_controller, "is_launching", False):
+                if not ai_running and not getattr(self.ai_controller, "is_launching", False):
                     started = self.ai_controller.toggle_ai()
                     if not started:
                         self._hide_ai_side_panel()
                         return
             except Exception:
                 pass
+        elif getattr(self, "_ai_controller_init_pending", False):
+            pass
         elif hasattr(self, "_launch_opencode_ai_assistant"):
             self._launch_opencode_ai_assistant()
 
@@ -23318,6 +24956,7 @@ default_envs = {self._pio_env_name()}
             return
 
         try:
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
             tk_hwnd = self.ai_embed_frame.winfo_id()
 
             # Set WS_CLIPCHILDREN on parent Tk frame
@@ -23973,7 +25612,6 @@ default_envs = {self._pio_env_name()}
             try:
                 editor_note.configure(wraplength=note_wrap)
                 autosave_note.configure(wraplength=note_wrap)
-                fast_start_note.configure(wraplength=note_wrap)
             except (NameError, tk.TclError):
                 pass
             narrow = (event.width / settings_scale) < 470
@@ -24242,28 +25880,11 @@ default_envs = {self._pio_env_name()}
 
         startup_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
         startup_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
-        try:
-            current_fast_start_enabled = bool(
-                _load_raw_config().get("shared", {}).get("skip_bootstrap_when_verified", False)
-            )
-        except Exception:
-            current_fast_start_enabled = False
-        fast_start_var = tk.BooleanVar(value=current_fast_start_enabled)
-        cb_fast_start = tk.Checkbutton(
-            startup_frame, text="Fast start after verified Bootstrap", variable=fast_start_var,
-            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
-            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_DARKEST,
-            activeforeground=Theme.TEXT,
-        )
-        cb_fast_start.pack(side=tk.LEFT)
-
-        fast_start_note = tk.Label(
-            settings_body,
-            text="Requires a recent successful verification for this Windows user and this app copy.",
+        tk.Label(
+            startup_frame,
+            text="Bootstrap runs before the main app on every launch.",
             font=self.font_label, fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
-            wraplength=sp(440), justify=tk.LEFT,
-        )
-        fast_start_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
+        ).pack(side=tk.LEFT)
 
         # Horizontal separator
         sep = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
@@ -24323,7 +25944,6 @@ default_envs = {self._pio_env_name()}
             monitor_font_var.set("12")
             editor_var.set(default_label)
             editor_var._monaco_confirmed = False
-            fast_start_var.set(False)
             self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
             
         reset_btn = self._make_btn(btn_frame, "Reset Defaults", reset_settings, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
@@ -24345,7 +25965,6 @@ default_envs = {self._pio_env_name()}
                 monitor_font_size_new = 12
 
             autosave_enabled_new = autosave_var.get()
-            fast_start_enabled_new = fast_start_var.get()
             try:
                 autosave_delay_new = max(200, int(autosave_delay_var.get()))
             except (TypeError, ValueError):
@@ -24362,7 +25981,6 @@ default_envs = {self._pio_env_name()}
                 data["shared"]["autosave_enabled"] = autosave_enabled_new
                 data["shared"]["autosave_delay_ms"] = autosave_delay_new
                 data["shared"]["periodic_reload_enabled"] = False
-                data["shared"]["skip_bootstrap_when_verified"] = fast_start_enabled_new
 
                 if editor_var.get() == monaco_label:
                     new_editor_mode = "monaco"
@@ -24420,16 +26038,6 @@ default_envs = {self._pio_env_name()}
                         )
                     else:
                         self._append("  ✔ Auto-Save: OFF.", "success")
-
-                if fast_start_enabled_new != current_fast_start_enabled:
-                    self._append_notif(
-                        "Fast start enabled; Bootstrap will still run unless a current verified record passes its health check."
-                        if fast_start_enabled_new
-                        else "Fast start disabled; Bootstrap will run normally on the next launch.",
-                        "success",
-                        category="system",
-                        title="Fast start setting updated",
-                    )
 
                 self.periodic_reload_enabled = False
 
@@ -25782,7 +27390,7 @@ default_envs = {self._pio_env_name()}
     def _project_option(self, name: str) -> str | None:
         """Read one scalar option from the generated PlatformIO environment."""
         try:
-            ini_path = self.sketch_dir_path / "platformio.ini"
+            ini_path = self._platformio_ini_path()
             content = ini_path.read_text(encoding="utf-8", errors="replace")
             match = re.search(
                 rf"^\s*{re.escape(name)}\s*=\s*([^;#\r\n]+)",
@@ -27200,6 +28808,17 @@ default_envs = {self._pio_env_name()}
                         if hasattr(self, "_save_all_editor_files"):
                             self._save_all_editor_files()
 
+        try:
+            if getattr(self, "_shell_prewarm_after_id", None) is not None:
+                self.root.after_cancel(self._shell_prewarm_after_id)
+                self._shell_prewarm_after_id = None
+            if getattr(self, "_shell_terminal_pump_after_id", None) is not None:
+                self.root.after_cancel(self._shell_terminal_pump_after_id)
+                self._shell_terminal_pump_after_id = None
+            self._shell_stop_all()
+        except Exception:
+            pass
+
         # If editor was detached, dispose/close that window first before destroying main GUI
         try:
             self._close_detached_editor_window()
@@ -27642,6 +29261,15 @@ def main():
             except Exception:
                 pass
 
+    # Keep the app's own cache/runtime/log folders out of the project view.
+    # This runs only after bootstrap handoff; user source files and unknown
+    # project entries are not touched by the metadata allowlist.
+    if "--from-bootstrap" in sys.argv:
+        try:
+            hide_internal_project_metadata(SCRIPT_DIR)
+        except Exception:
+            pass
+
     # A VBS re-run/relaunch must never create a second main GUI accidentally.
     # Additional windows are an explicit opt-in (--new-window), which keeps
     # their per-PID editor/config state isolated from the normal task.
@@ -27930,11 +29558,6 @@ def main():
                 os._exit(0)
         root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
 
-        # The UI and selected project are now fully initialized. Confirm this
-        # back to Bootstrap; a mere child-process spawn is never enough to
-        # earn a future fast-start bypass.
-        _bootstrap_confirm_healthy_startup()
-
         startup_state["stage"] = "starting the main Tk event loop"
         root_ready.set()
         root_val.mainloop()
@@ -28029,7 +29652,7 @@ def main():
                     pass
 
         try:
-            root_val.after(0, _fallback_to_default_editor)
+            app_val._post_ui(_fallback_to_default_editor)
         except Exception:
             pass
         tk_thread.join()
@@ -28049,7 +29672,9 @@ def main():
     def _confirm_monaco_booted():
         set_monaco_boot_pending(False)
 
-    root_val.after(3500, _confirm_monaco_booted)
+    # Tk owns root_val; queue the timer creation onto the Tk thread instead
+    # of calling root.after from the WebView/main thread.
+    app_val._post_ui(lambda: root_val.after(3500, _confirm_monaco_booted))
 
     # Now run pywebview on the main thread
     api = EditorApi(app_val)
@@ -28080,39 +29705,41 @@ def main():
             set_monaco_boot_pending(False)
         except Exception:
             pass
-        root_val.after(0, lambda: (
-            setattr(app_val, "_editor_content_loaded", True),
-            app_val._reveal_editor_if_ready(),
-            app_val._update_editor_info(),
-        ))
-        # Defer background syntax parsing by 2 seconds to avoid CPU contention while Monaco paints
-        root_val.after(2000, lambda: app_val._start_background_syntax_thread())
-        # Sync symbol navigation compiled state to Monaco after page loads
-        root_val.after(1000, lambda: app_val._set_symbol_cache_compiled_state(
-            getattr(app_val, "_project_compiled_cache_active", False)
-        ))
+
+        def _page_loaded_on_tk():
+            setattr(app_val, "_editor_content_loaded", True)
+            app_val._reveal_editor_if_ready()
+            app_val._update_editor_info()
+            # Defer background syntax parsing by 2 seconds to avoid CPU
+            # contention while Monaco paints.
+            root_val.after(2000, app_val._start_background_syntax_thread)
+            # Sync symbol navigation compiled state after page load.
+            root_val.after(1000, lambda: app_val._set_symbol_cache_compiled_state(
+                getattr(app_val, "_project_compiled_cache_active", False)
+            ))
+
+        app_val._post_ui(_page_loaded_on_tk)
     editor_window.events.loaded += _on_editor_page_loaded
 
     # Kick off the embed attempt now.
-    root_val.after(50, app_val._try_embed_editor_window)
+    app_val._post_ui(lambda: root_val.after(50, app_val._try_embed_editor_window))
 
     def on_closing():
-        if getattr(app_val, "_editor_embedded", False):
-            # It's embedded in the main window now — there's nowhere
-            # separate for it to "close" to, so just ignore the close.
-            return False
-        # Cancel any active polling timer — on_closing takes sole
-        # responsibility for re-attachment from here, preventing a
-        # duplicate _attach_editor() call from the poll timer.
-        poll_id = getattr(app_val, "_poll_detached_after_id", None)
-        if poll_id is not None:
-            try:
-                root_val.after_cancel(poll_id)
-            except Exception:
-                pass
-            app_val._poll_detached_after_id = None
-        # If it is detached, close event should trigger re-attachment back to main window
-        root_val.after(0, app_val._attach_editor)
+        # This callback is raised by the WebView thread. Queue all Tk reads,
+        # timer operations, and reattachment work onto Tk's owning thread.
+        def _reattach_on_tk():
+            if getattr(app_val, "_editor_embedded", False):
+                return
+            poll_id = getattr(app_val, "_poll_detached_after_id", None)
+            if poll_id is not None:
+                try:
+                    root_val.after_cancel(poll_id)
+                except Exception:
+                    pass
+                app_val._poll_detached_after_id = None
+            app_val._attach_editor()
+
+        app_val._post_ui(_reattach_on_tk)
         return False  # Intercept close and just hide/re-parent
 
     editor_window.events.closing += on_closing

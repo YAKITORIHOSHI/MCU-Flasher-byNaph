@@ -5,10 +5,8 @@ PyQt5 QScintilla Code Editor for MCU Flash GUI.
 Specialized for writing Arduino/C++ code (.ino / .cpp / .h).
 """
 
-import hashlib
 import os
 import sys
-import tempfile
 import argparse
 
 try:
@@ -377,16 +375,17 @@ class ArduinoEditor(QsciScintilla):
             # Apply indicators locally in QScintilla (real-time wavy underlines!)
             self.set_syntax_indicators(errors)
             
-            # Write errors to the temporary json file for the main window's bottom Treeview
-            proj_hash = hashlib.md5(str(project_dir.resolve()).encode("utf-8")).hexdigest()[:12]
-            temp_cache_dir = Path(tempfile.gettempdir()) / "mcu_flash_gui_cache"
-            temp_cache_dir.mkdir(exist_ok=True)
-            err_file = temp_cache_dir / f"{proj_hash}_.mcu_flash_syntax_errors.json"
-            # Clear legacy file in project directory if present
+            # Keep syntax state beside the project, under the one hidden cache
+            # folder used by the main GUI.  The parent folder is hidden once by
+            # the project manager, so individual generated files need no flags.
+            project_cache_dir = project_dir / ".mcu_flasher_build_cache"
+            project_cache_dir.mkdir(parents=True, exist_ok=True)
+            err_file = project_cache_dir / ".mcu_flash_syntax_errors.json"
+            # Migrate the old root file only when the new cache has no copy.
             legacy_err = project_dir / ".mcu_flash_syntax_errors.json"
-            if legacy_err.exists():
+            if legacy_err.exists() and not err_file.exists():
                 try:
-                    legacy_err.unlink()
+                    os.replace(str(legacy_err), str(err_file))
                 except Exception:
                     pass
             try:
@@ -871,7 +870,9 @@ class MainWindow(QMainWindow):
                 except Exception:
                     rel = editor.file_path
                 paths.append(rel)
-        order_file = os.path.join(self.project_dir, ".mcu_flash_tab_order.json")
+        cache_dir = os.path.join(self.project_dir, ".mcu_flasher_build_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        order_file = os.path.join(cache_dir, ".mcu_flash_tab_order.json")
         try:
             import json
             with open(order_file, "w", encoding="utf-8") as f:
@@ -892,7 +893,15 @@ class MainWindow(QMainWindow):
         files = [os.path.abspath(f) for f in files]
         
         # Load tab order
-        order_file = os.path.join(dir_path, ".mcu_flash_tab_order.json")
+        cache_dir = os.path.join(dir_path, ".mcu_flasher_build_cache")
+        order_file = os.path.join(cache_dir, ".mcu_flash_tab_order.json")
+        legacy_order_file = os.path.join(dir_path, ".mcu_flash_tab_order.json")
+        if os.path.isfile(legacy_order_file) and not os.path.isfile(order_file):
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                os.replace(legacy_order_file, order_file)
+            except OSError:
+                pass
         ordered_files = []
         if os.path.exists(order_file):
             try:

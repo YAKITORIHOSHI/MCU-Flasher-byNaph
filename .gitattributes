@@ -4,4 +4,3 @@ installers/*.msi filter=lfs diff=lfs merge=lfs -text
 installers/**/*.msi filter=lfs diff=lfs merge=lfs -text
 llvm-
 mingw/** filter=lfs diff=lfs merge=lfs -text
-index_json/library_index.json filter=lfs diff=lfs merge=lfs -text

@@ -37,7 +37,7 @@ The project provides a modern Windows desktop interface for compiling, flashing,
      - `loadProject()`, `saveAllFiles()`, `saveActiveFile()`, `reloadActiveFile()`.
    - `EditorApi` (Python side) is exposed as `window.pywebview.api` (JS side), providing:
      - `get_project_files()`, `read_file(path)`, `save_file(path, content)`, `mark_modified(path, bool)`, `set_active_file(path)`, `realtime_check_syntax(path, content)`, `run_action(action)`, `save_tab_order(paths)`, `on_editor_content_change()`.
-   - **Tab bar** with drag-and-drop reordering, dirty-dot indicators, and persistent tab order (`.mcu_flash_tab_order.json`).
+   - **Tab bar** with drag-and-drop reordering, dirty-dot indicators, and persistent tab order inside `.mcu_flasher_build_cache/.mcu_flash_tab_order.json`.
    - **Ctrl+Click / F12 Go-To-Definition** with cross-file symbol resolution (`findProjectSymbol()`, `parseSymbolDetails()`), including built-in Arduino function registry (`BUILTIN_ARDUINO`).
    - **Ctrl+Hover** floating definition card with function signature, parameters, and return type.
    - **Realtime syntax checking** via `realtime_check_syntax()` → `src/syntax_checker.py` (C++ linting).
@@ -59,7 +59,7 @@ The project provides a modern Windows desktop interface for compiling, flashing,
 
 4. **QScintilla External Viewer (`src/qscintilla_editor.py`, `src/qscintilla_viewer.py`)**
    - Optional rich code viewer using QScintilla (PyQt5). Launched as a subprocess via `sys.argv[1]`.
-   - Shares syntax error data with the main GUI through a temp JSON file (`.mcu_flash_syntax_errors.json`).
+   - Shares syntax error data with the main GUI through `.mcu_flasher_build_cache/.mcu_flash_syntax_errors.json`.
 
 5. **Launchers & Native Wrappers**
    - `launcher.py`: Python entry point for initializing configuration and launching the main GUI.

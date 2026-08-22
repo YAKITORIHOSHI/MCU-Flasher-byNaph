@@ -9,7 +9,7 @@ interpreters behind.
 
 Called by MCU-Flash-GUI.vbs. On a fresh system this runs
 once with a visible console window showing progress.
-Subsequent launches skip straight through in <1 second.
+Every launch runs the Bootstrap verification before the main GUI opens.
 """
 
 import json
@@ -72,7 +72,10 @@ def purge_python_cache(root_dir: Path | str = SCRIPT_DIR) -> None:
     """Purge all __pycache__ directories and *.pyc/*.pyo files recursively."""
     try:
         root_path = Path(root_dir).resolve()
-        skip_dirs = {".git", ".pio", "node_modules", ".vscode"}
+        skip_dirs = {
+            ".git", ".pio", ".mcu_flasher_build_cache",
+            "node_modules", ".vscode",
+        }
         for current_root, dirs, files in os.walk(root_path):
             dirs[:] = [d for d in dirs if d not in skip_dirs]
             if Path(current_root).name == "__pycache__":
@@ -103,8 +106,6 @@ _BOOTSTRAP_LOG_FILE = (
     / "logs"
     / f"bootstrap-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
 )
-_FAST_START_RECORD_SCHEMA = 1
-_FAST_START_RECORD_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _BOOTSTRAP_STARTUP_NOTE = ""
 
 
@@ -160,160 +161,6 @@ def _record_bootstrap_exception(context: str) -> None:
     import traceback
 
     _record_bootstrap_log("ERROR", f"{context}\n{traceback.format_exc().rstrip()}")
-
-
-def _fast_start_record_file() -> Path:
-    """Return this user's fast-start record for this exact app location."""
-    import hashlib
-
-    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
-    root = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
-    try:
-        app_identity = str(SCRIPT_DIR.resolve()).casefold()
-    except Exception:
-        app_identity = str(SCRIPT_DIR).casefold()
-    location_key = hashlib.sha256(app_identity.encode("utf-8")).hexdigest()[:16]
-    return root / "MCU Flasher by Naph" / "bootstrap_health" / f"{location_key}.json"
-
-
-def _fast_start_enabled_in_settings() -> bool:
-    """Read the main GUI's shared fast-start setting without importing its UI."""
-    config_files = (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json")
-    for config_file in config_files:
-        try:
-            data = json.loads(config_file.read_text(encoding="utf-8"))
-            return bool(data.get("shared", {}).get("skip_bootstrap_when_verified", False))
-        except Exception:
-            continue
-    return False
-
-
-def _fast_start_source_fingerprint() -> str | None:
-    """Fingerprint only the files whose changes must force a full bootstrap."""
-    import hashlib
-
-    critical_files = (
-        SCRIPT_DIR / "src" / "modules" / "launcher.py" if (SCRIPT_DIR / "src" / "modules" / "launcher.py").exists() else SCRIPT_DIR / "launcher.py",
-        SCRIPT_DIR / "mcu_flash_gui.py",
-        SCRIPT_DIR / "direct" / "runThisOnWindows.vbs" if (SCRIPT_DIR / "direct" / "runThisOnWindows.vbs").exists() else SCRIPT_DIR / "runThisOnWindows.vbs",
-        SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
-    )
-    try:
-        digest = hashlib.sha256()
-        for path in critical_files:
-            stat = path.stat()
-            digest.update(str(path.relative_to(SCRIPT_DIR)).encode("utf-8"))
-            digest.update(f"|{stat.st_size}|{stat.st_mtime_ns}|".encode("ascii"))
-        return digest.hexdigest()
-    except Exception:
-        return None
-
-
-def _fast_start_venv_is_healthy() -> bool:
-    """Run one bounded import probe against the portable virtual environment."""
-    if sys.platform != "win32":
-        return False
-    venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
-    if not venv_python.is_file():
-        return False
-    # The current application uses Tkinter and Monaco/pywebview.  PyQt5,
-    # QScintilla, winpty, and the old pywin32 terminal helpers belong to the
-    # retired editor/terminal path and must not invalidate fast start.
-    probe = (
-        "import serial, platformio, esptool, webview, psutil, certifi, websockets"
-    )
-    try:
-        result = subprocess.run(
-            [str(venv_python), "-B", "-c", probe],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def _read_fast_start_record() -> dict | None:
-    try:
-        data = json.loads(_fast_start_record_file().read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
-
-def _clear_fast_start_record() -> None:
-    try:
-        _fast_start_record_file().unlink(missing_ok=True)
-    except Exception:
-        pass
-
-
-def _write_fast_start_record() -> bool:
-    """Persist a record only after a full bootstrap has handed off successfully."""
-    if sys.platform != "win32":
-        return False
-    fingerprint = _fast_start_source_fingerprint()
-    venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
-    if not fingerprint or not venv_python.is_file():
-        return False
-    record = {
-        "schema": _FAST_START_RECORD_SCHEMA,
-        "verified_at": time.time(),
-        "app_path": str(SCRIPT_DIR.resolve()),
-        "source_fingerprint": fingerprint,
-        "venv_python": str(venv_python.resolve()),
-        "platformio_core_dir": os.environ.get("PLATFORMIO_CORE_DIR", ""),
-    }
-    record_file = _fast_start_record_file()
-    temp_file = record_file.with_suffix(".tmp")
-    try:
-        record_file.parent.mkdir(parents=True, exist_ok=True)
-        temp_file.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        temp_file.replace(record_file)
-        return True
-    except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return False
-
-
-def _fast_start_record_is_good() -> tuple[bool, str]:
-    """Validate the opt-in fast start record and its current lightweight health."""
-    if sys.platform != "win32":
-        return False, "fast start is currently available on Windows only"
-    if not _fast_start_enabled_in_settings():
-        return False, "fast start is disabled in Settings"
-    record = _read_fast_start_record()
-    if not record:
-        return False, "no verified bootstrap record exists for this Windows user"
-    if record.get("schema") != _FAST_START_RECORD_SCHEMA:
-        return False, "the verified bootstrap record is from an older app version"
-    try:
-        verified_at = float(record["verified_at"])
-    except (KeyError, TypeError, ValueError):
-        return False, "the verified bootstrap record has no usable timestamp"
-    age = time.time() - verified_at
-    if age < 0 or age > _FAST_START_RECORD_MAX_AGE_SECONDS:
-        return False, "the verified bootstrap record is older than seven days"
-    try:
-        if Path(record.get("app_path", "")).resolve() != SCRIPT_DIR.resolve():
-            return False, "the verified bootstrap record belongs to a different app copy"
-        if Path(record.get("venv_python", "")).resolve() != (SCRIPT_DIR / "env" / "Scripts" / "python.exe").resolve():
-            return False, "the verified bootstrap record belongs to a different virtual environment"
-    except Exception:
-        return False, "the verified bootstrap record contains invalid paths"
-    # Fast start is meant to remain useful after normal application updates.
-    # The environment health probe below is the authority for dependency
-    # readiness; invalidating the option on every Python source edit made it
-    # ineffective during routine development and app updates.
-    if not _fast_start_venv_is_healthy():
-        return False, "the portable virtual environment did not pass its health check"
-    return True, "recent verified bootstrap record and virtual environment health check passed"
 
 
 def _recover_stale_update_processes() -> int:
@@ -411,6 +258,50 @@ def _select_default_editor_for_compatibility() -> None:
         config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+def _clear_editor_config_after_new_environment() -> bool:
+    """Clear stale editor state only when a brand-new app environment exists.
+
+    ``src/gui_config.json`` is the app-local configuration and takes priority
+    over the per-user fallback.  A copied or freshly rebuilt ``env`` can leave
+    that file pointing at an editor that no longer matches the available
+    runtime, which makes switching editors appear to do nothing.
+
+    The fallback file is shared by app copies, so do not delete it wholesale.
+    Remove only its editor-specific keys so it cannot immediately restore the
+    stale Monaco selection after the local file is removed.  All other user
+    preferences remain intact.
+    """
+    local_config = SCRIPT_DIR / "src" / "gui_config.json"
+    removed_local = False
+
+    try:
+        if local_config.is_file():
+            local_config.unlink()
+            removed_local = True
+    except Exception:
+        # A read-only/package-managed copy should not prevent the environment
+        # from completing its setup.
+        pass
+
+    user_config = Path.home() / ".mcu_gui_config.json"
+    try:
+        if user_config.is_file():
+            data = json.loads(user_config.read_text(encoding="utf-8"))
+            shared = data.get("shared")
+            changed = False
+            if isinstance(shared, dict):
+                for key in ("editor_mode", "monaco_boot_pending"):
+                    if key in shared:
+                        shared.pop(key, None)
+                        changed = True
+            if changed:
+                user_config.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return removed_local
 
 def ensure_platformio_penv_with_hook(script_dir: Path = None) -> bool:
     """
@@ -1149,9 +1040,17 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
                     gui.set_status(f"Extracting {zip_dest.name}... {idx}/{total_files} files ({pct:.1f}%)")
                     gui.set_progress_percent(pct)
 
+        # Do not report the step as complete until the extracted store has
+        # passed the same readiness check used by the caller.  The live row is
+        # deliberately capped at 99% while files are being written, so the
+        # final UI update must be issued after extraction *and* verification.
+        core_ready = _platformio_core_is_populated(SCRIPT_DIR)
+        if not core_ready:
+            raise RuntimeError("Extracted PlatformIO core failed readiness verification")
         if gui:
             gui.clear_platformio_progress_block()
             gui.set_progress_percent(100)
+            gui.set_status("PlatformIO toolchains ready.")
         ok("Pre-built PlatformIO core extracted successfully.")
     except Exception as exc:
         _record_bootstrap_exception("Pre-built PlatformIO zip extraction failed")
@@ -1277,11 +1176,22 @@ class BootstrapGUI:
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        width = max(420, min(680, sw - 48))
-        height = max(360, min(500, sh - 72))
-        self.root.minsize(min(520, width), min(380, height))
-        x = max(0, (sw - width) // 2)
-        y = max(0, (sh - height) // 2)
+        # Size the setup window from the current Tk screen dimensions instead
+        # of using a small fixed size.  Tk reports dimensions in the display's
+        # effective DPI/scaling coordinate space, so this remains about 70%
+        # of the usable screen on high-DPI and low-end displays alike.
+        width = min(sw - 32, max(520, int(sw * 0.70)))
+        height = min(sh - 48, max(420, int(sh * 0.70)))
+        self.root.minsize(min(720, width), min(480, height))
+        # Apply the requested size first, let Tk account for the native frame
+        # and DPI rounding, then center using the realized window dimensions.
+        # This keeps the title-bar-inclusive window mathematically centered.
+        self.root.geometry(f"{width}x{height}")
+        self.root.update_idletasks()
+        actual_width = max(1, self.root.winfo_width())
+        actual_height = max(1, self.root.winfo_height())
+        x = max(0, (sw - actual_width) // 2)
+        y = max(0, (sh - actual_height) // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
         # Force window always on top for 1 second (1000ms) upon launch
@@ -1392,7 +1302,7 @@ class BootstrapGUI:
             cursor="hand2",
         ).pack(side=tk.RIGHT)
 
-        # Skip updates checkbox (for offline mode / fast startup)
+        # Skip updates checkbox (for offline mode)
         cfg_init = load_bootstrap_config()
         self._skip_updates_var = tk.BooleanVar(
             value=cfg_init.get("skip_updates", DEFAULT_SKIP_UPDATES)
@@ -1478,6 +1388,86 @@ class BootstrapGUI:
 
         # Allow closing without killing the main process immediately
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # The first geometry pass occurs before the native window is mapped.
+        # Recenter once Tk/Windows has created the real window so mixed-DPI
+        # scaling, title-bar borders, and the taskbar work area are included.
+        self.root.after_idle(self._center_bootstrap_window)
+
+    def _center_bootstrap_window(self):
+        """Center the mapped bootstrap window in its current monitor work area."""
+        try:
+            if getattr(self, "_closed", False):
+                return
+            if not self.root.winfo_viewable():
+                # Tk may run the idle callback just before Windows maps the
+                # top-level window. Retry after mapping instead of accepting
+                # a position based on an incomplete native rectangle.
+                self.root.after(50, self._center_bootstrap_window)
+                return
+            self.root.update_idletasks()
+            left = top = 0
+            right = self.root.winfo_screenwidth()
+            bottom = self.root.winfo_screenheight()
+
+            if sys.platform == "win32":
+                import ctypes
+                from ctypes import wintypes
+
+                class _Rect(ctypes.Structure):
+                    _fields_ = [
+                        ("left", wintypes.LONG),
+                        ("top", wintypes.LONG),
+                        ("right", wintypes.LONG),
+                        ("bottom", wintypes.LONG),
+                    ]
+
+                class _MonitorInfo(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.DWORD),
+                        ("rcMonitor", _Rect),
+                        ("rcWork", _Rect),
+                        ("dwFlags", wintypes.DWORD),
+                    ]
+
+                hwnd = wintypes.HWND(self.root.winfo_id())
+                monitor_from_window = ctypes.windll.user32.MonitorFromWindow
+                monitor_from_window.argtypes = [wintypes.HWND, wintypes.DWORD]
+                monitor_from_window.restype = wintypes.HANDLE
+                monitor = monitor_from_window(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+                if monitor:
+                    monitor_info = _MonitorInfo()
+                    monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+                    get_monitor_info = ctypes.windll.user32.GetMonitorInfoW
+                    get_monitor_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)]
+                    get_monitor_info.restype = wintypes.BOOL
+                    if get_monitor_info(monitor, ctypes.byref(monitor_info)):
+                        work = monitor_info.rcWork
+                        left, top = int(work.left), int(work.top)
+                        right, bottom = int(work.right), int(work.bottom)
+
+                window_rect = _Rect()
+                get_window_rect = ctypes.windll.user32.GetWindowRect
+                get_window_rect.argtypes = [wintypes.HWND, ctypes.POINTER(_Rect)]
+                get_window_rect.restype = wintypes.BOOL
+                if get_window_rect(hwnd, ctypes.byref(window_rect)):
+                    window_width = max(1, int(window_rect.right - window_rect.left))
+                    window_height = max(1, int(window_rect.bottom - window_rect.top))
+                else:
+                    window_width = max(1, self.root.winfo_width())
+                    window_height = max(1, self.root.winfo_height())
+            else:
+                window_width = max(1, self.root.winfo_width())
+                window_height = max(1, self.root.winfo_height())
+
+            work_width = max(1, right - left)
+            work_height = max(1, bottom - top)
+            x = left + max(0, (work_width - window_width) // 2)
+            y = top + max(0, (work_height - window_height) // 2)
+            self.root.geometry(f"+{x}+{y}")
+        except Exception:
+            # The initial geometry remains a safe fallback if a platform API
+            # is unavailable or the window is already closing.
+            pass
 
     def _unset_topmost(self):
         try:
@@ -7989,9 +7979,9 @@ def _repair_venv_in_place(venv_dir: Path, host_python: Path) -> bool:
 def _install_arduino_cli_machine_only() -> bool:
     """Install Arduino-CLI itself without prewarming per-user board cores.
 
-    This is used by the elevated first-run helper.  Board/core preparation is
-    intentionally left to the normal unelevated bootstrap so it lands in the
-    real user's profile even when UAC used different administrator credentials.
+    This remains available for the one-shot helper compatibility path.  The
+    normal launcher now elevates the complete bootstrap chain, so board/core
+    preparation can use the same Administrator token without nesting helpers.
     """
     if sys.platform != "win32":
         return True
@@ -8010,9 +8000,9 @@ def _install_arduino_cli_machine_only() -> bool:
 def _run_privileged_first_run_tasks() -> bool:
     """Run machine-level first-run installers under one elevated process.
 
-    The normal bootstrap remains unelevated so its venv, npm global packages,
-    caches and per-user tool state always belong to the signed-in user.  Only
-    components that may need machine-level rights are handled here.
+    This compatibility entry point remains for older launchers.  The current
+    VBS/Python launch chain elevates before bootstrap starts, so normal setup
+    already runs under the same token and does not need this helper.
     """
     global _gui
     if sys.platform != "win32":
@@ -8032,8 +8022,8 @@ def _run_privileged_first_run_tasks() -> bool:
     critical_ok = True
 
     # Install the complete Windows bundle once while this helper owns the
-    # elevated token. Arduino CLI is kept machine-only here; board/core setup
-    # remains in the normal user process below.
+    # elevated token. Board/core setup is handled by the main elevated
+    # bootstrap after this compatibility helper returns.
     installer_results = _ensure_bundled_windows_installers(
         machine_only_arduino=True
     )
@@ -8055,10 +8045,10 @@ def _run_privileged_first_run_tasks() -> bool:
 def _request_first_run_privileged_setup(gui: Optional[BootstrapGUI] = None) -> bool:
     """Request at most one UAC consent prompt for first-run system installers.
 
-    Windows cannot be silently elevated; one consent/credential prompt is still
-    required.  Keeping the main bootstrap unelevated avoids creating the venv,
-    npm globals, and user caches under an administrator account on standard-user
-    PCs.
+    The normal launcher requests elevation before bootstrap starts.  This
+    function remains defensive for direct bootstrap invocation and avoids
+    spawning a second elevated helper when the current process already owns
+    the Administrator token.
     """
     if sys.platform != "win32":
         return True
@@ -8365,15 +8355,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                             gui.root.after(0, lambda: gui.log_ok("Proceeding with portable Python."))
 
             if venv_created:
-                try:
-                    reset_script = SCRIPT_DIR / "src" / "modules" / "reset_editor.py"
-                    if reset_script.exists():
-                        subprocess.run(
-                            [sys.executable, str(reset_script)],
-                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                        )
-                except Exception:
-                    pass
+                if _clear_editor_config_after_new_environment():
+                    gui.root.after(0, lambda: gui.log_ok(
+                        "Fresh env detected; cleared stale editor configuration."
+                    ))
 
                 if sys.platform == "win32":
                     try:
@@ -8574,7 +8559,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         def _launch_done(proc=proc, gui_log=gui_log):
             if proc is None:
-                _clear_fast_start_record()
                 gui.log_fail("Could not start the MCU Uploader IDE process.")
                 gui.stop_spinner("GUI target missing", ok=False)
                 gui.show_error("MCU Uploader IDE by Naph — Error",
@@ -8604,7 +8588,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                     return
 
                 # Read crash log
-                _clear_fast_start_record()
                 try:
                     crash_text = gui_log.read_text(encoding="utf-8", errors="replace").strip() if gui_log else ""
                 except Exception:
@@ -8636,7 +8619,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             # GUI alive — clean up empty log and close bootstrap window
             _record_bootstrap_log(
                 "FINISH",
-                "Main GUI started successfully; it will save the verified fast-start record after initialization completes.",
+                "Main GUI started successfully after mandatory Bootstrap verification.",
             )
             try:
                 if gui_log and gui_log.exists() and gui_log.stat().st_size == 0:
@@ -8869,29 +8852,6 @@ def main():
         except Exception:
             pass
         return
-
-    # Fast start is deliberately opt-in and must prove that this exact app
-    # copy passed a recent full bootstrap. It still performs one bounded venv
-    # import probe; any doubt falls back to the visible full bootstrap.
-    fast_start_ok, fast_start_reason = _fast_start_record_is_good()
-    if fast_start_ok:
-        _record_bootstrap_log("FAST_START", f"Skipping visible bootstrap: {fast_start_reason}.")
-        proc, gui_log = _spawn_main_gui()
-        if proc is not None:
-            time.sleep(2.0)
-            if proc.poll() is None:
-                _record_bootstrap_log("FINISH", "Fast-start handoff to the main GUI completed.")
-                return
-        _clear_fast_start_record()
-        _record_bootstrap_log(
-            "WARN",
-            "Fast-start GUI handoff did not remain healthy; record cleared and full bootstrap will run.",
-        )
-        _BOOTSTRAP_STARTUP_NOTE = "Fast start was rejected because the GUI did not stay open; full verification is running."
-    elif _fast_start_enabled_in_settings():
-        _clear_fast_start_record()
-        _BOOTSTRAP_STARTUP_NOTE = f"Fast start was not used: {fast_start_reason}; full verification is running."
-        _record_bootstrap_log("FAST_START", _BOOTSTRAP_STARTUP_NOTE)
 
     # ── Launch Bootstrap GUI Window ─────────────────────────────────
     # Bootstrap setup is mandatory and runs its verification checks before launching the main GUI.

@@ -659,6 +659,42 @@
   <script src="bundle.js"></script>
   <script>
     (function () {
+      // The page loads the project once at DOMContentLoaded, while the host
+      // may request a refresh at the same time when the project is attached.
+      // Coalesce host-triggered reloads so two async loads cannot materialize
+      // the same file twice in the tab bar.
+      let projectLoadInFlight = null;
+      const originalLoadProject = window.loadProject;
+      window.safeLoadProject = function () {
+        if (projectLoadInFlight) return projectLoadInFlight;
+        if (typeof originalLoadProject !== 'function') return Promise.resolve();
+        projectLoadInFlight = Promise.resolve(originalLoadProject())
+          .finally(() => { projectLoadInFlight = null; });
+        return projectLoadInFlight;
+      };
+
+      function dedupeProjectTabs() {
+        const seen = new Set();
+        document.querySelectorAll('#tab-bar .tab').forEach((tab) => {
+          const rawKey = tab._filePath || tab.getAttribute('data-file-path') || tab.id;
+          const key = String(rawKey || '').replace(/\\/g, '/').toLowerCase();
+          if (!key || !seen.has(key)) {
+            if (key) seen.add(key);
+            return;
+          }
+          if (tab.classList.contains('active')) {
+            const first = document.querySelector('#tab-bar .tab');
+            if (first && first !== tab) first.click();
+          }
+          tab.remove();
+        });
+      }
+
+      const projectTabBar = document.getElementById('tab-bar');
+      if (projectTabBar) {
+        new MutationObserver(dedupeProjectTabs).observe(projectTabBar, { childList: true });
+      }
+
       const bar = document.getElementById('detached-action-bar');
       window.setDetachedActionBar = function (visible) {
         bar.classList.toggle('visible', !!visible);
@@ -723,6 +759,7 @@
             } else {
               tabs.forEach((tab) => tab.setAttribute('draggable', 'true'));
             }
+            dedupeProjectTabs();
             return fileList;
           })
           .catch((error) => {

@@ -25,7 +25,8 @@ hardware safety.
 - `src/modules/bootstrap.py` manages private Python runtime auto-heal (`_heal_private_python_runtime()`),
   virtual environments (`env`), PlatformIO toolchains, Arduino CLI, Node.js LTS, and OpenCode AI Assistant.
 - PlatformIO frameworks and toolchains are shared, but each exact board keeps a
-  canonical project-local workspace under `.pio/boards/<board-key>/`.
+  canonical project-local workspace under
+  `.mcu_flasher_build_cache/boards/<board-key>/`.
 - Hard and Soft Reset reuse the same exact-board reset project. Switching
   A → B → A must return to A's existing incremental objects and binaries.
 - Ordinary compiler/linker failures preserve incremental state. Only explicit
@@ -40,10 +41,10 @@ Keep Windows Explorer focused on the user's real project:
 - Keep user-owned source and content visible and writable. Supported source
   extensions include `.ino`, `.cpp`, `.c`, `.h`, `.hpp`, and `.txt`. Unknown
   files and user directories are user-owned unless provenance proves otherwise.
-- Hide only known app-generated paths such as `.pio/`, `src/_python/` (private Python runtime),
-  staged `src/`, generated `platformio.ini`, exact-board archives, legacy compiled caches,
-  cache/state JSON files, `.mcu_ai_edits/`, `.opencodeignore`, `.pio_bootstrap_first_use_*`,
-  and generated `AGENTS.md`.
+- Hide the single `.mcu_flasher_build_cache/` project container, which holds
+  staged `src/`, generated `platformio.ini`, `.pio/`, exact-board archives,
+  cache/state JSON files, and AI recovery data. Legacy paths are migrated only
+  when their ownership is proven.
 - Do not hide or delete collision-prone legacy names such as `SKILL.md`,
   `READ-FIRST.md`, `temp.json`, `here.txt`, or `logs/` unless an app-generated
   content signature or other provenance check confirms ownership.

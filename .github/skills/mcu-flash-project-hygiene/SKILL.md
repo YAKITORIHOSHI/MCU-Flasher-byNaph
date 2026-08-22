@@ -14,7 +14,10 @@ Classify paths before changing attributes or deleting anything:
 - Treat root sketch sources and user material as user-owned. This includes
   `.ino`, `.cpp`, `.c`, `.h`, `.hpp`, `.txt`, documentation, assets, and
   unrecognized files or directories. Keep them visible and writable.
-- Treat only known app-created paths as generated. Examples include `.pio/`,
+- Treat only known app-created paths as generated. The preferred project-level
+  container is `.mcu_flasher_build_cache/`; it contains the staged `src/`,
+  generated `platformio.ini`, `.pio/` board workspaces, metadata, and AI
+  recovery state. Legacy examples include `.pio/`,
   `src/_python/` (private Python runtime), `src/env/` (virtual environment),
   `src/`, `platformio.ini`, `build_artifacts/`, `compiled_builds/`,
   `.mcu_ai_edits/`, app cache JSON files, `.opencodeignore`, `.pio_bootstrap_first_use_*`,
@@ -44,8 +47,9 @@ Classify paths before changing attributes or deleting anything:
 
 ## Keep cache and Clean behavior safe
 
-- Keep each exact board under its canonical `.pio/boards/<board-key>/`
-  workspace. Do not restore family-bucketed binaries into an exact-board build.
+- Keep each exact board under its canonical
+  `.mcu_flasher_build_cache/boards/<board-key>/` workspace. Do not restore
+  family-bucketed binaries into an exact-board build.
 - For remote/UNC network projects, workspaces are isolated on local fast storage
   (under `remote_workspaces/`) to prevent SMB signature file errors and network latency,
   and are cleanly registered for manual Clean operations.

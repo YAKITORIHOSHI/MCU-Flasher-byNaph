@@ -58,7 +58,7 @@ _configure_windows_dpi_awareness()
 
 # Ensure workspace 'env' site-packages is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
-AI_STARTUP_PATCH_VERSION = "v21-readiness-gated"
+AI_STARTUP_PATCH_VERSION = "v22-readiness-no-fallback"
 ENV_DIR = SCRIPT_DIR / "env"
 ENV_SITE_PACKAGES = ENV_DIR / "Lib" / "site-packages"
 if ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
@@ -340,18 +340,34 @@ class TerminalServer:
         self.pty = None
         self.loop = None
         self.is_running = True
+        self._pty_lock = threading.RLock()
+        self._restart_count = 0
+
+    def _supervised_opencode_command(self, target_dir):
+        """Run OpenCode under a persistent CMD supervisor.
+
+        OpenCode's ``/exit`` exits the child CLI, not the container.  The
+        infinite CMD loop immediately launches a fresh session in the same
+        PTY after that command or any unexpected child termination.
+        """
+        cmd_to_run = self.command or find_opencode_cli() or "opencode"
+        if " " in cmd_to_run or os.path.exists(cmd_to_run):
+            invocation = f'"{cmd_to_run}"'
+        else:
+            invocation = cmd_to_run
+        return (
+            f'cd /d "{target_dir}" && '
+            f'set PATH=%APPDATA%\\npm;%PATH% && cls && '
+            f'for /L %i in (0,0,1) do ( {invocation} & '
+            f'timeout /t 1 /nobreak >nul )\r\n'
+        )
 
     async def ws_handler(self, websocket):
         target_dir = os.path.abspath(self.target_dir)
         if PtyProcess:
             try:
                 self.pty = PtyProcess.spawn("cmd.exe", dimensions=(30, 120))
-                cmd_to_run = self.command or find_opencode_cli() or "opencode"
-                if " " in cmd_to_run or os.path.exists(cmd_to_run):
-                    exec_cmd = f'cd /d "{target_dir}" && set PATH=%APPDATA%\\npm;%PATH% && cls && "{cmd_to_run}"\r\n'
-                else:
-                    exec_cmd = f'cd /d "{target_dir}" && set PATH=%APPDATA%\\npm;%PATH% && cls && {cmd_to_run}\r\n'
-                self.pty.write(exec_cmd)
+                self.pty.write(self._supervised_opencode_command(target_dir))
             except Exception as e:
                 print(f"[ERROR] Failed to spawn PTY process: {e}")
 
@@ -364,6 +380,47 @@ class TerminalServer:
         output_bytes = [0]
         output_chunks = [0]
         webview_connected = [False]
+        input_line = [""]
+        input_escape = [False]
+
+        def input_requests_exit(raw_data):
+            """Detect a complete user-entered /exit line without swallowing it."""
+            requested = False
+            for char in str(raw_data or ""):
+                if input_escape[0]:
+                    # Ignore cursor/function-key escape sequences while
+                    # reconstructing the current command line.
+                    if char.isalpha() or char == "~":
+                        input_escape[0] = False
+                    continue
+                if char == "\x1b":
+                    input_escape[0] = True
+                    continue
+                if char in ("\r", "\n"):
+                    if input_line[0].strip().casefold() == "/exit":
+                        requested = True
+                    input_line[0] = ""
+                    continue
+                if char in ("\x08", "\x7f"):
+                    input_line[0] = input_line[0][:-1]
+                    continue
+                if char == "\x03":
+                    input_line[0] = ""
+                    continue
+                if char.isprintable():
+                    input_line[0] = (input_line[0] + char)[-512:]
+            return requested
+
+        def notify_container_restart():
+            notice = (
+                "\r\n[MCU Flasher] /exit detected. Restarting OpenCode "
+                "inside the protected AI container…\r\n"
+            )
+            if self.loop and self.loop.is_running():
+                try:
+                    asyncio.run_coroutine_threadsafe(websocket.send(notice), self.loop)
+                except Exception:
+                    pass
 
         def write_ready_marker(reason="ready"):
             """Publish readiness exactly once for the embedding GUI.
@@ -421,7 +478,8 @@ class TerminalServer:
             WebView2 and the websocket often connect before OpenCode has loaded
             its configuration and rendered the interactive prompt. Require a
             connected client, meaningful PTY output, a minimum startup interval,
-            and a quiet period. The long fallback still requires a settled PTY.
+            and a quiet period. There is no timeout-based ready state: a cold
+            first run remains loading until this actual readiness condition is met.
             """
             while self.is_running and not ready_marker_written[0]:
                 now = time.time()
@@ -439,14 +497,6 @@ class TerminalServer:
                 ):
                     write_ready_marker("opencode-ready")
                     return
-                if (
-                    elapsed >= 30.0
-                    and webview_connected[0]
-                    and output_seen[0]
-                    and quiet_for >= 4.0
-                ):
-                    write_ready_marker("startup-fallback-ready")
-                    return
                 time.sleep(0.15)
 
         if self.pty:
@@ -463,11 +513,23 @@ class TerminalServer:
                     # after PTY output settles.
                     webview_connected[0] = True
                 elif self.pty and msg.get('type') == 'input':
-                    self.pty.write(msg['data'])
+                    input_data = msg.get('data', '')
+                    if input_requests_exit(input_data):
+                        # Let OpenCode receive /exit normally.  The CMD
+                        # supervisor above observes its termination and starts
+                        # the next session in the same container.
+                        notify_container_restart()
+                    with self._pty_lock:
+                        current_pty = self.pty
+                    if current_pty:
+                        current_pty.write(input_data)
                 elif self.pty and msg.get('type') == 'resize':
                     cols = msg.get('cols', 120)
                     rows = msg.get('rows', 30)
-                    self.pty.setwinsize(rows, cols)
+                    with self._pty_lock:
+                        current_pty = self.pty
+                    if current_pty:
+                        current_pty.setwinsize(rows, cols)
         except Exception:
             pass
         finally:
@@ -504,12 +566,14 @@ class TerminalServer:
 
     def stop(self):
         self.is_running = False
-        if self.pty:
+        with self._pty_lock:
+            current_pty = self.pty
+            self.pty = None
+        if current_pty:
             try:
-                self.pty.close()
+                current_pty.close()
             except Exception:
                 pass
-            self.pty = None
 
 
 def find_free_pair(start_port=8765):
@@ -674,6 +738,11 @@ def run_standalone_ai(target_directory=None):
             width=1040,
             height=680,
             resizable=True,
+            # The main GUI embeds this native window after WebView2 creates
+            # it.  Keep it hidden during that short handoff so it cannot flash
+            # as a separate window on the desktop.
+            hidden=True,
+            focus=False,
             background_color="#0c0d10"
         )
         try:
@@ -1006,6 +1075,7 @@ class AIController:
             ignore_dirs = {
                 ".git", ".vscode", "env", "node_modules", "__pycache__",
                 ".platformio", "build", ".pio", "src",
+                ".mcu_flasher_build_cache",
             }
             for root_path, dirs, files in os.walk(target_dir):
                 dirs[:] = [
@@ -1159,7 +1229,8 @@ class AIController:
     IGNORED_SYSTEM_FILENAMES = {
         "agents.md", "opencode.md", "read-first.md", ".read-first.md",
         "skill.md", ".skill.md", ".opencodeignore", ".ignore",
-        "platformio.ini", ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
+        "platformio.ini", ".mcu_gui_cache.json", ".mcu_gui_compat_cache.json",
+        ".mcu_flash_syntax_errors.json",
         ".mcu_flash_tab_order.json", ".ai_edit_signal", ".ai_ready_signal"
     }
 

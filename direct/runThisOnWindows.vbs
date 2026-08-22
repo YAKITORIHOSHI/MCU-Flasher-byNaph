@@ -3,18 +3,67 @@
 '  Downloads Python if needed, installs deps,
 '  and launches the GUI — fully unattended.
 '
-'  Starts normally so setup can always display. Installers request
-'  Administrator permission individually when it is actually needed.
+'  Starts with Administrator permission so environment, junction,
+'  driver, and toolchain setup use one consistent Windows token.
 ' ─────────────────────────────────────────────
 
 Dim fso, shell, scriptDir
 Set fso   = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 
-' Normal startup is intentionally non-elevated. Python, the virtual
-' environment, PlatformIO, Arduino CLI, and WebView2 support per-user
-' installation on Windows 10/11. Individual installers may request UAC only
-' when a system-wide driver or component genuinely needs it.
+' ── Require one consistent Administrator token for the complete app chain ──
+' If this VBS is already running elevated (for example from a shortcut with
+' "Run as administrator" enabled), continue directly without another prompt.
+' Otherwise relaunch this exact script through the Windows runas verb.
+Dim alreadyElevated, elevatedArgument, argumentValue
+alreadyElevated = IsRunningElevated()
+elevatedArgument = False
+On Error Resume Next
+For Each argumentValue In WScript.Arguments
+    If LCase(Trim(CStr(argumentValue))) = "/elevated" Or _
+       LCase(Trim(CStr(argumentValue))) = "--elevated" Then
+        elevatedArgument = True
+        Exit For
+    End If
+Next
+Err.Clear
+On Error GoTo 0
+
+If (Not alreadyElevated) And (Not elevatedArgument) Then
+    Dim shellApp, elevateArgs, launcherRoot, nativeLauncher
+    launcherRoot = fso.GetParentFolderName(WScript.ScriptFullName)
+    If Not fso.FolderExists(launcherRoot & "\src\modules") Then
+        launcherRoot = fso.GetParentFolderName(launcherRoot)
+    End If
+    nativeLauncher = launcherRoot & "\MCU_Flasher.exe"
+
+    Set shellApp = CreateObject("Shell.Application")
+    ' A VBS file cannot carry the application's icon.  Elevating through the
+    ' native launcher makes Windows show MCU_Flasher.exe's real icon in
+    ' the UAC consent prompt, while the elevated launcher still starts this
+    ' same script and preserves the existing bootstrap path.
+    If fso.FileExists(nativeLauncher) Then
+        elevateArgs = "/vbs-elevated"
+        On Error Resume Next
+        shellApp.ShellExecute nativeLauncher, elevateArgs, launcherRoot, "runas", 1
+    Else
+        elevateArgs = Chr(34) & WScript.ScriptFullName & Chr(34) & " /elevated"
+        On Error Resume Next
+        shellApp.ShellExecute "wscript.exe", elevateArgs, fso.GetParentFolderName(WScript.ScriptFullName), "runas", 1
+    End If
+    On Error Resume Next
+    If shellApp Is Nothing Then
+        Err.Raise vbObjectError + 1001, , "Shell.Application is unavailable"
+    End If
+    If Err.Number <> 0 Then
+        MsgBox "MCU Uploader IDE could not obtain Administrator permission." & vbCrLf & vbCrLf & _
+               "Please right-click the launcher and choose 'Run as administrator'.", _
+               vbCritical, "MCU Uploader IDE — Administrator Permission Required"
+        Err.Clear
+    End If
+    On Error GoTo 0
+    WScript.Quit 0
+End If
 
 
 ' ── Locate the project root directory (supports running from direct\ or project root) ──
@@ -346,6 +395,20 @@ On Error GoTo 0
 ' ═════════════════════════════════════════════
 '  HELPERS
 ' ═════════════════════════════════════════════
+
+' ── Return True when this wscript.exe already has an elevated token ──
+Function IsRunningElevated()
+    IsRunningElevated = False
+    Dim exitCode
+    ' fltmc.exe requires an elevated token and is present on supported Windows
+    ' installations. It avoids PowerShell policy/profile differences that can
+    ' make a split admin token look elevated when this VBS is not.
+    On Error Resume Next
+    exitCode = shell.Run("cmd.exe /d /c fltmc.exe >nul 2>&1", 0, True)
+    If Err.Number = 0 And exitCode = 0 Then IsRunningElevated = True
+    Err.Clear
+    On Error GoTo 0
+End Function
 
 ' ── Detect a self-referential/corrupt venv before executing it ──
 Function VenvConfigNeedsRepair(venvDir)

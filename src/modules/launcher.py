@@ -26,6 +26,71 @@ sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 
+def _is_process_elevated() -> bool:
+    """Return True when this launcher already has an elevated Windows token."""
+    if sys.platform != "win32":
+        return True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _ensure_elevated_launcher() -> None:
+    """Keep direct launcher.py starts consistent with the VBS launch path.
+
+    The VBS launcher normally performs this handoff first.  This second guard
+    covers direct development shortcuts, file associations, and packaged
+    launchers that invoke launcher.py without going through the VBS file.
+    Already-elevated launches are left alone, so users with an Administrator
+    shortcut do not receive a second elevation loop.
+    """
+    if sys.platform != "win32":
+        return
+    if _is_process_elevated() or "--elevated-launch" in sys.argv:
+        return
+
+    import subprocess
+
+    args = [str(Path(__file__).resolve()), *sys.argv[1:], "--elevated-launch"]
+    parameters = subprocess.list2cmdline(args)
+    try:
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            str(Path(sys.executable).resolve()),
+            parameters,
+            str(SCRIPT_DIR),
+            1,
+        )
+    except Exception as error:
+        result = 0
+        launch_error = error
+    else:
+        launch_error = None
+
+    if int(result or 0) > 32:
+        raise SystemExit(0)
+
+    detail = f"\n\nDetails: {launch_error}" if launch_error else ""
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "MCU Flasher requires Administrator permission for its environment, "
+            "junction, driver, and toolchain setup.\n\n"
+            "Please approve the Windows prompt and start it again."
+            + detail,
+            "MCU Flasher by Naph — Administrator Permission Required",
+            0x10,
+        )
+    except Exception:
+        pass
+    raise SystemExit(1)
+
+
+_ensure_elevated_launcher()
+
+
 def _verify_storage_drive_type():
     """Ensure MCU Flasher is running from an internal fixed drive (SSD/HDD), not a USB flash drive or removable media."""
     if sys.platform != "win32":
