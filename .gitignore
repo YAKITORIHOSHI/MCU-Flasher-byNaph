@@ -5,9 +5,8 @@
 .piolibdeps/
 .platformio-mcu-gui/
 src/libs/.platformio-mcu-gui/
-env/*
-!env/Scripts/
-!env/Scripts/python.exe
+env/
+src/env/
 env.platformio.cache/
 **/.platformio/
 **/platformio/cache/

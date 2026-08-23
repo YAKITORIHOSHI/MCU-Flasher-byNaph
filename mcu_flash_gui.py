@@ -1972,17 +1972,19 @@ def is_opencode_installed() -> bool:
 # pywebview is optional and can pull in a sizeable native backend. Keep it out
 # of the default Tkinter startup path; Monaco loads it explicitly in main().
 webview = None
+_WEBVIEW_IMPORT_ERROR = ""
 
 
 def _load_webview():
-    global webview
+    global webview, _WEBVIEW_IMPORT_ERROR
     if webview is None:
         try:
             # pyrefly: ignore [missing-import]
             import webview as _webview
             webview = _webview
-        except Exception:
+        except Exception as exc:
             webview = False
+            _WEBVIEW_IMPORT_ERROR = str(exc).strip() or exc.__class__.__name__
     return webview if webview else None
 
 # Unique title used to locate the pywebview-hosted editor's native OS
@@ -5718,9 +5720,9 @@ class Theme:
 LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
 GUI_CONFIG_FILE = LOCAL_GUI_CONFIG if (SCRIPT_DIR / "src").exists() else (Path.home() / ".mcu_gui_config.json")
 
-# Resolved at startup in main() before MCUUploadGUI is constructed. Lets the
-# crash-safety revert logic (Monaco -> Default) apply even though the config
-# file itself still says "monaco" until the user is warned/confirms again.
+# Resolved at startup in main() before MCUUploadGUI is constructed. It lets
+# startup choose a safe runtime editor independently of the saved preference
+# when native Monaco dependencies are unavailable or a previous boot failed.
 _RESOLVED_EDITOR_MODE = None
 
 # ── Per-instance config key ─────────────────────────────────────────────────
@@ -5843,14 +5845,24 @@ def _load_raw_config() -> dict:
     now = time.time()
     if _CONFIG_MEM_CACHE and (now - _CONFIG_MEM_MTIME < 2.0):
         return _CONFIG_MEM_CACHE
-    for target in (LOCAL_GUI_CONFIG, Path.home() / ".mcu_gui_config.json"):
-        if target.exists() and target.stat().st_size > 0:
-            try:
-                _CONFIG_MEM_CACHE = json.loads(target.read_text(encoding="utf-8"))
-                _CONFIG_MEM_MTIME = now
-                return _CONFIG_MEM_CACHE
-            except Exception:
-                pass
+    # Both locations are retained for compatibility with portable copies and
+    # older installs.  The per-user file is authoritative whenever it is
+    # valid: an app-local file can be copied from another device or rewritten
+    # by an older Bootstrap pass and otherwise hide the user's editor choice.
+    candidates = []
+    user_config = Path.home() / ".mcu_gui_config.json"
+    for target in (user_config, LOCAL_GUI_CONFIG):
+        try:
+            if target.exists() and target.stat().st_size > 0:
+                data = json.loads(target.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    candidates.append((target == user_config, target.stat().st_mtime_ns, data))
+        except Exception:
+            pass
+    if candidates:
+        _CONFIG_MEM_CACHE = max(candidates, key=lambda item: (item[0], item[1]))[2]
+        _CONFIG_MEM_MTIME = now
+        return _CONFIG_MEM_CACHE
     _CONFIG_MEM_CACHE = {}
     _CONFIG_MEM_MTIME = now
     return {}
@@ -7512,6 +7524,22 @@ class MCUUploadGUI:
         self._shell_terminal_pump_after_id = None
         self._shell_prewarm_after_id = None
         self._shells_prewarmed = False
+        # The visible Project Terminal is hosted by the same isolated
+        # pywebview + xterm.js + pywinpty child process used by OpenCode.  Keep
+        # the older Tk PTY state available as a runtime fallback for machines
+        # where WebView2 or native window embedding is unavailable.
+        self._project_terminal_proc = None
+        self._project_terminal_port = None
+        self._project_terminal_port_file = None
+        self._project_terminal_hwnd = None
+        self._project_terminal_embedded = False
+        self._project_terminal_launching = False
+        self._project_terminal_fallback = False
+        self._project_terminal_fallback_revealed = False
+        self._project_terminal_embed_attempts = 0
+        self._project_terminal_status_job = None
+        self._project_terminal_pending_action = None
+        self._project_terminal_page_ready = False
         # Cross-thread UI callbacks are queued here and executed only by Tk's
         # main thread.  Background workers must use _post_ui() instead of
         # calling root.after()/widget methods themselves.
@@ -7717,6 +7745,11 @@ class MCUUploadGUI:
 
         self._first_run = False
         self._deferred_bg_done = False
+        self._deferred_bg_services_started = False
+        self._deferred_bg_settle_until = 0.0
+        self._deferred_bg_finish_job = None
+        self._startup_terminal_deadline = 0.0
+        self._startup_terminal_timed_out = False
 
         # Do not run the selected-project scan from inside _build_ui().  Wait
         # until construction has fully returned and Tk is processing events.
@@ -7868,19 +7901,31 @@ class MCUUploadGUI:
             return
 
         if getattr(self, "editor_mode", "default") == "monaco":
-            if (getattr(self, "_editor_embedded", False)
-                    and getattr(self, "_editor_content_loaded", False)):
-                self._mark_startup_ready("Monaco Editor ready")
-                return
-            if getattr(self, "_editor_fallback_ready", False):
-                self._mark_startup_ready("Monaco Editor opened separately")
+            editor_ready = (
+                getattr(self, "_editor_embedded", False)
+                and getattr(self, "_editor_content_loaded", False)
+            )
+            fallback_ready = getattr(self, "_editor_fallback_ready", False)
+            if editor_ready or fallback_ready:
+                if getattr(self, "_deferred_bg_done", False):
+                    self._mark_startup_ready("Application ready")
+                    return
+                self._set_startup_overlay_message(
+                    "⚡ MCU Flasher by Naph",
+                    "Editor opened — finishing terminal and device startup…",
+                )
+            else:
+                self._set_startup_overlay_message(
+                    "⚡ MCU Flasher by Naph", "Loading Monaco Editor…"
+                )
+        elif getattr(self, "_default_editor_ready", False):
+            if getattr(self, "_deferred_bg_done", False):
+                self._mark_startup_ready("Application ready")
                 return
             self._set_startup_overlay_message(
-                "⚡ MCU Flasher by Naph", "Loading Monaco Editor…"
+                "⚡ MCU Flasher by Naph",
+                "Editor ready — finishing terminal and device startup…",
             )
-        elif getattr(self, "_default_editor_ready", False):
-            self._mark_startup_ready("Code editor ready")
-            return
         else:
             self._set_startup_overlay_message(
                 "⚡ MCU Flasher by Naph", "Loading project files…"
@@ -7896,6 +7941,18 @@ class MCUUploadGUI:
     def _mark_startup_ready(self, reason=""):
         """Dismiss the startup cover after the active editor is actually usable."""
         if getattr(self, "_startup_ready", False):
+            return
+        if not getattr(self, "_deferred_bg_done", False):
+            # Editor callbacks can arrive before the terminal, device checks,
+            # and other final startup services have returned. Remember that the
+            # editor is ready, but keep the cover in place until the bottom-up
+            # startup pass has completed.
+            self._startup_editor_ready = True
+            self._startup_editor_ready_reason = str(reason or "Editor ready")
+            self._set_startup_overlay_message(
+                "⚡ MCU Flasher by Naph",
+                "Editor ready — finishing terminal and device startup…",
+            )
             return
         self._startup_ready = True
         self._startup_ready_reason = str(reason or "Ready")
@@ -7947,9 +8004,10 @@ class MCUUploadGUI:
         """Asynchronously initialize secondary background services (serial port probing,
         board state checks, background syntax checker, serial monitor connection) AFTER
         the editor UI is fully rendered and interactive."""
-        if getattr(self, "_deferred_bg_done", False):
+        if (getattr(self, "_deferred_bg_done", False)
+                or getattr(self, "_deferred_bg_started", False)):
             return
-        self._deferred_bg_done = True
+        self._deferred_bg_started = True
         try:
             # Dynamic board matching is intentionally deferred until the main
             # window has painted. A cached catalog is already available when
@@ -7969,8 +8027,78 @@ class MCUUploadGUI:
             self._schedule_auto_start_monitor(0)
             self._start_port_polling()
             self._start_background_syntax_thread()
+            # Start the terminal during the real startup pass as well. The
+            # terminal must not wait for a manual pwsh/cmd tab switch before
+            # it begins loading, otherwise the main loading cover can report
+            # readiness while the terminal is still completely cold.
+            self._startup_terminal_required = True
+            self._startup_terminal_deadline = time.monotonic() + 45.0
+            if not self._ensure_project_terminal_webview():
+                if getattr(self, "_project_terminal_fallback", False):
+                    for _kind in ("pwsh", "cmd"):
+                        self._shell_start(_kind)
         except Exception as e:
             print(f"[MCU Flasher] Error in deferred background init: {e}")
+        finally:
+            # Starting worker threads is not the same as being ready. Keep the
+            # startup cover in place for one settling pass so their first UI
+            # callbacks, port scan, monitor startup, and syntax initialization
+            # can complete before readiness is reported.
+            self._deferred_bg_services_started = True
+            self._deferred_bg_settle_until = time.monotonic() + 1.5
+            self._schedule_deferred_background_completion_check()
+
+    def _schedule_deferred_background_completion_check(self):
+        if getattr(self, "_deferred_bg_done", False):
+            return
+        try:
+            self._deferred_bg_finish_job = self.root.after(
+                100, self._finish_deferred_background_init
+            )
+        except Exception:
+            self._deferred_bg_finish_job = None
+
+    def _finish_deferred_background_init(self):
+        """Release startup only after the initial background pass has settled."""
+        self._deferred_bg_finish_job = None
+        if getattr(self, "_deferred_bg_done", False):
+            return
+        if not getattr(self, "_deferred_bg_services_started", False):
+            self._schedule_deferred_background_completion_check()
+            return
+        if time.monotonic() < getattr(self, "_deferred_bg_settle_until", 0.0):
+            self._schedule_deferred_background_completion_check()
+            return
+        self._deferred_bg_done = True
+        try:
+            self._set_status(
+                "Application ready — terminal and background services initialized",
+                Theme.CYAN,
+            )
+        except Exception:
+            pass
+        self._poll_startup_readiness()
+
+    def _startup_terminal_ready(self):
+        """Return true only after the terminal has a usable native/fallback shell."""
+        if getattr(self, "_project_terminal_fallback", False):
+            with self._shell_state_lock:
+                session = self._shell_sessions.get(self._shell_active_kind)
+                if not session:
+                    return False
+                if session.get("ready"):
+                    return True
+                # A deliberate compatibility error is a completed attempt;
+                # do not leave the entire application covered forever when a
+                # machine has no PTY support.
+                return bool(
+                    not session.get("running")
+                    and "[MCU Flasher]" in str(session.get("output", ""))
+                )
+        return bool(
+            getattr(self, "_project_terminal_embedded", False)
+            and getattr(self, "_project_terminal_page_ready", False)
+        )
 
     def _get_sketch_display_name(self) -> str:
         if hasattr(self, "sketch_dir_path") and self.sketch_dir_path:
@@ -8398,11 +8526,15 @@ class MCUUploadGUI:
             style.configure("Bottom.TNotebook.Tab",
                             background=Theme.BG_MID,
                             foreground=Theme.TEXT_DIM,
-                            padding=[16, 6],
+                            # Keep the selected and unselected tabs on the same
+                            # geometry.  The previous larger padding made the
+                            # notebook look oversized, while ttk's selected
+                            # element made the active tab appear to shrink.
+                            padding=[12, 5],
                             font=("Segoe UI", 9, "bold"))
             style.map("Bottom.TNotebook.Tab",
                       background=[("selected", Theme.BG_HOVER), ("active", Theme.BG_LIGHT)],
-                      foreground=[("selected", Theme.TEXT_BRIGHT), ("active", Theme.TEXT)])
+                      foreground=[("selected", Theme.CYAN), ("active", Theme.TEXT)])
         except Exception:
             pass
 
@@ -9104,28 +9236,6 @@ class MCUUploadGUI:
         terminal_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
         self._shell_terminal_frame = terminal_frame
 
-        terminal_header = tk.Frame(terminal_frame, bg=Theme.BG_MID, pady=7, padx=12)
-        terminal_header.pack(fill=tk.X)
-        self.lbl_shell_terminal_title = tk.Label(
-            terminal_header, text="⌘ PROJECT TERMINAL",
-            font=self.monitor_heading_font, fg=Theme.CYAN, bg=Theme.BG_MID,
-        )
-        self.lbl_shell_terminal_title.pack(side=tk.LEFT)
-        self.lbl_shell_terminal_status = tk.Label(
-            terminal_header, text="Click this tab to start a shell",
-            font=self.font_mono_sm, fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
-            anchor=tk.W,
-        )
-        self.lbl_shell_terminal_status.pack(side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True)
-
-        self.btn_shell_restart = self._make_btn(
-            terminal_header, "↻ Restart", self._shell_restart,
-            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_mono_sm,
-        )
-        self.btn_shell_restart.pack(side=tk.RIGHT)
-
-        tk.Frame(terminal_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
-
         terminal_body = tk.Frame(terminal_frame, bg=Theme.BG_DARKEST)
         terminal_body.pack(fill=tk.BOTH, expand=True)
 
@@ -9140,7 +9250,7 @@ class MCUUploadGUI:
             fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
         ).pack(fill=tk.X, padx=8, pady=(10, 6), anchor=tk.W)
         self._shell_switch_buttons = {}
-        for shell_kind, shell_label in (("pwsh", "▣ PowerShell"), ("cmd", "▣ Command Prompt")):
+        for shell_kind, shell_label in (("pwsh", "▣ pwsh"), ("cmd", "▣ cmd")):
             shell_btn = tk.Button(
                 shell_switcher, text=shell_label, anchor=tk.W,
                 font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_DARK,
@@ -9166,9 +9276,30 @@ class MCUUploadGUI:
         shell_left = tk.Frame(terminal_body, bg=Theme.BG_DARKEST)
         shell_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        shell_scroll = ttk.Scrollbar(shell_left, orient=tk.VERTICAL)
+        # Native terminal surface. The child WebView2 window is reparented
+        # into this frame after it creates its own HWND. The small placeholder
+        # remains visible until the real xterm page has attached.
+        self._shell_terminal_embed_frame = tk.Frame(shell_left, bg="#0c0d10")
+        self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
+        self._shell_terminal_embed_frame.bind(
+            "<Configure>", self._resize_project_terminal
+        )
+        self._shell_terminal_placeholder = tk.Label(
+            self._shell_terminal_embed_frame,
+            text="Loading native Project Terminal…",
+            font=self.font_mono_sm,
+            fg=Theme.TEXT_DIM,
+            bg="#0c0d10",
+        )
+        self._shell_terminal_placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+        # Existing Tk PTY surface is retained only as a compatibility fallback.
+        # It is not mapped during the normal path, so it cannot intercept
+        # Backspace/Ctrl+C/Ctrl+V before xterm.js receives them.
+        self._shell_terminal_fallback_frame = tk.Frame(shell_left, bg=Theme.BG_DARKEST)
+        shell_scroll = ttk.Scrollbar(self._shell_terminal_fallback_frame, orient=tk.VERTICAL)
         self.shell_console = tk.Text(
-            shell_left, bg="#0c0d10", fg="#cccccc",
+            self._shell_terminal_fallback_frame, bg="#0c0d10", fg="#cccccc",
             insertbackground="#ffffff", selectbackground="#264f78",
             selectforeground="#ffffff", font=self.font_mono,
             relief=tk.FLAT, borderwidth=0, highlightthickness=0,
@@ -9180,6 +9311,7 @@ class MCUUploadGUI:
         self.shell_console.configure(yscrollcommand=shell_scroll.set)
         shell_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.shell_console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._shell_terminal_fallback_frame.pack_forget()
         self._configure_shell_ansi_tags()
         self._configure_shell_selection_highlight()
         # Keep the output selectable, but make this a real PTY terminal: key
@@ -9939,7 +10071,11 @@ class MCUUploadGUI:
             style = ttk.Style()
             style.configure(
                 "Bottom.TNotebook.Tab",
-                padding=[8 if width < 700 else 16, 5 if height < 600 else 6],
+                # Use one stable padding value for every state so switching
+                # tabs cannot change their apparent size.  Keep the compact
+                # layout on narrow windows, but reduce the desktop maximum a
+                # little without making the labels cramped.
+                padding=[8 if width < 700 else 12, 4 if height < 600 else 5],
                 font=("Segoe UI", 8 if width < 700 else 9, "bold"),
             )
 
@@ -12403,6 +12539,9 @@ class MCUUploadGUI:
         text_value = re.sub(r"(?:\x1b)?\]0;[^\r\n]*(?:\x07|\x1b\\)?", "", text_value)
         text_value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text_value)
         text_value = text_value.replace("\x1b", "").replace("\x07", "")
+        # Some Windows PTY paths strip ESC but leave the CSI payload. Do not
+        # expose those fragments (for example ``[1;2m``) in the fallback view.
+        text_value = re.sub(r"\[(?:\d{1,3}(?:;\d{1,3})*)m", "", text_value)
         # The remote-path bootstrap uses one quieting command before pushd;
         # keep that implementation detail out of the visible terminal.
         text_value = re.sub(r"(?im)^.*@echo\s+off.*(?:\n|$)", "", text_value)
@@ -12427,6 +12566,19 @@ class MCUUploadGUI:
             return "break"
         self._shell_active_kind = kind
         self._shell_refresh_switcher()
+
+        # Normal path: the actual terminal is xterm.js backed by a native
+        # PowerShell/CMD PTY in the isolated child process.  The old Tk path
+        # below remains available only after the native path explicitly fails.
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._ensure_project_terminal_webview()
+            if not getattr(self, "_project_terminal_fallback", False):
+                self._project_terminal_send_control("select", kind)
+                self._shell_set_status(
+                    f"Loading {self._shell_display_name(kind)} • {self._shell_current_target()}"
+                )
+                return "break"
+
         session = self._shell_sessions.get(kind)
         if not session or not session.get("running"):
             self._shell_start(kind)
@@ -12445,13 +12597,417 @@ class MCUUploadGUI:
             pass
         return "break"
 
-    def _schedule_shell_prewarm(self):
-        """Start both shells shortly after the real app-ready handshake.
+    def _ensure_project_terminal_webview(self):
+        """Start the same child WebView2/PTTY architecture used by OpenCode."""
+        if getattr(self, "_project_terminal_fallback", False):
+            return False
+        proc = getattr(self, "_project_terminal_proc", None)
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    return True
+            except Exception:
+                pass
 
-        Shell creation stays out of the critical startup path.  Once the
-        editor is usable and the startup cover is being dismissed, both PTYs
-        are prepared in their own worker threads so switching tabs never shows
-        a cold Windows shell or its startup banner.
+        if getattr(self, "_project_terminal_launching", False):
+            return True
+
+        script_path = SCRIPT_DIR / "src" / "modules" / "project_terminal.py"
+        if (
+            not script_path.exists()
+            or sys.platform != "win32"
+            or win32gui is None
+            or win32con is None
+        ):
+            self._activate_project_terminal_fallback(
+                "Native Project Terminal is unavailable on this platform."
+            )
+            return False
+
+        try:
+            fd, port_file = tempfile.mkstemp(prefix="mcu-terminal-", suffix=".json")
+            os.close(fd)
+            try:
+                os.unlink(port_file)
+            except OSError:
+                pass
+            target = str(self._shell_current_target())
+            initial_cwd = str(getattr(self, "_shell_initial_cwd", Path.cwd()))
+            launcher = sys.executable
+            if getattr(sys, "frozen", False):
+                for candidate in (
+                    SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe",
+                    SCRIPT_DIR / "env" / "Scripts" / "python.exe",
+                ):
+                    if candidate.exists():
+                        launcher = str(candidate)
+                        break
+            command = [
+                launcher,
+                str(script_path),
+                "--launch-terminal",
+                target,
+                "--initial-cwd",
+                initial_cwd,
+                "--port-file",
+                port_file,
+            ]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self._project_terminal_proc = subprocess.Popen(
+                command,
+                cwd=str(SCRIPT_DIR),
+                creationflags=flags,
+            )
+            self._project_terminal_port_file = Path(port_file)
+            self._project_terminal_port = None
+            self._project_terminal_launching = True
+            self._project_terminal_embed_attempts = 0
+            self._shell_set_status("Starting native Project Terminal…")
+            self._schedule_project_terminal_poll(50)
+            return True
+        except Exception as exc:
+            self._activate_project_terminal_fallback(
+                f"Native Project Terminal could not start: {exc}"
+            )
+            return False
+
+    def _schedule_project_terminal_poll(self, delay_ms=100):
+        try:
+            if self._project_terminal_status_job:
+                self.root.after_cancel(self._project_terminal_status_job)
+        except Exception:
+            pass
+        try:
+            self._project_terminal_status_job = self.root.after(
+                max(25, int(delay_ms)), self._poll_project_terminal_webview
+            )
+        except Exception:
+            self._project_terminal_status_job = None
+
+    def _poll_project_terminal_webview(self):
+        self._project_terminal_status_job = None
+        if getattr(self, "_project_terminal_fallback", False):
+            return
+        proc = getattr(self, "_project_terminal_proc", None)
+        try:
+            if proc is not None and proc.poll() is not None:
+                self._activate_project_terminal_fallback(
+                    "Native Project Terminal closed before it could attach."
+                )
+                return
+        except Exception:
+            pass
+
+        port_file = getattr(self, "_project_terminal_port_file", None)
+        if port_file:
+            try:
+                if port_file.exists():
+                    data = json.loads(port_file.read_text(encoding="utf-8"))
+                    if data.get("error"):
+                        self._activate_project_terminal_fallback(
+                            f"Native Project Terminal failed: {data['error']}"
+                        )
+                        return
+                    if data.get("xterm") is False:
+                        self._activate_project_terminal_fallback(
+                            "xterm.js could not load in WebView2."
+                        )
+                        return
+                    if not getattr(self, "_project_terminal_port", None):
+                        self._project_terminal_port = int(data["port"])
+            except Exception:
+                pass
+
+        if getattr(self, "_project_terminal_port", None) and not getattr(
+            self, "_project_terminal_embedded", False
+        ):
+            self._try_embed_project_terminal_window()
+
+        if getattr(self, "_project_terminal_embedded", False) and not getattr(
+            self, "_project_terminal_page_ready", False
+        ):
+            try:
+                if port_file and port_file.exists():
+                    data = json.loads(port_file.read_text(encoding="utf-8"))
+                    if data.get("ready") is True:
+                        self._reveal_project_terminal()
+            except Exception:
+                pass
+
+        self._project_terminal_embed_attempts = getattr(
+            self, "_project_terminal_embed_attempts", 0
+        ) + 1
+        if self._project_terminal_embed_attempts >= 160 and not getattr(
+            self, "_project_terminal_embedded", False
+        ):
+            self._activate_project_terminal_fallback(
+                "Native Project Terminal could not attach to the main window."
+            )
+            return
+        if not getattr(self, "_project_terminal_embedded", False):
+            self._schedule_project_terminal_poll(75)
+        else:
+            # Keep a lightweight watchdog so a child that exits later falls
+            # back cleanly instead of leaving a dead native rectangle.
+            self._schedule_project_terminal_poll(750)
+
+    def _try_embed_project_terminal_window(self):
+        if win32gui is None or win32con is None:
+            return False
+        if getattr(self, "_project_terminal_embedded", False):
+            self._resize_project_terminal()
+            return True
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - Project Terminal")
+        except Exception:
+            hwnd = 0
+        if not hwnd:
+            return False
+
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            frame = self._shell_terminal_embed_frame
+            frame.update_idletasks()
+            tk_hwnd = frame.winfo_id()
+            try:
+                style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, style | win32con.WS_CLIPCHILDREN)
+            except Exception:
+                pass
+
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                       win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                       win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+            style |= win32con.WS_CHILD
+            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                          win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+            ex_style |= win32con.WS_EX_TOOLWINDOW
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+            win32gui.SetParent(hwnd, tk_hwnd)
+
+            self._project_terminal_hwnd = hwnd
+            self._project_terminal_embedded = True
+            self._project_terminal_launching = False
+            self._project_terminal_page_ready = False
+            self._shell_terminal_fallback_frame.pack_forget()
+            self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
+            # Keep the native surface hidden until the child reports that
+            # xterm.js and the selected shell prompt are actually ready.
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            self._resize_project_terminal(force=True)
+            self._shell_set_status(
+                f"Loading terminal • {self._shell_current_target()}"
+            )
+            pending = getattr(self, "_project_terminal_pending_action", None)
+            self._project_terminal_pending_action = None
+            if pending:
+                self._project_terminal_send_control(*pending)
+            else:
+                self._project_terminal_send_control("select", self._shell_active_kind)
+            return True
+        except Exception:
+            self._project_terminal_embedded = False
+            self._project_terminal_hwnd = None
+            return False
+
+    def _reveal_project_terminal(self):
+        if not getattr(self, "_project_terminal_embedded", False):
+            return
+        if getattr(self, "_project_terminal_page_ready", False):
+            return
+        hwnd = getattr(self, "_project_terminal_hwnd", None)
+        if not hwnd or win32gui is None or win32con is None:
+            return
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            self._shell_terminal_placeholder.place_forget()
+            self._project_terminal_page_ready = True
+            self._resize_project_terminal(force=True)
+            self._shell_set_status(
+                f"Running • {self._shell_current_target()}"
+            )
+        except Exception:
+            pass
+
+    def _resize_project_terminal(self, event=None, force=False):
+        if not getattr(self, "_project_terminal_embedded", False):
+            return
+        hwnd = getattr(self, "_project_terminal_hwnd", None)
+        if not hwnd or win32gui is None or win32con is None:
+            return
+        try:
+            frame = self._shell_terminal_embed_frame
+            width = max(frame.winfo_width(), 20)
+            height = max(frame.winfo_height(), 20)
+            win32gui.SetWindowPos(
+                hwnd, 0, 0, 0, width, height,
+                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
+                win32con.SWP_NOACTIVATE | 0x4000,
+            )
+        except Exception:
+            pass
+
+    def _project_terminal_send_control(self, action: str, kind: str):
+        if getattr(self, "_project_terminal_fallback", False):
+            return
+        port = getattr(self, "_project_terminal_port", None)
+        if not port:
+            self._project_terminal_pending_action = (action, kind)
+            return
+
+        payload = json.dumps({"action": action, "shell": kind}).encode("utf-8")
+        url = f"http://127.0.0.1:{int(port)}/control"
+
+        def _send():
+            try:
+                from urllib.request import Request, urlopen
+                request = Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=1.5) as response:
+                    result = json.loads(response.read().decode("utf-8", errors="replace"))
+                if result.get("success"):
+                    self._post_ui(
+                        lambda: self._shell_set_status(
+                            f"Running • {self._shell_current_target()}"
+                        )
+                    )
+            except Exception:
+                # A short-lived control race is normal while WebView2 is
+                # attaching. The next selection/restart sends a fresh command.
+                pass
+
+        threading.Thread(target=_send, name="MCUTerminalControl", daemon=True).start()
+
+    def _activate_project_terminal_fallback(self, reason: str = ""):
+        if getattr(self, "_project_terminal_fallback", False):
+            return
+        self._project_terminal_fallback = True
+        self._project_terminal_fallback_revealed = False
+        self._project_terminal_launching = False
+        hwnd = getattr(self, "_project_terminal_hwnd", None)
+        if hwnd and win32gui is not None:
+            try:
+                win32gui.SetParent(hwnd, 0)
+                if win32con is not None:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+        self._project_terminal_hwnd = None
+        self._project_terminal_embedded = False
+        self._project_terminal_page_ready = False
+        self._terminate_project_terminal_process()
+        try:
+            self._shell_terminal_fallback_frame.pack_forget()
+            self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
+            self._shell_terminal_placeholder.configure(
+                text="Starting compatible PowerShell and Command Prompt…"
+            )
+            self._shell_terminal_placeholder.place(
+                relx=0.5, rely=0.5, anchor=tk.CENTER
+            )
+        except Exception:
+            pass
+        if reason:
+            self._append(f"  ⚠ {reason} Using the compatibility terminal surface.", "warning")
+        for kind in ("pwsh", "cmd"):
+            try:
+                self._shell_start(kind)
+            except Exception:
+                pass
+        self._shell_select(self._shell_active_kind)
+
+    def _reveal_project_terminal_fallback(self):
+        """Show the compatibility surface only after a complete shell prompt."""
+        if not getattr(self, "_project_terminal_fallback", False):
+            return
+        if getattr(self, "_project_terminal_fallback_revealed", False):
+            return
+        self._project_terminal_fallback_revealed = True
+        try:
+            self._shell_terminal_embed_frame.pack_forget()
+            self._shell_terminal_fallback_frame.pack(fill=tk.BOTH, expand=True)
+            self._shell_terminal_placeholder.place_forget()
+            self._shell_render_session(self._shell_active_kind)
+        except Exception:
+            pass
+
+    def _terminate_project_terminal_process(self):
+        proc = getattr(self, "_project_terminal_proc", None)
+        self._project_terminal_proc = None
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                    else:
+                        proc.terminate()
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        port_file = getattr(self, "_project_terminal_port_file", None)
+        self._project_terminal_port_file = None
+        self._project_terminal_port = None
+        if port_file:
+            try:
+                Path(port_file).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _dispose_project_terminal(self):
+        """Hide and terminate the isolated native Project Terminal child."""
+        job = getattr(self, "_project_terminal_status_job", None)
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+            self._project_terminal_status_job = None
+        hwnd = getattr(self, "_project_terminal_hwnd", None)
+        if hwnd and win32gui is not None:
+            try:
+                win32gui.SetParent(hwnd, 0)
+                if win32con is not None:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+        self._project_terminal_hwnd = None
+        self._project_terminal_embedded = False
+        self._project_terminal_launching = False
+        self._project_terminal_fallback = False
+        self._project_terminal_fallback_revealed = False
+        self._project_terminal_page_ready = False
+        self._terminate_project_terminal_process()
+        try:
+            self._shell_terminal_fallback_frame.pack_forget()
+            self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
+            self._shell_terminal_placeholder.place(
+                relx=0.5, rely=0.5, anchor=tk.CENTER
+            )
+        except Exception:
+            pass
+
+    def _schedule_shell_prewarm(self):
+        """Schedule legacy fallback prewarm only when native terminal fails.
+
+        The normal xterm/WebView2 terminal is created lazily when its tab is
+        selected. Keeping this hook for the Tk fallback preserves recovery on
+        machines without WebView2 while avoiding two hidden shells at startup.
         """
         if getattr(self, "_shells_prewarmed", False):
             return
@@ -12469,6 +13025,13 @@ class MCUUploadGUI:
         if getattr(self, "_shells_prewarmed", False):
             return
         if not getattr(self, "_startup_ready", False):
+            return
+        # The native terminal is intentionally lazy. Starting two extra
+        # Windows shells during app startup was the source of repeated loading
+        # and unnecessary CPU use on low-end devices. The selected shell is
+        # created by xterm/WebView2 when the Terminal tab is actually opened.
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._shells_prewarmed = True
             return
         self._shells_prewarmed = True
         for kind in ("pwsh", "cmd"):
@@ -12494,6 +13057,7 @@ class MCUUploadGUI:
                 "running": True,
                 "pty": None,
                 "output": "",
+                "plain_output": "",
                 "styled": [],
                 "pending": deque(),
                 "terminal": _ShellTerminalBuffer(columns=120),
@@ -12511,15 +13075,26 @@ class MCUUploadGUI:
     def _shell_append_output(self, session: dict, data):
         with self._shell_state_lock:
             terminal = session.setdefault("terminal", _ShellTerminalBuffer(columns=120))
+            if isinstance(data, bytes):
+                data = data.decode("utf-8", errors="replace")
+            raw_data = str(data or "")
+            # A few Windows PTY paths deliver the CSI payload without the
+            # leading ESC byte. Remove those orphaned SGR fragments before the
+            # screen model sees them, while retaining normal terminal styling.
+            data = re.sub(r"\[(?:\d{1,3}(?:;\d{1,3})*)m", "", raw_data)
             terminal.feed(data)
             text_value = terminal.render()
-            styled_value = terminal.render_styled()
             session["output"] = text_value[-220000:]
-            session["styled"] = styled_value
+            # The fallback Text widget is a transcript, not an xterm clone.
+            # Rendering every VT redraw as a screen snapshot caused PowerShell
+            # prompts to reflow into fragmented vertical text on some devices.
+            # Preserve the visible text and strip only terminal control codes.
+            visible = self._shell_clean_output(raw_data)
+            plain_output = session.get("plain_output", "") + visible
+            session["plain_output"] = plain_output[-220000:]
+            session["styled"] = []
             pending = session.setdefault("pending", deque())
-            # A snapshot replaces the previous screen; appending each redraw
-            # would recreate the duplicated PSReadLine input problem.
-            pending.append(styled_value)
+            pending.append(session["plain_output"])
             while len(pending) > 500:
                 pending.popleft()
 
@@ -12544,12 +13119,12 @@ class MCUUploadGUI:
                 session["running"] = False
             return
 
-        # Start at the directory from which MCU Flasher was launched so the
-        # native banner and initial prompt remain visible, then visibly navigate
-        # to the active project.  This matches the normal CMD/PowerShell
-        # startup transcript while still leaving the shell in the project dir.
+        # Start directly in the project directory. This removes the extra
+        # cd/cls round-trip that made cold shell startup feel slow.
         try:
-            launch_cwd = Path(getattr(self, "_shell_initial_cwd", Path.cwd()))
+            launch_cwd = Path(target)
+            if not launch_cwd.is_dir():
+                launch_cwd = Path(getattr(self, "_shell_initial_cwd", Path.cwd()))
             if not launch_cwd.is_dir():
                 launch_cwd = Path.home()
         except Exception:
@@ -12565,13 +13140,7 @@ class MCUUploadGUI:
             with self._shell_state_lock:
                 session["pty"] = pty
 
-            # Wait until the native shell has printed its first prompt before
-            # sending the project-directory command.  Sending it immediately
-            # races cmd.exe's banner on slower machines, which made the
-            # startup transcript appear to be cleared.
-            cd_pending = os.path.normcase(os.path.normpath(spawn_cwd)) != os.path.normcase(
-                os.path.normpath(target)
-            )
+            cd_pending = False
             startup_probe = ""
             # PowerShell can take several seconds to print its first prompt on
             # a cold Windows profile.  Give the native banner plenty of time to
@@ -12588,6 +13157,14 @@ class MCUUploadGUI:
                     break
                 if data:
                     self._shell_append_output(session, data)
+                    if not cd_pending and not session.get("ready"):
+                        startup_probe = session.get("output", "")[-6000:]
+                        if re.search(
+                            r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$",
+                            startup_probe,
+                        ):
+                            with self._shell_state_lock:
+                                session["ready"] = True
                     if cd_pending:
                         startup_probe = session.get("output", "")[-6000:]
                         prompt_seen = bool(
@@ -12603,12 +13180,16 @@ class MCUUploadGUI:
                             except Exception:
                                 pass
                             cd_pending = False
+                            with self._shell_state_lock:
+                                session["ready"] = True
                 elif cd_pending and time.monotonic() >= startup_deadline:
                     try:
                         pty.write(self._shell_cd_command(kind, target) + "cls\r\n")
                     except Exception:
                         pass
                     cd_pending = False
+                    with self._shell_state_lock:
+                        session["ready"] = True
         except Exception as exc:
             self._shell_append_output(session, f"\r\n[MCU Flasher] Could not start {kind}: {exc}\r\n")
         finally:
@@ -12649,8 +13230,8 @@ class MCUUploadGUI:
     def _shell_render_session(self, kind: str):
         with self._shell_state_lock:
             session = self._shell_sessions.get(kind)
-            output = session.get("output", "") if session else ""
-            styled = session.get("styled", []) if session else []
+            output = session.get("plain_output", session.get("output", "")) if session else ""
+            styled = []
             running = bool(session and session.get("running"))
             target = session.get("target", "") if session else str(self._shell_current_target())
         try:
@@ -12670,6 +13251,15 @@ class MCUUploadGUI:
     def _shell_output_pump(self):
         """Render bounded PTY batches on Tk, never from a shell thread."""
         self._shell_terminal_pump_after_id = None
+        if not getattr(self, "_project_terminal_fallback", False):
+            try:
+                if self.root and self.root.winfo_exists():
+                    self._shell_terminal_pump_after_id = self.root.after(
+                        250, self._shell_output_pump
+                    )
+            except Exception:
+                self._shell_terminal_pump_after_id = None
+            return
         try:
             active = self._shell_active_kind
             active_snapshot = None
@@ -12684,7 +13274,19 @@ class MCUUploadGUI:
                 current = self._shell_sessions.get(active)
                 running = bool(current and current.get("running"))
                 target = current.get("target", "") if current else ""
-            if active_snapshot is not None and self._shell_terminal_is_selected():
+                current_ready = bool(current and current.get("ready"))
+                current_failed = bool(
+                    current
+                    and not current.get("running")
+                    and "[MCU Flasher]" in str(current.get("output", ""))
+                )
+            if current_ready or current_failed:
+                self._reveal_project_terminal_fallback()
+            if (
+                active_snapshot is not None
+                and getattr(self, "_project_terminal_fallback_revealed", False)
+                and self._shell_terminal_is_selected()
+            ):
                 self.shell_console.configure(state=tk.NORMAL)
                 self.shell_console.delete("1.0", tk.END)
                 self._shell_insert_snapshot(active_snapshot)
@@ -12711,6 +13313,13 @@ class MCUUploadGUI:
 
     def _shell_write_input(self, payload: str) -> bool:
         """Write keystrokes directly to the active shell's PTY."""
+        if not payload:
+            return False
+        payload = re.sub(
+            r"\x1b(?:\[\?[0-9;]*c|\[>[0-9;]*c|\[\?[0-9;]*\$y|\[[0-9;]*\$y|\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?|P>\|[^\x1b\x07]*(?:\x1b\\|\x07)?|\[>[0-9;]*q)",
+            "",
+            str(payload),
+        )
         if not payload:
             return False
         with self._shell_state_lock:
@@ -12815,6 +13424,7 @@ class MCUUploadGUI:
             session = self._shell_sessions.get(self._shell_active_kind)
             if session:
                 session["output"] = ""
+                session["plain_output"] = ""
                 session["styled"] = []
                 session.setdefault("pending", deque()).clear()
                 session["terminal"] = _ShellTerminalBuffer(columns=120)
@@ -12845,6 +13455,14 @@ class MCUUploadGUI:
         kind = kind or getattr(self, "_shell_active_kind", "pwsh")
         if kind not in ("pwsh", "cmd"):
             return "break"
+
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._shell_active_kind = kind
+            self._ensure_project_terminal_webview()
+            if not getattr(self, "_project_terminal_fallback", False):
+                self._shell_set_status(f"Restarting {self._shell_display_name(kind)}…")
+                self._project_terminal_send_control("restart", kind)
+                return "break"
 
         # Restart is intentionally scoped to one PTY.  The other shell keeps
         # its process, scrollback, and current command untouched.
@@ -15754,6 +16372,19 @@ class MCUUploadGUI:
         Updates the UI label, invalidates the compile cache, then scans
         includes in a background thread so the console gets an instant
         project-summary report."""
+        # The native terminal owns its PTY sessions in a child process. Close
+        # that child before rebinding the project so the next Terminal-tab
+        # activation starts both shells in the new folder.
+        try:
+            self._dispose_project_terminal()
+        except Exception:
+            pass
+        try:
+            self._shell_stop_all()
+            with self._shell_state_lock:
+                self._shell_sessions.clear()
+        except Exception:
+            pass
         # If the AI Assistant (OpenCode) is running, restart it so the new
         # sketch directory becomes its session root instead of the previous
         # project's folder. When no AI process is active, only the watcher
@@ -18732,7 +19363,10 @@ default_envs = {self._pio_env_name()}
         if is_unc_or_network_path(self.sketch_dir_path):
             self._map_unc_for_build(self.sketch_dir_path)
 
-        self._run_manual_syntax_check()
+        # Syntax checking is scheduled by the Tk-owned background syntax
+        # service. Do not run the legacy UI-bound checker from this worker:
+        # it reads Tk widgets and calls root.update(), which can deadlock the
+        # main window when a WebView2 terminal is still attaching.
         ensure_platformio_penv_with_hook()
 
         self.is_busy = True
@@ -25266,15 +25900,25 @@ default_envs = {self._pio_env_name()}
 
         Do not reuse sys.argv wholesale: a frozen build and a source launch
         have different argv[0] semantics, and stale project arguments can be
-        duplicated.  The replacement bypasses bootstrap because dependencies
-        have already been verified in the current session.
+        duplicated.  Route the replacement through Bootstrap so selecting
+        Monaco can repair dependencies on a machine that was incomplete.
         """
         project_path = str(Path(self.sketch_dir_path).resolve(strict=False))
-        if getattr(sys, "frozen", False):
-            command = [sys.executable]
+        bootstrap_script = SCRIPT_DIR / "src" / "modules" / "bootstrap.py"
+        if not getattr(sys, "frozen", False):
+            command = [sys.executable, str(bootstrap_script)]
         else:
-            command = [sys.executable, str(Path(__file__).resolve())]
-        command.extend(["--from-bootstrap", "--project", project_path])
+            # A frozen GUI still has the verified app venv after normal
+            # startup. Use its Python to run the source Bootstrap module so
+            # the editor restart follows the same dependency path.
+            venv_python = SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe"
+            if not venv_python.exists():
+                venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
+            command = [
+                str(venv_python if venv_python.exists() else sys.executable),
+                str(bootstrap_script),
+            ]
+        command.extend(["--project", project_path])
         if "--new-window" in sys.argv:
             command.append("--new-window")
         return command
@@ -28818,6 +29462,10 @@ default_envs = {self._pio_env_name()}
             self._shell_stop_all()
         except Exception:
             pass
+        try:
+            self._dispose_project_terminal()
+        except Exception:
+            pass
 
         # If editor was detached, dispose/close that window first before destroying main GUI
         try:
@@ -29633,7 +30281,11 @@ def main():
     if _load_webview() is None:
         requested_mode = "default"
         _RESOLVED_EDITOR_MODE = requested_mode
-        set_editor_mode("default")
+        # Keep the user's Monaco preference.  The lightweight editor is only
+        # a runtime fallback for this launch; silently changing the saved
+        # preference made switching editors appear broken on machines that
+        # were missing pywebview or WebView2.
+        set_monaco_boot_pending(False)
 
         def _fallback_to_default_editor():
             try:
@@ -29642,9 +30294,11 @@ def main():
                 app_val._build_editor_default(app_val.editor_frame)
                 app_val._update_editor_info()
                 app_val._append(
-                    "  ⚠ Monaco/WebView is unavailable; switched to the lightweight Default editor.",
+                    "  ⚠ Monaco is selected, but WebView2/pywebview is unavailable; using the lightweight Default editor for this launch.",
                     "warning",
                 )
+                if _WEBVIEW_IMPORT_ERROR:
+                    app_val._append(f"    Reason: {_WEBVIEW_IMPORT_ERROR}", "warning")
             except Exception as exc:
                 try:
                     app_val._set_status(f"Default editor recovery failed: {exc}", Theme.RED)

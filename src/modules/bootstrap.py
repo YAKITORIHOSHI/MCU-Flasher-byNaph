@@ -2,10 +2,11 @@
 """
 bootstrap.py — MCU Upload GUI Dependency Bootstrap
 ==================================================
-Ensures pip, pyserial, psutil, pywin32 (Windows), and PlatformIO Core are
-installed before launching the main GUI. Online version checks are kept out
-of this short-lived launcher process so a slow network cannot leave child
-interpreters behind.
+Ensures pip, pyserial, psutil, pywin32 (Windows), pywebview, pywinpty,
+websockets, esptool, certifi, PlatformIO Core, and the WebView2 runtime are
+installed and verified before launching the main GUI. Online version checks
+are kept out of this short-lived launcher process so a slow network cannot
+leave child interpreters behind.
 
 Called by MCU-Flash-GUI.vbs. On a fresh system this runs
 once with a visible console window showing progress.
@@ -20,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.request
 import importlib.util
@@ -55,10 +57,6 @@ if sys.platform == "win32":
             getattr(sys.stderr, "reconfigure")(encoding="utf-8")
     except Exception:
         pass
-
-# Fast-path env var: set MCU_FLASH_GUI_SKIP_TOOLCHAINS=1 to skip board toolchain pre-install
-# (useful for dev/testing or if you only use ESP32 and already have it installed)
-SKIP_TOOLCHAINS = os.environ.get("MCU_FLASH_GUI_SKIP_TOOLCHAINS", "").lower() in ("1", "true", "yes")
 
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = Path(sys.executable).resolve().parent
@@ -247,31 +245,17 @@ def _update_check_skip_reason(gui=None) -> str | None:
     return None
 
 
-def _select_default_editor_for_compatibility() -> None:
-    """Keep the app launchable when WebView2/Monaco is unavailable."""
-    config_path = SCRIPT_DIR / "src" / "gui_config.json"
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-        shared = data.setdefault("shared", {})
-        shared["editor_mode"] = "default"
-        shared["monaco_boot_pending"] = False
-        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-
-
 def _clear_editor_config_after_new_environment() -> bool:
     """Clear stale editor state only when a brand-new app environment exists.
 
-    ``src/gui_config.json`` is the app-local configuration and takes priority
-    over the per-user fallback.  A copied or freshly rebuilt ``env`` can leave
-    that file pointing at an editor that no longer matches the available
-    runtime, which makes switching editors appear to do nothing.
+    A copied or freshly rebuilt app can leave ``src/gui_config.json`` pointing
+    at an editor that no longer matches the available runtime, which makes
+    switching editors appear to do nothing.
 
     The fallback file is shared by app copies, so do not delete it wholesale.
-    Remove only its editor-specific keys so it cannot immediately restore the
-    stale Monaco selection after the local file is removed.  All other user
-    preferences remain intact.
+    Preserve its editor-specific keys as well: they are the user's explicit
+    preference and the main GUI can fall back at runtime if the native Monaco
+    dependencies are unavailable.
     """
     local_config = SCRIPT_DIR / "src" / "gui_config.json"
     removed_local = False
@@ -283,22 +267,6 @@ def _clear_editor_config_after_new_environment() -> bool:
     except Exception:
         # A read-only/package-managed copy should not prevent the environment
         # from completing its setup.
-        pass
-
-    user_config = Path.home() / ".mcu_gui_config.json"
-    try:
-        if user_config.is_file():
-            data = json.loads(user_config.read_text(encoding="utf-8"))
-            shared = data.get("shared")
-            changed = False
-            if isinstance(shared, dict):
-                for key in ("editor_mode", "monaco_boot_pending"):
-                    if key in shared:
-                        shared.pop(key, None)
-                        changed = True
-            if changed:
-                user_config.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
         pass
 
     return removed_local
@@ -1170,7 +1138,10 @@ class BootstrapGUI:
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "bootstrap_icon.log").write_text(f"Error setting icon: {e}\n{traceback.format_exc()}\n", encoding="utf-8")
         self.root.configure(bg=T_BG_DARKEST)
-        self.root.resizable(True, True)
+        # Keep the setup window at its calculated size. Resizing it can expose
+        # incomplete progress rows and makes the bootstrap layout jump on
+        # smaller displays.
+        self.root.resizable(False, False)
 
         # Centre on screen
         self.root.update_idletasks()
@@ -1663,7 +1634,6 @@ class BootstrapGUI:
     # ── Thread-safe log append ────────────────────────────────
     def _append(self, text: str, tag: str = "normal"):
         _record_bootstrap_log(tag.upper(), text)
-
         def _do():
             if self._closed:
                 return
@@ -2730,9 +2700,8 @@ def ensure_psutil() -> bool:
 def ensure_pywin32() -> bool:
     """pywin32 (win32gui/win32con) is used on Windows to embed the code
     editor's native window directly inside the main GUI window instead of
-    it opening as a separate floating window. It's optional — if it's
-    missing or fails to install, the editor just falls back to opening in
-    its own window, so this is never treated as fatal."""
+    it opening as a separate floating window. It is required for the supported
+    Windows embedded-editor experience."""
     if sys.platform != "win32":
         return True
 
@@ -2835,7 +2804,26 @@ def _check_import_esptool() -> bool:
     return _check_spec("esptool")
 
 def _check_import_pywebview() -> bool:
-    return _check_spec("webview")
+    """Verify pywebview can actually import in a fresh interpreter.
+
+    ``find_spec`` can report a package as installed even when one of its
+    startup dependencies is broken.  Monaco cannot use that half-installed
+    state, so Bootstrap verifies the real import before continuing.
+    """
+    if not _check_spec("webview"):
+        return False
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        result = subprocess.run(
+            [sys.executable, "-c", "import webview; assert webview is not None"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            creationflags=creationflags,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 def _check_import_pywinpty() -> bool:
     if sys.platform != "win32":
@@ -2874,7 +2862,7 @@ PIP_PACKAGES_SPEC = [
         "name": "pywin32",
         "check": _check_import_pywin32,
         "pip_args": ["pywin32"],
-        "critical": False,
+        "critical": True,
     },
     {
         "id": "esptool",
@@ -2888,21 +2876,21 @@ PIP_PACKAGES_SPEC = [
         "name": "pywebview",
         "check": _check_import_pywebview,
         "pip_args": ["pywebview"],
-        "critical": False,
+        "critical": True,
     },
     {
         "id": "pywinpty",
         "name": "pywinpty",
         "check": _check_import_pywinpty,
         "pip_args": ["pywinpty"],
-        "critical": False,
+        "critical": True,
     },
     {
         "id": "websockets",
         "name": "websockets",
         "check": _check_import_websockets,
         "pip_args": ["websockets"],
-        "critical": False,
+        "critical": True,
     },
     {
         "id": "certifi",
@@ -2916,11 +2904,7 @@ PIP_PACKAGES_SPEC = [
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
-        "critical": False,
-        # The shipped editors are Tk and Monaco.  Qt/QScintilla is retained
-        # only for the standalone legacy viewer and should not add hundreds
-        # of MB to every normal installation.
-        "legacy_opt_in": "--with-qscintilla",
+        "critical": True,
     },
     {
         "id": "platformio",
@@ -2964,7 +2948,6 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
     active_specs = [
         spec for spec in PIP_PACKAGES_SPEC
         if not (spec["id"] == "pywin32" and sys.platform != "win32")
-        and not (spec.get("legacy_opt_in") and spec["legacy_opt_in"] not in sys.argv)
     ]
 
     table_lock = threading.RLock()
@@ -3414,13 +3397,12 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
         if gui:
             gui.set_progress_percent(100)
 
-        critical_failed = [spec for spec in final_failed if spec["critical"]]
-        if critical_failed:
-            names = ", ".join(spec["name"] for spec in critical_failed)
+        if final_failed:
+            names = ", ".join(spec["name"] for spec in final_failed)
             if gui:
-                gui.log_fail(f"Critical Python dependencies failed: {names}")
+                gui.log_fail(f"Required Python dependencies failed: {names}")
                 detail = next(
-                    (failure_details.get(spec["id"]) for spec in critical_failed if failure_details.get(spec["id"])),
+                    (failure_details.get(spec["id"]) for spec in final_failed if failure_details.get(spec["id"])),
                     "",
                 )
                 if detail:
@@ -3428,10 +3410,6 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             return False
 
         if gui:
-            optional_failed = [spec for spec in final_failed if not spec["critical"]]
-            if optional_failed:
-                optional_names = ", ".join(spec["name"] for spec in optional_failed)
-                gui.log_warn(f"Optional Python dependencies unavailable: {optional_names}")
             gui.log_ok("All required pip package dependencies installed & verified!")
         return True
 
@@ -3445,6 +3423,7 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
 
 # WebView2 runtime detection.
 _WEBVIEW2_CLIENT_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+_WEBVIEW2_BOOTSTRAPPER_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 
 
 def check_webview2_runtime() -> bool:
@@ -3477,12 +3456,67 @@ def check_webview2_runtime() -> bool:
     return False
 
 
+def _wait_for_webview2_runtime(timeout: int = 45) -> bool:
+    """Wait for the installer to publish its registry registration."""
+    if sys.platform != "win32":
+        return True
+    deadline = time.time() + max(1, int(timeout))
+    while time.time() < deadline:
+        if check_webview2_runtime():
+            return True
+        time.sleep(1.0)
+    return check_webview2_runtime()
+
+
+def _prepare_webview2_installer() -> Path | None:
+    """Find or download the official Evergreen WebView2 bootstrapper."""
+    installer = _find_installer_file("MicrosoftEdgeWebview2Setup.exe")
+    if _is_valid_exe(installer):
+        return installer
+
+    # A copied/incomplete app folder may not include the bundled installer.
+    # Download Microsoft's official Evergreen bootstrapper into the app's
+    # installer cache so the same repair is available on the next launch.
+    cache_path = SCRIPT_DIR / "installers" / "MicrosoftEdgeWebview2Setup.exe"
+    try:
+        section("Downloading Microsoft Edge WebView2 Runtime installer")
+        _download_file(
+            _WEBVIEW2_BOOTSTRAPPER_URL,
+            cache_path,
+            timeout=60,
+            attempts=3,
+        )
+        if _is_valid_exe(cache_path):
+            ok("WebView2 Runtime installer downloaded and verified")
+            return cache_path
+    except Exception as exc:
+        warn(f"Could not download the WebView2 Runtime installer: {exc}")
+
+    # Read-only app folders should not prevent a repair. Keep a temporary
+    # verified copy for this run if the app cache cannot be written.
+    try:
+        temp_path = Path(tempfile.gettempdir()) / "MCU-Flasher" / "MicrosoftEdgeWebview2Setup.exe"
+        _download_file(
+            _WEBVIEW2_BOOTSTRAPPER_URL,
+            temp_path,
+            timeout=60,
+            attempts=3,
+        )
+        if _is_valid_exe(temp_path):
+            ok("WebView2 Runtime installer downloaded to the temporary repair cache")
+            return temp_path
+    except Exception as exc:
+        warn(f"Temporary WebView2 installer download failed: {exc}")
+    return None
+
+
 def ensure_webview2_runtime() -> bool:
-    """Make sure the Microsoft Edge WebView2 Runtime is installed. Runs
-    the bundled installers/MicrosoftEdgeWebview2Setup.exe silently if the
-    runtime isn't detected. Never treated as fatal — if it's missing, the
-    Monaco editor just won't start, everything else (compile/upload/serial)
-    still works."""
+    """Install and verify the Microsoft Edge WebView2 Runtime.
+
+    Monaco depends on this runtime.  A successful installer exit code is not
+    enough: Bootstrap waits for the documented registry registration and
+    refuses to launch the GUI until the runtime is actually available.
+    """
     if sys.platform != "win32":
         return True
 
@@ -3491,11 +3525,10 @@ def ensure_webview2_runtime() -> bool:
         return True
 
     section("Installing Microsoft Edge WebView2 Runtime")
-    installer = _find_installer_file("MicrosoftEdgeWebview2Setup.exe")
+    installer = _prepare_webview2_installer()
 
-    if not _is_valid_exe(installer):
-        warn(f"WebView2 Runtime installer is missing or invalid: {installer}")
-        warn("Download it from https://developer.microsoft.com/microsoft-edge/webview2/ if the editor fails to start.")
+    if installer is None or not _is_valid_exe(installer):
+        warn("WebView2 Runtime installer is missing or invalid after the download/verification attempt.")
         return False
 
     status("Launching WebView2 Runtime installer (silent)...")
@@ -3506,17 +3539,19 @@ def ensure_webview2_runtime() -> bool:
             [str(installer), "/silent", "/install"],
             capture_output=True, text=True, timeout=180,
         )
-        # The bootstrapper returns 0 on success. If the runtime was
-        # actually already present (e.g. our registry check missed a
-        # non-standard install location), it exits non-zero with an
-        # "already installed" message — that's fine, not a real failure.
-        already_installed = "already installed" in (result.stdout + result.stderr).lower()
-        if result.returncode == 0 or already_installed or check_webview2_runtime():
-            ok("Microsoft Edge WebView2 Runtime installed successfully")
+        # Do not trust the process exit code by itself. The runtime may still
+        # be registering, or the bootstrapper may return an informational
+        # non-zero code. Only the post-install registry check certifies it.
+        if _wait_for_webview2_runtime(timeout=45):
+            ok("Microsoft Edge WebView2 Runtime installed and verified successfully")
             return True
         else:
-            warn(f"WebView2 Runtime installer exited with code {result.returncode} "
-                 f"— editor may not start.")
+            detail = (result.stdout + result.stderr).strip().splitlines()
+            tail = detail[-1] if detail else "no installer detail was returned"
+            warn(
+                f"WebView2 Runtime was not detected after installation "
+                f"(installer exit code {result.returncode}; {tail})."
+            )
             return False
     except Exception as e:
         warn(f"Failed to run WebView2 Runtime installer: {e}")
@@ -4872,10 +4907,6 @@ def ensure_board_toolchains() -> bool:
     platform.json: many of those entries are optional alternate frameworks,
     legacy cores, or debug tools and are not required by normal Arduino builds.
     """
-    if SKIP_TOOLCHAINS:
-        status("Skipping board toolchain pre-install (MCU_FLASH_GUI_SKIP_TOOLCHAINS=1)")
-        return True
-
     pio = find_pio()
     if not pio:
         warn("PlatformIO not found - skipping board toolchain pre-install.")
@@ -7755,6 +7786,22 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     if not GUI_SCRIPT.exists():
         return None, None
 
+    # Preserve a project passed through an editor-mode restart. Bootstrap is
+    # now part of that restart path, so the user should return to the same
+    # project instead of being sent back to the project picker.
+    gui_args = ["--from-bootstrap"]
+    if "--project" in sys.argv:
+        try:
+            project_index = sys.argv.index("--project")
+            if project_index + 1 < len(sys.argv):
+                project_candidate = Path(sys.argv[project_index + 1]).resolve(strict=False)
+                if project_candidate.is_dir():
+                    gui_args.extend(["--project", str(project_candidate)])
+        except Exception:
+            pass
+    if "--new-window" in sys.argv:
+        gui_args.append("--new-window")
+
     logs_dir = SCRIPT_DIR / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -7808,7 +7855,7 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
 
         try:
             proc = sp.Popen(
-                [str(python_exe), str(GUI_SCRIPT), "--from-bootstrap"],
+                [str(python_exe), str(GUI_SCRIPT), *gui_args],
                 cwd=str(SCRIPT_DIR),
                 env=launch_env,
                 stdin=sp.DEVNULL,   # never inherit a dead/closed handle from pythonw
@@ -7827,7 +7874,7 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             "PLATFORMIO_CORE_DIR", _get_safe_platformio_core_dir(SCRIPT_DIR)
         )
         proc = sp.Popen(
-            [sys.executable, str(GUI_SCRIPT), "--from-bootstrap"],
+            [sys.executable, str(GUI_SCRIPT), *gui_args],
             cwd=str(SCRIPT_DIR),
             env=launch_env,
         )
@@ -8357,7 +8404,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             if venv_created:
                 if _clear_editor_config_after_new_environment():
                     gui.root.after(0, lambda: gui.log_ok(
-                        "Fresh env detected; cleared stale editor configuration."
+                        "Fresh env detected; removed stale app-local editor metadata; saved editor preference preserved."
                     ))
 
                 if sys.platform == "win32":
@@ -8426,20 +8473,28 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
 
-        # ── WebView2 Runtime (Windows only, needed by pywebview to render
-        #    the Monaco editor) ────────────────────────────────────────
+        # ── Monaco runtime (required for the selected editor) ──────────
         gui.root.after(0, lambda: gui.log_section("Checking Microsoft Edge WebView2 Runtime"))
         if not _check_import_pywebview():
-            _select_default_editor_for_compatibility()
             gui.root.after(0, lambda: gui.log_warn(
-                "pywebview is unavailable. Switched to the lightweight default editor."
+                "pywebview failed its fresh-interpreter verification."
             ))
+            _fail_and_exit(
+                "pywebview",
+                "The Monaco WebView dependency could not be imported after installation. "
+                "Bootstrap will not launch the GUI with an incomplete dependency set.",
+            )
+            return
         elif sys.platform == "win32" and not ensure_webview2_runtime():
-            _select_default_editor_for_compatibility()
             gui.root.after(0, lambda: gui.log_warn(
-                "WebView2 is unavailable. Switched to the lightweight default editor; "
-                "compile, upload, and serial monitor remain usable."
+                "WebView2 Runtime installation did not pass post-install verification."
             ))
+            _fail_and_exit(
+                "Microsoft Edge WebView2 Runtime",
+                "The runtime is required by Monaco and was not detected after the repair attempt. "
+                "Bootstrap will retry after the installation problem is resolved.",
+            )
+            return
 
         # ── PlatformIO + Board Toolchains (combined step) ───────────────
         gui.root.after(0, lambda: gui.log_section("Checking PlatformIO & Board Toolchains"))
@@ -8463,21 +8518,27 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         # Prepare portable board-core folders used by the Board Browser.
         if not ensure_arduino_avr_board():
-            gui.root.after(0, lambda: gui.log_warn(
-                "Arduino AVR board folder could not be prepared; PlatformIO AVR support will still be checked separately."
-            ))
+            _fail_and_exit(
+                "Arduino AVR Board Core",
+                "The required Arduino AVR board folder could not be prepared.",
+            )
+            return
 
         if not ensure_esp32_board_folder():
-            gui.root.after(0, lambda: gui.log_warn(
-                "ESP32 board folder could not be prepared; PlatformIO ESP32 support will still be checked separately."
-            ))
+            _fail_and_exit(
+                "ESP32 Board Core",
+                "The required ESP32 board folder could not be prepared.",
+            )
+            return
 
         # Pre-install PlatformIO frameworks/toolchains (ESP32 + AVR + downloaded boards).
         # Runs serially because all PlatformIO package operations share one core directory.
         if not ensure_board_toolchains():
-            gui.root.after(0, lambda: gui.log_warn(
-                "One or more optional board toolchains were not preloaded. PlatformIO will retry on first use."
-            ))
+            _fail_and_exit(
+                "PlatformIO Board Toolchains",
+                "One or more required board toolchains could not be prepared.",
+            )
+            return
 
         # ── Arduino-CLI ──────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))
@@ -8498,16 +8559,27 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 0,
                 lambda: gui.log_ok(cp_message) if cp_ok else gui.log_warn(cp_message),
             )
+            if not cp_ok:
+                _fail_and_exit(
+                    "CP210x USB Serial Driver",
+                    cp_message,
+                )
+                return
 
         gui.root.after(0, lambda: gui.log_section("Checking OpenCode AI Assistant"))
         if sys.platform == "win32":
             if not _is_network_reachable(timeout=3.0):
-                gui.root.after(0, lambda: gui.log_warn(
-                    "Network is unreachable; skipping OpenCode AI Assistant installation. "
-                    "It will be installed automatically on the next launch with internet."
-                ))
+                _fail_and_exit(
+                    "OpenCode AI Assistant",
+                    "The network is unreachable, so the required OpenCode AI Assistant cannot be installed or verified.",
+                )
+                return
             elif not ensure_opencode_cli():
-                gui.root.after(0, lambda: gui.log_warn("OpenCode AI Assistant is missing or could not be installed automatically."))
+                _fail_and_exit(
+                    "OpenCode AI Assistant",
+                    "The required OpenCode AI Assistant is missing or could not be installed automatically.",
+                )
+                return
 
 
         # ── Update checks ─────────────────────────────────────────────
