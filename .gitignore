@@ -123,3 +123,7 @@ tests/index_json/
 tests/logs/
 tests/src/
 .pio_bootstrap_first_use_*
+
+# === Temporary / Archived Reports & Plans ===
+old-*
+
