@@ -23,8 +23,7 @@
  * THE SOFTWARE.
  *
  * Originally forked from (with the author's permission):
- *   Fabrice Bellard's javascript vt100 for jslinux:
- *   http://bellard.org/jslinux/
+ *   Fabrice Bellard's JavaScript VT100 implementation.
  *   Copyright (c) 2011 Fabrice Bellard
  *   The original design remains. The terminal itself
  *   has been extended to include xterm CSI codes, among

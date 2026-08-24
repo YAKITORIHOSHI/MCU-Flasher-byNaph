@@ -25,6 +25,7 @@ import sys
 import subprocess
 import threading
 import time
+import importlib.util
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import webbrowser
@@ -78,6 +79,8 @@ SETTINGS_FILE = (
 DEFAULT_DOWNLOAD_DIR = os.path.join(
     os.path.expanduser("~"), "Documents", "_MCUFlasherByNaph_src"
 )
+
+_QSCINTILLA_INSTALL_LOCK = threading.Lock()
 
 
 class Theme:
@@ -224,7 +227,18 @@ class CircularLoadingOverlay(tk.Frame):
             pass
 
 
-def _open_code_viewer(file_path, all_paths=None):
+def _qscintilla_available() -> bool:
+    """Return whether the optional standalone code viewer can start."""
+    try:
+        return (
+            importlib.util.find_spec("PyQt5.QtWidgets") is not None
+            and importlib.util.find_spec("PyQt5.Qsci") is not None
+        )
+    except Exception:
+        return False
+
+
+def _launch_code_viewer(file_path, all_paths=None):
     viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
     if not os.path.exists(viewer_script):
         # Fallback to notepad/editor if the viewer script is missing
@@ -233,10 +247,11 @@ def _open_code_viewer(file_path, all_paths=None):
                 import ctypes
                 SW_SHOWNORMAL = 1
                 ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-e", file_path])
             else:
-                subprocess.Popen(["xdg-open", file_path])
+                messagebox.showerror(
+                    "Windows Required",
+                    "The MCU Flasher code viewer is supported on Windows only.",
+                )
         except Exception as e:
             messagebox.showerror("Error", f"Viewer script not found and fallback failed:\n{e}")
         return
@@ -249,6 +264,89 @@ def _open_code_viewer(file_path, all_paths=None):
         subprocess.Popen(cmd)
     except Exception as e:
         messagebox.showerror("Error", f"Failed to launch QScintilla viewer:\n{e}")
+
+
+def _open_code_viewer(file_path, all_paths=None, parent=None):
+    """Open the optional QScintilla viewer, installing it only on first use.
+
+    PyQt5/QScintilla is intentionally not part of the normal bootstrap because
+    the main application uses Tk/Monaco.  Keep the feature available by
+    installing its dependency after the user explicitly asks to view an
+    example, without freezing the Arduino browser while pip runs.
+    """
+    if _qscintilla_available():
+        _launch_code_viewer(file_path, all_paths)
+        return
+
+    if parent is None:
+        messagebox.showerror(
+            "Code Viewer Dependency Missing",
+            "The optional PyQt5/QScintilla viewer is not installed. "
+            "Open the example from the MCU Flasher environment once to install it.",
+        )
+        return
+
+    if not messagebox.askyesno(
+        "Install Optional Code Viewer",
+        "The standalone code viewer needs PyQt5/QScintilla (a large optional download).\n\n"
+        "Install it now? The main MCU Flasher application does not require this package.",
+        parent=parent,
+    ):
+        return
+
+    if not _QSCINTILLA_INSTALL_LOCK.acquire(blocking=False):
+        messagebox.showinfo(
+            "Code Viewer Setup In Progress",
+            "The optional code viewer dependency is already being installed. "
+            "Please try again when setup finishes.",
+            parent=parent,
+        )
+        return
+
+    messagebox.showinfo(
+        "Installing Optional Code Viewer",
+        "PyQt5/QScintilla is being installed in the background.\n\n"
+        "The viewer will open automatically when setup completes.",
+        parent=parent,
+    )
+
+    def _install_worker():
+        ok = False
+        detail = ""
+        try:
+            modules_dir = os.path.dirname(os.path.abspath(__file__))
+            if modules_dir not in sys.path:
+                sys.path.insert(0, modules_dir)
+            from bootstrap import ensure_optional_pip_feature
+            ok = bool(ensure_optional_pip_feature("qscintilla_viewer"))
+            if not ok:
+                import bootstrap as _bootstrap
+                detail = str(getattr(_bootstrap, "_LAST_PIP_ERROR", "") or "")
+        except Exception as exc:
+            detail = str(exc)
+
+        def _finish():
+            _QSCINTILLA_INSTALL_LOCK.release()
+            if ok and _qscintilla_available():
+                _launch_code_viewer(file_path, all_paths)
+                return
+            messagebox.showerror(
+                "Code Viewer Setup Failed",
+                "PyQt5/QScintilla could not be installed.\n\n"
+                + (detail or "Check the bootstrap pip log and try again."),
+                parent=parent,
+            )
+
+        try:
+            parent.after(0, _finish)
+        except Exception:
+            _QSCINTILLA_INSTALL_LOCK.release()
+
+    threading.Thread(
+        target=_install_worker,
+        name="QScintillaOptionalInstall",
+        daemon=True,
+    ).start()
 
 
 def _load_settings() -> dict:
@@ -1200,7 +1298,7 @@ class InstalledTab:
         if not os.path.exists(path):
             messagebox.showerror("Error", "Sample file no longer exists on disk.")
             return
-        _open_code_viewer(path, self._current_examples)
+        _open_code_viewer(path, self._current_examples, parent=self.app.root)
 
     def _get_dir_size(self, path: str) -> int:
         if os.path.isfile(path):

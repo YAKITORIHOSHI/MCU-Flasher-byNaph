@@ -13,9 +13,7 @@ _modules_path = Path(__file__).resolve().parent / "src" / "modules"
 if str(_modules_path) not in sys.path:
     sys.path.insert(0, str(_modules_path))
 
-sys.dont_write_bytecode = True
 import os
-os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 import hashlib
 import json
@@ -38,6 +36,18 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font as tkfont
 from pathlib import Path
 from datetime import datetime
+
+
+_STARTUP_MONOTONIC = time.perf_counter()
+
+
+def _startup_event(name: str) -> None:
+    """Emit lightweight phase telemetry without adding startup I/O."""
+    try:
+        elapsed_ms = (time.perf_counter() - _STARTUP_MONOTONIC) * 1000.0
+        print(f"[STARTUP] {name} +{elapsed_ms:.1f}ms", flush=True)
+    except Exception:
+        pass
 
 
 class _ShellTerminalBuffer:
@@ -461,9 +471,6 @@ if getattr(sys, 'frozen', False):
     SCRIPT_DIR = Path(sys.executable).resolve().parent
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent
-
-sys.dont_write_bytecode = True
-os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 UPLOAD_CONNECTION_ATTEMPTS = 10
 MCU_FLASH_PATCH_VERSION = "v25-ui-responsive-serial-pump-app-namespace"
@@ -3678,10 +3685,30 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     return core_dir
 
 
-_configure_platformio_environment(SCRIPT_DIR)
-_neutralize_conflicting_global_platformio_config()
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PLATFORMIO_UNBUFFERED"] = "1"
+
+_PLATFORMIO_ENV_CONFIGURED = False
+_PLATFORMIO_ENV_CONFIG_LOCK = threading.RLock()
+
+
+def _ensure_platformio_environment_for_build(script_dir: Path = SCRIPT_DIR) -> None:
+    """Configure PlatformIO only when a build-related operation needs it.
+
+    Importing the GUI must remain side-effect free on the normal launch path.
+    Build/upload callers reach this through
+    ``_refresh_platformio_core_environment``; the setup worker performs the
+    equivalent bootstrap-side preparation before installing toolchains.
+    """
+    global _PLATFORMIO_ENV_CONFIGURED
+    if _PLATFORMIO_ENV_CONFIGURED:
+        return
+    with _PLATFORMIO_ENV_CONFIG_LOCK:
+        if _PLATFORMIO_ENV_CONFIGURED:
+            return
+        _configure_platformio_environment(script_dir)
+        _neutralize_conflicting_global_platformio_config()
+        _PLATFORMIO_ENV_CONFIGURED = True
 
 
 def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple[Path, bool]:
@@ -3694,6 +3721,7 @@ def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple
     known app-owned target when needed, and use the direct target as a safe
     fallback if Windows refuses the junction operation.
     """
+    _ensure_platformio_environment_for_build(script_dir)
     target_dir = Path(script_dir) / "src" / ".platformio-mcu-gui"
     configured_raw = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
     configured_valid = False
@@ -4021,10 +4049,11 @@ _BOARD_CATALOG_CACHE_VERSION = 1
 
 def _board_catalog_cache_path() -> Path:
     """Return a user-local cache path so startup never modifies the project tree."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", "" ).strip() or Path.home() / "AppData" / "Local")
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME", "").strip() or Path.home() / ".cache")
+    base = Path(
+        os.environ.get("LOCALAPPDATA", "").strip()
+        or os.environ.get("APPDATA", "").strip()
+        or Path.home() / "AppData" / "Local"
+    )
     return base / ".mcuflasher-app" / "board_catalog.json"
 
 
@@ -7724,6 +7753,7 @@ class MCUUploadGUI:
             self.root.update()
         except tk.TclError:
             pass
+        _startup_event("shell-visible")
         self.root.after(500, self._unset_main_topmost)
         # Keep the cover until the active editor reports that it is usable.
         # There is intentionally no fixed safety dismissal here: a cold
@@ -7759,12 +7789,12 @@ class MCUUploadGUI:
         # after_idle can run before the first WM_PAINT, making a synchronous
         # project scan look like a frozen white window even when it later
         # recovers. A short timer keeps startup responsive and visible.
-        self.root.after(250, self._run_initial_project_load)
+        self.root.after(100, self._run_initial_project_load)
 
-        # Defer secondary background services (serial probing, syntax checks)
-        # until the Code Editor is fully loaded & rendered (or 1500ms safety fallback),
-        # giving 100% CPU & thread priority to editor startup.
-        self.root.after(1500, self._deferred_background_init)
+        # Secondary services start after the editor marks the core UI ready.
+        # The 5-second fallback is only for a broken editor handshake and does
+        # not keep the shell or overlay blocked.
+        self.root.after(5000, self._deferred_background_init)
 
     def _run_initial_project_load(self):
         """Load the selected project after the main interface is complete.
@@ -7776,6 +7806,12 @@ class MCUUploadGUI:
         editor/window alive so the user can correct the project or choose a new
         one.
         """
+        if not getattr(self, "_startup_ready", False):
+            try:
+                self.root.after(100, self._run_initial_project_load)
+            except Exception:
+                pass
+            return
         try:
             self._print_welcome()
             return
@@ -7907,25 +7943,15 @@ class MCUUploadGUI:
             )
             fallback_ready = getattr(self, "_editor_fallback_ready", False)
             if editor_ready or fallback_ready:
-                if getattr(self, "_deferred_bg_done", False):
-                    self._mark_startup_ready("Application ready")
-                    return
-                self._set_startup_overlay_message(
-                    "⚡ MCU Flasher by Naph",
-                    "Editor opened — finishing terminal and device startup…",
-                )
+                self._mark_startup_ready("Application ready")
+                return
             else:
                 self._set_startup_overlay_message(
                     "⚡ MCU Flasher by Naph", "Loading Monaco Editor…"
                 )
         elif getattr(self, "_default_editor_ready", False):
-            if getattr(self, "_deferred_bg_done", False):
-                self._mark_startup_ready("Application ready")
-                return
-            self._set_startup_overlay_message(
-                "⚡ MCU Flasher by Naph",
-                "Editor ready — finishing terminal and device startup…",
-            )
+            self._mark_startup_ready("Code editor ready")
+            return
         else:
             self._set_startup_overlay_message(
                 "⚡ MCU Flasher by Naph", "Loading project files…"
@@ -7942,20 +7968,9 @@ class MCUUploadGUI:
         """Dismiss the startup cover after the active editor is actually usable."""
         if getattr(self, "_startup_ready", False):
             return
-        if not getattr(self, "_deferred_bg_done", False):
-            # Editor callbacks can arrive before the terminal, device checks,
-            # and other final startup services have returned. Remember that the
-            # editor is ready, but keep the cover in place until the bottom-up
-            # startup pass has completed.
-            self._startup_editor_ready = True
-            self._startup_editor_ready_reason = str(reason or "Editor ready")
-            self._set_startup_overlay_message(
-                "⚡ MCU Flasher by Naph",
-                "Editor ready — finishing terminal and device startup…",
-            )
-            return
         self._startup_ready = True
         self._startup_ready_reason = str(reason or "Ready")
+        _startup_event("core-ui-ready")
         self._schedule_shell_prewarm()
         self._set_startup_overlay_message(
             "⚡ MCU Flasher by Naph", f"✔ {self._startup_ready_reason}"
@@ -7977,6 +7992,14 @@ class MCUUploadGUI:
             )
         except Exception:
             self._dismiss_startup_overlay()
+
+        # Optional device, syntax, board, and terminal services start only
+        # after the core UI is interactive. Their completion is not part of
+        # the shell-ready contract.
+        try:
+            self.root.after(250, self._deferred_background_init)
+        except Exception:
+            pass
 
     def _dismiss_startup_overlay(self):
         """Remove the startup cover after the editor readiness handshake."""
@@ -8077,7 +8100,7 @@ class MCUUploadGUI:
             )
         except Exception:
             pass
-        self._poll_startup_readiness()
+        _startup_event("optional-services-settled")
 
     def _startup_terminal_ready(self):
         """Return true only after the terminal has a usable native/fallback shell."""
@@ -8187,7 +8210,7 @@ class MCUUploadGUI:
     # ──────────────────────────────────────────────────────────
     def _build_ui(self):
         # Use the 'clam' ttk theme for the whole window right from the start.
-        # Native themes (vista/xpnative on Windows, aqua on macOS) render
+        # Native Windows themes can render
         # Notebook tabs, Comboboxes, and Scrollbars using the OS's own visual
         # styling engine and silently ignore ttk style.configure() background/
         # foreground overrides. 'clam' draws everything with ttk's own
@@ -24462,8 +24485,7 @@ default_envs = {self._pio_env_name()}
         bind_target.bind("<Control-Key-plus>", _zoom_in)
         bind_target.bind("<Control-Key-minus>", _zoom_out)
 
-        # Trigger deferred background init once default editor tabs are ready
-        self.root.after(100, self._deferred_background_init)
+        # Deferred background services are started by _mark_startup_ready.
 
 
     def _find_editor_hwnd(self):
@@ -29881,6 +29903,9 @@ def _configure_windows_dpi_awareness() -> None:
 
 def main():
     import os
+    if sys.platform != "win32":
+        raise SystemExit("MCU Flasher by Naph requires Windows 10 or newer.")
+    _startup_event("main-enter")
     _configure_windows_dpi_awareness()
     # If not run from bootstrap, launch the VBS launcher to check for updates and setup dependencies
     if "--from-bootstrap" not in sys.argv:
@@ -30102,6 +30127,7 @@ def main():
     def _run_tk_inner():
         nonlocal root_val, app_val
         root_val = tk.Tk()
+        _startup_event("tk-root-created")
         root_val.withdraw()
         root_val.configure(bg="#151922")
 
@@ -30154,6 +30180,7 @@ def main():
 
         startup_state["stage"] = "opening the selected project and building the main interface"
         app_val = MCUUploadGUI(root_val)
+        _startup_event("gui-constructed")
 
         # If the user cancelled the Project Selector, __init__ destroyed
         # root and returned early.  Always signal root_ready FIRST so the
@@ -30208,6 +30235,7 @@ def main():
 
         startup_state["stage"] = "starting the main Tk event loop"
         root_ready.set()
+        _startup_event("shell-input-loop-started")
         root_val.mainloop()
 
     def run_tk():

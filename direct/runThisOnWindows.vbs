@@ -77,9 +77,6 @@ Else
     scriptDir = currentFolder & "\"
 End If
 
-' ── Prevent Python from writing or using compiled .pyc bytecode files ──
-shell.Environment("PROCESS")("PYTHONDONTWRITEBYTECODE") = "1"
-
 ' ── Verify storage drive type (SSD/HDD only; block USB flash drives) ──
 Dim driveLetter, driveObj
 driveLetter = fso.GetDriveName(scriptDir)
@@ -372,9 +369,9 @@ If systemPython <> "" And systemPython <> "py" And systemPython <> "python" Then
 End If
 
 If InStr(launchPython, "\") > 0 Then
-    runCmd = """" & launchPython & """ -B """ & bootstrapFile & """ --hidden"
+    runCmd = """" & launchPython & """ """ & bootstrapFile & """ --hidden"
 Else
-    runCmd = launchPython & " -B """ & bootstrapFile & """ --hidden"
+    runCmd = launchPython & " """ & bootstrapFile & """ --hidden"
 End If
 
 On Error Resume Next

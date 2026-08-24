@@ -63,9 +63,6 @@ if getattr(sys, 'frozen', False):
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 
-sys.dont_write_bytecode = True
-os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-
 def purge_python_cache(root_dir: Path | str = SCRIPT_DIR) -> None:
     """Purge all __pycache__ directories and *.pyc/*.pyo files recursively."""
     try:
@@ -1035,8 +1032,12 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
 
 
 # One store only: Bootstrap and every GUI subprocess must resolve the same core_dir.
-_configure_platformio_environment(SCRIPT_DIR)
-_neutralize_conflicting_global_platformio_config()
+# PlatformIO configuration is intentionally deferred.  Importing bootstrap is
+# part of the normal launch decision, so creating junctions/directories and
+# editing the user's global PlatformIO config here would put filesystem work
+# back on the fast path.  The setup worker configures it before any install or
+# build preparation; a normal launch receives the already-validated core path
+# from the installation health snapshot instead.
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 if sys.platform == "win32":
@@ -2904,7 +2905,11 @@ PIP_PACKAGES_SPEC = [
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
-        "critical": True,
+        # The main MCU Flasher GUI is Tk/Monaco based.  PyQt5/QScintilla is
+        # only used by the standalone Arduino library-example viewer and must
+        # not hold the normal bootstrap hostage to a large Qt wheel download.
+        "critical": False,
+        "optional_feature": "qscintilla_viewer",
     },
     {
         "id": "platformio",
@@ -2916,7 +2921,12 @@ PIP_PACKAGES_SPEC = [
 ]
 
 
-def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
+def ensure_pip_packages_parallel(
+    gui: Optional[BootstrapGUI] = None,
+    *,
+    package_ids: set[str] | None = None,
+    include_optional: bool = False,
+) -> bool:
     """Install missing Python dependencies with safe adaptive parallelism.
 
     The bootstrap never runs multiple ``pip install`` processes against the
@@ -2940,15 +2950,32 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
 
     The GUI keeps the original per-dependency 30-cell progress bars.  Raw pip
     resolver output is hidden unless an operation fails.
+
+    ``package_ids`` is reserved for feature-triggered installs (for example,
+    the optional QScintilla viewer).  The normal call installs only specs
+    marked ``critical``; ``include_optional`` is available to an explicit
+    setup/repair flow that intentionally wants every feature dependency.
     """
     import concurrent.futures
     import tempfile
     import threading
 
-    active_specs = [
-        spec for spec in PIP_PACKAGES_SPEC
-        if not (spec["id"] == "pywin32" and sys.platform != "win32")
-    ]
+    if package_ids is not None:
+        requested_ids = {str(value).strip().lower() for value in package_ids}
+        active_specs = [
+            spec for spec in PIP_PACKAGES_SPEC
+            if str(spec.get("id", "")).lower() in requested_ids
+            and not (spec["id"] == "pywin32" and sys.platform != "win32")
+        ]
+    else:
+        active_specs = [
+            spec for spec in PIP_PACKAGES_SPEC
+            if (include_optional or spec.get("critical", True))
+            and not (spec["id"] == "pywin32" and sys.platform != "win32")
+        ]
+
+    if not active_specs:
+        return True
 
     table_lock = threading.RLock()
     pkg_states = {
@@ -3114,10 +3141,12 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             "--progress-bar",
             "off",
             "--no-input",
-            # Isolate concurrent download workers from the user's shared pip
-            # cache.  This avoids Windows cache ACL/locking races while still
-            # allowing the later single install pass to use normal pip cache.
-            "--no-cache-dir",
+            # Reuse pip's content-addressed HTTP/wheel cache.  The previous
+            # no-cache-dir policy forced a full redownload whenever a venv was
+            # recreated, even when the same wheels were already present on the
+            # machine.  Each worker still writes to its own destination; the
+            # shared cache is read/write-safe because pip commits entries
+            # atomically.
         ]
 
         output_lines = []
@@ -3161,7 +3190,14 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             ).start()
 
             started = time.time()
-            timeout_limit = 720 if sid == "platformio" else 480
+            # Critical bootstrap packages are small wheel installs and should
+            # fail visibly rather than leave the UI in a fake 64–75% phase for
+            # eight minutes.  Keep a longer budget only for an explicitly
+            # requested optional feature or the PlatformIO package.
+            timeout_limit = (
+                600 if not spec.get("critical", True)
+                else (360 if sid == "platformio" else 180)
+            )
             timed_out = False
 
             while True:
@@ -3232,6 +3268,7 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
     try:
         # Downloads/resolution are isolated from the environment, so this is the
         # safe place to use parallel pip processes.
+        completed_downloads = 0
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=download_workers,
             thread_name_prefix="BootstrapPipDownload",
@@ -3256,8 +3293,19 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
                                 shutil.copy2(artifact, target)
                             except OSError:
                                 pass
-                    _set_state(result_sid, status_text="✔ Downloaded / waiting", pct=75)
+                    completed_downloads += 1
+                    _set_state(
+                        result_sid,
+                        status_text="✔ Downloaded; waiting for remaining downloads",
+                        pct=75,
+                    )
+                    if gui:
+                        gui.set_status(
+                            f"Downloaded {completed_downloads}/{len(missing_specs)} packages; "
+                            "waiting for the remaining downloads..."
+                        )
                 else:
+                    completed_downloads += 1
                     download_failures.add(result_sid)
                     failure_details[result_sid] = detail
                     # Do not abort.  The single install pass below may still
@@ -3265,7 +3313,15 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
                     # is just a status note — not an error.  Use a neutral glyph
                     # so users don't think the install has failed while the
                     # unified pip transaction is still about to install it.
-                    _set_state(result_sid, status_text="⏳ Unified install", pct=65)
+                    timed_out = "timeout" in str(detail).lower()
+                    _set_state(
+                        result_sid,
+                        status_text=(
+                            "⚠ Download timed out; retrying unified install"
+                            if timed_out else "⏳ Unified install"
+                        ),
+                        pct=65,
+                    )
                 _update_bottom_from_rows()
 
         # Build one top-level install argument list.  Deduplicate while preserving
@@ -3306,10 +3362,20 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             str(wheelhouse),
             *install_args,
         ]
+        # When every download worker completed successfully, the wheelhouse
+        # is a complete, deterministic install source.  Do not let pip query
+        # the package index again for metadata or a newer candidate: that can
+        # turn a local install back into a network-bound transaction.  If one
+        # worker failed, keep the index available for the recovery path.
+        if not download_failures:
+            first_install_args.insert(0, "--no-index")
 
+        install_timeout = 600 if (
+            download_failures or any(not spec.get("critical", True) for spec in missing_specs)
+        ) else 300
         install_ok = _run_pip_install(
             first_install_args,
-            timeout=1200,
+            timeout=install_timeout,
             use_cache=True,
             only_binary=False,
             progress_start=80,
@@ -3324,9 +3390,17 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             _set_all(missing_specs, "⚙ Retrying without cache...", 90)
             if gui:
                 gui.set_status("Retrying Python dependency installation without pip cache...")
+            # A complete wheelhouse is deliberately installed offline on the
+            # first pass.  If that local transaction fails, recovery must be
+            # allowed to consult the package index again; otherwise the retry
+            # would repeat the same offline failure while only changing pip's
+            # cache policy.
+            retry_install_args = [
+                arg for arg in first_install_args if str(arg).lower() != "--no-index"
+            ]
             install_ok = _run_pip_install(
-                first_install_args,
-                timeout=1200,
+                retry_install_args,
+                timeout=600,
                 use_cache=False,
                 only_binary=False,
                 progress_start=90,
@@ -3419,6 +3493,27 @@ def ensure_pip_packages_parallel(gui: Optional[BootstrapGUI] = None) -> bool:
             shutil.rmtree(temp_root, ignore_errors=True)
         except Exception:
             pass
+
+
+_OPTIONAL_PIP_FEATURE_PACKAGE_IDS: dict[str, set[str]] = {
+    "qscintilla_viewer": {"pyqt5_qscintilla"},
+}
+
+
+def ensure_optional_pip_feature(
+    feature: str,
+    gui: Optional[BootstrapGUI] = None,
+) -> bool:
+    """Install one optional feature's packages on first use.
+
+    Optional feature dependencies intentionally do not participate in the
+    normal bootstrap.  Callers should invoke this only after the user has
+    selected the feature (for example, opening a QScintilla example viewer).
+    """
+    package_ids = _OPTIONAL_PIP_FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
+    if not package_ids:
+        return False
+    return ensure_pip_packages_parallel(gui, package_ids=package_ids)
 
 
 # WebView2 runtime detection.
@@ -7773,6 +7868,194 @@ def _is_env_healthy() -> bool:
     return True
 
 
+# ─────────────────────────────────────────────────────────────
+# Fast normal-launch health snapshot
+# ─────────────────────────────────────────────────────────────
+# The bootstrap process remains the repair/setup entry point, but a valid
+# installation must not pay the full setup transaction on every launch.  This
+# small manifest is deliberately local and conservative: a missing file,
+# changed app/runtime fingerprint, or unreadable snapshot falls back to the
+# existing setup UI.  No network, installer, or optional-package import is
+# performed while deciding the normal path.
+STARTUP_HEALTH_SCHEMA = 2
+
+
+def _user_startup_state_dir() -> Path:
+    """Return a writable, per-user state location for the launch manifest.
+
+    Deployed builds may live below ``Program Files`` or on a read-only network
+    share.  Startup health is user state, not application content, so never
+    assume that ``SCRIPT_DIR`` is writable and never share one user's snapshot
+    with another user on the same machine.
+    """
+    override = os.environ.get("MCU_FLASHER_STATE_DIR", "").strip()
+    if override:
+        return Path(os.path.expandvars(os.path.expanduser(override)))
+
+    base = (
+        os.environ.get("LOCALAPPDATA", "").strip()
+        or os.environ.get("APPDATA", "").strip()
+        or str(Path.home() / "AppData" / "Local")
+    )
+    return Path(base) / "MCUFlasherByNaph"
+
+
+STARTUP_HEALTH_FILE = _user_startup_state_dir() / "startup_health.json"
+_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial",)
+
+
+def _startup_app_fingerprint() -> str:
+    """Return a cheap fingerprint for files that define the launch contract."""
+    tracked = (
+        SCRIPT_DIR / "mcu_flash_gui.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "launcher.py",
+    )
+    rows = []
+    for path in tracked:
+        try:
+            stat = path.stat()
+            rows.append((str(path.relative_to(SCRIPT_DIR)), stat.st_size, stat.st_mtime_ns))
+        except OSError:
+            rows.append((str(path.relative_to(SCRIPT_DIR)), None, None))
+    return json.dumps(rows, separators=(",", ":"), sort_keys=True)
+
+
+def _startup_installation_identity() -> str:
+    """Return a case-insensitive identity for this deployed app instance."""
+    try:
+        return str(SCRIPT_DIR.resolve()).casefold()
+    except OSError:
+        return str(SCRIPT_DIR).casefold()
+
+
+def _startup_site_packages_dir() -> Path | None:
+    """Resolve the current venv site-packages directory without importing it."""
+    current = Path(sys.executable).resolve()
+    venv_dir = SCRIPT_DIR / "env"
+    try:
+        if venv_dir.resolve() not in current.parents:
+            return None
+    except Exception:
+        return None
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = (
+        venv_dir / "Lib" / "site-packages",
+        venv_dir / "lib" / version / "site-packages",
+        venv_dir / "lib" / "site-packages",
+    )
+    for site in candidates:
+        if site.is_dir():
+            return site
+    return None
+
+
+def _startup_required_paths() -> list[Path]:
+    """Return only files needed to construct the current main GUI shell."""
+    site = _startup_site_packages_dir()
+    paths = [Path(sys.executable), GUI_SCRIPT]
+    if site is not None:
+        paths.extend(site / name for name in _STARTUP_REQUIRED_PACKAGE_DIRS)
+    return paths
+
+
+def _read_startup_health_snapshot() -> dict | None:
+    """Return a valid cached health snapshot, or ``None`` for repair mode."""
+    try:
+        if _startup_site_packages_dir() is None:
+            return None
+        data = json.loads(STARTUP_HEALTH_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        if int(data.get("schema", 0)) != STARTUP_HEALTH_SCHEMA:
+            return None
+        if data.get("installation_root") != _startup_installation_identity():
+            return None
+        if data.get("python_executable") != str(Path(sys.executable).resolve()).casefold():
+            return None
+        if data.get("app_fingerprint") != _startup_app_fingerprint():
+            return None
+        current_python_version = ".".join(str(x) for x in sys.version_info[:3])
+        if data.get("python_version") != current_python_version:
+            return None
+        if not bool(data.get("critical_ready")):
+            return None
+        if not all(path.exists() for path in _startup_required_paths()):
+            return None
+        core_dir = str(data.get("platformio_core_dir") or "").strip()
+        if core_dir and not Path(core_dir).exists():
+            return None
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _write_startup_health_snapshot() -> bool:
+    """Persist the successful setup result atomically for future warm launches."""
+    temporary: Path | None = None
+    try:
+        if _startup_site_packages_dir() is None:
+            return False
+        STARTUP_HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema": STARTUP_HEALTH_SCHEMA,
+            "installation_root": _startup_installation_identity(),
+            "python_executable": str(Path(sys.executable).resolve()).casefold(),
+            "app_fingerprint": _startup_app_fingerprint(),
+            "python_version": ".".join(str(x) for x in sys.version_info[:3]),
+            "python_executable_name": Path(sys.executable).name,
+            "critical_ready": all(path.exists() for path in _startup_required_paths()),
+            "platformio_core_dir": os.environ.get("PLATFORMIO_CORE_DIR", ""),
+            "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if not payload["critical_ready"]:
+            return False
+        temporary = STARTUP_HEALTH_FILE.with_name(
+            f"{STARTUP_HEALTH_FILE.name}.tmp-{os.getpid()}"
+        )
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, STARTUP_HEALTH_FILE)
+        return True
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return False
+
+
+def _try_fast_normal_launch() -> bool:
+    """Launch the main GUI immediately when the local health snapshot is valid."""
+    snapshot = _read_startup_health_snapshot()
+    if snapshot is None:
+        return False
+
+    # Preserve the validated core path for child processes without invoking
+    # _get_safe_platformio_core_dir(), which creates directories/junctions.
+    core_dir = str(snapshot.get("platformio_core_dir") or "").strip()
+    if core_dir:
+        os.environ["PLATFORMIO_CORE_DIR"] = core_dir
+
+    proc, _gui_log = _spawn_main_gui()
+    if proc is None:
+        return False
+    _record_bootstrap_log(
+        "FAST_PATH",
+        "Valid local startup health snapshot found; spawned the main GUI without setup, update, or installer checks.",
+    )
+    _record_bootstrap_log("FINISH", "Main GUI launched through the normal fast path.")
+    return True
+
+
+def _explicit_setup_requested() -> bool:
+    """Return true when the caller intentionally requested repair/setup."""
+    requested = {"--repair", "--setup", "--force-setup", "--force-repair"}
+    if any(str(arg).lower() in requested for arg in sys.argv[1:]):
+        return True
+    return (SCRIPT_DIR / ".force_rebuild").exists()
+
+
 def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     """
     Launch MCU Flasher.exe (if exists) or mcu_flash_gui.py as a detached process.
@@ -8268,6 +8551,12 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         gui.root.after(0, _log_worker_start)
 
+        # PlatformIO setup is a repair/install concern, not an import-time
+        # concern.  Keep directory/junction/configuration work on this worker
+        # so a normal launch can skip it entirely.
+        _configure_platformio_environment(SCRIPT_DIR)
+        _neutralize_conflicting_global_platformio_config()
+
         if sys.platform == "win32":
             try:
                 from win_subprocess_hide import install_venv_site_hook
@@ -8472,6 +8761,9 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         if not ensure_pip_packages_parallel(gui):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
+        gui.root.after(0, lambda: gui.log_dim(
+            "Optional PyQt5/QScintilla viewer deferred until an example is opened."
+        ))
 
         # ── Monaco runtime (required for the selected editor) ──────────
         gui.root.after(0, lambda: gui.log_section("Checking Microsoft Edge WebView2 Runtime"))
@@ -8591,6 +8883,11 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # ── Summary & launch ─────────────────────────────────────────
         def _finish():
             gui.log_ok("All dependencies ready!")
+
+            # The next launch can now use the local fast path.  A failed write
+            # is non-fatal; the existing bootstrap flow remains the fallback.
+            if _write_startup_health_snapshot():
+                gui.log_ok("Warm-launch health snapshot saved.")
 
             exe_path = SCRIPT_DIR / "MCU Flasher.exe"
             if not exe_path.exists() and not GUI_SCRIPT.exists():
@@ -8728,7 +9025,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 # run from a dev shortcut, etc.) instead of only ever being safe when
 # invoked through launcher.py. Sharing the one lock file means either entry
 # point blocks the other.
-_BOOTSTRAP_LOCK_FILE = SCRIPT_DIR / "logs" / "launcher.lock"
+_BOOTSTRAP_LOCK_FILE = STARTUP_HEALTH_FILE.parent / "launcher.lock"
 
 
 def _bootstrap_process_is_alive(pid: int) -> bool:
@@ -8888,12 +9185,36 @@ def _verify_storage_drive_type():
 
 def main():
     global _gui, _BOOTSTRAP_STARTUP_NOTE
+    if sys.platform != "win32":
+        raise SystemExit("MCU Flasher setup requires Windows 10 or newer.")
     _record_bootstrap_log(
         "START",
         "Bootstrap started "
         f"(pid={os.getpid()}, python={sys.executable}, project={SCRIPT_DIR}, args={sys.argv[1:]})",
     )
     _verify_storage_drive_type()
+
+    # Existing main GUI owns the user-facing singleton.  Check this before any
+    # recovery/update work so a second launcher invocation stays cheap.
+    if _is_main_gui_running():
+        _record_bootstrap_log("FINISH", "Existing main GUI detected; bootstrap did not run setup.")
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "MCU Uploader IDE by Naph is already running.\n\n"
+                "Switch to the existing window instead of starting a new one.",
+                "MCU Uploader IDE by Naph",
+                0x40,
+            )
+        except Exception:
+            pass
+        return
+
+    # Warm launches use the cached local health contract.  If it is absent or
+    # stale, continue into the existing setup/repair UI below.
+    if not _explicit_setup_requested() and _try_fast_normal_launch():
+        return
 
     # Clean up the narrow class of orphaned update probes produced by older
     # releases before checking the normal GUI instance. This is best-effort
@@ -8904,26 +9225,6 @@ def main():
             "RECOVERY",
             f"Stopped {recovered_updates} stale update probe process(es) from an older release.",
         )
-
-    # If the Main GUI already holds its single-instance mutex, it's already
-    # up and running. There is nothing bootstrap needs to prepare that the
-    # user is waiting on, and popping open another BootstrapGUI window (and
-    # possibly spawning a second Main GUI) would just be redundant — skip
-    # setup entirely in that case.
-    if _is_main_gui_running():
-        _record_bootstrap_log("FINISH", "Existing main GUI detected; bootstrap did not run setup.")
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0,
-                "MCU Uploader IDE by Naph is already running.\n\n"
-                "Switch to the existing window instead of starting a new one.",
-                "MCU Uploader IDE by Naph",
-                0x40,  # MB_ICONINFORMATION
-            )
-        except Exception:
-            pass
-        return
 
     # ── Launch Bootstrap GUI Window ─────────────────────────────────
     # Bootstrap setup is mandatory and runs its verification checks before launching the main GUI.
@@ -8941,6 +9242,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.platform != "win32":
+        raise SystemExit("MCU Flasher setup requires Windows 10 or newer.")
     # Special one-shot elevated helper used by a fresh normal-user bootstrap.
     # It deliberately bypasses the normal launcher/bootstrap lock and GUI.
     if "--privileged-first-run" in sys.argv:

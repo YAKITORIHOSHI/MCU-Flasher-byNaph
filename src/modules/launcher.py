@@ -21,10 +21,21 @@ if sys.platform == "win32":
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 
-# Disable python bytecode file creation
-sys.dont_write_bytecode = True
-os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
+def _user_state_dir() -> Path:
+    """Resolve per-user writable state instead of sharing locks in the install folder."""
+    override = os.environ.get("MCU_FLASHER_STATE_DIR", "").strip()
+    if override:
+        return Path(os.path.expandvars(os.path.expanduser(override)))
+    base = (
+        os.environ.get("LOCALAPPDATA", "").strip()
+        or os.environ.get("APPDATA", "").strip()
+        or str(Path.home() / "AppData" / "Local")
+    )
+    return Path(base) / "MCUFlasherByNaph"
+
+
+_USER_STATE_DIR = _user_state_dir()
 
 def _is_process_elevated() -> bool:
     """Return True when this launcher already has an elevated Windows token."""
@@ -151,7 +162,7 @@ _verify_storage_drive_type()
 # "win" -- exactly one O_EXCL create can ever succeed for a given filename.
 # If a stale lock is found (owner PID no longer alive, e.g. a crashed
 # previous run), it's reclaimed automatically.
-_LAUNCHER_LOCK_FILE = SCRIPT_DIR / "logs" / "launcher.lock"
+_LAUNCHER_LOCK_FILE = _USER_STATE_DIR / "launcher.lock"
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -268,6 +279,8 @@ def _notify_already_starting():
 
 
 if __name__ == "__main__":
+    if sys.platform != "win32":
+        raise SystemExit("MCU Flasher launcher requires Windows 10 or newer.")
     if "--new-window" not in sys.argv:
         if not _claim_launcher_slot():
             _notify_already_starting()
@@ -382,7 +395,7 @@ try:
         bootstrap.main()
 except Exception as e:
     import traceback
-    crash_log = SCRIPT_DIR / "logs" / "launcher_crash.log"
+    crash_log = _USER_STATE_DIR / "launcher_crash.log"
     try:
         crash_log.parent.mkdir(parents=True, exist_ok=True)
         crash_log.write_text(traceback.format_exc(), encoding="utf-8")
