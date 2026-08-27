@@ -20,6 +20,7 @@ Features
 
 import json
 import os
+import socket
 import re
 import sys
 import subprocess
@@ -53,6 +54,24 @@ try:
     import requests
 except ImportError:
     requests = None
+
+def check_internet_connection(timeout: float = 2.0) -> bool:
+    """Fast socket check for active internet connection."""
+    test_targets = [
+        ("1.1.1.1", 53),
+        ("8.8.8.8", 53),
+        ("downloads.arduino.cc", 443),
+        ("google.com", 80),
+    ]
+    for host, port in test_targets:
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+            return True
+        except Exception:
+            continue
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1581,7 +1600,18 @@ class ArduinoBrowser:
             self._force_exit()
 
     def _check_show_trigger(self):
-        """Poll for wake-up trigger file sent by main MCU Flasher GUI."""
+        """Poll for wake-up or force-exit trigger file sent by main MCU Flasher GUI."""
+        # If the main app is shutting down, it writes a force-exit trigger so
+        # this sleeping Download Manager process doesn't remain as an orphan.
+        force_exit_file = os.path.join(INDEX_CACHE_DIR, ".dm_force_exit")
+        if os.path.exists(force_exit_file):
+            try:
+                os.remove(force_exit_file)
+            except Exception:
+                pass
+            self._force_exit()
+            return
+
         trigger_file = os.path.join(INDEX_CACHE_DIR, ".show_dm_trigger")
         if os.path.exists(trigger_file):
             try:
@@ -2198,6 +2228,14 @@ class ArduinoBrowser:
     def _refresh_all(self):
         if self._busy:
             return
+        if not check_internet_connection():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "Cannot refresh library and board indexes because you are currently offline.\n\n"
+                "Please check your network connection and try again.",
+                parent=self.root,
+            )
+            return
         self._set_status("Refreshing all indexes…")
         if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
             try:
@@ -2249,8 +2287,14 @@ class ArduinoBrowser:
         # Final status and installed recompute
         lib_count = len(libs) if lib_data else 0
         board_count = len(boards) if board_data else 0
-        self.root.after(0, self._finish_load,
-                        f"{lib_count} libraries, {board_count} board platforms loaded")
+        if not check_internet_connection(timeout=1.0):
+            if lib_count or board_count:
+                status_msg = f"⚠ Offline Mode: {lib_count} libraries, {board_count} board platforms loaded from cache"
+            else:
+                status_msg = "⚠ No Internet Connection — Please check your network and click Refresh"
+        else:
+            status_msg = f"{lib_count} libraries, {board_count} board platforms loaded"
+        self.root.after(0, self._finish_load, status_msg)
 
     def _load_index(self, url: str, cache_file: str,
                     force_refresh: bool, label: str) -> dict | None:
@@ -2266,6 +2310,19 @@ class ArduinoBrowser:
                     os.unlink(cache_file)
                 except OSError:
                     pass
+
+        # Offline fallback: if no internet, load existing cached index even if expired
+        if not check_internet_connection(timeout=1.5):
+            if os.path.isfile(cache_file):
+                try:
+                    with open(cache_file, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                        self.root.after(0, self._set_status, f"Offline mode: loaded cached {label} index")
+                        return data
+                except Exception:
+                    pass
+            self.root.after(0, self._set_status, f"⚠ Offline — No internet and no cached {label} index available")
+            return None
 
         def _update_overlay():
             self._set_status(f"Downloading {label} index…")
@@ -2380,6 +2437,14 @@ class ArduinoBrowser:
         sel = tab.listbox.curselection()
         if not sel or self._busy:
             return
+        if not check_internet_connection():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "Cannot download package because you are currently offline.\n\n"
+                "Please check your internet connection and try again.",
+                parent=self.root,
+            )
+            return
         name = tab.filtered_names[sel[0]]
         item = tab.all_items[name]
         ver = tab.version_var.get()
@@ -2419,6 +2484,14 @@ class ArduinoBrowser:
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):
         if self._busy:
+            return
+        if not check_internet_connection():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "Cannot download update because you are currently offline.\n\n"
+                "Please check your internet connection and try again.",
+                parent=self.root,
+            )
             return
 
         tab = self.board_tab if is_board else self.lib_tab

@@ -14,6 +14,7 @@
 | Feature                              | Description                                                                    |
 | ------------------------------------ | ------------------------------------------------------------------------------ |
 | **🔨 One-Click Build & Flash**       | Compile and upload to ESP32 via Arduino CLI or PlatformIO                      |
+| **🔌 Disconnect-Safe Uploads**       | Two-phase uploads tolerate unplugging: compilation always finishes, and flashing is cleanly skipped (with recovery hints + reusable build cache) if the MCU disappears mid-compile |
 | **📟 Serial Monitor**                | Built-in terminal with ANSI color support, timestamps, and baud rate control   |
 | **🎨 Modern Dark UI**                | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
 | **✏️ Integrated Code Editor**        | Syntax-highlighted editor (QScintilla / Monaco) with project file management   |

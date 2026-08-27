@@ -899,6 +899,10 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
         ok("Pre-built PlatformIO core already populated.")
         return True
 
+    if not _is_network_reachable(timeout=2.0):
+        warn("PlatformIO core toolchains are not yet installed and cannot be downloaded while offline.")
+        return False
+
     pio_dir = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
     zip_dest = SCRIPT_DIR / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
 
@@ -3091,6 +3095,16 @@ def ensure_pip_packages_parallel(
             gui.log_ok("All pip package dependencies are verified!")
         return True
 
+    # Fast offline termination: cannot download missing pip packages without internet
+    if not _is_network_reachable(timeout=2.0):
+        missing_names = ", ".join(s["name"] for s in missing_specs)
+        for s in missing_specs:
+            _set_state(s["id"], status_text="✖ Offline (missing)", pct=0, done=True, ok_value=False)
+        if gui:
+            gui.log_fail(f"Internet connection is required to download missing Python dependencies: {missing_names}")
+        warn(f"Cannot download missing Python dependencies ({missing_names}) while offline.")
+        return False
+
     cpu_count = max(1, int(os.cpu_count() or 1))
     if cpu_count <= 2:
         download_workers = 1
@@ -5032,6 +5046,11 @@ def ensure_board_toolchains() -> bool:
     if not platforms_to_prepare:
         return True
 
+    if not _is_network_reachable(timeout=2.0):
+        missing_labels = ", ".join(lbl for _, lbl, _ in platforms_to_prepare)
+        warn(f"Required board toolchains ({missing_labels}) are not yet installed and cannot be prepared while offline.")
+        return False
+
     _check_and_extract_pio_zip_bundle(Path(pio_core_dir))
 
     all_ok = True
@@ -5297,6 +5316,10 @@ def ensure_esp32_board_folder() -> bool:
         except Exception:
             pass
 
+    if not _is_network_reachable(timeout=2.0):
+        warn("ESP32 board core is not yet downloaded and cannot be prepared while offline.")
+        return False
+
     section("Preparing ESP32 Boards (Folder)")
     status("Resolving latest stable ESP32 board core from Espressif...")
     release = _load_latest_esp32_board_release()
@@ -5403,6 +5426,10 @@ def ensure_arduino_avr_board() -> bool:
             if "avr" in parent_name or "uno" in parent_name:
                 ok("Arduino AVR boards framework is already downloaded.")
                 return True
+
+    if not _is_network_reachable(timeout=2.0):
+        warn("Arduino AVR boards framework is not yet downloaded and cannot be prepared while offline.")
+        return False
 
     section("Preparing Arduino AVR Boards")
     status("Preparing Arduino AVR Boards core (v1.8.6) to enable AVR compilation...")
@@ -8860,18 +8887,23 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         gui.root.after(0, lambda: gui.log_section("Checking OpenCode AI Assistant"))
         if sys.platform == "win32":
-            if not _is_network_reachable(timeout=3.0):
-                _fail_and_exit(
-                    "OpenCode AI Assistant",
-                    "The network is unreachable, so the required OpenCode AI Assistant cannot be installed or verified.",
-                )
-                return
-            elif not ensure_opencode_cli():
-                _fail_and_exit(
-                    "OpenCode AI Assistant",
-                    "The required OpenCode AI Assistant is missing or could not be installed automatically.",
-                )
-                return
+            # If already installed and working, pass immediately without network dependency
+            if check_opencode_cli() and ensure_opencode_cli():
+                gui.root.after(0, lambda: gui.log_ok("OpenCode AI Assistant is verified and ready."))
+            else:
+                # Missing — internet connection is required to install it
+                if not _is_network_reachable(timeout=2.0):
+                    _fail_and_exit(
+                        "OpenCode AI Assistant",
+                        "Internet connection is required to download and install OpenCode AI Assistant. Setup cannot proceed.",
+                    )
+                    return
+                elif not ensure_opencode_cli():
+                    _fail_and_exit(
+                        "OpenCode AI Assistant",
+                        "The required OpenCode AI Assistant is missing or could not be installed automatically.",
+                    )
+                    return
 
 
         # ── Update checks ─────────────────────────────────────────────

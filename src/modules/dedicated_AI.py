@@ -56,6 +56,23 @@ def _configure_windows_dpi_awareness():
 
 _configure_windows_dpi_awareness()
 
+def check_internet_connection(timeout: float = 2.0) -> bool:
+    """Fast socket check for active internet connection."""
+    test_targets = [
+        ("1.1.1.1", 53),
+        ("8.8.8.8", 53),
+        ("google.com", 80),
+    ]
+    for host, port in test_targets:
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+            return True
+        except Exception:
+            continue
+    return False
+
+
 # Ensure workspace 'env' site-packages is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 AI_STARTUP_PATCH_VERSION = "v22-readiness-no-fallback"
@@ -703,6 +720,22 @@ def _pre_hide_console_for_conpty():
 
 def run_standalone_ai(target_directory=None):
     """Entry point when executed as an independent AI terminal process."""
+    if not check_internet_connection():
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showwarning(
+                "No Internet Connection",
+                "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
+                "Please check your network connection and try again."
+            )
+            r.destroy()
+        except Exception:
+            pass
+        return
+
     _pre_hide_console_for_conpty()
     target_dir = os.path.abspath(target_directory) if target_directory else os.getcwd()
     # Remove a stale marker from an earlier process. The new process publishes
@@ -1117,6 +1150,16 @@ class AIController:
 
     def toggle_ai(self):
         """Ensure OpenCode AI process is running (prompts disclaimer prompt ONLY ONCE)."""
+        if not check_internet_connection():
+            if self.root:
+                messagebox.showwarning(
+                    "No Internet Connection",
+                    "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
+                    "Please check your network connection and try again.",
+                    parent=self.root,
+                )
+            return False
+
         if self.is_launching or is_opencode_running():
             return True
 

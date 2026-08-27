@@ -9,6 +9,7 @@ Run:
 """
 
 import os
+import socket
 import re
 import threading
 import mimetypes
@@ -17,6 +18,23 @@ from pathlib import Path
 import requests
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+
+def check_internet_connection(timeout: float = 2.0) -> bool:
+    """Fast socket check for active internet connection."""
+    test_targets = [
+        ("1.1.1.1", 53),
+        ("8.8.8.8", 53),
+        ("google.com", 80),
+    ]
+    for host, port in test_targets:
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            sock.close()
+            return True
+        except Exception:
+            continue
+    return False
 
 try:
     # pyrefly: ignore [missing-import]
@@ -229,6 +247,15 @@ class DownloaderApp(tk.Tk):
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showwarning("Missing link", "Please paste a download link first.")
+            return
+
+        if not check_internet_connection():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "Cannot start download because you are currently offline.\n\n"
+                "Please check your network connection and try again.",
+                parent=self,
+            )
             return
 
         dest_dir = Path(self.download_dir.get())

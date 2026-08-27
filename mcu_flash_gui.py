@@ -7917,6 +7917,7 @@ class MCUUploadGUI:
             # Avoid a one-frame flash on very fast launches, but do not use a
             # fixed dismissal time as a substitute for editor readiness.
             self._startup_min_visible_until = time.monotonic() + 0.35
+            self._startup_overlay_created_at = time.monotonic()
         except Exception:
             self._startup_overlay = None
 
@@ -7934,6 +7935,15 @@ class MCUUploadGUI:
         if getattr(self, "_startup_ready", False):
             return
         if getattr(self, "_startup_overlay", None) is None:
+            return
+
+        # Safety fallback: if the editor never fires its ready signal (e.g.
+        # webview crash, stalled file I/O), dismiss the overlay after 8s so
+        # the app becomes usable rather than permanently stuck on the spinner.
+        _STARTUP_SAFETY_TIMEOUT = 8.0
+        created_at = getattr(self, "_startup_overlay_created_at", 0.0)
+        if created_at and (time.monotonic() - created_at) >= _STARTUP_SAFETY_TIMEOUT:
+            self._mark_startup_ready("Application ready")
             return
 
         if getattr(self, "editor_mode", "default") == "monaco":
@@ -8024,49 +8034,118 @@ class MCUUploadGUI:
                 pass
 
     def _deferred_background_init(self):
-        """Asynchronously initialize secondary background services (serial port probing,
-        board state checks, background syntax checker, serial monitor connection) AFTER
-        the editor UI is fully rendered and interactive."""
+        """Initialize secondary background services AFTER the editor UI is fully
+        rendered and interactive — strictly one service at a time.
+
+        Every service used to start in a single synchronous burst here, which
+        stampedede the Tk thread (and several worker threads) at the exact
+        moment the user begins interacting — the perceived post-launch lag.
+        Services are now queued in user-visible priority order and started
+        sequentially, with a short event-loop gap between each so the UI gets
+        a quiet turn in between. Component/widget construction itself remains
+        fully synchronous before the first paint (see _build_ui / __init__):
+        that ordering IS the priority phase and must not be split."""
         if (getattr(self, "_deferred_bg_done", False)
                 or getattr(self, "_deferred_bg_started", False)):
             return
         self._deferred_bg_started = True
+
+        # Priority order (most user-visible benefit first):
+        #   1. Board catalog refresh      — comboboxes show correct data
+        #   2. Serial monitor             — must open the port BEFORE any
+        #     esptool probe runs, otherwise the probe eats the MCU boot
+        #     banner (ESP-ROM/rst/load/entry). Documented ordering contract.
+        #   3. Port scan                  — populates the port dropdown
+        #   4. Hardware action buttons    — depends on board+port state
+        #   5. Hotplug monitor thread     — keeps 3/4 fresh
+        #   6. Background syntax checker  — pure comfort, lowest urgency
+        #   7. Embedded terminal          — heaviest (PTY/webview spawn);
+        #     deliberately last so it cannot compete with the above.
+        self._deferred_bg_queue: deque = deque([
+            ("board-catalog", self._dbi_board_catalog),
+            ("serial-monitor", self._dbi_serial_monitor),
+            ("port-scan", self._dbi_port_scan),
+            ("hardware-buttons", self._dbi_hardware_buttons),
+            ("hotplug-monitor", self._dbi_hotplug_monitor),
+            ("syntax-checker", self._dbi_syntax_checker),
+            ("terminal", self._dbi_terminal),
+        ])
+        # Gap between services: long enough to give the event loop a real
+        # idle turn, short enough that the whole pipeline still settles well
+        # inside the existing 1.5 s settle window.
+        self._deferred_bg_step_gap_ms = 150
+        self._advance_deferred_background_init()
+
+    def _dbi_board_catalog(self):
+        # Dynamic board matching is intentionally deferred until the main
+        # window has painted. A cached catalog is already available when
+        # possible; this refresh keeps it correct without blocking launch.
+        self._reload_supported_boards()
+        self._on_board_changed()
+
+    def _dbi_serial_monitor(self):
+        # Signals the esptool probe to bail out immediately once running.
+        self._monitor_should_run = True
+        self._schedule_auto_start_monitor(0)
+
+    def _dbi_port_scan(self):
+        # Async since the port-scan rework: kicks a worker thread off the Tk
+        # thread and applies results back when ready.
+        self._refresh_ports()
+
+    def _dbi_hardware_buttons(self):
+        self._update_hardware_action_buttons()
+
+    def _dbi_hotplug_monitor(self):
+        self._start_port_polling()
+
+    def _dbi_syntax_checker(self):
+        self._start_background_syntax_thread()
+
+    def _dbi_terminal(self):
+        # Start the terminal during the real startup pass as well. The
+        # terminal must not wait for a manual pwsh/cmd tab switch before
+        # it begins loading, otherwise the main loading cover can report
+        # readiness while the terminal is still completely cold.
+        self._startup_terminal_required = True
+        self._startup_terminal_deadline = time.monotonic() + 45.0
+        if not self._ensure_project_terminal_webview():
+            if getattr(self, "_project_terminal_fallback", False):
+                for _kind in ("pwsh", "cmd"):
+                    self._shell_start(_kind)
+
+    def _advance_deferred_background_init(self):
+        """Run the next queued service, then yield the event loop before the
+        following one. Drains into the shared settle/completion tracking."""
+        queue = getattr(self, "_deferred_bg_queue", None)
+        if getattr(self, "_deferred_bg_done", False):
+            return
         try:
-            # Dynamic board matching is intentionally deferred until the main
-            # window has painted. A cached catalog is already available when
-            # possible; this refresh keeps it correct without blocking launch.
-            self._reload_supported_boards()
-            self._on_board_changed()
-            self._refresh_ports()
-            self._update_hardware_action_buttons()
-            # ── Start the serial monitor FIRST, before any esptool probe ──
-            # The probe inside _refresh_ports above runs in a background thread
-            # and may open/close the port via esptool — which eats the MCU's
-            # boot banner (ESP-ROM, rst, load, entry) before the monitor can
-            # see it. Starting the monitor here means it opens the port first,
-            # captures the full boot output, and the probe then skips the port
-            # (it detects the monitor is alive and returns early).
-            self._monitor_should_run = True  # signals esptool probe to bail out immediately
-            self._schedule_auto_start_monitor(0)
-            self._start_port_polling()
-            self._start_background_syntax_thread()
-            # Start the terminal during the real startup pass as well. The
-            # terminal must not wait for a manual pwsh/cmd tab switch before
-            # it begins loading, otherwise the main loading cover can report
-            # readiness while the terminal is still completely cold.
-            self._startup_terminal_required = True
-            self._startup_terminal_deadline = time.monotonic() + 45.0
-            if not self._ensure_project_terminal_webview():
-                if getattr(self, "_project_terminal_fallback", False):
-                    for _kind in ("pwsh", "cmd"):
-                        self._shell_start(_kind)
+            if queue:
+                name, service = queue.popleft()
+                try:
+                    service()
+                except Exception as e:
+                    print(f"[MCU Flasher] Deferred service '{name}' failed: {e}")
+                if queue:
+                    try:
+                        self.root.after(
+                            getattr(self, "_deferred_bg_step_gap_ms", 150),
+                            self._advance_deferred_background_init,
+                        )
+                        return
+                    except Exception:
+                        pass  # root gone — fall through to drain silently
+            # Queue empty (or event loop unavailable): services have been
+            # STARTED. Starting worker threads is not the same as being
+            # ready — keep the startup cover for one settling pass so their
+            # first UI callbacks, port scan, monitor startup, and syntax
+            # initialization can complete before readiness is reported.
+            self._deferred_bg_services_started = True
+            self._deferred_bg_settle_until = time.monotonic() + 1.5
+            self._schedule_deferred_background_completion_check()
         except Exception as e:
             print(f"[MCU Flasher] Error in deferred background init: {e}")
-        finally:
-            # Starting worker threads is not the same as being ready. Keep the
-            # startup cover in place for one settling pass so their first UI
-            # callbacks, port scan, monitor startup, and syntax initialization
-            # can complete before readiness is reported.
             self._deferred_bg_services_started = True
             self._deferred_bg_settle_until = time.monotonic() + 1.5
             self._schedule_deferred_background_completion_check()
@@ -11417,8 +11496,12 @@ class MCUUploadGUI:
                     self.upload_speed_combo.configure(state="disabled")
                 else:
                     self.upload_speed_combo.configure(state="readonly")
-                    
-                self.btn_clean.configure(state=tk.NORMAL, text="Clean" if is_compact else "🧹 Clean")
+
+                # Re-enable Clean only when there is actually something to
+                # clean. Unconditionally forcing NORMAL here used to re-arm
+                # the button right after a successful Clean, letting users
+                # "clean" repeatedly with nothing left to remove.
+                self._update_clean_button_state()
                 
                 self.lbl_sketch.configure(cursor="hand2")
                 
@@ -11427,8 +11510,9 @@ class MCUUploadGUI:
 
                 # The block above unconditionally re-enabled Compile/Upload;
                 # re-apply the board-selected (and, for Upload, hardware-
-                # recognized) gating now that is_busy is back to False.
+                # recognized & port-present) gating now that is_busy is back to False.
                 self._update_hardware_action_buttons()
+                self._refresh_ports(called_from_hotplug=True)
 
             self._sync_detached_compact_actions()
                 
@@ -13125,6 +13209,7 @@ class MCUUploadGUI:
         kind = session["kind"]
         target = session["target"]
         try:
+            # pyrefly: ignore [missing-import]
             from winpty import PtyProcess
         except Exception as exc:
             self._shell_append_output(session, f"\r\n[MCU Flasher] PTY support is unavailable: {exc}\r\n")
@@ -13923,15 +14008,69 @@ class MCUUploadGUI:
         """Scan serial ports and update the combobox, hiding ports that
         another live instance already has selected.
         If force_select_port is specified, it will select that port immediately.
-        """
-        ports = serial.tools.list_ports.comports()
+
+        Enumeration (pyserial/WMI) plus the psutil occupancy scan used to run
+        inline on the Tk thread here — freezing the UI for 100–500 ms on every
+        dropdown open (postcommand) and at deferred init. The heavy scan now
+        runs on a worker thread and results are applied back on the Tk thread;
+        while a scan is in flight the dropdown opens instantly with the last
+        known list."""
+        # Paint last-known values immediately so postcommand never stalls.
+        cached = getattr(self, "_last_port_scan_result", None)
+        if cached is not None:
+            try:
+                self.port_combo["values"] = cached
+            except Exception:
+                pass
+
+        if getattr(self, "_port_scan_inflight", False):
+            # Coalesce bursts (hotplug + user click) into one follow-up scan.
+            self._port_scan_pending = (force_select_port, called_from_hotplug)
+            return
+
+        self._port_scan_inflight = True
+        self._port_scan_pending = None
+
+        def _scan_worker():
+            try:
+                ports = list(serial.tools.list_ports.comports())
+                occupied = get_occupied_ports()
+            except Exception:
+                ports, occupied = [], None
+            try:
+                self.root.after(
+                    0,
+                    lambda: self._apply_port_scan(ports, occupied, force_select_port, called_from_hotplug),
+                )
+            except Exception:
+                # Window destroyed mid-scan; nothing left to update.
+                self._port_scan_inflight = False
+
+        threading.Thread(target=_scan_worker, name="PortScan", daemon=True).start()
+
+    def _chain_pending_port_scan(self):
+        """Run a scan that was requested while another one was in flight."""
+        pending = getattr(self, "_port_scan_pending", None)
+        self._port_scan_pending = None
+        if pending is not None:
+            try:
+                self.root.after(80, lambda: self._refresh_ports(*pending))
+            except Exception:
+                pass
+
+    def _apply_port_scan(self, ports, occupied_ports, force_select_port=None, called_from_hotplug=False):
+        """Tk-thread application of a completed background port scan."""
+        self._port_scan_inflight = False
+        if occupied_ports is None:
+            # Scan itself failed; retry a coalesced request if one queued up.
+            self._chain_pending_port_scan()
+            return
 
         # Computed once and reused for the whole pass, so the dropdown
         # contents, current-selection check, and auto-select fallback all
         # agree on the same snapshot of what's taken. This instance's own
         # claimed port is never in here (get_occupied_ports() excludes
         # _INSTANCE_ID), so it can never hide itself from its own dropdown.
-        occupied_ports = get_occupied_ports()
         visible_ports = []
         for p in ports:
             if p.device in occupied_ports:
@@ -13945,6 +14084,9 @@ class MCUUploadGUI:
             visible_ports.append(p)
 
         port_list = [f"{p.device}  -  {p.description or ''}" for p in visible_ports]
+
+        # Remember for instant-paint on the next dropdown open.
+        self._last_port_scan_result = port_list
 
         # Update last-known port set for hotplug detection. This tracks the
         # *physical* device set (not the occupancy-filtered view) using (device, hwid)
@@ -13988,6 +14130,7 @@ class MCUUploadGUI:
                             args=(p.device,),
                             daemon=True,
                         ).start()
+                    self._chain_pending_port_scan()
                     return
 
         is_current_valid = False
@@ -14017,6 +14160,7 @@ class MCUUploadGUI:
                     args=(current_device,),
                     daemon=True,
                 ).start()
+            self._chain_pending_port_scan()
             return
 
         # If the current selection is invalid, empty, or was just hidden:
@@ -14064,6 +14208,8 @@ class MCUUploadGUI:
             self._save_selected_port("")
             self._board_port_confirmed = False
             self._update_hardware_action_buttons()
+
+        self._chain_pending_port_scan()
 
     def _start_port_polling(self):
         """Start a dedicated background thread to monitor serial ports in real-time
@@ -14140,36 +14286,46 @@ class MCUUploadGUI:
                 for p in removed_devs:
                     self._append_notif(f"  ⚠ USB device disconnected: {p}", "warning")
 
-            current_port = self._get_port()
+            # Do not mutate active port selection, status bar, or trigger
+            # auto-monitor starts while an upload/compile/reset operation is busy.
+            if not getattr(self, "is_busy", False):
+                current_port = self._get_port()
 
-            # If the currently selected/monitored port was disconnected:
-            if removed_devs and current_port and (current_port in removed_devs or current_port not in new_devices):
-                # Stop active serial monitor connection immediately
-                self._monitor_should_run = False
-                self._stop_serial_session()
-                self._set_serial_status(False)
-                self._board_port_confirmed = False
-                self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
+                # If the currently selected/monitored port was disconnected:
+                if removed_devs and current_port and (current_port in removed_devs or current_port not in new_devices):
+                    # Stop active serial monitor connection immediately
+                    self._monitor_should_run = False
+                    self._stop_serial_session()
+                    self._set_serial_status(False)
+                    self._board_port_confirmed = False
+                    self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
 
-            # Auto-switch to newly connected MCU only if current port is not valid/recognized (e.g. empty, disconnected, or placeholder COM1)
-            current_port = self._get_port()
-            is_recognized = bool(
-                current_port 
-                and current_port.upper() != "COM1" 
-                and current_port in new_devices
-                and (getattr(self, "_board_port_confirmed", False) or self._is_valid_port() or self._port_is_avr_only())
-            )
-            
-            force_select_port = None
-            if has_new_known_mcu and not is_recognized:
-                force_select_port = new_mcu_device
+                # Auto-switch to newly connected MCU only if current port is not valid/recognized (e.g. empty, disconnected, or placeholder COM1)
+                current_port = self._get_port()
+                is_recognized = bool(
+                    current_port 
+                    and current_port.upper() != "COM1" 
+                    and current_port in new_devices
+                    and (getattr(self, "_board_port_confirmed", False) or self._is_valid_port() or self._port_is_avr_only())
+                )
+                
+                force_select_port = None
+                if has_new_known_mcu and not is_recognized:
+                    force_select_port = new_mcu_device
 
-            self._refresh_ports(force_select_port=force_select_port, called_from_hotplug=True)
+                self._refresh_ports(force_select_port=force_select_port, called_from_hotplug=True)
 
-            # If a new device appeared, auto-start monitor on it with hardware reset so setup() is captured
-            if added_devs and not self.serial_running:
-                self._manual_reset_pending = True
-                self._schedule_auto_start_monitor(500)
+                # If a new device appeared, auto-start monitor on it with hardware reset so setup() is captured
+                if added_devs and not self.serial_running:
+                    self._manual_reset_pending = True
+                    self._schedule_auto_start_monitor(500)
+            elif removed_devs:
+                current_port = self._get_port()
+                if current_port and (current_port in removed_devs or current_port not in new_devices):
+                    # Stop serial monitor connection if disconnected while busy
+                    self._monitor_should_run = False
+                    self._stop_serial_session()
+                    self._set_serial_status(False)
 
         except Exception as e:
             self._append_notif(f"  ✖ Error handling port change: {e}", "error")
@@ -14814,7 +14970,7 @@ class MCUUploadGUI:
         """Compile only needs a board *type* selected — it never talks to
         the physical port, so it's gated on board_var alone. Upload and the
         hardware Reset button additionally need the board on the selected
-        port to actually be recognized."""
+        port to actually be recognized and the port to be physically present."""
         if self.is_busy:
             return  # the running operation's own state machine owns button states right now
         board_selected = bool(self.board_var.get())
@@ -14826,7 +14982,9 @@ class MCUUploadGUI:
             except Exception:
                 pass
 
-        state = tk.NORMAL if (board_selected and self._is_board_recognized()) else tk.DISABLED
+        port = self._get_port()
+        port_present = bool(port and self._is_port_present(port))
+        state = tk.NORMAL if (board_selected and self._is_board_recognized() and port_present) else tk.DISABLED
         for attr in ("btn_upload", "btn_reset_mcu"):
             btn = getattr(self, attr, None)
             if btn is not None:
@@ -14956,6 +15114,28 @@ class MCUUploadGUI:
         # Extract COMx from "COM8  —  Silicon Labs..."
         match = re.match(r"(COM\d+|/dev/\S+)", val)
         return match.group(1) if match else val.split()[0]
+
+    def _is_port_present(self, port: str | None) -> bool:
+        """True when the OS still enumerates `port` (e.g. 'COM7').
+
+        Live hardware gate for the Upload pipeline: compilation never talks
+        to the board, but flashing does — when the MCU is unplugged the port
+        simply disappears from enumeration, and the upload phase must then be
+        skipped.  Fail-open on enumeration errors so a transient WMI/SetupAPI
+        hiccup never fabricates a disconnect; the uploader's own connect
+        logic remains the final arbiter in that case."""
+        if not port:
+            return False
+        target = str(port).strip().upper()
+        if not target:
+            return False
+        try:
+            for candidate in serial.tools.list_ports.comports():
+                if str(candidate.device or "").upper() == target:
+                    return True
+        except Exception:
+            return True
+        return False
 
     # ──────────────────────────────────────────────────────────
     # ACTIONS
@@ -15148,9 +15328,26 @@ class MCUUploadGUI:
             self._build_metadata_by_board.pop(board_name, None)
         return removed, errors
 
+    # Targets the *running app itself* recreates within moments (temp files,
+    # AI review transcripts). They are still swept by a real Clean, but they
+    # must not count towards availability — otherwise Clean re-enables right
+    # after finishing and the user can "clean" an already-clean project
+    # forever.
+    _CLEAN_VOLATILE_LABELS = frozenset({
+        "external AI review transcripts",
+        "external temporary app cache",
+    })
+
     def _has_cleanable_targets(self) -> bool:
-        """Return True if any build artifacts or generated files exist that Clean would remove."""
-        return any(target.exists() for target, _label in self._clean_targets())
+        """Return True if any build artifacts or generated files exist that Clean would remove.
+
+        Volatile app-owned paths (see _CLEAN_VOLATILE_LABELS) are excluded so
+        the button reflects real project artifacts, not transient temp churn."""
+        return any(
+            target.exists()
+            for target, label in self._clean_targets()
+            if label not in self._CLEAN_VOLATILE_LABELS
+        )
 
     def _show_toast(self, message: str, duration_ms: int = 2500):
         """Show a floating borderless toast notification centered over the main window that auto-dismisses."""
@@ -15232,30 +15429,41 @@ class MCUUploadGUI:
             self._set_status("Busy — stop the current operation first", Theme.RED)
             return
 
+        # askyesno() runs a nested event loop: while the dialog is open,
+        # self.is_busy is still False and buttons are still enabled, so a
+        # second click would queue a second concurrent Clean. Guard the whole
+        # confirm window with an explicit latch.
+        if getattr(self, "_clean_confirm_pending", False):
+            return
+
         # Fast-path: nothing to clean — show toast and disable button
         if not self._has_cleanable_targets():
             self._show_toast("🧹  Project is already clean\nNothing to remove.")
             self._update_clean_button_state()
             return
 
-        if not confirmed:
-            proceed = messagebox.askyesno(
-                "Clear All Board Build Caches?",
-                "Clean will remove generated project configuration and ALL cached "
-                "builds for every board used with this sketch.\n\n"
-                "The app-wide Hard/Soft Reset board caches shared by all sketches "
-                "and windows, plus legacy compiled artifacts, will also be cleared. "
-                "The next Compile, Upload, Hard "
-                "Reset, or Soft Reset for those boards may need a first-time rebuild.\n\n"
-                "Your .ino/.cpp/.c/.h source files, other user files, and shared "
-                "PlatformIO frameworks/toolchains will NOT be removed.\n\n"
-                "Continue with Clean?",
-                icon="warning",
-                parent=self.root,
-            )
-            if not proceed:
-                self._set_status("Clean cancelled — caches preserved", Theme.YELLOW)
-                return
+        self._clean_confirm_pending = True
+        try:
+            if not confirmed:
+                proceed = messagebox.askyesno(
+                    "Clear All Board Build Caches?",
+                    "Clean will remove generated project configuration and ALL cached "
+                    "builds for every board used with this sketch.\n\n"
+                    "The app-wide Hard/Soft Reset board caches shared by all sketches "
+                    "and windows, plus legacy compiled artifacts, will also be cleared. "
+                    "The next Compile, Upload, Hard "
+                    "Reset, or Soft Reset for those boards may need a first-time rebuild.\n\n"
+                    "Your .ino/.cpp/.c/.h source files, other user files, and shared "
+                    "PlatformIO frameworks/toolchains will NOT be removed.\n\n"
+                    "Continue with Clean?",
+                    icon="warning",
+                    parent=self.root,
+                )
+                if not proceed:
+                    self._set_status("Clean cancelled — caches preserved", Theme.YELLOW)
+                    return
+        finally:
+            self._clean_confirm_pending = False
 
         self._clean_retry_in_progress = bool(on_complete)
         self.is_busy = True
@@ -15300,14 +15508,18 @@ class MCUUploadGUI:
                     except Exception:
                         pass
                     
+                    # Reflect the post-clean target state immediately, in
+                    # both the chained and standalone paths — after a full
+                    # clean there is normally nothing left, so the button
+                    # must go DISABLED instead of waiting for the next op.
+                    self._update_clean_button_state()
+
                     if on_complete:
                         self.is_busy = False
                         on_complete()
                     else:
                         self.is_busy = False
                         self._set_buttons_state(False)
-                        # Disable Clean button since we just cleaned everything
-                        self._update_clean_button_state()
 
                 self.root.after(0, _done)
             except Exception as exc:
@@ -15502,6 +15714,12 @@ class MCUUploadGUI:
         port = self._get_port()
         if not port:
             self._append_notif("  ✖ Upload failed: No serial port selected! Please select a port.", "warning")
+            return
+
+        if not self._is_port_present(port):
+            self._append_notif(f"  ✖ Upload rejected: Selected port '{port}' is disconnected. Please connect your board.", "warning")
+            self._set_status(f"Upload failed — {port} disconnected", Theme.RED)
+            self._update_hardware_action_buttons()
             return
 
         owner_pid = port_occupied_owner(port)
@@ -15719,11 +15937,19 @@ class MCUUploadGUI:
 
             threading.Thread(target=_kill, daemon=True).start()
         elif self.is_busy:
-            # Process is already dead but is_busy is stuck — clear it immediately
-            self.is_busy = False
-            self._set_buttons_state(False)
-            self._set_status("Ready", Theme.GREEN)
-            self._append("  ℹ Busy state was stale — cleared.", "info")
+            if getattr(self, "_reconnect_waiting", False):
+                try:
+                    self.root.after(0, lambda: self.btn_stop.configure(
+                        text="■ Stopping...", state=tk.DISABLED))
+                except Exception:
+                    pass
+                self._set_status("Stopping...", Theme.YELLOW)
+            else:
+                # Process is already dead but is_busy is stuck — clear it immediately
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._set_status("Ready", Theme.GREEN)
+                self._append("  ℹ Busy state was stale — cleared.", "info")
 
     def _stop_serial_session(self):
         """Cancel/detach the active serial generation without joining the caller.
@@ -20700,11 +20926,65 @@ default_envs = {self._pio_env_name()}
     # ──────────────────────────────────────────────────────────
     # UPLOAD
     # ──────────────────────────────────────────────────────────
+    def _abort_upload_if_mcu_missing(self, port: str, *, compiled_fresh: bool) -> bool:
+        """Flash-phase gate for the two-phase Upload pipeline.
+
+        Upload runs in up to two phases: compile (only when sources changed;
+        skipped entirely when a cached build can be reused) and flash.  Only
+        the flash phase needs the physical board, so an unplug mid-compile
+        must NOT abort the build — the detach watchdog in _run_upload records
+        the disappearance, and this gate then skips just the flash phase once
+        compilation completes.  The same gate also re-validates the port right
+        before the uploader is spawned (a long compatibility prompt can sit
+        between the two checks).
+
+        Returns True when the upload was aborted because the target MCU port
+        vanished (either during the compile phase or right now); returns False
+        when the board is still connected and flashing may proceed.
+        """
+        detached_port = getattr(self, "_mcu_detached_during_compile", None)
+        present_now = self._is_port_present(port)
+        if present_now and not detached_port:
+            return False
+
+        lost_port = detached_port or port
+        self._append("")
+        self._append("─" * 50, "warning")
+        if detached_port:
+            self._append(f"  ⚠ Upload skipped: the MCU on {detached_port} was disconnected while compiling.", "warning")
+        else:
+            self._append(f"  ⚠ Upload aborted: the MCU on {port} is no longer connected.", "warning")
+        if compiled_fresh:
+            self._append("  ✔ Compile phase finished — the fresh build is cached and stays valid.", "success")
+        if present_now:
+            self._append("  💡 The board is back — press Upload again; Skip Compile reuses the cached build.", "info")
+        else:
+            self._append("  💡 Reconnect the board, then press Upload again — Skip Compile reuses the cached build.", "info")
+        self._append("─" * 50, "warning")
+
+        if compiled_fresh:
+            self._set_status("Compile OK — upload skipped (MCU disconnected)", Theme.YELLOW)
+        else:
+            self._set_status("Upload aborted — MCU disconnected", Theme.YELLOW)
+        self._append_notif(
+            f"  ⚠ Upload skipped: MCU on {lost_port} disconnected before flashing.",
+            "warning",
+        )
+
+        self.is_busy = False
+        self._current_op_phase = None
+        self._set_buttons_busy(False)
+        self._set_buttons_state(False)
+        return True
+
     def _run_upload(self, port: str) -> bool:
         self._stop_requested = False
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         self._current_op_phase = "compiling"
         self._active_reset_kind = None
+        # Set by the detach watchdog below when the target port vanishes
+        # mid-compile; consumed by _abort_upload_if_mcu_missing().
+        self._mcu_detached_during_compile = None
         self._set_window_closable(True)
         self._pending_auto_baud = self._detect_sketch_baud_rate()
 
@@ -20741,13 +21021,41 @@ default_envs = {self._pio_env_name()}
         elif not self.skip_compile_var.get():
             pass
 
+        # ── MCU detachment watchdog (compile phase of Upload) ─────────────
+        # Compilation never talks to the board, so an unplug mid-compile must
+        # NOT abort the build.  The watchdog instead records the disappearance
+        # and the gate below then skips only the flash phase.  A cached-build
+        # upload has no compile window to watch; the gate still validates
+        # presence on its own.
+        _detach_watch_stop = threading.Event()
+
+        def _mcu_detach_watchdog():
+            while not _detach_watch_stop.wait(0.6):
+                if not self._is_port_present(port):
+                    self._mcu_detached_during_compile = port
+                    self._append("")
+                    self._append(f"  ⚠ MCU disconnected from {port} while compiling!", "warning")
+                    self._append("    Compile continues — it does not need the board —", "warning")
+                    self._append("    but the upload phase will be skipped afterwards.", "warning")
+                    return
+
         if need_compile:
-            compile_result = self._run_compile(is_upload=True)
-            if compile_result is None:
-                # Explicit cache-integrity failure: _run_compile repaired only
-                # the selected board workspace. Retry once; siblings survive.
-                self._append("  🔄 Retrying after selected-board cache repair…", "info")
+            _detach_watchdog_thread = threading.Thread(
+                target=_mcu_detach_watchdog,
+                name="MCUDetachWatchdog",
+                daemon=True,
+            )
+            _detach_watchdog_thread.start()
+            try:
                 compile_result = self._run_compile(is_upload=True)
+                if compile_result is None:
+                    # Explicit cache-integrity failure: _run_compile repaired only
+                    # the selected board workspace. Retry once; siblings survive.
+                    self._append("  🔄 Retrying after selected-board cache repair…", "info")
+                    compile_result = self._run_compile(is_upload=True)
+            finally:
+                _detach_watch_stop.set()
+                _detach_watchdog_thread.join(timeout=2)
             if not compile_result:
                 self.is_busy = False
                 self._set_buttons_busy(False)
@@ -20764,6 +21072,12 @@ default_envs = {self._pio_env_name()}
                 self._set_status("Upload paused for AI review", Theme.YELLOW)
                 return False
 
+        # ── Gate 1: compile done (or reused) — is the MCU still attached? ──
+        # When the board was unplugged during compilation the build above has
+        # finished normally and its cache snapshot is already saved, so a
+        # re-upload after replugging goes straight to flashing.
+        if self._abort_upload_if_mcu_missing(port, compiled_fresh=need_compile):
+            return False
 
         # ── Sketch-vs-board compatibility guard (run before starting upload timer) ──
         selected_board = self.board_var.get()
@@ -20881,6 +21195,12 @@ default_envs = {self._pio_env_name()}
             self._set_status("Upload paused for AI review", Theme.YELLOW)
             return False
 
+        # ── Gate 2: last live hardware check before flashing ─────────────
+        # The compatibility prompt above can park this worker a long time
+        # waiting on the user — plenty of time to unplug the board.
+        if self._abort_upload_if_mcu_missing(port, compiled_fresh=need_compile):
+            return False
+
         # Release the serial monitor only after compilation, scanning, and
         # user confirmation are complete. The uploader is fired immediately
         # from here, minimizing the manual BOOT-button hold window.
@@ -20926,6 +21246,11 @@ default_envs = {self._pio_env_name()}
 
         def _upload_spin_loop():
             while _upload_active[0] and not getattr(self, "_stop_requested", False):
+                # Yield the status bar to the reconnect countdown while
+                # waiting for an unplugged MCU to reappear.
+                if getattr(self, "_reconnect_waiting", False):
+                    time.sleep(0.2)
+                    continue
                 idx     = _upload_phase_idx[0]
                 key, label = _UPLOAD_PHASES[idx]
                 # Keep the status visibly alive while esptool waits for the
@@ -25178,6 +25503,24 @@ default_envs = {self._pio_env_name()}
         
         return _resource_safe_worker_count(setting)
 
+    def _is_internet_available(self, timeout: float = 2.0) -> bool:
+        """Fast socket check for active internet connection."""
+        import socket
+        test_targets = [
+            ("1.1.1.1", 53),
+            ("8.8.8.8", 53),
+            ("google.com", 80),
+        ]
+        for host, port in test_targets:
+            try:
+                sock = socket.create_connection((host, port), timeout=timeout)
+                sock.close()
+                return True
+            except Exception:
+                continue
+        return False
+
+
     def _confirm_ai_assistant_launch(self) -> bool:
         """Ask for consent before importing or starting the AI integration."""
         disclaimer_title = "OpenCode AI Assistant (Beta Test)"
@@ -25198,6 +25541,14 @@ default_envs = {self._pio_env_name()}
 
     def _launch_opencode_ai_assistant(self):
         """Prompt user with beta & copyright disclaimer before launching elevated OpenCode AI."""
+        if not self._is_internet_available():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "OpenCode AI Assistant requires an active internet connection to function.\n\n"
+                "Please check your network connection and try again.",
+                parent=self.root,
+            )
+            return
         proceed = self._confirm_ai_assistant_launch()
         if proceed:
             try:
@@ -25329,6 +25680,15 @@ default_envs = {self._pio_env_name()}
         is_visible = getattr(self, "_ai_side_visible", False)
         if is_visible:
             self._hide_ai_side_panel()
+            return
+
+        if not self._is_internet_available():
+            messagebox.showwarning(
+                "No Internet Connection",
+                "OpenCode AI Assistant requires an active internet connection to function.\n\n"
+                "Please check your network connection and try again.",
+                parent=self.root,
+            )
             return
 
         # The consent dialog must be the first action on the first click.
@@ -27133,6 +27493,16 @@ default_envs = {self._pio_env_name()}
             )
             return
 
+        if not self._is_port_present(port):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Port Disconnected",
+                f"The selected port '{port}' is not connected.\n\n"
+                "Please connect your MCU physical board before performing a Hard Reset.",
+                parent=parent_dlg
+            )
+            return
+
         # ESP32 Hard Reset uses a dedicated, persistent recovery build instead
         # of whichever sketch happens to be open.  Only its bootloader and
         # partition table are used; its application firmware is never written.
@@ -28315,6 +28685,71 @@ default_envs = {self._pio_env_name()}
         except Exception:
             pass
 
+    def _wait_for_port_reconnect(self, port: str, timeout: float = 10.0) -> bool:
+        """Wait up to *timeout* seconds for a disconnected COM port to reappear.
+
+        Re-enables the Stop button during the wait so the user can cancel.
+        Returns True if the port came back, False if timed out or user stopped.
+        """
+        self._append("")
+        self._append(
+            "  ⚠ MCU disconnected — COM port is no longer available.",
+            "warning",
+        )
+        self._append(
+            f"  ⏳ Waiting {int(timeout)} seconds for MCU reconnection… "
+            "Press ■ STOP to cancel.",
+            "info",
+        )
+        # Re-enable the Stop button so the user can abort the wait.
+        try:
+            self.root.after(0, lambda: self.btn_stop.configure(state=tk.NORMAL))
+        except Exception:
+            pass
+
+        # Signal the upload spin-loop to yield the status bar to the
+        # reconnect countdown so the two don't overwrite each other.
+        self._reconnect_waiting = True
+
+        poll_interval = 0.5
+        deadline = time.monotonic() + timeout
+        reconnected = False
+        try:
+            while time.monotonic() < deadline:
+                if getattr(self, "_stop_requested", False):
+                    break
+                remaining = max(0, int(deadline - time.monotonic()))
+                self._set_status(
+                    f"⏳ Waiting for MCU reconnection… ({remaining}s)",
+                    Theme.YELLOW,
+                )
+                time.sleep(poll_interval)
+                if self._is_port_present(port):
+                    reconnected = True
+                    self._append(
+                        f"  ✔ MCU reconnected on {port} — resuming upload.",
+                        "success",
+                    )
+                    break
+        finally:
+            # Always clear the flag so the upload spin-loop resumes its
+            # normal status-bar updates after the reconnect window closes.
+            self._reconnect_waiting = False
+
+        if not reconnected and not getattr(self, "_stop_requested", False):
+            self._append(
+                f"  ✖ MCU was not reconnected within {int(timeout)} seconds.",
+                "error",
+            )
+
+        # Restore the Stop button to the flash-phase disabled state.
+        try:
+            self.root.after(0, lambda: self.btn_stop.configure(state=tk.DISABLED))
+        except Exception:
+            pass
+
+        return reconnected
+
     def _soft_reset_esptool_write(self, fast_bins: dict, port: str,
                                   phase_callback=None,
                                   start_attempt: int = 1) -> tuple[bool, str, int]:
@@ -28690,7 +29125,26 @@ default_envs = {self._pio_env_name()}
                                 "could not open port", "port is busy",
                             )
                         )
-                        if port_reenumerating:
+                        if port_reenumerating and not self._is_port_present(port):
+                            # Port physically gone — MCU was unplugged.
+                            if not self._wait_for_port_reconnect(port):
+                                error_message = (
+                                    "MCU disconnected during upload "
+                                    f"({port} is no longer available)"
+                                )
+                                if getattr(self, "_stop_requested", False):
+                                    self._append(
+                                        "  ■ Upload cancelled by user during reconnection wait.",
+                                        "warning",
+                                    )
+                                self._last_fast_upload_failure_kind = "flash"
+                                self._record_fast_upload_diagnostic(
+                                    port, attempt_cmd, return_code=rc,
+                                    output_lines=output_lines,
+                                    error=error_message,
+                                )
+                                return False, error_message, _connect_retry_count + 1
+                        elif port_reenumerating:
                             self._append(
                                 "  ℹ COM port is resetting — waiting briefly before the next BOOT pulse…",
                                 "dim",
@@ -28716,6 +29170,27 @@ default_envs = {self._pio_env_name()}
                         and str(fast_bins.get("upload_speed") or "460800") != "115200"
                         and post_connect_transport_failure
                         and not getattr(self, "_stop_requested", False)):
+                    # Before attempting baud recovery, check if the port
+                    # has physically vanished (MCU unplugged). A lower baud
+                    # rate cannot help a missing device.
+                    if not self._is_port_present(port):
+                        if not self._wait_for_port_reconnect(port):
+                            error_message = (
+                                "MCU disconnected during upload "
+                                f"({port} is no longer available)"
+                            )
+                            if getattr(self, "_stop_requested", False):
+                                self._append(
+                                    "  ■ Upload cancelled by user during reconnection wait.",
+                                    "warning",
+                                )
+                            self._last_fast_upload_failure_kind = "flash"
+                            self._record_fast_upload_diagnostic(
+                                port, attempt_cmd, return_code=rc,
+                                output_lines=output_lines,
+                                error=error_message,
+                            )
+                            return False, error_message, _connect_retry_count + 1
                     # A high-speed USB-serial bridge can lose bytes after the
                     # board has already entered the ROM loader. Rewriting the
                     # complete image at 115200 is safe and far more reliable
@@ -28835,6 +29310,16 @@ default_envs = {self._pio_env_name()}
                 "Board Not Recognized",
                 "The board on this port hasn't been recognized yet.\n\n"
                 "Wait for auto-detect to finish, or verify the correct board/port is selected.",
+                parent=parent_dlg
+            )
+            return
+
+        if not self._is_port_present(port):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Port Disconnected",
+                f"The selected port '{port}' is not connected.\n\n"
+                "Please connect your MCU physical board before resetting.",
                 parent=parent_dlg
             )
             return
@@ -29089,7 +29574,7 @@ default_envs = {self._pio_env_name()}
 
         def _sr_spin_loop():
             while _sr_active[0] and self.is_busy:
-                if str(_sr_state[0]).startswith("Connecting"):
+                if str(_sr_state[0]).startswith("Connecting") or getattr(self, "_reconnect_waiting", False):
                     time.sleep(0.2)
                     continue
                 elapsed = int(time.time() - _sr_start)
@@ -29252,6 +29737,11 @@ default_envs = {self._pio_env_name()}
                     is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
 
                     if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
+                        if not self._is_port_present(port):
+                            if not self._wait_for_port_reconnect(port):
+                                err_msg = f"MCU disconnected during soft reset ({port} is no longer available)"
+                                ok = False
+                                break
                         _connect_retry_count += 1
                         _sr_state[0] = f"Connecting ({_connect_retry_count + 1}/{_MAX_CONNECT_RETRIES})"
                         if any(x in joined for x in ("permissionerror", "access is denied", "port is busy", "could not open port", "permission denied")):
@@ -29526,6 +30016,17 @@ default_envs = {self._pio_env_name()}
                 except Exception:
                     pass
 
+        # Signal any sleeping Download Manager process to exit permanently.
+        # The DM uses "Sleep Mode" (hides instead of exiting on close) to keep
+        # indexes cached in RAM.  A trigger file tells its poll loop to call
+        # _force_exit() instead of staying alive as an orphan.
+        try:
+            dm_exit_trigger = SCRIPT_DIR / "index_json" / ".dm_force_exit"
+            dm_exit_trigger.parent.mkdir(parents=True, exist_ok=True)
+            dm_exit_trigger.write_text("exit", encoding="utf-8")
+        except Exception:
+            pass
+
         self._do_stop()
         self._syntax_bg_active = False
         if hasattr(self, "_monaco_autosave_worker"):
@@ -29575,6 +30076,23 @@ default_envs = {self._pio_env_name()}
         except Exception:
             pass
         self.root.destroy()
+
+        # -- Final safety net: kill the entire process tree --
+        # Even after individually stopping every tracked subprocess, an orphan
+        # child (Download Manager in Sleep Mode, AI subprocess, shell process)
+        # can keep a `python.exe` entry visible in Task Manager.  Killing our
+        # own PID with /T (tree) sweeps every remaining descendant.  This is
+        # safe because we are about to os._exit(0) anyway.
+        try:
+            _own_pid = os.getpid()
+            subprocess.Popen(
+                ["taskkill", "/F", "/T", "/PID", str(_own_pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
         os._exit(0)
 
     def _set_window_closable(self, closable: bool):
@@ -29724,66 +30242,165 @@ default_envs = {self._pio_env_name()}
         return False
 
     def _run_manual_syntax_check(self):
-        # Trigger save all if unsaved changes exist
+        """UI-thread entry point for the syntax check.
+
+        The old implementation parsed every open buffer AND globbed/re-read
+        the whole project inline on the Tk thread — plus a 150 ms
+        ``root.update()`` busy-wait that re-entered pending timers. All of
+        that now happens in three cheap phases:
+
+          1. UI thread : trigger save-all, snapshot open buffers (fast),
+             compute a change signature and bail out if nothing changed.
+          2. Worker    : extract project functions + run analyze_cpp_syntax
+             over snapshots and on-disk files (CPU/IO heavy).
+          3. UI thread : apply inline error tags + refresh the result tree.
+        """
+        if getattr(self, "_syntax_analysis_inflight", False):
+            # A pass is already running; coalesce instead of stacking work.
+            self._syntax_analysis_rerun = True
+            return
+
+        # Trigger save all if unsaved changes exist. No busy-wait here: saves
+        # are small local writes, and phase 1 reads live widget buffers, so
+        # there is nothing to wait for.
         if self._is_project_unsaved():
             if hasattr(self, "_save_all_editor_files") and callable(self._save_all_editor_files):
                 try:
                     self._save_all_editor_files()
-                    # Small yielding loop to let async subprocesses / webviews write to disk
-                    import time
-                    start = time.time()
-                    while time.time() - start < 0.15:
-                        self.root.update()
-                        time.sleep(0.01)
                 except Exception:
                     pass
 
         self._cached_project_funcs = None
-        defined_funcs = self._get_project_defined_functions()
-        
-        all_errors = []
-        try:
-            from src.syntax_checker import analyze_cpp_syntax
-        except Exception:
-            return
-            
+
+        tab_snapshots = []   # [(Path, code)]
         checked_files = set()
         if hasattr(self, "editor_tab_data") and self.editor_tab_data:
             for frame, data in self.editor_tab_data.items():
-                if not frame.winfo_exists():
+                try:
+                    if not frame.winfo_exists():
+                        continue
+                except Exception:
                     continue
                 file_path = data["path"]
                 if file_path.suffix in (".ino", ".cpp", ".h"):
                     try:
-                        code = data["text"].get("1.0", tk.END)
-                        errors = analyze_cpp_syntax(code, file_path, defined_funcs)
-                        all_errors.extend(errors)
+                        tab_snapshots.append((file_path, data["text"].get("1.0", tk.END)))
                         checked_files.add(file_path.resolve())
-                        
-                        # Realtime highlight update in the text widget
-                        txt = data["text"]
-                        txt.tag_remove("syntax_error", "1.0", tk.END)
-                        txt.tag_remove("syntax_warning", "1.0", tk.END)
-                        for err in errors:
-                            line = err["line"]
-                            col = err["col"]
-                            tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
-                            txt.tag_add(tag, f"{line}.{max(0, col - 1)}", f"{line}.end")
                     except Exception:
                         pass
-                        
-        if hasattr(self, "sketch_dir_path") and self.sketch_dir_path and self.sketch_dir_path.exists():
-            for ext in ["*.ino", "*.cpp", "*.h"]:
-                for file_path in self.sketch_dir_path.glob(ext):
-                    if file_path.resolve() not in checked_files:
+
+        sketch_dir = getattr(self, "sketch_dir_path", None)
+
+        # Change signature: buffer contents + project file metadata. When
+        # nothing changed since the last completed pass (the common idle case
+        # for the 3 s periodic timer) skip the worker entirely.
+        signature = None
+        try:
+            disk_state = []
+            if sketch_dir and sketch_dir.exists():
+                for ext in ("*.ino", "*.cpp", "*.h"):
+                    for fp in sketch_dir.glob(ext):
                         try:
-                            code = file_path.read_text(encoding="utf-8", errors="replace")
-                            errors = analyze_cpp_syntax(code, file_path, defined_funcs)
-                            all_errors.extend(errors)
-                        except Exception:
+                            st = fp.stat()
+                            disk_state.append((str(fp), st.st_mtime_ns, st.st_size))
+                        except OSError:
                             pass
-                            
+            digest = hashlib.sha256()
+            for fpath, code in tab_snapshots:
+                digest.update(str(fpath).encode("utf-8", "replace"))
+                digest.update(code.encode("utf-8", "replace"))
+            signature = (
+                digest.hexdigest(),
+                tuple(sorted(disk_state)),
+            )
+            if signature == getattr(self, "_last_syntax_signature", None):
+                return
+        except Exception:
+            signature = None
+
+        self._syntax_analysis_inflight = True
+        self._last_syntax_signature = signature
+
+        def _worker():
+            all_errors = []
+            per_file_errors = {}
+            defined_funcs = set()
+            try:
+                from src.syntax_checker import analyze_cpp_syntax, extract_project_functions
+            except Exception:
+                # Mirror the historical behaviour: no checker available,
+                # leave existing UI state untouched.
+                try:
+                    self.root.after(0, lambda: self._finish_manual_syntax_check({}, [], quiet=True))
+                except Exception:
+                    self._syntax_analysis_inflight = False
+                return
+            try:
+                if sketch_dir and sketch_dir.exists():
+                    try:
+                        defined_funcs = extract_project_functions(sketch_dir)
+                    except Exception:
+                        defined_funcs = set()
+                for fpath, code in tab_snapshots:
+                    try:
+                        errs = analyze_cpp_syntax(code, fpath, defined_funcs)
+                    except Exception:
+                        errs = []
+                    per_file_errors[str(fpath)] = errs
+                    all_errors.extend(errs)
+                if sketch_dir and sketch_dir.exists():
+                    for ext in ["*.ino", "*.cpp", "*.h"]:
+                        for file_path in sketch_dir.glob(ext):
+                            try:
+                                if file_path.resolve() in checked_files:
+                                    continue
+                                code = file_path.read_text(encoding="utf-8", errors="replace")
+                            except Exception:
+                                continue
+                            try:
+                                all_errors.extend(analyze_cpp_syntax(code, file_path, defined_funcs))
+                            except Exception:
+                                pass
+            finally:
+                try:
+                    self.root.after(0, lambda: self._finish_manual_syntax_check(per_file_errors, all_errors))
+                except Exception:
+                    self._syntax_analysis_inflight = False
+
+        threading.Thread(target=_worker, name="ManualSyntaxCheck", daemon=True).start()
+
+    def _finish_manual_syntax_check(self, per_file_errors, all_errors, quiet=False):
+        """UI-thread completion: paint inline tags and refresh the tree."""
+        self._syntax_analysis_inflight = False
+        rerun = getattr(self, "_syntax_analysis_rerun", False)
+        self._syntax_analysis_rerun = False
+
+        if quiet:
+            return
+
+        if hasattr(self, "editor_tab_data") and self.editor_tab_data:
+            for frame, data in self.editor_tab_data.items():
+                try:
+                    if not frame.winfo_exists():
+                        continue
+                except Exception:
+                    continue
+                errs = per_file_errors.get(str(data["path"]))
+                if errs is None:
+                    continue
+                txt = data["text"]
+                txt.tag_remove("syntax_error", "1.0", tk.END)
+                txt.tag_remove("syntax_warning", "1.0", tk.END)
+                for err in errs:
+                    line = err["line"]
+                    col = err["col"]
+                    tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
+                    txt.tag_add(tag, f"{line}.{max(0, col - 1)}", f"{line}.end")
+
         self._update_syntax_check_ui(all_errors)
+
+        if rerun:
+            self.root.after(50, self._run_manual_syntax_check)
 
     def _update_syntax_check_ui(self, errors):
         if not hasattr(self, "syntax_tree") or not self.syntax_tree or not self.syntax_tree.winfo_exists():
