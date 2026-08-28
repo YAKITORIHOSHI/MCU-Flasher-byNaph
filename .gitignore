@@ -97,6 +97,7 @@ compile_cache/
 *.map
 *.a
 *.dblite
+*.res
 
 .pio_cache/
 soft_reset_project/boards/
@@ -117,6 +118,8 @@ ___*.py
 node_modules/
 
 # === Tests ===
+test/
+tests/
 tests/flashertester
 tests/env/
 tests/index_json/
@@ -125,5 +128,6 @@ tests/src/
 .pio_bootstrap_first_use_*
 
 # === Temporary / Archived Reports & Plans ===
+temp/
 old-*
 

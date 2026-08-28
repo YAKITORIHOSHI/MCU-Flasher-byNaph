@@ -60,6 +60,35 @@ Classify paths before changing attributes or deleting anything:
 - Patch `SCRIPT_DIR`, temp-path helpers, and deletion helpers in tests so a test
   cannot remove live caches.
 
+## File distribution conventions
+
+Files generated at runtime or holding user-specific state belong in dedicated
+subdirectories, not the project root:
+
+- **`src/dbs/`** — Settings and config files: `bootstrap_config.json`,
+  `arduino_browser_settings.json`, `arduino_cli_path.txt`, `dbs_notif.json`.
+- **`logs/`** — Runtime logs and diagnostics: `error_log.txt`, `session_backup.json`,
+  `temp.json`.
+- **Project root** — `compile_commands.json` stays at root for clangd/IntelliSense
+  but is marked with `attrib +h` (Windows hidden) to keep Explorer clean.
+
+When moving files into new subdirectories, always update all dependent imports,
+path references, and fallback logic in the same operation.
+
+## Git repository hygiene
+
+- **`.gitignore` is authoritative.** Files committed before their ignore rule
+  existed remain tracked until explicitly untracked with `git rm --cached`.
+  Periodically audit with `git ls-files -ic --exclude-standard`.
+- **Never track compiled artifacts** that can be regenerated from source:
+  `*.res`, `*.o`, `*.d`, `*.bin`, `*.elf`, `*.pyc`, build caches.
+- **Never track machine-specific files**: `compile_commands.json`, `.clangd`,
+  `src/gui_config.json`, `arduino_cli_path.txt`, notification databases.
+- **Dev scratch files** (`___*.py`, `old-*` reports) must be gitignored and
+  untracked before pushing.
+- **`.gitattributes`** — Only include LFS rules for paths that actually exist
+  in the repo. Remove stale rules for deleted directories.
+
 ## Audit workflow
 
 1. Search for every create, write, move, replace, and delete site for generated
