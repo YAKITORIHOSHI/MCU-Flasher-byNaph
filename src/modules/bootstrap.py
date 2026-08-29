@@ -1066,6 +1066,20 @@ DIM = "\033[90m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
+def _detect_system_theme() -> str:
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return "light" if val == 1 else "default"
+    except Exception:
+        return "default"
+
+
 # ── Theme colours matching MCU Flash GUI exactly ─────────────
 def _resolve_bootstrap_theme() -> dict:
     palettes = {
@@ -1123,7 +1137,11 @@ def _resolve_bootstrap_theme() -> dict:
         try:
             if cfg.exists():
                 data = json.loads(cfg.read_text(encoding="utf-8"))
-                m = data.get("shared", {}).get("theme_mode", "default")
+                shared = data.get("shared", {})
+                if shared.get("theme_follow_system", False):
+                    mode = _detect_system_theme()
+                    break
+                m = shared.get("theme_mode", "default")
                 if m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
                     m = "solarized_dark"
                 if m in palettes:

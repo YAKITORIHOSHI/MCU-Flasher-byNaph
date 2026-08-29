@@ -264,6 +264,20 @@ class Theme:
         return mode_key
 
 
+def _detect_system_theme() -> str:
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return "light" if val == 1 else "default"
+    except Exception:
+        return "default"
+
+
 def _resolve_lib_req_theme() -> str:
     for cfg in (
         os.path.join(SCRIPT_DIR, "src", "gui_config.json"),
@@ -273,7 +287,10 @@ def _resolve_lib_req_theme() -> str:
             if os.path.exists(cfg):
                 with open(cfg, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                m = data.get("shared", {}).get("theme_mode", "default")
+                shared = data.get("shared", {})
+                if shared.get("theme_follow_system", False):
+                    return _detect_system_theme()
+                m = shared.get("theme_mode", "default")
                 if m in Theme.PALETTES or m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
                     return m
         except Exception:

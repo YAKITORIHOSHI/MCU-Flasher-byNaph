@@ -151,6 +151,20 @@ def is_opencode_installed() -> bool:
 active_ai_proc = None
 
 
+def _detect_system_theme() -> str:
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return "light" if val == 1 else "default"
+    except Exception:
+        return "default"
+
+
 def _resolve_ai_theme() -> dict:
     theme = "default"
     repo_root = Path(__file__).resolve().parent.parent
@@ -162,7 +176,11 @@ def _resolve_ai_theme() -> dict:
         try:
             if cfg.exists():
                 data = json.loads(cfg.read_text(encoding="utf-8"))
-                m = data.get("shared", {}).get("theme_mode", "default")
+                shared = data.get("shared", {})
+                if shared.get("theme_follow_system", False):
+                    theme = _detect_system_theme()
+                    break
+                m = shared.get("theme_mode", "default")
                 if m:
                     theme = m
                     break

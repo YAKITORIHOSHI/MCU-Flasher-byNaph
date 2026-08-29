@@ -6118,23 +6118,51 @@ def set_editor_mode(mode: str):
     _save_raw_config(data)
 
 
-def get_theme_mode() -> str:
-    """Return the persisted theme mode: 'default', 'light', or 'solarized_dark'."""
+def _detect_system_theme() -> str:
+    """Query Windows registry for system app theme preference (Dark or Light)."""
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return "light" if val == 1 else "default"
+    except Exception:
+        return "default"
+
+
+def get_theme_settings() -> tuple:
+    """Return (theme_mode: str, follow_system: bool)."""
     data = _load_raw_config()
-    mode = data.get("shared", {}).get("theme_mode", "default")
+    shared = data.get("shared", {})
+    mode = shared.get("theme_mode", "default")
     if mode not in Theme.PALETTES:
         mode = "default"
+    follow_system = bool(shared.get("theme_follow_system", False))
+    return mode, follow_system
+
+
+def get_theme_mode() -> str:
+    """Return the active theme mode: 'default', 'light', or 'solarized_dark',
+    accounting for system default preference if enabled."""
+    mode, follow_system = get_theme_settings()
+    if follow_system:
+        return _detect_system_theme()
     return mode
 
 
-def set_theme_mode(mode: str):
-    """Persist the theme mode preference and update Theme attributes."""
+def set_theme_mode(mode: str, follow_system: bool = False):
+    """Persist the theme mode preference and follow_system flag, then update Theme attributes."""
     if mode not in Theme.PALETTES:
         mode = "default"
     data = _load_raw_config()
     data.setdefault("shared", {})["theme_mode"] = mode
+    data["shared"]["theme_follow_system"] = bool(follow_system)
     _save_raw_config(data)
-    Theme.apply_theme(mode)
+    active_mode = _detect_system_theme() if follow_system else mode
+    Theme.apply_theme(active_mode)
 
 
 # Apply persisted theme on startup before GUI creation
@@ -26983,6 +27011,40 @@ default_envs = {self._pio_env_name()}
         if self.is_busy:
             theme_combo.configure(state="disabled")
 
+        theme_system_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        theme_system_frame.pack(fill=tk.X, padx=sp(25), pady=(sp(2), sp(2)))
+
+        current_theme_saved, current_theme_follow_sys = get_theme_settings()
+        theme_system_var = tk.BooleanVar(value=current_theme_follow_sys)
+
+        def _on_theme_system_toggle():
+            if theme_system_var.get():
+                detected = _detect_system_theme()
+                theme_var.set(theme_light_label if detected == "light" else theme_default_label)
+                theme_combo.configure(state="disabled")
+            else:
+                if not self.is_busy:
+                    theme_combo.configure(state="readonly")
+                    if current_theme_saved == "light":
+                        theme_var.set(theme_light_label)
+                    elif current_theme_saved in ("solarized_dark", "solarized"):
+                        theme_var.set(theme_solarized_label)
+                    else:
+                        theme_var.set(theme_default_label)
+
+        cb_theme_system = tk.Checkbutton(
+            theme_system_frame, text="System Default (Follow Windows Light / Dark mode)",
+            variable=theme_system_var, command=_on_theme_system_toggle,
+            font=self.font_label, fg=Theme.TEXT, bg=Theme.BG_DARKEST,
+            selectcolor=Theme.BG_DARK, activebackground=Theme.BG_DARKEST,
+            activeforeground=Theme.TEXT,
+        )
+        cb_theme_system.pack(side=tk.LEFT)
+        if self.is_busy:
+            cb_theme_system.configure(state="disabled")
+
+        _on_theme_system_toggle()
+
         theme_note = tk.Label(
             settings_body, text="Changing the theme applies across the main UI, editor, and integrated terminal.",
             font=self.font_label,
@@ -27184,7 +27246,9 @@ default_envs = {self._pio_env_name()}
             cpu_var.set(high_val)
             g_var.set(True)
             monitor_font_var.set("12")
+            theme_system_var.set(False)
             theme_var.set(theme_default_label)
+            _on_theme_system_toggle()
             editor_var.set(default_label)
             editor_var._monaco_confirmed = False
             self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
@@ -27207,14 +27271,22 @@ default_envs = {self._pio_env_name()}
             except (TypeError, ValueError):
                 monitor_font_size_new = 12
 
-            theme_sel = theme_var.get()
-            if theme_sel == theme_light_label:
-                new_theme_mode = "light"
-            elif theme_sel == theme_solarized_label:
-                new_theme_mode = "solarized_dark"
+            follow_sys = theme_system_var.get()
+            if follow_sys:
+                detected = _detect_system_theme()
+                new_theme_mode = detected
+                saved_mode = "default" if detected == "default" else "light"
             else:
-                new_theme_mode = "default"
-            theme_changed = (new_theme_mode != current_theme_mode)
+                theme_sel = theme_var.get()
+                if theme_sel == theme_light_label:
+                    new_theme_mode = "light"
+                elif theme_sel == theme_solarized_label:
+                    new_theme_mode = "solarized_dark"
+                else:
+                    new_theme_mode = "default"
+                saved_mode = new_theme_mode
+
+            theme_changed = (new_theme_mode != current_theme_mode or follow_sys != current_theme_follow_sys)
 
             autosave_enabled_new = autosave_var.get()
             try:
@@ -27230,8 +27302,9 @@ default_envs = {self._pio_env_name()}
                 data["shared"]["cpu_multithreading"] = cpu_key
                 data["shared"]["graphics_acceleration"] = g_val
                 data["shared"]["monitor_font_size"] = monitor_font_size_new
-                data["shared"]["theme_mode"] = new_theme_mode
-                set_theme_mode(new_theme_mode)
+                data["shared"]["theme_mode"] = saved_mode
+                data["shared"]["theme_follow_system"] = follow_sys
+                set_theme_mode(saved_mode, follow_system=follow_sys)
                 data["shared"]["autosave_enabled"] = autosave_enabled_new
                 data["shared"]["autosave_delay_ms"] = autosave_delay_new
                 data["shared"]["periodic_reload_enabled"] = False
@@ -27273,7 +27346,10 @@ default_envs = {self._pio_env_name()}
                     self._apply_monitor_font_size(monitor_font_size_new)
                     self._append(f"  ✔ Build / Serial / Syntax font size set to {monitor_font_size_new} pt.", "success")
                 if theme_changed:
-                    self._append(f"  ✔ Theme mode set to {new_theme_mode.replace('_', ' ').title()}.", "success")
+                    if follow_sys:
+                        self._append(f"  ✔ Theme mode set to System Default ({new_theme_mode.replace('_', ' ').title()}).", "success")
+                    else:
+                        self._append(f"  ✔ Theme mode set to {new_theme_mode.replace('_', ' ').title()}.", "success")
                     if getattr(self, "editor_mode", "default") == "monaco" and hasattr(self, "editor_webview_window") and self.editor_webview_window:
                         try:
                             self.editor_webview_window.evaluate_js(f"if (typeof window.setEditorTheme === 'function') window.setEditorTheme('{new_theme_mode}');")
