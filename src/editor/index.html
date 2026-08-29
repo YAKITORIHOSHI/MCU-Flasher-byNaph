@@ -11,10 +11,19 @@
       --bg-tab-hover: #171c28;
       --border: #222938;
       --border-tab: #1c212e;
-      --text: #abb2bf;
+      --text: #e0e6ed;
       --text-dim: #7f8c8d;
       --accent: #00d2ff;
       --dirty-dot: #ff9f00;
+      --hover-bg: #161d27;
+      --hover-code-bg: #0f121a;
+      --hover-border: #2a3545;
+      --hover-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+      --hover-kind: #00d2ff;
+      --hover-proto: #5ccc6e;
+      --hover-type: #e5c07b;
+      --hover-param: #98c379;
+      --hover-link: #00d2ff;
     }
 
     body.theme-light {
@@ -27,6 +36,15 @@
       --text-dim: #57606a;
       --accent: #0969da;
       --dirty-dot: #bc4c00;
+      --hover-bg: #ffffff;
+      --hover-code-bg: #f6f8fa;
+      --hover-border: #d0d7de;
+      --hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+      --hover-kind: #0969da;
+      --hover-proto: #116329;
+      --hover-type: #953800;
+      --hover-param: #0550ae;
+      --hover-link: #0969da;
     }
 
     body.theme-solarized-dark {
@@ -35,10 +53,19 @@
       --bg-tab-hover: #073642;
       --border: #073642;
       --border-tab: #094250;
-      --text: #e0e6ed;
+      --text: #ffffff;
       --text-dim: #8fa1b3;
       --accent: #39c5bb;
       --dirty-dot: #b58900;
+      --hover-bg: #002b36;
+      --hover-code-bg: #00212b;
+      --hover-border: #094250;
+      --hover-shadow: 0 12px 32px rgba(0, 0, 0, 0.7);
+      --hover-kind: #39c5bb;
+      --hover-proto: #859900;
+      --hover-type: #b58900;
+      --hover-param: #2aa198;
+      --hover-link: #268bd2;
     }
 
     html,
@@ -226,109 +253,170 @@
     }
 
     .monaco-definition-link {
-      color: #00d2ff !important;
+      color: var(--accent) !important;
       cursor: pointer !important;
       text-decoration: underline !important;
-      text-decoration-color: #00d2ff !important;
-      text-underline-offset: 2px;
-    }
-
-    #definition-hover-card {
-      display: none;
-      position: fixed;
-      z-index: 10000;
-      max-width: 460px;
-      padding: 8px 10px;
-      border: 1px solid #00d2ff;
-      border-radius: 5px;
-      background: #101722;
-      color: #dce5ef;
-      box-shadow: 0 5px 16px rgba(0, 0, 0, 0.38);
-      font: 12px/1.45 'Consolas', 'Courier New', monospace;
-      pointer-events: none;
-      transform: translateY(-100%);
-    }
-
-    #definition-hover-card .symbol-kind {
-      margin-bottom: 3px;
-      color: #00d2ff;
-      font: 700 11px 'Montserrat', 'Segoe UI', sans-serif;
-      text-transform: uppercase;
-    }
-
-    #definition-hover-card .signature,
-    #definition-hover-card .symbol-detail {
-      margin-top: 3px;
-    }
-
-    #definition-hover-card strong {
-      color: #7fdbff;
+      text-decoration-color: var(--accent) !important;
+      text-underline-offset: 3px;
     }
 
     .tab.dragging {
       opacity: 0.5;
     }
 
-    /* Custom VS Code style floating hover container widget */
+    /* Modern VS Code / Antigravity Style Floating Information & Hover Window */
     #monaco-custom-hover-card {
       position: fixed;
       z-index: 99999;
       display: none;
-      background: #1e2430;
-      border: 1px solid #323b4d;
-      border-radius: 6px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      background: var(--hover-bg);
+      border: 1px solid var(--hover-border);
+      border-radius: 8px;
+      box-shadow: var(--hover-shadow);
       padding: 10px 14px;
-      max-width: 450px;
-      font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+      max-width: 480px;
+      font-family: 'Consolas', 'Segoe UI', monospace;
       font-size: 12px;
-      color: #abb2bf;
-      pointer-events: none;
-      transition: opacity 0.15s ease-in-out;
+      line-height: 1.45;
+      color: var(--text);
+      pointer-events: auto;
+      user-select: text;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      backdrop-filter: blur(10px);
     }
 
-    #monaco-custom-hover-card .hover-title {
-      color: #61afef;
-      font-weight: bold;
-      font-size: 13px;
+    #monaco-custom-hover-card .hover-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--hover-border);
     }
 
     #monaco-custom-hover-card .hover-kind {
-      color: #e06c75;
-      font-style: italic;
+      color: var(--hover-kind);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    #monaco-custom-hover-card .hover-loc {
+      color: var(--text-dim);
+      font-size: 11px;
+      font-family: 'Segoe UI', sans-serif;
     }
 
     #monaco-custom-hover-card .hover-proto {
-      color: #98c379;
-      background: #161b24;
-      padding: 4px 8px;
-      border-radius: 4px;
+      color: var(--hover-proto);
+      background: var(--hover-code-bg);
+      border: 1px solid var(--hover-border);
+      padding: 6px 10px;
+      border-radius: 5px;
       margin: 6px 0;
       white-space: pre-wrap;
       word-break: break-all;
+      font-size: 12px;
+      font-weight: 500;
     }
 
     #monaco-custom-hover-card .hover-detail {
-      margin-top: 4px;
-      color: #c8d3df;
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text);
       word-break: break-word;
     }
 
-    #monaco-custom-hover-card strong {
-      color: #7fdbff;
+    #monaco-custom-hover-card .hover-detail strong {
+      color: var(--hover-kind);
     }
 
-    #monaco-custom-hover-card .hover-link {
-      color: #00d2ff;
-      margin-top: 6px;
+    #monaco-custom-hover-card .hover-param-tag {
+      background: var(--hover-code-bg);
+      color: var(--hover-param);
+      border: 1px solid var(--hover-border);
+      padding: 1px 6px;
+      border-radius: 4px;
       font-size: 11px;
-      cursor: pointer;
+      margin-right: 4px;
       display: inline-block;
-      text-decoration: underline;
     }
 
-    #monaco-custom-hover-card .hover-link:hover {
-      color: #66e2ff;
+    #monaco-custom-hover-card .hover-footer {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--hover-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #monaco-custom-hover-card .hover-goto-btn {
+      color: var(--hover-link);
+      font-family: 'Segoe UI', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--hover-code-bg);
+      border: 1px solid var(--hover-border);
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+      user-select: none;
+    }
+
+    #monaco-custom-hover-card .hover-goto-btn:hover {
+      background: var(--border);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    /* Style Monaco's Native Hover and Quick Input Popups */
+    .monaco-editor .monaco-hover {
+      background: var(--hover-bg) !important;
+      border: 1px solid var(--hover-border) !important;
+      border-radius: 8px !important;
+      box-shadow: var(--hover-shadow) !important;
+      color: var(--text) !important;
+    }
+
+    .monaco-editor .monaco-hover-content {
+      color: var(--text) !important;
+      font-family: 'Consolas', 'Segoe UI', monospace !important;
+    }
+
+    .monaco-editor .quick-input-widget {
+      background: var(--hover-bg) !important;
+      border: 1px solid var(--hover-border) !important;
+      border-radius: 8px !important;
+      box-shadow: var(--hover-shadow) !important;
+      color: var(--text) !important;
+    }
+
+    .monaco-editor .parameter-hints-widget {
+      background: var(--hover-bg) !important;
+      border: 1px solid var(--hover-border) !important;
+      border-radius: 6px !important;
+      box-shadow: var(--hover-shadow) !important;
+      color: var(--text) !important;
+    }
+
+    /* GoTo Target Line Flash Animation */
+    @keyframes lineFlashTarget {
+      0% { background: rgba(0, 210, 255, 0.45); }
+      50% { background: rgba(0, 210, 255, 0.25); }
+      100% { background: transparent; }
+    }
+
+    .monaco-target-line-flash {
+      background: rgba(0, 210, 255, 0.35) !important;
+      animation: lineFlashTarget 1.2s ease-out forwards;
     }
 
     /* AI Edits Glow & Diff Highlighting Styles */
@@ -2088,6 +2176,18 @@
           } else if (typeof editor.revealLineInCenter === 'function') {
             editor.revealLineInCenter(sym.line);
           }
+          try {
+            const flashDecs = editor.deltaDecorations([], [{
+              range: new monaco.Range(sym.line, 1, sym.line, 1),
+              options: {
+                isWholeLine: true,
+                className: 'monaco-target-line-flash'
+              }
+            }]);
+            setTimeout(() => {
+              try { editor.deltaDecorations(flashDecs, []); } catch (e) {}
+            }, 1200);
+          } catch (e) {}
           editor.focus();
           return true;
         }
@@ -2531,19 +2631,39 @@
         }
 
         let hoverTimer = null;
+        let hideHoverTimer = null;
         let lastHoverWord = '';
+        let isMouseOverCard = false;
 
-        function hideHoverCard() {
+        function hideHoverCard(immediate = false) {
           if (hoverTimer) clearTimeout(hoverTimer);
-          customHoverCard.style.display = 'none';
-          lastHoverWord = '';
+          if (hideHoverTimer) clearTimeout(hideHoverTimer);
+          if (immediate) {
+            customHoverCard.style.display = 'none';
+            lastHoverWord = '';
+            return;
+          }
+          hideHoverTimer = setTimeout(() => {
+            if (!isMouseOverCard) {
+              customHoverCard.style.display = 'none';
+              lastHoverWord = '';
+            }
+          }, 200);
         }
 
-        customHoverCard.addEventListener('mouseleave', hideHoverCard);
+        customHoverCard.addEventListener('mouseenter', () => {
+          isMouseOverCard = true;
+          if (hideHoverTimer) clearTimeout(hideHoverTimer);
+        });
+
+        customHoverCard.addEventListener('mouseleave', () => {
+          isMouseOverCard = false;
+          hideHoverCard(false);
+        });
 
         // Global DOM event listeners to dispose hover card immediately when Control key is released or window loses focus
         window.addEventListener('keyup', (e) => {
-          if (e.key === 'Control' || e.key === 'Meta' || (!e.ctrlKey && !e.metaKey)) {
+          if (e.key === 'Control' || e.key === 'Meta' || e.key === 'Escape' || (!e.ctrlKey && !e.metaKey && !isMouseOverCard)) {
             disposeControlHover();
           }
         }, true);
@@ -2552,13 +2672,13 @@
           disposeControlHover();
         }, true);
 
-        function renderHoverCardAt(pos, clientX, clientY) {
+        async function renderHoverCardAt(pos, clientX, clientY, anchorElement) {
           if (!pos) {
             disposeControlHover();
             return;
           }
           const model = editor.getModel();
-          if (!model) {
+          if (!model || isPositionInStringOrComment(model, pos)) {
             disposeControlHover();
             return;
           }
@@ -2582,67 +2702,6 @@
             return;
           }
 
-          if (word === lastHoverWord && customHoverCard.style.display === 'block') return;
-          lastHoverWord = word;
-
-          const sym = parseSymbolDetails(word, model, pos);
-          let html = '';
-          if (sym) {
-            const isFunc = sym.kind === 'function';
-            const kindDisplay = isFunc ? 'function' : (sym.kind || 'variable');
-
-            html = `<div><span class="hover-kind">(${kindDisplay})</span> <span class="hover-title">${sym.name || word}</span></div>`;
-
-            if (sym.returnType) {
-              html += `<div style="font-size:11px; color:#abb2bf; margin-top:3px;">Return Type: <span style="color:#e5c07b; font-weight:600;">${sym.returnType}</span></div>`;
-            }
-
-            if (isFunc) {
-              if (sym.params && sym.params.length > 0) {
-                const paramElements = sym.params.map(p => `<code style="background:#161b24; padding:2px 5px; border-radius:3px; color:#98c379; margin-right:3px;">${p}</code>`).join(' ');
-                html += `<div style="font-size:11px; color:#abb2bf; margin-top:5px;"><strong>Parameters/Arguments:</strong><div style="margin-top:3px; display:flex; flex-wrap:wrap; gap:4px;">${paramElements}</div></div>`;
-              } else {
-                html += `<div style="font-size:11px; color:#abb2bf; margin-top:5px;"><strong>Parameters/Arguments:</strong> <em style="color:#7f8c8d;">none</em></div>`;
-              }
-            }
-
-            if (sym.prototype) {
-              html += `<div class="hover-proto">${sym.prototype}</div>`;
-            }
-          } else {
-            html = `<div><span class="hover-kind">(variable)</span> <span class="hover-title">${word}</span></div>`;
-            html += `<div class="hover-proto">${word}</div>`;
-          }
-
-          html += `<div class="hover-link" onclick="window.jumpToDefinitionWord('${word}')">👉 Go to Definition (Click / Tab)</div>`;
-          customHoverCard.innerHTML = html;
-
-          // Position floating hover container near cursor
-          const left = Math.min(window.innerWidth - 320, Math.max(10, clientX + 12));
-          const top = Math.max(10, clientY - 80);
-          customHoverCard.style.left = left + 'px';
-          customHoverCard.style.top = top + 'px';
-          customHoverCard.style.display = 'block';
-        }
-
-        // Replace the older generic hover card with a declaration-aware card.
-        async function renderHoverCardAt(pos, clientX, clientY, anchorElement) {
-          if (!pos) {
-            disposeControlHover();
-            return;
-          }
-          const model = editor.getModel();
-          if (!model || isPositionInStringOrComment(model, pos)) {
-            disposeControlHover();
-            return;
-          }
-          const wordInfo = model.getWordAtPosition(pos);
-          if (!wordInfo || !wordInfo.word) {
-            disposeControlHover();
-            return;
-          }
-
-          const word = wordInfo.word;
           lastHoverWord = word;
           const declaration = getHoveredDeclaration(word, model, pos);
           const symbol = await findProjectSymbol(word, model) || parseSymbolDetails(word, model, pos);
@@ -2650,46 +2709,87 @@
 
           const info = declaration || symbol;
           const isFunction = info.kind === 'function';
-          const params = Array.isArray(info.params) ? info.params.join(', ') : (info.params || '');
+          const paramsList = Array.isArray(info.params) ? info.params : (info.params ? String(info.params).split(',').map(s => s.trim()).filter(Boolean) : []);
           const label = isFunction
             ? (info.isDefinition ? 'Function definition' : 'Function declaration')
             : info.kind === 'macro'
               ? 'Macro declaration'
-              : (declaration || (info && (info.returnType || info.line)))
-                ? 'Variable declaration'
-                : 'Symbol';
+              : info.kind === 'class'
+                ? 'Class declaration'
+                : info.kind === 'struct'
+                  ? 'Struct declaration'
+                  : (declaration || (info && (info.returnType || info.line)))
+                    ? 'Variable declaration'
+                    : 'Symbol';
+
+          // Location badge text
+          let locText = '';
+          if (symbol.path) {
+            const fileName = symbol.path.split(/[\\/]/).pop();
+            locText = fileName + (symbol.line ? `:${symbol.line}` : '');
+          } else if (symbol.line) {
+            locText = `line ${symbol.line}`;
+          }
+
           const signature = isFunction
-            ? '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word) +
-            '(' + formatTypedName(params) + ')' + (info.isDefinition ? ' {}' : ';')
-            : '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word);
+            ? '<span style="color:var(--hover-keyword); font-weight:bold;">' + escapeHtml(info.returnType || 'void') + '</span> ' +
+              '<span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>' +
+              '(' + formatTypedName(paramsList.join(', ')) + ')' + (info.isDefinition ? ' {}' : ';')
+            : info.kind === 'macro'
+              ? '<span style="color:var(--hover-keyword); font-weight:bold;">#define</span> <span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>'
+              : '<span style="color:var(--hover-keyword); font-weight:bold;">' + escapeHtml(info.returnType || 'auto') + '</span> <span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>';
+
           const currentLine = model.getLineContent(pos.lineNumber) || '';
           const callMatch = !declaration && currentLine.match(new RegExp(
             word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'
           ));
           const callValues = callMatch && callMatch[1].trim();
-          let html = '<div><span class="hover-kind">' + label + '</span></div>' +
-            '<div class="hover-proto">' + signature + '</div>';
-          if (isFunction && callValues) {
-            html += '<div class="hover-detail"><strong>Parameter/s:</strong> ' + escapeHtml(word) +
-              '(' + escapeHtml(callValues) + ') &rarr; ' + escapeHtml(callValues) + '</div>' +
-              '<div class="hover-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
-              '(' + formatTypedName(params) + ') &rarr; ' + formatTypedName(params) + '</div>';
-          } else if (isFunction) {
-            html += '<div class="hover-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
-              '(' + formatTypedName(params) + ') &rarr; ' + formatTypedName(params) + '</div>';
+
+          let html = `
+            <div class="hover-header">
+              <span class="hover-kind">${label}</span>
+              ${locText ? `<span class="hover-loc">${escapeHtml(locText)}</span>` : ''}
+            </div>
+            <div class="hover-proto">${signature}</div>
+          `;
+
+          if (isFunction && paramsList.length > 0) {
+            const paramTags = paramsList.map(p => `<span class="hover-param-tag">${escapeHtml(p)}</span>`).join('');
+            html += `<div class="hover-detail"><strong>Parameters:</strong> <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px;">${paramTags}</div></div>`;
           }
+
+          if (isFunction && callValues) {
+            html += `<div class="hover-detail" style="margin-top:5px;"><strong>Caller values:</strong> <code style="color:var(--hover-param); background:var(--hover-code-bg); padding:1px 5px; border-radius:3px;">${escapeHtml(callValues)}</code></div>`;
+          }
+
+          html += `
+            <div class="hover-footer">
+              <button class="hover-goto-btn" onclick="window.jumpToDefinitionWord('${escapeHtml(word)}')">
+                <span>👉 Go to Definition</span>
+                <kbd style="font-size:10px; opacity:0.8; margin-left:3px; background:var(--hover-code-bg); padding:1px 4px; border-radius:3px; border:1px solid var(--hover-border);">F12</kbd>
+              </button>
+              <span style="font-size:10px; color:var(--text-dim);">Ctrl+Click / F12 to jump</span>
+            </div>
+          `;
+
           customHoverCard.innerHTML = html;
-          // A hidden element reports zero height. Make it measurable before
-          // calculating its position so it sits above, rather than over, the
-          // hovered symbol.
           customHoverCard.style.visibility = 'hidden';
           customHoverCard.style.display = 'block';
+
           const anchorRect = anchorElement && anchorElement.getBoundingClientRect
             ? anchorElement.getBoundingClientRect() : null;
           const anchorX = anchorRect && anchorRect.width ? anchorRect.left : clientX;
           const anchorTop = anchorRect && anchorRect.height ? anchorRect.top : clientY;
-          const left = Math.min(window.innerWidth - customHoverCard.offsetWidth - 8, Math.max(8, anchorX));
-          const top = Math.max(8, anchorTop - customHoverCard.offsetHeight - 6);
+          const cardWidth = customHoverCard.offsetWidth || 360;
+          const cardHeight = customHoverCard.offsetHeight || 130;
+
+          let left = Math.min(window.innerWidth - cardWidth - 12, Math.max(12, anchorX));
+          let top = anchorTop - cardHeight - 8;
+          if (top < 10) {
+            top = (anchorRect && anchorRect.bottom ? anchorRect.bottom : clientY) + 16;
+          }
+          top = Math.max(10, Math.min(window.innerHeight - cardHeight - 12, top));
+
           customHoverCard.style.left = left + 'px';
           customHoverCard.style.top = top + 'px';
           customHoverCard.style.visibility = 'visible';
@@ -2739,15 +2839,15 @@
           const cy = event.clientY || (e.browserEvent && e.browserEvent.clientY) || 100;
           hoverTimer = setTimeout(() => {
             renderHoverCardAt(pos, cx, cy, e.target && e.target.element);
-          }, 100);
+          }, 80);
         });
 
         editor.onMouseLeave(() => {
-          disposeControlHover();
+          if (!isMouseOverCard) disposeControlHover();
         });
         editor.onKeyUp((e) => {
           const event = e.browserEvent || {};
-          if (!event.ctrlKey && !event.metaKey) disposeControlHover();
+          if (!event.ctrlKey && !event.metaKey && !isMouseOverCard) disposeControlHover();
         });
         editor.onDidChangeModelContent(() => {
           disposeControlHover();
