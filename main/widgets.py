@@ -576,7 +576,7 @@ class ToolTip:
             relief=tk.SOLID, borderwidth=1,
             highlightbackground=Theme.BORDER,
             padx=8, pady=4,
-            font=("Montserrat", 9)
+            font=("Segoe UI", 9)
         )
         label.pack(ipadx=1)
 
@@ -614,12 +614,28 @@ class ToolTip:
 class CircularLoadingOverlay(tk.Frame):
     """
     Sleek, modern loading overlay with an animated circular spinner.
-    Remains visible until the OpenCode terminal reports interactive readiness.
+    Adapts seamlessly to Light, Dark, and Solarized Dark themes.
     """
-    def __init__(self, parent, bg_color="#0c0d10", spinner_color="#00e5ff", text="Initializing AI Assistant..."):
+    def __init__(
+        self,
+        parent,
+        bg_color=None,
+        spinner_color=None,
+        fg_title=None,
+        fg_sub=None,
+        track_color=None,
+        text="⚡ MCU Flasher by Naph",
+    ):
+        bg_color = bg_color or Theme.BG_DARKEST
+        spinner_color = spinner_color or Theme.CYAN
+        fg_title = fg_title or Theme.TEXT_BRIGHT
+        fg_sub = fg_sub or Theme.TEXT_DIM
+        track_color = track_color or Theme.BORDER
+
         super().__init__(parent, bg=bg_color)
         self.bg_color = bg_color
         self.spinner_color = spinner_color
+        self.track_color = track_color
         self.angle = 0
         self.is_animating = True
         self._after_id = None
@@ -640,17 +656,17 @@ class CircularLoadingOverlay(tk.Frame):
         self.title_label = tk.Label(
             self.center_frame,
             text=text,
-            font=("Segoe UI", 12, "bold"),
-            fg="#ffffff",
+            font=("Segoe UI", 13, "bold"),
+            fg=fg_title,
             bg=bg_color
         )
-        self.title_label.pack(pady=(0, 4))
+        self.title_label.pack(pady=(0, 6))
 
         self.sub_label = tk.Label(
             self.center_frame,
-            text="Preparing workspace & loading AI environment...",
+            text="Preparing workspace & loading editor...",
             font=("Segoe UI", 9),
-            fg="#8a8f9d",
+            fg=fg_sub,
             bg=bg_color
         )
         self.sub_label.pack()
@@ -666,7 +682,7 @@ class CircularLoadingOverlay(tk.Frame):
             r = self.size - pad
             self.canvas.create_oval(
                 pad, pad, r, r,
-                outline="#1e2330",
+                outline=self.track_color,
                 width=4
             )
             self.canvas.create_arc(

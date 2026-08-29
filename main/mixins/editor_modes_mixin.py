@@ -94,7 +94,7 @@ class EditorModesMixin(_Base):
         status_lbl = tk.Label(
             placeholder,
             text="📝 Loading code editor…",
-            font=tkfont.Font(family="Montserrat", size=16, weight="bold"),
+            font=tkfont.Font(family="Segoe UI", size=16, weight="bold"),
             fg=Theme.CYAN, bg=Theme.BG_DARKEST
         )
         status_lbl.pack(pady=10)
@@ -103,7 +103,7 @@ class EditorModesMixin(_Base):
         desc_lbl = tk.Label(
             placeholder,
             text="Attaching the editor to this window…",
-            font=tkfont.Font(family="Montserrat", size=10),
+            font=tkfont.Font(family="Segoe UI", size=10),
             fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
         )
         desc_lbl.pack(pady=5)
@@ -116,7 +116,7 @@ class EditorModesMixin(_Base):
 
         self._editor_fallback_btn = self._make_btn(
             placeholder, "Open Editor Window", open_editor_win,
-            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, font=tkfont.Font(family="Montserrat", size=10, weight="bold")
+            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, font=tkfont.Font(family="Segoe UI", size=10, weight="bold")
         )
         # Only packed (shown) if/when embedding fails — see
         # _try_embed_editor_window below.

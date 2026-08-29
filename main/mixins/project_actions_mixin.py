@@ -230,9 +230,9 @@ class ProjectActionsMixin(_Base):
         dlg.transient(self.root)
         dlg.grab_set()
 
-        dlg_title_font = tkfont.Font(family="Montserrat", size=13, weight="bold")
-        dlg_btn_font = tkfont.Font(family="Montserrat", size=10, weight="bold")
-        dlg_action_font = tkfont.Font(family="Montserrat", size=11, weight="bold")
+        dlg_title_font = tkfont.Font(family="Segoe UI", size=13, weight="bold")
+        dlg_btn_font = tkfont.Font(family="Segoe UI", size=10, weight="bold")
+        dlg_action_font = tkfont.Font(family="Segoe UI", size=11, weight="bold")
 
         tk.Label(
             dlg, text="Modify Project Files", font=dlg_title_font,

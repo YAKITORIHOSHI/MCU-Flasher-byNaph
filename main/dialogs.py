@@ -155,10 +155,10 @@ class ProjectSelectorDialog:
         self.win.configure(bg=Theme.BG_DARKEST)
         self.win.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        f_title = tkfont.Font(family="Montserrat", size=title_size, weight="bold")
-        f_sub = tkfont.Font(family="Montserrat", size=sub_size)
-        f_label = tkfont.Font(family="Montserrat", size=label_size)
-        f_btn = tkfont.Font(family="Montserrat", size=label_size, weight="bold")
+        f_title = tkfont.Font(family="Segoe UI", size=title_size, weight="bold")
+        f_sub = tkfont.Font(family="Segoe UI", size=sub_size)
+        f_label = tkfont.Font(family="Segoe UI", size=label_size)
+        f_btn = tkfont.Font(family="Segoe UI", size=label_size, weight="bold")
         f_mono = tkfont.Font(family="Consolas", size=max(8, label_size - 1))
         self._fonts = (f_title, f_sub, f_label, f_btn, f_mono)
 
@@ -859,7 +859,7 @@ class BoardSearchDialog(tk.Toplevel):
         hdr_frame.pack(fill=tk.X)
         tk.Label(
             hdr_frame, text="🔍 Search MCU Board",
-            font=("Montserrat", 11, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARK
+            font=("Segoe UI", 11, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARK
         ).pack(side=tk.LEFT)
 
         # Search Entry
@@ -867,7 +867,7 @@ class BoardSearchDialog(tk.Toplevel):
         search_frame.pack(fill=tk.X)
 
         tk.Label(
-            search_frame, text="Search:", font=("Montserrat", 9, "bold"),
+            search_frame, text="Search:", font=("Segoe UI", 9, "bold"),
             fg=Theme.TEXT_DIM, bg=Theme.BG_MID
         ).pack(side=tk.LEFT, padx=(0, 6))
 
@@ -913,16 +913,16 @@ class BoardSearchDialog(tk.Toplevel):
         btn_frame.pack(fill=tk.X)
 
         self.btn_select = tk.Button(
-            btn_frame, text="Select Board", font=("Montserrat", 9, "bold"),
+            btn_frame, text="Select Board", font=("Segoe UI", 9, "bold"),
             bg=Theme.BTN_MONITOR, fg="#ffffff", activebackground=Theme.BTN_MONITOR_H,
             activeforeground="#ffffff", bd=0, padx=12, pady=4, cursor="hand2", command=self._confirm_selection
         )
         self.btn_select.pack(side=tk.RIGHT, padx=(6, 0))
 
         btn_cancel = tk.Button(
-            btn_frame, text="Cancel", font=("Montserrat", 9),
-            bg=Theme.BTN_STOP, fg=Theme.TEXT_BRIGHT, activebackground=Theme.BTN_STOP_H,
-            activeforeground=Theme.TEXT_BRIGHT,
+            btn_frame, text="Cancel", font=("Segoe UI", 9),
+            bg=Theme.BTN_STOP, fg="#ffffff", activebackground=Theme.BTN_STOP_H,
+            activeforeground="#ffffff",
             bd=0, padx=12, pady=4, cursor="hand2", command=self.destroy
         )
         btn_cancel.pack(side=tk.RIGHT)

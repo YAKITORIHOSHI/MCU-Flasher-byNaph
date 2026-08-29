@@ -393,6 +393,10 @@ def main():
         screen_w = work_right - work_left
         screen_h = work_bottom - work_top
         dpi_scale = _get_widget_dpi_scale(root_val)
+        try:
+            root_val.tk.call("tk", "scaling", (96.0 * dpi_scale) / 72.0)
+        except Exception:
+            pass
         logical_screen_w = screen_w / dpi_scale
         logical_screen_h = screen_h / dpi_scale
 

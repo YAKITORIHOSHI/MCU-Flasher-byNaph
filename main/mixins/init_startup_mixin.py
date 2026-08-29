@@ -321,19 +321,22 @@ class InitStartupMixin(_Base):
         def _sz(base: float, floor: int) -> int:
             return max(floor, round(base * self._ui_scale))
 
-        self.font_title    = tkfont.Font(family="Montserrat", size=_sz(15, 11), weight="bold")
-        self.font_subtitle = tkfont.Font(family="Montserrat", size=_sz(9, 8))
-        self.font_label    = tkfont.Font(family="Montserrat", size=_sz(9, 8))
-        self.font_btn      = tkfont.Font(family="Montserrat", size=_sz(9, 7), weight="bold")
-        self.font_mono     = tkfont.Font(family="Consolas", size=_sz(10, 8))
-        self.font_mono_sm  = tkfont.Font(family="Consolas", size=_sz(9, 8))
-        self.font_status   = tkfont.Font(family="Montserrat", size=_sz(9, 8))
+        _font_family_ui = "Segoe UI"
+        _font_family_mono = "Consolas"
+
+        self.font_title    = tkfont.Font(family=_font_family_ui, size=_sz(15, 11), weight="bold")
+        self.font_subtitle = tkfont.Font(family=_font_family_ui, size=_sz(9, 8))
+        self.font_label    = tkfont.Font(family=_font_family_ui, size=_sz(9, 8))
+        self.font_btn      = tkfont.Font(family=_font_family_ui, size=_sz(9, 7), weight="bold")
+        self.font_mono     = tkfont.Font(family=_font_family_mono, size=_sz(10, 8))
+        self.font_mono_sm  = tkfont.Font(family=_font_family_mono, size=_sz(9, 8))
+        self.font_status   = tkfont.Font(family=_font_family_ui, size=_sz(9, 8))
         self.monitor_font_size = get_monitor_font_size()
-        self.monitor_font = tkfont.Font(family="Consolas", size=self.monitor_font_size)
-        self.monitor_font_bold = tkfont.Font(family="Consolas", size=self.monitor_font_size, weight="bold")
-        self.monitor_font_header = tkfont.Font(family="Consolas", size=self.monitor_font_size + 1, weight="bold")
-        self.monitor_font_large_bold = tkfont.Font(family="Consolas", size=self.monitor_font_size + 2, weight="bold")
-        self.monitor_heading_font = tkfont.Font(family="Montserrat", size=self.monitor_font_size, weight="bold")
+        self.monitor_font = tkfont.Font(family=_font_family_mono, size=self.monitor_font_size)
+        self.monitor_font_bold = tkfont.Font(family=_font_family_mono, size=self.monitor_font_size, weight="bold")
+        self.monitor_font_header = tkfont.Font(family=_font_family_mono, size=self.monitor_font_size + 1, weight="bold")
+        self.monitor_font_large_bold = tkfont.Font(family=_font_family_mono, size=self.monitor_font_size + 2, weight="bold")
+        self.monitor_heading_font = tkfont.Font(family=_font_family_ui, size=self.monitor_font_size, weight="bold")
         self._btn_padx = round(_sz(10, 6) * self._display_scale)
         self._btn_pady = round(_sz(3, 2) * self._display_scale)
 
@@ -515,6 +518,9 @@ class InitStartupMixin(_Base):
                 self.root,
                 bg_color=Theme.BG_DARKEST,
                 spinner_color=Theme.CYAN,
+                fg_title=Theme.TEXT_BRIGHT,
+                fg_sub=Theme.TEXT_DIM,
+                track_color=Theme.BORDER,
                 text="⚡ MCU Flasher by Naph",
             )
             overlay.place(relx=0, rely=0, relwidth=1, relheight=1)

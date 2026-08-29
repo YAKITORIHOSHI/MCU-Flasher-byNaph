@@ -436,7 +436,7 @@ class UILayoutMixin(_Base):
         self.lbl_ai_side_title = tk.Label(
             self.ai_side_header,
             text="🤖 OPENCODE AI ASSISTANT",
-            font=tkfont.Font(family="Montserrat", size=9, weight="bold"),
+            font=tkfont.Font(family="Segoe UI", size=9, weight="bold"),
             fg=Theme.CYAN, bg=Theme.BG_MID
         )
         self.lbl_ai_side_title.pack(side=tk.LEFT, padx=(2, 0))
@@ -1046,7 +1046,7 @@ class UILayoutMixin(_Base):
 
         lbl_syntax_beta_notice = tk.Label(
             syntax_header, text=" (Beta: Checker is under progress; some warnings or errors may be approximate)",
-            font=tkfont.Font(family="Montserrat", size=8),
+            font=tkfont.Font(family="Segoe UI", size=8),
             fg=Theme.YELLOW, bg=Theme.BG_MID,
         )
         lbl_syntax_beta_notice.pack(side=tk.LEFT, padx=(6, 0))

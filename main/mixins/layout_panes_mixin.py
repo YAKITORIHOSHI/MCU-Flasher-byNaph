@@ -945,7 +945,7 @@ class LayoutPanesMixin(_Base):
                 status_lbl = tk.Label(
                     placeholder,
                     text="📝 Editor Detached",
-                    font=tkfont.Font(family="Montserrat", size=16, weight="bold"),
+                    font=tkfont.Font(family="Segoe UI", size=16, weight="bold"),
                     fg=Theme.CYAN, bg=Theme.BG_DARKEST
                 )
                 status_lbl.pack(pady=10)
@@ -953,7 +953,7 @@ class LayoutPanesMixin(_Base):
                 desc_lbl = tk.Label(
                     placeholder,
                     text="The code editor is running in a separate window.",
-                    font=tkfont.Font(family="Montserrat", size=10),
+                    font=tkfont.Font(family="Segoe UI", size=10),
                     fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
                 )
                 desc_lbl.pack(pady=5)
