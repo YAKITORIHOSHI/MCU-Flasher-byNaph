@@ -375,6 +375,18 @@ def _shell_cd_command(kind: str, target: str) -> str:
     return f"Set-Location -LiteralPath '{escaped}'\r\n"
 
 
+RE_PWSH_PROMPT = re.compile(r"PS [^>\r\n]*>", re.MULTILINE)
+RE_CMD_PROMPT = re.compile(r"[A-Za-z]:\\[^>\r\n]*>", re.MULTILINE)
+
+
+def re_prompt(kind: str, text: str) -> bool:
+    if not text:
+        return False
+    if kind == "pwsh":
+        return bool(RE_PWSH_PROMPT.search(text)) or ("> " in text or text.rstrip().endswith(">"))
+    return bool(RE_CMD_PROMPT.search(text)) or ("> " in text or text.rstrip().endswith(">"))
+
+
 RE_TERMINAL_QUERY_RESPONSE = re.compile(
     r"\x1b(?:\[\?[0-9;]*c|\[>[0-9;]*c|\[\?[0-9;]*\$y|\[[0-9;]*\$y|\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?|P>\|[^\x1b\x07]*(?:\x1b\\|\x07)?|\[>[0-9;]*q)"
 )
@@ -549,9 +561,9 @@ class ProjectTerminalServer:
             pty = PtyProcess.spawn(argv, cwd=self.target_dir, dimensions=(30, 120))
             with session.lock:
                 session.pty = pty
-            cd_pending = False
+            cls_pending = True
             probe = ""
-            deadline = time.monotonic() + 30.0
+            deadline = time.monotonic() + 4.0
             while is_current():
                 try:
                     data = pty.read(4096)
@@ -564,14 +576,14 @@ class ProjectTerminalServer:
                     session.append_history(text)
                     self.broadcast({"type": "output", "shell": kind, "data": text})
                     probe = (probe + text)[-8000:]
-                    if cd_pending:
+                    if cls_pending:
                         prompt_seen = bool(re_prompt(kind, probe))
                         if prompt_seen or time.monotonic() >= deadline:
                             try:
-                                pty.write(_shell_cd_command(kind, self.target_dir) + "cls\r\n")
+                                pty.write("cls\r\n")
                             except Exception:
                                 pass
-                            cd_pending = False
+                            cls_pending = False
                             ready_candidate = time.monotonic()
                     elif not session.ready and (
                         re_prompt(kind, probe)
@@ -582,12 +594,12 @@ class ProjectTerminalServer:
                         if self.active_shell == kind:
                             self._write_port_file(ready=True)
                         self.broadcast({"type": "status", "shell": kind, "running": True, "ready": True})
-                elif cd_pending and time.monotonic() >= deadline:
+                elif cls_pending and time.monotonic() >= deadline:
                     try:
-                        pty.write(_shell_cd_command(kind, self.target_dir) + "cls\r\n")
+                        pty.write("cls\r\n")
                     except Exception:
                         pass
-                    cd_pending = False
+                    cls_pending = False
         except Exception as exc:
             message = f"\r\n[MCU Flasher] Could not start {kind}: {exc}\r\n"
             session.append_history(message)

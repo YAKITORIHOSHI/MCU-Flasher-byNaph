@@ -841,12 +841,9 @@ class ProjectTerminalMixin(_Base):
             with self._shell_state_lock:
                 session["pty"] = pty
 
-            cd_pending = False
+            cls_pending = True
             startup_probe = ""
-            # PowerShell can take several seconds to print its first prompt on
-            # a cold Windows profile.  Give the native banner plenty of time to
-            # arrive; cmd.exe normally completes this path much sooner.
-            startup_deadline = time.monotonic() + 30.0
+            startup_deadline = time.monotonic() + 4.0
 
             while True:
                 with self._shell_state_lock:
@@ -858,37 +855,28 @@ class ProjectTerminalMixin(_Base):
                     break
                 if data:
                     self._shell_append_output(session, data)
-                    if not cd_pending and not session.get("ready"):
-                        startup_probe = session.get("output", "")[-6000:]
-                        if re.search(
-                            r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$",
-                            startup_probe,
-                        ):
-                            with self._shell_state_lock:
-                                session["ready"] = True
-                    if cd_pending:
-                        startup_probe = session.get("output", "")[-6000:]
-                        prompt_seen = bool(
-                            re.search(r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$", startup_probe)
-                        )
+                    startup_probe = session.get("output", "")[-6000:]
+                    prompt_seen = bool(
+                        re.search(r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$", startup_probe)
+                    )
+                    if cls_pending:
                         if prompt_seen or time.monotonic() >= startup_deadline:
                             try:
-                                # Keep the navigation visible, then perform one
-                                # native clear so the session settles on a
-                                # clean project prompt:
-                                # ``PS D:\project> cls`` / ``D:\project>cls``.
-                                pty.write(self._shell_cd_command(kind, target) + "cls\r\n")
+                                pty.write("cls\r\n")
                             except Exception:
                                 pass
-                            cd_pending = False
+                            cls_pending = False
                             with self._shell_state_lock:
                                 session["ready"] = True
-                elif cd_pending and time.monotonic() >= startup_deadline:
+                    elif not session.get("ready") and prompt_seen:
+                        with self._shell_state_lock:
+                            session["ready"] = True
+                elif cls_pending and time.monotonic() >= startup_deadline:
                     try:
-                        pty.write(self._shell_cd_command(kind, target) + "cls\r\n")
+                        pty.write("cls\r\n")
                     except Exception:
                         pass
-                    cd_pending = False
+                    cls_pending = False
                     with self._shell_state_lock:
                         session["ready"] = True
         except Exception as exc:
