@@ -124,12 +124,14 @@ def main():
         raise SystemExit("MCU Flasher by Naph requires Windows 10 or newer.")
     _startup_event("main-enter")
     _configure_windows_dpi_awareness()
-    # If not run from bootstrap, launch the VBS launcher to check for updates and setup dependencies
+    # Ensure Bootstrap is ALWAYS run first before the main GUI starts.
+    # If not spawned from bootstrap, launch the bootstrap pipeline and exit this process.
     if "--from-bootstrap" not in sys.argv:
         import subprocess
         vbs_launcher = SCRIPT_DIR / "direct" / "runThisOnWindows.vbs"
         if not vbs_launcher.exists():
             vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
+        launched = False
         if vbs_launcher.exists():
             try:
                 # Sanitize PyInstaller environment variables so they don't pollute the VBS launcher
@@ -147,9 +149,21 @@ def main():
                     env["PATH"] = os.pathsep.join(cleaned_paths)
                 
                 subprocess.Popen(["wscript.exe", str(vbs_launcher)], cwd=str(SCRIPT_DIR), env=env)
+                launched = True
                 sys.exit(0)
             except Exception:
-                pass
+                launched = False
+
+        if not launched:
+            launcher_py = SCRIPT_DIR / "src" / "modules" / "launcher.py"
+            bootstrap_py = SCRIPT_DIR / "src" / "modules" / "bootstrap.py"
+            target_py = launcher_py if launcher_py.exists() else bootstrap_py
+            if target_py.exists():
+                try:
+                    subprocess.Popen([sys.executable, str(target_py), *sys.argv[1:]], cwd=str(SCRIPT_DIR))
+                    sys.exit(0)
+                except Exception:
+                    pass
 
     # Keep the app's own cache/runtime/log folders out of the project view.
     # This runs only after bootstrap handoff; user source files and unknown

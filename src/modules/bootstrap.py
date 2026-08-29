@@ -8163,26 +8163,8 @@ def _write_startup_health_snapshot() -> bool:
 
 
 def _try_fast_normal_launch() -> bool:
-    """Launch the main GUI immediately when the local health snapshot is valid."""
-    snapshot = _read_startup_health_snapshot()
-    if snapshot is None:
-        return False
-
-    # Preserve the validated core path for child processes without invoking
-    # _get_safe_platformio_core_dir(), which creates directories/junctions.
-    core_dir = str(snapshot.get("platformio_core_dir") or "").strip()
-    if core_dir:
-        os.environ["PLATFORMIO_CORE_DIR"] = core_dir
-
-    proc, _gui_log = _spawn_main_gui()
-    if proc is None:
-        return False
-    _record_bootstrap_log(
-        "FAST_PATH",
-        "Valid local startup health snapshot found; spawned the main GUI without setup, update, or installer checks.",
-    )
-    _record_bootstrap_log("FINISH", "Main GUI launched through the normal fast path.")
-    return True
+    """Bootstrap must never be skipped at all costs. Full verification runs on every launch."""
+    return False
 
 
 def _explicit_setup_requested() -> bool:
@@ -9353,10 +9335,8 @@ def main():
             pass
         return
 
-    # Warm launches use the cached local health contract.  If it is absent or
-    # stale, continue into the existing setup/repair UI below.
-    if not _explicit_setup_requested() and _try_fast_normal_launch():
-        return
+    # Bootstrap setup and verification is mandatory and must run on every launch.
+    _record_bootstrap_log("START", "Executing mandatory Bootstrap verification pipeline.")
 
     # Clean up the narrow class of orphaned update probes produced by older
     # releases before checking the normal GUI instance. This is best-effort
