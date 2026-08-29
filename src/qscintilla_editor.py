@@ -17,8 +17,8 @@ try:
     # pyrefly: ignore [missing-import]
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QTabWidget, QAction, QFileDialog,
-        QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
-        QPushButton, QDialog, QCheckBox, QLabel, QStyle
+        QMessageBox, QVBoxLayout, QHBoxLayout, QLineEdit,
+        QPushButton, QDialog, QCheckBox, QLabel
     )
 except ImportError:
     sys.exit(
@@ -41,7 +41,6 @@ WM_MCU_RUN_ACTION = 0
 if sys.platform == "win32":
     try:
         import ctypes
-        from ctypes import wintypes
         WM_MCU_SAVE_ALL = ctypes.windll.user32.RegisterWindowMessageW("MCU_Flash_Save_All")
         WM_MCU_RELOAD_ALL = ctypes.windll.user32.RegisterWindowMessageW("MCU_Flash_Reload_All")
         WM_MCU_SET_EMBEDDED = ctypes.windll.user32.RegisterWindowMessageW("MCU_Flash_Set_Embedded")
@@ -363,6 +362,7 @@ class ArduinoEditor(QsciScintilla):
             return
             
         try:
+            # pyrefly: ignore [missing-import]
             from syntax_checker import analyze_cpp_syntax, extract_project_functions
             from pathlib import Path
             import json
@@ -1004,7 +1004,6 @@ class MainWindow(QMainWindow):
         if eventType == b"windows_generic_MSG" and sys.platform == "win32":
             try:
                 import ctypes
-                from ctypes import wintypes
                 msg = ctypes.wintypes.MSG.from_address(int(message))
                 # WM_SETFOCUS = 0x0007 — forward Qt focus to the active
                 # editor tab when the native window receives keyboard

@@ -6,24 +6,10 @@ MCU Flasher by Naph — Modularized Architecture
 from __future__ import annotations
 
 import sys
-import os
 import time
-import json
-import re
-import shutil
-import tempfile
-import subprocess
-import threading
-import queue
-import ctypes
-import traceback
-import hashlib
-from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING
-from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import ttk, font as tkfont
 
 
 from main.core.constants import *
@@ -780,6 +766,10 @@ class UILayoutMixin(_Base):
         )
         self.serial_baud_combo.pack(side=tk.LEFT, padx=(4, 0))
         self.serial_baud_combo.bind("<<ComboboxSelected>>", lambda e: self._on_serial_baud_changed())
+
+        # Setup real-time reactive auto-synchronization of project hardware state
+        if hasattr(self, "_setup_hardware_state_auto_sync"):
+            self._setup_hardware_state_auto_sync()
 
         # Small divider between BAUD RATE and status indicator
         tk.Frame(serial_header, bg=Theme.CYAN_DIM, width=1, height=20).pack(

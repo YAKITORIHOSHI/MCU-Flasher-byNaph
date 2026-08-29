@@ -8,7 +8,6 @@ Run:
     python downloader.py
 """
 
-import os
 import socket
 import re
 import threading

@@ -5,25 +5,14 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
-import sys
 import os
-import time
 import json
 import re
-import shutil
-import tempfile
-import subprocess
 import threading
-import queue
-import ctypes
-import traceback
-import hashlib
-from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import messagebox
 
 
 from main.core.constants import *
@@ -418,6 +407,15 @@ class CleanBuildMixin(_Base):
                     # clean there is normally nothing left, so the button
                     # must go DISABLED instead of waiting for the next op.
                     self._update_clean_button_state()
+
+                    # Re-sync hardware state and recreate AGENTS.md immediately so AI Assistant has fresh cache
+                    try:
+                        if hasattr(self, "sketch_dir_path") and self.sketch_dir_path:
+                            ensure_hidden_read_first_md(self.sketch_dir_path)
+                        if hasattr(self, "_sync_project_hardware_state"):
+                            self._sync_project_hardware_state()
+                    except Exception:
+                        pass
 
                     if on_complete:
                         self.is_busy = False

@@ -22,21 +22,12 @@ for _p in (_project_root, _modules_path, _main_path):
 
 SCRIPT_DIR = _project_root
 
-import time
-import json
-import re
-import shutil
-import tempfile
 import subprocess
 import threading
-import queue
 import ctypes
 import traceback
-import hashlib
-from collections import deque
-from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import messagebox
 
 # Import all core constants, theme, config, file utilities, toolchains, catalogs, and compatibilities
 from main.core.constants import *

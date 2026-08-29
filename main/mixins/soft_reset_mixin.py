@@ -8,22 +8,16 @@ from __future__ import annotations
 import sys
 import os
 import time
-import json
 import re
-import shutil
-import tempfile
 import subprocess
 import threading
 import queue
-import ctypes
 import traceback
-import hashlib
-from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import messagebox
 
 
 from main.core.constants import *
@@ -1313,8 +1307,6 @@ class SoftResetMixin(_Base):
         # ── Use an exact-board persistent reset project ────────────────────────
         # A/B/A board switching returns to A's own .pio tree instead of
         # rewriting and deleting the last board's shared reset build.
-        import shutil
-
         self._set_status("Soft Reset: Preparing project files...", Theme.YELLOW)
         project_dir = self._soft_reset_project_dir(board_name, board_info)
         self._migrate_legacy_reset_project(board_name, board_info)

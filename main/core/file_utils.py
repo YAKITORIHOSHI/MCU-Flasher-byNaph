@@ -8,21 +8,15 @@ from __future__ import annotations
 import sys
 import os
 import time
-import json
 import re
 import shutil
 import tempfile
 import subprocess
 import threading
-import queue
 import ctypes
-import traceback
 import hashlib
-from collections import deque
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
 
 
 from main.core.constants import *
@@ -270,11 +264,8 @@ def _hide_junction(path) -> None:
 
 def ensure_file_writable(path) -> None:
     """Ensure file is writable by clearing POSIX read-only flags and Windows
-    FILE_ATTRIBUTE_READONLY (0x01).
-
-    Deliberately preserve HIDDEN/SYSTEM: visibility and writability are
-    separate concerns, and app-generated files must not briefly become mixed
-    into the user's visible sketch files whenever the GUI edits them."""
+    file attributes to FILE_ATTRIBUTE_NORMAL (0x80) to prevent Win32 CreateFile /
+    open('w') ERROR_ACCESS_DENIED ([Errno 13] Permission denied)."""
     try:
         p = Path(path)
         if not p.exists():
@@ -282,9 +273,8 @@ def ensure_file_writable(path) -> None:
         os.chmod(p, 0o666)
         if sys.platform == "win32":
             import ctypes
-            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
-            if attrs != -1 and (attrs & 0x01):  # 0x01 = FILE_ATTRIBUTE_READONLY
-                ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs & ~0x01)
+            # 0x80 = FILE_ATTRIBUTE_NORMAL
+            ctypes.windll.kernel32.SetFileAttributesW(str(p), 0x80)
     except Exception:
         pass
 
@@ -1207,13 +1197,11 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "# 🚨 OPENCODE AI WORKSPACE EXECUTION PRIORITY 🚨\n\n"
             "## ⚡ WHAT TO DO FIRST (Execution Sequence)\n\n"
             "### 1️⃣ STEP 1: Discover Active Hardware & Settings (FIRST ACTION)\n"
-            f"- **Before writing or editing any code**, read `{PROJECT_BUILD_CACHE_DIR}/project_state.json` (Read-Only) to identify:\n"
-            "  - `hardware.board_name` (e.g. \"ESP32 Dev Module\", \"Arduino Uno\", \"ESP32-S3\", \"Raspberry Pi Pico\")\n"
-            "  - `hardware.platform` & `hardware.fqbn` (Determines pinouts, available RAM/flash, GPIOs, ADC/DAC channels, SPI/I2C buses)\n"
-            "  - `hardware.port` (Active connected USB serial port, e.g. COM3)\n"
-            "  - `hardware.baud_rate` (Serial Monitor baud rate — match this in `Serial.begin(baud)`)\n"
-            "  - `hardware.upload_speed` & `settings.editor_mode`\n"
-            "  *Use this information so that all pin definitions, peripherals, and libraries match the exact physical board selected by the user.*\n\n"
+            f"- **To answer questions about the active board, port, or microcontroller**, immediately read `{PROJECT_BUILD_CACHE_DIR}/project_state.json` (Read-Only). Answer directly using `status_summary` and `hardware`:\n"
+            "  - If `hardware.mcu_connected` is false or `hardware.port` is null: answer immediately: \"No microcontroller is currently connected.\"\n"
+            "  - If `hardware.board_selected` is false or `hardware.board_name` is null: answer immediately: \"No board is currently selected in the GUI.\"\n"
+            "  - `status_summary` gives the authoritative human-readable live hardware status.\n"
+            f"  *`project_state.json` is the sole source of truth for the live GUI hardware state. Do NOT run PowerShell commands (like Test-Path) or inspect `platformio.ini` to infer board selection — answer directly and immediately from `project_state.json`.*\n\n"
             "### 2️⃣ STEP 2: Read & Edit ONLY Main Sketch Files at Root\n"
             "- Work strictly on primary sketch source files located at the root of this project folder:\n"
             "  - `*.ino` (Main Arduino sketch file at root)\n"
@@ -1263,11 +1251,13 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "Follow this execution sequence when working on this microcontroller sketch:\n\n"
             "### Step 1: Discover Active Hardware Target\n"
             f"Always inspect `{PROJECT_BUILD_CACHE_DIR}/project_state.json` first to get:\n"
-            "- Target Board: `hardware.board_name` (e.g. ESP32, Uno, RP2040)\n"
+            "- Live Status: `status_summary`\n"
+            "- Target Board: `hardware.board_name` (and `hardware.board_selected`). If null or false, state clearly: \"No board is currently selected in the GUI.\"\n"
             "- Target MCU: `hardware.platform` and `hardware.fqbn`\n"
-            "- Serial COM Port: `hardware.port`\n"
+            "- Serial COM Port: `hardware.port` (and `hardware.mcu_connected`). If null or false, state clearly: \"No microcontroller is currently connected.\"\n"
             "- Serial Monitor Baud: `hardware.baud_rate` (use this in `Serial.begin(...)`)\n"
-            "- Settings: `settings.editor_mode` and `settings.clear_serial_on_upload`\n\n"
+            "- Settings: `settings.editor_mode` and `settings.clear_serial_on_upload`\n"
+            "Always report the live values from `project_state.json`. Never read `platformio.ini` to guess board selection.\n\n"
             "### Step 2: Read & Edit Only Root Sketch Files\n"
             "Confine all source code changes strictly to the root sketch directory:\n"
             "- Primary sketches: `*.ino`\n"

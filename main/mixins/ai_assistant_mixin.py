@@ -5,25 +5,14 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
-import sys
 import os
 import time
 import json
-import re
-import shutil
-import tempfile
 import subprocess
-import threading
-import queue
 import ctypes
-import traceback
-import hashlib
-from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import messagebox
 
 
 from main.core.constants import *
@@ -172,6 +161,11 @@ class AIAssistantMixin(_Base):
         # scheduled, so this launch must not display the controller's prompt
         # a second time.
         self.ai_controller.disclaimer_accepted = True
+        if hasattr(self, "_sync_project_hardware_state"):
+            try:
+                self._sync_project_hardware_state()
+            except Exception:
+                pass
         if getattr(self.ai_controller, "is_launching", False) or module.is_opencode_running():
             return
         started = self.ai_controller.toggle_ai()
@@ -205,6 +199,13 @@ class AIAssistantMixin(_Base):
         if is_visible:
             self._hide_ai_side_panel()
             return
+
+        # Guarantee project hardware state file is 100% up-to-date on disk before AI interacts with it
+        if hasattr(self, "_sync_project_hardware_state"):
+            try:
+                self._sync_project_hardware_state()
+            except Exception:
+                pass
 
         if not self._is_internet_available():
             messagebox.showwarning(

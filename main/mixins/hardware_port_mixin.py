@@ -5,25 +5,16 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
-import sys
 import os
 import time
 import json
 import re
-import shutil
-import tempfile
-import subprocess
 import threading
-import queue
-import ctypes
-import traceback
-import hashlib
-from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import messagebox
 
 
 from main.core.constants import *
@@ -182,25 +173,24 @@ class HardwarePortMixin(_Base):
                             args=(p.device,),
                             daemon=True,
                         ).start()
+                    self._sync_project_hardware_state()
                     self._chain_pending_port_scan()
                     return
 
         is_current_valid = False
+        mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
         if current_val:
             if current_val in port_list and current_device.upper() != "COM1":
                 is_current_valid = True
             elif current_val in port_list and current_device.upper() == "COM1":
-                # Only keep COM1 if user manually selected it and no other MCU port is present
-                has_other_mcu = False
-                mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
+                # COM1 on PC motherboards is a generic Communications Port, NOT an MCU.
+                # Only keep COM1 if it explicitly contains known MCU bridge signatures.
                 for p in visible_ports:
-                    if p.device.upper() != "COM1":
+                    if p.device.upper() == "COM1":
                         combined = f"{p.description} {p.hwid}".lower()
-                        if any(kw in combined for kw in mcu_keywords):
-                            has_other_mcu = True
+                        if any(kw in combined for kw in mcu_keywords) and "communications port" not in combined:
+                            is_current_valid = True
                             break
-                if not has_other_mcu:
-                    is_current_valid = True
 
         if is_current_valid:
             # Current selection is still valid, keep it and update config
@@ -212,6 +202,7 @@ class HardwarePortMixin(_Base):
                     args=(current_device,),
                     daemon=True,
                 ).start()
+            self._sync_project_hardware_state()
             self._chain_pending_port_scan()
             return
 
@@ -258,9 +249,12 @@ class HardwarePortMixin(_Base):
             self.port_combo.set("")
             self.port_var.set("")
             self._save_selected_port("")
+            if hasattr(self, "board_var"):
+                self.board_var.set("")
             self._board_port_confirmed = False
             self._update_hardware_action_buttons()
 
+        self._sync_project_hardware_state()
         self._chain_pending_port_scan()
 
     def _start_port_polling(self):
@@ -268,6 +262,13 @@ class HardwarePortMixin(_Base):
         for USB hotplug, MCU disconnections, and instance port occupancy changes."""
         self._last_known_occupied_ports: set[str] = get_occupied_ports()
         self._port_poll_active = True
+
+        # Perform one-time initial hardware state sync on thread start so project_state.json
+        # is immediately and accurately populated with current board & port availability
+        try:
+            self._post_ui(self._sync_project_hardware_state)
+        except Exception:
+            pass
 
         def _poll_thread_worker():
             poll_ticks = 0
@@ -293,11 +294,14 @@ class HardwarePortMixin(_Base):
                             lambda ports=current_ports, occupied=current_occupied:
                                 self._handle_port_change(ports, occupied)
                         )
+                    elif poll_ticks % 5 == 0:
+                        # Periodic one-time heartbeat sync to ensure project_state.json always
+                        # stays 100% current and fresh for AI assistants (OpenCode / Antigravity)
+                        self._post_ui(self._sync_project_hardware_state)
                 except Exception as e:
                     self._post_ui(
                         lambda exc=e: self._append_notif(f"  ✖ Port poll thread error: {exc}", "error")
                     )
-
 
         self._port_poll_thread = threading.Thread(target=_poll_thread_worker, name="RealtimePortMonitorThread", daemon=True)
         self._port_poll_thread.start()
@@ -587,6 +591,8 @@ class HardwarePortMixin(_Base):
         self._update_hardware_action_buttons()
         if not port_label:
             self._save_selected_port("")
+            if hasattr(self, "board_var"):
+                self.board_var.set("")
             self._set_status("Port cleared", Theme.CYAN)
             self._restart_monitor("port cleared")
             self._sync_project_hardware_state()
@@ -740,6 +746,7 @@ class HardwarePortMixin(_Base):
                     )
                 self._board_port_confirmed = True
                 self._update_hardware_action_buttons()
+                self._sync_project_hardware_state()
             self.root.after(0, _apply_desc)
             return
 
@@ -751,6 +758,7 @@ class HardwarePortMixin(_Base):
             self._auto_select_board(show_msg=True)
             self._board_port_confirmed = True
             self._update_hardware_action_buttons()
+            self._sync_project_hardware_state()
             self._schedule_auto_start_monitor(50)
         self.root.after(0, _non_disruptive_fallback)
 
@@ -773,6 +781,7 @@ class HardwarePortMixin(_Base):
         if hasattr(self, "serial_baud_var"):
             self.serial_baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
+        self._sync_project_hardware_state()
 
     def _on_serial_baud_changed(self):
         """Handle a real Serial Monitor baud change; ignore same-value re-selection."""
@@ -789,6 +798,7 @@ class HardwarePortMixin(_Base):
         # Also sync the main/internal baud var.
         self.baud_var.set(baud)
         self._restart_monitor(f"baud → {baud}")
+        self._sync_project_hardware_state()
 
     def _detect_sketch_baud_rate(self) -> str | None:
         """Scan active sketch directory for Serial.begin(...) calls and return a valid baud rate string, or None if invalid or not found."""
@@ -851,6 +861,7 @@ class HardwarePortMixin(_Base):
             speed = "115200"
 
         self._set_status(f"Upload speed changed to {speed}", Theme.CYAN)
+        self._sync_project_hardware_state()
 
         def _update_ini_task():
             ini_path = self._platformio_ini_path()
@@ -1198,10 +1209,53 @@ class HardwarePortMixin(_Base):
             return True
         return False
 
+    def _setup_hardware_state_auto_sync(self):
+        """Attach reactive traces to all hardware and settings Tk variables so project_state.json
+        is automatically and immediately synchronized in real-time whenever any board, port,
+        baud rate, or upload speed changes."""
+        self._hardware_sync_job = None
+        vars_to_trace = [
+            ("board_var", getattr(self, "board_var", None)),
+            ("port_var", getattr(self, "port_var", None)),
+            ("upload_speed_var", getattr(self, "upload_speed_var", None)),
+            ("baud_var", getattr(self, "baud_var", None)),
+            ("serial_baud_var", getattr(self, "serial_baud_var", None)),
+        ]
+        for name, v in vars_to_trace:
+            if isinstance(v, tk.StringVar):
+                try:
+                    v.trace_add("write", lambda *args, n=name: self._debounced_sync_project_hardware_state())
+                except Exception:
+                    pass
+
+        # Perform initial real-time sync immediately on setup
+        try:
+            self._sync_project_hardware_state()
+        except Exception:
+            pass
+
+    def _debounced_sync_project_hardware_state(self, delay_ms: int = 50):
+        """Debounced sync to prevent disk thrashing when multiple vars update in quick succession."""
+        job = getattr(self, "_hardware_sync_job", None)
+        if job and hasattr(self, "root") and self.root:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+            self._hardware_sync_job = None
+
+        if hasattr(self, "root") and self.root:
+            try:
+                self._hardware_sync_job = self.root.after(delay_ms, self._sync_project_hardware_state)
+            except Exception:
+                self._sync_project_hardware_state()
+        else:
+            self._sync_project_hardware_state()
+
     def _sync_project_hardware_state(self):
         """Write current board, microcontroller target, port, baud, and active settings to
         <sketch_dir>/.mcu_flasher_build_cache/project_state.json so AI assistants (OpenCode & Antigravity)
-        can instantly know the active MCU architecture, pinouts, and COM connection.
+        can instantly know the active MCU architecture, pinouts, and COM connection in real-time.
         """
         sketch_dir = getattr(self, "sketch_dir_path", None)
         if not sketch_dir or not Path(sketch_dir).is_dir():
@@ -1212,29 +1266,88 @@ class HardwarePortMixin(_Base):
             cache_dir.mkdir(parents=True, exist_ok=True)
             hide_generated_directory(cache_dir)
 
-            board_name = self.board_var.get() if hasattr(self, "board_var") else ""
-            board_info = SUPPORTED_BOARDS.get(board_name, {})
-            port_label = self.port_var.get() if hasattr(self, "port_var") else ""
+            port_label = (self.port_var.get() if hasattr(self, "port_var") else "") or ""
+            if not port_label and hasattr(self, "port_combo") and self.port_combo:
+                try:
+                    port_label = self.port_combo.get() or ""
+                except Exception:
+                    pass
+
             port_device = self._extract_port_device(port_label) or ""
+            if not port_device and hasattr(self, "_get_port"):
+                try:
+                    port_device = self._get_port() or ""
+                except Exception:
+                    pass
+
+            # Filter generic motherboard Communications Port (COM1) so it is not mistaken for an attached MCU
+            if port_device.upper() == "COM1":
+                lbl = (port_label or "").lower()
+                mcu_kws = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "arduino", "mcu"]
+                if "communications port" in lbl or not any(kw in lbl for kw in mcu_kws):
+                    port_device = ""
+                    port_label = ""
+
+            board_name = (self.board_var.get() if hasattr(self, "board_var") else "") or ""
+            board_name = board_name.strip()
+
+            # If no MCU port is connected, board is strictly unavailable
+            if not port_device:
+                board_name = ""
+                board_selected = False
+                mcu_connected = False
+                status_summary = "No microcontroller connected. No board is available."
+            else:
+                mcu_connected = True
+                board_selected = bool(board_name)
+                if board_selected:
+                    status_summary = f"Ready: {board_name} on {port_device}."
+                else:
+                    status_summary = f"Microcontroller connected on {port_device}, but no board selected in GUI."
+
+            # Lookup board info with case/trim tolerance only if MCU is connected and board is selected
+            board_info = {}
+            if board_selected and board_name:
+                board_info = SUPPORTED_BOARDS.get(board_name, {})
+                if not board_info:
+                    for b_name, b_data in SUPPORTED_BOARDS.items():
+                        if b_name.strip().lower() == board_name.lower():
+                            board_info = b_data
+                            break
 
             editor_mode = get_editor_mode()
             clear_serial = get_clear_serial_on_upload()
-            baud_val = self.baud_var.get() if hasattr(self, "baud_var") else "115200"
+
+            # Prefer serial_baud_var if active, then baud_var
+            baud_val = ""
+            if hasattr(self, "serial_baud_var") and self.serial_baud_var.get():
+                baud_val = str(self.serial_baud_var.get()).strip()
+            if not baud_val and hasattr(self, "baud_var"):
+                baud_val = str(self.baud_var.get()).strip()
+            if not baud_val:
+                baud_val = "115200"
+
             upload_spd_val = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+            upload_spd_val = str(upload_spd_val).strip()
 
             state_data = {
                 "project_name": Path(sketch_dir).name,
                 "project_path": str(Path(sketch_dir).resolve(strict=False)),
+                "status_summary": status_summary,
                 "hardware": {
-                    "board_name": board_name,
-                    "platform": board_info.get("platform", ""),
-                    "framework": board_info.get("framework", "arduino"),
-                    "fqbn": board_info.get("fqbn", ""),
-                    "build_mcu": board_info.get("build_mcu", ""),
-                    "port": port_device,
-                    "port_label": port_label,
+                    "board_selected": board_selected,
+                    "mcu_connected": mcu_connected,
+                    "board_name": board_name if board_selected else None,
+                    "platform": (board_info.get("platform", "") if board_selected else "") or None,
+                    "framework": (board_info.get("framework", "arduino") if board_selected else "") or None,
+                    "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
+                    "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
+                    "port": port_device if mcu_connected else None,
+                    "port_label": port_label if mcu_connected else None,
                     "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
                     "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "flash_mb": board_info.get("flash_mb") if board_selected else None,
+                    "has_psram": board_info.get("has_psram", False) if board_selected else False,
                 },
                 "settings": {
                     "editor_mode": editor_mode,
@@ -1246,7 +1359,6 @@ class HardwarePortMixin(_Base):
             state_file = cache_dir / "project_state.json"
             ensure_file_writable(state_file)
             state_file.write_text(json.dumps(state_data, indent=2, ensure_ascii=False), encoding="utf-8")
-            hide_hidden_attribute(state_file)
         except Exception as exc:
             print(f"[MCU Flasher] Error syncing project state: {exc}")
 

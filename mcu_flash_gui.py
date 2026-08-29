@@ -7,7 +7,6 @@ Delegates directly to main.mcu_flash_gui.
 from __future__ import annotations
 
 import sys
-import os
 from pathlib import Path
 
 # Ensure root and main are on sys.path

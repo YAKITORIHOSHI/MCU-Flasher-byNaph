@@ -444,44 +444,75 @@ def _launch_code_viewer(file_path, all_paths=None):
 
 
 def _open_code_viewer(file_path, all_paths=None, parent=None):
-    """Open the optional QScintilla viewer, installing it only on first use.
-
-    PyQt5/QScintilla is intentionally not part of the normal bootstrap because
-    the main application uses Tk/Monaco.  Keep the feature available by
-    installing its dependency after the user explicitly asks to view an
-    example, without freezing the Arduino browser while pip runs.
+    """Open the QScintilla code viewer, with offline fallback to default editor.
+    Installed library sample files are ALWAYS accessible and viewable regardless
+    of network status.
     """
     if _qscintilla_available():
         _launch_code_viewer(file_path, all_paths)
         return
 
+    # If QScintilla is not yet available and there is no active internet connection,
+    # immediately fallback to the system default editor / notepad so the installed
+    # code remains 100% accessible to the user without any blockers.
+    if not check_internet_connection(timeout=1.5):
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                SW_SHOWNORMAL = 1
+                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
+                return
+            else:
+                webbrowser.open("file://" + file_path)
+                return
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open sample file:\n{e}", parent=parent)
+            return
+
     if parent is None:
         messagebox.showerror(
-            "Code Viewer Dependency Missing",
-            "The optional PyQt5/QScintilla viewer is not installed. "
-            "Open the example from the MCU Flasher environment once to install it.",
+            "Code Viewer Setup Required",
+            "The PyQt5/QScintilla viewer is not installed. "
+            "Please run the bootstrap setup to complete package installation.",
         )
         return
 
     if not messagebox.askyesno(
-        "Install Optional Code Viewer",
-        "The standalone code viewer needs PyQt5/QScintilla (a large optional download).\n\n"
-        "Install it now? The main MCU Flasher application does not require this package.",
+        "Install Code Viewer",
+        "The standalone code viewer needs PyQt5/QScintilla.\n\n"
+        "Install it now in the background?",
         parent=parent,
     ):
+        # User declined install: still open the sample file in default editor so it is viewable!
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
+            else:
+                webbrowser.open("file://" + file_path)
+        except Exception:
+            pass
         return
 
     if not _QSCINTILLA_INSTALL_LOCK.acquire(blocking=False):
         messagebox.showinfo(
             "Code Viewer Setup In Progress",
-            "The optional code viewer dependency is already being installed. "
-            "Please try again when setup finishes.",
+            "The code viewer dependency is already being installed in the background. "
+            "Opening the file in your default editor in the meantime...",
             parent=parent,
         )
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
+            else:
+                webbrowser.open("file://" + file_path)
+        except Exception:
+            pass
         return
 
     messagebox.showinfo(
-        "Installing Optional Code Viewer",
+        "Installing Code Viewer",
         "PyQt5/QScintilla is being installed in the background.\n\n"
         "The viewer will open automatically when setup completes.",
         parent=parent,
@@ -507,10 +538,19 @@ def _open_code_viewer(file_path, all_paths=None, parent=None):
             if ok and _qscintilla_available():
                 _launch_code_viewer(file_path, all_paths)
                 return
+            # If background install failed or timed out, open the file in default editor
+            try:
+                if sys.platform == "win32":
+                    import ctypes
+                    ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
+                else:
+                    webbrowser.open("file://" + file_path)
+            except Exception:
+                pass
             messagebox.showerror(
-                "Code Viewer Setup Failed",
-                "PyQt5/QScintilla could not be installed.\n\n"
-                + (detail or "Check the bootstrap pip log and try again."),
+                "Code Viewer Setup Notice",
+                "PyQt5/QScintilla setup could not be completed at this time.\n\n"
+                + (detail or "The sample code was opened in your default editor instead."),
                 parent=parent,
             )
 
@@ -1118,80 +1158,34 @@ class InstalledTab:
         )
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Scrollable Canvas container for detail panel (Scrollable IF AND ONLY IF content overflows)
-        self.detail_canvas = tk.Canvas(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
-        self.detail_scroll = ttk.Scrollbar(self.detail_frame, orient="vertical", style="Vertical.TScrollbar",
-                                           command=self.detail_canvas.yview)
-        self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
+        # Responsive detail content frame that stretches to fill all available space
+        self._detail_content = tk.Frame(self.detail_frame, bg=Theme.BG_DARKEST)
 
-        self._scroll_state = {"visible": False}
-
-        def _sync_detail_scrollbar():
-            if not self.detail_canvas.winfo_exists() or not self.detail_canvas.winfo_ismapped():
-                if self._scroll_state["visible"]:
-                    self.detail_scroll.pack_forget()
-                    self._scroll_state["visible"] = False
-                return
-            bbox = self.detail_canvas.bbox("all")
-            content_height = (bbox[3] - bbox[1]) if bbox else 0
-            view_height = self.detail_canvas.winfo_height()
-            needs_scroll = content_height > view_height + 2
-            if needs_scroll and not self._scroll_state["visible"]:
-                self.detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-                self._scroll_state["visible"] = True
-            elif not needs_scroll and self._scroll_state["visible"]:
-                self.detail_scroll.pack_forget()
-                self.detail_canvas.yview_moveto(0)
-                self._scroll_state["visible"] = False
-
-        self._sync_detail_scrollbar = _sync_detail_scrollbar
-
-        def _on_canvas_configure(event):
-            self.detail_canvas.itemconfigure(self._content_window, width=event.width)
-            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
-            _sync_detail_scrollbar()
-
+        def _on_detail_configure(event):
             pad = 30
             for lbl in self._wrapping_labels:
-                lbl.configure(wraplength=max(event.width - pad, 100))
+                try:
+                    lbl.configure(wraplength=max(event.width - pad, 100))
+                except Exception:
+                    pass
 
-        def _on_content_configure(event=None):
-            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
-            self.detail_canvas.after_idle(_sync_detail_scrollbar)
+        self.detail_frame.bind("<Configure>", _on_detail_configure)
 
-        def _on_mousewheel(event):
-            if self._scroll_state["visible"]:
-                if event.delta:
-                    self.detail_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-                elif event.num == 4:
-                    self.detail_canvas.yview_scroll(-1, "units")
-                elif event.num == 5:
-                    self.detail_canvas.yview_scroll(1, "units")
-
-        self.detail_canvas.bind("<Configure>", _on_canvas_configure)
-        self.detail_canvas.bind("<MouseWheel>", _on_mousewheel)
-        self.detail_canvas.bind("<Button-4>", _on_mousewheel)
-        self.detail_canvas.bind("<Button-5>", _on_mousewheel)
-
-        # Detail content
-        self._detail_content = tk.Frame(self.detail_canvas, bg=Theme.BG_DARKEST)
-        self._content_window = self.detail_canvas.create_window((0, 0), window=self._detail_content, anchor="nw")
-        self._detail_content.bind("<Configure>", _on_content_configure)
-        self._detail_content.bind("<MouseWheel>", _on_mousewheel)
-        self._detail_content.bind("<Button-4>", _on_mousewheel)
-        self._detail_content.bind("<Button-5>", _on_mousewheel)
+        # Top Metadata Section (fixed natural height)
+        self._top_info = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        self._top_info.pack(fill="x", expand=False)
 
         # Labels inside detail content
-        self.lbl_name = tk.Label(self._detail_content, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_name = tk.Label(self._top_info, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_name.pack(anchor="w", fill="x", pady=(0, 4))
         self._wrapping_labels.append(self.lbl_name)
 
-        self.lbl_type = tk.Label(self._detail_content, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_type = tk.Label(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_type.pack(anchor="w", fill="x")
         self._wrapping_labels.append(self.lbl_type)
 
         # Version info frame
-        ver_frame = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        ver_frame = tk.Frame(self._top_info, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
         self.lbl_installed_ver = tk.Label(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
@@ -1199,28 +1193,28 @@ class InstalledTab:
         self.lbl_latest_ver = tk.Label(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_latest_ver.pack(anchor="w")
         self.lbl_update_status = tk.Label(ver_frame, text="", font=("Montserrat", 9, "bold"), bg=Theme.BG_DARKEST, anchor="w")
-        self.lbl_update_status.pack(anchor="w", pady=(4,0))
+        self.lbl_update_status.pack(anchor="w", pady=(4, 0))
 
-        self.lbl_size = tk.Label(self._detail_content, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_size = tk.Label(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_size.pack(anchor="w", fill="x")
         self._wrapping_labels.append(self.lbl_size)
 
-        sep = tk.Frame(self._detail_content, bg=Theme.BORDER, height=1)
-        sep.pack(fill="x", pady=8)
+        sep = tk.Frame(self._top_info, bg=Theme.BORDER, height=1)
+        sep.pack(fill="x", pady=5)
 
-        self.lbl_path_header = tk.Label(self._detail_content, text="Location on Disk:", font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_path_header = tk.Label(self._top_info, text="Location on Disk:", font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_path_header.pack(anchor="w", fill="x")
 
-        self.lbl_path = tk.Label(self._detail_content, text="", font=("Consolas", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
-        self.lbl_path.pack(anchor="w", fill="x", pady=(2, 6))
+        self.lbl_path = tk.Label(self._top_info, text="", font=("Consolas", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        self.lbl_path.pack(anchor="w", fill="x", pady=(1, 4))
         self._wrapping_labels.append(self.lbl_path)
 
-        sep2 = tk.Frame(self._detail_content, bg=Theme.BORDER, height=1)
-        sep2.pack(fill="x", pady=8)
+        sep2 = tk.Frame(self._top_info, bg=Theme.BORDER, height=1)
+        sep2.pack(fill="x", pady=5)
 
         # Action Buttons frame
-        btn_frame = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
-        btn_frame.pack(anchor="w", fill="x", pady=4)
+        btn_frame = tk.Frame(self._top_info, bg=Theme.BG_DARKEST)
+        btn_frame.pack(anchor="w", fill="x", pady=2)
 
         self.open_btn = make_flat_button(
             btn_frame, "📂 Open Folder", self._open_folder,
@@ -1240,24 +1234,27 @@ class InstalledTab:
         )
         self.delete_btn.pack(side="left")
 
-        # --- Sample Codes (Examples) section ---
-        sep3 = tk.Frame(self._detail_content, bg=Theme.BORDER, height=1)
-        sep3.pack(fill="x", pady=8)
+        # --- Sample Codes (Examples) section --- (expands vertically to fill remaining space)
+        self._examples_section = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        self._examples_section.pack(fill="both", expand=True, pady=(2, 0))
+
+        sep3 = tk.Frame(self._examples_section, bg=Theme.BORDER, height=1)
+        sep3.pack(fill="x", pady=5)
 
         self.lbl_examples_header = tk.Label(
-            self._detail_content, text="Sample Codes (Examples):",
+            self._examples_section, text="Sample Codes (Examples):",
             font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w"
         )
         self.lbl_examples_header.pack(anchor="w", fill="x")
 
         self.lbl_examples_hint = tk.Label(
-            self._detail_content, text="Double-click a sketch to view its code",
+            self._examples_section, text="Double-click a sketch to view its code",
             font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w"
         )
         self.lbl_examples_hint.pack(anchor="w", fill="x", pady=(0, 4))
 
         # Filter entry for examples / boards
-        examples_search_wrap = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        examples_search_wrap = tk.Frame(self._examples_section, bg=Theme.BG_DARKEST)
         examples_search_wrap.pack(anchor="w", fill="x", pady=(0, 4))
 
         tk.Label(
@@ -1277,11 +1274,11 @@ class InstalledTab:
         )
         self.examples_search_entry.pack(side="left", fill="x", expand=True)
 
-        examples_wrap = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
-        examples_wrap.pack(anchor="w", fill="both", expand=True)
+        examples_wrap = tk.Frame(self._examples_section, bg=Theme.BG_DARKEST)
+        examples_wrap.pack(anchor="w", fill="both", expand=True, pady=(4, 0))
 
         self.examples_listbox = tk.Listbox(
-            examples_wrap, font=("Consolas", 9), height=8,
+            examples_wrap, font=("Consolas", 9),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.BORDER_LIT, selectforeground=Theme.TEXT_BRIGHT,
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
@@ -1403,9 +1400,6 @@ class InstalledTab:
                 self._all_boards = boards
 
             self._filter_and_render_list(item_override=item)
-
-            if hasattr(self, "detail_canvas"):
-                self.detail_canvas.after_idle(self._sync_detail_scrollbar)
 
         try:
             self.app.root.after(0, _on_complete)
@@ -1544,8 +1538,8 @@ class InstalledTab:
                     return
 
         # Hide detail if nothing
-        if hasattr(self, "detail_canvas"):
-            self.detail_canvas.pack_forget()
+        if hasattr(self, "_detail_content"):
+            self._detail_content.pack_forget()
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._clear_examples()
 
@@ -1562,8 +1556,8 @@ class InstalledTab:
             self.examples_search_var.set("")
 
         self.lbl_placeholder.pack_forget()
-        if hasattr(self, "detail_canvas") and not self.detail_canvas.winfo_ismapped():
-            self.detail_canvas.pack(side=tk.LEFT, fill="both", expand=True)
+        if hasattr(self, "_detail_content") and not self._detail_content.winfo_ismapped():
+            self._detail_content.pack(side=tk.LEFT, fill="both", expand=True, padx=10, pady=8)
 
         self.lbl_name.config(text=item["name"])
         self.lbl_type.config(text=f"Type: {item['type']}")
@@ -1607,10 +1601,6 @@ class InstalledTab:
             args=(item, req_id),
             daemon=True
         ).start()
-
-        if hasattr(self, "detail_canvas"):
-            self.detail_canvas.yview_moveto(0)
-            self.detail_canvas.after_idle(self._sync_detail_scrollbar)
 
     def _open_folder(self):
         sel = self.listbox.curselection()
@@ -1713,12 +1703,54 @@ class ArduinoBrowser:
             except Exception:
                 pass
 
-        self.root.geometry("960x620")
-        self.root.minsize(720, 480)
-        try:
-            self.root.state('zoomed')
-        except tk.TclError:
-            pass
+        # Calculate dynamic window geometry: 50% width and 70% height with Windows DPI & Work Area awareness
+        work_w, work_h = 1280, 720
+        start_x, start_y = 0, 0
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                class _WorkAreaRect(ctypes.Structure):
+                    _fields_ = [
+                        ('left', wintypes.LONG),
+                        ('top', wintypes.LONG),
+                        ('right', wintypes.LONG),
+                        ('bottom', wintypes.LONG)
+                    ]
+
+                rect = _WorkAreaRect()
+                SPI_GETWORKAREA = 0x0030
+                if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+                    work_w = max(800, rect.right - rect.left)
+                    work_h = max(600, rect.bottom - rect.top)
+                    start_x = rect.left
+                    start_y = rect.top
+                else:
+                    work_w = max(800, self.root.winfo_screenwidth())
+                    work_h = max(600, self.root.winfo_screenheight())
+            except Exception:
+                work_w = max(800, self.root.winfo_screenwidth())
+                work_h = max(600, self.root.winfo_screenheight())
+        else:
+            work_w = max(800, self.root.winfo_screenwidth())
+            work_h = max(600, self.root.winfo_screenheight())
+
+        target_w = max(860, int(work_w * 0.50))
+        target_h = max(620, int(work_h * 0.70))
+        # Ensure target does not exceed usable work area
+        target_w = min(target_w, work_w)
+        target_h = min(target_h, work_h)
+
+        pos_x = start_x + (work_w - target_w) // 2
+        pos_y = start_y + (work_h - target_h) // 2
+
+        self.root.geometry(f"{target_w}x{target_h}+{pos_x}+{pos_y}")
+
+        # Set minimum allowable window dimensions (50% width, 70% height) to prevent clipping
+        min_w = min(target_w, max(800, int(work_w * 0.50)))
+        min_h = min(target_h, max(580, int(work_h * 0.70)))
+        self.root.minsize(min_w, min_h)
 
         self._busy = False
         self._active_download_tab = None
@@ -1797,10 +1829,6 @@ class ArduinoBrowser:
     def _unhide_window(self):
         """Instantly restore window from memory without reloading JSON indexes."""
         self.root.deiconify()
-        try:
-            self.root.state('zoomed')
-        except tk.TclError:
-            pass
         self.root.lift()
         self.root.focus_force()
         self._is_hidden = False

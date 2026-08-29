@@ -12,13 +12,12 @@ import time
 import socket
 import asyncio
 import ctypes
-from ctypes import wintypes
 import threading
 import subprocess
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 
 # Set AppUserModelID so taskbar groups windows under custom app icon
 if sys.platform == "win32":

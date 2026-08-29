@@ -1209,7 +1209,7 @@ class BootstrapGUI:
             except Exception:
                 pass
         import tkinter as tk
-        from tkinter import scrolledtext, font as tkfont, ttk
+        from tkinter import font as tkfont, ttk
 
         self.root = tk.Tk()
         self.root.title("MCU Uploader IDE by Naph — Setup")
@@ -3002,10 +3002,7 @@ PIP_PACKAGES_SPEC = [
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
-        # The main MCU Flasher GUI is Tk/Monaco based.  PyQt5/QScintilla is
-        # only used by the standalone Arduino library-example viewer and must
-        # not hold the normal bootstrap hostage to a large Qt wheel download.
-        "critical": False,
+        "critical": True,
         "optional_feature": "qscintilla_viewer",
     },
     {
@@ -8079,6 +8076,9 @@ def _is_env_healthy() -> bool:
         # pyrefly: ignore [missing-import]
         import websockets  # noqa: F401
         # pyrefly: ignore [missing-import]
+        import PyQt5.QtWidgets  # noqa: F401
+        # pyrefly: ignore [missing-import]
+        import PyQt5.Qsci  # noqa: F401
     except ImportError:
         return False
 

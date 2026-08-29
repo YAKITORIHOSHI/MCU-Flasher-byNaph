@@ -14,16 +14,12 @@ import shutil
 import tempfile
 import subprocess
 import threading
-import queue
 import ctypes
-import traceback
-import hashlib
 from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, font as tkfont
+from tkinter import font as tkfont
 
 
 from main.core.constants import *
