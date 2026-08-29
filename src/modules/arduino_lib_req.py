@@ -46,13 +46,21 @@ try:
 except ImportError:
     requests = None
 
-def check_internet_connection(timeout: float = 2.0) -> bool:
-    """Fast socket check for active internet connection."""
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+}
+
+
+def check_internet_connection(timeout: float = 2.5) -> bool:
+    """Fast socket check for active internet connection using standard HTTP/HTTPS ports."""
     test_targets = [
-        ("1.1.1.1", 53),
-        ("8.8.8.8", 53),
         ("downloads.arduino.cc", 443),
-        ("google.com", 80),
+        ("www.google.com", 80),
+        ("1.1.1.1", 443),
+        ("8.8.8.8", 443),
+        ("github.com", 443),
+        ("1.1.1.1", 80),
     ]
     for host, port in test_targets:
         try:
@@ -642,7 +650,7 @@ def heal_library_path_on_current_device(raw_slug: str) -> str:
 
 
 def _extract_archive(filepath: str, extract_dir: str):
-    """Extract a zip or tar archive into extract_dir."""
+    """Extract a zip or tar archive into extract_dir with Windows symlink tolerance."""
     import zipfile
     import tarfile
     import shutil
@@ -651,15 +659,21 @@ def _extract_archive(filepath: str, extract_dir: str):
     if filepath.lower().endswith('.zip'):
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
-    elif filepath.lower().endswith(('.tar.gz', '.tgz')):
-        with tarfile.open(filepath, 'r:gz') as tar_ref:
-            tar_ref.extractall(extract_dir)
-    elif filepath.lower().endswith(('.tar.bz2', '.tbz2')):
-        with tarfile.open(filepath, 'r:bz2') as tar_ref:
-            tar_ref.extractall(extract_dir)
-    elif filepath.lower().endswith(('.tar.xz', '.txz')):
-        with tarfile.open(filepath, 'r:xz') as tar_ref:
-            tar_ref.extractall(extract_dir)
+    elif filepath.lower().endswith(('.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz')):
+        try:
+            with tarfile.open(filepath, 'r:*') as tar_ref:
+                for member in tar_ref.getmembers():
+                    try:
+                        tar_ref.extract(member, path=extract_dir)
+                    except (OSError, PermissionError) as e:
+                        # Symlinks fail on Windows for standard non-admin users without dev mode ([WinError 1314])
+                        if member.issym() or member.islnk():
+                            continue
+                        raise e
+        except Exception:
+            # If standard extract failed but files were extracted, keep going
+            if not os.path.exists(extract_dir) or not os.listdir(extract_dir):
+                raise
 
     # Self-heal / flatten double nesting if present
     try:
@@ -1734,6 +1748,15 @@ class ArduinoBrowser:
         except Exception:
             pass
 
+        # Clean up any stale trigger files left over from prior abnormal shutdowns
+        for stale_name in (".dm_force_exit", ".show_dm_trigger"):
+            stale_file = os.path.join(INDEX_CACHE_DIR, stale_name)
+            if os.path.exists(stale_file):
+                try:
+                    os.remove(stale_file)
+                except Exception:
+                    pass
+
         # Installed items cache (computed from disk + indexes)
         self._installed_items: list[dict] = []
 
@@ -2316,24 +2339,44 @@ class ArduinoBrowser:
     # ------------------------------------------------------------------
 
     def _compute_installed_items(self):
-        """Scan download folders against loaded indexes to determine what is
-        installed and whether an update is available."""
+        """Scan download folders in fast O(1) time against loaded indexes to determine what is
+        installed and whether an update is available without freezing Tkinter."""
         items = []
 
-        # Helper: for a given index item (lib or board) and type, check
-        # if any of its versions exist on disk.
-        def check_index_item(name: str, index_entry: dict, subfolder: str, type_label: str):
+        # Fast disk inventory: read local Libs and Boards directories directly
+        libs_dir = os.path.join(self._download_dir, "Libs")
+        boards_dir = os.path.join(self._download_dir, "Boards")
+
+        local_libs = set()
+        if os.path.isdir(libs_dir):
+            try:
+                local_libs = set(os.listdir(libs_dir))
+            except Exception:
+                local_libs = set()
+
+        local_boards = set()
+        if os.path.isdir(boards_dir):
+            try:
+                local_boards = set(os.listdir(boards_dir))
+            except Exception:
+                local_boards = set()
+
+        # Helper: check an index item against the pre-scanned directory contents
+        def check_index_item(name: str, index_entry: dict, local_set: set, subfolder_name: str, type_label: str):
+            dest_dir = os.path.join(self._download_dir, subfolder_name)
             latest_version = index_entry["versions"][0]["version"]  # sorted newest first
-            # Walk versions from newest to oldest, first match = installed version
+
             for ver_entry in index_entry["versions"]:
                 archive = ver_entry["archiveFileName"] or ver_entry["url"].split("/")[-1]
-                dest_dir = os.path.join(self._download_dir, subfolder)
-                filepath = os.path.join(dest_dir, archive)
-                folder_path = os.path.join(dest_dir, _get_folder_name(archive))
-                if os.path.isdir(folder_path) or os.path.isfile(filepath):
+                folder_name = _get_folder_name(archive)
+
+                # Instant memory set lookup instead of tens of thousands of disk I/O calls
+                has_folder = folder_name in local_set
+                has_archive = archive in local_set
+
+                if has_folder or has_archive:
                     installed_version = ver_entry["version"]
-                    # Prefer folder if it exists
-                    path = folder_path if os.path.isdir(folder_path) else filepath
+                    path = os.path.join(dest_dir, folder_name) if has_folder else os.path.join(dest_dir, archive)
                     update_available = _version_key(latest_version) > _version_key(installed_version)
                     items.append({
                         "type": type_label,
@@ -2347,14 +2390,14 @@ class ArduinoBrowser:
                     break  # only report the newest installed version
 
         # Libraries
-        if self.lib_tab.all_items:
+        if self.lib_tab.all_items and local_libs:
             for name, entry in self.lib_tab.all_items.items():
-                check_index_item(name, entry, "Libs", "Library")
+                check_index_item(name, entry, local_libs, "Libs", "Library")
 
         # Boards
-        if self.board_tab.all_items:
+        if self.board_tab.all_items and local_boards:
             for name, entry in self.board_tab.all_items.items():
-                check_index_item(name, entry, "Boards", "Board Platform")
+                check_index_item(name, entry, local_boards, "Boards", "Board Platform")
 
         # Sort alphabetically
         items.sort(key=lambda x: x["name"].lower())
@@ -2441,7 +2484,7 @@ class ArduinoBrowser:
         # Final status and installed recompute
         lib_count = len(libs) if lib_data else 0
         board_count = len(boards) if board_data else 0
-        if not check_internet_connection(timeout=1.0):
+        if not check_internet_connection(timeout=2.0):
             if lib_count or board_count:
                 status_msg = f"⚠ Offline Mode: {lib_count} libraries, {board_count} board platforms loaded from cache"
             else:
@@ -2466,7 +2509,7 @@ class ArduinoBrowser:
                     pass
 
         # Offline fallback: if no internet, load existing cached index even if expired
-        if not check_internet_connection(timeout=1.5):
+        if not check_internet_connection(timeout=2.0):
             if os.path.isfile(cache_file):
                 try:
                     with open(cache_file, "r", encoding="utf-8") as fh:
@@ -2487,25 +2530,35 @@ class ArduinoBrowser:
                 )
 
         self.root.after(0, _update_overlay)
-        try:
-            resp = requests.get(url, timeout=60)
-            resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            self.root.after(0, self._set_status,
-                           f"Failed to download {label} index")
-            return None
+        data = None
+        raw_text = None
+        if requests is not None:
+            try:
+                resp = requests.get(url, timeout=60, headers=DEFAULT_HEADERS)
+                resp.raise_for_status()
+                data = resp.json()
+                raw_text = resp.text
+            except Exception:
+                data = None
 
-        try:
-            data = resp.json()
-        except ValueError:
-            self.root.after(0, self._set_status,
-                           f"Invalid JSON from {label} index")
-            return None
+        if data is None:
+            # Robust urllib fallback with headers
+            try:
+                import urllib.request
+                req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+                with urllib.request.urlopen(req, timeout=60) as uresp:
+                    raw_text = uresp.read().decode("utf-8")
+                    data = json.loads(raw_text)
+            except Exception as e:
+                self.root.after(0, self._set_status,
+                               f"Failed to download {label} index: {e}")
+                return None
 
         try:
             os.makedirs(INDEX_CACHE_DIR, exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as fh:
-                fh.write(resp.text)
+            if raw_text:
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    fh.write(raw_text)
         except OSError:
             pass
 
@@ -2654,7 +2707,7 @@ class ArduinoBrowser:
         tab = self.board_tab if is_board else self.lib_tab
         item = tab.all_items.get(name)
         if not item:
-            messagebox.showerror("Error", f"Item '{name}' not found in index.")
+            messagebox.showerror("Error", f"Item '{name}' not found in index.", parent=self.root)
             return
 
         ver = item["versions"][0]["version"]
@@ -2667,30 +2720,12 @@ class ArduinoBrowser:
                 break
 
         if not url:
-            messagebox.showerror("Error", f"No download URL found for version '{ver}'.")
+            messagebox.showerror("Error", f"No download URL found for version '{ver}'.", parent=self.root)
             return
 
         subfolder = "Boards" if is_board else "Libs"
         dest_dir = os.path.join(self._download_dir, subfolder)
         os.makedirs(dest_dir, exist_ok=True)
-
-        # Delete the old version before downloading the update
-        if old_path and os.path.exists(old_path):
-            try:
-                import shutil
-                if os.path.isdir(old_path):
-                    shutil.rmtree(old_path)
-                else:
-                    os.remove(old_path)
-            except Exception:
-                pass
-        if old_archive:
-            old_archive_path = os.path.join(dest_dir, old_archive)
-            if os.path.isfile(old_archive_path):
-                try:
-                    os.remove(old_archive_path)
-                except Exception:
-                    pass
 
         download_option = self._prompt_download_option(archive)
         if not download_option:
@@ -2702,56 +2737,121 @@ class ArduinoBrowser:
         self._cancel_event.clear()
 
         tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
-        self._set_status(f"Downloading {archive}…")
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
+
+        self._set_status(f"Downloading update {archive}…")
         self.progress.config(mode="indeterminate")
         self.progress.start(12)
 
-        t = threading.Thread(target=self._download_worker,
-                             args=(tab, url, archive, dest_dir, download_option), daemon=True)
+        t = threading.Thread(
+            target=self._download_worker,
+            args=(tab, url, archive, dest_dir, download_option, (old_path, old_archive)),
+            daemon=True
+        )
         t.start()
 
-    def _download_worker(self, tab: BrowseTab, url: str, archive: str, dest_dir: str, download_option: str):
+    def _download_worker(self, tab: BrowseTab, url: str, archive: str, dest_dir: str, download_option: str, cleanup_old: tuple = None):
+        import shutil
+        filepath = os.path.join(dest_dir, archive)
+        folder_path = os.path.join(dest_dir, _get_folder_name(archive))
         try:
-            resp = requests.get(url, stream=True, timeout=120)
-            resp.raise_for_status()
-
             os.makedirs(dest_dir, exist_ok=True)
-            filepath = os.path.join(dest_dir, archive)
 
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
+            resp = None
+            if requests is not None:
+                try:
+                    resp = requests.get(url, stream=True, timeout=(15, 120), headers=DEFAULT_HEADERS, allow_redirects=True)
+                    resp.raise_for_status()
+                except Exception:
+                    resp = None
 
-            if total:
-                self.root.after(0, self._set_progress_determinate, total)
+            if resp is not None:
+                total = int(resp.headers.get("content-length", 0))
+                downloaded = 0
 
-            with open(filepath, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    if self._cancel_event.is_set():
-                        fh.close()
-                        try:
-                            os.remove(filepath)
-                        except OSError:
-                            pass
-                        self.root.after(0, self._download_cancelled, tab)
-                        return
+                if total:
+                    self.root.after(0, self._set_progress_determinate, total)
 
-                    fh.write(chunk)
-                    downloaded += len(chunk)
+                with open(filepath, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=16384):
+                        if self._cancel_event.is_set():
+                            fh.close()
+                            try:
+                                if os.path.exists(filepath):
+                                    os.remove(filepath)
+                            except OSError:
+                                pass
+                            self.root.after(0, self._download_cancelled, tab)
+                            return
+
+                        if chunk:
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                self.root.after(0, self._update_progress,
+                                                downloaded, total)
+            else:
+                import urllib.request
+                req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+                with urllib.request.urlopen(req, timeout=120) as uresp:
+                    total = int(uresp.headers.get("Content-Length", 0))
+                    downloaded = 0
                     if total:
-                        self.root.after(0, self._update_progress,
-                                        downloaded, total)
+                        self.root.after(0, self._set_progress_determinate, total)
+                    with open(filepath, "wb") as fh:
+                        while True:
+                            if self._cancel_event.is_set():
+                                fh.close()
+                                try:
+                                    if os.path.exists(filepath):
+                                        os.remove(filepath)
+                                except OSError:
+                                    pass
+                                self.root.after(0, self._download_cancelled, tab)
+                                return
+                            chunk = uresp.read(16384)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                self.root.after(0, self._update_progress, downloaded, total)
 
             if download_option in ("folder", "both"):
                 self.root.after(0, self._set_status, "Extracting files…")
-                folder_path = os.path.join(dest_dir, _get_folder_name(archive))
                 os.makedirs(folder_path, exist_ok=True)
                 _extract_archive(filepath, folder_path)
 
             if download_option == "folder":
                 try:
-                    os.remove(filepath)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
                 except OSError:
                     pass
+
+            # Safe cleanup of old version only after new version is confirmed extracted/saved
+            if cleanup_old:
+                old_p, old_arc = cleanup_old
+                if old_p and os.path.exists(old_p):
+                    try:
+                        norm_old = os.path.normpath(old_p).lower()
+                        norm_new_folder = os.path.normpath(folder_path).lower()
+                        norm_new_file = os.path.normpath(filepath).lower()
+                        if norm_old != norm_new_folder and norm_old != norm_new_file:
+                            if os.path.isdir(old_p):
+                                shutil.rmtree(old_p)
+                            elif os.path.isfile(old_p):
+                                os.remove(old_p)
+                    except Exception:
+                        pass
+                if old_arc:
+                    old_arc_path = os.path.join(dest_dir, old_arc)
+                    if os.path.isfile(old_arc_path) and os.path.normpath(old_arc_path).lower() != os.path.normpath(filepath).lower():
+                        try:
+                            os.remove(old_arc_path)
+                        except Exception:
+                            pass
 
             self.root.after(0, self._download_done, tab, filepath if download_option != "folder" else folder_path)
 
@@ -2784,6 +2884,8 @@ class ArduinoBrowser:
         self._set_status("Download complete")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -2797,7 +2899,7 @@ class ArduinoBrowser:
         except Exception:
             pass
         
-        messagebox.showinfo("Done", f"Saved:\n{filepath}")
+        messagebox.showinfo("Done", f"Saved:\n{filepath}", parent=self.root)
 
     def _download_cancelled(self, tab: BrowseTab):
         self.progress.stop()
@@ -2805,6 +2907,8 @@ class ArduinoBrowser:
         self._set_status("Download cancelled")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -2817,12 +2921,14 @@ class ArduinoBrowser:
         self._set_status("Download failed")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
         self._active_download_tab = None
         self._downloading_item_name = None
         
         self._update_version_status(self.lib_tab)
         self._update_version_status(self.board_tab)
-        messagebox.showerror("Download Error", msg)
+        messagebox.showerror("Download Error", msg, parent=self.root)
 
     # ------------------------------------------------------------------
     # Helpers

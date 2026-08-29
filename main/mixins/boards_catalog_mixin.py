@@ -62,14 +62,33 @@ class BoardsCatalogMixin(_Base):
             script_dir = SCRIPT_DIR
             script_path = script_dir / "src" / "modules" / "arduino_lib_req.py"
 
+            # Purge any stale exit trigger before launching or restoring
+            exit_trigger = script_dir / "index_json" / ".dm_force_exit"
+            if exit_trigger.exists():
+                try:
+                    exit_trigger.unlink()
+                except Exception:
+                    pass
+
             # Check if a persistent Download Manager process is already sleeping in background
             active_proc = None
+            active_hwnd = None
+            hwnd_file = script_dir / "index_json" / ".dm_hwnd"
+            if sys.platform == "win32" and hwnd_file.exists():
+                try:
+                    dm_hwnd = int(hwnd_file.read_text(encoding="utf-8").strip())
+                    import ctypes
+                    if ctypes.windll.user32.IsWindow(dm_hwnd):
+                        active_hwnd = dm_hwnd
+                except Exception:
+                    active_hwnd = None
+
             for p in getattr(self, "_download_managers", []):
                 if p.poll() is None:
                     active_proc = p
                     break
 
-            if active_proc:
+            if active_proc and (active_hwnd or sys.platform != "win32"):
                 # Send wake-up trigger file + Win32 HWND restore for instant unhide
                 trigger_file = script_dir / "index_json" / ".show_dm_trigger"
                 try:
@@ -78,13 +97,11 @@ class BoardsCatalogMixin(_Base):
                 except Exception:
                     pass
 
-                hwnd_file = script_dir / "index_json" / ".dm_hwnd"
-                if sys.platform == "win32" and hwnd_file.exists():
+                if active_hwnd:
                     try:
-                        dm_hwnd = int(hwnd_file.read_text(encoding="utf-8").strip())
                         import ctypes
-                        ctypes.windll.user32.ShowWindow(dm_hwnd, 9)  # SW_RESTORE / SW_SHOW
-                        ctypes.windll.user32.SetForegroundWindow(dm_hwnd)
+                        ctypes.windll.user32.ShowWindow(active_hwnd, 9)  # SW_RESTORE / SW_SHOW
+                        ctypes.windll.user32.SetForegroundWindow(active_hwnd)
                     except Exception:
                         pass
 
