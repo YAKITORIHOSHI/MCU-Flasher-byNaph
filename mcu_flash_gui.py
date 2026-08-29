@@ -3080,6 +3080,8 @@ class EditorApi:
         if self._gui and hasattr(self._gui, "_monaco_autosave_worker"):
             self._gui._monaco_autosave_worker.notify_edit()
 
+    def get_theme_mode(self):
+        return get_theme_mode()
 
     def get_project_files(self):
         project_dir = getattr(self._gui, "sketch_dir_path", None)
@@ -5699,9 +5701,136 @@ def strip_ansi(text: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# COLOR PALETTE — Dark Cyberpunk / Robotics theme
+# COLOR PALETTE — Multi-Theme Engine (Default, Light, Solarized Dark)
 # ═══════════════════════════════════════════════════════════════
 class Theme:
+    PALETTES = {
+        "default": {
+            "BG_DARKEST": "#0a0e14",
+            "BG_DARK": "#10151c",
+            "BG_MID": "#161d27",
+            "BG_LIGHT": "#1c2532",
+            "BG_HOVER": "#243040",
+            "BORDER": "#2a3545",
+            "BORDER_LIT": "#3d5068",
+            "TEXT": "#c8d2dc",
+            "TEXT_DIM": "#6b7d94",
+            "TEXT_BRIGHT": "#e8edf3",
+            "CYAN": "#39c5bb",
+            "CYAN_DIM": "#1f7872",
+            "GREEN": "#5ccc6e",
+            "GREEN_DIM": "#2d6636",
+            "YELLOW": "#e8b83a",
+            "YELLOW_DIM": "#7a6020",
+            "RED": "#f05050",
+            "RED_DIM": "#7a2828",
+            "MAGENTA": "#c678dd",
+            "PURPLE": "#b388ff",
+            "PURPLE_DIM": "#9d7cc4",
+            "BLUE": "#61afef",
+            "ORANGE": "#d19a66",
+            "BTN_COMPILE": "#2d7d46",
+            "BTN_COMPILE_H": "#38a058",
+            "BTN_UPLOAD": "#8244a0",
+            "BTN_UPLOAD_H": "#a05cc0",
+            "BTN_FULL": "#2077b0",
+            "BTN_FULL_H": "#2899dd",
+            "BTN_MONITOR": "#1a7a70",
+            "BTN_MONITOR_H": "#22a090",
+            "BTN_STOP": "#a03030",
+            "BTN_STOP_H": "#cc4444",
+            "BTN_CLEAR": "#3a4555",
+            "BTN_CLEAR_H": "#4a5a70",
+            "BTN_DIM": "#2a3342",
+            "BTN_DIM_H": "#3a4555",
+            "BTN_DANGER": "#7a2828",
+            "BTN_DANGER_H": "#a03030",
+        },
+        "light": {
+            "BG_DARKEST": "#f4f6f9",
+            "BG_DARK": "#e9ecef",
+            "BG_MID": "#ffffff",
+            "BG_LIGHT": "#dee2e6",
+            "BG_HOVER": "#d0d7de",
+            "BORDER": "#c5ccd6",
+            "BORDER_LIT": "#0969da",
+            "TEXT": "#24292f",
+            "TEXT_DIM": "#57606a",
+            "TEXT_BRIGHT": "#1a1f24",
+            "CYAN": "#0969da",
+            "CYAN_DIM": "#0550ae",
+            "GREEN": "#1a7f37",
+            "GREEN_DIM": "#116329",
+            "YELLOW": "#9a6700",
+            "YELLOW_DIM": "#7d4e00",
+            "RED": "#cf222e",
+            "RED_DIM": "#a40e26",
+            "MAGENTA": "#8250df",
+            "PURPLE": "#6639ba",
+            "PURPLE_DIM": "#542c9f",
+            "BLUE": "#0969da",
+            "ORANGE": "#bc4c00",
+            "BTN_COMPILE": "#2da44e",
+            "BTN_COMPILE_H": "#2c974b",
+            "BTN_UPLOAD": "#8250df",
+            "BTN_UPLOAD_H": "#753fe0",
+            "BTN_FULL": "#0969da",
+            "BTN_FULL_H": "#0858b8",
+            "BTN_MONITOR": "#0e8a7e",
+            "BTN_MONITOR_H": "#0b7066",
+            "BTN_STOP": "#cf222e",
+            "BTN_STOP_H": "#b61c27",
+            "BTN_CLEAR": "#e1e4e8",
+            "BTN_CLEAR_H": "#d0d7de",
+            "BTN_DIM": "#eaeef2",
+            "BTN_DIM_H": "#d0d7de",
+            "BTN_DANGER": "#cf222e",
+            "BTN_DANGER_H": "#b61c27",
+        },
+        "solarized_dark": {
+            "BG_DARKEST": "#00212b",
+            "BG_DARK": "#002b36",
+            "BG_MID": "#073642",
+            "BG_LIGHT": "#094250",
+            "BG_HOVER": "#0e5365",
+            "BORDER": "#0e5365",
+            "BORDER_LIT": "#2aa198",
+            "TEXT": "#839496",
+            "TEXT_DIM": "#586e75",
+            "TEXT_BRIGHT": "#93a1a1",
+            "CYAN": "#2aa198",
+            "CYAN_DIM": "#1f7870",
+            "GREEN": "#859900",
+            "GREEN_DIM": "#586600",
+            "YELLOW": "#b58900",
+            "YELLOW_DIM": "#7a5d00",
+            "RED": "#dc322f",
+            "RED_DIM": "#93201e",
+            "MAGENTA": "#d33682",
+            "PURPLE": "#6c71c4",
+            "PURPLE_DIM": "#4d5196",
+            "BLUE": "#268bd2",
+            "ORANGE": "#cb4b16",
+            "BTN_COMPILE": "#586600",
+            "BTN_COMPILE_H": "#859900",
+            "BTN_UPLOAD": "#6c71c4",
+            "BTN_UPLOAD_H": "#8389db",
+            "BTN_FULL": "#268bd2",
+            "BTN_FULL_H": "#3a9de0",
+            "BTN_MONITOR": "#2aa198",
+            "BTN_MONITOR_H": "#38b8ae",
+            "BTN_STOP": "#dc322f",
+            "BTN_STOP_H": "#e84a47",
+            "BTN_CLEAR": "#073642",
+            "BTN_CLEAR_H": "#0e5365",
+            "BTN_DIM": "#073642",
+            "BTN_DIM_H": "#094250",
+            "BTN_DANGER": "#93201e",
+            "BTN_DANGER_H": "#dc322f",
+        }
+    }
+
+    # Initial default values
     BG_DARKEST  = "#0a0e14"
     BG_DARK     = "#10151c"
     BG_MID      = "#161d27"
@@ -5744,6 +5873,21 @@ class Theme:
     BTN_DIM_H     = "#3a4555"
     BTN_DANGER    = "#7a2828"
     BTN_DANGER_H  = "#a03030"
+
+    active_theme = "default"
+
+    @classmethod
+    def apply_theme(cls, mode: str = "default") -> str:
+        mode_key = (mode or "default").lower().strip()
+        if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+            mode_key = "solarized_dark"
+        elif mode_key not in cls.PALETTES:
+            mode_key = "default"
+        palette = cls.PALETTES[mode_key]
+        for key, val in palette.items():
+            setattr(cls, key, val)
+        cls.active_theme = mode_key
+        return mode_key
 
 
 LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
@@ -5972,6 +6116,29 @@ def set_editor_mode(mode: str):
     data = _load_raw_config()
     data.setdefault("shared", {})["editor_mode"] = mode
     _save_raw_config(data)
+
+
+def get_theme_mode() -> str:
+    """Return the persisted theme mode: 'default', 'light', or 'solarized_dark'."""
+    data = _load_raw_config()
+    mode = data.get("shared", {}).get("theme_mode", "default")
+    if mode not in Theme.PALETTES:
+        mode = "default"
+    return mode
+
+
+def set_theme_mode(mode: str):
+    """Persist the theme mode preference and update Theme attributes."""
+    if mode not in Theme.PALETTES:
+        mode = "default"
+    data = _load_raw_config()
+    data.setdefault("shared", {})["theme_mode"] = mode
+    _save_raw_config(data)
+    Theme.apply_theme(mode)
+
+
+# Apply persisted theme on startup before GUI creation
+Theme.apply_theme(get_theme_mode())
 
 
 def get_autosave_settings() -> tuple:
@@ -26647,6 +26814,7 @@ default_envs = {self._pio_env_name()}
                     for widget in (
                         cpu_label, cpu_combo, monitor_font_label,
                         monitor_font_combo, monitor_font_unit,
+                        theme_label, theme_combo,
                         editor_label, editor_combo,
                     ):
                         widget.pack_forget()
@@ -26656,6 +26824,8 @@ default_envs = {self._pio_env_name()}
                         monitor_font_label.pack(anchor=tk.W, pady=(0, sp(3)))
                         monitor_font_combo.pack(side=tk.LEFT)
                         monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
+                        theme_label.pack(anchor=tk.W, pady=(0, sp(3)))
+                        theme_combo.pack(fill=tk.X)
                         editor_label.pack(anchor=tk.W, pady=(0, sp(3)))
                         editor_combo.pack(fill=tk.X)
                     else:
@@ -26664,6 +26834,8 @@ default_envs = {self._pio_env_name()}
                         monitor_font_label.pack(side=tk.LEFT, padx=(0, sp(10)))
                         monitor_font_combo.pack(side=tk.LEFT)
                         monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
+                        theme_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+                        theme_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
                         editor_label.pack(side=tk.LEFT, padx=(0, sp(10)))
                         editor_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -26773,6 +26945,50 @@ default_envs = {self._pio_env_name()}
         monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
         if self.is_busy:
             monitor_font_combo.configure(state="disabled")
+
+        # Horizontal separator
+        sep_theme = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
+        sep_theme.pack(fill=tk.X, padx=sp(25), pady=sp(10))
+
+        # Section: Appearance & Theme
+        tk.Label(settings_body, text="Appearance & Theme", font=self.font_title, fg=Theme.CYAN, bg=Theme.BG_DARKEST).pack(pady=(0, sp(5)))
+
+        theme_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        theme_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+
+        theme_label = tk.Label(
+            theme_frame, text="Color Theme:", font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
+        )
+        theme_label.pack(side=tk.LEFT, padx=(0, sp(10)))
+
+        theme_default_label = "Default (Dark Cyberpunk)"
+        theme_light_label = "Light (Clean & Bright)"
+        theme_solarized_label = "Solarized Dark (Teal / Cyan)"
+
+        current_theme_mode = get_theme_mode()
+        if current_theme_mode == "light":
+            _start_theme_val = theme_light_label
+        elif current_theme_mode in ("solarized_dark", "solarized"):
+            _start_theme_val = theme_solarized_label
+        else:
+            _start_theme_val = theme_default_label
+
+        theme_var = tk.StringVar(value=_start_theme_val)
+        theme_combo = ttk.Combobox(
+            theme_frame, textvariable=theme_var, font=self.font_label, state="readonly",
+            values=[theme_default_label, theme_light_label, theme_solarized_label], width=36
+        )
+        theme_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        if self.is_busy:
+            theme_combo.configure(state="disabled")
+
+        theme_note = tk.Label(
+            settings_body, text="Changing the theme applies across the main UI, editor, and integrated terminal.",
+            font=self.font_label,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, wraplength=sp(440), justify=tk.LEFT
+        )
+        theme_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
 
         # Horizontal separator
         sep_editor = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
@@ -26968,6 +27184,7 @@ default_envs = {self._pio_env_name()}
             cpu_var.set(high_val)
             g_var.set(True)
             monitor_font_var.set("12")
+            theme_var.set(theme_default_label)
             editor_var.set(default_label)
             editor_var._monaco_confirmed = False
             self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
@@ -26990,6 +27207,15 @@ default_envs = {self._pio_env_name()}
             except (TypeError, ValueError):
                 monitor_font_size_new = 12
 
+            theme_sel = theme_var.get()
+            if theme_sel == theme_light_label:
+                new_theme_mode = "light"
+            elif theme_sel == theme_solarized_label:
+                new_theme_mode = "solarized_dark"
+            else:
+                new_theme_mode = "default"
+            theme_changed = (new_theme_mode != current_theme_mode)
+
             autosave_enabled_new = autosave_var.get()
             try:
                 autosave_delay_new = max(200, int(autosave_delay_var.get()))
@@ -27004,6 +27230,8 @@ default_envs = {self._pio_env_name()}
                 data["shared"]["cpu_multithreading"] = cpu_key
                 data["shared"]["graphics_acceleration"] = g_val
                 data["shared"]["monitor_font_size"] = monitor_font_size_new
+                data["shared"]["theme_mode"] = new_theme_mode
+                set_theme_mode(new_theme_mode)
                 data["shared"]["autosave_enabled"] = autosave_enabled_new
                 data["shared"]["autosave_delay_ms"] = autosave_delay_new
                 data["shared"]["periodic_reload_enabled"] = False
@@ -27044,6 +27272,13 @@ default_envs = {self._pio_env_name()}
                 if monitor_font_size_new != self.monitor_font_size:
                     self._apply_monitor_font_size(monitor_font_size_new)
                     self._append(f"  ✔ Build / Serial / Syntax font size set to {monitor_font_size_new} pt.", "success")
+                if theme_changed:
+                    self._append(f"  ✔ Theme mode set to {new_theme_mode.replace('_', ' ').title()}.", "success")
+                    if getattr(self, "editor_mode", "default") == "monaco" and hasattr(self, "editor_webview_window") and self.editor_webview_window:
+                        try:
+                            self.editor_webview_window.evaluate_js(f"if (typeof window.setEditorTheme === 'function') window.setEditorTheme('{new_theme_mode}');")
+                        except Exception:
+                            pass
 
                 autosave_changed = (
                     autosave_enabled_new != current_autosave_enabled

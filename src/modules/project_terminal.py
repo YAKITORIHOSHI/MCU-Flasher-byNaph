@@ -51,11 +51,42 @@ except Exception:
 WINDOW_TITLE = "MCU Flash GUI - Project Terminal"
 
 
-# This is deliberately the same local page shape, xterm.js version, theme,
-# WebSocket handshake, and fit/resize behavior used by dedicated_AI.py.  The
-# only difference is that it keeps one xterm instance per shell so switching
-# PowerShell/CMD does not destroy scrollback or the current prompt.
-HTML_CONTENT = r"""<!DOCTYPE html>
+def _resolve_terminal_theme() -> dict:
+    theme = "default"
+    for cfg in (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
+        try:
+            if cfg.exists():
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                m = data.get("shared", {}).get("theme_mode", "default")
+                if m:
+                    theme = m
+                    break
+        except Exception:
+            pass
+
+    if theme == "light":
+        return {
+            "bg": "#f8f9fa",
+            "fg": "#24292f",
+            "cursor": "#0969da",
+            "selection": "#d0d7de"
+        }
+    elif theme in ("solarized_dark", "solarized", "solarize_dark"):
+        return {
+            "bg": "#002b36",
+            "fg": "#839496",
+            "cursor": "#2aa198",
+            "selection": "#073642"
+        }
+    return {
+        "bg": "#0c0d10",
+        "fg": "#cccccc",
+        "cursor": "#ffffff",
+        "selection": "#264f78"
+    }
+
+
+HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -63,13 +94,13 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     <style>
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            background: #0c0d10; color: #cccccc;
+            background: __THEME_BG__; color: __THEME_FG__;
             font-family: Consolas, "Courier New", monospace; font-size: 14px;
             overflow: hidden; box-sizing: border-box;
         }
         #terminal-root, .terminal-host {
             width: 100%; height: 100%; box-sizing: border-box;
-            background: #0c0d10;
+            background: __THEME_BG__;
         }
         .terminal-host { display: none; }
         .terminal-host.active { display: block; }
@@ -79,7 +110,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             box-sizing: border-box;
         }
         .xterm, .xterm-viewport, .xterm-screen {
-            background: #0c0d10 !important;
+            background: __THEME_BG__ !important;
             overflow-y: hidden !important;
             width: 100% !important;
         }
@@ -143,10 +174,10 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                     scrollback: 5000,
                     overviewRulerWidth: 0,
                     theme: {
-                        background: "#0c0d10",
-                        foreground: "#cccccc",
-                        cursor: "#ffffff",
-                        selectionBackground: "#264f78"
+                        background: "__THEME_BG__",
+                        foreground: "__THEME_FG__",
+                        cursor: "__THEME_CURSOR__",
+                        selectionBackground: "__THEME_SELECTION__"
                     }
                 });
                 const fit = new FitAddon.FitAddon();
@@ -172,7 +203,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             // xterm assets as OpenCode. The parent GUI will normally switch to
             // its proven Tk PTY surface before this becomes visible.
             fallback = true;
-            root.innerHTML = "<pre style='margin:12px;color:#cccccc'>Project Terminal could not load xterm.js.</pre>";
+            root.innerHTML = "<pre style='margin:12px;color:__THEME_FG__'>Project Terminal could not load xterm.js.</pre>";
         }
 
         function sendResize() {
@@ -290,6 +321,17 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def get_terminal_html() -> str:
+    t = _resolve_terminal_theme()
+    return (
+        HTML_CONTENT_TEMPLATE
+        .replace("__THEME_BG__", t["bg"])
+        .replace("__THEME_FG__", t["fg"])
+        .replace("__THEME_CURSOR__", t["cursor"])
+        .replace("__THEME_SELECTION__", t["selection"])
+    )
 
 
 def _native_shell_executable(kind: str) -> str | None:
@@ -649,7 +691,7 @@ class ProjectTerminalServer:
             def do_GET(self):
                 path = urlsplit(self.path).path
                 if path in ("/", "/index.html"):
-                    body = HTML_CONTENT.encode("utf-8")
+                    body = get_terminal_html().encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))

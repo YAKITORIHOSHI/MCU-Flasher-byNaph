@@ -5,15 +5,50 @@
   <meta charset="UTF-8" />
   <title>MCU Flasher — Embedded Code Editor</title>
   <style>
+    :root, body.theme-default {
+      --bg-darkest: #151922;
+      --bg-dark: #0f121a;
+      --bg-tab-hover: #171c28;
+      --border: #222938;
+      --border-tab: #1c212e;
+      --text: #abb2bf;
+      --text-dim: #7f8c8d;
+      --accent: #00d2ff;
+      --dirty-dot: #ff9f00;
+    }
+
+    body.theme-light {
+      --bg-darkest: #ffffff;
+      --bg-dark: #f0f2f5;
+      --bg-tab-hover: #e4e7eb;
+      --border: #d0d7de;
+      --border-tab: #d8dee4;
+      --text: #24292f;
+      --text-dim: #57606a;
+      --accent: #0969da;
+      --dirty-dot: #bc4c00;
+    }
+
+    body.theme-solarized-dark {
+      --bg-darkest: #002b36;
+      --bg-dark: #00212b;
+      --bg-tab-hover: #073642;
+      --border: #073642;
+      --border-tab: #094250;
+      --text: #839496;
+      --text-dim: #586e75;
+      --accent: #2aa198;
+      --dirty-dot: #b58900;
+    }
+
     html,
     body {
       height: 100%;
       margin: 0;
       padding: 0;
-      background: #151922;
-      /* Matches Theme.BG_DARKEST */
+      background: var(--bg-darkest);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
-      color: #abb2bf;
+      color: var(--text);
       overflow: hidden;
     }
 
@@ -26,10 +61,8 @@
     #tab-bar {
       display: flex;
       align-items: center;
-      background: #0f121a;
-      /* Matches Theme.BG_DARK */
-      border-bottom: 1px solid #222938;
-      /* Matches Theme.BORDER */
+      background: var(--bg-dark);
+      border-bottom: 1px solid var(--border);
       overflow-x: auto;
       overflow-y: hidden;
       height: 35px;
@@ -43,8 +76,8 @@
       min-height: 40px;
       padding: 5px 8px;
       box-sizing: border-box;
-      background: #0f121a;
-      border-bottom: 1px solid #222938;
+      background: var(--bg-dark);
+      border-bottom: 1px solid var(--border);
       overflow-x: auto;
     }
 
@@ -53,7 +86,7 @@
     }
 
     #detached-action-bar .toolbar-label {
-      color: #7f8c8d;
+      color: var(--text-dim);
       font-size: 11px;
       font-weight: 700;
       margin-right: 3px;
@@ -64,7 +97,7 @@
       height: 22px;
       margin: 0 5px;
       flex: 0 0 auto;
-      background: #222938;
+      background: var(--border);
     }
 
     #detached-action-bar button {
@@ -120,11 +153,11 @@
     }
 
     #tab-bar::-webkit-scrollbar-track {
-      background: #0f121a;
+      background: var(--bg-dark);
     }
 
     #tab-bar::-webkit-scrollbar-thumb {
-      background: #222938;
+      background: var(--border);
     }
 
     .tab {
@@ -133,26 +166,26 @@
       gap: 8px;
       padding: 0 16px;
       height: 100%;
-      background: #0f121a;
-      border-right: 1px solid #1c212e;
+      background: var(--bg-dark);
+      border-right: 1px solid var(--border-tab);
       cursor: pointer;
       font-size: 12px;
       font-weight: 500;
       user-select: none;
-      color: #7f8c8d;
+      color: var(--text-dim);
       box-sizing: border-box;
       position: relative;
       transition: all 0.2s ease;
     }
 
     .tab:hover {
-      background: #171c28;
-      color: #abb2bf;
+      background: var(--bg-tab-hover);
+      color: var(--text);
     }
 
     .tab.active {
-      background: #151922;
-      color: #00d2ff;
+      background: var(--bg-darkest);
+      color: var(--accent);
       font-weight: 600;
     }
 
@@ -163,13 +196,13 @@
       left: 0;
       right: 0;
       height: 2px;
-      background: #00d2ff;
+      background: var(--accent);
     }
 
     .tab .dirty-dot {
       width: 6px;
       height: 6px;
-      background: #ff9f00;
+      background: var(--dirty-dot);
       border-radius: 50%;
       display: inline-block;
     }
@@ -177,7 +210,7 @@
     #editor-container {
       flex: 1;
       position: relative;
-      background: #151922;
+      background: var(--bg-darkest);
     }
 
     #monaco-anchor {
@@ -2872,6 +2905,91 @@
       }
 
       setTimeout(attachNavigationListeners, 300);
+    })();
+  </script>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       Multi-Theme Manager (Default, Light, Solarized Dark)
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      let themesRegistered = false;
+
+      function registerCustomMonacoThemes() {
+        if (themesRegistered || typeof monaco === 'undefined' || !monaco.editor) return;
+        themesRegistered = true;
+
+        try {
+          monaco.editor.defineTheme('mcu-solarized-dark', {
+            base: 'vs-dark',
+            inherit: true,
+            rules: [
+              { token: '', foreground: '839496', background: '002b36' },
+              { token: 'comment', foreground: '586e75', fontStyle: 'italic' },
+              { token: 'string', foreground: '2aa198' },
+              { token: 'keyword', foreground: '859900', fontStyle: 'bold' },
+              { token: 'number', foreground: 'd33682' },
+              { token: 'type', foreground: 'b58900' },
+              { token: 'identifier', foreground: '268bd2' },
+              { token: 'delimiter', foreground: '93a1a1' }
+            ],
+            colors: {
+              'editor.background': '#002b36',
+              'editor.foreground': '#839496',
+              'editor.lineHighlightBackground': '#073642',
+              'editorCursor.foreground': '#2aa198',
+              'editorWhitespace.foreground': '#073642',
+              'editorIndentGuide.background': '#073642',
+              'editorIndentGuide.activeBackground': '#586e75',
+              'editor.selectionBackground': '#073642',
+              'editorGutter.background': '#00212b'
+            }
+          });
+        } catch (e) {
+          console.warn("Could not register custom Monaco themes", e);
+        }
+      }
+
+      window.setEditorTheme = function (themeName) {
+        themeName = (themeName || 'default').toLowerCase().trim();
+        document.body.classList.remove('theme-default', 'theme-light', 'theme-solarized-dark');
+
+        registerCustomMonacoThemes();
+
+        if (themeName === 'light') {
+          document.body.classList.add('theme-light');
+          if (typeof monaco !== 'undefined' && monaco.editor) {
+            try { monaco.editor.setTheme('vs'); } catch (e) {}
+          }
+        } else if (themeName === 'solarized_dark' || themeName === 'solarized' || themeName === 'solarize_dark') {
+          document.body.classList.add('theme-solarized-dark');
+          if (typeof monaco !== 'undefined' && monaco.editor) {
+            try { monaco.editor.setTheme('mcu-solarized-dark'); } catch (e) {}
+          }
+        } else {
+          document.body.classList.add('theme-default');
+          if (typeof monaco !== 'undefined' && monaco.editor) {
+            try { monaco.editor.setTheme('vs-dark'); } catch (e) {}
+          }
+        }
+      };
+
+      async function autoInitTheme() {
+        if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_theme_mode === 'function') {
+          try {
+            const theme = await window.pywebview.api.get_theme_mode();
+            window.setEditorTheme(theme);
+          } catch (e) {
+            window.setEditorTheme('default');
+          }
+        }
+      }
+
+      window.addEventListener('pywebviewready', autoInitTheme);
+      document.addEventListener('DOMContentLoaded', () => {
+        registerCustomMonacoThemes();
+        setTimeout(autoInitTheme, 150);
+      });
     })();
   </script>
 </body>

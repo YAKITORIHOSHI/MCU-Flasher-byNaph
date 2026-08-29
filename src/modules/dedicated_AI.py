@@ -151,8 +151,48 @@ def is_opencode_installed() -> bool:
 active_ai_proc = None
 
 
+def _resolve_ai_theme() -> dict:
+    theme = "default"
+    repo_root = Path(__file__).resolve().parent.parent
+    for cfg in (
+        repo_root / "src" / "gui_config.json",
+        repo_root.parent / "src" / "gui_config.json",
+        Path.home() / ".mcu_gui_config.json"
+    ):
+        try:
+            if cfg.exists():
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                m = data.get("shared", {}).get("theme_mode", "default")
+                if m:
+                    theme = m
+                    break
+        except Exception:
+            pass
+
+    if theme == "light":
+        return {
+            "bg": "#f8f9fa",
+            "fg": "#24292f",
+            "cursor": "#0969da",
+            "selection": "#d0d7de"
+        }
+    elif theme in ("solarized_dark", "solarized", "solarize_dark"):
+        return {
+            "bg": "#002b36",
+            "fg": "#839496",
+            "cursor": "#2aa198",
+            "selection": "#073642"
+        }
+    return {
+        "bg": "#0c0d10",
+        "fg": "#cccccc",
+        "cursor": "#ffffff",
+        "selection": "#264f78"
+    }
+
+
 # HTML Page containing xterm.js with native fallback terminal renderer
-HTML_CONTENT = r"""<!DOCTYPE html>
+HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -160,24 +200,24 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     <style>
         html, body {
             margin: 0; padding: 0; width: 100% !important; height: 100% !important;
-            background-color: #0c0d10 !important; color: #cccccc;
+            background-color: __THEME_BG__ !important; color: __THEME_FG__;
             font-family: 'Consolas', 'Courier New', monospace; font-size: 14px;
             overflow: hidden;
             box-sizing: border-box;
         }
         #terminal-container {
             width: 100% !important; height: 100% !important;
-            background-color: #0c0d10;
+            background-color: __THEME_BG__;
             margin: 0; padding: 0;
             box-sizing: border-box;
         }
         #fallback-container {
             display: none; width: 100% !important; height: 100% !important; box-sizing: border-box;
-            padding: 12px; flex-direction: column; background: #0c0d10; color: #00ff66;
+            padding: 12px; flex-direction: column; background: __THEME_BG__; color: #00ff66;
         }
         #fallback-output {
             flex: 1; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
-            background: #0c0d10; color: #cccccc; font-family: inherit; font-size: 13px;
+            background: __THEME_BG__; color: __THEME_FG__; font-family: inherit; font-size: 13px;
         }
         #fallback-input-row { display: flex; align-items: center; background: #16181f; padding: 6px; border-top: 1px solid #252830; }
         #fallback-prompt { color: #00d2ff; font-weight: bold; margin-right: 8px; }
@@ -192,7 +232,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
             box-sizing: border-box;
         }
         .xterm, .xterm-viewport, .xterm-screen {
-            background-color: #0c0d10 !important;
+            background-color: __THEME_BG__ !important;
             overflow-y: hidden !important;
             width: 100% !important;
         }
@@ -241,10 +281,10 @@ HTML_CONTENT = r"""<!DOCTYPE html>
                     fontFamily: 'Consolas, "Courier New", monospace',
                     overviewRulerWidth: 0,
                     theme: {
-                        background: '#0c0d10',
-                        foreground: '#cccccc',
-                        cursor: '#ffffff',
-                        selectionBackground: '#264f78'
+                        background: '__THEME_BG__',
+                        foreground: '__THEME_FG__',
+                        cursor: '__THEME_CURSOR__',
+                        selectionBackground: '__THEME_SELECTION__'
                     }
                 });
                 const fitAddon = new FitAddon.FitAddon();
@@ -347,6 +387,17 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def get_ai_html() -> str:
+    t = _resolve_ai_theme()
+    return (
+        HTML_CONTENT_TEMPLATE
+        .replace("__THEME_BG__", t["bg"])
+        .replace("__THEME_FG__", t["fg"])
+        .replace("__THEME_CURSOR__", t["cursor"])
+        .replace("__THEME_SELECTION__", t["selection"])
+    )
 
 
 class TerminalServer:
@@ -559,7 +610,7 @@ class TerminalServer:
                     self.send_response(200)
                     self.send_header('Content-type', 'text/html')
                     self.end_headers()
-                    self.wfile.write(HTML_CONTENT.encode('utf-8'))
+                    self.wfile.write(get_ai_html().encode('utf-8'))
                 else:
                     self.send_error(404)
 

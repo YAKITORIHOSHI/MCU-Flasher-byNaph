@@ -1067,20 +1067,87 @@ BOLD = "\033[1m"
 RESET = "\033[0m"
 
 # ── Theme colours matching MCU Flash GUI exactly ─────────────
-T_BG_DARKEST  = "#0a0e14"
-T_BG_DARK     = "#10151c"
-T_BG_MID      = "#161d27"
-T_BG_LIGHT    = "#1c2532"
-T_BG_HOVER    = "#243040"
-T_BORDER      = "#2a3545"
-T_TEXT        = "#c8d2dc"
-T_TEXT_DIM    = "#6b7d94"
-T_TEXT_BRIGHT = "#e8edf3"
-T_CYAN        = "#39c5bb"
-T_GREEN       = "#5ccc6e"
-T_YELLOW      = "#e8b83a"
-T_RED         = "#f05050"
-T_MAGENTA     = "#c678dd"
+def _resolve_bootstrap_theme() -> dict:
+    palettes = {
+        "default": {
+            "T_BG_DARKEST": "#0a0e14",
+            "T_BG_DARK": "#10151c",
+            "T_BG_MID": "#161d27",
+            "T_BG_LIGHT": "#1c2532",
+            "T_BG_HOVER": "#243040",
+            "T_BORDER": "#2a3545",
+            "T_TEXT": "#c8d2dc",
+            "T_TEXT_DIM": "#6b7d94",
+            "T_TEXT_BRIGHT": "#e8edf3",
+            "T_CYAN": "#39c5bb",
+            "T_GREEN": "#5ccc6e",
+            "T_YELLOW": "#e8b83a",
+            "T_RED": "#f05050",
+            "T_MAGENTA": "#c678dd",
+        },
+        "light": {
+            "T_BG_DARKEST": "#f4f6f9",
+            "T_BG_DARK": "#e9ecef",
+            "T_BG_MID": "#ffffff",
+            "T_BG_LIGHT": "#dee2e6",
+            "T_BG_HOVER": "#d0d7de",
+            "T_BORDER": "#c5ccd6",
+            "T_TEXT": "#24292f",
+            "T_TEXT_DIM": "#57606a",
+            "T_TEXT_BRIGHT": "#1a1f24",
+            "T_CYAN": "#0969da",
+            "T_GREEN": "#1a7f37",
+            "T_YELLOW": "#9a6700",
+            "T_RED": "#cf222e",
+            "T_MAGENTA": "#8250df",
+        },
+        "solarized_dark": {
+            "T_BG_DARKEST": "#00212b",
+            "T_BG_DARK": "#002b36",
+            "T_BG_MID": "#073642",
+            "T_BG_LIGHT": "#094250",
+            "T_BG_HOVER": "#0e5365",
+            "T_BORDER": "#0e5365",
+            "T_TEXT": "#839496",
+            "T_TEXT_DIM": "#586e75",
+            "T_TEXT_BRIGHT": "#93a1a1",
+            "T_CYAN": "#2aa198",
+            "T_GREEN": "#859900",
+            "T_YELLOW": "#b58900",
+            "T_RED": "#dc322f",
+            "T_MAGENTA": "#d33682",
+        }
+    }
+    mode = "default"
+    for cfg in (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
+        try:
+            if cfg.exists():
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                m = data.get("shared", {}).get("theme_mode", "default")
+                if m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+                    m = "solarized_dark"
+                if m in palettes:
+                    mode = m
+                    break
+        except Exception:
+            pass
+    return palettes[mode]
+
+_T_PALETTE = _resolve_bootstrap_theme()
+T_BG_DARKEST  = _T_PALETTE["T_BG_DARKEST"]
+T_BG_DARK     = _T_PALETTE["T_BG_DARK"]
+T_BG_MID      = _T_PALETTE["T_BG_MID"]
+T_BG_LIGHT    = _T_PALETTE["T_BG_LIGHT"]
+T_BG_HOVER    = _T_PALETTE["T_BG_HOVER"]
+T_BORDER      = _T_PALETTE["T_BORDER"]
+T_TEXT        = _T_PALETTE["T_TEXT"]
+T_TEXT_DIM    = _T_PALETTE["T_TEXT_DIM"]
+T_TEXT_BRIGHT = _T_PALETTE["T_TEXT_BRIGHT"]
+T_CYAN        = _T_PALETTE["T_CYAN"]
+T_GREEN       = _T_PALETTE["T_GREEN"]
+T_YELLOW      = _T_PALETTE["T_YELLOW"]
+T_RED         = _T_PALETTE["T_RED"]
+T_MAGENTA     = _T_PALETTE["T_MAGENTA"]
 
 # ── Shared GUI state (set up by BootstrapGUI) ────────────────
 _gui: "BootstrapGUI | None" = None   # set when the window is live

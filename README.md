@@ -16,7 +16,7 @@
 | **🔨 One-Click Build & Flash**       | Compile and upload to ESP32 via Arduino CLI or PlatformIO                      |
 | **🔌 Disconnect-Safe Uploads**       | Two-phase uploads tolerate unplugging: compilation always finishes, and flashing is cleanly skipped (with recovery hints + reusable build cache) if the MCU disappears mid-compile |
 | **📟 Serial Monitor**                | Built-in terminal with ANSI color support, timestamps, and baud rate control   |
-| **🎨 Modern Dark UI**                | Custom-styled Tkinter with Montserrat fonts, dark theme, and responsive layout |
+| **🎨 Multi-Theme UI**                | Custom-styled Tkinter with Montserrat fonts, responsive layout, and selectable themes: **Default (Dark Cyberpunk)**, **Light Mode (Clean & Bright)**, and **Solarized Dark** across all components |
 | **✏️ Integrated Code Editor**        | Syntax-highlighted editor (QScintilla / Monaco) with project file management   |
 | **🤖 AI Assistant**                  | Built-in `src/modules/dedicated_AI.py` for code generation, debugging, and explanations    |
 | **🌐 Remote & Network Drive Support** | Seamlessly compile & flash projects located on Windows UNC shares (`\\server\share`) or mapped network drives with automated drive mapping and local SSD build acceleration |

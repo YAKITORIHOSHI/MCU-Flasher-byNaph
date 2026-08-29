@@ -103,6 +103,114 @@ _QSCINTILLA_INSTALL_LOCK = threading.Lock()
 
 
 class Theme:
+    PALETTES = {
+        "default": {
+            "BG_DARKEST": "#0a0e14",
+            "BG_DARK": "#10151c",
+            "BG_MID": "#161d27",
+            "BG_LIGHT": "#1c2532",
+            "BG_HOVER": "#243040",
+            "BORDER": "#2a3545",
+            "BORDER_LIT": "#3d5068",
+            "TEXT": "#c8d2dc",
+            "TEXT_DIM": "#6b7d94",
+            "TEXT_BRIGHT": "#e8edf3",
+            "CYAN": "#39c5bb",
+            "CYAN_DIM": "#1f7872",
+            "GREEN": "#5ccc6e",
+            "GREEN_DIM": "#2d6636",
+            "YELLOW": "#e8b83a",
+            "YELLOW_DIM": "#7a6020",
+            "RED": "#f05050",
+            "RED_DIM": "#7a2828",
+            "MAGENTA": "#c678dd",
+            "BLUE": "#61afef",
+            "ORANGE": "#d19a66",
+            "BTN_COMPILE": "#2d7d46",
+            "BTN_COMPILE_H": "#38a058",
+            "BTN_UPLOAD": "#8244a0",
+            "BTN_UPLOAD_H": "#a05cc0",
+            "BTN_FULL": "#2077b0",
+            "BTN_FULL_H": "#2899dd",
+            "BTN_MONITOR": "#1a7a70",
+            "BTN_MONITOR_H": "#22a090",
+            "BTN_STOP": "#a03030",
+            "BTN_STOP_H": "#cc4444",
+            "BTN_CLEAR": "#3a4555",
+            "BTN_CLEAR_H": "#4a5a70",
+        },
+        "light": {
+            "BG_DARKEST": "#f4f6f9",
+            "BG_DARK": "#e9ecef",
+            "BG_MID": "#ffffff",
+            "BG_LIGHT": "#dee2e6",
+            "BG_HOVER": "#d0d7de",
+            "BORDER": "#c5ccd6",
+            "BORDER_LIT": "#0969da",
+            "TEXT": "#24292f",
+            "TEXT_DIM": "#57606a",
+            "TEXT_BRIGHT": "#1a1f24",
+            "CYAN": "#0969da",
+            "CYAN_DIM": "#0550ae",
+            "GREEN": "#1a7f37",
+            "GREEN_DIM": "#116329",
+            "YELLOW": "#9a6700",
+            "YELLOW_DIM": "#7d4e00",
+            "RED": "#cf222e",
+            "RED_DIM": "#a40e26",
+            "MAGENTA": "#8250df",
+            "BLUE": "#0969da",
+            "ORANGE": "#bc4c00",
+            "BTN_COMPILE": "#2da44e",
+            "BTN_COMPILE_H": "#2c974b",
+            "BTN_UPLOAD": "#8250df",
+            "BTN_UPLOAD_H": "#753fe0",
+            "BTN_FULL": "#0969da",
+            "BTN_FULL_H": "#0858b8",
+            "BTN_MONITOR": "#0e8a7e",
+            "BTN_MONITOR_H": "#0b7066",
+            "BTN_STOP": "#cf222e",
+            "BTN_STOP_H": "#b61c27",
+            "BTN_CLEAR": "#e1e4e8",
+            "BTN_CLEAR_H": "#d0d7de",
+        },
+        "solarized_dark": {
+            "BG_DARKEST": "#00212b",
+            "BG_DARK": "#002b36",
+            "BG_MID": "#073642",
+            "BG_LIGHT": "#094250",
+            "BG_HOVER": "#0e5365",
+            "BORDER": "#0e5365",
+            "BORDER_LIT": "#2aa198",
+            "TEXT": "#839496",
+            "TEXT_DIM": "#586e75",
+            "TEXT_BRIGHT": "#93a1a1",
+            "CYAN": "#2aa198",
+            "CYAN_DIM": "#1f7870",
+            "GREEN": "#859900",
+            "GREEN_DIM": "#586600",
+            "YELLOW": "#b58900",
+            "YELLOW_DIM": "#7a5d00",
+            "RED": "#dc322f",
+            "RED_DIM": "#93201e",
+            "MAGENTA": "#d33682",
+            "BLUE": "#268bd2",
+            "ORANGE": "#cb4b16",
+            "BTN_COMPILE": "#586600",
+            "BTN_COMPILE_H": "#859900",
+            "BTN_UPLOAD": "#6c71c4",
+            "BTN_UPLOAD_H": "#8389db",
+            "BTN_FULL": "#268bd2",
+            "BTN_FULL_H": "#3a9de0",
+            "BTN_MONITOR": "#2aa198",
+            "BTN_MONITOR_H": "#38b8ae",
+            "BTN_STOP": "#dc322f",
+            "BTN_STOP_H": "#e84a47",
+            "BTN_CLEAR": "#073642",
+            "BTN_CLEAR_H": "#0e5365",
+        }
+    }
+
     BG_DARKEST  = "#0a0e14"
     BG_DARK     = "#10151c"
     BG_MID      = "#161d27"
@@ -139,6 +247,40 @@ class Theme:
     BTN_STOP_H    = "#cc4444"
     BTN_CLEAR     = "#3a4555"
     BTN_CLEAR_H   = "#4a5a70"
+
+    active_theme = "default"
+
+    @classmethod
+    def apply_theme(cls, mode: str = "default") -> str:
+        mode_key = (mode or "default").lower().strip()
+        if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+            mode_key = "solarized_dark"
+        elif mode_key not in cls.PALETTES:
+            mode_key = "default"
+        palette = cls.PALETTES[mode_key]
+        for key, val in palette.items():
+            setattr(cls, key, val)
+        cls.active_theme = mode_key
+        return mode_key
+
+
+def _resolve_lib_req_theme() -> str:
+    for cfg in (
+        os.path.join(SCRIPT_DIR, "src", "gui_config.json"),
+        os.path.join(os.path.expanduser("~"), ".mcu_gui_config.json")
+    ):
+        try:
+            if os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                m = data.get("shared", {}).get("theme_mode", "default")
+                if m in Theme.PALETTES or m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+                    return m
+        except Exception:
+            pass
+    return "default"
+
+Theme.apply_theme(_resolve_lib_req_theme())
 
 
 def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9, "bold")) -> tk.Button:
