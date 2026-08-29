@@ -111,28 +111,41 @@ class BoardsCatalogMixin(_Base):
                 env["PATH"] = os.pathsep.join(cleaned_paths)
 
             try:
-                venv_dir = SCRIPT_DIR / "env"
-                if sys.platform == "win32":
-                    python_exe = venv_dir / "Scripts" / "pythonw.exe"
-                    if not python_exe.exists():
-                        python_exe = venv_dir / "Scripts" / "python.exe"
-                else:
-                    python_exe = venv_dir / "bin" / "python"
+                python_exe = None
+                # Priority 1: Bundled private Python runtime
+                # Priority 2: Virtualenv runtime
+                # Priority 3: sys.executable (if not frozen)
+                # Priority 4: System PATH python
+                candidates = [
+                    SCRIPT_DIR / "src" / "_python" / "pythonw.exe",
+                    SCRIPT_DIR / "src" / "_python" / "python.exe",
+                    SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe",
+                    SCRIPT_DIR / "env" / "Scripts" / "python.exe",
+                ]
+                for c in candidates:
+                    if c.is_file():
+                        python_exe = c
+                        break
 
-                cmd_args = ["--keep-alive"]
-                if parent_hwnd:
-                    cmd_args += ["--parent-hwnd", str(parent_hwnd)]
+                if not python_exe and not getattr(sys, 'frozen', False):
+                    p_exe = Path(sys.executable)
+                    if sys.platform == "win32":
+                        pythonw = p_exe.parent / "pythonw.exe"
+                        python_exe = pythonw if pythonw.is_file() else p_exe
+                    else:
+                        python_exe = p_exe
 
-                if python_exe.exists() and script_path.exists():
-                    cmd = [str(python_exe), str(script_path)] + cmd_args
-                else:
-                    python_exe = sys.executable
-                    if sys.platform == "win32" and not getattr(sys, 'frozen', False):
-                        pythonw = Path(python_exe).parent / "pythonw.exe"
-                        if pythonw.exists():
-                            python_exe = str(pythonw)
-                    cmd = [str(python_exe), str(script_path)] + cmd_args
+                if not python_exe:
+                    for name in ("pythonw", "python", "py"):
+                        which = shutil.which(name)
+                        if which:
+                            python_exe = Path(which)
+                            break
 
+                if not python_exe:
+                    python_exe = Path(sys.executable)
+
+                cmd = [str(python_exe), str(script_path)]
                 p = subprocess.Popen(cmd, env=env)
 
                 def _on_launched():

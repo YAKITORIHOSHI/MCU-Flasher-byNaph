@@ -31,24 +31,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import webbrowser
 
-# Self-bootstrap using env if running outside of it
+# Self-bootstrap directory resolution
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.environ.get("MCU_PREF_DIR", os.path.dirname(sys.executable))
 else:
     SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-VENV_DIR = os.path.join(SCRIPT_DIR, "env")
-if __name__ == "__main__" and not getattr(sys, 'frozen', False):
-    current_exe = os.path.normpath(sys.executable).lower()
-    venv_exe = os.path.normpath(os.path.join(VENV_DIR, "Scripts", "python.exe")).lower()
-    venv_exew = os.path.normpath(os.path.join(VENV_DIR, "Scripts", "pythonw.exe")).lower()
-    if os.path.isfile(venv_exe) and current_exe != venv_exe and current_exe != venv_exew:
-        exe_to_use = venv_exew if current_exe.endswith("pythonw.exe") and os.path.isfile(venv_exew) else venv_exe
-        try:
-            subprocess.Popen([exe_to_use] + sys.argv)
-            sys.exit(0)
-        except Exception:
-            pass
+# Ensure project root is in sys.path
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 try:
     import requests
@@ -2566,19 +2557,22 @@ class ArduinoBrowser:
             result.set(opt)
             dialog.destroy()
 
-        btn_zip = make_flat_button(btn_frame, "ZIP Only (Default)", lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        btn_zip.pack(side="left", padx=8, expand=True, fill="x")
-
-        btn_folder = make_flat_button(btn_frame, "Folder Only", lambda: select_option("folder"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        btn_folder = make_flat_button(btn_frame, "📁 Folder / Extracted (Default)", lambda: select_option("folder"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         btn_folder.pack(side="left", padx=8, expand=True, fill="x")
 
-        btn_both = make_flat_button(btn_frame, "Both (ZIP & Folder)", lambda: select_option("both"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
+        btn_both = make_flat_button(btn_frame, "📦 Both (ZIP & Folder)", lambda: select_option("both"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
         btn_both.pack(side="left", padx=8, expand=True, fill="x")
+
+        btn_zip = make_flat_button(btn_frame, "🗜 ZIP Archive Only", lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
+        btn_zip.pack(side="left", padx=8, expand=True, fill="x")
 
         cancel_frame = tk.Frame(dialog, bg=Theme.BG_DARKEST)
         cancel_frame.pack(fill="x", pady=10)
         btn_cancel = make_flat_button(cancel_frame, "Cancel", dialog.destroy, Theme.BTN_STOP, Theme.BTN_STOP_H)
         btn_cancel.pack(pady=5)
+
+        dialog.bind("<Return>", lambda e: select_option("folder"))
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         dialog.update_idletasks()
         req_w = max(780, dialog.winfo_reqwidth() + 40)
@@ -2587,7 +2581,7 @@ class ArduinoBrowser:
         y = self.root.winfo_y() + (self.root.winfo_height() - req_h) // 2
         dialog.geometry(f"{req_w}x{req_h}+{x}+{y}")
 
-        btn_zip.focus_set()
+        btn_folder.focus_set()
 
         self.root.wait_window(dialog)
         return result.get()
