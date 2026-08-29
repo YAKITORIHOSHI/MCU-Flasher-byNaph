@@ -214,29 +214,31 @@ class UILayoutMixin(_Base):
         self.board_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
         self.board_group.pack(side=tk.LEFT, padx=(round(12 * self._display_scale), 8))
 
-        tk.Label(self.board_group, text="BOARD", font=self.font_label,
-                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(anchor=tk.W)
+        self.lbl_board = tk.Label(self.board_group, text="BOARD", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
+        self.lbl_board.pack(anchor=tk.W)
 
-        board_row = tk.Frame(self.board_group, bg=Theme.BG_MID)
-        board_row.pack(fill=tk.X)
+        self.board_row = tk.Frame(self.board_group, bg=Theme.BG_MID)
+        self.board_row.pack(fill=tk.X)
 
-        self._build_board_dropdown(board_row)
+        self._build_board_dropdown(self.board_row)
 
         # Port selection
         self.port_group = tk.Frame(self.ctrl_row_top, bg=Theme.BG_MID)
         self.port_group.pack(side=tk.LEFT, padx=(0, 8))
 
-        tk.Label(self.port_group, text="PORT", font=self.font_label,
-                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(anchor=tk.W)
+        self.lbl_port = tk.Label(self.port_group, text="PORT", font=self.font_label,
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
+        self.lbl_port.pack(anchor=tk.W)
 
-        port_row = tk.Frame(self.port_group, bg=Theme.BG_MID)
-        port_row.pack()
+        self.port_row = tk.Frame(self.port_group, bg=Theme.BG_MID)
+        self.port_row.pack()
 
         self.port_var = tk.StringVar()
         # Make the width of the port combobox dynamic to prevent overflow on smaller screens (like 1366x768)
         port_width = 30 if is_compact_display else 45
         self.port_combo = ttk.Combobox(
-            port_row, textvariable=self.port_var, width=port_width,
+            self.port_row, textvariable=self.port_var, width=port_width,
             font=self.font_mono_sm, state="readonly", justify="left",
             postcommand=self._refresh_ports,
         )
@@ -259,10 +261,10 @@ class UILayoutMixin(_Base):
         self.upload_spd_group.pack(side=tk.LEFT, padx=(0, 8))
         self._upload_spd_group = self.upload_spd_group  # saved for show/hide
 
-        lbl_upload_spd = tk.Label(self.upload_spd_group, text="UPLOAD SPD", font=self.font_label,
+        self.lbl_upload_spd = tk.Label(self.upload_spd_group, text="UPLOAD SPD", font=self.font_label,
                                   fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
-        lbl_upload_spd.pack(anchor=tk.W)
-        self._lbl_upload_spd = lbl_upload_spd  # referenced by _apply_responsive_layout
+        self.lbl_upload_spd.pack(anchor=tk.W)
+        self._lbl_upload_spd = self.lbl_upload_spd  # referenced by _apply_responsive_layout
 
         self.upload_speed_var = tk.StringVar(value=str(DEFAULT_UPLOAD_SPEED))
         self.upload_speed_combo = ttk.Combobox(
@@ -1613,8 +1615,9 @@ class UILayoutMixin(_Base):
             getattr(self, "ctrl_row_top", None),
             getattr(self, "ctrl_row_bottom", None),
             getattr(self, "board_group", None),
+            getattr(self, "board_row", None),
             getattr(self, "port_group", None),
-            getattr(self, "baud_group", None),
+            getattr(self, "port_row", None),
             getattr(self, "upload_spd_group", None),
             getattr(self, "right_group", None),
             getattr(self, "opt_row", None),
@@ -1655,7 +1658,7 @@ class UILayoutMixin(_Base):
                 try:
                     cb.configure(
                         fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID,
-                        selectcolor=Theme.BG_LIGHT, activebackground=Theme.BG_MID,
+                        selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
                         activeforeground=Theme.TEXT_BRIGHT
                     )
                 except Exception:
