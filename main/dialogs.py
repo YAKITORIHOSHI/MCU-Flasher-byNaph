@@ -784,10 +784,51 @@ class ProjectSelectorDialog:
         return self.result
 def _validate_and_scaffold_ino(parent_win, folder_path: Path) -> bool:
     """Validate that the project folder contains at least one .ino file.
-    If not, prompt the user to make the folder a project directory and
-    automatically create a default .ino file (aligned to the folder name).
-    Returns True if valid/created, False if user cancelled or error occurred.
+    If an .ino file has a case mismatch with the folder name (e.g. Testsketch.ino
+    vs TestSketch), prompt the user to rename it before proceeding. If denied,
+    show an error dialog and block opening.
+    If no .ino files exist, prompt the user to create a default .ino aligned to the folder name.
+    Returns True if valid/created/renamed, False if user cancelled/denied or error occurred.
     """
+    from tkinter import messagebox
+
+    # 1. Check for case mismatch between .ino files and the folder name
+    try:
+        folder_name = folder_path.name
+        folder_name_lower = folder_name.lower()
+        root_files = [f for f in folder_path.iterdir() if f.is_file()]
+        mismatched_ino = [
+            f for f in root_files
+            if f.suffix.lower() == ".ino"
+            and f.stem.lower() == folder_name_lower
+            and f.stem != folder_name
+        ]
+        if mismatched_ino:
+            bad_file = mismatched_ino[0]
+            confirm = messagebox.askyesno(
+                "Sketch Case Mismatch Detected",
+                f"The sketch filename does not match the folder name's exact casing:\n\n"
+                f"  • Folder Name:  {folder_name}\n"
+                f"  • Sketch File:  {bad_file.name}\n\n"
+                f"Arduino standards require the main sketch filename to match the folder name ({folder_name}.ino).\n\n"
+                f"Would you like to rename '{bad_file.name}' to '{folder_name}.ino' to proceed?",
+                parent=parent_win,
+            )
+            if confirm:
+                align_sketch_filename_case(folder_path)
+            else:
+                messagebox.showerror(
+                    "Case Mismatch — Cannot Proceed",
+                    f"Cannot open project due to a filename case mismatch:\n\n"
+                    f"  • Folder Name:  {folder_name}\n"
+                    f"  • Sketch File:  {bad_file.name}\n\n"
+                    f"Please rename the sketch file to match the folder name exactly ({folder_name}.ino) before opening.",
+                    parent=parent_win,
+                )
+                return False
+    except Exception as ex:
+        print(f"[WARN] Error checking sketch case match: {ex}")
+
     try:
         ino_files = list(folder_path.glob("*.ino"))
     except Exception:

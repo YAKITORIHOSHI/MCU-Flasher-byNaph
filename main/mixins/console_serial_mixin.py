@@ -424,6 +424,22 @@ class ConsoleSerialMixin(_Base):
         self._post_ui(_schedule_flush)
 
 
+    def _get_project_notif_db_path(self) -> str:
+        """Return the notifications JSON database path for the active project.
+        Saves inside <sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json,
+        or falls back to src/dbs/dbs_notif.json if no sketch directory is active.
+        """
+        sketch_dir = getattr(self, "sketch_dir_path", None)
+        if sketch_dir and Path(sketch_dir).is_dir():
+            cache_dir = Path(sketch_dir) / PROJECT_BUILD_CACHE_DIR
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                hide_generated_directory(cache_dir)
+            except Exception:
+                pass
+            return str((cache_dir / "dbs_notif.json").resolve(strict=False))
+        return str((SCRIPT_DIR / "src" / "dbs" / "dbs_notif.json").resolve(strict=False))
+
     def _append_notif(
         self,
         text: str,
@@ -433,7 +449,7 @@ class ConsoleSerialMixin(_Base):
         title: str | None = None,
         persist: bool = True
     ):
-        """Append text to the Notifications tab and persist to dbs_notif.json (thread-safe)."""
+        """Append text to the Notifications tab and persist to project's dbs_notif.json (thread-safe)."""
         def _do():
             now_dt = datetime.now()
             dt_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -488,6 +504,7 @@ class ConsoleSerialMixin(_Base):
             # Persist to database through the shared worker pool instead of
             # creating one new OS thread for every notification.
             if persist and text.strip():
+                db_target = self._get_project_notif_db_path()
                 def _bg_persist():
                     try:
                         dbs_create.add_notification(
@@ -495,6 +512,7 @@ class ConsoleSerialMixin(_Base):
                             level=lvl,
                             title=title or text.strip()[:50],
                             message=text.strip(),
+                            db_path=db_target,
                         )
                     except Exception:
                         pass
@@ -504,6 +522,7 @@ class ConsoleSerialMixin(_Base):
 
     def _load_persistent_notifications(self, category_filter: str | None = None):
         """Load notification data off-thread, but render it only on Tk's thread."""
+        db_target = self._get_project_notif_db_path()
         def _read_records():
             cat_query = None
             lvl_query = None
@@ -512,7 +531,7 @@ class ConsoleSerialMixin(_Base):
             elif category_filter == "✖ Errors":
                 lvl_query = "error"
 
-            records = dbs_read.get_notifications(category=cat_query, level=lvl_query, limit=200)
+            records = dbs_read.get_notifications(category=cat_query, level=lvl_query, limit=200, db_path=db_target)
             if category_filter == "📦 Boards & Libraries":
                 records = [r for r in records if r.get("category") in ("board_install", "library_install")]
             return list(reversed(records))
@@ -522,7 +541,7 @@ class ConsoleSerialMixin(_Base):
                 self.notif_console.configure(state=tk.NORMAL)
                 self.notif_console.delete("1.0", tk.END)
                 if not records:
-                    self.notif_console.insert(tk.END, "  ℹ No saved notifications recorded yet.\n", "dim")
+                    self.notif_console.insert(tk.END, "  ℹ No saved notifications recorded yet for this project.\n", "dim")
                 else:
                     insert_args: list[object] = []
                     for r in records:

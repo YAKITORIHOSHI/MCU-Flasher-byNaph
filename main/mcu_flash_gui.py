@@ -435,6 +435,15 @@ def main():
             root_ready.set()   # unblock main-thread wait() before exiting
             return
 
+        # Ensure active project state is synced and notifications loaded
+        try:
+            if hasattr(app_val, "_sync_project_hardware_state"):
+                app_val._sync_project_hardware_state()
+            if hasattr(app_val, "_load_persistent_notifications"):
+                app_val._load_persistent_notifications()
+        except Exception:
+            pass
+
         # If we just auto-reverted from a crashed Monaco session, tell the
         # user once the window is up rather than blocking startup on it.
         if monaco_crashed_last_time:

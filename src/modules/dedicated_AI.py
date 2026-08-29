@@ -1342,7 +1342,8 @@ class AIController:
         "agents.md", "opencode.md", "read-first.md", ".read-first.md",
         "skill.md", ".skill.md", ".opencodeignore", ".ignore",
         "platformio.ini", ".mcu_gui_cache.json", ".mcu_gui_compat_cache.json",
-        ".mcu_flash_syntax_errors.json",
+        ".mcu_flash_syntax_errors.json", "project_state.json", ".project_state.json",
+        "dbs_notif.json", ".dbs_notif.json",
         ".mcu_flash_tab_order.json", ".ai_edit_signal", ".ai_ready_signal"
     }
 

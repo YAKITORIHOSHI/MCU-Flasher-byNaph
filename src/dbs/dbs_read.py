@@ -1,12 +1,14 @@
 import json
 import os
-from .dbs_create import _DB_LOCK, _DB_PATH
+from pathlib import Path
+from .dbs_create import _DB_LOCK, _get_db_path
 
 def get_notifications(
     category: str | None = None,
     level: str | None = None,
     limit: int | None = 100,
-    search_query: str | None = None
+    search_query: str | None = None,
+    db_path: str | Path | None = None,
 ) -> list[dict]:
     """Query notifications from dbs_notif.json.
 
@@ -15,17 +17,18 @@ def get_notifications(
         level: Filter by severity level ('info', 'success', 'warning', 'error')
         limit: Max number of recent records to return (None for all)
         search_query: Search string to match in title or message
+        db_path: Optional explicit path to the target dbs_notif.json file.
 
     Returns:
         List of matching notification dicts ordered newest first.
     """
-    db_path = _DB_PATH
+    target_db = _get_db_path(db_path)
 
     with _DB_LOCK:
-        if not os.path.exists(db_path):
+        if not os.path.exists(target_db):
             return []
         try:
-            with open(db_path, "r", encoding="utf-8") as f:
+            with open(target_db, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 if not isinstance(records, list):
                     return []
@@ -56,14 +59,14 @@ def get_notifications(
 
     return results
 
-def get_notification_by_id(notif_id: str) -> dict | None:
+def get_notification_by_id(notif_id: str, db_path: str | Path | None = None) -> dict | None:
     """Find a specific notification record by ID."""
-    db_path = _DB_PATH
+    target_db = _get_db_path(db_path)
     with _DB_LOCK:
-        if not os.path.exists(db_path):
+        if not os.path.exists(target_db):
             return None
         try:
-            with open(db_path, "r", encoding="utf-8") as f:
+            with open(target_db, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 for r in records:
                     if r.get("id") == notif_id:

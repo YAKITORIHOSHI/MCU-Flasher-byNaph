@@ -1,29 +1,30 @@
 import json
 import os
-from .dbs_create import _DB_LOCK, _DB_PATH, _safe_replace_file
+from pathlib import Path
+from .dbs_create import _DB_LOCK, _get_db_path, _safe_replace_file
 
-def clear_all_notifications() -> bool:
-    """Clear all records from dbs_notif.json."""
-    db_path = _DB_PATH
+def clear_all_notifications(db_path: str | Path | None = None) -> bool:
+    """Clear all records from target notification database."""
+    target_db = _get_db_path(db_path)
     with _DB_LOCK:
         try:
-            temp_path = db_path + ".tmp"
+            temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump([], f, indent=2)
-            _safe_replace_file(temp_path, db_path)
+            _safe_replace_file(temp_path, target_db)
             return True
         except Exception as e:
-            print(f"[dbs_delete] Failed to clear notifications: {e}")
+            print(f"[dbs_delete] Failed to clear notifications from {target_db}: {e}")
             return False
 
-def delete_notification(notif_id: str) -> bool:
+def delete_notification(notif_id: str, db_path: str | Path | None = None) -> bool:
     """Delete a specific notification record by ID."""
-    db_path = _DB_PATH
+    target_db = _get_db_path(db_path)
     with _DB_LOCK:
-        if not os.path.exists(db_path):
+        if not os.path.exists(target_db):
             return False
         try:
-            with open(db_path, "r", encoding="utf-8") as f:
+            with open(target_db, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 if not isinstance(records, list):
                     return False
@@ -35,23 +36,23 @@ def delete_notification(notif_id: str) -> bool:
             return False
 
         try:
-            temp_path = db_path + ".tmp"
+            temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, db_path)
+            _safe_replace_file(temp_path, target_db)
             return True
         except Exception as e:
-            print(f"[dbs_delete] Failed to delete notification {notif_id}: {e}")
+            print(f"[dbs_delete] Failed to delete notification {notif_id} from {target_db}: {e}")
             return False
 
-def delete_notifications_by_category(category: str) -> int:
+def delete_notifications_by_category(category: str, db_path: str | Path | None = None) -> int:
     """Delete all notification records belonging to a category."""
-    db_path = _DB_PATH
+    target_db = _get_db_path(db_path)
     with _DB_LOCK:
-        if not os.path.exists(db_path):
+        if not os.path.exists(target_db):
             return 0
         try:
-            with open(db_path, "r", encoding="utf-8") as f:
+            with open(target_db, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 if not isinstance(records, list):
                     return 0
@@ -64,11 +65,11 @@ def delete_notifications_by_category(category: str) -> int:
             return 0
 
         try:
-            temp_path = db_path + ".tmp"
+            temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, db_path)
+            _safe_replace_file(temp_path, target_db)
             return removed_count
         except Exception as e:
-            print(f"[dbs_delete] Failed to delete category {category}: {e}")
+            print(f"[dbs_delete] Failed to delete category {category} from {target_db}: {e}")
             return 0

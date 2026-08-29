@@ -79,25 +79,31 @@ The project provides a modern Windows desktop interface for compiling, flashing,
    - Lightweight C++ AST & regex engine for validating `.ino`, `.cpp`, and `.h` files without invoking full compiler runs.
    - Parses missing semicolons, unmatched brackets/quotes, undeclared variables/functions, and syntax errors, populating line-numbered diagnostics into the UI tree and Monaco markers.
 
-8. **Database & Notification Store (`src/dbs/`)**
-   - Persistent JSON notification store and event database (`dbs_notif.json`).
-   - Managed via modular CRUD operations: `dbs_create.py`, `dbs_read.py`, `dbs_update.py`, and `dbs_delete.py`.
+8. **Database & Notification Store (`src/dbs/` & `.mcu_flasher_build_cache/`)**
+   - **Per-Sketch Notification Store**: Notifications are persisted per-project inside `<sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json`, ensuring build logs, compile errors, library installations, and USB device events stay scoped to each sketch.
+   - Fallback global store: `src/dbs/dbs_notif.json` (used when no project folder is active).
+   - Managed via modular CRUD operations: `dbs_create.py`, `dbs_read.py`, `dbs_update.py`, and `dbs_delete.py` (supports explicit or dynamic `db_path`).
    - Also stores: `bootstrap_config.json`, `arduino_browser_settings.json`, `arduino_cli_path.txt`.
 
-9. **Toolchain, Bootstrap & Utilities (`src/modules/`)**
-   - `bootstrap.py`: Manages private Python environment setup/auto-heal, PlatformIO virtual environments (`penv`), Arduino CLI binaries, Node.js LTS, and OpenCode AI Assistant. Junctions PlatformIO core to avoid MAX_PATH (>260 char) issues.
-   - `_heal_private_python_runtime()` (line ~7578): Self-repair mechanism that detects missing or damaged portable Python at `src/_python/`, reinstalling it silently from `installers/.handsoff/python-*-amd64.exe` with `attrib +h` project isolation.
-   - `_ensure_platformio_core_prebuilt()` (line ~882): Downloads a pre-built PlatformIO toolchain zip from GitHub release, with Google Drive fallback, resume support, SHA256 verification, and progress bar. Seeds the core store before the slower `ensure_platformio()` path.
-   - `downloader.py`: Custom download utility with progress bar, resume support, and Google Drive virus-scan confirmation page handling (urllib-based, no `requests` dependency).
-   - `arduino_lib_req.py`: Resolves required C++ headers and auto-downloads missing Arduino libraries.
-   - `detector.py`: Windows USB serial port auto-detection and board identification.
-   - `win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
-   - `reset_editor.py`: Utility to reset cached editor configuration and state.
-   - `setup_ide_paths.py`: Dynamically re-navigates `compile_commands.json` paths when projects are moved across machines or user accounts.
-   - `project_terminal.py`: Integrated project terminal (see component #4 above).
-   - `get-platformio.py`: PlatformIO official installer script (bundled).
+9. **Per-Project Hardware State & AI Context Discovery (`project_state.json`)**
+   - Synchronized automatically into `<sketch_dir>/.mcu_flasher_build_cache/project_state.json` on board, port, baud rate, and setting changes.
+   - Contains: active `board_name`, `platform` (e.g. `espressif32`, `atmelavr`), `fqbn`, `build_mcu`, `port`, `baud_rate`, `upload_speed`, `editor_mode`, and settings.
+   - Allows AI assistants (Antigravity & OpenCode) to read active MCU target architecture, pinouts, and COM port directly without manual user prompting.
 
-10. **Remote UNC & Network Share Pipeline (`mcu_flash_gui.py`)**
+10. **Toolchain, Bootstrap & Utilities (`src/modules/`)**
+    - `bootstrap.py`: Manages private Python environment setup/auto-heal, PlatformIO virtual environments (`penv`), Arduino CLI binaries, Node.js LTS, and OpenCode AI Assistant. Junctions PlatformIO core to avoid MAX_PATH (>260 char) issues.
+    - `_heal_private_python_runtime()` (line ~7578): Self-repair mechanism that detects missing or damaged portable Python at `src/_python/`, reinstalling it silently from `installers/.handsoff/python-*-amd64.exe` with `attrib +h` project isolation.
+    - `_ensure_platformio_core_prebuilt()` (line ~882): Downloads a pre-built PlatformIO toolchain zip from GitHub release, with Google Drive fallback, resume support, SHA256 verification, and progress bar. Seeds the core store before the slower `ensure_platformio()` path.
+    - `downloader.py`: Custom download utility with progress bar, resume support, and Google Drive virus-scan confirmation page handling (urllib-based, no `requests` dependency).
+    - `arduino_lib_req.py`: Resolves required C++ headers and auto-downloads missing Arduino libraries.
+    - `detector.py`: Windows USB serial port auto-detection and board identification.
+    - `win_subprocess_hide.py`: Suppresses console window popups when spawning background subprocesses on Windows (`CREATE_NO_WINDOW`).
+    - `reset_editor.py`: Utility to reset cached editor configuration and state.
+    - `setup_ide_paths.py`: Dynamically re-navigates `compile_commands.json` paths when projects are moved across machines or user accounts.
+    - `project_terminal.py`: Integrated project terminal (see component #4 above).
+    - `get-platformio.py`: PlatformIO official installer script (bundled).
+
+11. **Remote UNC & Network Share Pipeline (`mcu_flash_gui.py`)**
     - `is_unc_or_network_path()`, `_unc_share_root()`: Dynamically detects Windows UNC paths (`\\server\share`) and remote drive types.
     - `_map_unc_for_build()` (line ~17918) / `_unmap_unc_after_build()` (line ~18044): Dynamically maps the remote share to a free drive letter (`Z:` to `A:`) for subprocess CWD compatibility and cleanly removes it in `finally:` blocks.
     - `_remote_workspace_root()` (line ~17710): Automatically routes PlatformIO build workspaces (`PLATFORMIO_WORKSPACE_DIR`, `PLATFORMIO_BUILD_DIR`, `PLATFORMIO_LIBDEPS_DIR`) to local fast storage (`remote_workspaces/<project>_<hash>/`), avoiding Samba/SMB file-locking errors on `.sconsign*.dblite` while reading source files directly from the network.

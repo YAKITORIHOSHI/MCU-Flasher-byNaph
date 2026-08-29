@@ -960,14 +960,15 @@ class UILayoutMixin(_Base):
 
         def _clear_notifications():
             try:
+                db_target = self._get_project_notif_db_path() if hasattr(self, "_get_project_notif_db_path") else None
                 if dbs_delete is not None and hasattr(dbs_delete, "clear_all_notifications"):
-                    dbs_delete.clear_all_notifications()
+                    dbs_delete.clear_all_notifications(db_path=db_target)
             except Exception as e:
                 print(f"[MCU Flasher] Error clearing database notifications: {e}")
             if hasattr(self, "notif_console") and self.notif_console:
                 self.notif_console.configure(state=tk.NORMAL)
                 self.notif_console.delete("1.0", tk.END)
-                self.notif_console.insert(tk.END, "  🗑 All notifications cleared.\n", "dim")
+                self.notif_console.insert(tk.END, "  🗑 All notifications cleared for this project.\n", "dim")
                 self.notif_console.configure(state=tk.DISABLED)
 
         def _copy_notifications():

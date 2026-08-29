@@ -1019,6 +1019,12 @@ class SettingsDialogMixin(_Base):
                         self.editor_mode = new_editor_mode
                         self._build_editor(self.editor_frame)
                         self._append(f"  ✔ File editor switched to {new_editor_mode.capitalize()} instantly.", "success")
+                
+                try:
+                    if hasattr(self, "_sync_project_hardware_state"):
+                        self._sync_project_hardware_state()
+                except Exception:
+                    pass
             except Exception as e:
                 self._append(f"  ✖ Failed to save settings: {e}", "error")
 

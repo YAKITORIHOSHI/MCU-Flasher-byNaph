@@ -1,24 +1,26 @@
 import json
 import os
-from .dbs_create import _DB_LOCK, _DB_PATH, _safe_replace_file
+from pathlib import Path
+from .dbs_create import _DB_LOCK, _get_db_path, _safe_replace_file
 
-def update_notification(notif_id: str, updates: dict) -> bool:
-    """Update fields of an existing notification record in dbs_notif.json.
+def update_notification(notif_id: str, updates: dict, db_path: str | Path | None = None) -> bool:
+    """Update fields of an existing notification record.
 
     Args:
         notif_id: The ID of the notification to update.
         updates: Dictionary of fields to update or add.
+        db_path: Optional explicit path to the target dbs_notif.json file.
 
     Returns:
         True if updated successfully, False if not found or failed.
     """
-    db_path = _DB_PATH
+    target_db = _get_db_path(db_path)
 
     with _DB_LOCK:
-        if not os.path.exists(db_path):
+        if not os.path.exists(target_db):
             return False
         try:
-            with open(db_path, "r", encoding="utf-8") as f:
+            with open(target_db, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 if not isinstance(records, list):
                     return False
@@ -36,11 +38,11 @@ def update_notification(notif_id: str, updates: dict) -> bool:
             return False
 
         try:
-            temp_path = db_path + ".tmp"
+            temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, db_path)
+            _safe_replace_file(temp_path, target_db)
             return True
         except Exception as e:
-            print(f"[dbs_update] Failed to update notification {notif_id}: {e}")
+            print(f"[dbs_update] Failed to update notification {notif_id} in {target_db}: {e}")
             return False

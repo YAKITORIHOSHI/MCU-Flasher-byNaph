@@ -576,6 +576,9 @@ class HardwarePortMixin(_Base):
         if port_device:
             remember_port_board(port_device, board_name)
 
+        # Sync active target hardware state to .mcu_flasher_build_cache/project_state.json
+        self._sync_project_hardware_state()
+
     def _on_port_changed(self):
         """Handle port selection change — stop the current monitor,
         reconnect on the new port, and kick off esptool chip detection."""
@@ -586,6 +589,7 @@ class HardwarePortMixin(_Base):
             self._save_selected_port("")
             self._set_status("Port cleared", Theme.CYAN)
             self._restart_monitor("port cleared")
+            self._sync_project_hardware_state()
             return
 
         # Extract just the device name for the status message
@@ -607,6 +611,7 @@ class HardwarePortMixin(_Base):
             self.port_var.set("")
             self._set_status(f"Port {port_name} in use by PID {owner_pid}", Theme.YELLOW)
             self._restart_monitor("port occupied by another window")
+            self._sync_project_hardware_state()
             return
 
         # Save to config
@@ -617,6 +622,9 @@ class HardwarePortMixin(_Base):
         
         # Fast local auto-select based on project files + port chip description
         self._auto_select_board(show_msg=True)
+
+        # Sync active target hardware state to .mcu_flasher_build_cache/project_state.json
+        self._sync_project_hardware_state()
 
         # Skip esptool chip probing when the port or selected board is confirmed
         # non-Espressif (e.g. AVR, STM32, RP2040).
@@ -1189,4 +1197,57 @@ class HardwarePortMixin(_Base):
         except Exception:
             return True
         return False
+
+    def _sync_project_hardware_state(self):
+        """Write current board, microcontroller target, port, baud, and active settings to
+        <sketch_dir>/.mcu_flasher_build_cache/project_state.json so AI assistants (OpenCode & Antigravity)
+        can instantly know the active MCU architecture, pinouts, and COM connection.
+        """
+        sketch_dir = getattr(self, "sketch_dir_path", None)
+        if not sketch_dir or not Path(sketch_dir).is_dir():
+            return
+
+        try:
+            cache_dir = Path(sketch_dir) / PROJECT_BUILD_CACHE_DIR
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            hide_generated_directory(cache_dir)
+
+            board_name = self.board_var.get() if hasattr(self, "board_var") else ""
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            port_label = self.port_var.get() if hasattr(self, "port_var") else ""
+            port_device = self._extract_port_device(port_label) or ""
+
+            editor_mode = get_editor_mode()
+            clear_serial = get_clear_serial_on_upload()
+            baud_val = self.baud_var.get() if hasattr(self, "baud_var") else "115200"
+            upload_spd_val = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+
+            state_data = {
+                "project_name": Path(sketch_dir).name,
+                "project_path": str(Path(sketch_dir).resolve(strict=False)),
+                "hardware": {
+                    "board_name": board_name,
+                    "platform": board_info.get("platform", ""),
+                    "framework": board_info.get("framework", "arduino"),
+                    "fqbn": board_info.get("fqbn", ""),
+                    "build_mcu": board_info.get("build_mcu", ""),
+                    "port": port_device,
+                    "port_label": port_label,
+                    "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
+                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                },
+                "settings": {
+                    "editor_mode": editor_mode,
+                    "clear_serial_on_upload": clear_serial,
+                },
+                "last_updated": datetime.now().isoformat(timespec="seconds"),
+            }
+
+            state_file = cache_dir / "project_state.json"
+            ensure_file_writable(state_file)
+            state_file.write_text(json.dumps(state_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            hide_hidden_attribute(state_file)
+        except Exception as exc:
+            print(f"[MCU Flasher] Error syncing project state: {exc}")
+
 

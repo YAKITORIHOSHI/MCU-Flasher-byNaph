@@ -316,14 +316,17 @@ class ProjectActionsMixin(_Base):
             if src_path.suffix.lower() not in ALLOWED_NEW_EXTS:
                 err_lbl.config(text="Only .ino, .h, .cpp, .txt are allowed.")
                 return
-            dest = self.sketch_dir_path / src_path.name
+            target_name = src_path.name
+            if src_path.stem.lower() == self.sketch_dir_path.name.lower():
+                target_name = f"{self.sketch_dir_path.name}{src_path.suffix}"
+            dest = self.sketch_dir_path / target_name
             if dest.resolve() == src_path.resolve():
                 err_lbl.config(text="That file is already in the project folder.")
                 return
             if dest.exists():
                 overwrite = messagebox.askyesno(
                     "File Already Exists",
-                    f"\"{src_path.name}\" already exists in the project folder.\n\n"
+                    f"\"{target_name}\" already exists in the project folder.\n\n"
                     "Overwrite it with the selected file?",
                     parent=dlg,
                 )
@@ -334,7 +337,7 @@ class ProjectActionsMixin(_Base):
             except Exception as e:
                 err_lbl.config(text=f"Could not copy file: {e}")
                 return
-            self._append(f"  ➕ Added file to project (copied): {src_path.name}", "success")
+            self._append(f"  ➕ Added file to project (copied): {target_name}", "success")
             _refresh_editor()
             dlg.destroy()
 
@@ -355,6 +358,10 @@ class ProjectActionsMixin(_Base):
             if not Path(name).stem:
                 err_lbl.config(text="Please enter a name before the extension.")
                 return
+
+            # Match folder casing if adding primary sketch or header
+            if Path(name).stem.lower() == self.sketch_dir_path.name.lower():
+                name = f"{self.sketch_dir_path.name}{Path(name).suffix}"
 
             dest = self.sketch_dir_path / name
             if dest.exists():
@@ -676,11 +683,24 @@ class ProjectActionsMixin(_Base):
         self._set_status(f"Project: {self.sketch_dir_path.name}", Theme.CYAN)
         self._save_active_folder(self.sketch_dir_path)
         try:
+            align_sketch_filename_case(self.sketch_dir_path)
             heal_platformio_ini_symlinks_and_dirs(self._platformio_ini_path(), self.sketch_dir_path)
             if not is_unc_or_network_path(self.sketch_dir_path):
                 hide_internal_project_metadata(self.sketch_dir_path)
         except Exception:
             pass
+
+        # Update notification store and sync hardware state for newly active project
+        try:
+            if hasattr(self, "_get_project_notif_db_path") and dbs_create is not None and hasattr(dbs_create, "set_default_db_path"):
+                dbs_create.set_default_db_path(self._get_project_notif_db_path())
+            if hasattr(self, "_sync_project_hardware_state"):
+                self._sync_project_hardware_state()
+            if hasattr(self, "_load_persistent_notifications"):
+                self._load_persistent_notifications()
+        except Exception as exc:
+            print(f"[MCU Flasher] Error updating project state & notifications: {exc}")
+
         if hasattr(self, "_load_editor_files") and not getattr(self, "_editor_files_load_pending", False):
             try:
                 self._load_editor_files()

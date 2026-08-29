@@ -186,11 +186,11 @@ MCU Flasher by Naph/
 │   │   ├── bootstrap_config.json    # Bootstrap update and skip configuration
 │   │   ├── arduino_browser_settings.json  # Arduino board browser preferences
 │   │   ├── arduino_cli_path.txt     # Cached Arduino CLI executable path
-│   │   ├── dbs_notif.json           # Notification event store (runtime data)
-│   │   ├── dbs_create.py            # Notification DB CRUD: create
-│   │   ├── dbs_read.py              # Notification DB CRUD: read
-│   │   ├── dbs_update.py            # Notification DB CRUD: update
-│   │   └── dbs_delete.py            # Notification DB CRUD: delete
+│   │   ├── dbs_notif.json           # Global notification fallback (projects use .mcu_flasher_build_cache/dbs_notif.json)
+│   │   ├── dbs_create.py            # Notification DB CRUD: create (project-scoped or global)
+│   │   ├── dbs_read.py              # Notification DB CRUD: read (project-scoped or global)
+│   │   ├── dbs_update.py            # Notification DB CRUD: update (project-scoped or global)
+│   │   └── dbs_delete.py            # Notification DB CRUD: delete (project-scoped or global)
 │   │
 │   └── fonts/                       # Bundled offline Montserrat and system fonts
 │
