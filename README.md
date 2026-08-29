@@ -87,7 +87,7 @@ MCU Flasher by Naph/
 ├── mcu_flash_gui.py                 # Root forwarder script delegating to main.mcu_flash_gui
 ├── README.md                         # Comprehensive documentation, user guide & architecture
 │
-├── main/                             # Modular GUI core architecture (32k+ LOC across 41 files)
+├── main/                             # Modular GUI core architecture (34k+ LOC across 41 files)
 │   ├── __init__.py                  # Public exports and package initializer
 │   ├── mcu_flash_gui.py             # Primary application assembly (MCUUploadGUI) & main()
 │   ├── dialogs.py                   # Modal dialogs (ProjectSelectorDialog, BoardSearchDialog)
@@ -104,7 +104,7 @@ MCU Flasher by Naph/
 │   │   ├── board_catalog.py         # 420+ board definitions, dynamic catalog loader, USB VID/PID map
 │   │   └── board_compat.py          # Board compatibility detection & GPIO pin conflict analyzer
 │   │
-│   └── mixins/                      # 27 domain mixins composing MCUUploadGUI (358 methods total)
+│   └── mixins/                      # 27 domain mixins composing MCUUploadGUI (586 methods total)
 │       ├── __init__.py              # Mixins package re-exports
 │       ├── init_startup_mixin.py    # App init, startup overlay splash & deferred background init
 │       ├── ui_layout_mixin.py       # Main UI builder, toolbar, responsive layout & button styling
@@ -134,6 +134,14 @@ MCU Flasher by Naph/
 │       ├── window_lifecycle_mixin.py# Window closure cleanup (_on_close) & mutex releasing
 │       └── syntax_checker_mixin.py  # Background C++ syntax checker thread & diagnostic tree updates
 │
+├── cleaner/                          # Maintenance utility scripts
+│   ├── clean_pycache.bat            # Recursive __pycache__ cleaner
+│   └── terminate_all_python.exe-task.bat  # Kill all Python processes
+│
+├── DANGER-ZONE/                      # Destructive reset utilities (use with caution)
+│   ├── DELETE_EVERYTHING_DO_NOT_RUN.ps1   # Full environment teardown script
+│   └── runReset.cmd                 # Reset launcher
+│
 ├── direct/
 │   └── runThisOnWindows.vbs         # Silent UAC-elevated launcher for Windows
 │
@@ -146,6 +154,7 @@ MCU Flasher by Naph/
 │   ├── qscintilla_viewer.py         # Optional QScintilla read-only viewer component (PyQt5)
 │   ├── launcher.cpp                 # Native Windows executable wrapper source (C++)
 │   ├── launcher.cs                  # Native Windows executable wrapper source (C#)
+│   ├── resources.res                # Compiled Windows resource file (icon embedding)
 │   ├── resources.rc                 # Windows resource definition (icon embedding)
 │   │
 │   ├── modules/                     # System launchers, AI backend, terminal & bootstrap engine
@@ -164,6 +173,8 @@ MCU Flasher by Naph/
 │   ├── editor/                      # Offline Monaco Editor Web UI assets
 │   │   ├── index.html               # Monaco Editor HTML (tabs, toolbar, diff glow, hover, go-to-def)
 │   │   ├── bundle.js                # Monaco Editor offline JS bundle (no CDN dependency)
+│   │   ├── 18.bundle.js             # Monaco Editor async chunk (lazy-loaded features)
+│   │   ├── editor.worker.js         # Monaco Editor web worker (tokenization & validation)
 │   │   └── *.ttf                    # Offline editor icon and UI font assets
 │   │
 │   ├── assets/                      # Shared graphical assets
@@ -171,7 +182,11 @@ MCU Flasher by Naph/
 │   │   └── xterm/                   # xterm.js assets for terminal and AI panels
 │   │
 │   ├── dbs/                         # Persistent JSON databases and CRUD managers
+│   │   ├── __init__.py              # DB package initializer
 │   │   ├── bootstrap_config.json    # Bootstrap update and skip configuration
+│   │   ├── arduino_browser_settings.json  # Arduino board browser preferences
+│   │   ├── arduino_cli_path.txt     # Cached Arduino CLI executable path
+│   │   ├── dbs_notif.json           # Notification event store (runtime data)
 │   │   ├── dbs_create.py            # Notification DB CRUD: create
 │   │   ├── dbs_read.py              # Notification DB CRUD: read
 │   │   ├── dbs_update.py            # Notification DB CRUD: update
@@ -306,7 +321,7 @@ MCU Flasher by Naph/
 
 ---
 
-### The `main/mixins/` Domain Mixins (358 Methods)
+### The `main/mixins/` Domain Mixins (586 Methods)
 
 | Mixin File | Mixin Class | Responsibilities & Methods |
 | --- | --- | --- |
