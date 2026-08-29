@@ -495,6 +495,7 @@ class HardwarePortMixin(_Base):
             Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_mono_sm
         )
         btn_search_board.pack(side=tk.LEFT, fill=tk.Y)
+        self.btn_search_board = btn_search_board
 
     def _open_board_search_dialog(self):
         if getattr(self, "board_entry", None) and str(self.board_entry.cget("state")) == "disabled":

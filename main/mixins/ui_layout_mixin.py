@@ -1552,27 +1552,59 @@ class UILayoutMixin(_Base):
             except Exception:
                 pass
 
-        self._restyle_btn(getattr(self, "btn_compile", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        self._restyle_btn(getattr(self, "btn_upload", None), Theme.BTN_FULL, Theme.BTN_FULL_H)
-        self._restyle_btn(getattr(self, "btn_stop", None), Theme.BTN_STOP, Theme.BTN_STOP_H)
-        self._restyle_btn(getattr(self, "btn_clean", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_save", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        self._restyle_btn(getattr(self, "btn_save_all", None), Theme.BTN_FULL, Theme.BTN_FULL_H)
-        self._restyle_btn(getattr(self, "btn_reload_file", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_modify_files", None), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        # Action buttons with colored backgrounds get pure white text
+        self._restyle_btn(getattr(self, "btn_compile", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_upload", None), Theme.BTN_FULL, Theme.BTN_FULL_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_stop", None), Theme.BTN_STOP, Theme.BTN_STOP_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_save", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_save_all", None), Theme.BTN_FULL, Theme.BTN_FULL_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_modify_files", None), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_download_mgr", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_detach_editor", None), Theme.BTN_COMPILE if not getattr(self, "editor_detached", False) else Theme.BTN_UPLOAD, Theme.BTN_COMPILE_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_reset_mcu", None), "#8B5E3C", "#A0724F", fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_search_board", None), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, fg="#ffffff")
+        self._restyle_btn(getattr(self, "btn_send", None), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, fg="#ffffff")
+
+        # Neutral buttons get Theme.TEXT_BRIGHT (dark in light mode, bright in dark mode)
+        self._restyle_btn(getattr(self, "btn_clean", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_reload_file", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
         self._restyle_btn(getattr(self, "btn_new_project", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
-        self._restyle_btn(getattr(self, "btn_download_mgr", None), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        self._restyle_btn(getattr(self, "_actions_dropdown_btn", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_toggle_editor", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_toggle_monitors", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_detach_editor", None), Theme.BTN_COMPILE if not getattr(self, "editor_detached", False) else Theme.BTN_UPLOAD, Theme.BTN_COMPILE_H)
-        self._restyle_btn(getattr(self, "btn_settings", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "btn_ai_assistant", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        self._restyle_btn(getattr(self, "_opt_dropdown_btn", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
+        self._restyle_btn(getattr(self, "_actions_dropdown_btn", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_toggle_editor", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_toggle_monitors", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_settings", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_ai_assistant", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "_opt_dropdown_btn", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_pause_serial", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_clear_console_header", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_copy_console_header", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_clear_serial_header", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_copy_serial_header", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
+        self._restyle_btn(getattr(self, "btn_compat_copy", None), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, fg=Theme.TEXT_BRIGHT)
 
         if hasattr(self, "_update_detach_button_style"):
             try:
                 self._update_detach_button_style()
+            except Exception:
+                pass
+
+        if hasattr(self, "top_separator") and self.top_separator:
+            try:
+                self.top_separator.configure(bg=Theme.BORDER)
+            except Exception:
+                pass
+
+        if hasattr(self, "board_entry") and self.board_entry:
+            try:
+                self.board_entry.configure(
+                    bg=Theme.BG_LIGHT,
+                    fg=Theme.TEXT_BRIGHT,
+                    readonlybackground=Theme.BG_LIGHT,
+                    disabledbackground=Theme.BG_LIGHT,
+                    disabledforeground=Theme.TEXT_DIM,
+                    highlightbackground=Theme.BORDER,
+                    highlightcolor=Theme.BORDER_LIT,
+                )
             except Exception:
                 pass
 
@@ -1623,7 +1655,7 @@ class UILayoutMixin(_Base):
                 try:
                     cb.configure(
                         fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID,
-                        selectcolor=Theme.BG_DARK, activebackground=Theme.BG_MID,
+                        selectcolor=Theme.BG_LIGHT, activebackground=Theme.BG_MID,
                         activeforeground=Theme.TEXT_BRIGHT
                     )
                 except Exception:

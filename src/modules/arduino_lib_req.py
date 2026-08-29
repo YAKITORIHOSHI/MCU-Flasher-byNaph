@@ -1801,6 +1801,10 @@ class ArduinoBrowser:
     def _force_exit(self):
         """Permanently close process and purge memory."""
         try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        try:
             hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
             if os.path.exists(hwnd_file):
                 os.remove(hwnd_file)

@@ -130,6 +130,23 @@ class WindowLifecycleMixin(_Base):
                         if hasattr(self, "_save_all_editor_files"):
                             self._save_all_editor_files()
 
+        # Instantly hide all UI windows so the user experiences an immediate, clean close
+        # without seeing background teardowns, subprocess disposes, or window lag.
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        if getattr(self, "default_editor_toplevel", None):
+            try:
+                self.default_editor_toplevel.withdraw()
+            except Exception:
+                pass
+        if getattr(self, "detached_editor_toplevel", None):
+            try:
+                self.detached_editor_toplevel.withdraw()
+            except Exception:
+                pass
+
         try:
             if getattr(self, "_shell_prewarm_after_id", None) is not None:
                 self.root.after_cancel(self._shell_prewarm_after_id)

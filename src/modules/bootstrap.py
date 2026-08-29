@@ -1885,6 +1885,10 @@ class BootstrapGUI:
         if not self._closed:
             self._closed = True
             self._spinning = False
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
             # Disable window protocol to prevent callback loops during destroy
             try:
                 self.root.protocol("WM_DELETE_WINDOW", lambda: None)
