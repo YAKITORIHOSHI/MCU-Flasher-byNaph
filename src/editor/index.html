@@ -35,9 +35,9 @@
       --bg-tab-hover: #073642;
       --border: #073642;
       --border-tab: #094250;
-      --text: #839496;
-      --text-dim: #586e75;
-      --accent: #2aa198;
+      --text: #e0e6ed;
+      --text-dim: #8fa1b3;
+      --accent: #39c5bb;
       --dirty-dot: #b58900;
     }
 
@@ -688,6 +688,10 @@
     <div id="definition-hover-card" role="tooltip"></div>
   </div>
 
+  <!-- Expose Monaco globally so themes and models can be managed dynamically -->
+  <script>
+    window.MonacoEnvironment = { globalAPI: true };
+  </script>
   <!-- Local, C++-only trimmed Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
   <script>
@@ -2916,33 +2920,86 @@
       let themesRegistered = false;
 
       function registerCustomMonacoThemes() {
-        if (themesRegistered || typeof monaco === 'undefined' || !monaco.editor) return;
+        const monacoObj = window.monaco || (typeof monaco !== 'undefined' ? monaco : null);
+        if (!monacoObj || !monacoObj.editor) return;
+        if (themesRegistered) return;
         themesRegistered = true;
 
         try {
-          monaco.editor.defineTheme('mcu-solarized-dark', {
+          monacoObj.editor.defineTheme('mcu-solarized-dark', {
             base: 'vs-dark',
             inherit: true,
             rules: [
-              { token: '', foreground: '839496', background: '002b36' },
-              { token: 'comment', foreground: '586e75', fontStyle: 'italic' },
+              { token: '', foreground: 'ffffff', background: '002b36' },
+              { token: 'comment', foreground: '718c93', fontStyle: 'italic' },
               { token: 'string', foreground: '2aa198' },
               { token: 'keyword', foreground: '859900', fontStyle: 'bold' },
               { token: 'number', foreground: 'd33682' },
               { token: 'type', foreground: 'b58900' },
               { token: 'identifier', foreground: '268bd2' },
-              { token: 'delimiter', foreground: '93a1a1' }
+              { token: 'delimiter', foreground: 'e0e6ed' }
             ],
             colors: {
               'editor.background': '#002b36',
-              'editor.foreground': '#839496',
+              'editor.foreground': '#ffffff',
+              'editorLineNumber.foreground': '#586e75',
+              'editorLineNumber.activeForeground': '#39c5bb',
               'editor.lineHighlightBackground': '#073642',
-              'editorCursor.foreground': '#2aa198',
+              'editorCursor.foreground': '#39c5bb',
               'editorWhitespace.foreground': '#073642',
               'editorIndentGuide.background': '#073642',
               'editorIndentGuide.activeBackground': '#586e75',
               'editor.selectionBackground': '#073642',
               'editorGutter.background': '#00212b'
+            }
+          });
+
+          monacoObj.editor.defineTheme('mcu-light', {
+            base: 'vs',
+            inherit: true,
+            rules: [
+              { token: '', foreground: '24292f', background: 'ffffff' },
+              { token: 'comment', foreground: '6e7781', fontStyle: 'italic' },
+              { token: 'string', foreground: '0a3069' },
+              { token: 'keyword', foreground: 'cf222e', fontStyle: 'bold' },
+              { token: 'number', foreground: '0550ae' },
+              { token: 'type', foreground: '953800' },
+              { token: 'identifier', foreground: '116329' },
+              { token: 'delimiter', foreground: '24292f' }
+            ],
+            colors: {
+              'editor.background': '#ffffff',
+              'editor.foreground': '#24292f',
+              'editorLineNumber.foreground': '#8c959f',
+              'editorLineNumber.activeForeground': '#0969da',
+              'editor.lineHighlightBackground': '#f6f8fa',
+              'editorCursor.foreground': '#0969da',
+              'editorWhitespace.foreground': '#d0d7de',
+              'editorIndentGuide.background': '#d0d7de',
+              'editorIndentGuide.activeBackground': '#afb8c1',
+              'editor.selectionBackground': '#add6ff',
+              'editorGutter.background': '#f6f8fa'
+            }
+          });
+
+          monacoObj.editor.defineTheme('mcu-default-dark', {
+            base: 'vs-dark',
+            inherit: true,
+            rules: [
+              { token: '', foreground: 'abb2bf', background: '151922' },
+              { token: 'comment', foreground: '5c6370', fontStyle: 'italic' },
+              { token: 'keyword', foreground: '00d2ff', fontStyle: 'bold' },
+              { token: 'string', foreground: '98c379' },
+              { token: 'number', foreground: 'd19a66' }
+            ],
+            colors: {
+              'editor.background': '#151922',
+              'editor.foreground': '#abb2bf',
+              'editorLineNumber.foreground': '#4b5263',
+              'editorLineNumber.activeForeground': '#00d2ff',
+              'editor.lineHighlightBackground': '#1e2430',
+              'editor.selectionBackground': '#2c313c',
+              'editorGutter.background': '#151922'
             }
           });
         } catch (e) {
@@ -2955,22 +3012,33 @@
         document.body.classList.remove('theme-default', 'theme-light', 'theme-solarized-dark');
 
         registerCustomMonacoThemes();
+        const monacoObj = window.monaco || (typeof monaco !== 'undefined' ? monaco : null);
 
+        let targetMonacoTheme = 'mcu-default-dark';
         if (themeName === 'light') {
           document.body.classList.add('theme-light');
-          if (typeof monaco !== 'undefined' && monaco.editor) {
-            try { monaco.editor.setTheme('vs'); } catch (e) {}
-          }
+          targetMonacoTheme = 'mcu-light';
         } else if (themeName === 'solarized_dark' || themeName === 'solarized' || themeName === 'solarize_dark') {
           document.body.classList.add('theme-solarized-dark');
-          if (typeof monaco !== 'undefined' && monaco.editor) {
-            try { monaco.editor.setTheme('mcu-solarized-dark'); } catch (e) {}
-          }
+          targetMonacoTheme = 'mcu-solarized-dark';
         } else {
           document.body.classList.add('theme-default');
-          if (typeof monaco !== 'undefined' && monaco.editor) {
-            try { monaco.editor.setTheme('vs-dark'); } catch (e) {}
+          targetMonacoTheme = 'mcu-default-dark';
+        }
+
+        if (monacoObj && monacoObj.editor) {
+          try {
+            monacoObj.editor.setTheme(targetMonacoTheme);
+          } catch (e) {
+            try {
+              monacoObj.editor.setTheme(targetMonacoTheme === 'mcu-light' ? 'vs' : 'vs-dark');
+            } catch (e2) {}
           }
+        }
+        if (window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
+          try {
+            window.editorInstance.updateOptions({ theme: targetMonacoTheme });
+          } catch (e) {}
         }
       };
 
@@ -2985,10 +3053,13 @@
         }
       }
 
-      window.addEventListener('pywebviewready', autoInitTheme);
+      window.addEventListener('pywebviewready', () => {
+        autoInitTheme();
+      });
       document.addEventListener('DOMContentLoaded', () => {
         registerCustomMonacoThemes();
-        setTimeout(autoInitTheme, 150);
+        setTimeout(autoInitTheme, 50);
+        setTimeout(autoInitTheme, 300);
       });
     })();
   </script>

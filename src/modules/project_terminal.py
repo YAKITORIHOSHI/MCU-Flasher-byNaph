@@ -92,8 +92,8 @@ def _resolve_terminal_theme() -> dict:
     elif theme in ("solarized_dark", "solarized", "solarize_dark"):
         return {
             "bg": "#002b36",
-            "fg": "#839496",
-            "cursor": "#2aa198",
+            "fg": "#ffffff",
+            "cursor": "#39c5bb",
             "selection": "#073642"
         }
     return {

@@ -1,11 +1,11 @@
 ---
 name: mcu-flash-project-hygiene
-description: Audit and improve Windows MCU Flasher project hygiene, including generated-file visibility, Windows hidden attributes, safe writable metadata, PlatformIO board caches, Clean targets, and protection of user sketch files. Use for changes involving hide_internal_project_metadata, hide_hidden_attribute, hide_generated_directory, ensure_file_writable, generated project files, or cache cleanup in mcu_flash_gui.py.
+description: Audit and improve Windows MCU Flasher project hygiene, including generated-file visibility, Windows hidden attributes, safe writable metadata, PlatformIO board caches, Clean targets, and protection of user sketch files. Use for changes involving hide_internal_project_metadata, hide_hidden_attribute, hide_generated_directory, ensure_file_writable, generated project files, or cache cleanup in main/core/file_utils.py or main/mcu_flash_gui.py.
 ---
 
 # MCU Flasher Project Hygiene
 
-Work on the Windows main app, `mcu_flash_gui.py`, Windows launchers, and supporting utilities.
+Work on the Windows main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), Windows launchers, and supporting utilities.
 
 ## Preserve ownership boundaries
 

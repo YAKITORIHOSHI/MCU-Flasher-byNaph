@@ -17,19 +17,20 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 
 ## Core Architecture Overview
 
-The project provides a modern Windows desktop interface for compiling, flashing, and monitoring ESP32 / Arduino microcontrollers. The main file (`mcu_flash_gui.py`, ~31k lines) is a monolithic Tkinter application with an embedded code editor, dual toolchain support, an integrated AI assistant, and a project terminal.
+The project provides a modern Windows desktop interface for compiling, flashing, and monitoring ESP32 / Arduino microcontrollers. The GUI architecture is modularized into `main/` (32k+ lines total across 27 domain mixins, core utilities, dialogs, widgets, and Monaco bridge), with `mcu_flash_gui.py` acting as both a root forwarder and the assembled main package (`main/mcu_flash_gui.py`).
 
 ### Key Components
 
-1. **Main GUI Application (`mcu_flash_gui.py`)**
-   - Tkinter-based dark-themed GUI (`MCU Flasher by Naph`), main class: `MCUUploadGUI` (line ~7436).
+1. **Main GUI Application (`main/mcu_flash_gui.py` + `main/mixins/`)**
+   - Tkinter-based dark-themed GUI (`MCU Flasher by Naph`), main class: `MCUUploadGUI`.
+   - Composed of 27 modular domain mixins in `main/mixins/` covering compilation, flashing, serial monitor, terminal, AI side panel, settings, and hardware management.
    - **Dual editor modes** switchable at runtime via Settings dialog:
-     - `"default"` — Pure Tkinter `tk.Text` tabbed editor with custom syntax highlighting, line numbers, auto-indent, and bracket matching (built inside `_build_editor_default()`, line ~22800).
-     - `"monaco"` — Monaco Editor (VS Code engine) embedded in a pywebview WebView2 window that is Win32-reparented into the Tkinter frame (built inside `_build_editor_monaco()`, line ~22722).
+     - `"default"` — Pure Tkinter `tk.Text` tabbed editor with custom syntax highlighting, line numbers, auto-indent, and bracket matching (built inside `EditorModesMixin._build_editor_default()`).
+     - `"monaco"` — Monaco Editor (VS Code engine) embedded in a pywebview WebView2 window that is Win32-reparented into the Tkinter frame (built inside `EditorModesMixin._build_editor_monaco()`).
    - Editor mode is persisted in `src/gui_config.json` under `shared.editor_mode`.
    - Serial port auto-detection, baud rate selection, and live serial monitor.
    - Dual toolchain support: **Arduino CLI** and **PlatformIO**.
-   - Supporting classes: `EditorApi` (pywebview JS↔Python bridge), `MonacoAutosaveWorker`, `Theme` (color constants), `ProjectSelectorDialog`, `BoardSearchDialog`, `ToolTip`.
+   - Supporting modules: `main/editor_api.py` (pywebview JS↔Python bridge), `main/core/theme.py` (color constants), `main/dialogs.py` (`ProjectSelectorDialog`, `BoardSearchDialog`), `main/widgets.py` (`ToolTip`, `CircularLoadingOverlay`, `_ShellTerminalBuffer`).
 
 2. **Monaco Editor Frontend (`src/editor/index.html` + `bundle.js`)**
    - Self-contained HTML page loaded by pywebview, backed by a local offline Monaco `bundle.js` (no CDN).
@@ -107,9 +108,24 @@ The project provides a modern Windows desktop interface for compiling, flashing,
 
 ```
 MCU Flasher by Naph/
-├── mcu_flash_gui.py           # Main GUI application (~31k lines, monolithic)
+├── mcu_flash_gui.py           # Backward-compatible main entry point (invokes main/)
+├── main/                      # Modular GUI core architecture (32k+ LOC)
+│   ├── __init__.py            # Package exports
+│   ├── mcu_flash_gui.py       # Assembled MCUUploadGUI class & main()
+│   ├── dialogs.py             # Modal dialogs (ProjectSelectorDialog, BoardSearchDialog)
+│   ├── widgets.py             # Custom UI widgets (ToolTip, CircularLoadingOverlay, _ShellTerminalBuffer)
+│   ├── editor_api.py          # JS ↔ Python bridge for Monaco Editor & autosave
+│   ├── core/                  # Core engine foundations
+│   │   ├── constants.py       # Global constants, regexes, baud rates & telemetry
+│   │   ├── theme.py           # Theme class, color tokens & styling engine
+│   │   ├── config.py          # Settings persistence, multi-instance PID locks
+│   │   ├── file_utils.py      # File attributes (attrib +h), UNC paths, AI backup store
+│   │   ├── toolchain.py       # PlatformIO & Arduino CLI discovery, junctions
+│   │   ├── board_catalog.py   # 420+ board definitions, catalog cache, USB IDs
+│   │   └── board_compat.py    # Board compatibility detection & GPIO analyzer
+│   └── mixins/                # 27 domain mixins composing MCUUploadGUI
 ├── MCU_Flasher.exe            # Compiled native launcher (from launcher.cs)
-├── README.md                  # Project documentation
+├── README.md                  # Project documentation & user guide
 ├── direct/
 │   └── runThisOnWindows.vbs   # Windows VBS launcher
 ├── installers/                # Bundled silent installers & drivers (Git LFS)

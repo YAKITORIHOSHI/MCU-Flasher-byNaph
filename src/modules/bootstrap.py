@@ -1055,7 +1055,11 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-GUI_SCRIPT = SCRIPT_DIR / "mcu_flash_gui.py"
+GUI_SCRIPT = (
+    SCRIPT_DIR / "main" / "mcu_flash_gui.py"
+    if (SCRIPT_DIR / "main" / "mcu_flash_gui.py").exists()
+    else SCRIPT_DIR / "mcu_flash_gui.py"
+)
 
 # ── ANSI codes kept for any direct print() fallbacks ────────
 CYAN = "\033[96m"
@@ -1116,15 +1120,15 @@ def _resolve_bootstrap_theme() -> dict:
             "T_MAGENTA": "#8250df",
         },
         "solarized_dark": {
-            "T_BG_DARKEST": "#00212b",
+            "T_BG_DARKEST": "#001b22",
             "T_BG_DARK": "#002b36",
             "T_BG_MID": "#073642",
-            "T_BG_LIGHT": "#094250",
-            "T_BG_HOVER": "#0e5365",
-            "T_BORDER": "#0e5365",
-            "T_TEXT": "#839496",
-            "T_TEXT_DIM": "#586e75",
-            "T_TEXT_BRIGHT": "#93a1a1",
+            "T_BG_LIGHT": "#0d4a59",
+            "T_BG_HOVER": "#115d70",
+            "T_BORDER": "#166b80",
+            "T_TEXT": "#ffffff",
+            "T_TEXT_DIM": "#d0e4e8",
+            "T_TEXT_BRIGHT": "#ffffff",
             "T_CYAN": "#2aa198",
             "T_GREEN": "#859900",
             "T_YELLOW": "#b58900",
@@ -7122,10 +7126,11 @@ def check_opencode_cli() -> Optional[str]:
         if appdata:
             for candidate in [
                 Path(appdata) / "npm" / "opencode.cmd",
+                Path(appdata) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
                 Path(appdata) / "npm" / "opencode.exe",
                 Path(appdata) / "npm" / "opencode",
             ]:
-                if candidate.exists():
+                if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
 
         local_app = os.environ.get("LOCALAPPDATA", "")
@@ -7133,22 +7138,28 @@ def check_opencode_cli() -> Optional[str]:
             for candidate in [
                 Path(local_app) / "Programs" / "opencode" / "opencode.exe",
                 Path(local_app) / "opencode" / "opencode.exe",
+                Path(local_app) / "npm" / "opencode.cmd",
+                Path(local_app) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
             ]:
-                if candidate.exists():
+                if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
 
         user_prof = os.environ.get("USERPROFILE", "")
         if user_prof:
             for candidate in [
                 Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
                 Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
             ]:
-                if candidate.exists():
+                if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
 
-        node_npm_opencode = Path(r"C:\Program Files\nodejs\opencode.cmd")
-        if node_npm_opencode.exists():
-            return str(node_npm_opencode)
+        for candidate in [
+            Path(r"C:\Program Files\nodejs\opencode.cmd"),
+            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+        ]:
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return str(candidate)
 
     return None
 
@@ -7478,7 +7489,11 @@ def ensure_opencode_cli() -> bool:
     def _cli_works(path: str | None) -> bool:
         if not path:
             return False
+        p = Path(path)
+        if not p.exists() and not shutil.which(path):
+            return False
         try:
+            is_script = str(path).lower().endswith((".cmd", ".bat"))
             result = subprocess.run(
                 [path, "--version"],
                 stdin=subprocess.DEVNULL,
@@ -7487,8 +7502,9 @@ def ensure_opencode_cli() -> bool:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                shell=is_script if sys.platform == "win32" else False,
                 creationflags=_hidden_subprocess_flags(),
-                timeout=20,
+                timeout=15,
             )
             return result.returncode == 0
         except Exception:
@@ -8018,8 +8034,13 @@ _STARTUP_REQUIRED_PACKAGE_DIRS = ("serial",)
 
 def _startup_app_fingerprint() -> str:
     """Return a cheap fingerprint for files that define the launch contract."""
+    gui_target = (
+        SCRIPT_DIR / "main" / "mcu_flash_gui.py"
+        if (SCRIPT_DIR / "main" / "mcu_flash_gui.py").exists()
+        else SCRIPT_DIR / "mcu_flash_gui.py"
+    )
     tracked = (
-        SCRIPT_DIR / "mcu_flash_gui.py",
+        gui_target,
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
     )
