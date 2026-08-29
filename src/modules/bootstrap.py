@@ -3222,12 +3222,16 @@ def ensure_pip_packages_parallel(
     wheelhouse = temp_root / "wheelhouse"
     wheelhouse.mkdir(parents=True, exist_ok=True)
 
+    # ── Stall detection & retry constants for pip download ──────────────
+    _DOWNLOAD_STALL_TIMEOUT = 45   # seconds with zero output → stalled
+    _DOWNLOAD_MAX_RETRIES   = 2    # retry up to 2 times (3 attempts total)
+
     def _download_one(spec):
         sid = spec["id"]
         worker_dir = temp_root / f"download_{sid}"
         worker_dir.mkdir(parents=True, exist_ok=True)
-        _set_state(sid, status_text="⬇ Downloading...", pct=5)
-        _update_bottom_from_rows()
+
+        max_attempts = _DOWNLOAD_MAX_RETRIES + 1
 
         cmd = [
             sys.executable,
@@ -3256,121 +3260,181 @@ def ensure_pip_packages_parallel(
             # atomically.
         ]
 
-        output_lines = []
-        phase_events = 0
-        proc = None
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
+        # Critical bootstrap packages are small wheel installs and should
+        # fail visibly rather than leave the UI in a fake 64–75% phase for
+        # eight minutes.  Keep a longer budget only for an explicitly
+        # requested optional feature or the PlatformIO package.
+        timeout_limit = (
+            600 if not spec.get("critical", True)
+            else (360 if sid == "platformio" else 180)
+        )
 
-            import queue as _queue
-            output_queue = _queue.Queue()
-            reader_done = threading.Event()
+        last_detail = ""
 
-            def _reader():
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                # Show retry status in the per-package row.
+                _set_state(
+                    sid,
+                    status_text=f"⟳ Retrying ({attempt + 1}/{max_attempts})...",
+                    pct=5,
+                )
+                _update_bottom_from_rows()
+                # Clean the worker dir so a partial download does not confuse
+                # the next attempt.
                 try:
-                    if proc.stdout is not None:
-                        for raw in iter(proc.stdout.readline, ""):
-                            output_queue.put(raw)
+                    for f in worker_dir.iterdir():
+                        if f.is_file():
+                            f.unlink(missing_ok=True)
                 except Exception:
                     pass
-                finally:
-                    try:
-                        if proc.stdout is not None:
-                            proc.stdout.close()
-                    except Exception:
-                        pass
-                    reader_done.set()
-
-            threading.Thread(
-                target=_reader,
-                daemon=True,
-                name=f"BootstrapPipDownloadReader-{sid}",
-            ).start()
-
-            started = time.time()
-            # Critical bootstrap packages are small wheel installs and should
-            # fail visibly rather than leave the UI in a fake 64–75% phase for
-            # eight minutes.  Keep a longer budget only for an explicitly
-            # requested optional feature or the PlatformIO package.
-            timeout_limit = (
-                600 if not spec.get("critical", True)
-                else (360 if sid == "platformio" else 180)
-            )
-            timed_out = False
-
-            while True:
-                try:
-                    raw = output_queue.get(timeout=0.15)
-                    line = raw.rstrip("\r\n")
-                    output_lines.append(line)
-                    low = line.strip().lower()
-                    if low:
-                        # pip does not expose a stable byte-progress API to a
-                        # non-interactive subprocess, so the classic row reflects
-                        # real resolver/download phases and never claims fake bytes.
-                        if low.startswith("collecting "):
-                            phase_events += 1
-                            _set_state(sid, status_text="⚙ Resolving...", pct=min(28, 10 + phase_events * 2))
-                        elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
-                            phase_events += 1
-                            _set_state(sid, status_text="⚙ Reading metadata...", pct=min(38, 24 + phase_events * 2))
-                        elif low.startswith("downloading ") or low.startswith("using cached "):
-                            phase_events += 1
-                            _set_state(sid, status_text="⬇ Downloading...", pct=min(68, 34 + phase_events * 3))
-                        elif low.startswith("saved "):
-                            _set_state(sid, status_text="⬇ Saving packages...", pct=70)
-                        elif low.startswith("successfully downloaded"):
-                            _set_state(sid, status_text="✔ Downloaded", pct=75)
-                        _update_bottom_from_rows()
-                except _queue.Empty:
-                    pass
-
-                if proc.poll() is not None and reader_done.is_set() and output_queue.empty():
-                    break
-
-                if time.time() - started > timeout_limit:
-                    timed_out = True
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    output_lines.append("bootstrap timeout while downloading")
-                    break
-
-            try:
-                return_code = proc.wait(timeout=10)
-            except Exception:
-                return_code = -1
-
-            if timed_out:
-                return_code = -1
-            if return_code == 0:
-                _set_state(sid, status_text="✔ Downloaded", pct=75)
+                # Brief pause before retry to let transient issues settle.
+                time.sleep(2)
+            else:
+                _set_state(sid, status_text="⬇ Downloading...", pct=5)
                 _update_bottom_from_rows()
-                return sid, True, worker_dir, ""
 
-            detail = "\n".join(output_lines[-80:]).strip()
-            return sid, False, worker_dir, detail
-        except Exception as exc:
+            output_lines = []
+            phase_events = 0
+            proc = None
             try:
-                if proc is not None and proc.poll() is None:
-                    proc.kill()
-            except Exception:
-                pass
-            detail = "\n".join(output_lines[-80:]).strip()
-            if detail:
-                detail += "\n"
-            detail += str(exc)
-            return sid, False, worker_dir, detail
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
+
+                import queue as _queue
+                output_queue = _queue.Queue()
+                reader_done = threading.Event()
+
+                def _reader(_proc=proc):
+                    try:
+                        if _proc.stdout is not None:
+                            for raw in iter(_proc.stdout.readline, ""):
+                                output_queue.put(raw)
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            if _proc.stdout is not None:
+                                _proc.stdout.close()
+                        except Exception:
+                            pass
+                        reader_done.set()
+
+                threading.Thread(
+                    target=_reader,
+                    daemon=True,
+                    name=f"BootstrapPipDownloadReader-{sid}-{attempt}",
+                ).start()
+
+                started = time.time()
+                last_output_time = started   # ← stall detection anchor
+                timed_out = False
+                stalled = False
+
+                while True:
+                    try:
+                        raw = output_queue.get(timeout=0.15)
+                        line = raw.rstrip("\r\n")
+                        output_lines.append(line)
+                        last_output_time = time.time()   # reset stall clock
+                        low = line.strip().lower()
+                        if low:
+                            # pip does not expose a stable byte-progress API to a
+                            # non-interactive subprocess, so the classic row reflects
+                            # real resolver/download phases and never claims fake bytes.
+                            if low.startswith("collecting "):
+                                phase_events += 1
+                                _set_state(sid, status_text="⚙ Resolving...", pct=min(28, 10 + phase_events * 2))
+                            elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
+                                phase_events += 1
+                                _set_state(sid, status_text="⚙ Reading metadata...", pct=min(38, 24 + phase_events * 2))
+                            elif low.startswith("downloading ") or low.startswith("using cached "):
+                                phase_events += 1
+                                _set_state(sid, status_text="⬇ Downloading...", pct=min(68, 34 + phase_events * 3))
+                            elif low.startswith("saved "):
+                                _set_state(sid, status_text="⬇ Saving packages...", pct=70)
+                            elif low.startswith("successfully downloaded"):
+                                _set_state(sid, status_text="✔ Downloaded", pct=75)
+                            _update_bottom_from_rows()
+                    except _queue.Empty:
+                        pass
+
+                    if proc.poll() is not None and reader_done.is_set() and output_queue.empty():
+                        break
+
+                    now = time.time()
+
+                    # Stall detection: no output for _DOWNLOAD_STALL_TIMEOUT seconds
+                    if now - last_output_time > _DOWNLOAD_STALL_TIMEOUT:
+                        stalled = True
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        output_lines.append(
+                            f"bootstrap: download stalled ({_DOWNLOAD_STALL_TIMEOUT}s with no output)"
+                        )
+                        break
+
+                    # Absolute wall-clock timeout
+                    if now - started > timeout_limit:
+                        timed_out = True
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        output_lines.append("bootstrap timeout while downloading")
+                        break
+
+                try:
+                    return_code = proc.wait(timeout=10)
+                except Exception:
+                    return_code = -1
+
+                if timed_out or stalled:
+                    return_code = -1
+
+                if return_code == 0:
+                    _set_state(sid, status_text="✔ Downloaded", pct=75)
+                    _update_bottom_from_rows()
+                    return sid, True, worker_dir, ""
+
+                # Download failed on this attempt — store detail for potential retry.
+                last_detail = "\n".join(output_lines[-80:]).strip()
+
+                # If this was a stall/timeout and we have retries left, loop.
+                if (stalled or timed_out) and attempt < max_attempts - 1:
+                    continue
+
+                # Non-stall failure or last attempt — give up.
+                return sid, False, worker_dir, last_detail
+
+            except Exception as exc:
+                try:
+                    if proc is not None and proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass
+                last_detail = "\n".join(output_lines[-80:]).strip()
+                if last_detail:
+                    last_detail += "\n"
+                last_detail += str(exc)
+
+                # Retry on exception only if attempts remain.
+                if attempt < max_attempts - 1:
+                    continue
+                return sid, False, worker_dir, last_detail
+
+        # Should not reach here, but safety net.
+        return sid, False, worker_dir, last_detail
 
     try:
         # Downloads/resolution are isolated from the environment, so this is the
@@ -6230,11 +6294,17 @@ def _run_pip_install(
         threading.Thread(target=_reader, daemon=True, name="BootstrapPipReader").start()
 
         started = time.time()
+        last_output_time = started  # ← stall detection anchor
+        # Stall threshold for unified install is longer than download (90s vs
+        # 45s) because pip's dependency resolver can legitimately spend a
+        # minute between output lines on first-run machines.
+        _INSTALL_STALL_TIMEOUT = 90
         while True:
             try:
                 raw_line = q.get(timeout=0.15)
                 line = raw_line.rstrip("\r\n")
                 output_lines.append(line)
+                last_output_time = time.time()   # reset stall clock
                 if line_callback is not None:
                     try:
                         line_callback(line)
@@ -6246,7 +6316,22 @@ def _run_pip_install(
             if proc.poll() is not None and reader_done.is_set() and q.empty():
                 break
 
-            if time.time() - started > timeout:
+            now = time.time()
+
+            # Stall detection: no output for _INSTALL_STALL_TIMEOUT seconds
+            if now - last_output_time > _INSTALL_STALL_TIMEOUT:
+                timed_out = True
+                output_lines.append(
+                    f"bootstrap: pip install stalled ({_INSTALL_STALL_TIMEOUT}s with no output)"
+                )
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                break
+
+            # Absolute wall-clock timeout
+            if now - started > timeout:
                 timed_out = True
                 try:
                     proc.kill()
