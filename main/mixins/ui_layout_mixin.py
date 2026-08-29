@@ -287,7 +287,7 @@ class UILayoutMixin(_Base):
                 return "460800 is the recommended stable upload speed for ESP32/ESP8266."
             return "460800 is the recommended stable upload speed."
 
-        ToolTip(lbl_upload_spd, _get_upload_speed_tip)
+        ToolTip(self.lbl_upload_spd, _get_upload_speed_tip)
         ToolTip(self.upload_speed_combo, _get_upload_speed_tip)
 
         # Action buttons moved to title bar
