@@ -59,29 +59,8 @@ class ProjectTerminalMixin(_Base):
             return False
 
     def _configure_shell_ansi_tags(self):
-        """Mirror the OpenCode/xterm dark palette on the Tk terminal surface."""
-        palette = {
-            "default": "#cccccc",
-            # OpenCode uses ANSI black for muted placeholder/help text. Pure
-            # black disappears against the application's dark terminal
-            # surface, so use a readable muted gray for the normal ANSI slot.
-            "black": "#8a8f9d",
-            "red": "#cd3131",
-            "green": "#0dbc79",
-            "yellow": "#e5e510",
-            "blue": "#2472c8",
-            "magenta": "#bc3fbc",
-            "cyan": "#11a8cd",
-            "white": "#e5e5e5",
-            "bright_black": "#666666",
-            "bright_red": "#f14c4c",
-            "bright_green": "#23d18b",
-            "bright_yellow": "#f5f543",
-            "bright_blue": "#3b8eea",
-            "bright_magenta": "#d670d6",
-            "bright_cyan": "#29b8db",
-            "bright_white": "#ffffff",
-        }
+        """Apply the active application palette to the Tk terminal surface."""
+        palette = self._terminal_ansi_palette()
         try:
             self._shell_bold_font = tkfont.Font(
                 family="Consolas",
@@ -99,10 +78,102 @@ class ProjectTerminalMixin(_Base):
                 self.shell_console.tag_configure(
                     tag,
                     foreground=foreground,
-                    background="#0c0d10",
+                    background=Theme.BG_DARK,
                     font=(self._shell_bold_font if "bold" in suffix else self.font_mono),
                     underline=("underline" in suffix),
                 )
+
+    @staticmethod
+    def _terminal_ansi_palette() -> dict[str, str]:
+        """Map ANSI names to the same semantic colors used by the main UI."""
+        return {
+            "default": Theme.TEXT,
+            "black": Theme.TEXT_DIM,
+            "red": Theme.RED,
+            "green": Theme.GREEN,
+            "yellow": Theme.YELLOW,
+            "blue": Theme.BLUE,
+            "magenta": Theme.MAGENTA,
+            "cyan": Theme.CYAN,
+            "white": Theme.TEXT_BRIGHT,
+            "bright_black": Theme.TEXT_DIM,
+            "bright_red": Theme.RED,
+            "bright_green": Theme.GREEN,
+            "bright_yellow": Theme.YELLOW,
+            "bright_blue": Theme.BLUE,
+            "bright_magenta": Theme.MAGENTA,
+            "bright_cyan": Theme.CYAN,
+            "bright_white": Theme.TEXT_BRIGHT,
+        }
+
+    def _terminal_theme_payload(self) -> dict[str, str]:
+        """Return the active palette in the format used by xterm.js."""
+        ansi = self._terminal_ansi_palette()
+        return {
+            "background": Theme.BG_DARK,
+            "foreground": Theme.TEXT,
+            "cursor": Theme.CYAN,
+            "selectionBackground": Theme.BG_HOVER,
+            "black": ansi["black"],
+            "red": ansi["red"],
+            "green": ansi["green"],
+            "yellow": ansi["yellow"],
+            "blue": ansi["blue"],
+            "magenta": ansi["magenta"],
+            "cyan": ansi["cyan"],
+            "white": ansi["white"],
+            "brightBlack": ansi["bright_black"],
+            "brightRed": ansi["bright_red"],
+            "brightGreen": ansi["bright_green"],
+            "brightYellow": ansi["bright_yellow"],
+            "brightBlue": ansi["bright_blue"],
+            "brightMagenta": ansi["bright_magenta"],
+            "brightCyan": ansi["bright_cyan"],
+            "brightWhite": ansi["bright_white"],
+        }
+
+    def _apply_project_terminal_theme(self):
+        """Refresh both terminal implementations after a live theme change."""
+        payload = self._terminal_theme_payload()
+        for widget in (
+            getattr(self, "_shell_terminal_frame", None),
+            getattr(self, "_terminal_header", None),
+            getattr(self, "_terminal_tabs_frame", None),
+            getattr(self, "_terminal_toolbar", None),
+        ):
+            if widget:
+                try:
+                    widget.configure(bg=Theme.BG_DARKEST)
+                except Exception:
+                    pass
+        shell_console = getattr(self, "shell_console", None)
+        if shell_console:
+            try:
+                shell_console.configure(
+                    bg=Theme.BG_DARK,
+                    fg=Theme.TEXT,
+                    insertbackground=Theme.CYAN,
+                    selectbackground=Theme.BG_DARK,
+                    selectforeground=Theme.TEXT,
+                    inactiveselectbackground=Theme.BG_DARK,
+                )
+                shell_console.tag_configure(
+                    "shell_selection",
+                    background=Theme.BG_HOVER,
+                    foreground=Theme.TEXT_BRIGHT,
+                )
+                self._configure_shell_ansi_tags()
+                active_id = getattr(self, "_shell_active_session_id", None)
+                if getattr(self, "_project_terminal_fallback", False) and active_id:
+                    self._shell_render_session(active_id)
+            except Exception:
+                pass
+        try:
+            self._terminal_refresh_session_bar()
+        except Exception:
+            pass
+        if getattr(self, "_project_terminal_port", None):
+            self._project_terminal_send_control("theme", extra={"theme": payload})
 
     def _configure_shell_selection_highlight(self):
         """Use a compact xterm-style selection instead of Tk's full-row fill."""
@@ -113,14 +184,14 @@ class ProjectTerminalMixin(_Base):
             # The native ``sel`` tag paints empty cells through the remainder
             # of a visual row.  Hide that layer and paint only the selected
             # character range with our own tag below.
-            selectbackground="#0c0d10",
-            selectforeground="#cccccc",
-            inactiveselectbackground="#0c0d10",
+            selectbackground=Theme.BG_DARK,
+            selectforeground=Theme.TEXT,
+            inactiveselectbackground=Theme.BG_DARK,
         )
         self.shell_console.tag_configure(
             "shell_selection",
-            background="#264f78",
-            foreground="#ffffff",
+            background=Theme.BG_HOVER,
+            foreground=Theme.TEXT_BRIGHT,
         )
 
         def sync_selection(_event=None):
@@ -314,7 +385,7 @@ class ProjectTerminalMixin(_Base):
         btn_kill = getattr(self, "btn_term_kill", None)
         if btn_kill and btn_kill.winfo_exists():
             if has_active_sessions:
-                btn_kill.configure(state=tk.NORMAL, fg="#e06c75", cursor="hand2")
+                btn_kill.configure(state=tk.NORMAL, fg=Theme.RED, cursor="hand2")
             else:
                 btn_kill.configure(state=tk.DISABLED, fg=Theme.TEXT_DIM, cursor="arrow")
 
@@ -656,6 +727,9 @@ class ProjectTerminalMixin(_Base):
                 self._project_terminal_send_control("select", self._shell_active_session_id)
             else:
                 self._project_terminal_send_control("select", None)
+            self._project_terminal_send_control(
+                "theme", extra={"theme": self._terminal_theme_payload()}
+            )
             return True
         except Exception:
             self._project_terminal_embedded = False
@@ -1032,7 +1106,7 @@ class ProjectTerminalMixin(_Base):
         with self._shell_state_lock:
             session = self._shell_sessions.get(kind)
             output = session.get("plain_output", session.get("output", "")) if session else ""
-            styled = []
+            styled = list(session.get("styled", [])) if session else []
             running = bool(session and session.get("running"))
             target = session.get("target", "") if session else str(self._shell_current_target())
         try:

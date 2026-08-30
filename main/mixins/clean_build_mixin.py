@@ -178,11 +178,20 @@ class CleanBuildMixin(_Base):
             except Exception as exc:
                 errors.append(f"{label}: {exc}")
 
-        # Reset compile-state tracking so the next build starts clean
+        # Reset every compile-state field so the next build always prepares a
+        # fresh PlatformIO environment.  Keep the legacy single-slot hash in
+        # sync with the per-board cache; leaving it populated makes a cleaned
+        # project appear compiled to older cache readers and chained actions.
+        self._compile_cache_hash = None
         self._last_compiled_board = None
         self._compile_cache_by_board = {}
         self._build_config_hash_by_board = {}
         self._build_metadata_by_board = {}
+        self._just_created_envs = set()
+        try:
+            self._set_symbol_cache_compiled_state(False)
+        except Exception:
+            pass
         return removed, errors
 
     def _perform_clean_current_board(self) -> tuple[list[str], list[str]]:
@@ -417,12 +426,15 @@ class CleanBuildMixin(_Base):
                     except Exception:
                         pass
 
+                    # Return to the normal idle state before invoking a
+                    # chained action.  In particular, _do_compile() must not
+                    # inherit the clean operation marker or stale disabled
+                    # button state.  Queue the callback after the idle
+                    # transition so its scheduled UI update runs first.
+                    self.is_busy = False
+                    self._set_buttons_state(False)
                     if on_complete:
-                        self.is_busy = False
-                        on_complete()
-                    else:
-                        self.is_busy = False
-                        self._set_buttons_state(False)
+                        self.root.after(0, on_complete)
 
                 self.root.after(0, _done)
             except Exception as exc:

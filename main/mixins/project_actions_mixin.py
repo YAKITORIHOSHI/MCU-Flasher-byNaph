@@ -138,9 +138,18 @@ class ProjectActionsMixin(_Base):
                     if run_here:
                         try:
                             flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                            if getattr(sys, "frozen", False):
+                                gui_command = [sys.executable]
+                            else:
+                                gui_entrypoint = SCRIPT_DIR / "main" / "mcu_flash_gui.py"
+                                if not gui_entrypoint.exists():
+                                    gui_entrypoint = SCRIPT_DIR / "mcu_flash_gui.py"
+                                gui_command = [sys.executable, str(gui_entrypoint)]
                             proc = subprocess.Popen(
-                                [sys.executable, str(Path(__file__).resolve()), "--from-bootstrap",
-                                 "--new-window", "--project", str(project_dir)],
+                                gui_command + [
+                                    "--from-bootstrap", "--new-window",
+                                    "--project", str(project_dir),
+                                ],
                                 cwd=str(SCRIPT_DIR), creationflags=flags,
                             )
                             messagebox.showinfo(

@@ -1116,6 +1116,7 @@ class UILayoutMixin(_Base):
 
         # Right container: Action buttons (+ ▾, Clear, 🗑)
         terminal_toolbar = tk.Frame(terminal_header, bg=Theme.BG_DARKEST)
+        self._terminal_toolbar = terminal_toolbar
         terminal_toolbar.pack(side=tk.RIGHT)
 
         # ▾ Shell Type Dropdown Menu
@@ -1141,7 +1142,7 @@ class UILayoutMixin(_Base):
         # 🗑 Kill Terminal button
         self.btn_term_kill = tk.Button(
             terminal_toolbar, text="🗑 Kill", font=self.font_mono_sm,
-            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, activeforeground="#ff6b6b",
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, activeforeground=Theme.RED,
             activebackground=Theme.BG_HOVER, relief=tk.FLAT, borderwidth=0,
             padx=7, pady=2, cursor="arrow", state=tk.DISABLED,
             command=self._terminal_action_kill_active,
@@ -1159,7 +1160,7 @@ class UILayoutMixin(_Base):
         # Native terminal surface. The child WebView2 window is reparented
         # into this frame after it creates its own HWND. The small placeholder
         # remains visible until the real xterm page has attached.
-        self._shell_terminal_embed_frame = tk.Frame(shell_left, bg="#0c0d10")
+        self._shell_terminal_embed_frame = tk.Frame(shell_left, bg=Theme.BG_DARK)
         self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
         self._shell_terminal_embed_frame.bind(
             "<Configure>", self._resize_project_terminal
@@ -1169,7 +1170,7 @@ class UILayoutMixin(_Base):
             text="Loading native Project Terminal…",
             font=self.font_mono_sm,
             fg=Theme.TEXT_DIM,
-            bg="#0c0d10",
+            bg=Theme.BG_DARK,
         )
         self._shell_terminal_placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
@@ -1179,9 +1180,9 @@ class UILayoutMixin(_Base):
         self._shell_terminal_fallback_frame = tk.Frame(shell_left, bg=Theme.BG_DARKEST)
         shell_scroll = ttk.Scrollbar(self._shell_terminal_fallback_frame, orient=tk.VERTICAL)
         self.shell_console = tk.Text(
-            self._shell_terminal_fallback_frame, bg="#0c0d10", fg="#cccccc",
-            insertbackground="#ffffff", selectbackground="#264f78",
-            selectforeground="#ffffff", font=self.font_mono,
+            self._shell_terminal_fallback_frame, bg=Theme.BG_DARK, fg=Theme.TEXT,
+            insertbackground=Theme.CYAN, selectbackground=Theme.BG_HOVER,
+            selectforeground=Theme.TEXT_BRIGHT, font=self.font_mono,
             relief=tk.FLAT, borderwidth=0, highlightthickness=0,
             padx=12, pady=8, wrap=tk.NONE, state=tk.NORMAL,
             spacing1=0, spacing2=0, spacing3=0,
@@ -1744,13 +1745,25 @@ class UILayoutMixin(_Base):
             getattr(self, "_syntax_check_frame", None),
             getattr(self, "_syntax_tree_frame", None),
             getattr(self, "_terminal_body", None),
-            getattr(self, "_shell_terminal_embed_frame", None),
             getattr(self, "_shell_terminal_fallback_frame", None),
             getattr(self, "_shell_left", None),
         ):
             if f:
                 try:
                     f.configure(bg=Theme.BG_DARKEST)
+                except Exception:
+                    pass
+
+        # The embedded WebView surface and its loading placeholder are the
+        # terminal itself, so keep them on BG_DARK rather than the pane's
+        # darker container background.
+        for widget in (
+            getattr(self, "_shell_terminal_embed_frame", None),
+            getattr(self, "_shell_terminal_placeholder", None),
+        ):
+            if widget:
+                try:
+                    widget.configure(bg=Theme.BG_DARK)
                 except Exception:
                     pass
 
@@ -1813,6 +1826,12 @@ class UILayoutMixin(_Base):
                             )
                     except Exception:
                         pass
+            except Exception:
+                pass
+
+        if hasattr(self, "_apply_project_terminal_theme"):
+            try:
+                self._apply_project_terminal_theme()
             except Exception:
                 pass
 

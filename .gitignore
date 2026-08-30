@@ -54,6 +54,11 @@ backups/
 Thumbs.db
 desktop.ini
 *.zip
+*.zip.part*
+*.parts/
+*.part
+src/platformio-mcu-gui-prebuilt.zip.part*
+src/platformio-mcu-gui-prebuilt.zip.part.parts/
 .vscode/
 .idea/
 .claude/

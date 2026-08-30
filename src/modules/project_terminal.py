@@ -66,6 +66,21 @@ def _detect_system_theme() -> str:
 
 
 def _resolve_terminal_theme() -> dict:
+    def make_theme(bg: str, fg: str, cursor: str, selection: str, palette: dict[str, str]) -> dict:
+        return {
+            "bg": bg,
+            "fg": fg,
+            "cursor": cursor,
+            "selection": selection,
+            "xterm": {
+                "background": bg,
+                "foreground": fg,
+                "cursor": cursor,
+                "selectionBackground": selection,
+                **palette,
+            },
+        }
+
     theme = "default"
     for cfg in (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
         try:
@@ -83,25 +98,43 @@ def _resolve_terminal_theme() -> dict:
             pass
 
     if theme == "light":
-        return {
-            "bg": "#f8f9fa",
-            "fg": "#24292f",
-            "cursor": "#0969da",
-            "selection": "#d0d7de"
-        }
-    elif theme in ("solarized_dark", "solarized", "solarize_dark"):
-        return {
-            "bg": "#002b36",
-            "fg": "#ffffff",
-            "cursor": "#39c5bb",
-            "selection": "#073642"
-        }
-    return {
-        "bg": "#0c0d10",
-        "fg": "#cccccc",
-        "cursor": "#ffffff",
-        "selection": "#264f78"
-    }
+        return make_theme(
+            "#eef2f5", "#24292f", "#0969da", "#e1e4e8",
+            {
+                "black": "#57606a", "red": "#cf222e", "green": "#1a7f37",
+                "yellow": "#9a6700", "blue": "#0969da", "magenta": "#8250df",
+                "cyan": "#0969da", "white": "#1f2328",
+                "brightBlack": "#57606a", "brightRed": "#cf222e",
+                "brightGreen": "#1a7f37", "brightYellow": "#9a6700",
+                "brightBlue": "#0969da", "brightMagenta": "#8250df",
+                "brightCyan": "#0969da", "brightWhite": "#1f2328",
+            },
+        )
+    elif theme in ("solarized_dark", "solarized", "solarize", "solarize_dark"):
+        return make_theme(
+            "#002b36", "#ffffff", "#2aa198", "#073642",
+            {
+                "black": "#d0e4e8", "red": "#dc322f", "green": "#859900",
+                "yellow": "#b58900", "blue": "#268bd2", "magenta": "#d33682",
+                "cyan": "#2aa198", "white": "#ffffff",
+                "brightBlack": "#d0e4e8", "brightRed": "#dc322f",
+                "brightGreen": "#859900", "brightYellow": "#b58900",
+                "brightBlue": "#268bd2", "brightMagenta": "#d33682",
+                "brightCyan": "#2aa198", "brightWhite": "#ffffff",
+            },
+        )
+    return make_theme(
+        "#10151c", "#e0e6ed", "#00d2ff", "#243040",
+        {
+            "black": "#8fa1b3", "red": "#f05050", "green": "#5ccc6e",
+            "yellow": "#e8b83a", "blue": "#61afef", "magenta": "#c678dd",
+            "cyan": "#00d2ff", "white": "#ffffff",
+            "brightBlack": "#8fa1b3", "brightRed": "#f05050",
+            "brightGreen": "#5ccc6e", "brightYellow": "#e8b83a",
+            "brightBlue": "#61afef", "brightMagenta": "#c678dd",
+            "brightCyan": "#00d2ff", "brightWhite": "#ffffff",
+        },
+    )
 
 
 HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
@@ -110,19 +143,23 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
     <meta charset="utf-8">
     <title>MCU Flash GUI - Project Terminal</title>
     <style>
+        :root {
+            --terminal-bg: __THEME_BG__;
+            --terminal-fg: __THEME_FG__;
+        }
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            background: __THEME_BG__; color: __THEME_FG__;
+            background: var(--terminal-bg); color: var(--terminal-fg);
             font-family: Consolas, "Courier New", monospace; font-size: 14px;
             overflow: hidden; box-sizing: border-box;
         }
         #terminal-root {
             width: 100%; height: 100%; box-sizing: border-box;
-            background: __THEME_BG__; position: relative;
+            background: var(--terminal-bg); position: relative;
         }
         .terminal-host {
             display: none; width: 100%; height: 100%; box-sizing: border-box;
-            background: __THEME_BG__; position: absolute; top: 0; left: 0;
+            background: var(--terminal-bg); position: absolute; top: 0; left: 0;
         }
         .terminal-host.active { display: block; }
         .xterm {
@@ -131,11 +168,11 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             box-sizing: border-box;
         }
         .xterm-viewport {
-            background: __THEME_BG__ !important;
+            background: var(--terminal-bg) !important;
             overflow-y: auto !important;
         }
         .xterm-screen {
-            background: __THEME_BG__ !important;
+            background: var(--terminal-bg) !important;
         }
         ::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
     </style>
@@ -157,8 +194,40 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         let activeShell = null;
         let socket = null;
         let fallback = false;
+        let currentTheme = __THEME_XTERM__;
         const root = document.getElementById("terminal-root");
         const emptyState = document.getElementById("empty-state");
+
+        function applyTheme(nextTheme) {
+            if (!nextTheme || typeof nextTheme !== "object") return;
+            currentTheme = Object.assign({}, currentTheme || {}, nextTheme);
+            const bg = currentTheme.background || "#10151c";
+            const fg = currentTheme.foreground || "#e0e6ed";
+            document.documentElement.style.setProperty("--terminal-bg", bg);
+            document.documentElement.style.setProperty("--terminal-fg", fg);
+            document.body.style.backgroundColor = bg;
+            document.body.style.color = fg;
+            if (root) {
+                root.style.backgroundColor = bg;
+                root.querySelectorAll(".terminal-host, .xterm").forEach(node => {
+                    node.style.backgroundColor = bg;
+                });
+            }
+            if (emptyState) {
+                emptyState.style.color = fg;
+                if (emptyState.firstElementChild) emptyState.firstElementChild.style.color = fg;
+            }
+            if (fallback && root && root.firstElementChild) {
+                root.firstElementChild.style.color = fg;
+            }
+            Object.values(terminals).forEach(term => {
+                try {
+                    term.options.theme = Object.assign({}, term.options.theme || {}, currentTheme);
+                    term.refresh(0, term.rows - 1);
+                } catch (e) {}
+            });
+        }
+        applyTheme(currentTheme);
 
         function sanitizeTerminalInput(data) {
             if (!data || typeof data !== "string") return "";
@@ -229,12 +298,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     fontFamily: 'Consolas, "Courier New", monospace',
                     scrollback: 5000,
                     overviewRulerWidth: 0,
-                    theme: {
-                        background: "__THEME_BG__",
-                        foreground: "__THEME_FG__",
-                        cursor: "__THEME_CURSOR__",
-                        selectionBackground: "__THEME_SELECTION__"
-                    }
+                    theme: Object.assign({}, currentTheme)
                 });
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
@@ -328,6 +392,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     if (activeShell && terminals[activeShell]) terminals[activeShell].write(event.data);
                     return;
                 }
+                if (message.type === "theme") {
+                    applyTheme(message.theme);
+                    return;
+                }
                 if (message.type === "create") {
                     makeTerminal(message.shell);
                     setActiveShell(message.shell);
@@ -419,6 +487,7 @@ def get_terminal_html() -> str:
         .replace("__THEME_FG__", t["fg"])
         .replace("__THEME_CURSOR__", t["cursor"])
         .replace("__THEME_SELECTION__", t["selection"])
+        .replace("__THEME_XTERM__", json.dumps(t["xterm"], separators=(",", ":")))
     )
 
 
@@ -721,6 +790,13 @@ class ProjectTerminalServer:
                 return {"success": True}
             return {"success": False, "error": "Session not found"}
 
+        if action == "theme":
+            theme = message.get("theme")
+            if isinstance(theme, dict):
+                self.broadcast({"type": "theme", "theme": theme})
+                return {"success": True}
+            return {"success": False, "error": "Invalid terminal theme"}
+
         if action == "select":
             if shell_id in self.sessions:
                 self.active_shell = shell_id
@@ -981,6 +1057,7 @@ def run_standalone_project_terminal(target_directory: str, initial_cwd: str, por
 
     _apply_window_icon()
     try:
+        terminal_theme = _resolve_terminal_theme()
         webview.create_window(
             title=WINDOW_TITLE,
             url=f"http://127.0.0.1:{port}",
@@ -989,7 +1066,7 @@ def run_standalone_project_terminal(target_directory: str, initial_cwd: str, por
             min_size=(320, 180),
             hidden=True,
             focus=False,
-            background_color="#0c0d10",
+            background_color=terminal_theme["bg"],
         )
         webview.start(debug=False)
     finally:
