@@ -829,8 +829,8 @@ def _validate_and_scaffold_ino(parent_win, folder_path: Path) -> bool:
     from tkinter import messagebox
     res = messagebox.askyesno(
         "Create Arduino Sketch?",
-        f"The selected folder does not contain any Arduino sketch (.ino) files.\n\n"
-        f"Would you like to make this a project directory and create a default .ino file aligned to the current folder?",
+        "The selected folder does not contain any Arduino sketch (.ino) files.\n\n"
+        "Would you like to make this a project directory and create a default .ino file aligned to the current folder?",
         parent=parent_win
     )
     if res:

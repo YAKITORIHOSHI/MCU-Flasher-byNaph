@@ -57,9 +57,9 @@ class AsyncTasksMixin(_Base):
         """
         self._ui_dispatch_after_id = None
         processed = 0
-        deadline = time.perf_counter() + 0.004  # ~4 ms of worker callbacks/frame
+        deadline = time.perf_counter() + 0.008  # ~8 ms of worker callbacks/frame for high refresh rates
         try:
-            while processed < 80 and time.perf_counter() < deadline:
+            while processed < 120 and time.perf_counter() < deadline:
                 try:
                     callback = self._ui_dispatch_queue.get_nowait()
                 except queue.Empty:
@@ -72,10 +72,9 @@ class AsyncTasksMixin(_Base):
         finally:
             try:
                 if self.root and self.root.winfo_exists():
-                    # If we consumed work, yield briefly to paint/input before
-                    # continuing the queue.  Idle polling stays inexpensive.
+                    # If we consumed work, continue immediately on next turn; idle stays relaxed
                     self._ui_dispatch_after_id = self.root.after(
-                        4 if processed else 20, self._drain_ui_dispatch_queue
+                        1 if processed else 15, self._drain_ui_dispatch_queue
                     )
             except Exception:
                 self._ui_dispatch_after_id = None

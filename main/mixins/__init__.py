@@ -25,3 +25,34 @@ from main.mixins.hard_reset_mixin import HardResetMixin
 from main.mixins.soft_reset_mixin import SoftResetMixin
 from main.mixins.window_lifecycle_mixin import WindowLifecycleMixin
 from main.mixins.syntax_checker_mixin import SyntaxCheckerMixin
+
+__all__ = [
+    "InitStartupMixin",
+    "UILayoutMixin",
+    "ConsoleSerialMixin",
+    "LayoutPanesMixin",
+    "AsyncTasksMixin",
+    "CompatDevicesMixin",
+    "ProjectTerminalMixin",
+    "HardwarePortMixin",
+    "CleanBuildMixin",
+    "BuildActionsMixin",
+    "ProjectActionsMixin",
+    "CompileCacheMixin",
+    "LibraryHeadersMixin",
+    "BuildWorkspaceMixin",
+    "SoftResetTemplateMixin",
+    "PlatformioIniMixin",
+    "CompilerPipelineMixin",
+    "UploadPipelineMixin",
+    "MonitorPipelineMixin",
+    "EditorModesMixin",
+    "BoardsCatalogMixin",
+    "AIAssistantMixin",
+    "SettingsDialogMixin",
+    "HardResetMixin",
+    "SoftResetMixin",
+    "WindowLifecycleMixin",
+    "SyntaxCheckerMixin",
+]
+

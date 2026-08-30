@@ -52,15 +52,15 @@ DEFAULT_HEADERS = {
 }
 
 
-def check_internet_connection(timeout: float = 2.5) -> bool:
+def check_internet_connection(timeout: float = 1.0) -> bool:
     """Fast socket check for active internet connection using standard HTTP/HTTPS ports."""
     test_targets = [
-        ("downloads.arduino.cc", 443),
-        ("www.google.com", 80),
         ("1.1.1.1", 443),
         ("8.8.8.8", 443),
-        ("github.com", 443),
         ("1.1.1.1", 80),
+        ("8.8.8.8", 53),
+        ("downloads.arduino.cc", 443),
+        ("www.google.com", 80),
     ]
     for host, port in test_targets:
         try:
@@ -445,125 +445,25 @@ def _launch_code_viewer(file_path, all_paths=None):
 
 def _open_code_viewer(file_path, all_paths=None, parent=None):
     """Open the QScintilla code viewer, with offline fallback to default editor.
-    Installed library sample files are ALWAYS accessible and viewable regardless
-    of network status.
+    Installed library sample files are ALWAYS accessible and viewable.
     """
     if _qscintilla_available():
         _launch_code_viewer(file_path, all_paths)
         return
 
-    # If QScintilla is not yet available and there is no active internet connection,
-    # immediately fallback to the system default editor / notepad so the installed
-    # code remains 100% accessible to the user without any blockers.
-    if not check_internet_connection(timeout=1.5):
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                SW_SHOWNORMAL = 1
-                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
-                return
-            else:
-                webbrowser.open("file://" + file_path)
-                return
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not open sample file:\n{e}", parent=parent)
+    # Fallback to notepad/system editor seamlessly if QScintilla is not yet available
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            SW_SHOWNORMAL = 1
+            ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
             return
-
-    if parent is None:
-        messagebox.showerror(
-            "Code Viewer Setup Required",
-            "The PyQt5/QScintilla viewer is not installed. "
-            "Please run the bootstrap setup to complete package installation.",
-        )
+        else:
+            webbrowser.open("file://" + file_path)
+            return
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not open sample file:\n{e}", parent=parent)
         return
-
-    if not messagebox.askyesno(
-        "Install Code Viewer",
-        "The standalone code viewer needs PyQt5/QScintilla.\n\n"
-        "Install it now in the background?",
-        parent=parent,
-    ):
-        # User declined install: still open the sample file in default editor so it is viewable!
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
-            else:
-                webbrowser.open("file://" + file_path)
-        except Exception:
-            pass
-        return
-
-    if not _QSCINTILLA_INSTALL_LOCK.acquire(blocking=False):
-        messagebox.showinfo(
-            "Code Viewer Setup In Progress",
-            "The code viewer dependency is already being installed in the background. "
-            "Opening the file in your default editor in the meantime...",
-            parent=parent,
-        )
-        try:
-            if sys.platform == "win32":
-                import ctypes
-                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
-            else:
-                webbrowser.open("file://" + file_path)
-        except Exception:
-            pass
-        return
-
-    messagebox.showinfo(
-        "Installing Code Viewer",
-        "PyQt5/QScintilla is being installed in the background.\n\n"
-        "The viewer will open automatically when setup completes.",
-        parent=parent,
-    )
-
-    def _install_worker():
-        ok = False
-        detail = ""
-        try:
-            modules_dir = os.path.dirname(os.path.abspath(__file__))
-            if modules_dir not in sys.path:
-                sys.path.insert(0, modules_dir)
-            from bootstrap import ensure_optional_pip_feature
-            ok = bool(ensure_optional_pip_feature("qscintilla_viewer"))
-            if not ok:
-                import bootstrap as _bootstrap
-                detail = str(getattr(_bootstrap, "_LAST_PIP_ERROR", "") or "")
-        except Exception as exc:
-            detail = str(exc)
-
-        def _finish():
-            _QSCINTILLA_INSTALL_LOCK.release()
-            if ok and _qscintilla_available():
-                _launch_code_viewer(file_path, all_paths)
-                return
-            # If background install failed or timed out, open the file in default editor
-            try:
-                if sys.platform == "win32":
-                    import ctypes
-                    ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, 1)
-                else:
-                    webbrowser.open("file://" + file_path)
-            except Exception:
-                pass
-            messagebox.showerror(
-                "Code Viewer Setup Notice",
-                "PyQt5/QScintilla setup could not be completed at this time.\n\n"
-                + (detail or "The sample code was opened in your default editor instead."),
-                parent=parent,
-            )
-
-        try:
-            parent.after(0, _finish)
-        except Exception:
-            _QSCINTILLA_INSTALL_LOCK.release()
-
-    threading.Thread(
-        target=_install_worker,
-        name="QScintillaOptionalInstall",
-        daemon=True,
-    ).start()
 
 
 def _load_settings() -> dict:

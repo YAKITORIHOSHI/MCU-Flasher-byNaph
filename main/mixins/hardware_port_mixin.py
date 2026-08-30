@@ -275,7 +275,7 @@ class HardwarePortMixin(_Base):
             while getattr(self, "_port_poll_active", True):
                 try:
                     cpus = os.cpu_count() or 4
-                    poll_interval = 1.2 if cpus <= 4 else 0.8
+                    poll_interval = 2.5 if cpus <= 4 else 2.0
                     time.sleep(poll_interval)
                     poll_ticks += 1
 
@@ -387,7 +387,7 @@ class HardwarePortMixin(_Base):
             self._append_notif(f"  ✖ Error handling port change: {e}", "error")
 
     def _start_marquee(self):
-        delay_ms = 800  # Default to slow poll if nothing is scrolling
+        delay_ms = 1500  # Default to relaxed slow poll if nothing is scrolling
         
         # 1. Port marquee
         try:
@@ -1291,21 +1291,19 @@ class HardwarePortMixin(_Base):
             board_name = (self.board_var.get() if hasattr(self, "board_var") else "") or ""
             board_name = board_name.strip()
 
-            # If no MCU port is connected, board is strictly unavailable
-            if not port_device:
-                board_name = ""
-                board_selected = False
-                mcu_connected = False
-                status_summary = "No microcontroller connected. No board is available."
-            else:
-                mcu_connected = True
-                board_selected = bool(board_name)
-                if board_selected:
-                    status_summary = f"Ready: {board_name} on {port_device}."
-                else:
-                    status_summary = f"Microcontroller connected on {port_device}, but no board selected in GUI."
+            mcu_connected = bool(port_device)
+            board_selected = bool(board_name)
 
-            # Lookup board info with case/trim tolerance only if MCU is connected and board is selected
+            if board_selected and mcu_connected:
+                status_summary = f"Ready: {board_name} on {port_device}."
+            elif board_selected and not mcu_connected:
+                status_summary = f"{board_name} selected in GUI (No microcontroller connected on COM port)."
+            elif not board_selected and mcu_connected:
+                status_summary = f"Microcontroller connected on {port_device}, but no board selected in GUI."
+            else:
+                status_summary = "No board selected in GUI and no microcontroller connected."
+
+            # Lookup board info with case/trim tolerance whenever board is selected
             board_info = {}
             if board_selected and board_name:
                 board_info = SUPPORTED_BOARDS.get(board_name, {})
@@ -1329,6 +1327,34 @@ class HardwarePortMixin(_Base):
 
             upload_spd_val = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
             upload_spd_val = str(upload_spd_val).strip()
+
+            state_payload = (
+                Path(sketch_dir).name,
+                str(Path(sketch_dir).resolve(strict=False)),
+                status_summary,
+                tuple(sorted((k, str(v)) for k, v in {
+                    "board_selected": board_selected,
+                    "mcu_connected": mcu_connected,
+                    "board_name": board_name if board_selected else None,
+                    "platform": (board_info.get("platform", "") if board_selected else "") or None,
+                    "framework": (board_info.get("framework", "arduino") if board_selected else "") or None,
+                    "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
+                    "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
+                    "port": port_device if mcu_connected else None,
+                    "port_label": port_label if mcu_connected else None,
+                    "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
+                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "flash_mb": board_info.get("flash_mb") if board_selected else None,
+                    "has_psram": board_info.get("has_psram", False) if board_selected else False,
+                }.items())),
+                editor_mode,
+                clear_serial,
+            )
+
+            # Avoid redundant disk writes and file attribute operations if state is identical
+            if getattr(self, "_last_synced_hardware_payload", None) == state_payload:
+                return
+            self._last_synced_hardware_payload = state_payload
 
             state_data = {
                 "project_name": Path(sketch_dir).name,
@@ -1359,6 +1385,7 @@ class HardwarePortMixin(_Base):
             state_file = cache_dir / "project_state.json"
             ensure_file_writable(state_file)
             state_file.write_text(json.dumps(state_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            ensure_hidden_read_first_md(sketch_dir)
         except Exception as exc:
             print(f"[MCU Flasher] Error syncing project state: {exc}")
 

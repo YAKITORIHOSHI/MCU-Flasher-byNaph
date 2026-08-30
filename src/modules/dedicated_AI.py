@@ -443,7 +443,7 @@ class TerminalServer:
         return (
             f'cd /d "{target_dir}" && '
             f'set PATH=%APPDATA%\\npm;%PATH% && cls && '
-            f'for /L %i in (0,0,1) do ( {invocation} & '
+            f'for /L %i in (0,0,1) do ( {invocation} "{target_dir}" & '
             f'timeout /t 1 /nobreak >nul )\r\n'
         )
 
@@ -451,7 +451,7 @@ class TerminalServer:
         target_dir = os.path.abspath(self.target_dir)
         if PtyProcess:
             try:
-                self.pty = PtyProcess.spawn("cmd.exe", dimensions=(30, 120))
+                self.pty = PtyProcess.spawn("cmd.exe", cwd=target_dir, dimensions=(30, 120))
                 self.pty.write(self._supervised_opencode_command(target_dir))
             except Exception as e:
                 print(f"[ERROR] Failed to spawn PTY process: {e}")
@@ -875,6 +875,7 @@ def launch_opencode_elevated_cmd(target_directory=None):
     try:
         active_ai_proc = subprocess.Popen(
             [sys.executable, script_path, "--launch-ai", target_directory],
+            cwd=target_directory,
             creationflags=flags
         )
         print(f"[INFO] OpenCode AI process started (PID: {active_ai_proc.pid})")

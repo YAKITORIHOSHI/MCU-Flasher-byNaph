@@ -68,7 +68,7 @@ def fix_paths():
     new_platformio = os.path.join(workspace_dir, "env", ".platformio")
     new_directory = workspace_dir
 
-    print(f"[*] Mapping old paths to new local paths:")
+    print("[*] Mapping old paths to new local paths:")
     print(f"    PlatformIO: {old_platformio} -> {new_platformio}")
     print(f"    Directory:  {old_directory} -> {new_directory}")
 

@@ -653,7 +653,7 @@ default_envs = {self._pio_env_name()}
                     if _has_stale_symlink:
                         stale_paths = [e for e in old_entries if e.startswith("symlink://") and not Path(e[len("symlink://"):]).exists()]
                         for sp in stale_paths:
-                            self._append(f"  🔄 Auto-healing foreign library path → adapting to this device:", "warning")
+                            self._append("  🔄 Auto-healing foreign library path → adapting to this device:", "warning")
                             self._append(f"     From: {sp}", "dim")
                         # Show what it was healed to
                         for lib in detected_libs:

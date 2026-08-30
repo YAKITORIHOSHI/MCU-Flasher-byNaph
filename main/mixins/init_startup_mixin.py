@@ -225,17 +225,18 @@ class InitStartupMixin(_Base):
         self._fast_upload_failure_count = 0
         self._fast_upload_disabled_reason = None
 
-        import concurrent.futures
-        self._bg_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(1, min(3, _resource_safe_worker_count("MEDIUM"))),
-            thread_name_prefix="MCUBgExecutor"
-        )
-
         # ── Startup project selector ──
         # Prompt for a project (existing folder, or scaffold a new one)
         # before the main window appears.
         self.root.withdraw()  # hide main window until project is chosen
         config = load_gui_config()
+        cpu_mode = config.get("shared", {}).get("cpu_multithreading", "HIGH")
+
+        import concurrent.futures
+        self._bg_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=_resource_safe_worker_count(cpu_mode),
+            thread_name_prefix="MCUBgExecutor"
+        )
         
         # Check if project was passed in command line arguments (e.g. after a restart)
         cmd_project = None
@@ -713,16 +714,11 @@ class InitStartupMixin(_Base):
         self._start_background_syntax_thread()
 
     def _dbi_terminal(self):
-        # Start the terminal during the real startup pass as well. The
-        # terminal must not wait for a manual pwsh/cmd tab switch before
-        # it begins loading, otherwise the main loading cover can report
-        # readiness while the terminal is still completely cold.
-        self._startup_terminal_required = True
-        self._startup_terminal_deadline = time.monotonic() + 45.0
-        if not self._ensure_project_terminal_webview():
-            if getattr(self, "_project_terminal_fallback", False):
-                for _kind in ("pwsh", "cmd"):
-                    self._shell_start(_kind)
+        # Pre-warm the project terminal in the background so it is instantly ready
+        try:
+            self._ensure_project_terminal_webview()
+        except Exception:
+            pass
 
     def _advance_deferred_background_init(self):
         """Run the next queued service, then yield the event loop before the

@@ -47,7 +47,7 @@
 | **🎨 Modern Multi-Theme UI** | Dark Cyberpunk, Light Mode, and Solarized styling with Montserrat typography and responsive layout |
 | **✏️ Dual Code Editor** | Switchable between **Monaco Editor** (VS Code engine with C++ syntax highlighting, Go-To-Definition, hover cards) and lightweight **Tkinter Default** editor |
 | **🤖 Dedicated AI Assistant** | Embedded OpenCode AI side panel with file-watcher, line-level diffing, and pulsating glowing diff highlights (green added, red removed) |
-| **💻 Integrated Project Terminal** | Embedded terminal powered by pywinpty + xterm.js with live **PowerShell ↔ Command Prompt** shell switching |
+| **💻 Multi-Session Project Terminal** | Embedded terminal powered by pywinpty + xterm.js with VS Code-style multi-terminal tabs, **PowerShell ↔ CMD** creation, and individual session controls |
 | **🌐 Remote & UNC Share Support** | Direct compilation & flashing of projects on network shares (`\\server\share`) with automated drive mapping and local SSD build acceleration |
 | **⚡ Dual Reset Modes** | Fast software reset (re-flashing lightweight reset sketch) and native hardware reset via esptool DTR/RTS pulsing or bootloader recovery images |
 | **📦 Zero-Touch Bootstrapper** | Self-healing Python environment, pre-built PlatformIO core seeding (~1.7GB fast download), and offline CP210x driver installation |
@@ -150,8 +150,8 @@ MCU Flasher by Naph/
 │   ├── .platformio-mcu-gui/         # PlatformIO core store (junctioned to avoid MAX_PATH)
 │   ├── gui_config.json              # Persisted user settings (editor mode, themes, baud rates)
 │   ├── syntax_checker.py            # Realtime C++ syntax linter & AST regex analyzer
-│   ├── qscintilla_editor.py         # Optional QScintilla code editor component (PyQt5)
-│   ├── qscintilla_viewer.py         # Optional QScintilla read-only viewer component (PyQt5)
+│   ├── qscintilla_editor.py         # QScintilla code editor component (PyQt5)
+│   ├── qscintilla_viewer.py         # QScintilla library sample code viewer component (PyQt5)
 │   ├── launcher.cpp                 # Native Windows executable wrapper source (C++)
 │   ├── launcher.cs                  # Native Windows executable wrapper source (C#)
 │   ├── resources.res                # Compiled Windows resource file (icon embedding)
@@ -258,10 +258,15 @@ MCU Flasher by Naph/
   - Ultra-lightweight native editor with syntax coloring, auto-indent, and bracket matching.
 - **Switching**: Open **`⚙️ Settings`** → **Editor Mode** → Select Monaco or Default.
 
-### 7. Integrated Project Terminal (PowerShell ↔ CMD)
+### 7. Integrated Project Terminal (VS Code Style Multi-Session)
 - Click the **`💻 Project Terminal`** tab in the bottom notebook.
-- Live, embedded ConPTY xterm.js terminal initialized directly in your sketch directory.
-- Switch seamlessly between **PowerShell** and **Command Prompt** with dedicated session scrollback preservation.
+- **VS Code Style Multi-Terminal Management**:
+  - **`[▾]` New Shell Selector**: Choose between **PowerShell (`pwsh`)** and **Command Prompt (`cmd`)** to spawn a new terminal.
+  - **Dynamic Session Tab Bar**: Tab chips for every active session with active status highlighting and individual **`✕`** close buttons.
+  - **`[⌧ Clear]`**: Clears the active terminal viewport (`Clear-Host` for PowerShell, `cls` for CMD).
+  - **`[🗑 Kill]`**: Destroys the active terminal session, freeing its background PTY worker.
+- **Zero-Session Idle State**: Starts cleanly with zero open sessions and seamlessly transitions to an idle placeholder when all sessions are closed.
+- **Subprocess ConPTY Architecture**: Powered by pywinpty + xterm.js in an isolated process to prevent GUI thread contention.
 
 ### 8. OpenCode AI Assistant & Diff Glow
 - Click the **`🤖 AI Assistant`** button on the toolbar to open the embedded AI side panel.
@@ -425,4 +430,4 @@ python main/mcu_flash_gui.py
 
 MIT License — see [LICENSE](LICENSE) for details.
 
-> Made with ❤️ by **Naph** — Happy flashing! 🚀
+> Made with ❤️‍🔥 by **Naph** — Happy flashing! 🚀

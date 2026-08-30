@@ -275,7 +275,7 @@ class CompileCacheMixin(_Base):
             hide_internal_project_metadata(project_dir)
         self._append("")
         self._append("=" * 50, "header")
-        self._append(f"  📁  PROJECT LOADED", "header")
+        self._append("  📁  PROJECT LOADED", "header")
         self._append("=" * 50, "header")
         self._append(f"  Path : {project_dir}", "dim")
 

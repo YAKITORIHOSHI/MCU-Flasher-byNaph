@@ -2266,8 +2266,8 @@ class EditorModesMixin(_Base):
         if not hwnd:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
-            if self._editor_reparent_attempts < 120:
-                poll_delay = 25 if self._editor_reparent_attempts < 20 else 50
+            if self._editor_reparent_attempts < 100:
+                poll_delay = 60 if self._editor_reparent_attempts < 20 else 100
                 self.root.after(poll_delay, self._try_embed_editor_window)
             else:
                 self._append("  ✖ Could not locate the editor's window to embed it after 8s — "
@@ -2276,9 +2276,7 @@ class EditorModesMixin(_Base):
             return
 
         # Ensure the webview host thread is actively pumping messages before attempting
-        # reparenting or thread input linking. Premature AttachThreadInput while WebView2 /
-        # pywebview is mid-initialization causes Windows to lock message queues, making
-        # the app temporarily "Not Responding".
+        # reparenting. Avoid heavy SendMessageTimeout blocking while WebView2 is initializing.
         import ctypes
         from ctypes import wintypes
         try:
@@ -2294,8 +2292,8 @@ class EditorModesMixin(_Base):
                 return
 
             res = wintypes.DWORD()
-            # SMTO_ABORTIFHUNG = 0x0002 — check if thread responds to message within 50ms
-            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 50, ctypes.byref(res)):
+            # SMTO_ABORTIFHUNG = 0x0002 — non-blocking check if thread responds within 30ms
+            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 30, ctypes.byref(res)):
                 self._embedding_in_progress = False
                 self._editor_reparent_attempts += 1
                 if self._editor_reparent_attempts < 80:

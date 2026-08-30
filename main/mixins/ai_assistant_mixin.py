@@ -74,10 +74,10 @@ class AIAssistantMixin(_Base):
                     import ctypes
                     target_dir = os.path.abspath(str(self.sketch_dir_path))
                     window_title = "MCU Flash GUI - OpenCode AI Assistant (Administrator)"
-                    cmd_args = f'/k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode"'
+                    cmd_args = f'/k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode \"{target_dir}\""'
                     ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", cmd_args, target_dir, 1)
                     if int(ret) <= 32:
-                        subprocess.Popen(f'start cmd /k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode"', shell=True)
+                        subprocess.Popen(f'start cmd /k "cd /d \"{target_dir}\" && title {window_title} && cls && opencode \"{target_dir}\""', cwd=target_dir, shell=True)
                 except Exception as err:
                     messagebox.showerror("Launch Error", f"Failed to launch OpenCode AI: {err}", parent=self.root)
 

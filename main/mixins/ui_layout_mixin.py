@@ -1105,44 +1105,52 @@ class UILayoutMixin(_Base):
         terminal_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
         self._shell_terminal_frame = terminal_frame
 
+        # ── Top VS Code-style Terminal Header & Toolbar ──
+        terminal_header = tk.Frame(terminal_frame, bg=Theme.BG_DARKEST, height=28)
+        terminal_header.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(4, 2))
+        self._terminal_header = terminal_header
+
+        # Left container: Dynamic tabs for sessions ([ pwsh ✕ ] [ cmd ✕ ])
+        self._terminal_tabs_frame = tk.Frame(terminal_header, bg=Theme.BG_DARKEST)
+        self._terminal_tabs_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Right container: Action buttons (+ ▾, Clear, 🗑)
+        terminal_toolbar = tk.Frame(terminal_header, bg=Theme.BG_DARKEST)
+        terminal_toolbar.pack(side=tk.RIGHT)
+
+        # ▾ Shell Type Dropdown Menu
+        self.btn_term_menu = tk.Button(
+            terminal_toolbar, text="▾", font=self.font_mono_sm,
+            fg=Theme.TEXT, bg=Theme.BG_DARK, activeforeground=Theme.TEXT_BRIGHT,
+            activebackground=Theme.BG_HOVER, relief=tk.FLAT, borderwidth=0,
+            padx=7, pady=2, cursor="hand2",
+            command=self._terminal_action_show_new_menu,
+        )
+        self.btn_term_menu.pack(side=tk.LEFT, padx=(0, 6))
+
+        # ⌧ Clear Screen button
+        self.btn_term_clear = tk.Button(
+            terminal_toolbar, text="⌧ Clear", font=self.font_mono_sm,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, activeforeground=Theme.TEXT_BRIGHT,
+            activebackground=Theme.BG_HOVER, relief=tk.FLAT, borderwidth=0,
+            padx=7, pady=2, cursor="arrow", state=tk.DISABLED,
+            command=self._terminal_action_clear,
+        )
+        self.btn_term_clear.pack(side=tk.LEFT, padx=(0, 6))
+
+        # 🗑 Kill Terminal button
+        self.btn_term_kill = tk.Button(
+            terminal_toolbar, text="🗑 Kill", font=self.font_mono_sm,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_DARK, activeforeground="#ff6b6b",
+            activebackground=Theme.BG_HOVER, relief=tk.FLAT, borderwidth=0,
+            padx=7, pady=2, cursor="arrow", state=tk.DISABLED,
+            command=self._terminal_action_kill_active,
+        )
+        self.btn_term_kill.pack(side=tk.LEFT)
+
         terminal_body = tk.Frame(terminal_frame, bg=Theme.BG_DARKEST)
         terminal_body.pack(fill=tk.BOTH, expand=True)
         self._terminal_body = terminal_body
-
-        shell_switcher = tk.Frame(
-            terminal_body, bg=Theme.BG_DARKEST, width=116,
-            highlightthickness=1, highlightbackground=Theme.BORDER,
-        )
-        shell_switcher.pack(side=tk.RIGHT, fill=tk.Y)
-        shell_switcher.pack_propagate(False)
-        self._shell_switcher = shell_switcher
-        tk.Label(
-            shell_switcher, text="SHELLS", font=self.font_label,
-            fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST,
-        ).pack(fill=tk.X, padx=8, pady=(10, 6), anchor=tk.W)
-        self._shell_switch_buttons = {}
-        for shell_kind, shell_label in (("pwsh", "▣ pwsh"), ("cmd", "▣ cmd")):
-            shell_btn = tk.Button(
-                shell_switcher, text=shell_label, anchor=tk.W,
-                font=self.font_mono_sm, fg=Theme.TEXT, bg=Theme.BG_DARK,
-                activeforeground=Theme.TEXT_BRIGHT, activebackground=Theme.BG_HOVER,
-                relief=tk.FLAT, borderwidth=0, padx=9, pady=7, cursor="hand2",
-                takefocus=True,
-            )
-            shell_btn.bind(
-                "<ButtonRelease-1>",
-                lambda event, kind=shell_kind: self._shell_switch_button_click(event, kind),
-            )
-            shell_btn.bind(
-                "<Return>",
-                lambda _event, kind=shell_kind: self._shell_select(kind),
-            )
-            shell_btn.bind(
-                "<space>",
-                lambda _event, kind=shell_kind: self._shell_select(kind),
-            )
-            shell_btn.pack(fill=tk.X, padx=5, pady=2)
-            self._shell_switch_buttons[shell_kind] = shell_btn
 
         shell_left = tk.Frame(terminal_body, bg=Theme.BG_DARKEST)
         shell_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1327,7 +1335,7 @@ class UILayoutMixin(_Base):
         # failure aborted the entire GUI before the main event loop started.
         self._update_editor_info()
 
-    def _setup_selectable_read_only_text(self, text_widget: tk.Text, clear_callback=None, target_input_widget: tk.Widget = None):
+    def _setup_selectable_read_only_text(self, text_widget: tk.Text, clear_callback=None, target_input_widget: tk.Widget | None = None):
         """Configure a read-only console Text widget so mouse text selection, highlighting,
         Ctrl+C/Ctrl+A keyboard shortcuts, and right-click context menu ALWAYS work reliably,
         even when state='disabled' and regardless of focus changes.
@@ -1376,7 +1384,8 @@ class UILayoutMixin(_Base):
                     # If text was selected (e.g. double-click or drag), don't redirect focus
                     if bool(text_widget.tag_ranges("sel")):
                         return
-                    safe_reclaim_os_focus(target_input_widget)
+                    if target_input_widget is not None:
+                        safe_reclaim_os_focus(target_input_widget)
                 except Exception:
                     pass
 
@@ -1493,7 +1502,7 @@ class UILayoutMixin(_Base):
         except Exception:
             pass
 
-    def _apply_theme_to_ui(self, mode_name: str = None):
+    def _apply_theme_to_ui(self, mode_name: str | None = None):
         """Live-update all Tkinter UI widgets, ttk styles, and embedded Monaco Editor to the active theme."""
         active_mode = Theme.apply_theme(mode_name or get_theme_mode())
 
@@ -2060,6 +2069,12 @@ class UILayoutMixin(_Base):
         except Exception:
             pass
 
+        try:
+            if hasattr(self, "_terminal_refresh_session_bar"):
+                self._terminal_refresh_session_bar()
+        except Exception:
+            pass
+
     def _get_current_monitor_dimensions(self):
         """Return the work-area dimensions of the monitor containing the app."""
         left, top, right, bottom = _get_monitor_work_area(self.root)
@@ -2279,7 +2294,8 @@ class UILayoutMixin(_Base):
         # Keep the controls-bar background edge-to-edge (padx=0) so no black empty gaps appear
         # on either end, while configuring inner left/right inset gutters.
         try:
-            self.ctrl_row_top.master.pack_configure(padx=0)
+            if isinstance(self.ctrl_row_top.master, tk.Widget):
+                self.ctrl_row_top.master.pack_configure(padx=0)
             left_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
             right_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
             inner_gap = round((4 if width < 700 else 8) * display_scale)
@@ -2424,10 +2440,11 @@ class UILayoutMixin(_Base):
         try:
             # Strictly one row: Board, Port, Upload Speed, and Options never
             # move vertically. Narrow layouts shrink/collapse their contents.
+            ctrl_right_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
             self.right_group.pack_forget()
             if self.ctrl_row_bottom.winfo_ismapped():
                 self.ctrl_row_bottom.pack_forget()
-            self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT, padx=(0, right_pad))
+            self.right_group.pack(in_=self.ctrl_row_top, side=tk.RIGHT, padx=(0, ctrl_right_pad))
 
             # OPTIONS title centered above, content in one row below
             self.lbl_options_title.pack_forget()

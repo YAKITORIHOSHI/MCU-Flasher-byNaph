@@ -673,11 +673,18 @@ class ProjectActionsMixin(_Base):
         self._save_active_folder(self.sketch_dir_path)
         try:
             align_sketch_filename_case(self.sketch_dir_path)
-            heal_platformio_ini_symlinks_and_dirs(self._platformio_ini_path(), self.sketch_dir_path)
-            if not is_unc_or_network_path(self.sketch_dir_path):
-                hide_internal_project_metadata(self.sketch_dir_path)
         except Exception:
             pass
+
+        def _bg_metadata_and_healing(p_ini=self._platformio_ini_path(), s_path=self.sketch_dir_path):
+            try:
+                heal_platformio_ini_symlinks_and_dirs(p_ini, s_path)
+                if not is_unc_or_network_path(s_path):
+                    hide_internal_project_metadata(s_path)
+            except Exception:
+                pass
+
+        self._run_bg_task(_bg_metadata_and_healing)
 
         # Update notification store and sync hardware state for newly active project
         try:

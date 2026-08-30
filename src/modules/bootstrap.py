@@ -99,9 +99,12 @@ _BOOTSTRAP_LOG_LOCK = threading.Lock()
 _BOOTSTRAP_LOG_FILE = (
     SCRIPT_DIR
     / "logs"
-    / f"bootstrap-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
+    / ("bootstrap-" + time.strftime('%Y%m%d-%H%M%S') + "-" + str(os.getpid()) + ".log")
 )
 _BOOTSTRAP_STARTUP_NOTE = ""
+_BOOTSTRAP_LOG_MAX_BYTES = 10 * 1024 * 1024
+_LAST_PIP_ERROR: str = ""
+_gui: "BootstrapGUI | None" = None
 
 
 def get_bootstrap_log_file() -> Path:
@@ -1914,7 +1917,7 @@ def banner():
         _record_bootstrap_log("SECTION", "MCU Uploader IDE by Naph - Bootstrap")
         os.system("")
         print(f"\n{CYAN}{BOLD}{'=' * 56}")
-        print(f"  ⚡  MCU Uploader IDE by Naph — Bootstrap")
+        print("  ⚡  MCU Uploader IDE by Naph — Bootstrap")
         print(f"{'=' * 56}{RESET}\n")
 
 def status(msg: str, color: str = CYAN):
@@ -3003,7 +3006,6 @@ PIP_PACKAGES_SPEC = [
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
         "critical": True,
-        "optional_feature": "qscintilla_viewer",
     },
     {
         "id": "platformio",
@@ -7857,7 +7859,7 @@ def _heal_private_python_runtime() -> bool:
         "Include_test=0",
         "Include_doc=0",
         "Include_launcher=0",
-        f"/log", str(log_path),
+        "/log", str(log_path),
     ]
 
     try:
@@ -8118,7 +8120,20 @@ def _user_startup_state_dir() -> Path:
 
 
 STARTUP_HEALTH_FILE = _user_startup_state_dir() / "startup_health.json"
-_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial",)
+_STARTUP_REQUIRED_PACKAGE_DIRS = (
+    "serial",
+    "webview",
+    "platformio",
+    "esptool",
+    "requests",
+    "urllib3",
+    "winpty",
+    "win32",
+    "websockets",
+    "psutil",
+    "yaml",
+    "PyQt5",
+)
 
 
 def _startup_app_fingerprint() -> str:
@@ -8248,8 +8263,23 @@ def _write_startup_health_snapshot() -> bool:
 
 
 def _try_fast_normal_launch() -> bool:
-    """Bootstrap must never be skipped at all costs. Full verification runs on every launch."""
-    return False
+    """If all required dependencies and toolchains are verified in the cached health snapshot,
+    spawn the main GUI directly without running full setup."""
+    if _explicit_setup_requested():
+        return False
+    snapshot = _read_startup_health_snapshot()
+    if not snapshot:
+        return False
+    proc, gui_log = _spawn_main_gui()
+    if proc is None:
+        return False
+    for _ in range(3):
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            if proc.poll() != 0:
+                return False
+            return True
+    return True
 
 
 def _explicit_setup_requested() -> bool:
@@ -8965,9 +8995,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         if not ensure_pip_packages_parallel(gui):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
-        gui.root.after(0, lambda: gui.log_dim(
-            "Optional PyQt5/QScintilla viewer deferred until an example is opened."
-        ))
 
         # ── Monaco runtime (required for the selected editor) ──────────
         gui.root.after(0, lambda: gui.log_section("Checking Microsoft Edge WebView2 Runtime"))
@@ -9432,6 +9459,11 @@ def main():
             "RECOVERY",
             f"Stopped {recovered_updates} stale update probe process(es) from an older release.",
         )
+
+    # Check if warm-launch fast path is available (valid health snapshot, no repair requested)
+    if not _explicit_setup_requested() and _try_fast_normal_launch():
+        _record_bootstrap_log("FINISH", "Warm launch verified; started main GUI directly.")
+        sys.exit(0)
 
     # ── Launch Bootstrap GUI Window ─────────────────────────────────
     # Bootstrap setup is mandatory and runs its verification checks before launching the main GUI.

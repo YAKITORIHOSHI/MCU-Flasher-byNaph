@@ -633,8 +633,8 @@ class MainWindow(QMainWindow):
         )
 
         label = QLabel("ACTIONS")
-        label.setStyleSheet(f"color: #7f8c8d; font-weight: 700; font-size: 11px; "
-                            f"background: transparent; padding-right: 6px;")
+        label.setStyleSheet("color: #7f8c8d; font-weight: 700; font-size: 11px; "
+                            "background: transparent; padding-right: 6px;")
         self.action_toolbar.addWidget(label)
 
         def _add_action_btn(text, color, action_id):
@@ -656,8 +656,8 @@ class MainWindow(QMainWindow):
         _add_action_btn("Clean", "#3a4555", "clean")
 
         div = QLabel("")
-        div.setStyleSheet(f"background: #222938; min-width: 2px; max-width: 2px; "
-                          f"min-height: 22px; margin: 0 6px;")
+        div.setStyleSheet("background: #222938; min-width: 2px; max-width: 2px; "
+                          "min-height: 22px; margin: 0 6px;")
         self.action_toolbar.addWidget(div)
 
         _add_action_btn("Save", "#2d7d46", "save")

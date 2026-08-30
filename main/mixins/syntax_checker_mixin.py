@@ -55,7 +55,7 @@ class SyntaxCheckerMixin(_Base):
             while getattr(self, "_syntax_bg_active", False):
                 try:
                     cpus = os.cpu_count() or 4
-                    sleep_time = 3.5 if cpus <= 2 else (2.5 if cpus <= 4 else 1.2)
+                    sleep_time = 5.0 if cpus <= 2 else 3.5
                     time.sleep(sleep_time)
                     if not getattr(self, "_syntax_bg_active", False):
                         break
@@ -80,8 +80,8 @@ class SyntaxCheckerMixin(_Base):
         bg_thread.start()
         self._syntax_bg_thread = bg_thread
 
-        # Also keep the existing periodic check for inline highlighting
-        self.root.after(3000, self._start_periodic_syntax_check)
+        # Also keep the periodic check for inline highlighting in default mode
+        self.root.after(4000, self._start_periodic_syntax_check)
 
     def _run_bg_syntax_check(self):
         """Lightweight background syntax check — reads current editor content & project files
@@ -96,11 +96,26 @@ class SyntaxCheckerMixin(_Base):
                 sketch_dir = getattr(self, "sketch_dir_path", None)
                 if not sketch_dir or not sketch_dir.exists():
                     return
+
+                # Check if any files were modified since last scan
+                current_mtimes = {}
+                for ext in ["*.ino", "*.cpp", "*.h", "*.hpp"]:
+                    for f in sketch_dir.glob(ext):
+                        try:
+                            current_mtimes[str(f)] = f.stat().st_mtime
+                        except Exception:
+                            pass
+
+                last_mtimes = getattr(self, "_last_syntax_mtimes", None)
+                if last_mtimes is not None and last_mtimes == current_mtimes:
+                    return
+                self._last_syntax_mtimes = current_mtimes
+
                 from src.syntax_checker import analyze_cpp_syntax, extract_project_functions
                 defined_funcs = extract_project_functions(sketch_dir)
 
                 all_errors = []
-                for ext in ["*.ino", "*.cpp", "*.h"]:
+                for ext in ["*.ino", "*.cpp", "*.h", "*.hpp"]:
                     for file_path in sketch_dir.glob(ext):
                         try:
                             code = file_path.read_text(encoding="utf-8", errors="replace")

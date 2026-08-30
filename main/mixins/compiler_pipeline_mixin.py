@@ -81,7 +81,7 @@ class CompilerPipelineMixin(_Base):
         self._append("  ⚙  COMPILING (PlatformIO)", "header")
         self._append("=" * 50, "header")
         self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
-        self._append(f"  Tool   : PlatformIO Core", "dim")
+        self._append("  Tool   : PlatformIO Core", "dim")
         core_dir, core_was_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
         self._append(f"  Store  : {core_dir}", "dim")
         if core_was_refreshed:
@@ -651,7 +651,7 @@ class CompilerPipelineMixin(_Base):
                     return value or "PlatformIO package"
 
                 if is_library_manager_line and ("installing" in low or "linking" in low):
-                    installed_item = line.split("installing")[-1].split("linking")[-1].strip()
+                    installed_item = re.split(r"installing|linking", stripped, flags=re.IGNORECASE)[-1].strip()
                     verb = "Linked" if ("symlink" in low or "linking" in low or "installing" in low) else "Installed"
                     self._append_notif(
                         f"  📚 PlatformIO Auto-{verb} Library: {installed_item}",

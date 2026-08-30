@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from collections import deque
+from typing import Any
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -115,21 +116,26 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             font-family: Consolas, "Courier New", monospace; font-size: 14px;
             overflow: hidden; box-sizing: border-box;
         }
-        #terminal-root, .terminal-host {
+        #terminal-root {
             width: 100%; height: 100%; box-sizing: border-box;
-            background: __THEME_BG__;
+            background: __THEME_BG__; position: relative;
         }
-        .terminal-host { display: none; }
+        .terminal-host {
+            display: none; width: 100%; height: 100%; box-sizing: border-box;
+            background: __THEME_BG__; position: absolute; top: 0; left: 0;
+        }
         .terminal-host.active { display: block; }
         .xterm {
             padding: 2px 4px !important;
-            width: 100% !important; height: 100% !important;
+            height: 100% !important;
             box-sizing: border-box;
         }
-        .xterm, .xterm-viewport, .xterm-screen {
+        .xterm-viewport {
             background: __THEME_BG__ !important;
-            overflow-y: hidden !important;
-            width: 100% !important;
+            overflow-y: auto !important;
+        }
+        .xterm-screen {
+            background: __THEME_BG__ !important;
         }
         ::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
     </style>
@@ -139,21 +145,20 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
     <div id="terminal-root">
-        <div id="term-pwsh" class="terminal-host active"></div>
-        <div id="term-cmd" class="terminal-host"></div>
+        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
+            <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px; color: __THEME_FG__;">No Terminal Session Open</div>
+            <div>Click <b>[▾]</b> in the top toolbar to open a new PowerShell or Command Prompt terminal.</div>
+        </div>
     </div>
     <script>
-        const shellKinds = ["pwsh", "cmd"];
-        const hosts = {
-            pwsh: document.getElementById("term-pwsh"),
-            cmd: document.getElementById("term-cmd")
-        };
+        const hosts = {};
         const terminals = {};
         const fitAddons = {};
-        let activeShell = "pwsh";
+        let activeShell = null;
         let socket = null;
         let fallback = false;
         const root = document.getElementById("terminal-root");
+        const emptyState = document.getElementById("empty-state");
 
         function sanitizeTerminalInput(data) {
             if (!data || typeof data !== "string") return "";
@@ -167,22 +172,56 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 .replace(/\x1b\[>[0-9;]*q/g, "");
         }
 
-        function setActiveShell(kind) {
-            if (!hosts[kind]) return;
-            activeShell = kind;
-            shellKinds.forEach(k => hosts[k].classList.toggle("active", k === kind));
-            if (fitAddons[kind]) {
-                try { fitAddons[kind].fit(); } catch (e) {}
-                sendResize();
+        function getOrCreateHost(id) {
+            let host = hosts[id] || document.getElementById("term-" + id);
+            if (!host) {
+                host = document.createElement("div");
+                host.id = "term-" + id;
+                host.className = "terminal-host";
+                root.appendChild(host);
+                hosts[id] = host;
             }
-            if (terminals[kind]) terminals[kind].focus();
+            return host;
+        }
+
+        function setActiveShell(kind) {
+            activeShell = kind || null;
+            if (!activeShell || !hosts[activeShell]) {
+                Object.keys(hosts).forEach(k => {
+                    if (hosts[k]) hosts[k].classList.remove("active");
+                });
+                if (emptyState) emptyState.style.display = "flex";
+                return;
+            }
+            if (emptyState) emptyState.style.display = "none";
+            Object.keys(hosts).forEach(k => {
+                if (hosts[k]) hosts[k].classList.toggle("active", k === activeShell);
+            });
+            window.requestAnimationFrame(() => {
+                const host = hosts[activeShell];
+                if (host && host.offsetWidth > 40 && host.offsetHeight > 40) {
+                    if (fitAddons[activeShell]) {
+                        try { fitAddons[activeShell].fit(); } catch (e) {}
+                    }
+                    if (terminals[activeShell]) {
+                        try {
+                            terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
+                            terminals[activeShell].focus();
+                        } catch (e) {}
+                    }
+                    sendResize(activeShell);
+                }
+            });
         }
 
         function makeTerminal(kind) {
+            if (!kind) return false;
+            if (terminals[kind]) return true;
             if (typeof Terminal === "undefined" || typeof FitAddon === "undefined") {
                 return false;
             }
             try {
+                const host = getOrCreateHost(kind);
                 const term = new Terminal({
                     cursorBlink: true,
                     cursorStyle: "block",
@@ -199,7 +238,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 });
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
-                term.open(hosts[kind]);
+                term.open(host);
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
                 term.onData(data => {
@@ -210,39 +249,66 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 });
                 return true;
             } catch (e) {
-                console.warn("xterm.js failed to initialize", e);
+                console.warn("xterm.js failed to initialize for", kind, e);
                 return false;
             }
         }
 
+        function removeTerminal(id) {
+            if (terminals[id]) {
+                try { terminals[id].dispose(); } catch (e) {}
+                delete terminals[id];
+            }
+            if (fitAddons[id]) {
+                delete fitAddons[id];
+            }
+            const host = hosts[id] || document.getElementById("term-" + id);
+            if (host) {
+                try { host.remove(); } catch (e) {}
+                delete hosts[id];
+            }
+            if (activeShell === id) {
+                setActiveShell(null);
+            }
+        }
+
         function enableFallback() {
-            // This path is only reached when WebView2 cannot load the same
-            // xterm assets as OpenCode. The parent GUI will normally switch to
-            // its proven Tk PTY surface before this becomes visible.
             fallback = true;
             root.innerHTML = "<pre style='margin:12px;color:__THEME_FG__'>Project Terminal could not load xterm.js.</pre>";
         }
 
-        function sendResize() {
-            const term = terminals[activeShell];
+        function sendResize(id) {
+            const termId = id || activeShell;
+            if (!termId) return;
+            const term = terminals[termId];
             if (socket && socket.readyState === WebSocket.OPEN && term) {
-                socket.send(JSON.stringify({
-                    type: "resize", shell: activeShell,
-                    cols: term.cols, rows: term.rows
-                }));
+                if (term.cols >= 10 && term.rows >= 3) {
+                    socket.send(JSON.stringify({
+                        type: "resize", shell: termId,
+                        cols: term.cols, rows: term.rows
+                    }));
+                }
             }
         }
 
         function fitAll() {
-            shellKinds.forEach(kind => {
-                if (fitAddons[kind]) {
-                    try { fitAddons[kind].fit(); } catch (e) {}
-                }
-            });
-            sendResize();
+            if (!activeShell) return;
+            const host = hosts[activeShell];
+            if (!host || host.offsetWidth <= 50 || host.offsetHeight <= 50) return;
+            if (fitAddons[activeShell]) {
+                try { fitAddons[activeShell].fit(); } catch (e) {}
+            }
+            if (terminals[activeShell]) {
+                try { terminals[activeShell].refresh(0, terminals[activeShell].rows - 1); } catch (e) {}
+            }
+            sendResize(activeShell);
         }
 
-        if (window.xtermErr || !makeTerminal("pwsh") || !makeTerminal("cmd")) {
+        window.addEventListener("resize", () => {
+            window.requestAnimationFrame(fitAll);
+        });
+
+        if (window.xtermErr) {
             enableFallback();
         }
 
@@ -259,19 +325,32 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 let message;
                 try { message = JSON.parse(event.data); } catch (e) { message = null; }
                 if (!message) {
-                    if (terminals[activeShell]) terminals[activeShell].write(event.data);
+                    if (activeShell && terminals[activeShell]) terminals[activeShell].write(event.data);
+                    return;
+                }
+                if (message.type === "create") {
+                    makeTerminal(message.shell);
+                    setActiveShell(message.shell);
+                    return;
+                }
+                if (message.type === "destroy") {
+                    removeTerminal(message.shell);
                     return;
                 }
                 if (message.type === "activate") {
+                    if (message.shell) makeTerminal(message.shell);
                     setActiveShell(message.shell);
                     return;
                 }
                 if (message.type === "reset") {
                     const term = terminals[message.shell];
-                    if (term) term.reset();
+                    if (term) {
+                        try { term.reset(); } catch (e) {}
+                    }
                     return;
                 }
                 if (message.type === "snapshot") {
+                    makeTerminal(message.shell);
                     const term = terminals[message.shell];
                     if (term) {
                         term.reset();
@@ -281,13 +360,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     return;
                 }
                 if (message.type === "output") {
+                    makeTerminal(message.shell);
                     const term = terminals[message.shell];
                     if (term) term.write(message.data || "");
-                    return;
-                }
-                if (message.type === "status" && message.shell === activeShell && message.data) {
-                    // The Tk header owns the status text; this keeps the page
-                    // intentionally identical to the OpenCode xterm surface.
                     return;
                 }
             };
@@ -297,10 +372,6 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             };
         }
 
-        // xterm.js implements the correct console editing semantics (including
-        // Backspace, Delete, Ctrl+C, Ctrl+V, arrows, selection, and ANSI redraws).
-        // Keep explicit clipboard handling for WebView2 builds where the browser
-        // default Ctrl+C/Ctrl+V is intercepted before xterm sees it.
         document.addEventListener("keydown", event => {
             const term = terminals[activeShell];
             if (!term || !event.ctrlKey) return;
@@ -410,9 +481,14 @@ def _find_free_pair(start_port: int = 8765) -> int:
 
 
 class ShellSession:
-    def __init__(self, server: "ProjectTerminalServer", kind: str):
+    pty: Any | None
+    thread: Any | None
+
+    def __init__(self, server: "ProjectTerminalServer", session_id: str, kind: str, title: str = ""):
         self.server = server
+        self.session_id = session_id
         self.kind = kind
+        self.title = title or kind
         self.target = ""
         self.pty = None
         self.thread = None
@@ -429,9 +505,6 @@ class ShellSession:
 
     def history_text(self) -> str:
         with self.lock:
-            # Keep switching lightweight and below the WebSocket frame limit.
-            # xterm restores the selected screen from this bounded snapshot,
-            # then continues receiving live PTY output normally.
             return "".join(self.history)[-500_000:]
 
 
@@ -448,8 +521,9 @@ class ProjectTerminalServer:
         self.httpd = None
         self.http_error = None
         self.http_ready = threading.Event()
-        self.sessions = {kind: ShellSession(self, kind) for kind in ("pwsh", "cmd")}
-        self.active_shell = "pwsh"
+        self.sessions = {}
+        self.active_shell = None
+        self.session_counter = 0
         self.clients = set()
         self.clients_lock = threading.RLock()
 
@@ -531,6 +605,7 @@ class ProjectTerminalServer:
 
     def _shell_worker(self, session: ShellSession, generation: int) -> None:
         kind = session.kind
+        sid = session.session_id
 
         def is_current() -> bool:
             with session.lock:
@@ -544,25 +619,20 @@ class ProjectTerminalServer:
         if not executable or PtyProcess is None:
             message = "\r\n[MCU Flasher] Native PTY support is unavailable.\r\n"
             session.append_history(message)
-            self.broadcast({"type": "output", "shell": kind, "data": message})
+            self.broadcast({"type": "output", "shell": sid, "data": message})
             with session.lock:
                 session.running = False
-            self.broadcast({"type": "status", "shell": kind, "running": False, "ready": False})
+            self.broadcast({"type": "status", "shell": sid, "running": False, "ready": False})
             return
 
-        argv = [executable, "-NoProfile", "-NoExit"] if kind == "pwsh" else [executable, "/D"]
+        argv = [executable, "-NoLogo", "-NoProfile", "-NoExit"] if kind == "pwsh" else [executable, "/D"]
         pty = None
         ready_candidate = None
         try:
-            # Start in the project folder immediately. Waiting for a first
-            # prompt, then issuing cd + cls added a complete extra command
-            # round-trip to each cold shell start.
             pty = PtyProcess.spawn(argv, cwd=self.target_dir, dimensions=(30, 120))
             with session.lock:
                 session.pty = pty
-            cls_pending = True
             probe = ""
-            deadline = time.monotonic() + 4.0
             while is_current():
                 try:
                     data = pty.read(4096)
@@ -573,36 +643,21 @@ class ProjectTerminalServer:
                         break
                     text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
                     session.append_history(text)
-                    self.broadcast({"type": "output", "shell": kind, "data": text})
+                    self.broadcast({"type": "output", "shell": sid, "data": text})
                     probe = (probe + text)[-8000:]
-                    if cls_pending:
-                        prompt_seen = bool(re_prompt(kind, probe))
-                        if prompt_seen or time.monotonic() >= deadline:
-                            try:
-                                pty.write("cls\r\n")
-                            except Exception:
-                                pass
-                            cls_pending = False
-                            ready_candidate = time.monotonic()
-                    elif not session.ready and (
+                    if not session.ready and (
                         re_prompt(kind, probe)
                         or (ready_candidate and time.monotonic() - ready_candidate >= 0.75)
                     ):
                         with session.lock:
                             session.ready = True
-                        if self.active_shell == kind:
+                        if self.active_shell == sid:
                             self._write_port_file(ready=True)
-                        self.broadcast({"type": "status", "shell": kind, "running": True, "ready": True})
-                elif cls_pending and time.monotonic() >= deadline:
-                    try:
-                        pty.write("cls\r\n")
-                    except Exception:
-                        pass
-                    cls_pending = False
+                        self.broadcast({"type": "status", "shell": sid, "running": True, "ready": True})
         except Exception as exc:
             message = f"\r\n[MCU Flasher] Could not start {kind}: {exc}\r\n"
             session.append_history(message)
-            self.broadcast({"type": "output", "shell": kind, "data": message})
+            self.broadcast({"type": "output", "shell": sid, "data": message})
         finally:
             current = False
             with session.lock:
@@ -616,29 +671,82 @@ class ProjectTerminalServer:
             except Exception:
                 pass
             if current:
-                self.broadcast({"type": "status", "shell": kind, "running": False, "ready": False})
+                self.broadcast({"type": "status", "shell": sid, "running": False, "ready": False})
 
     def control(self, message: dict) -> dict:
         action = str(message.get("action", "")).lower()
-        kind = str(message.get("shell", self.active_shell)).lower()
-        if kind not in self.sessions:
-            return {"success": False, "error": "Unknown shell"}
+        shell_id = str(message.get("shell", message.get("session_id", self.active_shell)))
+        kind = str(message.get("kind", "pwsh")).lower()
+        title = str(message.get("title", ""))
+
+        if action == "new":
+            self.session_counter += 1
+            new_id = shell_id if shell_id and shell_id not in self.sessions else f"{kind}_{self.session_counter}"
+            new_title = title or kind
+            session = ShellSession(self, new_id, kind, new_title)
+            self.sessions[new_id] = session
+            self.active_shell = new_id
+            self.broadcast({"type": "create", "shell": new_id, "kind": kind})
+            self._start_session(new_id)
+            self.broadcast({"type": "activate", "shell": new_id})
+            return {"success": True, "shell": new_id, "title": new_title}
+
+        if action == "kill":
+            if shell_id in self.sessions:
+                self._stop_session(shell_id)
+                del self.sessions[shell_id]
+                self.broadcast({"type": "destroy", "shell": shell_id})
+                if self.active_shell == shell_id:
+                    if self.sessions:
+                        next_id = next(iter(self.sessions.keys()))
+                        self.active_shell = next_id
+                        self.broadcast({"type": "activate", "shell": next_id})
+                    else:
+                        self.active_shell = None
+                        self.broadcast({"type": "activate", "shell": None})
+                return {"success": True, "active": self.active_shell}
+            return {"success": False, "error": "Session not found"}
+
+        if action == "clear":
+            if shell_id in self.sessions:
+                session = self.sessions[shell_id]
+                with session.lock:
+                    pty = session.pty if session.running else None
+                if pty:
+                    try:
+                        pty.write("Clear-Host\r\n" if session.kind == "pwsh" else "cls\r\n")
+                    except Exception:
+                        pass
+                self.broadcast({"type": "reset", "shell": shell_id})
+                return {"success": True}
+            return {"success": False, "error": "Session not found"}
+
         if action == "select":
-            self.active_shell = kind
-            self._start_session(kind)
-            with self.sessions[kind].lock:
-                already_ready = self.sessions[kind].ready
-            self._write_port_file(ready=already_ready)
-            self.broadcast({"type": "activate", "shell": kind})
-            return {"success": True, "shell": kind}
+            if shell_id in self.sessions:
+                self.active_shell = shell_id
+                self._start_session(shell_id)
+                with self.sessions[shell_id].lock:
+                    already_ready = self.sessions[shell_id].ready
+                self._write_port_file(ready=already_ready)
+                self.broadcast({"type": "activate", "shell": shell_id})
+                return {"success": True, "shell": shell_id}
+            if not shell_id or shell_id == "None":
+                self.active_shell = None
+                self.broadcast({"type": "activate", "shell": None})
+                return {"success": True, "shell": None}
+            return {"success": False, "error": "Unknown shell"}
+
         if action == "restart":
-            self.active_shell = kind
-            self._write_port_file(ready=False)
-            self.broadcast({"type": "reset", "shell": kind})
-            self._stop_session(kind)
-            self._start_session(kind)
-            self.broadcast({"type": "activate", "shell": kind})
-            return {"success": True, "shell": kind}
+            if shell_id in self.sessions:
+                self.active_shell = shell_id
+                self._write_port_file(ready=False)
+                self.broadcast({"type": "reset", "shell": shell_id})
+                self._stop_session(shell_id)
+                self._start_session(shell_id)
+                self.broadcast({"type": "activate", "shell": shell_id})
+                return {"success": True, "shell": shell_id}
+            return {"success": False, "error": "Unknown shell"}
+
         return {"success": False, "error": "Unknown action"}
 
     async def websocket_handler(self, websocket):
@@ -660,14 +768,11 @@ class ProjectTerminalServer:
                     if message.get("xterm") is False:
                         self._write_port_file(xterm=False)
                     else:
-                        with self.sessions[self.active_shell].lock:
-                            already_ready = self.sessions[self.active_shell].ready
-                        self._write_port_file(xterm=True, ready=already_ready)
-                    # Warm both terminal choices while the native terminal is
-                    # already being created. This prevents shell switching
-                    # from being the event that finally starts the PTYs.
-                    for kind in ("pwsh", "cmd"):
-                        self._start_session(kind)
+                        already_ready = False
+                        if self.active_shell and self.active_shell in self.sessions:
+                            with self.sessions[self.active_shell].lock:
+                                already_ready = self.sessions[self.active_shell].ready
+                        self._write_port_file(xterm=True, ready=already_ready if self.active_shell else True)
                     continue
                 if message_type == "input":
                     kind = str(message.get("shell", self.active_shell))
@@ -758,7 +863,7 @@ class ProjectTerminalServer:
                 except Exception as exc:
                     self._write_json({"success": False, "error": str(exc)}, 400)
 
-            def log_message(self, _format, *_args):
+            def log_message(self, format: str, *args) -> None:
                 return
 
         try:
@@ -798,10 +903,6 @@ class ProjectTerminalServer:
             except Exception:
                 pass
 
-def re_prompt(kind: str, text: str) -> bool:
-    if kind == "cmd":
-        return bool(re.search(r"(?m)^[A-Za-z]:[^\r\n]*>\s*$", text))
-    return bool(re.search(r"(?m)^PS [^\r\n]*>\s*$", text))
 
 
 def _hide_console_for_conpty() -> None:

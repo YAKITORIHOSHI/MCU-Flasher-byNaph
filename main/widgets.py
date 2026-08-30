@@ -500,31 +500,31 @@ def setup_combobox_place_popdown(root: tk.Widget):
     """Override Tcl ::ttk::combobox::PlacePopdown to support opening popdown lists upwards ('above')
     when requested via set_combobox_direction(combo, 'above').
     """
-    tcl_override = f"""
-    proc ::ttk::combobox::PlacePopdown {{cb popdown}} {{
+    tcl_override = """
+    proc ::ttk::combobox::PlacePopdown {cb popdown} {
         set x [winfo rootx $cb]
         set y [winfo rooty $cb]
         set w [winfo width $cb]
         set h [winfo height $cb]
         set style [$cb cget -style]
-        if {{ $style eq {{}} }} {{
+        if { $style eq {} } {
           set style TCombobox
-        }}
-        set postoffset [ttk::style lookup $style -postoffset {{}} {{0 0 0 0}}]
-        foreach var {{x y w h}} delta $postoffset {{
+        }
+        set postoffset [ttk::style lookup $style -postoffset {} {0 0 0 0}]
+        foreach var {x y w h} delta $postoffset {
             incr $var $delta
-        }}
+        }
 
         set H [winfo reqheight $popdown]
-        if {{[info exists ::combobox_direction($cb)] && $::combobox_direction($cb) eq "above"}} {{
-            set Y [expr {{$y - $H}}]
-        }} elseif {{$y + $h + $H > [winfo screenheight $popdown]}} {{
-            set Y [expr {{$y - $H}}]
-        }} else {{
-            set Y [expr {{$y + $h}}]
-        }}
-        wm geometry $popdown ${{w}}x${{H}}+${{x}}+${{Y}}
-    }}
+        if {[info exists ::combobox_direction($cb)] && $::combobox_direction($cb) eq "above"} {
+            set Y [expr {$y - $H}]
+        } elseif {$y + $h + $H > [winfo screenheight $popdown]} {
+            set Y [expr {$y - $H}]
+        } else {
+            set Y [expr {$y + $h}]
+        }
+        wm geometry $popdown ${w}x${H}+${x}+${Y}
+    }
     """
     try:
         root.tk.eval(tcl_override)

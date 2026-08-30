@@ -18,8 +18,14 @@ import ctypes
 from collections import deque
 from typing import TYPE_CHECKING
 from pathlib import Path
+from urllib.request import Request, urlopen
 import tkinter as tk
 from tkinter import font as tkfont
+
+try:
+    from winpty import PtyProcess
+except ImportError:
+    PtyProcess = None  # type: ignore
 
 
 from main.core.constants import *
@@ -161,29 +167,207 @@ class ProjectTerminalMixin(_Base):
         self.shell_console.bind("<Button-1>", clear_selection_on_press, add="+")
         self.shell_console.bind("<ButtonRelease-1>", finalize_selection, add="+")
 
-    def _shell_refresh_switcher(self):
-        """Paint the narrow shell switcher without rebuilding its widgets."""
-        active = getattr(self, "_shell_active_kind", "pwsh")
-        sessions = getattr(self, "_shell_sessions", {})
-        for kind, button in getattr(self, "_shell_switch_buttons", {}).items():
-            selected = kind == active
-            running = bool(sessions.get(kind, {}).get("running"))
-            button.configure(
-                bg=Theme.BG_HOVER if selected else Theme.BG_DARK,
-                fg=Theme.TEXT_BRIGHT if selected else (Theme.GREEN if running else Theme.TEXT),
-                state=tk.NORMAL,
-            )
+    def _terminal_ensure_initialized(self):
+        if not hasattr(self, "_terminal_sessions_meta"):
+            self._terminal_sessions_meta = {}
+            self._terminal_counter = 0
+            self._shell_active_session_id = None
+            self._shell_active_kind = None
 
-    def _shell_switch_button_click(self, event, kind: str):
-        """Activate a shell switcher button on the Tk thread immediately."""
+    def _terminal_action_new_default(self):
+        self._terminal_action_new("pwsh")
+
+    def _terminal_action_show_new_menu(self):
         try:
-            event.widget.focus_set()
+            menu = tk.Menu(self.root, tearoff=0, bg=Theme.BG_DARK, fg=Theme.TEXT,
+                           activebackground=Theme.BG_HOVER, activeforeground=Theme.TEXT_BRIGHT)
+            menu.add_command(label="PowerShell (pwsh)", command=lambda: self._terminal_action_new("pwsh"))
+            menu.add_command(label="Command Prompt (cmd)", command=lambda: self._terminal_action_new("cmd"))
+            x = self.btn_term_menu.winfo_rootx()
+            y = self.btn_term_menu.winfo_rooty() + self.btn_term_menu.winfo_height()
+            menu.tk_popup(x, y)
         except Exception:
             pass
-        try:
-            self.root.after(0, lambda: self._shell_select(kind))
-        except Exception:
-            self._shell_select(kind)
+
+    def _terminal_action_new(self, kind: str = "pwsh"):
+        self._terminal_ensure_initialized()
+        self._terminal_counter += 1
+        num = self._terminal_counter
+        session_id = f"{kind}_{num}"
+        title = kind
+        self._terminal_sessions_meta[session_id] = {
+            "id": session_id,
+            "kind": kind,
+            "title": title
+        }
+        self._shell_active_session_id = session_id
+        self._shell_active_kind = kind
+        self._terminal_refresh_session_bar()
+
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._ensure_project_terminal_webview()
+            self._project_terminal_send_control("new", session_id, extra={"kind": kind, "title": title})
+        else:
+            self._shell_start(session_id, kind=kind)
+            self._shell_render_session(session_id)
+
+    def _terminal_action_kill_active(self):
+        self._terminal_ensure_initialized()
+        active_id = getattr(self, "_shell_active_session_id", None)
+        if active_id and active_id in self._terminal_sessions_meta:
+            self._terminal_kill_session(active_id)
+
+    def _terminal_kill_session(self, session_id: str):
+        self._terminal_ensure_initialized()
+        if session_id in self._terminal_sessions_meta:
+            del self._terminal_sessions_meta[session_id]
+
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._project_terminal_send_control("kill", session_id)
+        else:
+            session = self._shell_sessions.pop(session_id, None)
+            if session:
+                with self._shell_state_lock:
+                    session["running"] = False
+                    pty = session.get("pty")
+                    if pty:
+                        try:
+                            pty.close(force=True)
+                        except Exception:
+                            pass
+
+        if getattr(self, "_shell_active_session_id", None) == session_id:
+            if self._terminal_sessions_meta:
+                next_id = next(iter(self._terminal_sessions_meta.keys()))
+                self._terminal_select_session(next_id)
+            else:
+                self._shell_active_session_id = None
+                self._shell_active_kind = None
+                self._terminal_refresh_session_bar()
+                if not getattr(self, "_project_terminal_fallback", False):
+                    self._project_terminal_send_control("select", None)
+                else:
+                    self.shell_console.configure(state=tk.NORMAL)
+                    self.shell_console.delete("1.0", tk.END)
+                    self.shell_console.configure(state=tk.DISABLED)
+                self._shell_set_status(f"Project Terminal ready • {self._shell_current_target()}")
+        else:
+            self._terminal_refresh_session_bar()
+
+    def _terminal_action_clear(self):
+        self._terminal_ensure_initialized()
+        active_id = getattr(self, "_shell_active_session_id", None)
+        if not active_id or active_id not in self._terminal_sessions_meta:
+            return
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._project_terminal_send_control("clear", active_id)
+        else:
+            session = self._shell_sessions.get(active_id)
+            if session:
+                with self._shell_state_lock:
+                    pty = session.get("pty")
+                if pty:
+                    try:
+                        pty.write("Clear-Host\r\n" if session.get("kind") == "pwsh" else "cls\r\n")
+                    except Exception:
+                        pass
+
+    def _terminal_select_session(self, session_id: str):
+        self._terminal_ensure_initialized()
+        if session_id not in self._terminal_sessions_meta:
+            return
+        meta = self._terminal_sessions_meta[session_id]
+        kind = meta.get("kind", "pwsh")
+        self._shell_active_session_id = session_id
+        self._shell_active_kind = kind
+        self._terminal_refresh_session_bar()
+
+        if not getattr(self, "_project_terminal_fallback", False):
+            self._ensure_project_terminal_webview()
+            self._project_terminal_send_control("select", session_id)
+            self._shell_set_status(f"Loading {meta.get('title', kind)} • {self._shell_current_target()}")
+        else:
+            session = self._shell_sessions.get(session_id)
+            if not session or not session.get("running"):
+                self._shell_start(session_id, kind=kind)
+            self._shell_render_session(session_id)
+
+    def _terminal_refresh_session_bar(self):
+        container = getattr(self, "_terminal_tabs_frame", None)
+        if not container or not container.winfo_exists():
+            return
+        for child in container.winfo_children():
+            child.destroy()
+
+        self._terminal_ensure_initialized()
+        active_id = getattr(self, "_shell_active_session_id", None)
+        has_active_sessions = bool(self._terminal_sessions_meta and active_id)
+
+        # Update Clear and Kill toolbar button states dynamically
+        btn_clear = getattr(self, "btn_term_clear", None)
+        if btn_clear and btn_clear.winfo_exists():
+            if has_active_sessions:
+                btn_clear.configure(state=tk.NORMAL, fg=Theme.TEXT, cursor="hand2")
+            else:
+                btn_clear.configure(state=tk.DISABLED, fg=Theme.TEXT_DIM, cursor="arrow")
+
+        btn_kill = getattr(self, "btn_term_kill", None)
+        if btn_kill and btn_kill.winfo_exists():
+            if has_active_sessions:
+                btn_kill.configure(state=tk.NORMAL, fg="#e06c75", cursor="hand2")
+            else:
+                btn_kill.configure(state=tk.DISABLED, fg=Theme.TEXT_DIM, cursor="arrow")
+
+        if not self._terminal_sessions_meta:
+            hint = tk.Label(
+                container,
+                text="(No active sessions)",
+                font=self.font_mono_sm,
+                fg=Theme.TEXT_DIM,
+                bg=Theme.BG_DARKEST,
+            )
+            hint.pack(side=tk.LEFT, padx=(4, 0))
+            return
+
+        for sid, meta in list(self._terminal_sessions_meta.items()):
+            is_active = (sid == active_id)
+            title = meta.get("title", sid)
+
+            tab_btn = tk.Frame(
+                container,
+                bg=Theme.BG_HOVER if is_active else Theme.BG_DARK,
+                padx=6, pady=2, cursor="hand2"
+            )
+            tab_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+            lbl = tk.Label(
+                tab_btn,
+                text=title,
+                font=self.font_mono_sm,
+                fg=Theme.TEXT_BRIGHT if is_active else Theme.TEXT,
+                bg=Theme.BG_HOVER if is_active else Theme.BG_DARK,
+                cursor="hand2"
+            )
+            lbl.pack(side=tk.LEFT, padx=(2, 4))
+            lbl.bind("<Button-1>", lambda _e, s=sid: self._terminal_select_session(s))
+            tab_btn.bind("<Button-1>", lambda _e, s=sid: self._terminal_select_session(s))
+
+            close_btn = tk.Label(
+                tab_btn,
+                text="✕",
+                font=self.font_mono_sm,
+                fg=Theme.TEXT_DIM,
+                bg=Theme.BG_HOVER if is_active else Theme.BG_DARK,
+                cursor="hand2"
+            )
+            close_btn.pack(side=tk.LEFT, padx=(0, 2))
+            close_btn.bind("<Button-1>", lambda _e, s=sid: self._terminal_kill_session(s))
+
+    def _shell_refresh_switcher(self):
+        self._terminal_refresh_session_bar()
+
+    def _shell_switch_button_click(self, event, kind: str):
+        self._terminal_select_session(kind)
         return "break"
 
     def _shell_current_target(self) -> Path:
@@ -197,17 +381,12 @@ class ProjectTerminalMixin(_Base):
     @staticmethod
     def _shell_executable(kind: str) -> str | None:
         if kind == "cmd":
-            # Use the native system command processor, not a COMSPEC shim that
-            # may have been overridden by another CLI or launcher.
             system_root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
             if system_root:
                 native_cmd = Path(system_root) / "System32" / "cmd.exe"
                 if native_cmd.exists():
                     return str(native_cmd)
             return shutil.which("cmd.exe") or os.environ.get("COMSPEC") or "cmd.exe"
-        # The PowerShell slot is intentionally Windows PowerShell, not an
-        # arbitrary `pwsh`/profile/CLI shim. This keeps the prompt and editing
-        # behavior identical to a normal powershell.exe console.
         system_root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
         if system_root:
             native_powershell = (
@@ -228,18 +407,11 @@ class ProjectTerminalMixin(_Base):
         if isinstance(data, bytes):
             data = data.decode("utf-8", errors="replace")
         text_value = str(data or "")
-        # Shell prompts occasionally include ANSI CSI sequences and OSC title
-        # updates. Tk's Text widget cannot interpret them; leaving an OSC title
-        # update behind produces visible ``]0;Administrator`` garbage.
         text_value = re.sub(r"\x1b\][^\x07]*(?:\x07|\x1b\\)", "", text_value)
         text_value = re.sub(r"(?:\x1b)?\]0;[^\r\n]*(?:\x07|\x1b\\)?", "", text_value)
         text_value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text_value)
         text_value = text_value.replace("\x1b", "").replace("\x07", "")
-        # Some Windows PTY paths strip ESC but leave the CSI payload. Do not
-        # expose those fragments (for example ``[1;2m``) in the fallback view.
         text_value = re.sub(r"\[(?:\d{1,3}(?:;\d{1,3})*)m", "", text_value)
-        # The remote-path bootstrap uses one quieting command before pushd;
-        # keep that implementation detail out of the visible terminal.
         text_value = re.sub(r"(?im)^.*@echo\s+off.*(?:\n|$)", "", text_value)
         return text_value.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -249,48 +421,13 @@ class ProjectTerminalMixin(_Base):
 
     def _shell_cd_command(self, kind: str, target: str) -> str:
         if kind == "cmd":
-            # pushd handles UNC folders by assigning a temporary drive letter;
-            # cd /d handles ordinary local or already-mapped paths.
             if is_unc_or_network_path(Path(target)):
                 return f'pushd "{target}"\r\n'
             return f'cd /d "{target}"\r\n'
         return f"Set-Location -LiteralPath {self._shell_quote_powershell(target)}\r\n"
 
     def _shell_select(self, kind: str):
-        """Switch shell sessions and start the selected one on demand."""
-        if kind not in ("pwsh", "cmd"):
-            return "break"
-        self._shell_active_kind = kind
-        self._shell_refresh_switcher()
-
-        # Normal path: the actual terminal is xterm.js backed by a native
-        # PowerShell/CMD PTY in the isolated child process.  The old Tk path
-        # below remains available only after the native path explicitly fails.
-        if not getattr(self, "_project_terminal_fallback", False):
-            self._ensure_project_terminal_webview()
-            if not getattr(self, "_project_terminal_fallback", False):
-                self._project_terminal_send_control("select", kind)
-                self._shell_set_status(
-                    f"Loading {self._shell_display_name(kind)} • {self._shell_current_target()}"
-                )
-                return "break"
-
-        session = self._shell_sessions.get(kind)
-        if not session or not session.get("running"):
-            self._shell_start(kind)
-        else:
-            target = str(self._shell_current_target())
-            if session.get("target") != target:
-                try:
-                    session["pty"].write(self._shell_cd_command(kind, target))
-                    session["target"] = target
-                except Exception:
-                    pass
-        self._shell_render_session(kind)
-        try:
-            self.shell_console.focus_set()
-        except Exception:
-            pass
+        self._terminal_select_session(kind)
         return "break"
 
     def _ensure_project_terminal_webview(self):
@@ -329,15 +466,25 @@ class ProjectTerminalMixin(_Base):
                 pass
             target = str(self._shell_current_target())
             initial_cwd = str(getattr(self, "_shell_initial_cwd", Path.cwd()))
-            launcher = sys.executable
-            if getattr(sys, "frozen", False):
-                for candidate in (
-                    SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe",
-                    SCRIPT_DIR / "env" / "Scripts" / "python.exe",
-                ):
-                    if candidate.exists():
-                        launcher = str(candidate)
-                        break
+            launcher = None
+            for candidate in (
+                SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe",
+                SCRIPT_DIR / "env" / "Scripts" / "python.exe",
+                SCRIPT_DIR / "src" / "_python" / "pythonw.exe",
+                SCRIPT_DIR / "src" / "_python" / "python.exe",
+                Path(sys.executable).parent / "pythonw.exe",
+                Path(sys.executable).parent / "python.exe",
+            ):
+                if candidate.exists() and candidate.name.lower() in ("pythonw.exe", "python.exe"):
+                    launcher = str(candidate)
+                    break
+            if not launcher:
+                exe = Path(sys.executable)
+                if exe.name.lower() in ("pythonw.exe", "python.exe"):
+                    launcher = str(exe)
+                else:
+                    launcher = shutil.which("pythonw.exe") or shutil.which("python.exe") or "pythonw.exe"
+
             command = [
                 launcher,
                 str(script_path),
@@ -429,6 +576,8 @@ class ProjectTerminalMixin(_Base):
                         self._reveal_project_terminal()
             except Exception:
                 pass
+            if getattr(self, "_project_terminal_embed_attempts", 0) >= 6:
+                self._reveal_project_terminal()
 
         self._project_terminal_embed_attempts = getattr(
             self, "_project_terminal_embed_attempts", 0
@@ -503,8 +652,10 @@ class ProjectTerminalMixin(_Base):
             self._project_terminal_pending_action = None
             if pending:
                 self._project_terminal_send_control(*pending)
+            elif getattr(self, "_shell_active_session_id", None):
+                self._project_terminal_send_control("select", self._shell_active_session_id)
             else:
-                self._project_terminal_send_control("select", self._shell_active_kind)
+                self._project_terminal_send_control("select", None)
             return True
         except Exception:
             self._project_terminal_embedded = False
@@ -524,9 +675,10 @@ class ProjectTerminalMixin(_Base):
             self._shell_terminal_placeholder.place_forget()
             self._project_terminal_page_ready = True
             self._resize_project_terminal(force=True)
-            self._shell_set_status(
-                f"Running • {self._shell_current_target()}"
-            )
+            if getattr(self, "_shell_active_session_id", None):
+                self._shell_set_status(f"Running • {self._shell_current_target()}")
+            else:
+                self._shell_set_status(f"Project Terminal ready • {self._shell_current_target()}")
         except Exception:
             pass
 
@@ -538,8 +690,13 @@ class ProjectTerminalMixin(_Base):
             return
         try:
             frame = self._shell_terminal_embed_frame
-            width = max(frame.winfo_width(), 20)
-            height = max(frame.winfo_height(), 20)
+            width = frame.winfo_width()
+            height = frame.winfo_height()
+            if not force and (width <= 50 or height <= 50):
+                # Avoid resizing WebView2 to 0x0 while unmapped in notebook
+                return
+            width = max(width, 20)
+            height = max(height, 20)
             win32gui.SetWindowPos(
                 hwnd, 0, 0, 0, width, height,
                 win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
@@ -548,15 +705,18 @@ class ProjectTerminalMixin(_Base):
         except Exception:
             pass
 
-    def _project_terminal_send_control(self, action: str, kind: str):
+    def _project_terminal_send_control(self, action: str, kind: str | None = None, extra: dict | None = None):
         if getattr(self, "_project_terminal_fallback", False):
             return
         port = getattr(self, "_project_terminal_port", None)
         if not port:
-            self._project_terminal_pending_action = (action, kind)
+            self._project_terminal_pending_action = (action, kind, extra)
             return
 
-        payload = json.dumps({"action": action, "shell": kind}).encode("utf-8")
+        body = {"action": action, "shell": kind if kind is not None else ""}
+        if extra:
+            body.update(extra)
+        payload = json.dumps(body).encode("utf-8")
         url = f"http://127.0.0.1:{int(port)}/control"
 
         def _send():
@@ -569,57 +729,28 @@ class ProjectTerminalMixin(_Base):
                     method="POST",
                 )
                 with urlopen(request, timeout=1.5) as response:
-                    result = json.loads(response.read().decode("utf-8", errors="replace"))
-                if result.get("success"):
-                    self._post_ui(
-                        lambda: self._shell_set_status(
-                            f"Running • {self._shell_current_target()}"
-                        )
-                    )
+                    pass
             except Exception:
-                # A short-lived control race is normal while WebView2 is
-                # attaching. The next selection/restart sends a fresh command.
                 pass
 
-        threading.Thread(target=_send, name="MCUTerminalControl", daemon=True).start()
+        threading.Thread(target=_send, daemon=True, name="MCUProjectTerminalSend").start()
 
     def _activate_project_terminal_fallback(self, reason: str = ""):
         if getattr(self, "_project_terminal_fallback", False):
             return
         self._project_terminal_fallback = True
-        self._project_terminal_fallback_revealed = False
         self._project_terminal_launching = False
-        hwnd = getattr(self, "_project_terminal_hwnd", None)
-        if hwnd and win32gui is not None:
-            try:
-                win32gui.SetParent(hwnd, 0)
-                if win32con is not None:
-                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
-            except Exception:
-                pass
-        self._project_terminal_hwnd = None
         self._project_terminal_embedded = False
         self._project_terminal_page_ready = False
         self._terminate_project_terminal_process()
-        try:
-            self._shell_terminal_fallback_frame.pack_forget()
-            self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
-            self._shell_terminal_placeholder.configure(
-                text="Starting compatible PowerShell and Command Prompt…"
-            )
-            self._shell_terminal_placeholder.place(
-                relx=0.5, rely=0.5, anchor=tk.CENTER
-            )
-        except Exception:
-            pass
+        self._reveal_project_terminal_fallback()
         if reason:
             self._append(f"  ⚠ {reason} Using the compatibility terminal surface.", "warning")
-        for kind in ("pwsh", "cmd"):
-            try:
-                self._shell_start(kind)
-            except Exception:
-                pass
-        self._shell_select(self._shell_active_kind)
+        active_id = getattr(self, "_shell_active_session_id", None)
+        if active_id:
+            self._shell_select(active_id)
+        else:
+            self._shell_render_session(None)
 
     def _reveal_project_terminal_fallback(self):
         """Show the compatibility surface only after a complete shell prompt."""
@@ -632,7 +763,7 @@ class ProjectTerminalMixin(_Base):
             self._shell_terminal_embed_frame.pack_forget()
             self._shell_terminal_fallback_frame.pack(fill=tk.BOTH, expand=True)
             self._shell_terminal_placeholder.place_forget()
-            self._shell_render_session(self._shell_active_kind)
+            self._shell_render_session(getattr(self, "_shell_active_session_id", None))
         except Exception:
             pass
 
@@ -740,14 +871,15 @@ class ProjectTerminalMixin(_Base):
         except Exception:
             pass
 
-    def _shell_start(self, kind: str):
+    def _shell_start(self, session_id: str, kind: str = "pwsh"):
         """Create one independent PTY worker; never run shell startup on Tk."""
         target = str(self._shell_current_target())
         with self._shell_state_lock:
-            existing = self._shell_sessions.get(kind)
+            existing = self._shell_sessions.get(session_id)
             if existing and existing.get("running"):
                 return
             session = {
+                "id": session_id,
                 "kind": kind,
                 "target": target,
                 "running": True,
@@ -758,12 +890,12 @@ class ProjectTerminalMixin(_Base):
                 "pending": deque(),
                 "terminal": _ShellTerminalBuffer(columns=120),
             }
-            self._shell_sessions[kind] = session
+            self._shell_sessions[session_id] = session
         self._shell_refresh_switcher()
         self._shell_set_status(f"Starting {self._shell_display_name(kind)} in {target}…")
         thread = threading.Thread(
             target=self._shell_worker, args=(session,),
-            name=f"MCUShell-{kind}", daemon=True,
+            name=f"MCUShell-{session_id}", daemon=True,
         )
         session["thread"] = thread
         thread.start()
@@ -781,14 +913,8 @@ class ProjectTerminalMixin(_Base):
             terminal.feed(data)
             text_value = terminal.render()
             session["output"] = text_value[-220000:]
-            # The fallback Text widget is a transcript, not an xterm clone.
-            # Rendering every VT redraw as a screen snapshot caused PowerShell
-            # prompts to reflow into fragmented vertical text on some devices.
-            # Preserve the visible text and strip only terminal control codes.
-            visible = self._shell_clean_output(raw_data)
-            plain_output = session.get("plain_output", "") + visible
-            session["plain_output"] = plain_output[-220000:]
-            session["styled"] = []
+            session["plain_output"] = text_value[-220000:]
+            session["styled"] = terminal.render_styled()[-2500:]
             pending = session.setdefault("pending", deque())
             pending.append(session["plain_output"])
             while len(pending) > 500:
@@ -816,8 +942,7 @@ class ProjectTerminalMixin(_Base):
                 session["running"] = False
             return
 
-        # Start directly in the project directory. This removes the extra
-        # cd/cls round-trip that made cold shell startup feel slow.
+        # Start directly in the project directory.
         try:
             launch_cwd = Path(target)
             if not launch_cwd.is_dir():
@@ -828,7 +953,7 @@ class ProjectTerminalMixin(_Base):
             launch_cwd = Path.home()
         spawn_cwd = str(launch_cwd)
         argv = (
-            [executable, "-NoProfile", "-NoExit"]
+            [executable, "-NoLogo", "-NoProfile", "-NoExit"]
             if kind == "pwsh" else [executable, "/D"]
         )
         pty = None
@@ -836,11 +961,6 @@ class ProjectTerminalMixin(_Base):
             pty = PtyProcess.spawn(argv, cwd=spawn_cwd, dimensions=(30, 120))
             with self._shell_state_lock:
                 session["pty"] = pty
-
-            cls_pending = True
-            startup_probe = ""
-            startup_deadline = time.monotonic() + 4.0
-
             while True:
                 with self._shell_state_lock:
                     if not session.get("running"):
@@ -854,27 +974,13 @@ class ProjectTerminalMixin(_Base):
                     startup_probe = session.get("output", "")[-6000:]
                     prompt_seen = bool(
                         re.search(r"(?m)(?:[A-Za-z]:[^\r\n]*>|PS [^\r\n]*>\s*)$", startup_probe)
+                        or "> " in startup_probe or startup_probe.rstrip().endswith(">")
                     )
-                    if cls_pending:
-                        if prompt_seen or time.monotonic() >= startup_deadline:
-                            try:
-                                pty.write("cls\r\n")
-                            except Exception:
-                                pass
-                            cls_pending = False
-                            with self._shell_state_lock:
-                                session["ready"] = True
-                    elif not session.get("ready") and prompt_seen:
+                    if not session.get("ready") and prompt_seen:
                         with self._shell_state_lock:
                             session["ready"] = True
-                elif cls_pending and time.monotonic() >= startup_deadline:
-                    try:
-                        pty.write("cls\r\n")
-                    except Exception:
-                        pass
-                    cls_pending = False
-                    with self._shell_state_lock:
-                        session["ready"] = True
+                        if hasattr(self, "_post_ui"):
+                            self._post_ui(lambda: self._shell_render_session(getattr(self, "_shell_active_session_id", None)))
         except Exception as exc:
             self._shell_append_output(session, f"\r\n[MCU Flasher] Could not start {kind}: {exc}\r\n")
         finally:
@@ -912,7 +1018,17 @@ class ProjectTerminalMixin(_Base):
             if row_index < len(snapshot) - 1:
                 self.shell_console.insert(tk.END, "\n")
 
-    def _shell_render_session(self, kind: str):
+    def _shell_render_session(self, kind: str | None = None):
+        if not kind:
+            try:
+                self._shell_selected_range = None
+                self.shell_console.configure(state=tk.NORMAL)
+                self.shell_console.delete("1.0", tk.END)
+                self.shell_console.configure(state=tk.DISABLED)
+                self._shell_set_status(f"Project Terminal ready • {self._shell_current_target()}")
+            except Exception:
+                pass
+            return
         with self._shell_state_lock:
             session = self._shell_sessions.get(kind)
             output = session.get("plain_output", session.get("output", "")) if session else ""
@@ -946,12 +1062,12 @@ class ProjectTerminalMixin(_Base):
                 self._shell_terminal_pump_after_id = None
             return
         try:
-            active = self._shell_active_kind
+            active = getattr(self, "_shell_active_session_id", "pwsh")
             active_snapshot = None
             with self._shell_state_lock:
-                for session in self._shell_sessions.values():
+                for sid, session in self._shell_sessions.items():
                     pending = session.setdefault("pending", deque())
-                    if session.get("kind") == active:
+                    if sid == active or session.get("kind") == active:
                         while pending:
                             active_snapshot = pending.popleft()
                     else:
@@ -965,18 +1081,15 @@ class ProjectTerminalMixin(_Base):
                     and not current.get("running")
                     and "[MCU Flasher]" in str(current.get("output", ""))
                 )
-            if current_ready or current_failed:
+            if current_ready or current_failed or (current and bool(current.get("plain_output"))):
                 self._reveal_project_terminal_fallback()
             if (
                 active_snapshot is not None
-                and getattr(self, "_project_terminal_fallback_revealed", False)
                 and self._shell_terminal_is_selected()
             ):
                 self.shell_console.configure(state=tk.NORMAL)
                 self.shell_console.delete("1.0", tk.END)
                 self._shell_insert_snapshot(active_snapshot)
-                # Keep Tk's widget itself bounded in addition to the session
-                # buffer, so long-lived shells cannot grow the UI indefinitely.
                 try:
                     line_count = int(self.shell_console.index(tk.END).split(".")[0])
                     if line_count > 5000:
@@ -1007,12 +1120,13 @@ class ProjectTerminalMixin(_Base):
         )
         if not payload:
             return False
+        active = getattr(self, "_shell_active_session_id", "pwsh")
         with self._shell_state_lock:
-            session = self._shell_sessions.get(self._shell_active_kind)
+            session = self._shell_sessions.get(active)
             pty = session.get("pty") if session else None
             running = bool(session and session.get("running"))
         if not running or pty is None:
-            self._shell_select(self._shell_active_kind)
+            self._terminal_select_session(active)
             return False
         try:
             pty.write(payload)
@@ -1190,7 +1304,17 @@ class ProjectTerminalMixin(_Base):
 
         if self._shell_terminal_is_selected():
             try:
-                self.root.after_idle(lambda: self._shell_select(self._shell_active_kind))
+                self._terminal_ensure_initialized()
+                self._ensure_project_terminal_webview()
+                self._terminal_refresh_session_bar()
+                self.root.after_idle(lambda: self._resize_project_terminal(force=True))
+                active_id = getattr(self, "_shell_active_session_id", None)
+                if active_id:
+                    self._terminal_select_session(active_id)
+                if getattr(self, "_project_terminal_fallback", False):
+                    self._reveal_project_terminal_fallback()
+                    if active_id:
+                        self._shell_render_session(active_id)
             except Exception:
                 pass
 
