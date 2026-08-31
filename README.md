@@ -73,7 +73,7 @@ direct\runThisOnWindows.vbs
 6. Launches the main GUI seamlessly.
 
 > [!NOTE]
-> **Storage Requirement**: Initial installation requires approximately **5GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
+> **Storage Requirement**: Initial installation requires approximately **6GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
 
 ---
 
@@ -415,7 +415,7 @@ Preferences are persisted in `src/gui_config.json`:
 ### Requirements
 - Windows 10 / 11 (SSD / HDD recommended)
 - Python 3.10+
-- **5GB+** starting storage for toolchains and platform packages
+- **6GB+** starting storage for toolchains and platform packages
 - Git LFS (`git lfs install`) for large binaries
 
 ### Verification & Syntax Checking
