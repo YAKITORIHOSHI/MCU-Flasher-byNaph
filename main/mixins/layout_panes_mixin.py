@@ -1012,4 +1012,3 @@ class LayoutPanesMixin(_Base):
         # Kick off a project-folder scan immediately so the user sees
         # detected libs, ini status, and source files right on startup.
         self._on_folder_changed()
-

@@ -32,13 +32,33 @@ else:
 
 class SoftResetTemplateMixin(_Base):
     """Mixin providing SoftResetTemplateMixin capabilities for MCUUploadGUI."""
+    @staticmethod
+    def _reset_project_base_name(board_info: dict) -> str:
+        """Return the template family folder used by the reset cache."""
+        capabilities = board_reset_capabilities(
+            board_info.get("platform", ""),
+            board_info.get("board", ""),
+            board_info.get("name", ""),
+            board_info.get("framework", ""),
+        )
+        return (
+            "soft_reset_project_uno"
+            if capabilities.get("family") == "atmelavr"
+            else "soft_reset_project"
+        )
+
     def _soft_reset_project_dir(self, board_name: str | None = None,
                                 board_info: dict | None = None) -> Path:
-        """Persistent, exact-board reset project shared by Hard/Soft Reset."""
+        """Persistent, exact-board reset project shared by Hard/Soft Reset.
+
+        Keep both reset template families below one app-owned container. This
+        leaves room for future MCU-specific reset projects without adding more
+        top-level folders to the repository.
+        """
         name = board_name if board_name is not None else self.board_var.get()
         info = dict(board_info or SUPPORTED_BOARDS.get(name, {}))
-        base = "soft_reset_project_uno" if info.get("platform") == "atmelavr" else "soft_reset_project"
-        return SCRIPT_DIR / base / "boards" / self._board_cache_key(name)
+        base = self._reset_project_base_name(info)
+        return SCRIPT_DIR / "soft_reset" / base / "boards" / self._board_cache_key(name)
 
     def _reset_project_contents(self, board_name: str,
                                 board_info: dict) -> tuple[str, str, str]:
@@ -54,14 +74,28 @@ class SoftResetTemplateMixin(_Base):
         platform = str(info.get("platform", "atmelavr"))
         board_id = str(info.get("board", "uno"))
         framework = str(info.get("framework", "arduino"))
-        is_avr = platform == "atmelavr"
+        reset_capabilities = board_reset_capabilities(
+            platform, board_id, board_name, framework
+        )
+        reset_family = str(reset_capabilities.get("family") or platform).lower()
+        is_avr = reset_family == "atmelavr"
+        is_esp32 = reset_family == "espressif32"
+        is_esp8266 = reset_family == "espressif8266"
         is_s3 = is_s3_board(board_id)
         is_native = bool(is_s3 and self._is_native_usb_port())
         flash_size, has_psram = normalized_board_memory_options(info)
         memory_type = normalized_board_memory_type(info)
         flash_mode = normalized_board_flash_mode(info)
-        monitor_speed = "9600" if is_avr else "115200"
-        upload_speed = "115200" if is_avr else "460800"
+        monitor_speed = default_monitor_baud(platform, board_id, board_name)
+        # ESP8266 reset uploads deliberately use the board manifest's reliable
+        # 115200 connection speed. Cheap CH340 adapters and bare ESP-01
+        # modules frequently fail to enter download mode at 460800, even when
+        # normal project uploads can use that higher speed.
+        upload_speed = (
+            "115200"
+            if is_avr or is_esp8266
+            else "460800"
+        )
 
         env_lines = [
             f"platform = {platform}",
@@ -71,7 +105,7 @@ class SoftResetTemplateMixin(_Base):
         ]
         if not is_native:
             env_lines.append(f"upload_speed = {upload_speed}")
-        if platform in ("espressif32", "espressif8266"):
+        if is_esp32 or is_esp8266:
             env_lines.append("upload_protocol = esptool")
         if flash_mode:
             env_lines.append(f"board_build.flash_mode = {flash_mode}")
@@ -275,46 +309,75 @@ class SoftResetTemplateMixin(_Base):
 
     def _migrate_legacy_reset_project(self, board_name: str,
                                       board_info: dict) -> None:
-        """Move a matching last-board reset cache into its exact-board folder."""
+        """Move a matching old/shared reset cache into its exact-board folder.
+
+        Both layouts are accepted:
+
+        * ``soft_reset/<template>/...`` (current)
+        * ``<template>/...`` (legacy releases)
+
+        Migration is content-aware and only moves a cache whose platform and
+        board ID match the selected board, so an old cache can never be reused
+        for a different MCU.
+        """
         destination = self._soft_reset_project_dir(board_name, board_info)
         if (destination / ".pio").exists():
             return
-        legacy_base = SCRIPT_DIR / (
-            "soft_reset_project_uno"
-            if board_info.get("platform") == "atmelavr"
-            else "soft_reset_project"
+        base_name = self._reset_project_base_name(board_info)
+        destination_key = self._board_cache_key(board_name)
+        candidate_bases = (
+            SCRIPT_DIR / "soft_reset" / base_name / "boards" / destination_key,
+            SCRIPT_DIR / base_name / "boards" / destination_key,
+            SCRIPT_DIR / "soft_reset" / base_name,
+            SCRIPT_DIR / base_name,
         )
-        legacy_ini = legacy_base / "platformio.ini"
-        if not legacy_ini.is_file():
-            return
-        try:
-            content = legacy_ini.read_text(encoding="utf-8", errors="replace")
-            board_match = re.search(
-                r"^\s*board\s*=\s*([^;#\r\n]+)", content,
-                re.IGNORECASE | re.MULTILINE,
-            )
-            platform_match = re.search(
-                r"^\s*platform\s*=\s*([^;#\r\n]+)", content,
-                re.IGNORECASE | re.MULTILINE,
-            )
-            if not board_match or not platform_match:
+        expected_board = str(board_info.get("board", "")).strip().lower()
+        expected_platform = str(board_info.get("platform", "")).strip().lower()
+
+        import shutil as _reset_shutil
+        destination_resolved = destination.resolve()
+        for candidate_base in candidate_bases:
+            try:
+                if candidate_base.resolve() == destination_resolved:
+                    continue
+            except OSError:
+                pass
+
+            legacy_ini = candidate_base / "platformio.ini"
+            if not legacy_ini.is_file():
+                continue
+            try:
+                content = legacy_ini.read_text(encoding="utf-8", errors="replace")
+                board_match = re.search(
+                    r"^\s*board\s*=\s*([^;#\r\n]+)", content,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                platform_match = re.search(
+                    r"^\s*platform\s*=\s*([^;#\r\n]+)", content,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                if not board_match or not platform_match:
+                    continue
+                if board_match.group(1).strip().lower() != expected_board:
+                    continue
+                if platform_match.group(1).strip().lower() != expected_platform:
+                    continue
+
+                destination.mkdir(parents=True, exist_ok=True)
+                legacy_pio = candidate_base / ".pio"
+                target_pio = destination / ".pio"
+                if legacy_pio.is_dir() and not target_pio.exists():
+                    _reset_shutil.move(str(legacy_pio), str(target_pio))
+                for filename in ("platformio.ini", "main.cpp", "hard_reset_manifest.json"):
+                    source = candidate_base / filename
+                    target = destination / filename
+                    if source.is_file() and not target.exists():
+                        _reset_shutil.copy2(source, target)
                 return
-            if board_match.group(1).strip().lower() != str(board_info.get("board", "")).lower():
-                return
-            if platform_match.group(1).strip().lower() != str(board_info.get("platform", "")).lower():
-                return
-            destination.mkdir(parents=True, exist_ok=True)
-            import shutil as _reset_shutil
-            legacy_pio = legacy_base / ".pio"
-            if legacy_pio.is_dir():
-                _reset_shutil.move(str(legacy_pio), str(destination / ".pio"))
-            for filename in ("platformio.ini", "main.cpp", "hard_reset_manifest.json"):
-                source = legacy_base / filename
-                target = destination / filename
-                if source.is_file() and not target.exists():
-                    _reset_shutil.copy2(source, target)
-        except Exception:
-            pass
+            except Exception:
+                # A locked old cache must not stop a fresh exact-board cache
+                # from being created. PlatformIO will rebuild it safely.
+                continue
 
     def _pio_env_name(self, board_name: str | None = None) -> str:
         """Stable PlatformIO [env:...] name / .pio/build subfolder for a
@@ -365,4 +428,3 @@ class SoftResetTemplateMixin(_Base):
         else:
             slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_')
             return slug or "Generic_MCU"
-

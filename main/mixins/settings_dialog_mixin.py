@@ -380,10 +380,22 @@ class SettingsDialogMixin(_Base):
         
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
+        if not isinstance(board_info, dict):
+            board_info = {}
         platform = board_info.get("platform", "").lower()
-        port_desc = self.port_var.get().lower()
-        is_esp = ("espressif" in platform or "esp" in board_name.lower() or 
-                  "esp" in port_desc or "cp210" in port_desc or "ch9102" in port_desc)
+        reset_capabilities = board_reset_capabilities(
+            platform,
+            board_info.get("board", ""),
+            board_name,
+            board_info.get("framework", ""),
+        )
+        # USB bridge names are not MCU identities. Only show destructive Hard
+        # Reset when the selected board has a registered safe handler.
+        is_esp = bool(reset_capabilities.get("hard_reset_ui"))
+        can_soft_reset = bool(
+            board_info.get("pio_resolved", True)
+            and reset_capabilities.get("soft_reset")
+        )
 
         dlg.configure(bg=Theme.BG_DARKEST)
         dlg.resizable(True, True)
@@ -438,6 +450,7 @@ class SettingsDialogMixin(_Base):
             try:
                 editor_note.configure(wraplength=note_wrap)
                 autosave_note.configure(wraplength=note_wrap)
+                hide_warnings_note.configure(wraplength=note_wrap)
             except (NameError, tk.TclError):
                 pass
             narrow = (event.width / settings_scale) < 470
@@ -578,6 +591,41 @@ class SettingsDialogMixin(_Base):
         monitor_font_unit.pack(side=tk.LEFT, padx=(sp(5), 0))
         if self.is_busy:
             monitor_font_combo.configure(state="disabled")
+
+        current_hide_build_console_warnings = get_hide_build_console_warnings()
+        hide_build_console_warnings_var = tk.BooleanVar(
+            value=current_hide_build_console_warnings
+        )
+        hide_warnings_frame = tk.Frame(settings_body, bg=Theme.BG_DARKEST)
+        hide_warnings_frame.pack(fill=tk.X, padx=sp(25), pady=sp(5))
+        cb_hide_warnings = tk.Checkbutton(
+            hide_warnings_frame,
+            text="Hide warnings in Build Console",
+            variable=hide_build_console_warnings_var,
+            font=self.font_label,
+            fg=Theme.TEXT,
+            bg=Theme.BG_DARKEST,
+            selectcolor=Theme.BG_DARK,
+            activebackground=Theme.BG_DARKEST,
+            activeforeground=Theme.TEXT,
+        )
+        cb_hide_warnings.pack(side=tk.LEFT)
+        if self.is_busy:
+            cb_hide_warnings.configure(state="disabled")
+
+        hide_warnings_note = tk.Label(
+            settings_body,
+            text=(
+                "Only warning-tagged lines are hidden from the Build Console; "
+                "compiler and toolchain behavior is unchanged."
+            ),
+            font=self.font_label,
+            fg=Theme.TEXT_DIM,
+            bg=Theme.BG_DARKEST,
+            wraplength=sp(440),
+            justify=tk.LEFT,
+        )
+        hide_warnings_note.pack(fill=tk.X, padx=sp(25), pady=(0, sp(5)))
 
         # Horizontal separator
         sep_theme = tk.Frame(settings_body, bg=Theme.BORDER, height=1)
@@ -814,8 +862,13 @@ class SettingsDialogMixin(_Base):
             self._do_soft_reset(dlg)
 
         if is_esp:
+            hard_reset_label = (
+                "⚡ Hard Reset (Erase Flash)"
+                if reset_capabilities.get("hard_strategy") == "esp8266_erase"
+                else "⚡ Hard Reset (Bootloader)"
+            )
             btn_hard = self._make_btn(
-                reset_frame, "⚡ Hard Reset (Bootloader)", run_hard_reset,
+                reset_frame, hard_reset_label, run_hard_reset,
                 Theme.BTN_STOP, Theme.BTN_STOP_H, font=self.font_label
             )
             btn_hard.pack(side=tk.LEFT, padx=sp(10), expand=True, fill=tk.X)
@@ -832,6 +885,13 @@ class SettingsDialogMixin(_Base):
                 Theme.BTN_MONITOR, Theme.BTN_MONITOR_H, font=self.font_label
             )
             btn_soft.pack(fill=tk.X, padx=sp(10))
+
+        if not can_soft_reset:
+            btn_soft.configure(
+                state=tk.DISABLED,
+                text="Soft Reset unavailable (Arduino framework required)",
+                cursor="arrow",
+            )
         
         if not self._is_board_recognized():
             reset_disabled_state = tk.DISABLED
@@ -851,6 +911,7 @@ class SettingsDialogMixin(_Base):
             cpu_var.set(high_val)
             g_var.set(True)
             monitor_font_var.set("12")
+            hide_build_console_warnings_var.set(False)
             theme_system_var.set(False)
             theme_var.set(theme_default_label)
             _on_theme_system_toggle()
@@ -875,6 +936,7 @@ class SettingsDialogMixin(_Base):
                 monitor_font_size_new = max(8, min(24, int(monitor_font_var.get())))
             except (TypeError, ValueError):
                 monitor_font_size_new = 12
+            hide_build_console_warnings_new = hide_build_console_warnings_var.get()
 
             follow_sys = theme_system_var.get()
             if follow_sys:
@@ -907,6 +969,7 @@ class SettingsDialogMixin(_Base):
                 data["shared"]["cpu_multithreading"] = cpu_key
                 data["shared"]["graphics_acceleration"] = g_val
                 data["shared"]["monitor_font_size"] = monitor_font_size_new
+                data["shared"]["hide_build_console_warnings"] = hide_build_console_warnings_new
                 data["shared"]["theme_mode"] = saved_mode
                 data["shared"]["theme_follow_system"] = follow_sys
                 set_theme_mode(saved_mode, follow_system=follow_sys)
@@ -950,6 +1013,12 @@ class SettingsDialogMixin(_Base):
                 if monitor_font_size_new != self.monitor_font_size:
                     self._apply_monitor_font_size(monitor_font_size_new)
                     self._append(f"  ✔ Build / Serial / Syntax font size set to {monitor_font_size_new} pt.", "success")
+                if hide_build_console_warnings_new != current_hide_build_console_warnings:
+                    self._append(
+                        "  ✔ Build Console warnings: "
+                        f"{'hidden' if hide_build_console_warnings_new else 'visible'}.",
+                        "success",
+                    )
                 if theme_changed:
                     if follow_sys:
                         self._append(f"  ✔ Theme mode set to System Default ({new_theme_mode.replace('_', ' ').title()}).", "success")
@@ -1064,4 +1133,3 @@ class SettingsDialogMixin(_Base):
                 height=fitted_height / settings_scale,
             )
         dlg.after_idle(_sync_settings_scrollbar)
-

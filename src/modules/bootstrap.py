@@ -14,6 +14,7 @@ Every launch runs the Bootstrap verification before the main GUI opens.
 """
 
 import json
+import hashlib
 import os
 import queue
 import re
@@ -4241,6 +4242,9 @@ _PLATFORM_INFO = {
 # Readiness is derived from successful environment builds and their actual package metadata.
 _FULL_FAMILY_MARKER_SCHEMA = 5
 _FULL_FAMILY_MARKER_DIR = ".mcu-family-complete"
+_BOARD_TOOLCHAIN_MARKER_SCHEMA = 1
+_BOARD_TOOLCHAIN_MARKER_DIR = ".mcu-board-ready"
+_BOARD_TOOLCHAIN_PREPARE_LOCK = threading.RLock()
 
 
 def _platform_manifest_path(pio_core_dir: str, platform: str) -> Path | None:
@@ -4276,6 +4280,15 @@ def _installed_platform_version(pio_core_dir: str, platform: str) -> str:
 
 def _full_family_marker_path(pio_core_dir: str, platform: str) -> Path:
     return Path(pio_core_dir) / _FULL_FAMILY_MARKER_DIR / f"{platform}.json"
+
+
+def _board_toolchain_marker_path(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> Path:
+    """Return the private readiness marker for one proven board environment."""
+    identity = "\0".join((str(platform), str(board_id), str(framework)))
+    key = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()
+    return Path(pio_core_dir) / _BOARD_TOOLCHAIN_MARKER_DIR / f"{key}.json"
 
 
 def _installed_package_dir_names(pio_core_dir: str) -> list[str]:
@@ -4605,6 +4618,80 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
     return _full_family_marker_valid(pio_core_dir, platform)
 
 
+def board_toolchain_ready(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> bool:
+    """Check whether a board was proven usable by a real PlatformIO build.
+
+    The full-family bootstrap marker is accepted first.  Main-app, on-demand
+    installs additionally record a board-specific marker so a newly added
+    board/platform can be prepared without pretending that one board build
+    covered every variant in the platform.
+    """
+    if not platform or not board_id:
+        return False
+    marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
+    if marker.is_file():
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            if int(data.get("schema", 0)) != _BOARD_TOOLCHAIN_MARKER_SCHEMA:
+                return False
+            if str(data.get("platform", "")).lower() != str(platform).lower():
+                return False
+            if str(data.get("board", "")) != str(board_id):
+                return False
+            if str(data.get("framework", "arduino")).lower() != str(framework).lower():
+                return False
+            current_version = _installed_platform_version(pio_core_dir, platform)
+            if not current_version or current_version != str(data.get("platform_version", "")):
+                return False
+            installed = set(_installed_package_dir_names(pio_core_dir))
+            snapshot = {str(x) for x in (data.get("package_dirs") or []) if str(x).strip()}
+            return bool(snapshot and snapshot.issubset(installed))
+        except Exception:
+            return False
+
+    # Bootstrap's family marker is a fallback only when it explicitly contains
+    # this exact board in its proven prewarm set. A newly downloaded board must
+    # still get its own real validation even if another board in the same MCU
+    # family was prepared during first launch.
+    try:
+        if _platform_already_installed(pio_core_dir, platform):
+            family_marker = _full_family_marker_path(pio_core_dir, platform)
+            data = json.loads(family_marker.read_text(encoding="utf-8"))
+            prewarm_boards = {
+                str(value).strip() for value in (data.get("prewarm_boards") or [])
+                if str(value).strip()
+            }
+            return str(board_id) in prewarm_boards
+    except Exception:
+        pass
+    return False
+
+
+def _write_board_toolchain_marker(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> None:
+    """Persist the successful result of one board-specific prewarm build."""
+    marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": _BOARD_TOOLCHAIN_MARKER_SCHEMA,
+        "platform": str(platform),
+        "platform_version": _installed_platform_version(pio_core_dir, platform),
+        "board": str(board_id),
+        "framework": str(framework or "arduino"),
+        "install_mode": "main-app-board-specific-dummy-build",
+        "package_dirs": _installed_package_dir_names(pio_core_dir),
+    }
+    temporary = marker.with_name(marker.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.replace(temporary, marker)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 # Cache for PlatformIO CLI query results (avoid repeated subprocess calls)
 _PIO_PLATFORM_LIST_CACHE: dict[str, bool] = {}
 
@@ -4705,6 +4792,11 @@ def _stream_platformio_setup(
     progress_end: float = 100.0,
     timeout: int = 1200,
     on_download_start=None,
+    on_line=None,
+    on_status=None,
+    on_progress=None,
+    cancel_requested=None,
+    on_process=None,
 ) -> bool:
     """Run one PlatformIO command with phase-accurate logging and a real timeout.
 
@@ -4733,6 +4825,11 @@ def _stream_platformio_setup(
         coarse_progress = target
         if _gui:
             _gui.set_progress_percent(coarse_progress)
+        if callable(on_progress):
+            try:
+                on_progress(coarse_progress)
+            except Exception:
+                pass
 
     def _start_phase(phase: str, item: str, kind: str, pct: int | None):
         nonlocal active_phase, active_phase_item, active_phase_kind, active_pct
@@ -4743,6 +4840,14 @@ def _stream_platformio_setup(
         active_phase_kind = kind or current_kind
         active_pct = None if pct is None else max(0, min(100, int(pct)))
         status(f"{label}: {phase} {active_phase_kind} - {active_phase_item}")
+        if callable(on_status):
+            try:
+                on_status(
+                    f"{label}: {phase} {active_phase_item}"
+                    + (f"... {active_pct}%" if active_pct is not None else "...")
+                )
+            except Exception:
+                pass
         if _gui:
             _gui.set_status(
                 f"{label}: {phase} {active_phase_item}"
@@ -4758,6 +4863,14 @@ def _stream_platformio_setup(
             return
         if pct is not None:
             active_pct = max(0, min(100, int(pct)))
+        if callable(on_status):
+            try:
+                on_status(
+                    f"{label}: {active_phase} {active_phase_item}"
+                    + (f"... {active_pct}%" if active_pct is not None else "...")
+                )
+            except Exception:
+                pass
         if _gui:
             _gui.set_status(
                 f"{label}: {active_phase} {active_phase_item}"
@@ -4792,6 +4905,11 @@ def _stream_platformio_setup(
         tail.append(stripped)
         if len(tail) > 120:
             del tail[:30]
+        if callable(on_line):
+            try:
+                on_line(stripped)
+            except Exception:
+                pass
         low = stripped.lower()
 
         if "tool manager:" in low or "platform manager:" in low:
@@ -4857,6 +4975,13 @@ def _stream_platformio_setup(
         except Exception:
             pass
 
+    def _notify_process(value):
+        if callable(on_process):
+            try:
+                on_process(value)
+            except Exception:
+                pass
+
     def _terminate_tree(proc):
         if not proc or proc.poll() is not None:
             return
@@ -4880,6 +5005,16 @@ def _stream_platformio_setup(
     if _gui:
         _gui.set_progress_percent(progress_start)
         _gui.set_status(f"{label}: {stage}")
+    if callable(on_progress):
+        try:
+            on_progress(progress_start)
+        except Exception:
+            pass
+    if callable(on_status):
+        try:
+            on_status(f"{label}: {stage}")
+        except Exception:
+            pass
 
     proc = None
     try:
@@ -4896,6 +5031,7 @@ def _stream_platformio_setup(
             bufsize=1,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
+        _notify_process(proc)
 
         line_queue: queue.Queue = queue.Queue()
         reader_done = [False]
@@ -4934,6 +5070,22 @@ def _stream_platformio_setup(
 
         while True:
             now = time.monotonic()
+            if callable(cancel_requested):
+                try:
+                    if cancel_requested():
+                        _terminate_tree(proc)
+                        _write_failure_log("CANCELLED by caller")
+                        if _gui:
+                            _gui.clear_platformio_progress_block()
+                        if callable(on_status):
+                            try:
+                                on_status(f"{label}: cancelled")
+                            except Exception:
+                                pass
+                        _notify_process(None)
+                        return False
+                except Exception:
+                    pass
             if now - started_at > max(1, int(timeout)):
                 _terminate_tree(proc)
                 raise subprocess.TimeoutExpired(cmd, timeout)
@@ -4981,15 +5133,18 @@ def _stream_platformio_setup(
             if _gui:
                 _gui.clear_platformio_progress_block()
             _set_coarse_progress(progress_end)
+            _notify_process(None)
             return True
 
         if _gui:
             _gui.clear_platformio_progress_block()
         _write_failure_log(f"EXIT CODE: {rc}")
         warn(f"{label}: {stage} failed (exit {rc}); details saved to logs/bootstrap_platformio.log")
+        _notify_process(None)
         return False
     except subprocess.TimeoutExpired:
         _terminate_tree(proc)
+        _notify_process(None)
         if _gui:
             _gui.clear_platformio_progress_block()
         _write_failure_log(f"TIMEOUT: {timeout}s")
@@ -5000,6 +5155,7 @@ def _stream_platformio_setup(
         return False
     except Exception as exc:
         _terminate_tree(proc)
+        _notify_process(None)
         if _gui:
             _gui.clear_platformio_progress_block()
         _write_failure_log(f"EXCEPTION: {exc}")
@@ -5277,6 +5433,177 @@ def ensure_board_toolchains() -> bool:
             all_ok = False
 
     return all_ok
+
+
+def prepare_platformio_board_toolchain(
+    platform: str,
+    board_id: str,
+    framework: str = "arduino",
+    label: str | None = None,
+    *,
+    on_line=None,
+    on_status=None,
+    on_progress=None,
+    on_download_start=None,
+    cancel_requested=None,
+    on_process=None,
+) -> bool:
+    """Install and prove one board environment on demand from the main app.
+
+    This deliberately shares the bootstrap PlatformIO command runner and the
+    app-owned ``PLATFORMIO_CORE_DIR``.  The platform install is idempotent;
+    the temporary compile is what makes framework/toolchain readiness real for
+    the selected board, including packages that PlatformIO resolves only after
+    it has inspected that board's manifest.
+    """
+    platform = str(platform or "").strip()
+    board_id = str(board_id or "").strip()
+    framework = str(framework or "arduino").strip() or "arduino"
+    display = str(label or board_id or platform).strip() or platform
+    if not platform or not board_id:
+        if callable(on_status):
+            try:
+                on_status("Board toolchain preparation cannot start: board metadata is incomplete.")
+            except Exception:
+                pass
+        return False
+
+    with _BOARD_TOOLCHAIN_PREPARE_LOCK:
+        pio = find_pio()
+        if not pio:
+            if callable(on_status):
+                try:
+                    on_status("PlatformIO Core not found; installing it first...")
+                except Exception:
+                    pass
+            if not ensure_platformio():
+                return False
+            pio = find_pio()
+        if not pio:
+            return False
+
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(
+            _get_safe_platformio_core_dir(SCRIPT_DIR)
+        )
+        os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
+        if board_toolchain_ready(pio_core_dir, platform, board_id, framework):
+            if callable(on_status):
+                try:
+                    on_status(f"{display}: board framework/toolchain is already ready.")
+                except Exception:
+                    pass
+            if callable(on_progress):
+                try:
+                    on_progress(100)
+                except Exception:
+                    pass
+            return True
+        env = os.environ.copy()
+        env["PLATFORMIO_CORE_DIR"] = pio_core_dir
+        env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
+
+        if callable(on_status):
+            try:
+                on_status(f"Preparing {display} Framework & Toolchain...")
+            except Exception:
+                pass
+
+        try:
+            _check_and_extract_pio_zip_bundle(Path(pio_core_dir))
+        except Exception:
+            # A bundled archive is optional. PlatformIO can still download the
+            # missing package from its registry, so do not block the normal path.
+            pass
+
+        warning_sent = [False]
+
+        def _announce_download():
+            if not warning_sent[0]:
+                warning_sent[0] = True
+                _log_platformio_first_install_warning(
+                    display,
+                    _PLATFORM_INFO.get(platform, (platform, "a one-time"))[1],
+                )
+            if callable(on_download_start):
+                try:
+                    on_download_start()
+                except Exception:
+                    pass
+
+        platform_ok = _stream_platformio_setup(
+            list(pio) + ["platform", "install", platform],
+            env,
+            label=display,
+            stage=f"Checking PlatformIO platform {platform}",
+            progress_start=0,
+            progress_end=30,
+            timeout=1800,
+            on_download_start=_announce_download,
+            on_line=on_line,
+            on_status=on_status,
+            on_progress=on_progress,
+            cancel_requested=cancel_requested,
+            on_process=on_process,
+        )
+        if not platform_ok:
+            return False
+
+        temporary_root = Path(tempfile.mkdtemp(prefix="mcu_flasher_toolchain_"))
+        try:
+            safe_board = re.sub(r"[^A-Za-z0-9_]+", "_", board_id).strip("_") or "board"
+            env_name = f"prepare_{safe_board[:48]}"
+            (temporary_root / "platformio.ini").write_text(
+                f"[env:{env_name}]\n"
+                f"platform = {platform}\n"
+                f"board = {board_id}\n"
+                f"framework = {framework}\n",
+                encoding="utf-8",
+            )
+            source_dir = temporary_root / "src"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            (source_dir / "main.cpp").write_text(
+                "#include <Arduino.h>\nvoid setup(){}\nvoid loop(){}\n",
+                encoding="utf-8",
+            )
+
+            if callable(on_status):
+                try:
+                    on_status(f"{display}: validating framework and toolchain for {board_id}...")
+                except Exception:
+                    pass
+            build_ok = _stream_platformio_setup(
+                list(pio) + ["run", "-e", env_name],
+                env,
+                cwd=temporary_root,
+                label=display,
+                stage=f"First-use compile validation for {board_id}",
+                progress_start=30,
+                progress_end=100,
+                timeout=1800,
+                on_download_start=_announce_download,
+                on_line=on_line,
+                on_status=on_status,
+                on_progress=on_progress,
+                cancel_requested=cancel_requested,
+                on_process=on_process,
+            )
+            if not build_ok:
+                return False
+
+            try:
+                _write_board_toolchain_marker(pio_core_dir, platform, board_id, framework)
+            except Exception as exc:
+                if callable(on_status):
+                    try:
+                        on_status(
+                            f"{display}: packages are installed, but readiness could not be cached ({exc})."
+                        )
+                    except Exception:
+                        pass
+            return True
+        finally:
+            shutil.rmtree(str(temporary_root), ignore_errors=True)
 
 
 ESP32_BOARD_INDEX_URL = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"

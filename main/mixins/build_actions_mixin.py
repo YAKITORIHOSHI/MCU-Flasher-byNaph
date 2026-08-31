@@ -35,6 +35,92 @@ else:
 
 class BuildActionsMixin(_Base):
     """Mixin providing BuildActionsMixin capabilities for MCUUploadGUI."""
+    def _prepare_board_toolchain_for_operation(
+        self, selected_board: str, board_info: dict
+    ) -> bool:
+        """Automatically prepare one selected board before compile/upload.
+
+        The caller already owns the operation state and worker thread. This
+        method only performs the shared PlatformIO preparation and reports its
+        output through the existing main-app console.
+        """
+        platform = str(board_info.get("platform") or "").strip()
+        board_id = str(board_info.get("board") or "").strip()
+        framework = str(board_info.get("framework") or "arduino").strip() or "arduino"
+        if not board_info.get("pio_resolved", True) or not platform or not board_id:
+            self._append(
+                f"  ✖ PlatformIO cannot prepare '{selected_board}': no canonical board manifest is available.",
+                "error",
+            )
+            return False
+
+        core_dir, core_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
+        if board_toolchain_ready(str(core_dir), platform, board_id, framework):
+            return True
+
+        self._framework_download_active = False
+        self._append("  🔧 Preparing selected board framework & toolchain automatically...", "info")
+        self._append(f"    Board    : {selected_board}", "dim")
+        self._append(f"    Platform : {platform}", "dim")
+        self._append(f"    PIO ID   : {board_id}", "dim")
+        self._append(f"    Store    : {core_dir}", "dim")
+        if core_refreshed:
+            self._append("    ✔ PlatformIO core/junction path verified.", "info")
+        self._append(
+            "    Missing framework/toolchain packages will be downloaded and validated before continuing.",
+            "info",
+        )
+
+        def _line_tag(line: str) -> str:
+            low = str(line).lower()
+            if "error" in low or "failed" in low or "fatal" in low:
+                return "error"
+            if "warning" in low or "warn" in low:
+                return "warning"
+            if "installed" in low and "installing" not in low:
+                return "success"
+            if "downloading" in low or "unpacking" in low or "installing" in low:
+                return "info"
+            return "dim"
+
+        def _on_line(line: str):
+            text = str(line or "").strip()
+            if text:
+                self._append(f"    {text}", _line_tag(text))
+
+        def _on_status(status_text: str):
+            self._set_status(f"Toolchain: {status_text}", Theme.YELLOW)
+
+        def _on_download_start():
+            self._framework_download_active = True
+            self._set_status(
+                f"Downloading {selected_board} framework/toolchain packages...",
+                Theme.YELLOW,
+            )
+
+        def _on_process(process):
+            self.process = process
+
+        try:
+            return bool(
+                prepare_platformio_board_toolchain(
+                    platform,
+                    board_id,
+                    framework,
+                    selected_board,
+                    on_line=_on_line,
+                    on_status=_on_status,
+                    on_download_start=_on_download_start,
+                    on_process=_on_process,
+                    cancel_requested=lambda: bool(
+                        getattr(self, "_stop_requested", False)
+                    ),
+                )
+            )
+        finally:
+            self._framework_download_active = False
+            self.process = None
+
     def _do_compile(self):
         if self.is_busy:
             # Auto-recover: if no subprocess is actually running, clear stale busy flag
@@ -74,12 +160,28 @@ class BuildActionsMixin(_Base):
 
         self._clear_console_if_action_enabled()
         self.is_busy = True
+        self._stop_requested = False
         self._compile_background_lock.set()
         self._set_buttons_state(True, operation="compile")
+
+        # Capture the selected board before the worker starts. The worker may
+        # prepare packages for a while, but it must never follow a later board
+        # change or allow a background recognizer to alter its target.
+        selected_board_info = dict(SUPPORTED_BOARDS.get(selected_board, {}))
 
         def _safe_compile():
             compile_succeeded = False
             try:
+                if not self._prepare_board_toolchain_for_operation(
+                    selected_board, selected_board_info
+                ):
+                    if self._stop_requested:
+                        self._append("  ■ Compile cancelled during board toolchain preparation.", "warning")
+                        self._set_status("Compile cancelled", Theme.YELLOW)
+                    else:
+                        self._append("  ✖ Board toolchain preparation failed; compile was not started.", "error")
+                        self._set_status("Compile FAILED: board toolchain", Theme.RED)
+                    return
                 # Final skip decision belongs in the worker because preparing
                 # PlatformIO can scan libraries and touch disk.  More
                 # importantly, A -> B -> A must restore A's generated config
@@ -170,6 +272,9 @@ class BuildActionsMixin(_Base):
             self._append_notif("  ✖ Upload failed: No board selected! Choose a board before uploading.", "warning")
             return
 
+        selected_board = self.board_var.get()
+        selected_board_info = dict(SUPPORTED_BOARDS.get(selected_board, {}))
+
         if not self._is_board_recognized():
             self._append("  ✖ Upload rejected: board on this port hasn't been recognized yet.", "error")
             return
@@ -198,6 +303,17 @@ class BuildActionsMixin(_Base):
         def _safe_run():
             upload_succeeded = False
             try:
+                self._stop_requested = False
+                if not self._prepare_board_toolchain_for_operation(
+                    selected_board, selected_board_info
+                ):
+                    if self._stop_requested:
+                        self._append("  ■ Upload cancelled during board toolchain preparation.", "warning")
+                        self._set_status("Upload cancelled", Theme.YELLOW)
+                    else:
+                        self._append("  ✖ Board toolchain preparation failed; upload was not started.", "error")
+                        self._set_status("Upload FAILED: board toolchain", Theme.RED)
+                    return
                 # _run_upload may compile first.  Keep the temporary network
                 # mapping alive across that entire operation and clean it only
                 # after the final upload result is successful.
@@ -475,4 +591,3 @@ class BuildActionsMixin(_Base):
 
         self._monitor_should_run = True
         self._schedule_auto_start_monitor(20)
-

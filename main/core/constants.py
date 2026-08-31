@@ -64,10 +64,107 @@ EDITOR_WINDOW_TITLE = "MCU Flasher — Embedded Code Editor (Closing this window
 DEFAULT_SKETCH_DIR = SCRIPT_DIR
 DEFAULT_BAUD = 115200
 DEFAULT_UPLOAD_SPEED = 460800
+ESP8266_MONITOR_BAUD = 74880
+ESP32_MONITOR_BAUD = 115200
+AVR_MONITOR_BAUD = 9600
 VALID_BAUD_RATES = {
     300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800,
-    38400, 57600, 115200, 230400, 460800, 512000, 921600
+    38400, 57600, 74880, 115200, 230400, 460800, 512000, 921600
 }
+
+
+def default_monitor_baud(
+    platform: object = "",
+    board_id: object = "",
+    board_name: object = "",
+) -> str:
+    """Return the default Serial Monitor baud for a resolved board family.
+
+    ``platform`` is the authoritative value for downloaded/dynamically
+    discovered board definitions.  The board/name fields are intentionally
+    accepted as additional identity hints for older or third-party records
+    whose platform metadata may be an alias rather than the canonical
+    PlatformIO platform ID.
+
+    This is the monitor/application baud only; bootloader upload speeds remain
+    controlled independently by ``upload_speed``.
+    """
+    platform_text = str(platform or "").strip().lower()
+    identity = " ".join(
+        str(value or "").strip().lower()
+        for value in (platform, board_id, board_name)
+    )
+
+    if (
+        platform_text in {"espressif8266", "esp8266"}
+        or "espressif8266" in identity
+        or "esp8266" in identity
+    ):
+        return str(ESP8266_MONITOR_BAUD)
+    if (
+        platform_text in {"espressif32", "esp32"}
+        or "espressif32" in identity
+        or "esp32" in identity
+    ):
+        return str(ESP32_MONITOR_BAUD)
+    if platform_text in {"atmelavr", "avr"} or "atmelavr" in identity:
+        return str(AVR_MONITOR_BAUD)
+    return str(DEFAULT_BAUD)
+
+
+def board_reset_capabilities(
+    platform: object = "",
+    board_id: object = "",
+    board_name: object = "",
+    framework: object = "arduino",
+) -> dict[str, object]:
+    """Describe reset strategies that are safe for a resolved board.
+
+    Soft Reset is an incremental upload of the app's minimal Arduino sketch,
+    so it is available to any resolved PlatformIO board using the Arduino
+    framework.  Hard Reset is deliberately strategy-based: it is destructive
+    and must never fall through to an unrelated MCU's bootloader command.
+    Adding a future MCU therefore means adding one explicit strategy here and
+    one matching handler, rather than inheriting ESP32/AVR behavior by guess.
+    """
+    platform_text = str(platform or "").strip().lower()
+    identity = " ".join(
+        str(value or "").strip().lower()
+        for value in (platform, board_id, board_name)
+    )
+    # Older built-in records omitted ``framework``; the catalog has always
+    # treated those records as Arduino-compatible.
+    framework_text = str(framework or "arduino").strip().lower()
+
+    if (
+        platform_text in {"espressif8266", "esp8266"}
+        or "espressif8266" in identity
+        or "esp8266" in identity
+    ):
+        family = "espressif8266"
+    elif (
+        platform_text in {"espressif32", "esp32"}
+        or "espressif32" in identity
+        or "esp32" in identity
+    ):
+        family = "espressif32"
+    elif platform_text in {"atmelavr", "avr"} or "atmelavr" in identity:
+        family = "atmelavr"
+    else:
+        family = platform_text
+
+    hard_strategy = {
+        "atmelavr": "avr_bootloader",
+        "espressif32": "esp32_recovery",
+        "espressif8266": "esp8266_erase",
+    }.get(family)
+    return {
+        "family": family,
+        "soft_reset": bool(platform_text and board_id and "arduino" in framework_text),
+        "hard_reset": hard_strategy is not None,
+        "hard_reset_ui": hard_strategy in {"esp32_recovery", "esp8266_erase"},
+        "hard_strategy": hard_strategy,
+    }
 
 # ─── Standard C / C++ headers ────────────────────────────────────
 # Every header shipped with the C standard library, the C++ standard
@@ -157,10 +254,14 @@ __all__ = [
     "AI_PROJECT_STORAGE_DIR",
     "ANSI_CLEAR_RE",
     "ANSI_CSI_RE",
+    "AVR_MONITOR_BAUD",
+    "board_reset_capabilities",
     "DEFAULT_BAUD",
     "DEFAULT_SKETCH_DIR",
     "DEFAULT_UPLOAD_SPEED",
     "EDITOR_WINDOW_TITLE",
+    "ESP32_MONITOR_BAUD",
+    "ESP8266_MONITOR_BAUD",
     "KNOWN_WARNINGS",
     "MCU_FLASH_PATCH_VERSION",
     "PROJECT_BUILD_CACHE_DIR",
@@ -169,6 +270,7 @@ __all__ = [
     "STANDARD_C_CPP_HEADERS",
     "UPLOAD_CONNECTION_ATTEMPTS",
     "VALID_BAUD_RATES",
+    "default_monitor_baud",
     "_STARTUP_MONOTONIC",
     "_VALID_NAME_RE",
     "_startup_event",

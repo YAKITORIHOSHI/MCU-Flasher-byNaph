@@ -201,8 +201,9 @@ MCU Flasher by Naph/
 │   ├── MicrosoftEdgeWebview2Setup.exe # Bundled Microsoft Edge WebView2 installer
 │   └── msys2-*.exe                  # Bundled MSYS2 build tools
 │
-├── soft_reset_project/              # PlatformIO soft-reset project template (ESP32)
-├── soft_reset_project_uno/          # PlatformIO soft-reset template for Arduino UNO / AVR
+├── soft_reset/                      # App-owned reset templates and exact-board caches
+│   ├── soft_reset_project/          # PlatformIO reset template for non-AVR boards
+│   └── soft_reset_project_uno/      # PlatformIO reset template for Arduino UNO / AVR
 ├── index_json/                      # Arduino board and library index caches
 ├── .mcu_flasher_build_cache/        # Isolated per-board build cache & workspaces (gitignored, hidden)
 └── logs/                            # Runtime diagnostic logs & lock files
@@ -230,7 +231,7 @@ MCU Flasher by Naph/
 ### 3. Selecting Boards & COM Ports
 - **COM Port Selection**: The top-right dropdown shows detected USB serial ports. Plug in your microcontroller, and MCU Flasher automatically selects the new port and identifies the connected chip (ESP32, ESP32-S3, ESP32-C3, CH340, CP210x).
 - **Board Catalog Search**: Click **`🔍 Search Boards`** to search through 420+ supported microcontrollers by keyword, architecture, or manufacturer.
-- **Baud Rate & Upload Speed**: Choose your desired Serial Monitor baud rate (e.g. `115200`) and Flashing speed (up to `921600` baud for ultra-fast uploads).
+- **Baud Rate & Upload Speed**: The Serial Monitor defaults to `74880` for ESP8266-family boards, `115200` for ESP32-family boards, and `9600` for AVR boards. ESP8266/ESP32-family boards automatically start uploads at `460800`; upload speed remains a separate setting (up to `921600` baud for ultra-fast uploads).
 - **Additional Board Manager URLs**: Open **`⬇ Download Boards/Libraries`**, enter one or more vendor package-index URLs in **Additional board manager URLs** (comma-separated), then click **`⟳ Apply & Refresh`**. The default Arduino index is always included, and HTTP(S), GitHub raw/blob, redirects, stale-cache fallback, checksum verification, and ZIP/tar package archives are handled dynamically so indexes such as the ESP8266 package catalog can be used alongside it.
 
 ### 4. Compiling & Flashing Code
@@ -278,8 +279,8 @@ MCU Flasher by Naph/
   - Floating banner with quick **"Dismiss Glow ✖"** button.
 
 ### 9. Soft Reset & Hard Reset Recovery Flashing
-- **Soft Reset**: Flashes a minimal lightweight reset routine to clear locked flash or boot loops without wiping entire partition tables.
-- **Hard Reset**: Executes full recovery flashing using esptool bootloader images or AVR bootloader sequences.
+- **Soft Reset**: Flashes a minimal lightweight Arduino-framework routine through the selected board's PlatformIO definition. It is available to resolved Arduino/PlatformIO boards, including future families that do not have a Hard Reset handler.
+- **Hard Reset**: Uses an explicit board-family capability handler: ESP32 recovery images, ESP8266 full SPI-flash erase, or the existing AVR bootloader path. Other MCUs are refused safely instead of receiving an incompatible erase command.
 
 ### 10. Remote Network Shares (UNC Paths)
 - Open projects directly from network storage (e.g. `\\nas\projects\iot_sensor`).
@@ -379,8 +380,8 @@ MCU Flasher by Naph/
 ### Caches, Installers & Templates
 
 - **`installers/`**: Bundled offline installers (`CP210x/` USB drivers, `arduino-cli.msi`, `MicrosoftEdgeWebview2Setup.exe`, `msys2-*.exe`). Tracked via Git LFS.
-- **`soft_reset_project/`**: Pre-configured minimal PlatformIO workspace used for rapid software resets of ESP32 boards.
-- **`soft_reset_project_uno/`**: Pre-configured minimal workspace for software resets of Arduino AVR (Uno/Nano/Mega) boards.
+- **`soft_reset/soft_reset_project/`**: Pre-configured minimal PlatformIO workspace for non-AVR boards and exact-board reset caches.
+- **`soft_reset/soft_reset_project_uno/`**: Pre-configured minimal workspace for Arduino AVR (Uno/Nano/Mega) boards and exact-board reset caches. Legacy top-level reset folders are migrated automatically when their board/platform IDs match.
 - **`.mcu_flasher_build_cache/`**: Generated build artifacts and per-board workspaces (gitignored, hidden via Windows `attrib +h`).
 - **`logs/`**: Runtime crash and diagnostic logs.
 

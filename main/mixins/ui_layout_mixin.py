@@ -762,7 +762,7 @@ class UILayoutMixin(_Base):
         self.serial_baud_combo = ttk.Combobox(
             self.serial_baud_group, textvariable=self.serial_baud_var, width=10,
             font=self.font_mono_sm, state="readonly",
-            values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "512000", "921600"],
+            values=["9600", "19200", "38400", "57600", "74880", "115200", "230400", "460800", "512000", "921600"],
         )
         self.serial_baud_combo.pack(side=tk.LEFT, padx=(4, 0))
         self.serial_baud_combo.bind("<<ComboboxSelected>>", lambda e: self._on_serial_baud_changed())
@@ -2837,4 +2837,3 @@ class UILayoutMixin(_Base):
             except Exception:
                 pass
             self._actions_dropdown_win = None
-

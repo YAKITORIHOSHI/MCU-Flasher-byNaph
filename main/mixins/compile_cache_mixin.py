@@ -42,36 +42,18 @@ class CompileCacheMixin(_Base):
             board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         platform = board_info.get("platform", "espressif32")
+        board_id = board_info.get("board", "")
+        framework = board_info.get("framework", "arduino") or "arduino"
         pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR", str(Path.home() / ".platformio"))
-        
-        # Strategy 1: Direct fast filesystem check on packages directories
-        candidate_pkg_dirs = [
-            Path(pio_core_dir) / "packages",
-            Path(os.path.expanduser("~")) / ".platformio" / "packages",
-        ]
-        for pkg_dir in candidate_pkg_dirs:
-            if pkg_dir.exists():
-                try:
-                    if platform == "espressif32":
-                        if any("framework-arduinoespressif32" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
-                            return True
-                    elif platform == "atmelavr":
-                        if any("framework-arduino-avr" in p.name.lower() or "toolchain-atmelavr" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
-                            return True
-                    elif platform == "espressif8266":
-                        if any("framework-arduinoespressif8266" in p.name.lower() for p in pkg_dir.iterdir() if p.is_dir()):
-                            return True
-                except Exception:
-                    pass
 
-        # Strategy 2: Call helper from bootstrap
-        if _platform_already_installed:
-            try:
-                if _platform_already_installed(pio_core_dir, platform):
-                    return True
-            except Exception:
-                pass
-        return True
+        # A successful main-app prewarm records a board-specific marker. This
+        # is the dynamic path for newly supported platforms and avoids
+        # treating a downloaded Arduino boards.txt file as a usable compiler.
+        if board_id and board_toolchain_ready(
+            pio_core_dir, platform, board_id, framework
+        ):
+            return True
+        return False
 
     def _mark_env_just_created(self, board_name: str = None):
         """Mark an environment as newly created so compile won't be skipped until first successful build."""
@@ -586,4 +568,3 @@ class CompileCacheMixin(_Base):
                 (build_dir / "firmware.bin").exists()
             )
         )
-

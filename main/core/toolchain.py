@@ -70,6 +70,42 @@ def _platform_already_installed(pio_core_dir, platform):
         return False
     return b._platform_already_installed(pio_core_dir, platform)
 
+
+def board_toolchain_ready(pio_core_dir, platform, board_id, framework="arduino"):
+    """Return whether a board-specific PlatformIO environment was proven usable."""
+    b = _get_bootstrap()
+    if b is None:
+        return False
+    try:
+        return bool(b.board_toolchain_ready(pio_core_dir, platform, board_id, framework))
+    except Exception:
+        return False
+
+
+def prepare_platformio_board_toolchain(
+    platform,
+    board_id,
+    framework="arduino",
+    label=None,
+    **callbacks,
+):
+    """Delegate on-demand board preparation to the shared bootstrap runner."""
+    b = _get_bootstrap()
+    if b is None:
+        return False
+    try:
+        return bool(
+            b.prepare_platformio_board_toolchain(
+                platform,
+                board_id,
+                framework,
+                label,
+                **callbacks,
+            )
+        )
+    except Exception:
+        return False
+
 def _load_dedicated_ai():
     """Load the optional AI integration only when the user needs it."""
     global _dedicated_ai_module
@@ -857,7 +893,9 @@ __all__ = [
     "_resource_safe_worker_count",
     "_short_platformio_core_alias",
     "_system_reserved_cpu_count",
+    "board_toolchain_ready",
     "ensure_platformio",
+    "prepare_platformio_board_toolchain",
     "ensure_platformio_penv_with_hook",
     "find_arduino_cli_executable",
     "find_pio_executable",

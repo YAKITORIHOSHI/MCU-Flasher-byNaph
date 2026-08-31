@@ -698,6 +698,11 @@ class InitStartupMixin(_Base):
         # window has painted. A cached catalog is already available when
         # possible; this refresh keeps it correct without blocking launch.
         self._reload_supported_boards()
+        # The restored board is already stored in _last_valid_board, so the
+        # normal board-change guard intentionally treats it as unchanged. Apply
+        # its family baud explicitly before the monitor starts.
+        self._apply_board_monitor_baud()
+        self._apply_board_upload_speed()
         self._on_board_changed()
 
     def _dbi_serial_monitor(self):
@@ -895,4 +900,3 @@ class InitStartupMixin(_Base):
         self._sketch_marquee_dir = direction
 
         self._sketch_marquee_after_id = self.root.after(delay, self._update_sketch_marquee)
-

@@ -105,8 +105,14 @@ compile_cache/
 *.res
 
 .pio_cache/
+# Reset templates are tracked; generated exact-board workspaces are not.
+soft_reset/**/boards/
+soft_reset/**/.pio/
+soft_reset/**/.pio*/
 soft_reset_project/boards/
 soft_reset_project_uno/boards/
+soft_reset_project/.pio/
+soft_reset_project_uno/.pio/
 
 # === MCU Flasher dedicated internal app directories ===
 MCU-FLASHER-SRC/
@@ -135,4 +141,3 @@ tests/src/
 # === Temporary / Archived Reports & Plans ===
 temp/
 old-*
-

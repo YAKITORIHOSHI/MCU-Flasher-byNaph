@@ -306,12 +306,10 @@ class BoardsCatalogMixin(_Base):
             if curr not in SUPPORTED_BOARDS and SUPPORTED_BOARDS:
                 new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
                 self.board_var.set(new_board)
-                self._last_valid_board = new_board
                 self._on_board_changed()
             elif not curr and SUPPORTED_BOARDS:
                 new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
                 self.board_var.set(new_board)
-                self._last_valid_board = new_board
                 self._on_board_changed()
                 
             self._append("  ℹ Reloaded supported boards list from disk.", "info")

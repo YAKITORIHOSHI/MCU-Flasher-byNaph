@@ -414,6 +414,24 @@ def set_clear_build_console_on_action(enabled: bool):
         pass
 
 
+def get_hide_build_console_warnings() -> bool:
+    """Return whether warning-tagged Build Console lines should be hidden."""
+    try:
+        data = _load_raw_config()
+        return bool(data.get("shared", {}).get("hide_build_console_warnings", False))
+    except Exception:
+        return False
+
+
+def set_hide_build_console_warnings(enabled: bool):
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {})["hide_build_console_warnings"] = bool(enabled)
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
 def get_auto_clear_serial_monitor() -> bool:
     """Return whether Auto Clear Serial Monitor is enabled (defaults to False)."""
     try:
@@ -655,6 +673,7 @@ __all__ = [
     "get_autosave_settings",
     "get_clear_build_console_on_action",
     "get_clear_serial_on_upload",
+    "get_hide_build_console_warnings",
     "get_editor_mode",
     "get_monaco_boot_pending",
     "get_monitor_font_size",
@@ -673,6 +692,7 @@ __all__ = [
     "set_autosave_settings",
     "set_clear_build_console_on_action",
     "set_clear_serial_on_upload",
+    "set_hide_build_console_warnings",
     "set_editor_mode",
     "set_monaco_boot_pending",
     "set_periodic_reload_settings",

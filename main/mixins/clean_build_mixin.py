@@ -145,6 +145,10 @@ class CleanBuildMixin(_Base):
             (sketch / ".ai_edit_signal", "generated editor signal"),
             # Reset builds are app-level, exact-board caches.  Manual Clean is
             # intentionally the one operation that clears them all.
+            (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
+            (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
+            (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
+            (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / ".pio", "Arduino shared legacy cache"),
             (SCRIPT_DIR / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
             (SCRIPT_DIR / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
             (SCRIPT_DIR / "soft_reset_project" / ".pio", "legacy ESP reset cache"),

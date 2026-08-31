@@ -63,9 +63,32 @@ class ConsoleSerialMixin(_Base):
         if self.serial_autoscroll_var.get():
             self.serial_console.see(tk.END)
 
+    @classmethod
+    def _warning_tag_present(cls, tag) -> bool:
+        """Return whether a Tk tag or composite tag contains ``warning``."""
+        if isinstance(tag, (tuple, list)):
+            return any(cls._warning_tag_present(part) for part in tag)
+        return str(tag or "").strip().lower() == "warning"
+
+    def _should_hide_build_console_warning(self, tag="") -> bool:
+        """Check the display-only warning filter for Build Console output.
+
+        This is deliberately evaluated when the queued UI callback runs, so a
+        setting change takes effect for output that is still waiting to render.
+        It does not affect compiler/toolchain execution or Notifications.
+        """
+        if not self._warning_tag_present(tag):
+            return False
+        try:
+            return get_hide_build_console_warnings()
+        except Exception:
+            return False
+
     def _append(self, text: str, tag: str = "", newline: bool = True):
         """Append text to console (thread-safe)."""
         def _do():
+            if self._should_hide_build_console_warning(tag):
+                return
             self.console.configure(state=tk.NORMAL)
             if newline and text.strip():
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -83,7 +106,12 @@ class ConsoleSerialMixin(_Base):
         """Append a single line built from multiple (text, tag) segments,
         e.g. a dim label followed by a bright value, sharing one timestamp.
         Thread-safe, mirrors _append()."""
+        segments = tuple(segments)
         def _do():
+            if self._should_hide_build_console_warning(
+                [seg_tag for _, seg_tag in segments]
+            ):
+                return
             self.console.configure(state=tk.NORMAL)
             has_content = any(seg_text.strip() for seg_text, _ in segments)
             if newline and has_content:
@@ -136,6 +164,8 @@ class ConsoleSerialMixin(_Base):
         another package's completed row.
         """
         def _do():
+            if self._should_hide_build_console_warning(tag):
+                return
             self.console.configure(state=tk.NORMAL)
             last_line = self.console.get("end-2c linestart", "end-2c lineend")
             last_low = last_line.lower()

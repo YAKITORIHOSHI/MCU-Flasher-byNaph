@@ -74,6 +74,8 @@ class HardResetMixin(_Base):
 
         def _do():
             try:
+                if getattr(self, "_should_hide_build_console_warning", lambda _tag: False)(tag):
+                    return
                 self.console.configure(state=tk.NORMAL)
                 total_lines = int(self.console.index("end-1c").split(".")[0])
                 found = None
@@ -261,6 +263,7 @@ class HardResetMixin(_Base):
         self._migrate_legacy_reset_project(board_name, board_info)
         try:
             project_dir.mkdir(parents=True, exist_ok=True)
+            hide_generated_directory(project_dir.parent.parent)
             hide_generated_directory(project_dir.parent)
             hide_generated_directory(project_dir)
         except Exception as exc:
@@ -396,13 +399,31 @@ class HardResetMixin(_Base):
             return
 
         # ESP32 Hard Reset uses a dedicated, persistent recovery build instead
-        # of whichever sketch happens to be open.  Only its bootloader and
-        # partition table are used; its application firmware is never written.
+        # of whichever sketch happens to be open. ESP8266 has no equivalent
+        # flash bootloader bundle to burn, so its Hard Reset is a direct full
+        # SPI-flash erase and leaves the ROM bootloader untouched.
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         platform_name = str(board_info.get("platform", "")).lower()
+        reset_capabilities = board_reset_capabilities(
+            platform_name,
+            board_info.get("board", ""),
+            board_name,
+            board_info.get("framework", ""),
+        )
+        reset_strategy = reset_capabilities.get("hard_strategy")
+        if not reset_capabilities.get("hard_reset"):
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Hard Reset Unavailable",
+                f"Hard Reset is not supported for '{board_name}'.\n\n"
+                "This MCU has no registered safe destructive-reset handler. "
+                "Use Soft Reset when available or reset it with the hardware controls provided by the board.",
+                parent=parent_dlg,
+            )
+            return
         self._hard_reset_recovery_images = None
-        if platform_name == "espressif32":
+        if reset_strategy == "esp32_recovery":
             recovery_images, _recovery_error = self._locate_hard_reset_recovery_images(
                 board_name, board_info
             )
@@ -410,21 +431,46 @@ class HardResetMixin(_Base):
 
         # 2. Show confirmation
         from tkinter import messagebox
+        if reset_strategy == "esp8266_erase":
+            confirm_title = "ESP8266 Full Flash Erase"
+            confirm_message = (
+                "This is a destructive hard reset. It will erase the ENTIRE "
+                "ESP8266 flash, including the application, settings, OTA state, "
+                "and filesystem data.\n\n"
+                "The ESP8266 ROM bootloader is built into the chip and will not "
+                "be erased or rewritten. After the erase, use Upload to install "
+                "a project sketch again.\n\n"
+                "If the module or USB adapter has no automatic reset circuit, "
+                "hold BOOT/GPIO0 LOW when prompted and release it after the "
+                "connection indicator turns green.\n\n"
+                "Continue with the full flash erase?"
+            )
+        elif reset_strategy == "esp32_recovery":
+            confirm_title = "ESP32 Full Erase + Burn Bootloader"
+            confirm_message = (
+                "This is a destructive hard reset. It will erase the ENTIRE ESP32 flash, "
+                "including the current application, NVS settings, OTA state, and filesystem "
+                "data.\n\n"
+                "After erasing, it will write only bootloader.bin and partitions.bin from "
+                "the dedicated compiled Soft Reset recovery project, plus boot_app0. The "
+                "Soft Reset application firmware and the active project firmware will NOT "
+                "be uploaded.\n\n"
+                "If this board has no saved reset cache yet, the app will build its tiny "
+                "known-good recovery project once before erasing anything. Future Hard/Soft "
+                "Resets will reuse that exact board folder.\n\n"
+                "After preparation, esptool will show a live BOOT connection indicator. "
+                "Press and HOLD BOOT until the indicator turns green, then release it.\n\n"
+                "Continue with the full erase?"
+            )
+        else:
+            confirm_title = "Hard Reset"
+            confirm_message = (
+                "This operation is destructive and will erase or rewrite the selected "
+                "board's reset data.\n\nContinue?"
+            )
         confirm = messagebox.askyesno(
-            "ESP32 Full Erase + Burn Bootloader",
-            "This is a destructive hard reset. It will erase the ENTIRE ESP32 flash, "
-            "including the current application, NVS settings, OTA state, and filesystem "
-            "data.\n\n"
-            "After erasing, it will write only bootloader.bin and partitions.bin from "
-            "the dedicated compiled Soft Reset recovery project, plus boot_app0. The "
-            "Soft Reset application firmware and the active project firmware will NOT "
-            "be uploaded.\n\n"
-            "If this board has no saved reset cache yet, the app will build its tiny "
-            "known-good recovery project once before erasing anything. Future Hard/Soft "
-            "Resets will reuse that exact board folder.\n\n"
-            "After preparation, esptool will show a live BOOT connection indicator. "
-            "Press and HOLD BOOT until the indicator turns green, then release it.\n\n"
-            "Continue with the full erase?",
+            confirm_title,
+            confirm_message,
             parent=parent_dlg
         )
         if not confirm:
@@ -581,14 +627,162 @@ class HardResetMixin(_Base):
 
         return [sys.executable, "-m", "esptool"]
 
-    def _run_hard_reset_inner(self, port: str):
-        """Perform the ESP32 equivalent of a clean bootloader burn.
+    def _run_hard_reset_esp8266(
+        self, port: str, board_name: str, board_info: dict
+    ) -> None:
+        """Erase an ESP8266's complete SPI flash without touching its ROM.
 
-        Esptool has no separate ``burn-bootloader`` command for ESP32. The safe
-        serial equivalent is one ``write-flash --erase-all`` transaction that
-        erases every flash sector, then writes only the dedicated Soft Reset
-        recovery build's second-stage bootloader and partition table plus boot_app0.
-        Neither the recovery firmware nor the active sketch firmware is written.
+        Unlike ESP32, the ESP8266 does not use a separate flash bootloader
+        bundle that this operation needs to rebuild and write. ``erase-flash``
+        is therefore the correct full-reset primitive. The ROM download
+        bootloader remains in the chip and the next normal Upload can restore
+        the selected project.
+        """
+        target_mcu, _bootloader_address = self._esptool_target(
+            board_name, board_info
+        )
+        target_mcu = target_mcu or "esp8266"
+        self._append("  🔥 ESP8266 full SPI flash erase starting...", "warning")
+        self._append(
+            "  ℹ The ESP8266 ROM bootloader will remain intact; only external flash is erased.",
+            "dim",
+        )
+        self._append(
+            "  ⚠ If automatic reset is unavailable, hold BOOT/GPIO0 LOW now and release after Connected.",
+            "warning",
+        )
+        self._set_status("Waiting for BOOT / ESP8266 download mode...", Theme.YELLOW)
+        self._append_boot_connection_progress(0)
+
+        erase_cmd = self._get_esptool_cmd() + [
+            "--chip", target_mcu,
+            "--port", port,
+            "--baud", "115200",
+            "--before", "default-reset",
+            "--after", "no-reset",
+            "--connect-attempts", "30",
+            "erase-flash",
+        ]
+        proc = None
+        connected = False
+        connection_step = 0
+        erase_started = False
+        erase_completed = False
+
+        def _mark_connected() -> None:
+            nonlocal connected
+            if connected:
+                return
+            connected = True
+            self._append_boot_connection_progress(connection_step, connected=True)
+            self._append("  ✔ ESP8266 connected — release BOOT/GPIO0 now.", "success")
+            self._set_status("Connected - release BOOT/GPIO0", Theme.GREEN)
+
+        def _handle_line(raw_line: str) -> None:
+            nonlocal connection_step, erase_started, erase_completed
+            line = str(raw_line or "").strip()
+            if not line:
+                return
+            low = line.lower()
+            if low.startswith("connecting"):
+                connection_step = max(connection_step, line.count("."))
+                self._append_boot_connection_progress(connection_step)
+                return
+            if "connected to " in low or "chip is" in low or "chip type" in low:
+                _mark_connected()
+            if "erasing flash" in low or "erase flash" in low:
+                erase_started = True
+                self._set_status("Erasing entire ESP8266 flash...", Theme.YELLOW)
+                return
+            if (
+                "flash memory erased successfully" in low
+                or "chip erase completed successfully" in low
+                or ("erase" in low and "completed" in low and "success" in low)
+            ):
+                erase_completed = True
+                self._append("  ✔ ESP8266 flash erase completed.", "success")
+                return
+            if any(token in low for token in ("error", "failed", "fatal")):
+                self._append(f"  ✖ {line}", "error")
+
+        try:
+            proc = subprocess.Popen(
+                erase_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                ),
+            )
+            self.process = proc
+            for line in iter(proc.stdout.readline, ""):
+                if getattr(self, "_stop_requested", False):
+                    break
+                _handle_line(line)
+            if getattr(self, "_stop_requested", False) and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            proc.wait(timeout=15)
+            if getattr(self, "_stop_requested", False):
+                self._append("  ■ ESP8266 Hard Reset cancelled.", "warning")
+                self._set_status("Hard Reset cancelled", Theme.YELLOW)
+                return
+            if proc.returncode != 0:
+                self._append(
+                    f"  ✖ ESP8266 flash erase failed with exit code {proc.returncode}.",
+                    "error",
+                )
+                self._append_boot_connection_progress(
+                    connection_step, failed=not connected
+                )
+                self._set_status("ESP8266 Hard Reset failed", Theme.RED)
+                return
+            if not connected:
+                _mark_connected()
+            if erase_started and not erase_completed:
+                self._append("  ✔ ESP8266 flash erase completed.", "success")
+            self._append(
+                "  ✔ ESP8266 full flash erase completed successfully.",
+                "success",
+            )
+            self._append(
+                "  ℹ Use Upload to install a project sketch again.",
+                "info",
+            )
+            self._append("  🔄 Performing final Reset(DTR/RTS)...", "info")
+            time.sleep(0.75)
+            reset_ok = self._trigger_actual_board_reset(port)
+            if not reset_ok:
+                self._append(
+                    "  ⚠ Flash erase succeeded, but the automatic ESP8266 reset did not complete.",
+                    "warning",
+                )
+                self._append(
+                    "  Press the board's EN/RESET button once, or reconnect USB.",
+                    "info",
+                )
+                self._set_status("ESP8266 erase complete - reset failed", Theme.YELLOW)
+                return
+            self._set_status("ESP8266 Hard Reset successful", Theme.GREEN)
+            self._hard_reset_completed_successfully = True
+        finally:
+            if self.process is proc:
+                self.process = None
+
+    def _run_hard_reset_inner(self, port: str):
+        """Perform the board-specific destructive reset operation.
+
+        ESP32 uses one ``write-flash --erase-all`` transaction that erases every
+        flash sector, then writes only the dedicated Soft Reset recovery build's
+        second-stage bootloader and partition table plus boot_app0. ESP8266 uses
+        the simpler ``erase-flash`` command because its ROM bootloader is inside
+        the chip and must not be rewritten.
         """
         owner_pid = port_occupied_owner(port)
         if owner_pid:
@@ -613,11 +807,22 @@ class HardResetMixin(_Base):
             board_name = self.board_var.get()
             board_info = SUPPORTED_BOARDS.get(board_name, {})
             platform_name = str(board_info.get("platform", "")).lower()
-            is_avr = platform_name == "atmelavr"
 
             self._append("")
             self._append("=" * 50, "header")
-            self._append("  🔥 BURNING BOOTLOADER (Hard Reset)", "header")
+            reset_capabilities = board_reset_capabilities(
+                platform_name,
+                board_info.get("board", ""),
+                board_name,
+                board_info.get("framework", ""),
+            )
+            reset_strategy = reset_capabilities.get("hard_strategy")
+            reset_header = (
+                "  🔥 ERASING ESP8266 FLASH (Hard Reset)"
+                if reset_strategy == "esp8266_erase"
+                else "  🔥 BURNING BOOTLOADER (Hard Reset)"
+            )
+            self._append(reset_header, "header")
             self._append("=" * 50, "header")
             self._append(f"  Port  : {port}", "port_highlight")
             self._append(f"  Board : {board_name}", "dim")
@@ -635,7 +840,7 @@ class HardResetMixin(_Base):
                 )
             self._append("")
 
-            if is_avr:
+            if reset_strategy == "avr_bootloader":
                 self._append("  🔧 Starting the normal PlatformIO bootloader target...", "info")
                 if not self._ensure_platformio_ini():
                     self._append("  ✖ Could not prepare platformio.ini.", "error")
@@ -696,10 +901,15 @@ class HardResetMixin(_Base):
                 self._set_status("Bootloader burn successful", Theme.GREEN)
                 return
 
-            if platform_name != "espressif32":
+            if reset_strategy == "esp8266_erase":
+                self._run_hard_reset_esp8266(port, board_name, board_info)
+                return
+
+            if reset_strategy != "esp32_recovery":
                 self._append(
-                    f"  ✖ Normal bootloader burn is not implemented for platform "
-                    f"'{platform_name or 'unknown'}'.",
+                    f"  ✖ Hard Reset is not supported for platform "
+                    f"'{platform_name or 'unknown'}'. No safe handler is registered "
+                    "for this MCU family.",
                     "error",
                 )
                 self._set_status("Hard Reset unsupported", Theme.RED)
@@ -1058,4 +1268,3 @@ class HardResetMixin(_Base):
             # Always preserve the user's pre-reset monitor state.  The outer
             # worker restores it only after is_busy/_active_operation are clear.
             self._hard_reset_reconnect_monitor = bool(was_monitoring)
-

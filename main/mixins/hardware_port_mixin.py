@@ -509,15 +509,61 @@ class HardwarePortMixin(_Base):
         safe_reclaim_os_focus(dlg.search_ent)
 
     def _select_board_from_dialog(self, selected_board):
+        # Opening the board picker and confirming a board is an explicit user
+        # decision, even when it is the same board that is already displayed.
+        # This matters when a saved ESP8266 selection exists before a generic
+        # USB-serial adapter is connected.
+        self._board_selection_manually_overridden = True
+        self._board_port_confirmed = False
         if selected_board == self.board_var.get():
+            # The explicit confirmation may happen after startup restored a
+            # stale baud value. Re-apply the selected board's family default
+            # without treating the same board as a board-change event.
+            self._apply_board_monitor_baud(selected_board)
+            self._apply_board_upload_speed(selected_board)
             return
         # A board selected in the UI is authoritative for the active port.
         # Automatic recognition is allowed again only after the user selects
         # a different port or reconnects a device.
-        self._board_selection_manually_overridden = True
-        self._board_port_confirmed = False
         self.board_var.set(selected_board)
         self._on_board_changed()
+
+    def _apply_board_monitor_baud(self, board_name: str | None = None) -> str:
+        """Apply the monitor default for a board without touching upload speed."""
+        name = board_name if board_name is not None else self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(name, {})
+        monitor_baud = default_monitor_baud(
+            board_info.get("platform", ""),
+            board_info.get("board", ""),
+            name,
+        )
+        self.baud_var.set(monitor_baud)
+        if hasattr(self, "serial_baud_var"):
+            self.serial_baud_var.set(monitor_baud)
+        return monitor_baud
+
+    def _apply_board_upload_speed(self, board_name: str | None = None) -> str:
+        """Apply the safe upload-speed default for the selected board family."""
+        name = board_name if board_name is not None else self.board_var.get()
+        board_info = SUPPORTED_BOARDS.get(name, {})
+        family = board_reset_capabilities(
+            board_info.get("platform", ""),
+            board_info.get("board", ""),
+            name,
+            board_info.get("framework", ""),
+        ).get("family")
+
+        if family == "atmelavr":
+            upload_speed = "115200"
+            self.upload_speed_combo.configure(state="disabled")
+        elif family in {"espressif32", "espressif8266"}:
+            upload_speed = "460800"
+            self.upload_speed_combo.configure(state="readonly")
+        else:
+            upload_speed = str(self.upload_speed_var.get() or DEFAULT_UPLOAD_SPEED)
+            self.upload_speed_combo.configure(state="readonly")
+        self.upload_speed_var.set(upload_speed)
+        return upload_speed
 
     def _on_board_changed(self):
         """Handle board selection change."""
@@ -525,6 +571,10 @@ class HardwarePortMixin(_Base):
         board_name = self.board_var.get()
 
         if old_board and old_board == board_name:
+            # A restored/reloaded board can be logically unchanged while the
+            # visible monitor baud was edited or initialized earlier.
+            self._apply_board_monitor_baud(board_name)
+            self._apply_board_upload_speed(board_name)
             return
 
         self._last_valid_board = board_name
@@ -545,30 +595,15 @@ class HardwarePortMixin(_Base):
 
         self._set_status(f"Board changed to {board_name}", Theme.CYAN)
 
-        # Configure UPLOAD SPD based on platform:
-        #   - AVR (Arduino Uno): force 115200 and lock the combobox (disabled)
-        #   - ESP32: set to stable high speed (460800) and keep combobox editable
-        #   - Others: just show the combobox normally
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
-        platform = board_info.get("platform", "")
-        is_avr = (platform == "atmelavr")
-        is_esp32 = (platform == "espressif32")
-        if is_avr:
-            self.upload_speed_var.set("115200")
-            self.upload_speed_combo.configure(state="disabled")
-            # Arduino Uno sketches conventionally use 9600 baud. Keep both the
-            # internal and visible Serial Monitor controls synchronized so a
-            # successful upload cannot reconnect at the previous ESP32 115200.
-            self.baud_var.set("9600")
-            if hasattr(self, "serial_baud_var"):
-                self.serial_baud_var.set("9600")
-        else:
-            if is_esp32:
-                self.upload_speed_var.set("460800")
-                self.baud_var.set("115200")
-                if hasattr(self, "serial_baud_var"):
-                    self.serial_baud_var.set("115200")
-            self.upload_speed_combo.configure(state="readonly")
+        # Configure monitor baud and upload speed independently.  The monitor
+        # default follows the resolved board family, including dynamically
+        # downloaded third-party definitions:
+        #   - ESP8266 family: 74880 (ROM boot messages)
+        #   - ESP32 family: 115200
+        #   - AVR: 9600
+        # Upload speed is a separate bootloader setting below.
+        self._apply_board_monitor_baud(board_name)
+        self._apply_board_upload_speed(board_name)
 
         self._restart_monitor(f"board → {board_name}")
         self._update_skip_compile_state()
@@ -686,7 +721,7 @@ class HardwarePortMixin(_Base):
         return True
 
     def _detect_board_from_descriptor(self, port: str) -> str | None:
-        """Apply only the three intentionally-supported passive port heuristics.
+        """Apply only the intentionally-supported passive port heuristics.
 
         These mappings are deliberately conservative.  A USB descriptor normally
         identifies the bridge/USB interface, not the exact PCB, so the application
@@ -695,9 +730,10 @@ class HardwarePortMixin(_Base):
 
         Supported common signatures only:
           * Silicon Labs / CP210x-style descriptor -> generic ESP32 Dev Module
-          * USB-SERIAL (classic hyphenated WCH-style label) -> Arduino Uno
           * USB-Enhanced-SERIAL / USB Enhanced SERIAL -> generic ESP32-S3 Dev Module
 
+        Generic USB-serial bridge names are intentionally ambiguous: the same
+        CH340/WCH adapter is used by Arduino Uno clones and ESP8266 boards.
         Anything else returns None and leaves the user's board selection untouched.
         """
         try:
@@ -724,9 +760,7 @@ class HardwarePortMixin(_Base):
                 if "silicon labs" in text or "siliconlabs" in compact:
                     return find_board_for_platform("espressif32", variant_hint="esp32")
 
-                # 2) Common S3 USB-enhanced serial descriptor.  Check this BEFORE
-                #    the generic USB-SERIAL rule so an enhanced S3 interface can
-                #    never fall through to Arduino Uno.
+                # 2) Common S3 USB-enhanced serial descriptor.
                 enhanced_serial = (
                     "usb-enhanced-serial" in text
                     or "usb enhanced serial" in text
@@ -737,18 +771,9 @@ class HardwarePortMixin(_Base):
                 if enhanced_serial:
                     return find_board_for_platform("espressif32", variant_hint="esp32s3")
 
-                # 3) Classic Arduino/clone descriptor.  Intentionally require the
-                #    hyphenated USB-SERIAL spelling (or CH340/CH341 beside it) so a
-                #    generic Windows "USB Serial Device" CDC interface is NOT
-                #    misclassified as an Uno.
-                classic_usb_serial = (
-                    "usb-serial" in text
-                    and "enhanced" not in text
-                    and "enchanced" not in text
-                )
-                if classic_usb_serial:
-                    return find_arduino_uno_board()
-
+                # Generic "USB-SERIAL" / CH340 / WCH descriptors identify the
+                # USB bridge, not the MCU. Do not guess Arduino Uno here: this
+                # is also the normal descriptor for many ESP8266 boards.
                 return None
         except Exception:
             pass
@@ -1009,19 +1034,19 @@ class HardwarePortMixin(_Base):
         return target_board
 
     def _get_usb_chip_board_families(self) -> dict:
-        """Return only the three intentionally-recognized common port signatures.
+        """Return only the explicitly-recognized common port signatures.
 
         This helper is used for lightweight port-family validation.  Keep it in
         lockstep with ``_detect_board_from_descriptor`` so an unknown bridge never
         becomes an implicit board guess elsewhere in the application.
         """
         return {
-            # Check enhanced serial before generic USB-SERIAL.
+            # USB-SERIAL/CH340/WCH names are intentionally not listed here:
+            # they identify a bridge shared by Uno clones and ESP8266 boards.
             "usb-enhanced-serial": ({"espressif32"}, "USB-Enhanced-SERIAL (common ESP32-S3)"),
             "usb enhanced serial": ({"espressif32"}, "USB Enhanced SERIAL (common ESP32-S3)"),
             "usb-enchanced-serial": ({"espressif32"}, "USB-Enchanced-SERIAL (common ESP32-S3)"),
             "silicon labs":        ({"espressif32"}, "Silicon Labs USB-serial (common ESP32)"),
-            "usb-serial":          ({"atmelavr"}, "USB-SERIAL (common Arduino Uno/clone)"),
         }
 
 
@@ -1070,21 +1095,11 @@ class HardwarePortMixin(_Base):
         return None
 
     def _port_is_avr_only(self) -> bool:
-        """True only for the explicit USB-SERIAL -> Arduino Uno signature.
+        """Return whether the selected port has an explicit AVR-only signature.
 
         Unknown descriptors are intentionally ambiguous and therefore never
         treated as AVR-only.
         """
-        chip = self._detect_port_chip()
-        if not chip:
-            return False
-        keyword, allowed_platforms, _label = chip
-        if keyword == "usb-serial":
-            descriptor_board = self._detect_board_from_descriptor(self._get_port() or "")
-            return bool(
-                descriptor_board
-                and SUPPORTED_BOARDS.get(descriptor_board, {}).get("platform") == "atmelavr"
-            )
         return False
 
     def _port_is_non_espressif(self) -> bool:
@@ -1161,6 +1176,12 @@ class HardwarePortMixin(_Base):
             return False
         if "communications port" in val or val.strip() == "com1":
             return False
+
+        # A board explicitly chosen in the board picker is authoritative.
+        # USB-SERIAL/CH340/WCH identifies the converter, not the MCU, so it
+        # must never reject an ESP8266 selected by the user.
+        if getattr(self, "_board_selection_manually_overridden", False):
+            return True
 
         board_name = self.board_var.get()
         if not board_name or board_name not in SUPPORTED_BOARDS:
@@ -1392,7 +1413,11 @@ class HardwarePortMixin(_Base):
             if not baud_val and hasattr(self, "baud_var"):
                 baud_val = str(self.baud_var.get()).strip()
             if not baud_val:
-                baud_val = "115200"
+                baud_val = default_monitor_baud(
+                    board_info.get("platform", "") if board_selected else "",
+                    board_info.get("board", "") if board_selected else "",
+                    board_name if board_selected else "",
+                )
 
             upload_spd_val = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
             upload_spd_val = str(upload_spd_val).strip()
@@ -1457,5 +1482,3 @@ class HardwarePortMixin(_Base):
             ensure_hidden_read_first_md(sketch_dir)
         except Exception as exc:
             print(f"[MCU Flasher] Error syncing project state: {exc}")
-
-

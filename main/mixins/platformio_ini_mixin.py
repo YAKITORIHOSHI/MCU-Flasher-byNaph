@@ -202,7 +202,11 @@ class PlatformioIniMixin(_Base):
 
             # Build the [env:mcu_flash] body line-by-line so no key ever gets
             # concatenated onto the tail of another key's value line.
-            monitor_speed = "9600" if p_platform == "atmelavr" else "115200"
+            monitor_speed = default_monitor_baud(
+                p_platform,
+                p_board,
+                self.board_var.get(),
+            )
             env_lines: list[str] = [
                 f"platform = {p_platform}",
                 f"board = {p_board}",
@@ -380,8 +384,13 @@ default_envs = {self._pio_env_name()}
                     content = re.sub(r"^board\s*=.*", f"board = {p_board}", content, flags=re.MULTILINE)
 
                 # Keep the generated monitor baud aligned with the selected
-                # platform. Arduino Uno uses 9600; ESP boards use 115200.
-                desired_monitor_speed = "9600" if p_platform == "atmelavr" else "115200"
+                # resolved board family. ESP8266 uses 74880 for ROM boot
+                # messages; ESP32 remains at 115200.
+                desired_monitor_speed = default_monitor_baud(
+                    p_platform,
+                    p_board,
+                    self.board_var.get(),
+                )
                 if re.search(r"^monitor_speed\s*=", content, re.MULTILINE):
                     content = re.sub(
                         r"^monitor_speed\s*=.*",
