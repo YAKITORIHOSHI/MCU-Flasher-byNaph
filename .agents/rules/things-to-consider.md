@@ -67,9 +67,18 @@ The bootstrap system (`src/modules/bootstrap.py`) must handle a completely fresh
 
 - **Private Python runtime:** `_heal_private_python_runtime()` auto-detects and repairs the portable Python at `src/_python/`. Uses the bundled installer from `installers/.handsoff/python-*-amd64.exe`.
 - **Pre-built PlatformIO seeding:** `_ensure_platformio_core_prebuilt()` downloads a ~1.7GB pre-built toolchain zip with resume, SHA256 verification, and progress. Falls back gracefully to slower pip-based installation on failure.
+- **Multi-Attempt Toolchain Retries:** Transient network issues during platform installation or dummy compile prewarming are retried automatically (`_PLATFORMIO_SETUP_ATTEMPTS = 3`). Non-default platforms defer prewarming until first actual use to ensure instant application startup.
 - **Google Drive downloads use urllib (not requests)** because bootstrap runs before pip dependencies are installed. The downloader handles Google's virus-scan confirmation HTML page by parsing the form and extracting hidden fields.
 - **`[WinError 32]` file locks:** Antivirus scanners may lock `.zip.part` download files. Always handle with retry logic, exponential backoff, and clear error messages. Never crash on a lock error.
 - **Progress feedback is mandatory:** Downloads, extractions, and toolchain installs must show progress (percent, speed, ETA) inline in the bootstrap console.
+
+---
+
+## Board Resolution Safety & Discovery
+
+- **Safe Board Metadata Access:** In any GUI mixin or helper method inspecting board parameters (such as `platform`, `board`, `framework`, `arduino_board_id`), always call `board_info = self._resolve_board_info()`. Never assume `board_info` is already in local scope or rely on unverified global dictionaries.
+- **Unified Toolchain Backend:** All boards (ESP32, ESP8266, AVR) compile and flash through the unified PlatformIO toolchain and environment pipeline.
+- **Multi-Root Board Discovery:** Board definitions and USB VID/PID detection scan both app-local (`Boards/`) and standard Arduino packages (`%LOCALAPPDATA%/Arduino15/packages`). Duplicate board display names are disambiguated by appending `(arduino_board_id)`.
 
 ---
 

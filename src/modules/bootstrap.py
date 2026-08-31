@@ -4217,8 +4217,9 @@ def _scan_downloaded_platforms(pio: list[str] | None = None) -> set[str]:
         for counts in source_counts.values():
             if counts:
                 platforms.add(max(counts.items(), key=lambda item: (item[1], item[0]))[0])
-    if not platforms:
-        for record in records:
+    for record in records:
+        src = record.get("source_file", "")
+        if src not in source_counts:
             fallback = _fallback_platform_from_mcu(str(record.get("mcu") or ""))
             if fallback:
                 platforms.add(fallback)
@@ -4228,7 +4229,7 @@ def _scan_downloaded_platforms(pio: list[str] | None = None) -> set[str]:
 # Friendly label + rough one-time download size shown while installing.
 _PLATFORM_INFO = {
     "espressif32":   ("ESP32 / ESP32-S3", "~180 MB"),
-    "espressif8266": ("ESP8266",          "~60 MB"),
+    "espressif8266": ("ESP8266",          "~180 MB"),
     "atmelavr":      ("Arduino UNO / AVR", "~30 MB"),
     "ststm32":       ("STM32",             "~120 MB"),
     "raspberrypi":   ("RP2040 / Pico",     "~80 MB"),
@@ -4239,12 +4240,28 @@ _PLATFORM_INFO = {
     "ch32v":         ("CH32V RISC-V",      "~50 MB"),
 }
 
+# Keep bootstrap bounded to the platforms shipped in the pre-built bundle.
+# Board Browser downloads can add many third-party cores (ESP8266, STM32,
+# RP2040, etc.), but downloading every matching compiler during application
+# startup makes setup unexpectedly take minutes.  Those platforms are still
+# installed and validated by ``prepare_platformio_board_toolchain`` when the
+# user first compiles or uploads to a board that needs one.
+_BOOTSTRAP_DEFAULT_PLATFORMS = {"atmelavr", "espressif32"}
+
 # Readiness is derived from successful environment builds and their actual package metadata.
 _FULL_FAMILY_MARKER_SCHEMA = 5
 _FULL_FAMILY_MARKER_DIR = ".mcu-family-complete"
 _BOARD_TOOLCHAIN_MARKER_SCHEMA = 1
 _BOARD_TOOLCHAIN_MARKER_DIR = ".mcu-board-ready"
 _BOARD_TOOLCHAIN_PREPARE_LOCK = threading.RLock()
+# PlatformIO can spend several minutes inside its package manager without
+# writing anything to stdout, especially while downloading the ESP8266
+# Xtensa toolchain. Silence is therefore not treated as a stalled process;
+# the absolute command timeout remains the final safety limit. Failed package
+# attempts are retried because PlatformIO installs are idempotent and can
+# resume/repair the partially downloaded package on the next attempt.
+_PLATFORMIO_SETUP_TIMEOUT_S = 3600
+_PLATFORMIO_SETUP_ATTEMPTS = 3
 
 
 def _platform_manifest_path(pio_core_dir: str, platform: str) -> Path | None:
@@ -4902,6 +4919,9 @@ def _stream_platformio_setup(
 
     def _record_line(stripped: str):
         nonlocal current_item, current_kind
+        low = stripped.lower()
+        if "command is deprecated" in low or "pio pkg install" in low or "telemetry" in low:
+            return
         tail.append(stripped)
         if len(tail) > 120:
             del tail[:30]
@@ -4910,7 +4930,6 @@ def _stream_platformio_setup(
                 on_line(stripped)
             except Exception:
                 pass
-        low = stripped.lower()
 
         if "tool manager:" in low or "platform manager:" in low:
             kind, item = _platformio_manager_item(stripped)
@@ -5093,14 +5112,12 @@ def _stream_platformio_setup(
             try:
                 raw = line_queue.get(timeout=0.2)
             except queue.Empty:
-                if now - last_output_at >= 300.0 and proc.poll() is None:
-                    _terminate_tree(proc)
-                    raise RuntimeError(
-                        f"PlatformIO produced no output for {int(now - last_output_at)}s while processing "
-                        f"{current_item or stage}"
-                    )
-                # A silent Package Manager check is not necessarily frozen. Keep
-                # the UI explicit while still enforcing the absolute timeout.
+                # A silent Package Manager phase is not necessarily frozen. In
+                # particular, the ESP8266 Xtensa archive can download for many
+                # minutes without emitting a line. Keep the UI explicit and
+                # enforce only the absolute timeout checked above; killing the
+                # process after a short idle period caused packages to finish
+                # only when the user reopened the app.
                 if (
                     _gui and current_item and active_phase is None
                     and now - last_output_at >= 3.0
@@ -5315,29 +5332,37 @@ def _log_platformio_first_install_warning(label: str, size_hint: str) -> None:
         warn(msg)
 
 def ensure_board_toolchains() -> bool:
-    """Prepare PlatformIO packages exactly the way the main app's first Compile does.
+    """Prepare the bundled PlatformIO packages during application startup.
 
-    Bootstrap installs the development platform, then runs a tiny temporary
-    no-upload project. For ESP32 it dynamically chooses one Arduino board for
-    each distinct MCU family exposed by the installed platform. The resulting
-    frameworks/toolchains stay in the single shared PLATFORMIO_CORE_DIR, while
-    the temporary build workspace is deleted.
+    Bootstrap installs the bundled development platforms, then runs a tiny
+    temporary no-upload project. For ESP32 it dynamically chooses one Arduino
+    board for each distinct MCU family exposed by the installed platform. The
+    resulting frameworks/toolchains stay in the single shared
+    PLATFORMIO_CORE_DIR, while the temporary build workspace is deleted.
 
-    This is intentionally different from requiring every package listed in
-    platform.json: many of those entries are optional alternate frameworks,
-    legacy cores, or debug tools and are not required by normal Arduino builds.
+    Third-party platforms discovered from downloaded Board Browser cores are
+    deliberately deferred until first use. This keeps setup fast while the
+    normal compile/upload path still installs and proves those platforms before
+    touching the user's project.
     """
     pio = find_pio()
     if not pio:
         warn("PlatformIO not found - skipping board toolchain pre-install.")
         return False
 
-    platforms = _scan_downloaded_platforms(pio)
-    if not platforms:
-        # Bootstrap itself prepares the default Arduino AVR + ESP32 Board Browser
-        # cores before this step, so retain them only as a last-resort fallback
-        # if PlatformIO's global board catalog could not be queried.
-        platforms = {"espressif32", "atmelavr"}
+    detected_platforms = _scan_downloaded_platforms(pio)
+    deferred_platforms = sorted(detected_platforms - _BOOTSTRAP_DEFAULT_PLATFORMS)
+    platforms = set(_BOOTSTRAP_DEFAULT_PLATFORMS)
+    if deferred_platforms:
+        deferred_labels = [
+            _PLATFORM_INFO.get(platform, (platform, ""))[0]
+            for platform in deferred_platforms
+        ]
+        status(
+            "Deferring first-use toolchain setup for "
+            + ", ".join(deferred_labels)
+            + " (will auto-prepare on first compile/flash)."
+        )
     pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR)
     os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
     status(f"Shared PlatformIO package store: {pio_core_dir}")
@@ -5386,25 +5411,56 @@ def ensure_board_toolchains() -> bool:
             _log_platformio_first_install_warning(label, size_hint)
 
         # Ensure the development platform itself exists first. This command is
-        # idempotent and normally returns almost immediately when already present.
-        platform_ok = _stream_platformio_setup(
-            list(pio) + ["platform", "install", platform],
-            env,
-            label=label,
-            stage=f"Checking PlatformIO platform {platform}",
-            progress_start=5,
-            progress_end=32,
-            timeout=1800,
-            on_download_start=_warn_once,
-        )
+        # idempotent, and a previous interrupted download can be resumed or
+        # repaired by PlatformIO on the next attempt. Keep retrying here so a
+        # transient registry/network failure does not defer completion to the
+        # next application launch.
+        platform_ok = False
+        for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+            if attempt > 1:
+                status(
+                    f"{label}: retrying PlatformIO platform preparation "
+                    f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                )
+            platform_ok = _stream_platformio_setup(
+                list(pio) + ["platform", "install", platform],
+                env,
+                label=label,
+                stage=f"Checking PlatformIO platform {platform}",
+                progress_start=5,
+                progress_end=32,
+                timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
+                on_download_start=_warn_once,
+            )
+            if platform_ok:
+                break
         if not platform_ok:
             warn(f"{label}: PlatformIO platform preparation did not complete.")
             all_ok = False
             continue
 
-        prewarm_ok, prewarm_boards, required_packages, board_requirements, coverage_keys = _prewarm_pio_platform(
-            pio, platform, env, label=label, on_download_start=_warn_once
-        )
+        prewarm_ok = False
+        prewarm_boards: list[str] = []
+        required_packages: set[str] = set()
+        board_requirements: dict[str, list[str]] = {}
+        coverage_keys: list[str] = []
+        for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+            if attempt > 1:
+                status(
+                    f"{label}: retrying first-use framework/toolchain validation "
+                    f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                )
+            (
+                prewarm_ok,
+                prewarm_boards,
+                required_packages,
+                board_requirements,
+                coverage_keys,
+            ) = _prewarm_pio_platform(
+                pio, platform, env, label=label, on_download_start=_warn_once
+            )
+            if prewarm_ok:
+                break
         if not prewarm_ok:
             warn(
                 f"{label}: first-use dummy compile did not complete. "
@@ -5502,6 +5558,7 @@ def prepare_platformio_board_toolchain(
         env["PLATFORMIO_CORE_DIR"] = pio_core_dir
         env["PLATFORMIO_NO_TELEMETRY"] = "1"
         env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
+        env["PYTHONWARNINGS"] = "ignore"
 
         if callable(on_status):
             try:
@@ -5531,21 +5588,33 @@ def prepare_platformio_board_toolchain(
                 except Exception:
                     pass
 
-        platform_ok = _stream_platformio_setup(
-            list(pio) + ["platform", "install", platform],
-            env,
-            label=display,
-            stage=f"Checking PlatformIO platform {platform}",
-            progress_start=0,
-            progress_end=30,
-            timeout=1800,
-            on_download_start=_announce_download,
-            on_line=on_line,
-            on_status=on_status,
-            on_progress=on_progress,
-            cancel_requested=cancel_requested,
-            on_process=on_process,
-        )
+        platform_ok = False
+        for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+            if attempt > 1 and callable(on_status):
+                try:
+                    on_status(
+                        f"{display}: retrying platform preparation "
+                        f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                    )
+                except Exception:
+                    pass
+            platform_ok = _stream_platformio_setup(
+                list(pio) + ["platform", "install", platform],
+                env,
+                label=display,
+                stage=f"Checking PlatformIO platform {platform}",
+                progress_start=0,
+                progress_end=30,
+                timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
+                on_download_start=_announce_download,
+                on_line=on_line,
+                on_status=on_status,
+                on_progress=on_progress,
+                cancel_requested=cancel_requested,
+                on_process=on_process,
+            )
+            if platform_ok:
+                break
         if not platform_ok:
             return False
 
@@ -5572,22 +5641,34 @@ def prepare_platformio_board_toolchain(
                     on_status(f"{display}: validating framework and toolchain for {board_id}...")
                 except Exception:
                     pass
-            build_ok = _stream_platformio_setup(
-                list(pio) + ["run", "-e", env_name],
-                env,
-                cwd=temporary_root,
-                label=display,
-                stage=f"First-use compile validation for {board_id}",
-                progress_start=30,
-                progress_end=100,
-                timeout=1800,
-                on_download_start=_announce_download,
-                on_line=on_line,
-                on_status=on_status,
-                on_progress=on_progress,
-                cancel_requested=cancel_requested,
-                on_process=on_process,
-            )
+            build_ok = False
+            for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+                if attempt > 1 and callable(on_status):
+                    try:
+                        on_status(
+                            f"{display}: retrying framework/toolchain validation "
+                            f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                        )
+                    except Exception:
+                        pass
+                build_ok = _stream_platformio_setup(
+                    list(pio) + ["run", "-e", env_name],
+                    env,
+                    cwd=temporary_root,
+                    label=display,
+                    stage=f"First-use compile validation for {board_id}",
+                    progress_start=30,
+                    progress_end=100,
+                    timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
+                    on_download_start=_announce_download,
+                    on_line=on_line,
+                    on_status=on_status,
+                    on_progress=on_progress,
+                    cancel_requested=cancel_requested,
+                    on_process=on_process,
+                )
+                if build_ok:
+                    break
             if not build_ok:
                 return False
 

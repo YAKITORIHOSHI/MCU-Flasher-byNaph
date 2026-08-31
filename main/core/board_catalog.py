@@ -61,6 +61,60 @@ def _get_download_dir() -> str:
     return str(default_dir)
 
 
+def _get_arduino_board_search_roots() -> list[Path]:
+    """Return all directories containing installed or downloaded Arduino cores.
+
+    Includes MCU Flasher's internal Download Manager directory (Boards/),
+    as well as standard Arduino IDE / Arduino CLI package repositories
+    (%LOCALAPPDATA%/Arduino15/packages, %APPDATA%/Arduino15/packages).
+    """
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    # 1. Downloaded boards managed by MCU Flasher
+    try:
+        mcu_boards = Path(_get_download_dir()) / "Boards"
+        if mcu_boards.is_dir():
+            resolved = mcu_boards.resolve()
+            if str(resolved).lower() not in seen:
+                seen.add(str(resolved).lower())
+                roots.append(mcu_boards)
+    except Exception:
+        pass
+
+    # 2. System Arduino15 package locations (Arduino IDE 2.x, 1.8.x, Arduino CLI)
+    env_paths = [
+        os.environ.get("LOCALAPPDATA", ""),
+        os.environ.get("APPDATA", ""),
+        os.environ.get("USERPROFILE", ""),
+    ]
+    for env_base in env_paths:
+        if not env_base:
+            continue
+        try:
+            base_dir = Path(os.path.expandvars(os.path.expanduser(env_base)))
+            candidate = base_dir / "Arduino15" / "packages"
+            if candidate.is_dir():
+                resolved = candidate.resolve()
+                if str(resolved).lower() not in seen:
+                    seen.add(str(resolved).lower())
+                    roots.append(candidate)
+        except Exception:
+            pass
+
+    try:
+        home_arduino15 = Path.home() / ".arduino15" / "packages"
+        if home_arduino15.is_dir():
+            resolved = home_arduino15.resolve()
+            if str(resolved).lower() not in seen:
+                seen.add(str(resolved).lower())
+                roots.append(home_arduino15)
+    except Exception:
+        pass
+
+    return roots
+
+
 def _normalize_board_identity(value: object) -> str:
     """Normalize a board/vendor/variant identifier for cross-ecosystem matching."""
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
@@ -231,6 +285,11 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
     """
     root_value = str(core_dir or os.environ.get("PLATFORMIO_CORE_DIR") or "").strip()
     if not root_value:
+        try:
+            root_value = str(_get_safe_platformio_core_dir(SCRIPT_DIR))
+        except Exception:
+            root_value = ""
+    if not root_value:
         return []
     root = Path(os.path.expandvars(os.path.expanduser(root_value)))
     candidates: list[tuple[Path, str]] = []
@@ -284,19 +343,22 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         defines = {
             _normalize_board_identity(match.group(1))
             for flag in extra_flags
-            for match in [re.search(r"-D\s*(ARDUINO_[A-Za-z0-9_]+)", str(flag), re.IGNORECASE)]
+            for match in [re.search(r"-D\s*([A-Za-z0-9_]+)", str(flag))]
             if match
         }
+        for flag in arduino_build.get("extra_flags", []) if isinstance(arduino_build.get("extra_flags"), list) else []:
+            match = re.search(r"-D\s*([A-Za-z0-9_]+)", str(flag))
+            if match:
+                defines.add(_normalize_board_identity(match.group(1)))
 
         catalog.append({
             "id": manifest_path.stem,
-            "name": str(data.get("name") or manifest_path.stem).strip(),
-            "vendor": str(data.get("vendor") or "").strip(),
-            "platform": str(platform_value or platform_hint).strip(),
-            "frameworks": {str(x).lower() for x in frameworks},
+            "name": str(data.get("name") or manifest_path.stem),
+            "vendor": str(data.get("vendor") or ""),
+            "platform": str(platform_value or "").strip(),
+            "frameworks": {str(f).lower() for f in frameworks},
             "mcu": str(build.get("mcu") or "").strip().lower(),
-            "core": str(build.get("core") or "").strip().lower(),
-            "variant": str(build.get("variant") or "").strip(),
+            "variant": str(build.get("variant") or arduino_build.get("variant") or "").strip(),
             "memory_type": str(arduino_build.get("memory_type") or build.get("memory_type") or "").strip(),
             "flash_mode": str(build.get("flash_mode") or "").strip(),
             "flash_size": str(upload.get("flash_size") or "").strip(),
@@ -394,8 +456,52 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | N
     }
 
 
+def _fallback_platform_from_mcu(mcu: str) -> str:
+    """Last-resort architecture fallback when PlatformIO catalog discovery is unavailable."""
+    value = _normalize_board_identity(mcu)
+    if value.startswith("esp32"):
+        return "espressif32"
+    if value.startswith("esp8266"):
+        return "espressif8266"
+    if value.startswith("atmega") or value.startswith("attiny"):
+        return "atmelavr"
+    if value.startswith("stm32"):
+        return "ststm32"
+    if value.startswith("rp2040") or value.startswith("rp2350"):
+        return "raspberrypi"
+    if value.startswith("samd") or value.startswith("sam"):
+        return "atmelsam"
+    if value.startswith("nrf"):
+        return "nordicnrf52"
+    return ""
+
+
+def _fallback_board_id_for_platform(
+    platform: str, arduino_id: str, mcu: str = "", display_name: str = ""
+) -> str:
+    """Derive a sensible default PlatformIO board identifier when no local manifest is installed yet."""
+    aid = str(arduino_id or "").strip().lower()
+    dname = str(display_name or "").strip().lower()
+
+    if platform == "espressif8266":
+        if aid == "generic" or "generic" in dname:
+            return "esp01_1m"
+        if aid in ("nodemcu", "nodemcuv2", "d1_mini", "d1", "esp12e", "esp01", "esp07", "thing", "huzzah"):
+            return aid
+        return aid or "esp01_1m"
+    if platform == "espressif32":
+        if aid in ("esp32", "esp32dev", "nodemcu-32s", "esp32-s2-saola-1", "esp32-s3-devkitc-1", "esp32-c3-devkitm-1"):
+            return aid
+        return aid or "esp32dev"
+    if platform == "atmelavr":
+        if aid in ("uno", "nano", "megaatmega2560", "leonardo", "pro16mhzatmega328", "promicro"):
+            return aid
+        return aid or "uno"
+    return aid or "generic"
+
+
 def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> dict:
-    """Load downloaded Arduino boards and resolve them to real PlatformIO IDs.
+    """Load downloaded/installed Arduino boards and resolve them to real PlatformIO IDs.
 
     Arduino ``boards.txt`` identifiers and PlatformIO board IDs are different
     namespaces.  The old loader treated them as interchangeable and could
@@ -412,8 +518,9 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         return default_boards.copy()
 
     boards = default_boards.copy()
-    boards_path = Path(_get_download_dir()) / "Boards"
-    records = _parse_downloaded_arduino_board_files(boards_path)
+    records: list[dict] = []
+    for search_root in _get_arduino_board_search_roots():
+        records.extend(_parse_downloaded_arduino_board_files(search_root))
     catalog = _load_platformio_board_catalog()
 
     resolved_rows: list[tuple[dict, dict | None]] = [
@@ -437,16 +544,43 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
                 counts.items(), key=lambda item: (item[1], item[0])
             )[0]
 
+    # If no boards in a source_file matched an installed PlatformIO manifest
+    # (e.g. platform is not yet installed in PlatformIO's core store), infer
+    # the platform from the MCU declared in the Arduino core.
+    for record in records:
+        src = record.get("source_file", "")
+        if src and src not in inferred_source_platform:
+            fb = _fallback_platform_from_mcu(str(record.get("mcu") or ""))
+            if fb:
+                inferred_source_platform[src] = fb
+
     used_names: set[str] = set(boards)
     for record, match in resolved_rows:
         display_name = str(record.get("name") or record.get("arduino_id") or "Unknown board")
-        if display_name in used_names:
-            display_name = f"{display_name} ({record.get('arduino_id')})"
-        used_names.add(display_name)
+        platform = str(
+            (match or {}).get("platform")
+            or inferred_source_platform.get(record["source_file"], "")
+            or _fallback_platform_from_mcu(str(record.get("mcu") or ""))
+        ).strip()
+        arduino_id = str(record.get("arduino_id") or "")
+        raw_id = str((match or {}).get("id") or "").strip()
+        pio_id = raw_id or _fallback_board_id_for_platform(
+            platform, arduino_id, str(record.get("mcu") or ""), display_name
+        )
+        pio_resolved = bool(match and platform and raw_id) or bool(platform and pio_id)
 
-        platform = str((match or {}).get("platform") or inferred_source_platform.get(record["source_file"], ""))
-        pio_id = str((match or {}).get("id") or record.get("arduino_id") or "").strip()
-        pio_resolved = bool(match and platform and pio_id)
+        if display_name in used_names:
+            existing = boards.get(display_name)
+            if (
+                isinstance(existing, dict)
+                and existing.get("arduino_board_id") == arduino_id
+                and str(existing.get("platform", "")).lower() == platform.lower()
+            ):
+                continue
+            display_name = f"{display_name} ({arduino_id})"
+            if display_name in used_names:
+                continue
+        used_names.add(display_name)
 
         entry: dict = {
             "platform": platform,
@@ -455,7 +589,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
             "pio_resolved": pio_resolved,
             "pio_match_score": (match or {}).get("match_score", 0.0),
             "pio_match_reasons": list((match or {}).get("match_reasons") or []),
-            "arduino_board_id": str(record.get("arduino_id") or ""),
+            "arduino_board_id": arduino_id,
             "arduino_variant": str(record.get("variant") or ""),
             "arduino_build_board": str(record.get("build_board") or ""),
             "mcu": str((match or {}).get("mcu") or record.get("mcu") or "").lower(),
@@ -483,7 +617,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
 SUPPORTED_BOARDS = load_dynamic_boards({}, prefer_cache=True)
 
 def load_downloaded_board_usb_ids(board_catalog: dict | None = None) -> dict[tuple[int, int], tuple[str, ...]]:
-    """Map VID/PID pairs to every downloaded board that declares them.
+    """Map VID/PID pairs to every downloaded/installed board that declares them.
 
     ESP native-USB VID/PIDs are often shared or can be emitted by firmware, so
     a single ``dict[pair] = board`` silently made the last board in boards.txt
@@ -491,27 +625,26 @@ def load_downloaded_board_usb_ids(board_catalog: dict | None = None) -> dict[tup
     uniquely identifies one currently resolved board.
     """
     values: dict[tuple[str, str], dict[str, int]] = {}
-    boards_path = Path(_get_download_dir()) / "Boards"
-    if not boards_path.is_dir():
-        return {}
-
     property_re = re.compile(
         r"^([^.=]+)\.(?:upload_port\.)?(vid|pid)\.(\d+)\s*=\s*(0x[0-9a-f]+|\d+)\s*$",
         re.IGNORECASE,
     )
-    for boards_file in boards_path.glob("**/boards.txt"):
-        try:
-            for raw_line in boards_file.read_text(encoding="utf-8", errors="replace").splitlines():
-                match = property_re.match(raw_line.strip())
-                if not match:
-                    continue
-                board_id, field, index, raw_value = match.groups()
-                try:
-                    values.setdefault((board_id.lower(), index), {})[field.lower()] = int(raw_value, 0)
-                except ValueError:
-                    continue
-        except OSError:
+    for search_root in _get_arduino_board_search_roots():
+        if not search_root.is_dir():
             continue
+        for boards_file in search_root.glob("**/boards.txt"):
+            try:
+                for raw_line in boards_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                    match = property_re.match(raw_line.strip())
+                    if not match:
+                        continue
+                    board_id, field, index, raw_value = match.groups()
+                    try:
+                        values.setdefault((board_id.lower(), index), {})[field.lower()] = int(raw_value, 0)
+                    except ValueError:
+                        continue
+            except OSError:
+                continue
 
     board_names_by_id: dict[str, str] = {}
     catalog = board_catalog if board_catalog is not None else SUPPORTED_BOARDS
@@ -760,7 +893,10 @@ __all__ = [
     "_board_catalog_cache_path",
     "_board_name_tokens",
     "_enrich_chip_features",
+    "_fallback_board_id_for_platform",
+    "_fallback_platform_from_mcu",
     "_format_upload_progress_row",
+    "_get_arduino_board_search_roots",
     "_get_download_dir",
     "_json_safe_board_value",
     "_load_board_catalog_cache",

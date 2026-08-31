@@ -284,6 +284,13 @@ class BoardsCatalogMixin(_Base):
                     category="board_install",
                     title="Board Package Installed"
                 )
+            if added_boards:
+                self._append_notif(
+                    "  ℹ Board toolchain is configured and will automatically prepare on first compile/flash (no restart required).",
+                    tag="info",
+                    category="board_install",
+                    title="Toolchain Auto-Setup Ready"
+                )
         self._known_board_names = new_board_names
 
         if hasattr(self, 'board_combo') and self.board_combo:
@@ -301,15 +308,10 @@ class BoardsCatalogMixin(_Base):
                 except Exception:
                     pass
             
-            # If the current selected board is no longer in SUPPORTED_BOARDS
+            # If the current selected board is no longer in SUPPORTED_BOARDS, clear it
             curr = self.board_var.get()
-            if curr not in SUPPORTED_BOARDS and SUPPORTED_BOARDS:
-                new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
-                self.board_var.set(new_board)
-                self._on_board_changed()
-            elif not curr and SUPPORTED_BOARDS:
-                new_board = next((b for b in SUPPORTED_BOARDS if b.lower() == "arduino uno"), next(iter(SUPPORTED_BOARDS.keys())))
-                self.board_var.set(new_board)
+            if curr and curr not in SUPPORTED_BOARDS:
+                self.board_var.set("")
                 self._on_board_changed()
                 
             self._append("  ℹ Reloaded supported boards list from disk.", "info")

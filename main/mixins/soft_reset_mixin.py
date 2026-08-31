@@ -1382,9 +1382,12 @@ class SoftResetMixin(_Base):
         # Force the GUI monitor to the same board-family baud as the generated
         # reset sketch before it reconnects. This also keeps future Arduino
         # PlatformIO families from inheriting a stale ESP/AVR setting.
-        self.baud_var.set(monitor_speed)
-        if hasattr(self, "serial_baud_var"):
-            self.serial_baud_var.set(monitor_speed)
+        def _apply_reset_baud(b=monitor_speed):
+            self.baud_var.set(b)
+            if hasattr(self, "serial_baud_var"):
+                self.serial_baud_var.set(b)
+
+        self._post_ui(_apply_reset_baud)
 
         # ── Board-aware caching: only rewrite files if content changed ─────────
         # When the board changes, the ini_content changes → we detect that,
@@ -1633,6 +1636,8 @@ class SoftResetMixin(_Base):
                             self._capture_stale_clean_path(stripped, _stale_clean_paths)
                         elif is_linker_error:
                             self._append(f"  ✖ {stripped}", "error")
+                        elif "syntaxwarning" in low:
+                            continue
                         elif "error" in low and "werror" not in low:
                             is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
                             can_retry = (_connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
@@ -1756,6 +1761,11 @@ class SoftResetMixin(_Base):
         self._set_buttons_busy(False)
 
         if ok:
+            def _reapply_monitor_baud(b=monitor_speed):
+                self.baud_var.set(b)
+                if hasattr(self, "serial_baud_var"):
+                    self.serial_baud_var.set(b)
+            self._post_ui(_reapply_monitor_baud)
             self._activate_serial_monitor_after_success("Soft Reset")
 
         if ok and not was_monitoring:

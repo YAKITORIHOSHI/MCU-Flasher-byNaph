@@ -495,7 +495,7 @@ class UploadPipelineMixin(_Base):
         # so the user always knows where they are in the pipeline.
         # Phases in order: 1 Connecting → 2 Erasing → 3 Writing → 4 Verifying → 5 Resetting
         _UPLOAD_PHASES = [
-            ("Initialising",  "Starting PlatformIO uploader..."),
+            ("Initialising",  "Starting uploader..."),
             ("Connecting",    "Connecting to board..."),
             ("Erasing",       "Erasing flash memory..."),
             ("Writing",       "Writing firmware to flash..."),
@@ -575,6 +575,7 @@ class UploadPipelineMixin(_Base):
 
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
+
         is_avr = (board_info.get("platform", "") == "atmelavr")
         board_reset_family = board_reset_capabilities(
             board_info.get("platform", ""),

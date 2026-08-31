@@ -6,11 +6,14 @@ MCU Flasher by Naph — Modularized Architecture
 from __future__ import annotations
 
 import sys
+import os
 import time
+import re
 import subprocess
 import threading
 import queue
 import traceback
+from datetime import datetime
 from typing import TYPE_CHECKING
 import tkinter as tk
 from tkinter import messagebox
@@ -21,6 +24,7 @@ from main.core.theme import *
 from main.core.config import *
 from main.core.file_utils import *
 from main.core.toolchain import *
+from main.core import board_catalog as _board_catalog
 from main.core.board_catalog import *
 from main.core.board_compat import *
 from main.widgets import *
@@ -47,7 +51,16 @@ class BuildActionsMixin(_Base):
         platform = str(board_info.get("platform") or "").strip()
         board_id = str(board_info.get("board") or "").strip()
         framework = str(board_info.get("framework") or "arduino").strip() or "arduino"
-        if not board_info.get("pio_resolved", True) or not platform or not board_id:
+
+        if not platform:
+            platform = _fallback_platform_from_mcu(str(board_info.get("mcu") or ""))
+        if not board_id:
+            arduino_id = str(board_info.get("arduino_board_id") or "").strip()
+            board_id = _fallback_board_id_for_platform(
+                platform, arduino_id, str(board_info.get("mcu") or ""), selected_board
+            )
+
+        if not platform or not board_id:
             self._append(
                 f"  ✖ PlatformIO cannot prepare '{selected_board}': no canonical board manifest is available.",
                 "error",
@@ -59,17 +72,61 @@ class BuildActionsMixin(_Base):
             return True
 
         self._framework_download_active = False
-        self._append("  🔧 Preparing selected board framework & toolchain automatically...", "info")
-        self._append(f"    Board    : {selected_board}", "dim")
-        self._append(f"    Platform : {platform}", "dim")
-        self._append(f"    PIO ID   : {board_id}", "dim")
-        self._append(f"    Store    : {core_dir}", "dim")
-        if core_refreshed:
-            self._append("    ✔ PlatformIO core/junction path verified.", "info")
-        self._append(
-            "    Missing framework/toolchain packages will be downloaded and validated before continuing.",
-            "info",
-        )
+        self._append("  🔧 First-time toolchain setup for this board family...", "purple_header")
+        self._append(f"    Board    : {selected_board}", "purple_dim")
+        self._append(f"    Platform : {platform} (PIO ID: {board_id})", "purple_dim")
+        self._append("    ⏳ Notice: Downloading compiler & packages (may take 3–5 minutes depending on internet speed).", "warning")
+        self._append("    ✔ This is a one-time setup. Subsequent builds will start immediately without this delay.", "purple_dim")
+        self._append("")
+
+        active_package = [""]
+
+        def _append_toolchain_progress(item_label: str, percent: float, phase: str = "Downloading"):
+            pct = max(0.0, min(100.0, float(percent)))
+            total_bar_width = 24
+            filled = int(round((pct / 100.0) * total_bar_width))
+            bar = "\u2588" * filled + "\u2591" * max(0, total_bar_width - filled)
+            icon = "\u2714" if pct >= 99.9 else "\u23f3"
+            action = "Downloaded" if pct >= 99.9 and phase == "Downloading" else ("Unpacked" if pct >= 99.9 else phase)
+            tag = "success" if pct >= 99.9 else "info"
+            clean_item = re.sub(r"^(?:Installing|Downloading|Unpacking)\s+", "", item_label, flags=re.I)
+            clean_item = clean_item.replace("platformio/", "").strip() or "package"
+            row_text = f"    {icon} {action} {clean_item} [{bar}] {pct:.1f}%"
+
+            def _do():
+                self.console.configure(state=tk.NORMAL)
+                total_lines_cnt = int(self.console.index("end-1c").split(".")[0])
+                found_line_idx = None
+                found_line_text = ""
+                for check_idx in range(total_lines_cnt, max(0, total_lines_cnt - 50), -1):
+                    line_str = self.console.get(f"{check_idx}.0", f"{check_idx}.end")
+                    if re.search(r"(?:downloading|downloaded|unpacking|unpacked)\s+.*?\[.*\]\s*\d+(?:\.\d+)?%", line_str.lower()):
+                        found_line_idx = check_idx
+                        found_line_text = line_str
+                        break
+
+                if found_line_idx is not None:
+                    ts_match = re.match(r"^(\[\d+:\d+:\d+\])\s*", found_line_text)
+                    ts_prefix = (ts_match.group(1) + " ") if ts_match else ""
+                    self.console.delete(f"{found_line_idx}.0", f"{found_line_idx + 1}.0")
+                    self.console.mark_set("_toolchain_ins_mark", f"{found_line_idx}.0")
+                    insert_at = "_toolchain_ins_mark"
+                else:
+                    ts_prefix = f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    insert_at = tk.END
+
+                self.console.insert(insert_at, ts_prefix, "timestamp")
+                self.console.insert(insert_at, row_text + "\n", tag)
+                if found_line_idx is not None:
+                    try:
+                        self.console.mark_unset("_toolchain_ins_mark")
+                    except Exception:
+                        pass
+                self.console.configure(state=tk.DISABLED)
+                if self.console_autoscroll_var.get():
+                    self.console.see(tk.END)
+
+            self._post_ui(_do)
 
         def _line_tag(line: str) -> str:
             low = str(line).lower()
@@ -85,11 +142,37 @@ class BuildActionsMixin(_Base):
 
         def _on_line(line: str):
             text = str(line or "").strip()
-            if text:
-                self._append(f"    {text}", _line_tag(text))
+            if not text:
+                return
+            low = text.lower()
+            if "command is deprecated" in low or "pio pkg install" in low or "telemetry" in low:
+                return
+            if "syntaxwarning:" in low or "invalid escape sequence" in low or text.startswith("words = re.split"):
+                return
+            if text.startswith("=" * 10) or text.startswith("-" * 10):
+                return
+            if "tool manager:" in low or "platform manager:" in low:
+                if "@" in text:
+                    pkg = text.split("@")[0].split(":")[-1].strip()
+                    pkg = re.sub(r"^(?:Installing|Downloading|Unpacking)\s+", "", pkg, flags=re.I).strip()
+                    active_package[0] = pkg
+                self._append(f"    {text}", "info" if "installing" in low else "success")
+                return
+            pct_matches = re.findall(r"(\d+(?:\.\d+)?)%", text)
+            if ("downloading" in low or "unpacking" in low) and pct_matches:
+                pct = float(pct_matches[-1])
+                phase = "Unpacking" if "unpacking" in low else "Downloading"
+                item = active_package[0] or "toolchain"
+                _append_toolchain_progress(item, pct, phase=phase)
+                return
+            self._append(f"    {text}", _line_tag(text))
 
         def _on_status(status_text: str):
             self._set_status(f"Toolchain: {status_text}", Theme.YELLOW)
+
+        def _on_progress(pct: float):
+            # Coarse progress from stage runner — real package progress is driven via _on_line
+            pass
 
         def _on_download_start():
             self._framework_download_active = True
@@ -102,7 +185,7 @@ class BuildActionsMixin(_Base):
             self.process = process
 
         try:
-            return bool(
+            prep_ok = bool(
                 prepare_platformio_board_toolchain(
                     platform,
                     board_id,
@@ -110,6 +193,7 @@ class BuildActionsMixin(_Base):
                     selected_board,
                     on_line=_on_line,
                     on_status=_on_status,
+                    on_progress=_on_progress,
                     on_download_start=_on_download_start,
                     on_process=_on_process,
                     cancel_requested=lambda: bool(
@@ -117,6 +201,17 @@ class BuildActionsMixin(_Base):
                     ),
                 )
             )
+            if prep_ok:
+                try:
+                    reloaded = load_dynamic_boards({})
+                    shared_boards = _board_catalog.SUPPORTED_BOARDS
+                    shared_boards.clear()
+                    shared_boards.update(reloaded)
+                    if selected_board in shared_boards:
+                        board_info.update(shared_boards[selected_board])
+                except Exception:
+                    pass
+            return prep_ok
         finally:
             self._framework_download_active = False
             self.process = None

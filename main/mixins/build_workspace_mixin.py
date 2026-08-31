@@ -307,6 +307,7 @@ class BuildWorkspaceMixin(_Base):
         # signature database across projects.  Explicitly disable inheritance.
         env.pop("PLATFORMIO_BUILD_CACHE_DIR", None)
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONWARNINGS"] = "ignore"
         env["PLATFORMIO_UNBUFFERED"] = "1"
         env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
         env["PYTHONDONTWRITEBYTECODE"] = "0"

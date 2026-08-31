@@ -857,6 +857,17 @@ default_envs = {self._pio_env_name()}
             "fatfs_vfs.h", "ff.h", "diskio.h", "esp_spiffs.h", "esp_littlefs.h",
             "esp_camera.h", "fd_forward.h", "fr_forward.h", "image_util.h"
         }
+        board_info = self._resolve_board_info()
+        if str(board_info.get("platform") or "").lower() == "espressif8266":
+            # These headers are shipped by the Arduino ESP8266 core itself.
+            # Keep them classified as built-in even when the optional copy in
+            # the app's Board Manager cache has been removed; Arduino CLI can
+            # still provide the installed core during compilation.
+            BUILTIN_AND_STD.update({
+                "esp8266wifi.h", "esp8266webserver.h", "esp8266httpclient.h",
+                "esp8266mdns.h", "dnsserver.h",
+                "littlefs.h", "spiffs.h", "eeprom.h", "ticker.h",
+            })
 
         # Override mappings from header file to library name (internal key format for matching)
         HEADER_TO_LIB_NAME = {
@@ -1206,4 +1217,3 @@ default_envs = {self._pio_env_name()}
                     dst_path.unlink()
                 except OSError:
                     pass
-

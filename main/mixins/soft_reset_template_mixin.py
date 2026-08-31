@@ -80,13 +80,21 @@ class SoftResetTemplateMixin(_Base):
         reset_family = str(reset_capabilities.get("family") or platform).lower()
         is_avr = reset_family == "atmelavr"
         is_esp32 = reset_family == "espressif32"
-        is_esp8266 = reset_family == "espressif8266"
+        is_esp8266 = (
+            reset_family == "espressif8266"
+            or "esp8266" in board_name.lower()
+            or "nodemcu" in board_name.lower()
+            or "node" in board_name.lower()
+        )
         is_s3 = is_s3_board(board_id)
         is_native = bool(is_s3 and self._is_native_usb_port())
         flash_size, has_psram = normalized_board_memory_options(info)
         memory_type = normalized_board_memory_type(info)
         flash_mode = normalized_board_flash_mode(info)
-        monitor_speed = default_monitor_baud(platform, board_id, board_name)
+        if is_esp8266:
+            monitor_speed = "115200"
+        else:
+            monitor_speed = default_monitor_baud(platform, board_id, board_name)
         # ESP8266 reset uploads deliberately use the board manifest's reliable
         # 115200 connection speed. Cheap CH340 adapters and bare ESP-01
         # modules frequently fail to enter download mode at 460800, even when
@@ -298,6 +306,7 @@ class SoftResetTemplateMixin(_Base):
         env["PLATFORMIO_LIBDEPS_DIR"] = str(workspace / "libdeps")
         env.pop("PLATFORMIO_BUILD_CACHE_DIR", None)
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONWARNINGS"] = "ignore"
         env["PLATFORMIO_UNBUFFERED"] = "1"
         env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
         env["PYTHONDONTWRITEBYTECODE"] = "0"

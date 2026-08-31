@@ -225,9 +225,19 @@ MCU Flasher by Naph/
 - The terminal runs as a subprocess to prevent Tk/WebView2 event loop conflicts.
 
 ### 5. Toolchain & Serial Monitor Execution Pipeline
-- **Arduino CLI**: Invoked via sub-process execution using paths resolved from `src/dbs/arduino_cli_path.txt` or system PATH. Bootstrap logic in `src/modules/bootstrap.py`.
-- **PlatformIO**: Managed via bootstrap virtual environment wrappers (`ensure_platformio_penv_with_hook`). Core dir is junctioned to `C:\.platformio-mcu-gui` on Windows to avoid long path issues.
-- **Pre-built toolchain seeding**: `_ensure_platformio_core_prebuilt()` downloads a ~1.7GB pre-built zip from GitHub release before the slower pip-based `ensure_platformio()` runs. Uses `downloader.py` with resume, SHA256 verification, and progress reporting. Falls back gracefully on failure.
+- **Unified PlatformIO Toolchain Engine**:
+  - All microcontroller architectures (**ESP32**, **ESP8266**, **Atmel AVR**, etc.) compile uniformly through the PlatformIO SCons build engine using parallel CPU workers (`-j <jobs>`).
+  - Automatic `platformio.ini` environment generation for all boards based on canonical board manifests.
+  - SCons incremental compilation caches object files in isolated board workspaces (`.mcu_flasher_build_cache/boards/<board-key>/`), recompiling only modified or dependent translation units.
+- **PlatformIO & Toolchain Management**: Managed via bootstrap virtual environment wrappers (`ensure_platformio_penv_with_hook`). Core dir is junctioned to `C:\.platformio-mcu-gui` on Windows to avoid long path issues.
+- **Dynamic Board Search Roots & USB VID/PID Discovery**:
+  - `_get_arduino_board_search_roots()` scans both the application's download folder (`Boards/`) and local Arduino packages (`%LOCALAPPDATA%/Arduino15/packages`).
+  - `load_downloaded_board_usb_ids()` maps USB VID/PID tuples across all `boards.txt` to recognize connected microcontrollers reliably.
+  - Duplicate board display names are disambiguated by appending `(arduino_board_id)`.
+- **Pre-built Toolchain Seeding & Multi-Attempt Retries**:
+  - `_ensure_platformio_core_prebuilt()` downloads a ~1.7GB pre-built zip from GitHub release with SHA256 verification and resume support.
+  - `_PLATFORMIO_SETUP_ATTEMPTS` (3 attempts) with retry loops protects platform installs and dummy compile prewarming against transient network/registry drops.
+  - Deferred first-use toolchain setup (`_scan_downloaded_platforms`, `_BOOTSTRAP_DEFAULT_PLATFORMS`) ensures only default families (`espressif32`, `atmelavr`) are prewarmed on initial boot, saving startup time.
 - **Operation Phase Scoping (`_active_operation`)**:
   - `_active_operation == "compile"` (**Compile Phase**): Compiles code strictly on host CPU using background threads. Compiler does **not** open or touch the COM port. Serial Monitor, MCU Reset (DTR/RTS pulse), Baud Rate selection, Send input bar, and live serial output reading remain **fully functional and active**.
   - `_active_operation in ("upload", "flash", "reset")` (**Upload Phase**): Flashing tools (`esptool`, `avrdude`) take exclusive ownership of the COM port. Serial Monitor is automatically paused, port closed, and UI controls locked until upload finishes.
@@ -249,7 +259,8 @@ MCU Flasher by Naph/
 - `[WinError 32]` file lock handling: `.zip.part` files during download may be locked by antivirus. The bootstrap pipeline retries with exponential backoff and falls back to from-scratch installation.
 - Progress reporting is inline to the bootstrap console: download percent, speed (MB/s), and extraction progress.
 
-### 8. Adding New Features or Tooling
+### 8. Adding New Features, Board Resolution & Tooling
+- **Safe Board Resolution Pattern**: In any mixin or helper method needing board metadata (e.g. `platform`, `board`, `framework`, `arduino_board_id`), always call `board_info = self._resolve_board_info()` first. Never assume `board_info` exists in local scope or rely on unverified global dicts.
 - All utility modules belong in `src/modules/`. The `src/libs/` directory is legacy (now empty) — do not add new files there.
 - Ensure paths are resolved relatively using `Path(__file__).resolve().parent`.
 - Settings are persisted in `src/gui_config.json` using `get_editor_mode()` / `set_editor_mode()` pattern.

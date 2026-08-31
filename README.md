@@ -215,7 +215,7 @@ MCU Flasher by Naph/
 
 ### 1. Launching & First-Run Auto-Bootstrap
 - Launch via **`MCU_Flasher.exe`** (or **`direct\runThisOnWindows.vbs`**).
-- The bootstrapper handles all missing dependencies, Python packages (`pyserial`, `pywebview`, `pywinpty`), and toolchains unattended.
+- The bootstrapper handles missing dependencies, Python packages (`pyserial`, `pywebview`, `pywinpty`), and the bundled AVR/ESP32 toolchains unattended. Additional downloaded board families are installed automatically on first compile or upload, keeping startup fast.
 - If launched from source in a developer terminal:
   ```powershell
   python mcu_flash_gui.py
@@ -237,6 +237,7 @@ MCU Flasher by Naph/
 ### 4. Compiling & Flashing Code
 - **Compile Only (`🔨 Compile`)**:
   - Compiles your project using the selected toolchain (PlatformIO or Arduino CLI).
+  - ESP8266 Arduino boards reuse an installed Arduino CLI core when available, so a separate PlatformIO Xtensa download is not required.
   - *Non-blocking*: Serial Monitor remains active and streaming while compiling!
   - Caches build artifacts in `.mcu_flasher_build_cache/` for near-instant incremental builds.
 - **Upload (`⚡ Upload`)**:

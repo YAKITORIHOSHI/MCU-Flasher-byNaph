@@ -9,6 +9,7 @@ import sys
 import os
 import time
 import re
+import shutil
 import subprocess
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -35,6 +36,7 @@ else:
 
 class CompilerPipelineMixin(_Base):
     """Mixin providing CompilerPipelineMixin capabilities for MCUUploadGUI."""
+
     def _freeze_build_sources_at_boundary(self, action_name: str) -> bool:
         """Stage immutable build inputs between two synchronous AI scans.
 
@@ -76,12 +78,15 @@ class CompilerPipelineMixin(_Base):
         self._set_buttons_state(True, operation="compile")
         self._set_status("Compiling...", Theme.YELLOW)
 
+        board_info = self._resolve_board_info()
+        compiler_name = "PlatformIO"
+
         self._append("")
         self._append("=" * 50, "header")
-        self._append("  ⚙  COMPILING (PlatformIO)", "header")
+        self._append(f"  ⚙  COMPILING ({compiler_name})", "header")
         self._append("=" * 50, "header")
         self._append(f"  Sketch : {self.sketch_dir_path}", "dim")
-        self._append("  Tool   : PlatformIO Core", "dim")
+        self._append(f"  Tool   : {compiler_name}", "dim")
         core_dir, core_was_refreshed = _refresh_platformio_core_environment(SCRIPT_DIR)
         self._append(f"  Store  : {core_dir}", "dim")
         if core_was_refreshed:
@@ -163,7 +168,6 @@ class CompilerPipelineMixin(_Base):
         # hit "pins_arduino.h: No such file" deep into the build. Fully
         # dynamic — reads the board's own manifest, no board/platform
         # names hardcoded here.
-        board_info = self._resolve_board_info()
         variant_ok, missing_variant = self._verify_board_variant_exists(
             board_info["platform"], board_info["board"]
         )
@@ -238,10 +242,9 @@ class CompilerPipelineMixin(_Base):
             "-e", env_name,
             "-j", str(jobs)
         ]
-
         self._append("  ⚙ Initializing PlatformIO build engine & dependency tree...", "purple_header")
         self._append("    SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...", "purple_dim")
-        # ── Remote project support ────────────────────────────────────────
+        # ── Remote project support ────────────────────────────────────
         # Remote sketches are staged into a local board-isolated project by
         # _freeze_build_sources_at_boundary().  PlatformIO therefore never
         # uses the UNC/share directory as its cwd or repeatedly scans it.
@@ -866,12 +869,17 @@ class CompilerPipelineMixin(_Base):
         # Check if killed by user (returncode is negative on SIGTERM/SIGKILL, or _stop_requested set)
         was_killed = getattr(self, "_stop_requested", False) or (sys.platform != "win32" and rc < 0)
 
-
         if rc == 0:
             self._capture_build_metadata(output_lines)
             # Show advanced memory usage summary
             for line in output_lines:
-                if "ram:" in line.lower() or "flash:" in line.lower():
+                low = line.lower()
+                if (
+                    "ram:" in low
+                    or "flash:" in low
+                    or "sketch uses" in low
+                    or "global variables use" in low
+                ):
                     self._append(f"  {line.strip()}", "success")
             self._append("")
 
