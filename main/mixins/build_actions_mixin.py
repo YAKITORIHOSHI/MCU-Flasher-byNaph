@@ -69,9 +69,6 @@ class BuildActionsMixin(_Base):
         # Store reasons so _run_compile can emit them after the COMPILING header
         self._pending_compat_reasons = compat_reasons if compat_reasons else []
 
-        # Auto-detect and set correct board before compilation begins
-        self._auto_select_board(show_msg=True)
-
         if self._block_action_for_pending_ai_review("Compile"):
             return
 
@@ -176,9 +173,6 @@ class BuildActionsMixin(_Base):
         if not self._is_board_recognized():
             self._append("  ✖ Upload rejected: board on this port hasn't been recognized yet.", "error")
             return
-
-        # Auto-detect and set correct board before upload mismatch guard check
-        self._auto_select_board(show_msg=True)
 
         if not self._is_valid_port():
             self._append(f"  ✖ Upload rejected: {self._port_mismatch_reason()}.", "error")

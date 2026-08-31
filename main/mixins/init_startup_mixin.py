@@ -119,7 +119,13 @@ class InitStartupMixin(_Base):
         # Compile owns the CPU; cooperative background workers check this
         # event before performing scans, probes, or syntax work.
         self._compile_background_lock = threading.Event()
-        self._board_port_confirmed = False  # True only once esptool's live probe (or a known chip signature) confirms what's on the port
+        self._board_port_confirmed = False  # True only once a known chip signature confirms what's on the port
+        # Board recognition is intentionally one-shot for the currently
+        # selected port.  Once the user chooses a board, background detection
+        # and Compile/Upload must never replace that choice.
+        self._auto_detected_port = ""
+        self._selected_port_device = ""
+        self._board_selection_manually_overridden = False
         self.sketch_dir_path = DEFAULT_SKETCH_DIR
         self._last_known_ports: set = set()  # for USB hotplug detection
         self._auto_start_after_id = None

@@ -13,12 +13,15 @@ Features
 * All network I/O runs in background threads — the GUI never freezes.
 * Split-pane layout: list on the left, detail panel on the right.
 * Version dropdown to pick any release.
-* Progress bar for index loading and zip downloads.
+* Progress bar for index loading and package archive downloads.
 * Clickable website / repository links (opens in default browser).
 * Installed tab shows all downloaded items with **available update** indicators.
+* User-configurable additional board manager indexes, including multiple
+  comma-separated vendor URLs.
 """
 
 import json
+import hashlib
 import os
 import socket
 import re
@@ -30,6 +33,7 @@ import importlib.util
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import webbrowser
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 # Self-bootstrap directory resolution
 if getattr(sys, 'frozen', False):
@@ -48,7 +52,7 @@ except ImportError:
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "*/*",
+    "Accept": "application/json, text/plain, */*",
 }
 
 
@@ -85,7 +89,157 @@ LIBRARY_CACHE_FILE = os.path.join(INDEX_CACHE_DIR, "library_index.json")
 BOARD_CACHE_FILE = os.path.join(INDEX_CACHE_DIR, "package_index.json")
 CACHE_MAX_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 
-# Settings cache (remembers download folder across sessions)
+
+def _url_parts(value) -> list[str]:
+    """Return comma-separated board-manager URL candidates from *value*.
+
+    Settings written by older versions may use either a string or a list, so
+    both forms are accepted. Empty entries are ignored, which also makes a
+    trailing comma harmless.
+    """
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return []
+
+
+def _normalize_board_manager_url(value: str) -> str | None:
+    """Return a canonical fetch URL for an HTTP(S) board index.
+
+    Vendor lists contain a mixture of ordinary URLs, GitHub ``blob`` links,
+    redirects and URLs copied with surrounding quotes. Canonicalizing these
+    before validation, caching and fetching keeps one source from producing
+    duplicate cache entries and makes GitHub links behave like raw files.
+    """
+    raw = str(value or "").strip().strip("`'\"").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+
+    hostname = hostname.casefold()
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    if port is not None and not (
+        (scheme == "http" and port == 80) or
+        (scheme == "https" and port == 443)
+    ):
+        hostname = f"{hostname}:{port}"
+
+    path = parsed.path or "/"
+    # GitHub's normal web-view URL returns HTML. Convert the two repository
+    # file forms that appear in the community list to raw.githubusercontent.com
+    # before attempting JSON parsing.
+    github_parts = [part for part in path.split("/") if part]
+    if (
+        parsed.hostname.casefold() == "github.com"
+        and len(github_parts) >= 5
+        and github_parts[2].casefold() in {"blob", "raw"}
+    ):
+        owner, repo, mode, ref = github_parts[:4]
+        file_path = "/".join(github_parts[4:])
+        if owner and repo and ref and file_path:
+            hostname = "raw.githubusercontent.com"
+            path = f"/{owner}/{repo}/{ref}/{file_path}"
+
+    return urlunsplit((scheme, hostname, path, parsed.query, ""))
+
+
+def _is_valid_board_manager_url(value: str) -> bool:
+    """Return whether *value* is an absolute HTTP(S) board index URL."""
+    return _normalize_board_manager_url(value) is not None
+
+
+def parse_additional_board_urls(value) -> list[str]:
+    """Normalize and de-duplicate user-supplied board index URLs.
+
+    The default Arduino index is deliberately excluded because it is always
+    loaded separately. Invalid entries are omitted here and can be reported
+    by the settings UI with :func:`invalid_additional_board_urls`.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    default_key = _normalize_board_manager_url(BOARD_INDEX_URL).casefold()
+    for candidate in _url_parts(value):
+        normalized = _normalize_board_manager_url(candidate)
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key == default_key or key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
+def invalid_additional_board_urls(value) -> list[str]:
+    """Return non-empty URL entries that are not valid HTTP(S) URLs."""
+    invalid: list[str] = []
+    default_key = _normalize_board_manager_url(BOARD_INDEX_URL).casefold()
+    for candidate in _url_parts(value):
+        if _normalize_board_manager_url(candidate):
+            continue
+        if candidate.casefold() == default_key:
+            continue
+        invalid.append(candidate)
+    return invalid
+
+
+def _board_index_cache_file(url: str) -> str:
+    """Return a stable cache filename unique to an additional index URL."""
+    normalized = _normalize_board_manager_url(url) or str(url).strip()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(INDEX_CACHE_DIR, f"package_index_{digest}.json")
+
+
+def _validate_index_payload(data, expected_key: str) -> dict:
+    """Validate the small common contract used by Arduino index files.
+
+    The official format is intentionally extensible, so this does not reject
+    unknown fields. It only prevents HTML, arrays and unrelated JSON files
+    from being cached as apparently successful indexes.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("index root must be a JSON object")
+    if not isinstance(data.get(expected_key), list):
+        raise ValueError(f"index must contain a '{expected_key}' array")
+    return data
+
+
+def _read_index_cache(cache_file: str, expected_key: str) -> dict | None:
+    try:
+        with open(cache_file, "r", encoding="utf-8-sig") as fh:
+            return _validate_index_payload(json.load(fh), expected_key)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _write_index_cache(cache_file: str, raw_text: str) -> None:
+    """Atomically replace an index cache so interrupted writes cannot poison it."""
+    temp_file = f"{cache_file}.tmp-{os.getpid()}-{threading.get_ident()}"
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(temp_file, "w", encoding="utf-8") as fh:
+            fh.write(raw_text)
+        os.replace(temp_file, cache_file)
+    finally:
+        try:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+        except OSError:
+            pass
+
+# Settings cache (remembers download folder and board indexes across sessions)
 SETTINGS_FILE = (
     os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json")
     if os.path.exists(os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json"))
@@ -477,8 +631,15 @@ def _load_settings() -> dict:
         settings = {}
 
     saved_dir = str(settings.get("download_dir", "") or "")
+    saved_urls = settings.get("additional_board_urls", [])
+    normalized_urls = parse_additional_board_urls(saved_urls)
+    settings_changed = saved_urls != normalized_urls
+    if settings_changed:
+        settings["additional_board_urls"] = normalized_urls
     if not saved_dir or not os.path.isdir(os.path.expandvars(os.path.expanduser(saved_dir))):
         settings["download_dir"] = DEFAULT_DOWNLOAD_DIR
+        settings_changed = True
+    if settings_changed:
         _save_settings(settings)
     return settings
 
@@ -526,12 +687,128 @@ def _version_key(version_str: str):
     return (major, minor, patch, is_release, pre_key)
 
 
+def _archive_filename(url: str, archive_file_name: str = "") -> str:
+    """Choose a safe local filename from package metadata or the download URL."""
+    candidate = str(archive_file_name or "").strip()
+    if not candidate:
+        try:
+            candidate = unquote(urlsplit(str(url)).path).rsplit("/", 1)[-1]
+        except ValueError:
+            candidate = ""
+    candidate = candidate.replace("\\", "/").rsplit("/", 1)[-1]
+    candidate = re.sub(r'[<>:"/\\|?*]', "_", candidate).strip(" .")
+    if not candidate or candidate in {".", ".."}:
+        digest = hashlib.sha256(str(url).encode("utf-8")).hexdigest()[:12]
+        candidate = f"arduino-package-{digest}.archive"
+    return candidate
+
+
 def _get_folder_name(archive_name: str) -> str:
-    """Strip archive extension to get folder name."""
-    for ext in ['.tar.bz2', '.tar.gz', '.tar.xz', '.zip', '.tgz', '.tbz2']:
-        if archive_name.lower().endswith(ext):
-            return archive_name[:-len(ext)]
-    return os.path.splitext(archive_name)[0]
+    """Strip common Arduino package archive extensions to get folder name."""
+    for ext in [
+        ".tar.bz2", ".tar.gz", ".tar.xz", ".tar.zst", ".tar", ".zip",
+        ".tgz", ".tbz2", ".txz", ".tzst",
+    ]:
+        if str(archive_name).lower().endswith(ext):
+            return str(archive_name)[:-len(ext)]
+    return os.path.splitext(str(archive_name))[0]
+
+
+def _parse_checksum(value):
+    """Return ``(hashlib algorithm, expected hex digest)`` for Arduino metadata."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    if ":" in raw:
+        algorithm, digest = raw.split(":", 1)
+    elif "=" in raw:
+        algorithm, digest = raw.split("=", 1)
+    else:
+        digest = raw
+        algorithm = {
+            32: "md5",
+            40: "sha1",
+            64: "sha256",
+            96: "sha384",
+            128: "sha512",
+        }.get(len(digest), "")
+
+    algorithm = re.sub(r"[^a-z0-9]", "", algorithm.casefold())
+    algorithm = {"sha": "sha1", "sha256": "sha256", "sha384": "sha384", "sha512": "sha512"}.get(algorithm, algorithm)
+    digest = digest.strip().casefold()
+    if algorithm not in {"md5", "sha1", "sha256", "sha384", "sha512"}:
+        raise ValueError(f"unsupported checksum algorithm '{algorithm or 'unknown'}'")
+    if not re.fullmatch(r"[0-9a-f]+", digest) or len(digest) != hashlib.new(algorithm).digest_size * 2:
+        raise ValueError("invalid checksum value")
+    return algorithm, digest
+
+
+def _verify_download(filepath: str, expected_size=0, checksum="") -> None:
+    """Verify the package metadata before an archive is extracted."""
+    try:
+        declared_size = int(expected_size or 0)
+    except (TypeError, ValueError):
+        declared_size = 0
+    actual_size = os.path.getsize(filepath)
+    if declared_size > 0 and actual_size != declared_size:
+        raise ValueError(
+            f"download size mismatch (expected {declared_size:,} bytes, got {actual_size:,})"
+        )
+
+    parsed_checksum = _parse_checksum(checksum)
+    if not parsed_checksum:
+        return
+    algorithm, expected_digest = parsed_checksum
+    digest = hashlib.new(algorithm)
+    with open(filepath, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual_digest = digest.hexdigest().casefold()
+    if actual_digest != expected_digest:
+        raise ValueError(
+            f"{algorithm.upper()} checksum mismatch (expected {expected_digest}, got {actual_digest})"
+        )
+
+
+def _validate_archive_file(filepath: str) -> None:
+    """Reject successful HTTP responses that are actually HTML/error pages."""
+    import shutil
+    import tarfile
+    import zipfile
+
+    if zipfile.is_zipfile(filepath):
+        return
+    try:
+        with tarfile.open(filepath, "r:*"):
+            return
+    except (OSError, tarfile.TarError):
+        pass
+
+    if str(filepath).lower().endswith((".tar.zst", ".tzst")) or _is_zstd_archive(filepath):
+        tar_executable = shutil.which("tar")
+        if tar_executable:
+            try:
+                subprocess.run(
+                    [tar_executable, "-tf", filepath],
+                    check=True, capture_output=True,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+                )
+                return
+            except (OSError, subprocess.SubprocessError):
+                pass
+    raise ValueError("downloaded file is not a readable ZIP or tar archive")
+
+
+def _is_zstd_archive(filepath: str) -> bool:
+    """Detect a Zstandard stream when a vendor omits the archive extension."""
+    try:
+        with open(filepath, "rb") as fh:
+            return fh.read(4) == b"\x28\xb5\x2f\xfd"
+    except OSError:
+        return False
 
 
 def heal_library_path_on_current_device(raw_slug: str) -> str:
@@ -589,32 +866,90 @@ def heal_library_path_on_current_device(raw_slug: str) -> str:
     return clean_name
 
 
+def _safe_archive_target(extract_dir: str, member_name: str) -> str:
+    """Return a safe extraction path or raise for traversal/absolute members."""
+    root = os.path.abspath(extract_dir)
+    normalized_name = str(member_name).replace("\\", "/")
+    if normalized_name.startswith("/") or re.match(r"^[A-Za-z]:", normalized_name):
+        raise ValueError(f"archive contains an absolute path: {member_name!r}")
+    target = os.path.abspath(os.path.join(root, *[p for p in normalized_name.split("/") if p]))
+    if os.path.commonpath((root, target)) != root:
+        raise ValueError(f"archive contains a path outside its destination: {member_name!r}")
+    return target
+
+
 def _extract_archive(filepath: str, extract_dir: str):
-    """Extract a zip or tar archive into extract_dir with Windows symlink tolerance."""
+    """Extract zip/tar package archives safely, including modern tar.zst names."""
     import zipfile
     import tarfile
     import shutil
+    import stat
     from pathlib import Path
 
-    if filepath.lower().endswith('.zip'):
+    os.makedirs(extract_dir, exist_ok=True)
+    lower_path = filepath.lower()
+    if lower_path.endswith('.zip') or zipfile.is_zipfile(filepath):
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-    elif filepath.lower().endswith(('.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz')):
+            for member in zip_ref.infolist():
+                target = _safe_archive_target(extract_dir, member.filename)
+                mode = (member.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    continue
+                if member.is_dir():
+                    os.makedirs(target, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zip_ref.open(member, "r") as source, open(target, "wb") as dest:
+                    shutil.copyfileobj(source, dest)
+    else:
         try:
-            with tarfile.open(filepath, 'r:*') as tar_ref:
-                for member in tar_ref.getmembers():
-                    try:
-                        tar_ref.extract(member, path=extract_dir)
-                    except (OSError, PermissionError) as e:
-                        # Symlinks fail on Windows for standard non-admin users without dev mode ([WinError 1314])
-                        if member.issym() or member.islnk():
-                            continue
-                        raise e
-        except Exception:
-            # If standard extract failed but files were extracted, keep going
-            if not os.path.exists(extract_dir) or not os.listdir(extract_dir):
-                raise
+            tar_ref = tarfile.open(filepath, 'r:*')
+        except (OSError, tarfile.TarError) as exc:
+            tar_ref = None
+            if not lower_path.endswith(('.tar.zst', '.tzst')) and not _is_zstd_archive(filepath):
+                raise RuntimeError(f"Cannot extract tar archive: {exc}") from exc
+            tar_executable = shutil.which("tar")
+            if not tar_executable:
+                raise RuntimeError(
+                    "This tar.zst archive needs a Python zstandard runtime or the system tar utility."
+                ) from exc
+            try:
+                listing = subprocess.run(
+                    [tar_executable, "-tf", filepath],
+                    check=True, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                )
+                for member_name in listing.stdout.splitlines():
+                    _safe_archive_target(extract_dir, member_name.strip())
+                subprocess.run(
+                    [tar_executable, "-xf", filepath, "-C", extract_dir],
+                    check=True, capture_output=True,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+                )
+            except (OSError, subprocess.SubprocessError) as tar_exc:
+                raise RuntimeError(f"Cannot extract tar.zst archive: {tar_exc}") from tar_exc
 
+        if tar_ref is not None:
+            try:
+                for member in tar_ref.getmembers():
+                    target = _safe_archive_target(extract_dir, member.name)
+                    # Symlinks and hardlinks can escape the destination on Windows;
+                    # package contents remain usable without them.
+                    if member.issym() or member.islnk():
+                        continue
+                    if member.isdir():
+                        os.makedirs(target, exist_ok=True)
+                        continue
+                    if not member.isfile():
+                        continue
+                    source = tar_ref.extractfile(member)
+                    if source is None:
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with source, open(target, "wb") as dest:
+                        shutil.copyfileobj(source, dest)
+            finally:
+                tar_ref.close()
     # Self-heal / flatten double nesting if present
     try:
         p_dir = Path(extract_dir)
@@ -676,66 +1011,118 @@ def _group_libraries(raw_list: list[dict]) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 def _group_boards(packages: list[dict]) -> dict[str, dict]:
-    """Group the board package index by platform name.
+    """Group board platforms while preserving package/vendor identity.
 
     The JSON has packages → platforms (each platform is a version of a
     board core, e.g. "Arduino AVR Boards 1.8.6").  We group all platform
     versions under a single display name and keep every version available
-    for download.
+    for download. The package name is part of the internal identity so two
+    vendors using the same human-readable platform name cannot overwrite one
+    another.
     """
-    result: dict[str, dict] = {}
-
+    platform_groups: dict[tuple[str, str], list[tuple[dict, dict]]] = {}
     for pkg in packages:
-        pkg_name = pkg.get("name", "")
-        pkg_maintainer = pkg.get("maintainer", "")
-        pkg_website = pkg.get("websiteURL", "")
-        pkg_email = pkg.get("email", "")
+        if not isinstance(pkg, dict):
+            continue
+        pkg_name = str(pkg.get("name") or "").strip()
+        package_identity = (
+            pkg_name
+            or str(pkg.get("websiteURL") or "").strip()
+            or str(pkg.get("maintainer") or "").strip()
+            or "unknown-package"
+        ).casefold()
+        for plat in pkg.get("platforms", []) or []:
+            if not isinstance(plat, dict):
+                continue
+            pname = str(plat.get("name") or pkg_name or "").strip()
+            if pname:
+                identity = (package_identity, pname.casefold())
+                platform_groups.setdefault(identity, []).append((plat, pkg))
 
-        platforms = pkg.get("platforms", [])
-        # Group platforms by their display name (e.g. "Arduino AVR Boards")
-        by_platform_name: dict[str, list[dict]] = {}
-        for plat in platforms:
-            pname = plat.get("name", pkg_name)
-            by_platform_name.setdefault(pname, []).append(plat)
+    grouped_records = []
+    for (_package_key, pname_key), records in platform_groups.items():
+        records.sort(
+            key=lambda record: _version_key(str(record[0].get("version", "0"))),
+            reverse=True,
+        )
+        latest, latest_pkg = records[0]
+        base_name = str(latest.get("name") or latest_pkg.get("name") or pname_key).strip()
+        grouped_records.append((base_name, records, latest, latest_pkg))
 
-        for pname, plat_versions in by_platform_name.items():
-            # Sort versions newest-first
-            plat_versions.sort(
-                key=lambda p: _version_key(p.get("version", "0")),
-                reverse=True
-            )
-            latest = plat_versions[0]
+    name_counts: dict[str, int] = {}
+    for base_name, _records, _latest, _latest_pkg in grouped_records:
+        key = base_name.casefold()
+        name_counts[key] = name_counts.get(key, 0) + 1
 
-            # Collect board names from the latest version
-            boards_list = [b.get("name", "") for b in latest.get("boards", [])]
+    result: dict[str, dict] = {}
+    used_names: set[str] = set()
+    for base_name, records, latest, latest_pkg in grouped_records:
+        package_name = str(latest_pkg.get("name") or "").strip()
+        display_name = base_name
+        if name_counts.get(base_name.casefold(), 0) > 1:
+            suffix = package_name or str(latest_pkg.get("maintainer") or "vendor").strip()
+            display_name = f"{base_name} ({suffix})"
+        collision_number = 2
+        original_display_name = display_name
+        while display_name.casefold() in used_names:
+            display_name = f"{original_display_name} #{collision_number}"
+            collision_number += 1
+        used_names.add(display_name.casefold())
 
-            versions = []
-            for pv in plat_versions:
-                size_val = pv.get("size", 0)
-                try:
-                    size_val = int(size_val)
-                except (ValueError, TypeError):
-                    size_val = 0
-                versions.append({
-                    "version": pv.get("version", "?"),
-                    "url": pv.get("url", ""),
-                    "size": size_val,
-                    "checksum": pv.get("checksum", ""),
-                    "archiveFileName": pv.get("archiveFileName", ""),
-                })
+        boards_list: list[str] = []
+        for platform, _pkg in records:
+            for board in platform.get("boards", []) or []:
+                if not isinstance(board, dict):
+                    continue
+                board_name = str(board.get("name", "")).strip()
+                if board_name and board_name not in boards_list:
+                    boards_list.append(board_name)
 
-            result[pname] = {
-                "name": pname,
-                "package": pkg_name,
-                "maintainer": pkg_maintainer,
-                "website": pkg_website,
-                "email": pkg_email,
-                "architecture": latest.get("architecture", ""),
-                "category": latest.get("category", ""),
-                "boards": boards_list,
-                "help_url": latest.get("help", {}).get("online", ""),
-                "versions": versions,
-            }
+        versions = []
+        seen_versions: set[tuple[str, str]] = set()
+        for pv, _pkg in records:
+            version = str(pv.get("version", "?"))
+            raw_url = str(pv.get("url") or "").strip()
+            url = _normalize_board_manager_url(raw_url) or raw_url
+            version_key = (version, url)
+            if version_key in seen_versions:
+                continue
+            seen_versions.add(version_key)
+            size_val = pv.get("size", 0)
+            try:
+                size_val = int(size_val)
+            except (ValueError, TypeError):
+                size_val = 0
+            versions.append({
+                "version": version,
+                "url": url,
+                "size": size_val,
+                "checksum": pv.get("checksum", ""),
+                "archiveFileName": pv.get("archiveFileName", ""),
+                "deprecated": bool(pv.get("deprecated", False)),
+                "toolsDependencies": pv.get("toolsDependencies", []) or [],
+                "discoveryDependencies": pv.get("discoveryDependencies", []) or [],
+                "monitorDependencies": pv.get("monitorDependencies", []) or [],
+                "libraryDependencies": pv.get("libraryDependencies", []) or [],
+            })
+
+        result[display_name] = {
+            "name": display_name,
+            "platform_name": base_name,
+            "package": package_name,
+            "maintainer": str(latest_pkg.get("maintainer") or ""),
+            "website": str(latest_pkg.get("websiteURL") or ""),
+            "email": str(latest_pkg.get("email") or ""),
+            "architecture": str(latest.get("architecture") or ""),
+            "category": str(latest.get("category") or ""),
+            "boards": boards_list,
+            "help_url": (
+                (latest.get("help", {}) or {}).get("online", "")
+                if isinstance(latest.get("help", {}), dict)
+                else ""
+            ),
+            "versions": versions,
+        }
 
     return result
 
@@ -1662,6 +2049,9 @@ class ArduinoBrowser:
         # Load persisted download directory
         settings = _load_settings()
         saved_dir = settings.get("download_dir", "")
+        self._additional_board_urls = parse_additional_board_urls(
+            settings.get("additional_board_urls", [])
+        )
         if saved_dir and os.path.isdir(saved_dir):
             self._download_dir = saved_dir
         else:
@@ -1871,6 +2261,67 @@ class ArduinoBrowser:
         )
         self.browse_btn.pack(side="right")
 
+        # Additional board manager indexes. The default Arduino index is
+        # always loaded; this field lets users add vendor indexes such as the
+        # ESP8266 package index without editing Arduino-CLI files manually.
+        board_url_bar = tk.Frame(self.root, bg=Theme.BG_MID, pady=6, padx=10)
+        board_url_bar.pack(fill="x")
+        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill="x")
+
+        tk.Label(
+            board_url_bar, text="Additional board manager URLs:",
+            font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
+        ).pack(side="left")
+
+        self.board_urls_var = tk.StringVar(value=", ".join(self._additional_board_urls))
+        self.board_urls_entry = tk.Entry(
+            board_url_bar, textvariable=self.board_urls_var,
+            font=("Consolas", 10), bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            insertbackground=Theme.CYAN, borderwidth=0,
+            highlightthickness=1, highlightcolor=Theme.CYAN,
+            highlightbackground=Theme.BORDER,
+        )
+        self.board_urls_entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
+        self.board_urls_entry.bind("<Return>", lambda e: self._apply_board_urls())
+
+        self.board_urls_apply_btn = make_flat_button(
+            board_url_bar, "⟳ Apply & Refresh", self._apply_board_urls,
+            Theme.BTN_MONITOR, Theme.BTN_MONITOR_H,
+        )
+        self.board_urls_apply_btn.pack(side="right")
+
+        tk.Label(
+            self.root,
+            text="Separate multiple URLs with commas. The default Arduino index is included automatically.",
+            font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
+            anchor="w", padx=10,
+        ).pack(fill="x")
+
+        third_party_boards_url = (
+            "https://github.com/arduino/Arduino/wiki/"
+            "Unofficial-list-of-3rd-party-boards-support-urls"
+        )
+        third_party_boards_link = tk.Label(
+            self.root,
+            text="• Unofficial list of 3rd party boards support URLs",
+            font=("Montserrat", 8, "underline"),
+            fg=Theme.BLUE, bg=Theme.BG_MID, cursor="hand2",
+            anchor="w", padx=10,
+        )
+        third_party_boards_link.pack(fill="x")
+        third_party_boards_link.bind(
+            "<Button-1>",
+            lambda _event: webbrowser.open(third_party_boards_url),
+        )
+        third_party_boards_link.bind(
+            "<Enter>",
+            lambda _event: third_party_boards_link.configure(fg=Theme.CYAN),
+        )
+        third_party_boards_link.bind(
+            "<Leave>",
+            lambda _event: third_party_boards_link.configure(fg=Theme.BLUE),
+        )
+
         # Notebook (tabs)
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1984,6 +2435,36 @@ class ArduinoBrowser:
         self.installed_tab.populate(self._installed_items)
         self._update_version_status(self.lib_tab)
         self._update_version_status(self.board_tab)
+
+    def _apply_board_urls(self):
+        """Persist additional board indexes and refresh the browser catalog."""
+        if self._busy:
+            return
+
+        raw_urls = self.board_urls_var.get()
+        invalid_urls = invalid_additional_board_urls(raw_urls)
+        if invalid_urls:
+            preview = "\n".join(f"• {url}" for url in invalid_urls[:8])
+            if len(invalid_urls) > 8:
+                preview += f"\n• …and {len(invalid_urls) - 8} more"
+            messagebox.showerror(
+                "Invalid Board Manager URL",
+                "Each additional board manager URL must be a complete HTTP or HTTPS URL.\n\n"
+                f"Invalid entries:\n{preview}",
+                parent=self.root,
+            )
+            return
+
+        urls = parse_additional_board_urls(raw_urls)
+        self._additional_board_urls = urls
+        self.board_urls_var.set(", ".join(urls))
+
+        settings = _load_settings()
+        settings["additional_board_urls"] = urls
+        _save_settings(settings)
+
+        self._set_status("Board manager URLs saved — refreshing indexes…")
+        self._refresh_all()
 
     def _cancel_download(self):
         self._cancel_event.set()
@@ -2227,7 +2708,7 @@ class ArduinoBrowser:
             tab.lbl_size.config(text=f"Size: {size_kb:.0f} KB")
 
         url = target_version["url"]
-        archive = target_version["archiveFileName"] or url.split("/")[-1]
+        archive = _archive_filename(url, target_version.get("archiveFileName", ""))
         subfolder = "Libs" if tab == self.lib_tab else "Boards"
         dest_dir = os.path.join(self._download_dir, subfolder)
         
@@ -2295,7 +2776,7 @@ class ArduinoBrowser:
             latest_version = index_entry["versions"][0]["version"]  # sorted newest first
 
             for ver_entry in index_entry["versions"]:
-                archive = ver_entry["archiveFileName"] or ver_entry["url"].split("/")[-1]
+                archive = _archive_filename(ver_entry["url"], ver_entry.get("archiveFileName", ""))
                 folder_name = _get_folder_name(archive)
 
                 # Instant memory set lookup instead of tens of thousands of disk I/O calls
@@ -2353,14 +2834,6 @@ class ArduinoBrowser:
     def _refresh_all(self):
         if self._busy:
             return
-        if not check_internet_connection():
-            messagebox.showwarning(
-                "No Internet Connection",
-                "Cannot refresh library and board indexes because you are currently offline.\n\n"
-                "Please check your network connection and try again.",
-                parent=self.root,
-            )
-            return
         self._set_status("Refreshing all indexes…")
         if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
             try:
@@ -2392,6 +2865,8 @@ class ArduinoBrowser:
         """Load both library and board indexes (runs in worker thread)."""
         libs = {}
         boards = {}
+        board_sources_loaded = 0
+        failed_additional_urls: list[str] = []
 
         # --- Libraries ---
         lib_data = self._load_index(
@@ -2402,32 +2877,83 @@ class ArduinoBrowser:
             self.root.after(0, self.lib_tab.populate, libs)
 
         # --- Boards ---
-        board_data = self._load_index(
-            BOARD_INDEX_URL, BOARD_CACHE_FILE, force_refresh, "board"
+        # Arduino's default index remains first, then each user-configured
+        # vendor index is loaded into its own cache. Keeping caches separate
+        # prevents one source from overwriting another source's package data.
+        settings = _load_settings()
+        additional_urls = parse_additional_board_urls(
+            settings.get("additional_board_urls", [])
         )
-        if board_data is not None:
-            boards = _group_boards(board_data.get("packages", []))
+        board_urls = [BOARD_INDEX_URL, *additional_urls]
+        board_indexes: list[tuple[int, dict]] = []
+
+        def _load_board_source(index_num: int, board_url: str):
+            is_default = index_num == 0
+            cache_file = (
+                BOARD_CACHE_FILE
+                if is_default
+                else _board_index_cache_file(board_url)
+            )
+            label = "board" if is_default else f"additional board {index_num}"
+            try:
+                data = self._load_index(
+                    board_url, cache_file, force_refresh, label
+                )
+            except Exception as exc:
+                self.root.after(0, self._set_status, f"Failed to load {label} index: {exc}")
+                data = None
+            return index_num, board_url, data
+
+        # A user may paste many entries from the community list. A bounded
+        # pool keeps slow/dead vendors from blocking every later source while
+        # the result list remains ordered exactly as entered.
+        from concurrent.futures import ThreadPoolExecutor
+        worker_count = min(8, max(1, len(board_urls)))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="BoardIndex") as executor:
+            futures = [
+                executor.submit(_load_board_source, index_num, board_url)
+                for index_num, board_url in enumerate(board_urls)
+            ]
+            loaded_sources = [future.result() for future in futures]
+
+        for index_num, board_url, board_data in loaded_sources:
+            if board_data is not None:
+                board_indexes.append((index_num, board_data))
+                board_sources_loaded += 1
+            elif index_num != 0:
+                failed_additional_urls.append(board_url)
+        board_indexes.sort(key=lambda item: item[0])
+
+        if board_indexes:
+            packages = []
+            for _index_num, board_data in board_indexes:
+                source_packages = board_data.get("packages", [])
+                if isinstance(source_packages, list):
+                    packages.extend(source_packages)
+            boards = _group_boards(packages)
             self.root.after(0, self.board_tab.populate, boards)
 
         # Final status and installed recompute
         lib_count = len(libs) if lib_data else 0
-        board_count = len(boards) if board_data else 0
-        if not check_internet_connection(timeout=2.0):
-            if lib_count or board_count:
-                status_msg = f"⚠ Offline Mode: {lib_count} libraries, {board_count} board platforms loaded from cache"
-            else:
-                status_msg = "⚠ No Internet Connection — Please check your network and click Refresh"
-        else:
-            status_msg = f"{lib_count} libraries, {board_count} board platforms loaded"
+        board_count = len(boards) if board_sources_loaded else 0
+        status_msg = f"{lib_count} libraries, {board_count} board platforms loaded"
+        if not lib_count and not board_count:
+            status_msg = "No indexes loaded — check the network or configured board manager URLs"
+        if failed_additional_urls:
+            status_msg += (
+                f"; {len(failed_additional_urls)} additional board index"
+                f"{'es' if len(failed_additional_urls) != 1 else ''} could not be loaded"
+            )
         self.root.after(0, self._finish_load, status_msg)
 
     def _load_index(self, url: str, cache_file: str,
                     force_refresh: bool, label: str) -> dict | None:
+        expected_key = "libraries" if label.casefold() == "library" else "packages"
         if not force_refresh and self._cache_is_fresh(cache_file):
-            try:
-                with open(cache_file, "r", encoding="utf-8") as fh:
-                    return json.load(fh)
-            except Exception:
+            cached = _read_index_cache(cache_file, expected_key)
+            if cached is not None:
+                return cached
+            else:
                 # A copied or interrupted index cache must be discarded before
                 # the refresh attempt, otherwise an offline launch retries the
                 # same malformed JSON forever.
@@ -2435,19 +2961,6 @@ class ArduinoBrowser:
                     os.unlink(cache_file)
                 except OSError:
                     pass
-
-        # Offline fallback: if no internet, load existing cached index even if expired
-        if not check_internet_connection(timeout=2.0):
-            if os.path.isfile(cache_file):
-                try:
-                    with open(cache_file, "r", encoding="utf-8") as fh:
-                        data = json.load(fh)
-                        self.root.after(0, self._set_status, f"Offline mode: loaded cached {label} index")
-                        return data
-                except Exception:
-                    pass
-            self.root.after(0, self._set_status, f"⚠ Offline — No internet and no cached {label} index available")
-            return None
 
         def _update_overlay():
             self._set_status(f"Downloading {label} index…")
@@ -2458,39 +2971,56 @@ class ArduinoBrowser:
                 )
 
         self.root.after(0, _update_overlay)
+        normalized_url = _normalize_board_manager_url(url) or str(url).strip()
         data = None
         raw_text = None
+        errors: list[str] = []
+
+        def _parse_response(raw_bytes: bytes):
+            text = raw_bytes.decode("utf-8-sig")
+            return _validate_index_payload(json.loads(text), expected_key), text
+
         if requests is not None:
             try:
-                resp = requests.get(url, timeout=60, headers=DEFAULT_HEADERS)
+                resp = requests.get(normalized_url, timeout=60, headers=DEFAULT_HEADERS)
                 resp.raise_for_status()
-                data = resp.json()
-                raw_text = resp.text
-            except Exception:
+                response_bytes = getattr(resp, "content", b"")
+                if not response_bytes:
+                    response_bytes = str(getattr(resp, "text", "")).encode("utf-8")
+                data, raw_text = _parse_response(response_bytes)
+            except Exception as exc:
+                errors.append(str(exc))
                 data = None
 
         if data is None:
-            # Robust urllib fallback with headers
             try:
                 import urllib.request
-                req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+                req = urllib.request.Request(normalized_url, headers=DEFAULT_HEADERS)
                 with urllib.request.urlopen(req, timeout=60) as uresp:
-                    raw_text = uresp.read().decode("utf-8")
-                    data = json.loads(raw_text)
+                    data, raw_text = _parse_response(uresp.read())
             except Exception as e:
-                self.root.after(0, self._set_status,
-                               f"Failed to download {label} index: {e}")
-                return None
+                errors.append(str(e))
 
-        try:
-            os.makedirs(INDEX_CACHE_DIR, exist_ok=True)
-            if raw_text:
-                with open(cache_file, "w", encoding="utf-8") as fh:
-                    fh.write(raw_text)
-        except OSError:
-            pass
+        if data is not None and raw_text is not None:
+            try:
+                _write_index_cache(cache_file, raw_text)
+            except OSError:
+                # A read-only cache should not prevent the current session
+                # from using a successfully downloaded index.
+                pass
+            return data
 
-        return data
+        # A failed refresh must not throw away the last known-good index. This
+        # is especially important for vendor URLs that occasionally move or
+        # go offline while their package archives remain valid.
+        stale = _read_index_cache(cache_file, expected_key)
+        if stale is not None:
+            self.root.after(0, self._set_status, f"Offline/unavailable: loaded cached {label} index")
+            return stale
+
+        detail = next((error for error in errors if error), "invalid index response")
+        self.root.after(0, self._set_status, f"Failed to download {label} index: {detail}")
+        return None
 
     def _finish_load(self, msg: str):
         if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
@@ -2548,7 +3078,7 @@ class ArduinoBrowser:
         btn_both = make_flat_button(btn_frame, "📦 Both (ZIP & Folder)", lambda: select_option("both"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
         btn_both.pack(side="left", padx=8, expand=True, fill="x")
 
-        btn_zip = make_flat_button(btn_frame, "🗜 ZIP Archive Only", lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
+        btn_zip = make_flat_button(btn_frame, "🗜 Archive Only", lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         btn_zip.pack(side="left", padx=8, expand=True, fill="x")
 
         cancel_frame = tk.Frame(dialog, bg=Theme.BG_DARKEST)
@@ -2575,29 +3105,22 @@ class ArduinoBrowser:
         sel = tab.listbox.curselection()
         if not sel or self._busy:
             return
-        if not check_internet_connection():
-            messagebox.showwarning(
-                "No Internet Connection",
-                "Cannot download package because you are currently offline.\n\n"
-                "Please check your internet connection and try again.",
-                parent=self.root,
-            )
-            return
         name = tab.filtered_names[sel[0]]
         item = tab.all_items[name]
         ver = tab.version_var.get()
 
         url = ""
-        archive = ""
+        target_version = None
         for v in item["versions"]:
             if v["version"] == ver:
                 url = v["url"]
-                archive = v["archiveFileName"] or url.split("/")[-1]
+                target_version = v
                 break
 
-        if not url:
+        if not url or target_version is None:
             messagebox.showerror("Error", f"No download URL found for version '{ver or '(none)'}'.")
             return
+        archive = _archive_filename(url, target_version.get("archiveFileName", ""))
 
         subfolder = "Libs" if tab == self.lib_tab else "Boards"
         dest_dir = os.path.join(self._download_dir, subfolder)
@@ -2617,21 +3140,12 @@ class ArduinoBrowser:
         self.progress.start(12)
 
         t = threading.Thread(target=self._download_worker,
-                             args=(tab, url, archive, dest_dir, download_option), daemon=True)
+                             args=(tab, url, archive, dest_dir, download_option, None, target_version), daemon=True)
         t.start()
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):
         if self._busy:
             return
-        if not check_internet_connection():
-            messagebox.showwarning(
-                "No Internet Connection",
-                "Cannot download update because you are currently offline.\n\n"
-                "Please check your internet connection and try again.",
-                parent=self.root,
-            )
-            return
-
         tab = self.board_tab if is_board else self.lib_tab
         item = tab.all_items.get(name)
         if not item:
@@ -2640,16 +3154,17 @@ class ArduinoBrowser:
 
         ver = item["versions"][0]["version"]
         url = ""
-        archive = ""
+        target_version = None
         for v in item["versions"]:
             if v["version"] == ver:
                 url = v["url"]
-                archive = v["archiveFileName"] or url.split("/")[-1]
+                target_version = v
                 break
 
-        if not url:
+        if not url or target_version is None:
             messagebox.showerror("Error", f"No download URL found for version '{ver}'.", parent=self.root)
             return
+        archive = _archive_filename(url, target_version.get("archiveFileName", ""))
 
         subfolder = "Boards" if is_board else "Libs"
         dest_dir = os.path.join(self._download_dir, subfolder)
@@ -2674,15 +3189,26 @@ class ArduinoBrowser:
 
         t = threading.Thread(
             target=self._download_worker,
-            args=(tab, url, archive, dest_dir, download_option, (old_path, old_archive)),
+            args=(tab, url, archive, dest_dir, download_option, (old_path, old_archive), target_version),
             daemon=True
         )
         t.start()
 
-    def _download_worker(self, tab: BrowseTab, url: str, archive: str, dest_dir: str, download_option: str, cleanup_old: tuple = None):
+    def _download_worker(
+        self,
+        tab: BrowseTab,
+        url: str,
+        archive: str,
+        dest_dir: str,
+        download_option: str,
+        cleanup_old: tuple = None,
+        package_metadata: dict | None = None,
+    ):
         import shutil
         filepath = os.path.join(dest_dir, archive)
         folder_path = os.path.join(dest_dir, _get_folder_name(archive))
+        partial_path = f"{filepath}.part"
+        extraction_path = f"{folder_path}.part-{os.getpid()}-{threading.get_ident()}"
         try:
             os.makedirs(dest_dir, exist_ok=True)
 
@@ -2701,13 +3227,13 @@ class ArduinoBrowser:
                 if total:
                     self.root.after(0, self._set_progress_determinate, total)
 
-                with open(filepath, "wb") as fh:
+                with open(partial_path, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=16384):
                         if self._cancel_event.is_set():
                             fh.close()
                             try:
-                                if os.path.exists(filepath):
-                                    os.remove(filepath)
+                                if os.path.exists(partial_path):
+                                    os.remove(partial_path)
                             except OSError:
                                 pass
                             self.root.after(0, self._download_cancelled, tab)
@@ -2727,13 +3253,13 @@ class ArduinoBrowser:
                     downloaded = 0
                     if total:
                         self.root.after(0, self._set_progress_determinate, total)
-                    with open(filepath, "wb") as fh:
+                    with open(partial_path, "wb") as fh:
                         while True:
                             if self._cancel_event.is_set():
                                 fh.close()
                                 try:
-                                    if os.path.exists(filepath):
-                                        os.remove(filepath)
+                                    if os.path.exists(partial_path):
+                                        os.remove(partial_path)
                                 except OSError:
                                     pass
                                 self.root.after(0, self._download_cancelled, tab)
@@ -2746,10 +3272,24 @@ class ArduinoBrowser:
                             if total:
                                 self.root.after(0, self._update_progress, downloaded, total)
 
+            _verify_download(
+                partial_path,
+                (package_metadata or {}).get("size", 0),
+                (package_metadata or {}).get("checksum", ""),
+            )
+            _validate_archive_file(partial_path)
+            os.replace(partial_path, filepath)
+
             if download_option in ("folder", "both"):
                 self.root.after(0, self._set_status, "Extracting files…")
-                os.makedirs(folder_path, exist_ok=True)
-                _extract_archive(filepath, folder_path)
+                if os.path.isdir(extraction_path):
+                    shutil.rmtree(extraction_path, ignore_errors=True)
+                _extract_archive(filepath, extraction_path)
+                # Replace an older folder only after the new archive has been
+                # downloaded, verified and fully extracted.
+                if os.path.isdir(folder_path):
+                    shutil.rmtree(folder_path)
+                os.replace(extraction_path, folder_path)
 
             if download_option == "folder":
                 try:
@@ -2783,19 +3323,27 @@ class ArduinoBrowser:
 
             self.root.after(0, self._download_done, tab, filepath if download_option != "folder" else folder_path)
 
-        except requests.exceptions.RequestException as e:
+        except OSError as e:
+            if self._cancel_event.is_set():
+                self.root.after(0, self._download_cancelled, tab)
+            else:
+                self.root.after(0, self._download_error, tab,
+                               f"File/download error:\n{e}")
+        except Exception as e:
             if self._cancel_event.is_set():
                 self.root.after(0, self._download_cancelled, tab)
             else:
                 self.root.after(0, self._download_error, tab,
                                f"Download failed:\n{e}")
-        except OSError as e:
-            self.root.after(0, self._download_error, tab,
-                           f"File write error:\n{e}")
-        except Exception as e:
-            import traceback
-            self.root.after(0, self._download_error, tab,
-                           f"Unexpected error:\n{e}\n\n{traceback.format_exc()}")
+        finally:
+            for leftover in (partial_path, extraction_path):
+                try:
+                    if os.path.isfile(leftover):
+                        os.remove(leftover)
+                    elif os.path.isdir(leftover):
+                        shutil.rmtree(leftover, ignore_errors=True)
+                except OSError:
+                    pass
 
     def _set_progress_determinate(self, total):
         self.progress.stop()

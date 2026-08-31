@@ -231,6 +231,7 @@ MCU Flasher by Naph/
 - **COM Port Selection**: The top-right dropdown shows detected USB serial ports. Plug in your microcontroller, and MCU Flasher automatically selects the new port and identifies the connected chip (ESP32, ESP32-S3, ESP32-C3, CH340, CP210x).
 - **Board Catalog Search**: Click **`🔍 Search Boards`** to search through 420+ supported microcontrollers by keyword, architecture, or manufacturer.
 - **Baud Rate & Upload Speed**: Choose your desired Serial Monitor baud rate (e.g. `115200`) and Flashing speed (up to `921600` baud for ultra-fast uploads).
+- **Additional Board Manager URLs**: Open **`⬇ Download Boards/Libraries`**, enter one or more vendor package-index URLs in **Additional board manager URLs** (comma-separated), then click **`⟳ Apply & Refresh`**. The default Arduino index is always included, and HTTP(S), GitHub raw/blob, redirects, stale-cache fallback, checksum verification, and ZIP/tar package archives are handled dynamically so indexes such as the ESP8266 package catalog can be used alongside it.
 
 ### 4. Compiling & Flashing Code
 - **Compile Only (`🔨 Compile`)**:

@@ -3047,10 +3047,9 @@ def ensure_pip_packages_parallel(
     The GUI keeps the original per-dependency 30-cell progress bars.  Raw pip
     resolver output is hidden unless an operation fails.
 
-    ``package_ids`` is reserved for feature-triggered installs (for example,
-    the optional QScintilla viewer).  The normal call installs only specs
-    marked ``critical``; ``include_optional`` is available to an explicit
-    setup/repair flow that intentionally wants every feature dependency.
+    ``package_ids`` is reserved for feature-triggered installs.  The complete
+    bootstrap call passes ``include_optional=True`` so every declared package
+    is installed and verified before the main GUI is launched.
     """
     import concurrent.futures
     import tempfile
@@ -3674,11 +3673,11 @@ def ensure_optional_pip_feature(
     feature: str,
     gui: Optional[BootstrapGUI] = None,
 ) -> bool:
-    """Install one optional feature's packages on first use.
+    """Repair packages for an explicitly requested feature.
 
-    Optional feature dependencies intentionally do not participate in the
-    normal bootstrap.  Callers should invoke this only after the user has
-    selected the feature (for example, opening a QScintilla example viewer).
+    Complete bootstrap setup already installs every declared package.  This
+    compatibility helper remains available for callers that request a targeted
+    repair after an installation has been damaged.
     """
     package_ids = _OPTIONAL_PIP_FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
     if not package_ids:
@@ -8049,10 +8048,8 @@ def _relaunch_visible_if_hidden():
 
 def _is_env_healthy() -> bool:
     """
-    Fast-path check: returns True only when the venv exists, the current
-    interpreter IS the venv interpreter, and all required packages import
-    cleanly.  If True, bootstrap can skip all setup work and launch the GUI
-    immediately without showing the bootstrap window at all.
+    Diagnostic check for whether the venv and required imports are healthy.
+    This check is never used as a reason to skip bootstrap setup.
     """
     venv_dir = SCRIPT_DIR / "env"
     try:
@@ -8088,14 +8085,11 @@ def _is_env_healthy() -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
-# Fast normal-launch health snapshot
+# Bootstrap health snapshot (diagnostics only)
 # ─────────────────────────────────────────────────────────────
-# The bootstrap process remains the repair/setup entry point, but a valid
-# installation must not pay the full setup transaction on every launch.  This
-# small manifest is deliberately local and conservative: a missing file,
-# changed app/runtime fingerprint, or unreadable snapshot falls back to the
-# existing setup UI.  No network, installer, or optional-package import is
-# performed while deciding the normal path.
+# The bootstrap process remains the mandatory repair/setup entry point. This
+# local manifest records the result for troubleshooting, but it is never used
+# to bypass dependency, board-toolchain, driver, or external-tool checks.
 STARTUP_HEALTH_SCHEMA = 2
 
 
@@ -8228,7 +8222,7 @@ def _read_startup_health_snapshot() -> dict | None:
 
 
 def _write_startup_health_snapshot() -> bool:
-    """Persist the successful setup result atomically for future warm launches."""
+    """Persist the successful setup result atomically for diagnostics."""
     temporary: Path | None = None
     try:
         if _startup_site_packages_dir() is None:
@@ -8263,23 +8257,14 @@ def _write_startup_health_snapshot() -> bool:
 
 
 def _try_fast_normal_launch() -> bool:
-    """If all required dependencies and toolchains are verified in the cached health snapshot,
-    spawn the main GUI directly without running full setup."""
-    if _explicit_setup_requested():
-        return False
-    snapshot = _read_startup_health_snapshot()
-    if not snapshot:
-        return False
-    proc, gui_log = _spawn_main_gui()
-    if proc is None:
-        return False
-    for _ in range(3):
-        time.sleep(0.1)
-        if proc.poll() is not None:
-            if proc.poll() != 0:
-                return False
-            return True
-    return True
+    """Keep the legacy fast-launch hook disabled.
+
+    Every launch must pass through the complete bootstrap pipeline.  A cached
+    health snapshot is useful for diagnostics, but it cannot prove that a
+    dependency, board package, driver, or external tool was not removed after
+    the snapshot was written.
+    """
+    return False
 
 
 def _explicit_setup_requested() -> bool:
@@ -8992,7 +8977,9 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             _fail_and_exit("pip", "pip could not be installed.")
             return
 
-        if not ensure_pip_packages_parallel(gui):
+        # Install every declared dependency during this bootstrap run.  Do not
+        # defer feature packages to the first time a user opens that feature.
+        if not ensure_pip_packages_parallel(gui, include_optional=True):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
 
@@ -9120,10 +9107,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         def _finish():
             gui.log_ok("All dependencies ready!")
 
-            # The next launch can now use the local fast path.  A failed write
-            # is non-fatal; the existing bootstrap flow remains the fallback.
+            # Keep a diagnostic record of the completed setup.  It is never a
+            # launch gate: every subsequent launch repeats the full checks.
             if _write_startup_health_snapshot():
-                gui.log_ok("Warm-launch health snapshot saved.")
+                gui.log_ok("Bootstrap health snapshot saved.")
 
             exe_path = SCRIPT_DIR / "MCU Flasher.exe"
             if not exe_path.exists() and not GUI_SCRIPT.exists():
@@ -9460,13 +9447,9 @@ def main():
             f"Stopped {recovered_updates} stale update probe process(es) from an older release.",
         )
 
-    # Check if warm-launch fast path is available (valid health snapshot, no repair requested)
-    if not _explicit_setup_requested() and _try_fast_normal_launch():
-        _record_bootstrap_log("FINISH", "Warm launch verified; started main GUI directly.")
-        sys.exit(0)
-
     # ── Launch Bootstrap GUI Window ─────────────────────────────────
-    # Bootstrap setup is mandatory and runs its verification checks before launching the main GUI.
+    # Bootstrap setup is mandatory and runs its complete verification/install
+    # pipeline before launching the main GUI.
     import threading
 
     gui = BootstrapGUI()

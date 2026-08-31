@@ -8,7 +8,6 @@ from __future__ import annotations
 import sys
 import os
 import subprocess
-import threading
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
@@ -717,17 +716,12 @@ class ProjectActionsMixin(_Base):
         except Exception:
             pass
         
-        # Auto-detect and set correct board based on new project files.
-        # If a port is already selected, re-run the esptool probe so that
-        # switching projects (without unplugging) still picks the right board
-        # (e.g. going from Arduino R3 → ESP32-S3 with the same port connected).
+        # Board recognition belongs to the selected port, not to the project.
+        # If this port was already handled, preserve the user's board choice
+        # while they explore another project.
         port = self.port_var.get()
         if port and not port.startswith("─"):
-            threading.Thread(
-                target=self._auto_detect_board_from_port,
-                args=(port,),
-                daemon=True,
-            ).start()
+            self._start_auto_board_detection(port, show_msg=True)
         else:
             self._auto_select_board(show_msg=True)
 

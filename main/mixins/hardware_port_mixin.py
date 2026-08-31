@@ -166,13 +166,7 @@ class HardwarePortMixin(_Base):
                     self._save_selected_port(p.device)
                     self._board_port_confirmed = False
                     self._update_hardware_action_buttons()
-                    self._auto_select_board(show_msg=False)
-                    if p.device and not self._port_is_avr_only():
-                        threading.Thread(
-                            target=self._auto_detect_board_from_port,
-                            args=(p.device,),
-                            daemon=True,
-                        ).start()
+                    self._start_auto_board_detection(p.device, show_msg=False)
                     self._sync_project_hardware_state()
                     self._chain_pending_port_scan()
                     return
@@ -195,13 +189,9 @@ class HardwarePortMixin(_Base):
         if is_current_valid:
             # Current selection is still valid, keep it and update config
             self._save_selected_port(current_device)
-            self._auto_select_board(show_msg=False)
-            if current_device and current_device.upper() != "COM1" and not self._port_is_avr_only():
-                threading.Thread(
-                    target=self._auto_detect_board_from_port,
-                    args=(current_device,),
-                    daemon=True,
-                ).start()
+            # This also covers the initial scan. Subsequent refreshes only
+            # preserve the port and never re-run board recognition.
+            self._start_auto_board_detection(current_device, show_msg=False)
             self._sync_project_hardware_state()
             self._chain_pending_port_scan()
             return
@@ -237,14 +227,7 @@ class HardwarePortMixin(_Base):
             self._save_selected_port(auto_port_device)
             self._board_port_confirmed = False
             self._update_hardware_action_buttons()
-            self._auto_select_board(show_msg=False)
-
-            if auto_port_device and auto_port_device.upper() != "COM1" and not self._port_is_avr_only():
-                threading.Thread(
-                    target=self._auto_detect_board_from_port,
-                    args=(auto_port_device,),
-                    daemon=True,
-                ).start()
+            self._start_auto_board_detection(auto_port_device, show_msg=False)
         else:
             # A port scan only owns the physical-port selection.  A board is
             # also the compile target, so it must remain available when no
@@ -255,6 +238,9 @@ class HardwarePortMixin(_Base):
             self.port_var.set("")
             self._save_selected_port("")
             self._board_port_confirmed = False
+            self._auto_detected_port = ""
+            self._selected_port_device = ""
+            self._board_selection_manually_overridden = False
             self._update_hardware_action_buttons()
 
         self._sync_project_hardware_state()
@@ -357,6 +343,9 @@ class HardwarePortMixin(_Base):
                     self._stop_serial_session()
                     self._set_serial_status(False)
                     self._board_port_confirmed = False
+                    self._auto_detected_port = ""
+                    self._selected_port_device = ""
+                    self._board_selection_manually_overridden = False
                     self._set_status(f"MCU disconnected ({current_port}) — Port cleared", Theme.YELLOW)
 
                 # Auto-switch to newly connected MCU only if current port is not valid/recognized (e.g. empty, disconnected, or placeholder COM1)
@@ -385,6 +374,10 @@ class HardwarePortMixin(_Base):
                     self._monitor_should_run = False
                     self._stop_serial_session()
                     self._set_serial_status(False)
+                    self._board_port_confirmed = False
+                    self._auto_detected_port = ""
+                    self._selected_port_device = ""
+                    self._board_selection_manually_overridden = False
 
         except Exception as e:
             self._append_notif(f"  ✖ Error handling port change: {e}", "error")
@@ -518,6 +511,11 @@ class HardwarePortMixin(_Base):
     def _select_board_from_dialog(self, selected_board):
         if selected_board == self.board_var.get():
             return
+        # A board selected in the UI is authoritative for the active port.
+        # Automatic recognition is allowed again only after the user selects
+        # a different port or reconnects a device.
+        self._board_selection_manually_overridden = True
+        self._board_port_confirmed = False
         self.board_var.set(selected_board)
         self._on_board_changed()
 
@@ -594,6 +592,9 @@ class HardwarePortMixin(_Base):
         self._update_hardware_action_buttons()
         if not port_label:
             self._save_selected_port("")
+            self._auto_detected_port = ""
+            self._selected_port_device = ""
+            self._board_selection_manually_overridden = False
             # Clearing a physical port must not clear the selected compile
             # target.  Compile is intentionally board-only and remains valid
             # without a connected MCU.
@@ -619,6 +620,9 @@ class HardwarePortMixin(_Base):
                 )
             self._save_selected_port("")
             self.port_var.set("")
+            self._auto_detected_port = ""
+            self._selected_port_device = ""
+            self._board_selection_manually_overridden = False
             self._set_status(f"Port {port_name} in use by PID {owner_pid}", Theme.YELLOW)
             self._restart_monitor("port occupied by another window")
             self._sync_project_hardware_state()
@@ -630,23 +634,56 @@ class HardwarePortMixin(_Base):
         self._set_status(f"Port changed to {port_name}", Theme.CYAN)
         self._restart_monitor(f"port → {port_name}")
         
-        # Fast local auto-select based on project files + port chip description
-        self._auto_select_board(show_msg=True)
-
         # Sync active target hardware state to .mcu_flasher_build_cache/project_state.json
         self._sync_project_hardware_state()
 
-        # Skip esptool chip probing when the port or selected board is confirmed
-        # non-Espressif (e.g. AVR, STM32, RP2040).
-        if self._port_is_non_espressif() or not port_name:
-            return
-            
-        # Kick off chip auto-detection in background — non-blocking
+        # Recognize this newly selected port once. Compile and Upload never
+        # invoke recognition again.
+        self._start_auto_board_detection(port_name, show_msg=True)
+
+    def _start_auto_board_detection(self, port: str, *, show_msg: bool = False) -> bool:
+        """Recognize a selected port once, then leave board control to the user.
+
+        Port scans, project switches, and action buttons can all arrive after
+        the initial selection.  The selected port is therefore recorded before
+        the worker starts, which coalesces those callers into one recognition
+        attempt and prevents a late callback from repeatedly changing boards.
+        """
+        port_device = self._extract_port_device(str(port or "")) or str(port or "").strip()
+        if not port_device:
+            return False
+
+        previous_port = str(getattr(self, "_selected_port_device", "") or "")
+        if previous_port.upper() != port_device.upper():
+            self._board_selection_manually_overridden = False
+            self._board_port_confirmed = False
+            self._auto_detected_port = ""
+        self._selected_port_device = port_device
+
+        if self._auto_detected_port.upper() == port_device.upper():
+            return False
+        self._auto_detected_port = port_device
+
+        if getattr(self, "_board_selection_manually_overridden", False):
+            self._update_hardware_action_buttons()
+            return False
+
+        if port_device.upper() == "COM1":
+            self._board_port_confirmed = True
+            self._update_hardware_action_buttons()
+            self._sync_project_hardware_state()
+            return True
+
+        # One background job performs descriptor recognition and its fallback.
+        # Keeping the complete detection in that job avoids probing the same
+        # port synchronously and then repeating it asynchronously.
         threading.Thread(
             target=self._auto_detect_board_from_port,
-            args=(port_name,),
+            args=(port_device,),
+            kwargs={"show_msg": show_msg},
             daemon=True,
         ).start()
+        return True
 
     def _detect_board_from_descriptor(self, port: str) -> str | None:
         """Apply only the three intentionally-supported passive port heuristics.
@@ -718,7 +755,14 @@ class HardwarePortMixin(_Base):
         return None
 
 
-    def _auto_detect_board_from_port(self, port: str, _attempt: int = 1, _max_attempts: int = 4):
+    def _auto_detect_board_from_port(
+        self,
+        port: str,
+        _attempt: int = 1,
+        _max_attempts: int = 4,
+        *,
+        show_msg: bool = True,
+    ):
         """Background worker: probe *port* to auto-select board safely.
 
         Prioritizes non-disruptive USB descriptor matching so already-running
@@ -737,17 +781,30 @@ class HardwarePortMixin(_Base):
         if self._extract_port_device(self.port_var.get()) != port:
             return
 
+        # A manual board choice is authoritative. The worker may have been
+        # queued just before the user made that choice, so check both here and
+        # again in the Tk callback below.
+        if getattr(self, "_board_selection_manually_overridden", False):
+            return
+
         # 1. Non-disruptive USB Descriptor Check (Fast, zero-reset)
         descriptor_board = self._detect_board_from_descriptor(port)
         if descriptor_board:
             def _apply_desc():
+                if self._extract_port_device(self.port_var.get()) != port:
+                    return
+                if getattr(self, "_board_selection_manually_overridden", False):
+                    self._update_hardware_action_buttons()
+                    self._sync_project_hardware_state()
+                    return
                 if self.board_var.get() != descriptor_board and descriptor_board in SUPPORTED_BOARDS:
                     self.board_var.set(descriptor_board)
                     self._on_board_changed()
-                    self._append(
-                        f"  🔌 Auto-detected board on {port}: \"{descriptor_board}\"",
-                        "info",
-                    )
+                    if show_msg:
+                        self._append(
+                            f"  🔌 Auto-detected board on {port}: \"{descriptor_board}\"",
+                            "info",
+                        )
                 self._board_port_confirmed = True
                 self._update_hardware_action_buttons()
                 self._sync_project_hardware_state()
@@ -759,7 +816,12 @@ class HardwarePortMixin(_Base):
         # Arduino IDE never probes chips with esptool on startup — it relies strictly on USB descriptors,
         # remembered board history, and sketch auto-selection so already-running MCUs are never reset.
         def _non_disruptive_fallback():
-            self._auto_select_board(show_msg=True)
+            if self._extract_port_device(self.port_var.get()) != port:
+                return
+            if getattr(self, "_board_selection_manually_overridden", False):
+                self._update_hardware_action_buttons()
+                self._sync_project_hardware_state()
+                return
             self._board_port_confirmed = True
             self._update_hardware_action_buttons()
             self._sync_project_hardware_state()
@@ -913,6 +975,9 @@ class HardwarePortMixin(_Base):
         """
         port_device = self._extract_port_device(self.port_var.get())
         if not port_device:
+            return None
+
+        if getattr(self, "_board_selection_manually_overridden", False):
             return None
 
         detected = (
