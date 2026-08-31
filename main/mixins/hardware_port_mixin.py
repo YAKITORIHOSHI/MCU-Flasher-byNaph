@@ -246,11 +246,14 @@ class HardwarePortMixin(_Base):
                     daemon=True,
                 ).start()
         else:
+            # A port scan only owns the physical-port selection.  A board is
+            # also the compile target, so it must remain available when no
+            # device is connected (or while a device is temporarily absent).
+            # Clearing board_var here made a clean/no-port project impossible
+            # to compile even though the user had already selected a board.
             self.port_combo.set("")
             self.port_var.set("")
             self._save_selected_port("")
-            if hasattr(self, "board_var"):
-                self.board_var.set("")
             self._board_port_confirmed = False
             self._update_hardware_action_buttons()
 
@@ -591,8 +594,9 @@ class HardwarePortMixin(_Base):
         self._update_hardware_action_buttons()
         if not port_label:
             self._save_selected_port("")
-            if hasattr(self, "board_var"):
-                self.board_var.set("")
+            # Clearing a physical port must not clear the selected compile
+            # target.  Compile is intentionally board-only and remains valid
+            # without a connected MCU.
             self._set_status("Port cleared", Theme.CYAN)
             self._restart_monitor("port cleared")
             self._sync_project_hardware_state()

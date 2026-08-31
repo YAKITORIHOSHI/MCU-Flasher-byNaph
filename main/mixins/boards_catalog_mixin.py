@@ -20,6 +20,7 @@ from main.core.theme import *
 from main.core.config import *
 from main.core.file_utils import *
 from main.core.toolchain import *
+from main.core import board_catalog as _board_catalog
 from main.core.board_catalog import *
 from main.core.board_compat import *
 from main.widgets import *
@@ -258,9 +259,19 @@ class BoardsCatalogMixin(_Base):
     def _apply_reloaded_boards(self, new_boards: dict, new_usb_ids=None):
         """Apply the reloaded board list on the main (UI) thread."""
         global SUPPORTED_BOARDS, DOWNLOADED_BOARD_USB_IDS
-        SUPPORTED_BOARDS = new_boards
+        # Most mixins imported these catalogs with ``from ... import *`` and
+        # therefore retain references to the original dicts. Update the shared
+        # objects in place so a download-manager reload is visible everywhere:
+        # board search, compile configuration, and USB descriptor detection.
+        shared_boards = _board_catalog.SUPPORTED_BOARDS
+        shared_boards.clear()
+        shared_boards.update(new_boards)
+        SUPPORTED_BOARDS = shared_boards
         if new_usb_ids is not None:
-            DOWNLOADED_BOARD_USB_IDS = new_usb_ids
+            shared_usb_ids = _board_catalog.DOWNLOADED_BOARD_USB_IDS
+            shared_usb_ids.clear()
+            shared_usb_ids.update(new_usb_ids)
+            DOWNLOADED_BOARD_USB_IDS = shared_usb_ids
         
         old_boards = getattr(self, "_known_board_names", None)
         new_board_names = set(new_boards.keys())
@@ -280,7 +291,15 @@ class BoardsCatalogMixin(_Base):
             if hasattr(self.board_combo, 'update_options'):
                 self.board_combo.update_options(list(SUPPORTED_BOARDS.keys()))
             else:
-                self.board_combo["values"] = list(SUPPORTED_BOARDS.keys())
+                # The current board selector is a read-only tk.Entry with a
+                # separate search dialog, not a ttk.Combobox. Older reload
+                # code attempted to assign the Combobox-only `values` option
+                # here, raising TclError during deferred startup/catalog
+                # refresh and aborting the rest of the board-state update.
+                try:
+                    self.board_combo.configure(values=list(SUPPORTED_BOARDS.keys()))
+                except Exception:
+                    pass
             
             # If the current selected board is no longer in SUPPORTED_BOARDS
             curr = self.board_var.get()
@@ -296,6 +315,7 @@ class BoardsCatalogMixin(_Base):
                 self._on_board_changed()
                 
             self._append("  ℹ Reloaded supported boards list from disk.", "info")
+            self._update_hardware_action_buttons()
 
     def _get_cpu_cores_jobs(self) -> int:
         try:

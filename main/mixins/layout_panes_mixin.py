@@ -148,6 +148,10 @@ class LayoutPanesMixin(_Base):
     def _set_buttons_state(self, busy: bool, operation: str = "any"):
         previous_operation = getattr(self, "_active_operation", None)
         entering_busy = bool(busy and previous_operation is None)
+        # Clean is cache-only and snapshots/restores the hardware selectors.
+        # Its generic unlock path must not launch a fresh port scan that could
+        # overwrite that exact selection before the user can compile again.
+        refresh_ports_after_unlock = previous_operation != "clean"
         self._active_operation = operation if busy else None
         def _do():
             if busy:
@@ -291,7 +295,8 @@ class LayoutPanesMixin(_Base):
                 # re-apply the board-selected (and, for Upload, hardware-
                 # recognized & port-present) gating now that is_busy is back to False.
                 self._update_hardware_action_buttons()
-                self._refresh_ports(called_from_hotplug=True)
+                if refresh_ports_after_unlock:
+                    self._refresh_ports(called_from_hotplug=True)
 
             self._sync_detached_compact_actions()
                 

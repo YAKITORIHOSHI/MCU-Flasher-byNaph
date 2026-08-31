@@ -252,6 +252,38 @@ class CleanBuildMixin(_Base):
             if label not in self._CLEAN_VOLATILE_LABELS
         )
 
+    def _capture_clean_hardware_selection(self) -> tuple[str, str, str, bool]:
+        """Snapshot the UI hardware target before Clean disables its controls.
+
+        Clean removes generated files only.  It must never turn into an
+        implicit board/port reset, including when a concurrent port scan or a
+        stale asynchronous detector callback finishes while the cache is being
+        deleted.
+        """
+        board = self.board_var.get() if hasattr(self, "board_var") else ""
+        port = self.port_var.get() if hasattr(self, "port_var") else ""
+        last_valid_board = getattr(self, "_last_valid_board", board)
+        confirmed = bool(getattr(self, "_board_port_confirmed", False))
+        return board, port, last_valid_board, confirmed
+
+    def _restore_clean_hardware_selection(self, snapshot) -> None:
+        """Restore the exact board/port selection captured before Clean."""
+        if not snapshot:
+            return
+        board, port, last_valid_board, confirmed = snapshot
+        try:
+            if hasattr(self, "board_var"):
+                self.board_var.set(board)
+            if hasattr(self, "port_var"):
+                self.port_var.set(port)
+            if hasattr(self, "port_combo") and self.port_combo:
+                self.port_combo.set(port)
+            self._last_valid_board = last_valid_board
+            self._board_port_confirmed = confirmed
+        except Exception:
+            # The window may be closing while a background Clean completes.
+            pass
+
     def _show_toast(self, message: str, duration_ms: int = 2500):
         """Show a floating borderless toast notification centered over the main window that auto-dismisses."""
         try:
@@ -368,6 +400,8 @@ class CleanBuildMixin(_Base):
         finally:
             self._clean_confirm_pending = False
 
+        clean_hardware_snapshot = self._capture_clean_hardware_selection()
+        self._clean_hardware_snapshot = clean_hardware_snapshot
         self._clean_retry_in_progress = bool(on_complete)
         self.is_busy = True
         self._stop_requested = False
@@ -381,6 +415,8 @@ class CleanBuildMixin(_Base):
             reset_cache_lock = _try_acquire_reset_cache_lock()
             if reset_cache_lock is None:
                 def _locked():
+                    self._restore_clean_hardware_selection(clean_hardware_snapshot)
+                    self._clean_hardware_snapshot = None
                     self._append(
                         "  ⚠ Clean cancelled: another window is using the Hard/Soft Reset cache.",
                         "warning",
@@ -394,6 +430,11 @@ class CleanBuildMixin(_Base):
                 removed, errors = self._perform_clean()
 
                 def _done():
+                    # Keep Clean strictly cache-only.  Port enumeration and
+                    # board detection can complete asynchronously while the
+                    # worker is deleting files, so restore the exact target
+                    # selected by the user before unlocking the controls.
+                    self._restore_clean_hardware_selection(clean_hardware_snapshot)
                     if removed:
                         self._append(f"  ✔ Removed: {', '.join(removed)}", "success")
                     else:
@@ -433,12 +474,15 @@ class CleanBuildMixin(_Base):
                     # transition so its scheduled UI update runs first.
                     self.is_busy = False
                     self._set_buttons_state(False)
+                    self._clean_hardware_snapshot = None
                     if on_complete:
                         self.root.after(0, on_complete)
 
                 self.root.after(0, _done)
             except Exception as exc:
                 def _error(exc=exc):
+                    self._restore_clean_hardware_selection(clean_hardware_snapshot)
+                    self._clean_hardware_snapshot = None
                     self._append(f"  ✖ Internal error during clean: {exc}", "error")
                     self._set_status("Clean FAILED", Theme.RED)
                     self.is_busy = False

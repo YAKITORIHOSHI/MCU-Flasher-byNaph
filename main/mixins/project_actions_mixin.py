@@ -734,6 +734,11 @@ class ProjectActionsMixin(_Base):
         self._compat_warnings_approved_hash = None
         self._load_compile_cache()
         self._update_skip_compile_state()
+        # Folder changes do not necessarily fire _on_board_changed (for
+        # example when the selected board remains valid and no port is
+        # connected). Re-apply the action gating after the project/cache
+        # transition so Compile reflects the still-selected board immediately.
+        self._update_hardware_action_buttons()
 
         # Project reporting performs network-share reads, volume checks, and
         # include resolution. Keep it in the bounded worker pool; only its
