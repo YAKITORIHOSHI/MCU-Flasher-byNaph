@@ -8,11 +8,17 @@ from __future__ import annotations
 import sys
 import os
 import time
+import json
 import re
+import shutil
+import tempfile
 import subprocess
 import threading
 import queue
+import ctypes
 import traceback
+import hashlib
+from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -339,7 +345,8 @@ class SoftResetMixin(_Base):
             if not platform_dir.is_dir():
                 raise FileNotFoundError(platform_dir)
             # pyrefly: ignore [missing-import]
-            from platformio.platform.factory import PlatformFactory
+            # pyrefly: ignore [missing-import]
+            from platformio.platform.factory import PlatformFactory  # type: ignore
 
             platform = PlatformFactory.new(str(platform_dir))
             board = platform.board_config(board_id)
@@ -469,7 +476,8 @@ class SoftResetMixin(_Base):
             return {}
         try:
             # pyrefly: ignore [missing-import]
-            from elftools.elf.elffile import ELFFile
+            # pyrefly: ignore [missing-import]
+            from elftools.elf.elffile import ELFFile  # type: ignore
             with elf_path.open("rb") as handle:
                 elf = ELFFile(handle)
                 sections = {
