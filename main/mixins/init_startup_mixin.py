@@ -725,11 +725,9 @@ class InitStartupMixin(_Base):
         self._start_background_syntax_thread()
 
     def _dbi_terminal(self):
-        # Pre-warm the project terminal in the background so it is instantly ready
-        try:
-            self._ensure_project_terminal_webview()
-        except Exception:
-            pass
+        # Native terminal webview and shell are created lazily when the
+        # Terminal tab is opened, keeping startup lightweight and fast.
+        pass
 
     def _advance_deferred_background_init(self):
         """Run the next queued service, then yield the event loop before the

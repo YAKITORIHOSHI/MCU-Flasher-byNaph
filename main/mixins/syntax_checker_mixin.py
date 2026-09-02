@@ -347,9 +347,9 @@ class SyntaxCheckerMixin(_Base):
         warn_count = sum(1 for e in errors if e["severity"] == "warning")
         
         if not errors:
-            self.lbl_syntax_status.configure(text="🔍 SYNTAX CHECK: ✔ Clean (no issues)", fg=Theme.GREEN)
+            self.lbl_syntax_status.configure(text="✔ Clean (no issues)", fg=Theme.GREEN)
         else:
-            status_text = f"🔍 SYNTAX CHECK: {err_count} Error(s), {warn_count} Warning(s)"
+            status_text = f"{err_count} Error(s), {warn_count} Warning(s)"
             fg_color = Theme.RED if err_count > 0 else Theme.ORANGE
             self.lbl_syntax_status.configure(text=status_text, fg=fg_color)
             

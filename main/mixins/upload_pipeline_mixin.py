@@ -264,6 +264,7 @@ class UploadPipelineMixin(_Base):
         # mid-compile; consumed by _abort_upload_if_mcu_missing().
         self._mcu_detached_during_compile = None
         self._set_window_closable(True)
+        self._pending_auto_baud = self._detect_sketch_baud_rate()
 
         # Remote projects use a temporary mapped drive for the source snapshot.
         # Keep it mounted for the whole upload because this operation may call
@@ -495,7 +496,7 @@ class UploadPipelineMixin(_Base):
         # so the user always knows where they are in the pipeline.
         # Phases in order: 1 Connecting → 2 Erasing → 3 Writing → 4 Verifying → 5 Resetting
         _UPLOAD_PHASES = [
-            ("Initialising",  "Starting uploader..."),
+            ("Initialising",  "Starting PlatformIO uploader..."),
             ("Connecting",    "Connecting to board..."),
             ("Erasing",       "Erasing flash memory..."),
             ("Writing",       "Writing firmware to flash..."),
@@ -575,24 +576,7 @@ class UploadPipelineMixin(_Base):
 
         board_name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(board_name, {})
-
         is_avr = (board_info.get("platform", "") == "atmelavr")
-        board_reset_family = board_reset_capabilities(
-            board_info.get("platform", ""),
-            board_info.get("board", ""),
-            board_name,
-            board_info.get("framework", ""),
-        ).get("family")
-
-        # Espressif monitor defaults are board-family settings: ESP8266 ROM
-        # boot messages use 74880 and ESP32 uses 115200.  Do not let the
-        # optional Serial.begin() scanner replace those selected-board
-        # defaults after Upload; the user can still choose another monitor
-        # baud explicitly from the Serial Monitor control.
-        if board_reset_family in ("espressif32", "espressif8266"):
-            self._pending_auto_baud = None
-        else:
-            self._pending_auto_baud = self._detect_sketch_baud_rate()
 
         # The fast esptool path follows the legacy reliable connection model:
         # each numbered retry is a fresh esptool session and reset pulse. The
@@ -1327,13 +1311,8 @@ class UploadPipelineMixin(_Base):
             # already communicated the failed attempts, so only the final
             # verdict + real reason are printed here).
             if _timeout_triggered[0] or is_conn_failure:
-                connection_target = (
-                    "ESP8266"
-                    if board_info.get("platform") == "espressif8266"
-                    else "ESP32"
-                )
                 self._append(
-                    f"  ✖ Failed to connect to {connection_target} on {port} — no response "
+                    f"  ✖ Failed to connect to ESP32 on {port} — no response "
                     f"during one uploader session with up to "
                     f"{_MAX_CONNECT_RETRIES} internal BOOT polls. "
                     f"MCU needs to be on 'download_mode' state.",
@@ -1355,13 +1334,7 @@ class UploadPipelineMixin(_Base):
                     _connect_retry_count + 1, _MAX_CONNECT_RETRIES, failed=True
                 )
             if _timeout_triggered[0] or is_conn_failure:
-                if board_info.get("platform") == "espressif8266":
-                    self._append(
-                        "  💡 ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.",
-                        "info",
-                    )
-                else:
-                    self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
+                self._append("  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.", "info")
                 self._append("  💡 Or: unplug & replug the USB cable, then try again.", "info")
                 self._append("")
             else:
@@ -1426,3 +1399,4 @@ class UploadPipelineMixin(_Base):
             self._resume_monitor()
 
         return ok
+

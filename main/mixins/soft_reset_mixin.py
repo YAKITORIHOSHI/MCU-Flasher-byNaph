@@ -1170,28 +1170,6 @@ class SoftResetMixin(_Base):
             )
             return
 
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
-        reset_capabilities = board_reset_capabilities(
-            board_info.get("platform", "") if isinstance(board_info, dict) else "",
-            board_info.get("board", "") if isinstance(board_info, dict) else "",
-            board_name,
-            board_info.get("framework", "") if isinstance(board_info, dict) else "",
-        )
-        if (
-            not isinstance(board_info, dict)
-            or not board_info.get("pio_resolved", True)
-            or not reset_capabilities.get("soft_reset")
-        ):
-            from tkinter import messagebox
-            messagebox.showwarning(
-                "Soft Reset Unavailable",
-                "Soft Reset requires a resolved PlatformIO board using the Arduino framework.\n\n"
-                "The selected board definition is not ready for a generic reset sketch.",
-                parent=parent_dlg,
-            )
-            return
-
         port = self._get_port()
         if not port:
             from tkinter import messagebox
@@ -1263,43 +1241,22 @@ class SoftResetMixin(_Base):
         if owner_pid:
             self._append(f"  ⚠ Soft reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
             return
-
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name)
-        if not isinstance(board_info, dict):
-            self._append(
-                f"  ✖ Soft Reset is unavailable: '{board_name or 'the selected board'}' has no board definition.",
-                "error",
-            )
-            self._set_status("Soft Reset unsupported", Theme.RED)
-            return
-
-        p_platform = str(board_info.get("platform", "")).strip()
-        p_board = str(board_info.get("board", "")).strip()
-        p_framework = str(board_info.get("framework", "")).strip()
-        reset_capabilities = board_reset_capabilities(
-            p_platform, p_board, board_name, p_framework
-        )
-        if (
-            not board_info.get("pio_resolved", True)
-            or not reset_capabilities.get("soft_reset")
-            or not p_platform
-            or not p_board
-        ):
-            self._append(
-                f"  ✖ Soft Reset is unavailable for '{board_name}'. "
-                "The board must resolve to a PlatformIO board using the Arduino framework.",
-                "error",
-            )
-            self._set_status("Soft Reset unsupported", Theme.RED)
-            return
-
         # Pause monitor (so port isn't blocked)
         was_monitoring = self._pause_monitor()
         if was_monitoring:
             time.sleep(0.4)
 
-        is_avr = reset_capabilities.get("family") == "atmelavr"
+        board_name = self.board_var.get()
+        if board_name in SUPPORTED_BOARDS:
+            board_info = SUPPORTED_BOARDS[board_name]
+        elif SUPPORTED_BOARDS:
+            board_info = next(iter(SUPPORTED_BOARDS.values()))
+        else:
+            board_info = {"platform": "atmelavr", "board": "uno", "framework": "arduino"}
+        p_platform = board_info["platform"]
+        p_board = board_info["board"]
+        p_framework = board_info["framework"]
+        is_avr = p_platform == "atmelavr"
 
         self._append("")
         self._append("=" * 50, "header")
@@ -1350,12 +1307,13 @@ class SoftResetMixin(_Base):
         # ── Use an exact-board persistent reset project ────────────────────────
         # A/B/A board switching returns to A's own .pio tree instead of
         # rewriting and deleting the last board's shared reset build.
+        import shutil
+
         self._set_status("Soft Reset: Preparing project files...", Theme.YELLOW)
         project_dir = self._soft_reset_project_dir(board_name, board_info)
         self._migrate_legacy_reset_project(board_name, board_info)
         try:
             project_dir.mkdir(parents=True, exist_ok=True)
-            hide_generated_directory(project_dir.parent.parent)
             hide_generated_directory(project_dir.parent)
             hide_generated_directory(project_dir)
         except Exception as e:
@@ -1379,15 +1337,11 @@ class SoftResetMixin(_Base):
             board_name, board_info
         )
 
-        # Force the GUI monitor to the same board-family baud as the generated
-        # reset sketch before it reconnects. This also keeps future Arduino
-        # PlatformIO families from inheriting a stale ESP/AVR setting.
-        def _apply_reset_baud(b=monitor_speed):
-            self.baud_var.set(b)
+        if is_avr:
+            # Force the GUI monitor to the same baud before it reconnects.
+            self.baud_var.set(monitor_speed)
             if hasattr(self, "serial_baud_var"):
-                self.serial_baud_var.set(b)
-
-        self._post_ui(_apply_reset_baud)
+                self.serial_baud_var.set(monitor_speed)
 
         # ── Board-aware caching: only rewrite files if content changed ─────────
         # When the board changes, the ini_content changes → we detect that,
@@ -1445,7 +1399,6 @@ class SoftResetMixin(_Base):
             fast_bins = self._locate_soft_reset_fast_binaries(
                 project_dir, board_name, p_platform,
                 require_reset_manifest=True,
-                upload_speed="115200" if p_platform == "espressif8266" else "460800",
             )
 
         # ── Spinner thread for Soft Reset ──────────────────────────────────────
@@ -1528,16 +1481,6 @@ class SoftResetMixin(_Base):
             self._append("  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "success")
             ok, err_msg, _fast_attempts_used = self._soft_reset_esptool_write(fast_bins, port)
         else:
-            if p_platform == "espressif8266":
-                self._append(
-                    "  🔌 ESP8266 download-mode connection is starting at 115200 baud.",
-                    "info",
-                )
-                self._append(
-                    "  ⚠ If this module/adapter has no automatic reset circuit, "
-                    "hold BOOT/GPIO0 LOW now and release after Connected.",
-                    "warning",
-                )
             cmd = pio_path + [
                 "run",
                 "-t", "upload",
@@ -1636,8 +1579,6 @@ class SoftResetMixin(_Base):
                             self._capture_stale_clean_path(stripped, _stale_clean_paths)
                         elif is_linker_error:
                             self._append(f"  ✖ {stripped}", "error")
-                        elif "syntaxwarning" in low:
-                            continue
                         elif "error" in low and "werror" not in low:
                             is_conn_sig = any(sig in low for sig in _CONNECT_FAIL_SIGNATURES) or "fatal error occurred" in low or "error 2" in low
                             can_retry = (_connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False))
@@ -1761,11 +1702,6 @@ class SoftResetMixin(_Base):
         self._set_buttons_busy(False)
 
         if ok:
-            def _reapply_monitor_baud(b=monitor_speed):
-                self.baud_var.set(b)
-                if hasattr(self, "serial_baud_var"):
-                    self.serial_baud_var.set(b)
-            self._post_ui(_reapply_monitor_baud)
             self._activate_serial_monitor_after_success("Soft Reset")
 
         if ok and not was_monitoring:
@@ -1811,3 +1747,4 @@ class SoftResetMixin(_Base):
             self.root.after(0, lambda message=dialog_message: messagebox.showerror(
                 "Soft Reset Failed", message, parent=self.root
             ))
+

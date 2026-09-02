@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import sys
 import os
-import time
 import json
 import re
 import shutil

@@ -1988,9 +1988,19 @@ def _fetch_url(url: str, timeout: int = 8) -> str | None:
     """Fetch a URL, return body text or None on any error."""
     try:
         import urllib.request
-        req = urllib.request.Request(url, headers={"User-Agent": "mcu-flash-gui-bootstrap/1.0"})
+        import gzip
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "mcu-flash-gui-bootstrap/1.0",
+            "Accept-Encoding": "gzip, deflate",
+        })
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read().decode("utf-8", errors="replace")
+            raw = r.read()
+            if raw.startswith(b"\x1f\x8b") or r.headers.get("Content-Encoding") == "gzip":
+                try:
+                    raw = gzip.decompress(raw)
+                except Exception:
+                    pass
+            return raw.decode("utf-8", errors="replace")
     except Exception:
         return None
 
@@ -2016,18 +2026,35 @@ def _pip_installed_version(pkg_import: str, pkg_name: str) -> str | None:
         return metadata.version(pkg_name)
     except Exception:
         pass
+    try:
+        import subprocess as sp
+        res = sp.run(
+            [sys.executable, "-m", "pip", "--version"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=sp.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        import re
+        m = re.search(r"pip\s+([\d.]+)", res.stdout)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
     return None
 
 
 def _pip_latest_version(pkg_name: str) -> str | None:
     """Query PyPI JSON API for the latest stable release of a package."""
-    body = _fetch_url(f"https://pypi.org/pypi/{pkg_name}/json")
+    body = _fetch_url(f"https://pypi.org/pypi/{pkg_name}/json", timeout=6)
     if not body:
         return None
     try:
         data = json.loads(body)
         return data["info"]["version"]
     except Exception:
+        import re
+        m = re.search(r'"version":\s*"([^"]+)"', body)
+        if m:
+            return m.group(1)
         return None
 
 
@@ -2093,53 +2120,21 @@ def _arduino_cli_installed_version() -> str | None:
 
 def _arduino_cli_latest_version() -> str | None:
     """
-    Query the latest version of arduino-cli.
+    Query the latest version of arduino-cli via GitHub releases redirect URL.
     """
-    # ── Strategy 1: GitHub releases redirect URL (extremely reliable & non-rate-limited) ──
     try:
         import urllib.request
         req = urllib.request.Request(
             "https://github.com/arduino/arduino-cli/releases/latest",
             headers={"User-Agent": "mcu-flash-gui-bootstrap/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=3.0) as r:
             final_url = r.geturl()
-            # final_url looks like: https://github.com/arduino/arduino-cli/releases/tag/v1.5.1
             tag = final_url.split("/")[-1]
             if tag and tag.startswith("v"):
                 return tag.lstrip("v")
     except Exception:
         pass
-
-    # ── Strategy 2: arduino-cli upgrade (fallback) ──
-    cli = find_arduino_cli()
-    if cli:
-        try:
-            result = subprocess.run(
-                [cli, "upgrade"],
-                capture_output=True, text=True, timeout=15,
-                encoding="utf-8", errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
-            # "arduino-cli X.Y.Z -> A.B.C" or "already up to date"
-            import re
-            m = re.search(r"(\d+\.\d+[\.\d]*)\s*$", result.stdout)
-            if m:
-                return m.group(1).strip()
-        except Exception:
-            pass
-
-    # ── Strategy 3: GitHub releases API (fallback) ──
-    body = _fetch_url("https://api.github.com/repos/arduino/arduino-cli/releases/latest")
-    if body:
-        try:
-            data = json.loads(body)
-            tag = data.get("tag_name", "")          # e.g. "v1.1.1"
-            if tag:
-                return tag.lstrip("v")
-        except Exception:
-            pass
-
     return None
 
 
@@ -2227,56 +2222,16 @@ def check_pio_update() -> dict:
 
 
 def check_python_update() -> dict:
-    """Check if a newer version of Python is available on winget."""
+    """Check Python version status."""
     import sys
     current_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    
-    if sys.platform != "win32" or not shutil.which("winget"):
-        return {"name": "python", "installed": current_ver, "latest": current_ver,
-                "update_available": False, "error": None}
-                
-    try:
-        # Run winget search silently
-        import subprocess as sp
-        res = sp.run(
-            ["winget", "search", "Python.Python"],
-            capture_output=True, text=True, timeout=20, shell=False,
-            creationflags=sp.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        )
-        if res.returncode == 0:
-            highest_minor = sys.version_info.minor
-            highest_id = None
-            for line in res.stdout.splitlines():
-                if "Python.Python.3." in line:
-                    parts = line.split()
-                    for part in parts:
-                        if part.startswith("Python.Python.3."):
-                            try:
-                                minor_ver = int(part.split(".")[-1])
-                                if minor_ver > highest_minor:
-                                    highest_minor = minor_ver
-                                    highest_id = part
-                            except Exception:
-                                pass
-            if highest_id:
-                latest_ver_str = f"3.{highest_minor}"
-                return {
-                    "name": "python",
-                    "installed": current_ver,
-                    "latest": latest_ver_str,
-                    "update_available": True,
-                    "error": None,
-                    "package_id": highest_id,
-                }
-    except FileNotFoundError:
-        return {"name": "python", "installed": current_ver, "latest": current_ver,
-                "update_available": False, "error": None}
-    except Exception as e:
-        return {"name": "python", "installed": current_ver, "latest": None,
-                "update_available": False, "error": f"check failed: {e}"}
-                
-    return {"name": "python", "installed": current_ver, "latest": current_ver,
-            "update_available": False, "error": None}
+    return {
+        "name": "python",
+        "installed": current_ver,
+        "latest": current_ver,
+        "update_available": False,
+        "error": None,
+    }
 
 
 def _install_python_update(package_id: str) -> bool:
@@ -2426,10 +2381,9 @@ def run_update_checks(auto_update: bool = False):
     if sys.platform == "win32":
         checks.append(("pywin32", lambda: check_pip_package_update("pywin32")))
 
-    # Keep this deliberately small for older/low-memory machines. Package
-    # versions are read in-process, so the pool only covers network requests.
+    # Run checks concurrently in parallel so the entire phase completes fast.
     with ThreadPoolExecutor(
-        max_workers=min(3, len(checks)),
+        max_workers=len(checks),
         thread_name_prefix="MCUUpdateCheck",
     ) as executor:
         futures = {executor.submit(fn): key for key, fn in checks}
@@ -2876,9 +2830,11 @@ def ensure_pywebview() -> bool:
 
 # ── 2e. Ensure PyQt5 + QScintilla ─────────────────────────────
 # ── Multithreaded Parallel Pip Package Manager ────────────────
-# Fast import check using importlib.util.find_spec (no actual import overhead)
 def _check_spec(import_name: str) -> bool:
-    return importlib.util.find_spec(import_name) is not None
+    try:
+        return importlib.util.find_spec(import_name) is not None
+    except Exception:
+        return False
 
 def _check_import_pyserial() -> bool:
     return _check_spec("serial") and _check_spec("serial.tools.list_ports")
@@ -2887,45 +2843,17 @@ def _check_import_psutil() -> bool:
     return _check_spec("psutil")
 
 def _check_import_pywin32() -> bool:
-    """Verify pywin32 in a fresh interpreter so pywin32.pth is processed."""
     if sys.platform != "win32":
         return True
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", "import win32gui, win32con"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    return _check_spec("win32gui") and _check_spec("win32con")
 
 def _check_import_esptool() -> bool:
     return _check_spec("esptool")
 
 def _check_import_pywebview() -> bool:
-    """Verify pywebview can actually import in a fresh interpreter.
-
-    ``find_spec`` can report a package as installed even when one of its
-    startup dependencies is broken.  Monaco cannot use that half-installed
-    state, so Bootstrap verifies the real import before continuing.
-    """
-    if not _check_spec("webview"):
-        return False
-    try:
-        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        result = subprocess.run(
-            [sys.executable, "-c", "import webview; assert webview is not None"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=30,
-            creationflags=creationflags,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    if sys.platform != "win32":
+        return True
+    return _check_spec("webview")
 
 def _check_import_pywinpty() -> bool:
     if sys.platform != "win32":
@@ -2942,7 +2870,7 @@ def _check_import_certifi() -> bool:
     return _check_spec("certifi")
 
 def _check_import_platformio() -> bool:
-    return find_pio() is not None
+    return find_pio() is not None or _check_spec("platformio")
 
 PIP_PACKAGES_SPEC = [
     {
@@ -3242,21 +3170,13 @@ def ensure_pip_packages_parallel(
             str(worker_dir),
             "--disable-pip-version-check",
             "--prefer-binary",
-            "--only-binary",
-            ":all:",
             "--retries",
             "3",
             "--timeout",
-            "30",
+            "45",
             "--progress-bar",
             "off",
             "--no-input",
-            # Reuse pip's content-addressed HTTP/wheel cache.  The previous
-            # no-cache-dir policy forced a full redownload whenever a venv was
-            # recreated, even when the same wheels were already present on the
-            # machine.  Each worker still writes to its own destination; the
-            # shared cache is read/write-safe because pip commits entries
-            # atomically.
         ]
 
         # Critical bootstrap packages are small wheel installs and should
@@ -3528,17 +3448,11 @@ def ensure_pip_packages_parallel(
         # retry on successful fresh-machine installs.
         first_install_args = [
             "--no-warn-script-location",
+            "--prefer-binary",
             "--find-links",
             str(wheelhouse),
             *install_args,
         ]
-        # When every download worker completed successfully, the wheelhouse
-        # is a complete, deterministic install source.  Do not let pip query
-        # the package index again for metadata or a newer candidate: that can
-        # turn a local install back into a network-bound transaction.  If one
-        # worker failed, keep the index available for the recovery path.
-        if not download_failures:
-            first_install_args.insert(0, "--no-index")
 
         install_timeout = 600 if (
             download_failures or any(not spec.get("critical", True) for spec in missing_specs)

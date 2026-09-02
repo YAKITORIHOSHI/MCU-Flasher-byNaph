@@ -6,7 +6,6 @@ MCU Flasher by Naph — Modularized Architecture
 from __future__ import annotations
 
 import sys
-import os
 import time
 import re
 import subprocess

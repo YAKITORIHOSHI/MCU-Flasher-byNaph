@@ -457,13 +457,7 @@ class UILayoutMixin(_Base):
         console_header = tk.Frame(build_console_frame, bg=Theme.BG_MID, pady=6, padx=10)
         console_header.pack(fill=tk.X)
         self._console_header = console_header
-
-        self.lbl_build_console_title = tk.Label(
-            console_header, text="⚙ BUILD CONSOLE",
-            font=self.monitor_heading_font,
-            fg=Theme.CYAN, bg=Theme.BG_MID,
-        )
-        self.lbl_build_console_title.pack(side=tk.LEFT)
+        self.lbl_build_console_title = None
 
         btn_clear_console = self._make_btn(
             console_header, "🗑 Clear", self._clear_console,
@@ -575,7 +569,7 @@ class UILayoutMixin(_Base):
             widget.tag_configure("severe_alert", foreground="#FF3355", font=self.monitor_font_bold)
             widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
 
-        self.bottom_notebook.add(build_console_frame, text="  ⚙ Build Console  ")
+        self.bottom_notebook.add(build_console_frame, text=" ⚙ Build Console ")
 
         # ── TAB 2: Compatible Devices ──
         compat_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
@@ -585,20 +579,14 @@ class UILayoutMixin(_Base):
         compat_header = tk.Frame(compat_frame, bg=Theme.BG_MID, pady=6, padx=10)
         self._compat_header = compat_header
         compat_header.pack(fill=tk.X)
-
-        self.lbl_compat_title = tk.Label(
-            compat_header, text="🔧 COMPATIBLE DEVICES",
-            font=self.monitor_heading_font,
-            fg=Theme.CYAN, bg=Theme.BG_MID,
-        )
-        self.lbl_compat_title.pack(side=tk.LEFT)
+        self.lbl_compat_title = None
 
         self.lbl_compat_status = tk.Label(
             compat_header, text="Please compile to see the list of compatible devices",
             font=self.font_mono_sm,
             fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
         )
-        self.lbl_compat_status.pack(side=tk.LEFT, padx=(12, 0))
+        self.lbl_compat_status.pack(side=tk.LEFT, padx=(0, 0))
 
         def _copy_compat():
             text = self.compat_text.get("1.0", tk.END).strip()
@@ -670,16 +658,16 @@ class UILayoutMixin(_Base):
         # focus from the embedded Monaco/OpenCode native windows.
         for _compat_focus_widget in (
             compat_header,
-            self.lbl_compat_title,
             self.lbl_compat_status,
             compat_search_row,
             self.lbl_compat_search_icon,
         ):
-            _compat_focus_widget.bind(
-                "<Button-1>",
-                lambda _e: self._focus_compatible_search(select_all=False),
-                add="+",
-            )
+            if _compat_focus_widget:
+                _compat_focus_widget.bind(
+                    "<Button-1>",
+                    lambda _e: self._focus_compatible_search(select_all=False),
+                    add="+",
+                )
 
         tk.Frame(compat_frame, bg=Theme.BORDER, height=1).pack(fill=tk.X)
 
@@ -716,7 +704,7 @@ class UILayoutMixin(_Base):
             widget.tag_configure("dim",     foreground=Theme.TEXT_DIM)
             widget.tag_configure("normal",  foreground=Theme.TEXT)
 
-        self.bottom_notebook.add(compat_frame, text="  🔧 Compatible Devices  ")
+        self.bottom_notebook.add(compat_frame, text=" 🔧 Compatible Devices ")
 
         # ── TAB 2: Serial Monitor Panel ──
         serial_monitor_frame = tk.Frame(self.bottom_notebook, bg=Theme.BG_DARKEST)
@@ -726,19 +714,13 @@ class UILayoutMixin(_Base):
         serial_header = tk.Frame(serial_monitor_frame, bg=Theme.BG_MID, pady=6, padx=10)
         serial_header.pack(fill=tk.X)
         self._serial_header = serial_header
-
-        self.lbl_serial_monitor_title = tk.Label(
-            serial_header, text="📡 SERIAL MONITOR",
-            font=self.monitor_heading_font,
-            fg=Theme.CYAN, bg=Theme.BG_MID,
-        )
-        self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+        self.lbl_serial_monitor_title = None
 
         btn_reset_mcu = self._make_btn(
             serial_header, "↺ Reset", self._reset_mcu_from_monitor,
             "#8B5E3C", "#A0724F", font=self.font_mono_sm
         )
-        btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
+        btn_reset_mcu.pack(side=tk.LEFT, padx=(0, 0))
         self.btn_reset_mcu = btn_reset_mcu
 
         btn_pause_serial = self._make_btn(
@@ -913,7 +895,7 @@ class UILayoutMixin(_Base):
             widget.tag_configure("sent",    foreground=Theme.MAGENTA)
             widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
 
-        self.bottom_notebook.add(serial_monitor_frame, text="  📡 Serial Monitor  ")
+        self.bottom_notebook.add(serial_monitor_frame, text=" 📡 Serial Monitor ")
         self._serial_monitor_frame = serial_monitor_frame
         self._serial_monitor_tab_index_cache = len(self.bottom_notebook.tabs()) - 1
 
@@ -924,12 +906,6 @@ class UILayoutMixin(_Base):
         notif_header = tk.Frame(notif_frame, bg=Theme.BG_MID, pady=6, padx=10)
         notif_header.pack(fill=tk.X)
         self._notif_header = notif_header
-
-        tk.Label(
-            notif_header, text="🔔 NOTIFICATIONS",
-            font=self.monitor_heading_font,
-            fg=Theme.ORANGE, bg=Theme.BG_MID,
-        ).pack(side=tk.LEFT)
 
         notif_toolbar = tk.Frame(notif_header, bg=Theme.BG_MID)
         self._notif_toolbar = notif_toolbar
@@ -1018,7 +994,7 @@ class UILayoutMixin(_Base):
         ]:
             self.notif_console.tag_configure(tag_name, foreground=color)
 
-        self.bottom_notebook.add(notif_frame, text="  🔔 Notifications  ")
+        self.bottom_notebook.add(notif_frame, text=" 🔔 Notifications ")
         self._load_persistent_notifications()
 
         # ── TAB 4: Syntax Check Panel ──
@@ -1031,9 +1007,9 @@ class UILayoutMixin(_Base):
         self._syntax_header = syntax_header
 
         self.lbl_syntax_status = tk.Label(
-            syntax_header, text="🔍 SYNTAX CHECK",
-            font=self.monitor_heading_font,
-            fg=Theme.CYAN, bg=Theme.BG_MID,
+            syntax_header, text="Status: Ready",
+            font=self.font_mono_sm,
+            fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
         )
         self.lbl_syntax_status.pack(side=tk.LEFT)
 
@@ -1096,7 +1072,7 @@ class UILayoutMixin(_Base):
 
         self.syntax_tree.bind("<Double-Button-1>", self._on_syntax_tree_double_click)
 
-        self.bottom_notebook.add(syntax_check_frame, text="  🔍 Syntax Check  ")
+        self.bottom_notebook.add(syntax_check_frame, text=" 🔍 Syntax Check ")
 
         # ── TAB 5: Project Terminal ──
         # Keep the terminal lazy: creating the tab is cheap, and the first PTY
@@ -1228,7 +1204,7 @@ class UILayoutMixin(_Base):
         self.shell_console.bind("<Control-Shift-C>", self._shell_console_copy)
         self.shell_console.bind("<Control-Insert>", self._shell_console_copy)
 
-        self.bottom_notebook.add(terminal_frame, text="  ⌘ Terminal  ")
+        self.bottom_notebook.add(terminal_frame, text=" ⌘ Terminal ")
         self._shell_terminal_tab_id = terminal_frame
         self._shell_refresh_switcher()
 
@@ -2240,7 +2216,7 @@ class UILayoutMixin(_Base):
         # responsive layout only changes at these actual UI breakpoints; font
         # scaling and the lightweight AI pane width update still happen below.
         width_breakpoints = (520, 650, 680, 700, 760, 820, 850, 900,
-                             950, 1000, 1150, 1200, 1400, 1450)
+                             950, 1000, 1100, 1150, 1200, 1350, 1400, 1450)
         width_bucket = tuple(int(width >= point) for point in width_breakpoints)
         height_bucket = (int(height >= 560), int(height >= 720))
         layout_key = (
@@ -2272,32 +2248,32 @@ class UILayoutMixin(_Base):
         compact = width < 1200
         if width < 650:
             port_chars = 8
-            board_chars = 12
-            baud_chars = 7
+            board_chars = 10
+            baud_chars = 6
             upload_spd_chars = 6
         elif width < 760:
-            port_chars = 11
-            board_chars = 16
-            baud_chars = 8
+            port_chars = 10
+            board_chars = 12
+            baud_chars = 7
             upload_spd_chars = 7
-        elif width < 850:
-            port_chars = 14
-            board_chars = 20
+        elif width < 950:
+            port_chars = 12
+            board_chars = 15
             baud_chars = 8
             upload_spd_chars = 8
-        elif width < 1150:
-            port_chars = 20
-            board_chars = 26
-            baud_chars = 10
-            upload_spd_chars = 10
+        elif width < 1200:
+            port_chars = 14
+            board_chars = 18
+            baud_chars = 8
+            upload_spd_chars = 8
         elif width < 1450:
-            port_chars = 26
-            board_chars = 34
-            baud_chars = 10
-            upload_spd_chars = 10
+            port_chars = 16
+            board_chars = 22
+            baud_chars = 9
+            upload_spd_chars = 9
         else:
-            port_chars = 34
-            board_chars = 42
+            port_chars = 24
+            board_chars = 32
             baud_chars = 10
             upload_spd_chars = 10
 
@@ -2315,9 +2291,9 @@ class UILayoutMixin(_Base):
         try:
             if isinstance(self.ctrl_row_top.master, tk.Widget):
                 self.ctrl_row_top.master.pack_configure(padx=0)
-            left_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
-            right_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
-            inner_gap = round((4 if width < 700 else 8) * display_scale)
+            left_pad = round((8 if width < 800 else (12 if width < 1400 else 16)) * display_scale)
+            right_pad = round((8 if width < 800 else (12 if width < 1400 else 16)) * display_scale)
+            inner_gap = round((4 if width < 800 else 6) * display_scale)
 
             self.board_group.pack_configure(padx=(left_pad, inner_gap))
             self.port_group.pack_configure(padx=(0, inner_gap))
@@ -2327,12 +2303,9 @@ class UILayoutMixin(_Base):
         except Exception:
             pass
 
-        # On very narrow windows the UPLOAD SPD label is the single
-        # biggest fixed-width item in the bar (10 characters where BOARD/
-        # PORT/BAUD are 4-5); abbreviate it once real estate gets tight
-        # rather than letting it force everything else back into overflow.
+        # On narrow windows the UPLOAD SPD label is shortened to SPD to conserve space
         try:
-            lbl_upload_spd_text = "SPD" if width < 700 else "UPLOAD SPD"
+            lbl_upload_spd_text = "SPD" if width < 1100 else "UPLOAD SPD"
             self._lbl_upload_spd.configure(text=lbl_upload_spd_text)
         except Exception:
             pass
@@ -2459,7 +2432,7 @@ class UILayoutMixin(_Base):
         try:
             # Strictly one row: Board, Port, Upload Speed, and Options never
             # move vertically. Narrow layouts shrink/collapse their contents.
-            ctrl_right_pad = round((12 if width < 700 else (16 if width < 1400 else 20)) * display_scale)
+            ctrl_right_pad = round((8 if width < 1000 else (12 if width < 1400 else 16)) * display_scale)
             self.right_group.pack_forget()
             if self.ctrl_row_bottom.winfo_ismapped():
                 self.ctrl_row_bottom.pack_forget()
@@ -2471,31 +2444,33 @@ class UILayoutMixin(_Base):
             self.lbl_options_title.pack(side=tk.TOP, pady=(0, 2))
             self.opt_row.pack(side=tk.TOP)
 
-            # Checkboxes always visible
+            # Checkboxes frame
             self.opt_checkboxes_frame.pack_forget()
-            self.opt_checkboxes_frame.pack(side=tk.LEFT, padx=(0, 8))
+            self.opt_checkboxes_frame.pack(side=tk.LEFT, padx=(0, 4 if width < 1200 else 8))
 
-            # On 1366x768-class displays the full names crowd the controls
-            # bar. Keep the concise names there (and on manually narrowed
-            # windows), while larger displays retain the descriptive labels.
+            # Adaptive short labels for 1366x768 and smaller screens
             self.cb_timestamp.pack_forget()
             self.cb_skip_compile.pack_forget()
-            use_short_labels = width < 820
-            if use_short_labels:
+            if width < 1100:
                 self.cb_timestamp.configure(text="TS")
+                self.cb_skip_compile.configure(text="Skip")
+            elif width < 1350:
+                self.cb_timestamp.configure(text="Time Stamp")
                 self.cb_skip_compile.configure(text="Skip")
             else:
                 self.cb_timestamp.configure(text="Time Stamp")
                 self.cb_skip_compile.configure(text="Skip Compile")
-            self.cb_timestamp.pack(side=tk.LEFT, padx=(0, 8))
-            self.cb_skip_compile.pack(side=tk.LEFT, padx=(0, 8))
 
-            compact_buttons = width < 1200
+            cb_gap = 4 if width < 1100 else (6 if width < 1350 else 8)
+            self.cb_timestamp.pack(side=tk.LEFT, padx=(0, cb_gap))
+            self.cb_skip_compile.pack(side=tk.LEFT, padx=(0, cb_gap))
+
+            compact_buttons = width < 1350
             if compact_buttons:
                 # Compact buttons: collapse option buttons into a dropdown trigger
                 self.opt_buttons_frame.pack_forget()
                 self._opt_dropdown_btn.pack_forget()
-                self._opt_dropdown_btn.pack(in_=self.opt_row, side=tk.LEFT, padx=(4, 0))
+                self._opt_dropdown_btn.pack(in_=self.opt_row, side=tk.LEFT, padx=(2, 0))
             else:
                 # Wide buttons: show all option buttons inline
                 self._opt_dropdown_btn.pack_forget()
@@ -2508,29 +2483,15 @@ class UILayoutMixin(_Base):
         # Dynamic adjustments of Build Console and Serial Monitor toolbars based on width/height
         try:
             if width < 700:
-                self.lbl_build_console_title.pack_forget()
                 self.cb_clear_serial_on_upload.configure(text="Clear serial")
                 self.cb_clear_build_console_on_action.configure(text="Clear build")
                 self.cb_console_autoscroll.configure(text="Scroll")
                 self.btn_copy_console_header.configure(text="Copy")
                 self.btn_clear_console_header.configure(text="Clear")
             else:
-                if not self.lbl_build_console_title.winfo_ismapped():
-                    self.lbl_build_console_title.pack(side=tk.LEFT)
                 self.cb_clear_serial_on_upload.configure(text="Auto-clear Serial Monitor on Action")
                 self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
                 self.cb_console_autoscroll.configure(text="Auto-scroll")
-
-            if width < 950:
-                self.lbl_serial_monitor_title.pack_forget()
-            else:
-                if not self.lbl_serial_monitor_title.winfo_ismapped():
-                    self.lbl_serial_monitor_title.pack_forget()
-                    self.btn_reset_mcu.pack_forget()
-                    self.btn_pause_serial.pack_forget()
-                    self.lbl_serial_monitor_title.pack(side=tk.LEFT)
-                    self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
-                    self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
 
             serial_tight = width < 820
             self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
@@ -2560,16 +2521,56 @@ class UILayoutMixin(_Base):
                 if not self.cb_serial_autoscroll.winfo_ismapped():
                     self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
 
-            style = ttk.Style()
-            style.configure(
-                "Bottom.TNotebook.Tab",
-                # Use one stable padding value for every state so switching
-                # tabs cannot change their apparent size.  Keep the compact
-                # layout on narrow windows, but reduce the desktop maximum a
-                # little without making the labels cramped.
-                padding=[8 if width < 700 else 12, 4 if height < 600 else 5],
-                font=("Segoe UI", 8 if width < 700 else 9, "bold"),
-            )
+            # Dynamic tab text and padding to prevent clipping on 1366x768 and smaller displays
+            target_tab_mode = "compact" if width < 1200 else "wide"
+            if getattr(self, "_last_applied_tab_mode", None) != target_tab_mode:
+                self._last_applied_tab_mode = target_tab_mode
+                if target_tab_mode == "compact":
+                    tab_specs = [
+                        (getattr(self, "_build_console_frame", None), "⚙ Build"),
+                        (getattr(self, "_compat_frame", None), "🔧 Devices"),
+                        (getattr(self, "_serial_monitor_frame", None), "📡 Serial"),
+                        (getattr(self, "_notif_frame", None), "🔔 Alerts"),
+                        (getattr(self, "_syntax_check_frame", None), "🔍 Syntax"),
+                        (getattr(self, "_shell_terminal_frame", None), "⌘ Terminal"),
+                    ]
+                else:
+                    tab_specs = [
+                        (getattr(self, "_build_console_frame", None), "⚙ Build Console"),
+                        (getattr(self, "_compat_frame", None), "🔧 Compatible Devices"),
+                        (getattr(self, "_serial_monitor_frame", None), "📡 Serial Monitor"),
+                        (getattr(self, "_notif_frame", None), "🔔 Notifications"),
+                        (getattr(self, "_syntax_check_frame", None), "🔍 Syntax Check"),
+                        (getattr(self, "_shell_terminal_frame", None), "⌘ Terminal"),
+                    ]
+
+                if hasattr(self, "bottom_notebook"):
+                    try:
+                        managed_tabs = set(self.bottom_notebook.tabs())
+                        for frame_w, label in tab_specs:
+                            if frame_w is not None and str(frame_w) in managed_tabs:
+                                try:
+                                    self.bottom_notebook.tab(frame_w, text=f" {label} ")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+            pad_val = 6 if width < 850 else (8 if width < 1350 else 12)
+            pad_y = 4 if height < 600 else 5
+            font_size = 8 if width < 850 else 9
+            tab_style_key = (pad_val, pad_y, font_size)
+            if getattr(self, "_last_applied_tab_style_key", None) != tab_style_key:
+                self._last_applied_tab_style_key = tab_style_key
+                try:
+                    style = ttk.Style()
+                    style.configure(
+                        "Bottom.TNotebook.Tab",
+                        padding=[pad_val, pad_y],
+                        font=("Segoe UI", font_size, "bold"),
+                    )
+                except Exception:
+                    pass
 
             if width < 700:
                 self.editor_info_label.pack_forget()

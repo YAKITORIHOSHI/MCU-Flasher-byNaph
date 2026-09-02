@@ -718,10 +718,10 @@ def _enrich_chip_features(chip_model: str, raw_features: str) -> str:
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _ESPTOOL_V5_WRITE_PROGRESS_RE = re.compile(
-    r"\bWriting\s+at\s+(?P<address>0x[0-9a-f]+)\s*"
-    r"\[[^\]\r\n]*\]\s*"
+    r"\bWriting\s+at\s+(?P<address>0x[0-9a-f]+)\b"
+    r"[^\d\r\n]*"
     r"(?P<percent>\d{1,3}(?:\.\d+)?)\s*%"
-    r"(?:\s*(?P<written>[\d,]+)\s*/\s*(?P<total>[\d,]+)\s+bytes)?",
+    r"(?:\s*(?P<written>[\d,]+(?:\.\d+)?[kmg]?b?)\s*/\s*(?P<total>[\d,]+(?:\.\d+)?[kmg]?b?))?",
     re.IGNORECASE,
 )
 _ESPTOOL_V4_WRITE_PROGRESS_RE = re.compile(
@@ -784,6 +784,32 @@ def _parse_esptool_image_start(line: str) -> dict | None:
     return {"source": source, "address": match.group("address").lower()}
 
 
+def _parse_byte_size(val: str | None) -> int | None:
+    """Parse byte count safely from raw integers or unit strings like '11.91kB', '369.26kB', '137B'."""
+    if not val:
+        return None
+    val = str(val).strip().lower().replace(",", "")
+    if val.endswith("kb"):
+        try:
+            return int(float(val[:-2]) * 1024)
+        except Exception:
+            return None
+    elif val.endswith("mb"):
+        try:
+            return int(float(val[:-2]) * 1024 * 1024)
+        except Exception:
+            return None
+    elif val.endswith("b"):
+        try:
+            return int(float(val[:-1]))
+        except Exception:
+            return None
+    try:
+        return int(float(val))
+    except Exception:
+        return None
+
+
 def _parse_esptool_write_progress(line: str) -> dict | None:
     """Parse one esptool 4.x/5.x flash-progress row.
 
@@ -803,8 +829,8 @@ def _parse_esptool_write_progress(line: str) -> dict | None:
     return {
         "address": match.group("address").lower(),
         "percent": max(0.0, min(100.0, float(match.group("percent")))),
-        "written": int(written.replace(",", "")) if written else None,
-        "total": int(total.replace(",", "")) if total else None,
+        "written": _parse_byte_size(written),
+        "total": _parse_byte_size(total),
         "version": version,
     }
 
@@ -815,8 +841,8 @@ def _parse_esptool_compressed(line: str) -> dict | None:
     if not match:
         return None
     return {
-        "raw": int(match.group("raw").replace(",", "")),
-        "compressed": int(match.group("compressed").replace(",", "")),
+        "raw": _parse_byte_size(match.group("raw")),
+        "compressed": _parse_byte_size(match.group("compressed")),
     }
 
 
@@ -827,11 +853,8 @@ def _parse_esptool_wrote(line: str) -> dict | None:
         return None
     values = match.groupdict()
     return {
-        "raw": int(values["raw"].replace(",", "")),
-        "compressed": (
-            int(values["compressed"].replace(",", ""))
-            if values.get("compressed") else None
-        ),
+        "raw": _parse_byte_size(values.get("raw")),
+        "compressed": _parse_byte_size(values.get("compressed")),
         "address": values["address"].lower(),
         "seconds": float(values["seconds"]),
         "rate": float(values["rate"]) if values.get("rate") else None,

@@ -80,27 +80,20 @@ class SettingsDialogMixin(_Base):
     def _build_editor_restart_command(self) -> list[str]:
         """Build a clean command line for an editor-mode restart.
 
-        Do not reuse sys.argv wholesale: a frozen build and a source launch
-        have different argv[0] semantics, and stale project arguments can be
-        duplicated.  Route the replacement through Bootstrap so selecting
-        Monaco can repair dependencies on a machine that was incomplete.
+        Skips the bootstrap pipeline since dependencies and tools are already
+        verified on this machine. Directly restarts the GUI with the open project.
         """
         project_path = str(Path(self.sketch_dir_path).resolve(strict=False))
-        bootstrap_script = SCRIPT_DIR / "src" / "modules" / "bootstrap.py"
-        if not getattr(sys, "frozen", False):
-            command = [sys.executable, str(bootstrap_script)]
-        else:
-            # A frozen GUI still has the verified app venv after normal
-            # startup. Use its Python to run the source Bootstrap module so
-            # the editor restart follows the same dependency path.
-            venv_python = SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe"
-            if not venv_python.exists():
-                venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
-            command = [
-                str(venv_python if venv_python.exists() else sys.executable),
-                str(bootstrap_script),
-            ]
-        command.extend(["--project", project_path])
+        gui_script = SCRIPT_DIR / "mcu_flash_gui.py"
+        if not gui_script.exists():
+            gui_script = SCRIPT_DIR / "main" / "mcu_flash_gui.py"
+
+        venv_python = SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe"
+        if not venv_python.exists():
+            venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
+        py_exe = str(venv_python if venv_python.exists() else sys.executable)
+
+        command = [py_exe, str(gui_script), "--project", project_path]
         if "--new-window" in sys.argv:
             command.append("--new-window")
         return command

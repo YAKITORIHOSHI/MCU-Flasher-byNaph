@@ -308,13 +308,8 @@ class BoardsCatalogMixin(_Base):
                 except Exception:
                     pass
             
-            # If the current selected board is no longer in SUPPORTED_BOARDS, clear it
-            curr = self.board_var.get()
-            if curr and curr not in SUPPORTED_BOARDS:
-                self.board_var.set("")
-                self._on_board_changed()
-                
-            self._append("  ℹ Reloaded supported boards list from disk.", "info")
+            if added_boards:
+                self._append("  ℹ Reloaded supported boards list from disk.", "info")
             self._update_hardware_action_buttons()
 
     def _get_cpu_cores_jobs(self) -> int:

@@ -9,7 +9,6 @@ import sys
 import os
 import time
 import re
-import shutil
 import subprocess
 from typing import TYPE_CHECKING
 from pathlib import Path
