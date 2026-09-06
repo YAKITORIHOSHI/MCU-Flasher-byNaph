@@ -429,6 +429,15 @@ def classify_platformio_failure(output_lines) -> str:
         "permission denied",
         "access is denied",
     )
+    long_path_markers = (
+        "enable long paths",
+        "long paths",
+        "path too long",
+        "winerror 206",
+    )
+    if any(marker in joined for marker in long_path_markers):
+        return "long_path"
+
     if any(marker in joined for marker in configuration_markers):
         return "configuration"
     return "tool"

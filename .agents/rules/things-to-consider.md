@@ -98,6 +98,17 @@ The bootstrap system (`src/modules/bootstrap.py`) must handle a completely fresh
 - **PlatformIO long path workaround:** Core dir is junctioned to `C:\.platformio-mcu-gui` to avoid Windows MAX_PATH (>260 char) issues.
 - **Timeout handling:** All `subprocess.run()` calls in build/upload pipelines should have reasonable timeouts. Watch for hangs on UNC-mapped drive operations.
 - **File locking awareness:** On Windows, file lock errors (`[WinError 32]`) are common — always handle them gracefully with retry logic or clear error messages, especially for downloaded `.zip` files and build caches.
+- **Process scheduling priority:** Heavy background compiler and toolchain subprocesses MUST include `0x00004000` (`BELOW_NORMAL_PRIORITY_CLASS`) on Windows alongside `CREATE_NO_WINDOW`. This ensures that even under 100% CPU loads on dual-core systems, the Tkinter message loop, Monaco editor, and serial monitor stay fully responsive without freezing.
+
+---
+
+## Low-End Device Architecture & Concurrency
+
+This application is deployed publicly and will run on budget/older hardware (e.g. dual-core Celeron/Pentium, 4GB RAM, slow 5400 RPM HDDs or eMMC storage).
+
+- **Dynamic resource throttling:** Never hardcode parallel worker counts or spawn unconstrained threads. Query `psutil.virtual_memory().available` and `os.cpu_count()`. If free RAM < 1.0 GB or logical CPUs <= 2, cap compiler workers at `1` (`PLATFORMIO_BUILD_JOBS = 1`, `SCONSFLAGS = -j1`) to prevent severe disk thrashing and out-of-memory crashes.
+- **Generous silence thresholds:** Slow HDDs and budget eMMC drives take significantly longer to unpack large archives, especially with background Windows Defender scans. Keep silence watchdog timeouts at 600s (10 min) and pipe heartbeat updates to status callbacks so users know operations are actively progressing.
+- **On-demand board toolchain setup without restart:** When a user downloads a board definition (e.g. ESP8266 or third-party STM32/RP2040) from the Download Manager, compiling that board must automatically download and prepare the toolchain in the background (`prepare_platformio_board_toolchain()`), streaming live progress to the console. Never require an application restart for a newly added board. Caching in `.mcu-board-ready/` guarantees subsequent compiles start immediately.
 
 ---
 

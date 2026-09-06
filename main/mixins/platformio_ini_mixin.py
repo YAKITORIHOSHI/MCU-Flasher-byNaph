@@ -5,10 +5,13 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
+import sys
 import os
 import time
 import re
 import tempfile
+import threading
+import subprocess
 from typing import TYPE_CHECKING
 from pathlib import Path
 
@@ -42,8 +45,16 @@ class PlatformioIniMixin(_Base):
         ini_path = self._platformio_ini_path()
 
         board_info = self._resolve_board_info()
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            selected_board_name = str(getattr(self, "_active_board_name", "") or "")
+            upload_speed_value = str(getattr(self, "_active_upload_speed", "460800") or "460800")
+        else:
+            selected_board_name = self.board_var.get()
+            upload_speed_value = str(
+                self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+            )
         if not board_info.get("pio_resolved", True):
-            selected_name = self.board_var.get()
+            selected_name = selected_board_name
             arduino_id = str(board_info.get("arduino_board_id") or board_info.get("board") or "").strip()
             inferred_platform = str(board_info.get("platform") or "").strip()
             self._append(
@@ -165,7 +176,7 @@ class PlatformioIniMixin(_Base):
                 ])
             
             board_extra: list[str] = []
-            _uspd = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+            _uspd = upload_speed_value
             # AVR bootloader speeds vary by chip/bootloader version:
             # - Uno: 115200
             # - Nano (old bootloader) / Mega 2560: 57600
@@ -205,7 +216,7 @@ class PlatformioIniMixin(_Base):
             monitor_speed = default_monitor_baud(
                 p_platform,
                 p_board,
-                self.board_var.get(),
+                selected_board_name,
             )
             env_lines: list[str] = [
                 f"platform = {p_platform}",
@@ -261,7 +272,7 @@ default_envs = {self._pio_env_name()}
                     hide_internal_project_metadata(self.sketch_dir_path)
                 self._append("  ✔ Created default platformio.ini successfully.", "success")
                 self._append_notif(
-                    f"  📄 platformio.ini created for {self.board_var.get()} in {ini_path.parent}",
+                    f"  📄 platformio.ini created for {selected_board_name} in {ini_path.parent}",
                     tag="success", category="pio_ini", title="platformio.ini Created"
                 )
                 if detected_libs:
@@ -389,7 +400,7 @@ default_envs = {self._pio_env_name()}
                 desired_monitor_speed = default_monitor_baud(
                     p_platform,
                     p_board,
-                    self.board_var.get(),
+                    selected_board_name,
                 )
                 if re.search(r"^monitor_speed\s*=", content, re.MULTILINE):
                     content = re.sub(
@@ -418,7 +429,7 @@ default_envs = {self._pio_env_name()}
                     # Native USB removes upload_speed below, so we do nothing here
                     pass
                 else:
-                    current_speed = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+                    current_speed = upload_speed_value
                     if re.search(r"^upload_speed\s*=", content, re.MULTILINE):
                         content = re.sub(r"^upload_speed\s*=.*", f"upload_speed = {current_speed}", content, flags=re.MULTILINE)
                     else:
@@ -1217,3 +1228,45 @@ default_envs = {self._pio_env_name()}
                     dst_path.unlink()
                 except OSError:
                     pass
+
+    def _lint_platformio_ini(self, project_dir: Path | None = None) -> dict[str, list[str]]:
+        """Run `pio project config --lint --json-output` to validate platformio.ini.
+
+        Leverages PlatformIO Core 6.1.8+ built-in configuration linter to check for
+        syntax errors, unknown options, or deprecated settings.
+        Returns a dictionary: {"errors": [...], "warnings": [...]}.
+        """
+        target_dir = Path(project_dir or self._platformio_project_dir(self.sketch_dir_path))
+        ini_file = target_dir / "platformio.ini"
+        if not ini_file.exists():
+            return {"errors": ["platformio.ini not found"], "warnings": []}
+
+        pio_cmd = find_pio_executable()
+        if not pio_cmd:
+            return {"errors": [], "warnings": []}
+
+        cmd = pio_cmd + ["project", "config", "-d", str(target_dir), "--lint", "--json-output"]
+        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            import json as _json
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=8,
+                creationflags=creation_flags,
+            )
+            raw = (res.stdout or "").strip()
+            if raw:
+                try:
+                    data = _json.loads(raw)
+                    if isinstance(data, dict):
+                        return {
+                            "errors": [str(e) for e in data.get("errors", [])],
+                            "warnings": [str(w) for w in data.get("warnings", [])],
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return {"errors": [], "warnings": []}

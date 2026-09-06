@@ -310,10 +310,15 @@ class BuildWorkspaceMixin(_Base):
         env["PYTHONWARNINGS"] = "ignore"
         env["PLATFORMIO_UNBUFFERED"] = "1"
         env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+        env["PLATFORMIO_DISABLE_PROMPTS"] = "1"
+        env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "0"
         if jobs is not None:
             safe_jobs = max(1, int(jobs))
             env["PLATFORMIO_BUILD_JOBS"] = str(safe_jobs)
+            env["PLATFORMIO_RUN_JOBS"] = str(safe_jobs)
             env["SCONSFLAGS"] = f"-j{safe_jobs}"
         return env
 

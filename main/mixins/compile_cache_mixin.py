@@ -34,12 +34,25 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
+# Process-wide RAM cache for source file contents to eliminate repeated disk reads.
+# Maps file_path -> (mtime_ns, file_size, raw_bytes).
+_SOURCE_FILE_RAM_CACHE: dict[str, tuple[int, int, bytes]] = {}
+_SOURCE_FILE_RAM_CACHE_LOCK = threading.Lock()
+
+# Process-wide memoization for calculated sketch MD5 hashes.
+# Maps sketch_dir -> (cache_fingerprint_tuple, md5_hex_string).
+_SOURCE_HASH_MEMO_CACHE: dict[str, tuple[tuple, str]] = {}
+
 class CompileCacheMixin(_Base):
     """Mixin providing CompileCacheMixin capabilities for MCUUploadGUI."""
     def _is_framework_downloaded(self, board_name: str = None) -> bool:
         """Check if the core framework and toolchains for the board's platform are installed."""
         if not board_name:
-            board_name = self.board_var.get()
+            board_name = (
+                getattr(self, "_active_board_name", "")
+                if threading.get_ident() != getattr(self, "_tk_thread_id", None)
+                else self.board_var.get()
+            )
         board_info = SUPPORTED_BOARDS.get(board_name, {})
         platform = board_info.get("platform", "espressif32")
         board_id = board_info.get("board", "")
@@ -71,7 +84,10 @@ class CompileCacheMixin(_Base):
     def _save_compile_cache(self):
         """Snapshot source hashes after a successful compile and save to disk,
         keyed by board so each board keeps its own independent cache entry."""
-        self._last_compiled_board = self.board_var.get()
+        self._last_compiled_board = str(
+            getattr(self, "_active_board_name", "")
+            or (self.board_var.get() if threading.get_ident() == getattr(self, "_tk_thread_id", None) else "")
+        )
         if self._last_compiled_board:
             board_key = self._board_cache_key(self._last_compiled_board)
             if not hasattr(self, "_build_config_hash_by_board"):
@@ -145,7 +161,12 @@ class CompileCacheMixin(_Base):
                 if self._has_prior_build():
                     recompile_needed, _ = self._needs_recompile()
                     if not recompile_needed:
-                        self._set_symbol_cache_compiled_state(True)
+                        if threading.get_ident() == getattr(self, "_tk_thread_id", None):
+                            self._set_symbol_cache_compiled_state(True)
+                        elif callable(getattr(self, "_post_ui", None)):
+                            self._post_ui(
+                                lambda: self._set_symbol_cache_compiled_state(True)
+                            )
             else:
                 self._compile_cache_hash = None
                 self._last_compiled_board = None
@@ -173,7 +194,10 @@ class CompileCacheMixin(_Base):
         and it contains no RAM information.  Capturing the authoritative rows
         at compile time is both exact and essentially free.
         """
-        board_name = self.board_var.get()
+        board_name = str(
+            getattr(self, "_active_board_name", "")
+            or (self.board_var.get() if threading.get_ident() == getattr(self, "_tk_thread_id", None) else "")
+        )
         if not board_name:
             return
         board_key = self._board_cache_key(board_name)
@@ -192,7 +216,7 @@ class CompileCacheMixin(_Base):
 
         entry: dict = {
             **captured,
-            "env_name": self._pio_env_name(),
+            "env_name": self._pio_env_name(board_name),
             "source_hash": self._hash_sources(),
         }
         try:
@@ -211,8 +235,11 @@ class CompileCacheMixin(_Base):
         False  → binary is up-to-date for the CURRENTLY selected board, safe to skip compile.
         True   → sources changed, framework missing, env just created, board never compiled,
                  or firmware binary missing from disk (e.g. cleaned manually or by board switch)."""
-        board_name = self.board_var.get()
-        env_name = self._pio_env_name()
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            board_name = str(getattr(self, "_active_board_name", "") or "")
+        else:
+            board_name = self.board_var.get()
+        env_name = self._pio_env_name(board_name)
 
         # 1. Check if board framework is downloaded
         if not self._is_framework_downloaded(board_name):
@@ -455,7 +482,12 @@ class CompileCacheMixin(_Base):
         cache decision, so real user changes to build flags or partitions are
         still observed before any binary can be flashed.
         """
-        name = board_name if board_name is not None else self.board_var.get()
+        if board_name is not None:
+            name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = str(getattr(self, "_active_board_name", "") or "")
+        else:
+            name = self.board_var.get()
         info = dict(SUPPORTED_BOARDS.get(name, {}))
         if not info and board_name is None:
             info = dict(self._resolve_board_info())
@@ -500,34 +532,95 @@ class CompileCacheMixin(_Base):
         immediately after selecting A the file still describes B until the
         next PlatformIO preparation step, which used to create a false source
         change and disable A's valid cache.
-        Files are sorted by name so the hash is order-stable."""
-        h = hashlib.md5()
-        board_name = self.board_var.get()
-        h.update(self._board_cache_key(board_name).encode())
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        Files are sorted by name so the hash is order-stable.
+
+        Utilizes process-wide in-memory RAM caching (_SOURCE_FILE_RAM_CACHE and
+        _SOURCE_HASH_MEMO_CACHE) to avoid repetitive disk I/O and return
+        memoized hashes in sub-microsecond time when sources are unchanged.
+        """
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            board_name = str(getattr(self, "_active_board_name", "") or "")
+            board_info = dict(getattr(self, "_active_board_info", {}) or {})
+        else:
+            board_name = self.board_var.get()
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
+        board_key = self._board_cache_key(board_name)
         try:
-            h.update(json.dumps(board_info, sort_keys=True, default=str).encode())
+            board_info_str = json.dumps(board_info, sort_keys=True, default=str)
         except Exception:
-            pass
-        config_fingerprint = self._build_config_fingerprint(board_name)
-        h.update(b"build_config=")
-        h.update((config_fingerprint or "missing").encode("ascii", errors="replace"))
-        # Native-USB CDC flags affect the binary for relevant S3 boards.
+            board_info_str = ""
+        config_fingerprint = str(self._build_config_fingerprint(board_name) or "missing")
+
+        native_usb = False
         try:
             if is_s3_board(str(board_info.get("board", ""))):
-                h.update(b"native_usb=" + (b"1" if self._is_native_usb_port() else b"0"))
+                native_usb = bool(self._is_native_usb_port())
         except Exception:
             pass
+
+        sketch_dir = str(self.sketch_dir_path)
         source_files = get_project_root_source_files(
             self.sketch_dir_path, (".ino", ".cpp", ".c", ".h", ".hpp")
         )
-        for f in sorted(source_files):
+        sorted_files = sorted(source_files)
+
+        # Fast stat fingerprint to verify if any file on disk changed
+        file_stats = []
+        for f in sorted_files:
             try:
-                h.update(f.name.encode())                    # include filename
-                h.update(f.read_bytes())                     # include content
+                st = f.stat()
+                file_stats.append((f.name, st.st_mtime_ns, st.st_size))
             except Exception:
-                pass
-        return h.hexdigest()
+                file_stats.append((f.name, 0, 0))
+
+        memo_key = (
+            board_key,
+            board_info_str,
+            config_fingerprint,
+            native_usb,
+            tuple(file_stats),
+        )
+
+        with _SOURCE_FILE_RAM_CACHE_LOCK:
+            memoized = _SOURCE_HASH_MEMO_CACHE.get(sketch_dir)
+            if memoized is not None and memoized[0] == memo_key:
+                return memoized[1]
+
+        h = hashlib.md5()
+        h.update(board_key.encode())
+        if board_info_str:
+            h.update(board_info_str.encode())
+        h.update(b"build_config=")
+        h.update(config_fingerprint.encode("ascii", errors="replace"))
+        if is_s3_board(str(board_info.get("board", ""))):
+            h.update(b"native_usb=" + (b"1" if native_usb else b"0"))
+
+        for f, (fname, mtime_ns, size) in zip(sorted_files, file_stats):
+            h.update(fname.encode())
+            raw_bytes = None
+            f_key = str(f)
+            with _SOURCE_FILE_RAM_CACHE_LOCK:
+                cached = _SOURCE_FILE_RAM_CACHE.get(f_key)
+                if cached is not None and cached[0] == mtime_ns and cached[1] == size:
+                    raw_bytes = cached[2]
+
+            if raw_bytes is None:
+                try:
+                    raw_bytes = f.read_bytes()
+                except Exception:
+                    raw_bytes = b""
+                with _SOURCE_FILE_RAM_CACHE_LOCK:
+                    if len(_SOURCE_FILE_RAM_CACHE) > 500:
+                        _SOURCE_FILE_RAM_CACHE.clear()
+                    _SOURCE_FILE_RAM_CACHE[f_key] = (mtime_ns, size, raw_bytes)
+
+            h.update(raw_bytes)
+
+        digest = h.hexdigest()
+        with _SOURCE_FILE_RAM_CACHE_LOCK:
+            _SOURCE_HASH_MEMO_CACHE[sketch_dir] = (memo_key, digest)
+        return digest
+
 
     def _set_symbol_cache_compiled_state(self, is_compiled: bool):
         """Enable or disable symbol hover/click navigation based on backend build compilation state."""
@@ -544,7 +637,7 @@ class CompileCacheMixin(_Base):
         """Auto-detect if the project was already compiled.
         If yes, enable the 'Skip recompile' checkbox and check it.
         If no, disable the checkbox and uncheck it."""
-        if not hasattr(self, "cb_skip_compile"):
+        if not hasattr(self, "cb_skip_compile") or getattr(self, "is_busy", False):
             return
         if self._has_prior_build():
             needs_recompile, reason = self._needs_recompile()

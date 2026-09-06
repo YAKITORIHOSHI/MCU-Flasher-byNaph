@@ -10,13 +10,11 @@ import time
 import subprocess
 import threading
 import queue
-import ctypes
-import traceback
 from collections import deque
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, font as tkfont
+from tkinter import font as tkfont
 
 
 from main.core.constants import *
@@ -40,12 +38,23 @@ class InitStartupMixin(_Base):
     """Mixin providing InitStartupMixin capabilities for MCUUploadGUI."""
     def __init__(self, root: tk.Tk):
         self.root = root
-        # Startup is complete only after the selected editor has produced a
-        # usable surface.  A fixed splash timeout hid the real loading work and
-        # exposed a blank/white editor on slower machines.
+        # Track visual UI readiness separately from editor/project/background
+        # readiness. The visible shell is painted behind the cover while all
+        # independent startup work runs, but the cover is not released until
+        # both the layout and the application startup contract have settled.
         self._startup_ready = False
         self._startup_ready_reason = ""
+        self._startup_ui_ready = False
+        self._startup_overlay_released = False
+        self._startup_layout_check_job = None
+        self._startup_layout_signature = None
+        self._startup_layout_stable_passes = 0
+        self._startup_editor_ready = False
+        self._startup_project_load_started = False
+        self._startup_project_load_complete = False
         self._startup_overlay_dismiss_job = None
+        self._startup_readiness_poll_job = None
+        self._startup_overlay_raise_job = None
         self._startup_overlay_safety_job = None
         self._startup_min_visible_until = 0.0
         self._default_editor_ready = False
@@ -101,7 +110,6 @@ class InitStartupMixin(_Base):
         self.serial_thread: threading.Thread | None = None
         self.serial_running = False
         self._monitor_should_run = False   # intent flag: True = keep reconnecting
-        self._first_connect_done = False    # becomes True after the first successful serial connect
         self._monitor_paused = False       # True = keep reading the port, but hold back display
         # Serial concurrency is generation-based.  Each connection owns its own
         # cancellation Event and local pyserial handle, so a stale reconnect
@@ -179,6 +187,8 @@ class InitStartupMixin(_Base):
         self._project_terminal_status_job = None
         self._project_terminal_pending_action = None
         self._project_terminal_page_ready = False
+        self._project_terminal_visibility_after_id = None
+        self._project_terminal_visibility_pending = None
         # Cross-thread UI callbacks are queued here and executed only by Tk's
         # main thread.  Background workers must use _post_ui() instead of
         # calling root.after()/widget methods themselves.
@@ -189,6 +199,16 @@ class InitStartupMixin(_Base):
         self._upload_progress_lock = threading.Lock()
         self._upload_progress_pending = None
         self._upload_progress_flush_scheduled = False
+        # Connection progress has the same producer pattern as flash progress:
+        # esptool and retry/watchdog callbacks can report faster than Tk can
+        # repaint. Keep one latest, monotonic row per operation session.
+        self._connecting_progress_lock = threading.Lock()
+        self._connecting_progress_pending = None
+        self._connecting_progress_flush_scheduled = False
+        self._connecting_progress_rendered = None
+        self._status_update_lock = threading.Lock()
+        self._status_update_pending = None
+        self._status_update_flush_scheduled = False
         # Track if we're at the start of a new line (for timestamp prefix)
         self._serial_at_line_start = True
         # Avoid repeating the same warning on automatic reconnects. A changed
@@ -239,8 +259,12 @@ class InitStartupMixin(_Base):
         cpu_mode = config.get("shared", {}).get("cpu_multithreading", "HIGH")
 
         import concurrent.futures
+        # The pool is shared by startup scans, project/cache work, and later
+        # compile-adjacent tasks.  Let the existing CPU/RAM safety policy choose
+        # the number of workers; the old hard cap of three left available cores
+        # idle while startup services were being brought online.
         self._bg_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=_resource_safe_worker_count(cpu_mode),
+            max_workers=max(1, _resource_safe_worker_count(cpu_mode)),
             thread_name_prefix="MCUBgExecutor"
         )
         
@@ -352,37 +376,38 @@ class InitStartupMixin(_Base):
         # caused the visible white/blank flash reported at startup.  If widget
         # construction then failed, that empty window was the only thing the
         # user ever saw before the Tk thread terminated.
+        # Re-tune button padding/font live as the window is resized. Bind before
+        # deiconifying so no startup configure/maximize events are dropped.
+        self.root.bind("<Configure>", self._on_root_configure)
+
         self.root.update_idletasks()
 
-        # Reveal only after the complete main interface exists.
+        # Reveal only after the complete main interface exists. UI readiness
+        # is deliberately separate from project/editor/background readiness:
+        # once this layout has painted, the user should see and use it while
+        # the remaining work continues asynchronously.
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
-        self.root.attributes("-topmost", True)
-        # Force one short paint/layout pass while the loading cover is on top.
-        # Without this, Windows may present the newly deiconified client area
-        # before Tk has painted its child panes, producing the white frame in
-        # the startup screenshot.
-        try:
-            self.root.update()
-        except tk.TclError:
-            pass
         _startup_event("shell-visible")
-        self.root.after(500, self._unset_main_topmost)
-        # Keep the cover until the active editor reports that it is usable.
-        # There is intentionally no fixed safety dismissal here: a cold
-        # first-run WebView/editor must remain covered until its real ready
-        # handshake arrives.
-        self.root.after(100, self._poll_startup_readiness)
-
-        # Re-tune button padding/font live as the window is resized, so
-        # buttons keep shrinking a bit further if the user makes the window
-        # smaller than the screen (not just at startup).
-        self.root.bind("<Configure>", self._on_root_configure)
+        # One idle callback is too early on Windows: it can run before the
+        # first WM_PAINT/configure burst finishes and expose partially packed
+        # toolbar/pane geometry.  The readiness checker below requires stable
+        # geometry across multiple event-loop turns.
+        self._schedule_startup_layout_check(80)
+        self._startup_readiness_poll_job = self.root.after(
+            100, self._poll_startup_readiness
+        )
         # Refresh skip-compile readiness whenever the main window regains focus
-        # (e.g. after the embedded editor has auto-saved files on the side).
+        # (e.g. after the embedded editor has auto-saved files on the side),
+        # but skip if an active operation (compile/upload/flash/clean) is running.
+        def _on_focus_in(_e=None):
+            if getattr(self, "is_busy", False):
+                return
+            self._update_skip_compile_state()
+
         self.root.bind("<FocusIn>", lambda _e: self.root.after(
-            200, self._update_skip_compile_state), add="+")
+            200, _on_focus_in), add="+")
 
         # ── Cleanup on close ──
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -405,9 +430,9 @@ class InitStartupMixin(_Base):
         # recovers. A short timer keeps startup responsive and visible.
         self.root.after(100, self._run_initial_project_load)
 
-        # Secondary services start after the editor marks the core UI ready.
-        # The 5-second fallback is only for a broken editor handshake and does
-        # not keep the shell or overlay blocked.
+        # Secondary services start as soon as the stable UI pass (or the core
+        # editor fallback) is available. The fallback keeps startup moving if
+        # an editor handshake is delayed; the cover remains until full ready.
         self.root.after(5000, self._deferred_background_init)
 
     def _run_initial_project_load(self):
@@ -420,14 +445,19 @@ class InitStartupMixin(_Base):
         editor/window alive so the user can correct the project or choose a new
         one.
         """
-        if not getattr(self, "_startup_ready", False):
+        if not getattr(self, "_startup_editor_ready", False):
             try:
                 self.root.after(100, self._run_initial_project_load)
             except Exception:
                 pass
             return
+        if getattr(self, "_startup_project_load_started", False):
+            return
+        self._startup_project_load_started = True
         try:
             self._print_welcome()
+            self._startup_project_load_complete = True
+            self._maybe_finish_startup_ready()
             return
         except Exception as exc:
             import traceback
@@ -491,12 +521,14 @@ class InitStartupMixin(_Base):
                 self.root.after(100, _show_project_error)
             except Exception:
                 pass
-            # The editor readiness handshake still owns splash dismissal. A
-            # project-reporting warning must not expose a half-created editor;
-            # the readiness poll will close the cover when the editor is usable.
+            # The main UI is already usable at this point. Keep the warning
+            # visible in the console/message box without re-covering the
+            # editor or blocking the user from selecting another project.
             self._set_startup_overlay_message(
                 "⚠ MCU Flasher by Naph", "Project scan warning — opening editor…"
             )
+            self._startup_project_load_complete = True
+            self._maybe_finish_startup_ready()
 
     def _unset_main_topmost(self):
         try:
@@ -531,12 +563,172 @@ class InitStartupMixin(_Base):
                  else "Loading project files…"),
             )
             self._startup_overlay = overlay
-            # Avoid a one-frame flash on very fast launches, but do not use a
-            # fixed dismissal time as a substitute for editor readiness.
+            # Avoid a one-frame flash on very fast launches. This is only a
+            # paint guard; the cover is removed only after stable geometry and
+            # the full startup contract have both completed.
             self._startup_min_visible_until = time.monotonic() + 0.35
             self._startup_overlay_created_at = time.monotonic()
         except Exception:
             self._startup_overlay = None
+
+    def _raise_startup_overlay(self):
+        """Keep the Tk cover above packed widgets during the first paint."""
+        overlay = getattr(self, "_startup_overlay", None)
+        if overlay is None or getattr(self, "_startup_overlay_released", False):
+            self._startup_overlay_raise_job = None
+            return
+        try:
+            if not overlay.winfo_exists():
+                self._startup_overlay_raise_job = None
+                return
+            overlay.lift()
+            self._startup_overlay_raise_job = self.root.after(
+                50, self._raise_startup_overlay
+            )
+        except Exception:
+            self._startup_overlay_raise_job = None
+
+    def _schedule_startup_layout_check(self, delay_ms=60):
+        """Queue a non-blocking check for stable, visible widget geometry."""
+        if (getattr(self, "_startup_overlay_released", False)
+                or getattr(self, "_startup_ui_ready", False)
+                or getattr(self, "_startup_layout_check_job", None)):
+            return
+        try:
+            self._startup_layout_check_job = self.root.after(
+                max(0, int(delay_ms)), self._check_startup_layout_ready
+            )
+        except Exception:
+            self._startup_layout_check_job = None
+
+    def _startup_layout_snapshot(self):
+        """Return key widget geometry once the visible shell has settled."""
+        try:
+            if not self.root.winfo_exists() or self.root.winfo_width() <= 1:
+                return None
+
+            action_container = (
+                self.top_compact_actions
+                if self.top_compact_actions.winfo_ismapped()
+                else self.actions_frame
+            )
+            widgets = (
+                self.title_frame,
+                self.title_row_top,
+                self.title_left,
+                self.sketch_frame,
+                action_container,
+                self.ctrl_row_top,
+                self.h_split_pane,
+                self.main_pane,
+                self.bottom_notebook,
+            )
+            geometry = [
+                (
+                    widget.winfo_id(),
+                    widget.winfo_x(),
+                    widget.winfo_y(),
+                    widget.winfo_width(),
+                    widget.winfo_height(),
+                    widget.winfo_reqwidth(),
+                    widget.winfo_reqheight(),
+                )
+                for widget in widgets
+                if widget.winfo_exists()
+            ]
+            if len(geometry) != len(widgets) or any(
+                width <= 0 or height <= 0
+                for _wid, _x, _y, width, height, _req_w, _req_h in geometry
+            ):
+                return None
+            return (self.root.winfo_width(), self.root.winfo_height(), tuple(geometry))
+        except Exception:
+            return None
+
+    def _check_startup_layout_ready(self):
+        """Release visual readiness only after two stable layout samples."""
+        self._startup_layout_check_job = None
+        if (getattr(self, "_startup_overlay_released", False)
+                or getattr(self, "_startup_ui_ready", False)):
+            return
+
+        # Apply the first responsive pass before sampling.  Configure events
+        # are debounced during normal use; during startup we can safely apply
+        # the pending pass now while the opaque cover is still raised.
+        try:
+            resize_job = getattr(self, "_resize_after_id", None)
+            if resize_job:
+                try:
+                    self.root.after_cancel(resize_job)
+                except Exception:
+                    pass
+                self._resize_after_id = None
+                self._minwidth_after_id = None
+            if hasattr(self, "_apply_debounced_resize"):
+                self._apply_debounced_resize()
+            elif hasattr(self, "_apply_dynamic_button_scale"):
+                self._apply_dynamic_button_scale()
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+        snapshot = self._startup_layout_snapshot()
+        if snapshot is not None and snapshot == getattr(
+                self, "_startup_layout_signature", None):
+            self._startup_layout_stable_passes += 1
+        elif snapshot is not None:
+            self._startup_layout_signature = snapshot
+            self._startup_layout_stable_passes = 1
+        else:
+            self._startup_layout_signature = None
+            self._startup_layout_stable_passes = 0
+
+        # A second sample prevents the first post-deiconify geometry from being
+        # mistaken for the finished layout.  Keep checking even after the
+        # minimum paint guard if a native child or responsive repack is still
+        # changing dimensions.
+        if self._startup_layout_stable_passes >= 2:
+            self._mark_startup_ui_ready()
+            return
+        self._schedule_startup_layout_check(60)
+
+    def _mark_startup_ui_ready(self):
+        """Record stable visual readiness; dismissal also requires full startup."""
+        if getattr(self, "_startup_ui_ready", False):
+            return
+        self._startup_ui_ready = True
+        self._set_startup_overlay_message(
+            "⚡ MCU Flasher by Naph", "UI ready — continuing background setup…"
+        )
+        self._raise_startup_overlay()
+        # Start independent startup services as soon as the visible hierarchy
+        # is stable. Their heavy work is already routed through worker threads,
+        # while their Tk callbacks remain serialized on the UI thread.
+        try:
+            self.root.after(0, self._deferred_background_init)
+        except Exception:
+            pass
+        self._schedule_startup_overlay_dismiss()
+
+    def _schedule_startup_overlay_dismiss(self):
+        """Schedule cover removal after visual and full startup readiness."""
+        if (not getattr(self, "_startup_ui_ready", False)
+                or not getattr(self, "_startup_ready", False)
+                or getattr(self, "_startup_overlay_released", False)
+                or getattr(self, "_startup_overlay", None) is None):
+            return
+        if getattr(self, "_startup_overlay_dismiss_job", None):
+            return
+        delay_ms = max(
+            0, round((getattr(self, "_startup_min_visible_until", 0.0)
+                      - time.monotonic()) * 1000)
+        )
+        try:
+            self._startup_overlay_dismiss_job = self.root.after(
+                delay_ms, self._dismiss_startup_overlay
+            )
+        except Exception:
+            self._dismiss_startup_overlay()
 
     def _set_startup_overlay_message(self, title=None, subtitle=None):
         overlay = getattr(self, "_startup_overlay", None)
@@ -549,21 +741,45 @@ class InitStartupMixin(_Base):
 
     def _poll_startup_readiness(self):
         """Keep startup feedback current without blocking Tk's event loop."""
-        if getattr(self, "_startup_ready", False):
+        # This callback used to share _startup_overlay_dismiss_job with the
+        # real dismissal callback. That left the poll's own timer ID set while
+        # the callback was running, so a ready application could refuse to
+        # schedule dismissal and then stop polling forever.
+        self._startup_readiness_poll_job = None
+        if getattr(self, "_startup_overlay_released", False):
             return
         if getattr(self, "_startup_overlay", None) is None:
             return
 
-        # Safety fallback: if the editor never fires its ready signal (e.g.
-        # webview crash, stalled file I/O), dismiss the overlay after 8s so
-        # the app becomes usable rather than permanently stuck on the spinner.
+        if getattr(self, "_startup_ready", False) and not getattr(
+                self, "_startup_ui_ready", False):
+            self._schedule_startup_layout_check(0)
+            return
+
+        # The visible UI is complete. The cover still waits for the full
+        # application readiness state before it is removed.
+        if getattr(self, "_startup_ui_ready", False):
+            self._raise_startup_overlay()
+            self._schedule_startup_overlay_dismiss()
+            return
+
+        # Safety fallback: if the layout checker never receives usable geometry
+        # (e.g. a native child/window-manager edge case), allow the degraded
+        # editor path to begin after 8s. The cover still waits for the full
+        # startup contract rather than disappearing on this fallback alone.
         _STARTUP_SAFETY_TIMEOUT = 8.0
         created_at = getattr(self, "_startup_overlay_created_at", 0.0)
         if created_at and (time.monotonic() - created_at) >= _STARTUP_SAFETY_TIMEOUT:
+            self._mark_startup_ui_ready()
             self._mark_startup_ready("Application ready")
+            self._deferred_background_init()
             return
 
-        if getattr(self, "editor_mode", "default") == "monaco":
+        if getattr(self, "_startup_editor_ready", False):
+            self._set_startup_overlay_message(
+                "⚡ MCU Flasher by Naph", "Finishing application initialization…"
+            )
+        elif getattr(self, "editor_mode", "default") == "monaco":
             editor_ready = (
                 getattr(self, "_editor_embedded", False)
                 and getattr(self, "_editor_content_loaded", False)
@@ -585,56 +801,69 @@ class InitStartupMixin(_Base):
             )
 
         try:
-            self._startup_overlay_dismiss_job = self.root.after(
+            self._startup_readiness_poll_job = self.root.after(
                 100, self._poll_startup_readiness
             )
         except Exception:
-            self._startup_overlay_dismiss_job = None
+            self._startup_readiness_poll_job = None
 
     def _mark_startup_ready(self, reason=""):
-        """Dismiss the startup cover after the active editor is actually usable."""
-        if getattr(self, "_startup_ready", False):
+        """Mark the editor/core phase ready and start background work."""
+        if getattr(self, "_startup_editor_ready", False):
             return
-        self._startup_ready = True
-        self._startup_ready_reason = str(reason or "Ready")
+        self._startup_editor_ready = True
+        self._startup_ready_reason = str(reason or "Core UI ready")
         _startup_event("core-ui-ready")
-        self._schedule_shell_prewarm()
         self._set_startup_overlay_message(
-            "⚡ MCU Flasher by Naph", f"✔ {self._startup_ready_reason}"
+            "⚡ MCU Flasher by Naph", "Finishing application initialization…"
         )
-        job = getattr(self, "_startup_overlay_dismiss_job", None)
-        if job:
-            try:
-                self.root.after_cancel(job)
-            except Exception:
-                pass
-            self._startup_overlay_dismiss_job = None
-        delay_ms = max(
-            0, round((getattr(self, "_startup_min_visible_until", 0.0)
-                      - time.monotonic()) * 1000)
-        )
-        try:
-            self._startup_overlay_dismiss_job = self.root.after(
-                delay_ms, self._dismiss_startup_overlay
-            )
-        except Exception:
-            self._dismiss_startup_overlay()
 
-        # Optional device, syntax, board, and terminal services start only
-        # after the core UI is interactive. Their completion is not part of
-        # the shell-ready contract.
+        # Start deferred services immediately once the core editor has reported
+        # ready. The visual layout checker also requests this path, so the
+        # guard in _deferred_background_init coalesces both triggers.
         try:
-            self.root.after(250, self._deferred_background_init)
+            self.root.after(0, self._deferred_background_init)
+        except Exception:
+            pass
+        try:
+            self.root.after(0, self._run_initial_project_load)
         except Exception:
             pass
 
+    def _maybe_finish_startup_ready(self):
+        """Record completion of non-visual startup services."""
+        if getattr(self, "_startup_ready", False):
+            return
+        if not getattr(self, "_startup_editor_ready", False):
+            return
+        if not getattr(self, "_startup_project_load_complete", False):
+            return
+        if not getattr(self, "_deferred_bg_done", False):
+            return
+
+        self._startup_ready = True
+        self._startup_ready_reason = "Application fully initialized"
+        _startup_event("application-ready")
+        self._schedule_shell_prewarm()
+        if getattr(self, "_startup_ui_ready", False):
+            self._schedule_startup_overlay_dismiss()
+        else:
+            self._schedule_startup_layout_check(0)
+
     def _dismiss_startup_overlay(self):
-        """Remove the startup cover after the editor readiness handshake."""
+        """Remove the startup cover after stable layout and full readiness."""
         overlay = getattr(self, "_startup_overlay", None)
         if overlay is None:
             return
+        self._startup_overlay_released = True
         self._startup_overlay = None
-        for attr in ("_startup_overlay_dismiss_job", "_startup_overlay_safety_job"):
+        for attr in (
+            "_startup_overlay_dismiss_job",
+            "_startup_readiness_poll_job",
+            "_startup_overlay_raise_job",
+            "_startup_layout_check_job",
+            "_startup_overlay_safety_job",
+        ):
             job = getattr(self, attr, None)
             if job:
                 try:
@@ -650,18 +879,45 @@ class InitStartupMixin(_Base):
             except Exception:
                 pass
 
-    def _deferred_background_init(self):
-        """Initialize secondary background services AFTER the editor UI is fully
-        rendered and interactive — strictly one service at a time.
+        # Ensure a full layout synchronization and paint pass once the cover is gone.
+        # If the user resized or maximized the window while the overlay was covering it,
+        # cached keys and debounced jobs may leave stale widget geometry or unpainted areas.
+        try:
+            self._last_responsive_layout_key = None
+            self._last_cfg_w = None
+            self._last_cfg_h = None
+            if hasattr(self, "_apply_dynamic_button_scale"):
+                self._apply_dynamic_button_scale()
+            self.root.update_idletasks()
+        except Exception:
+            pass
 
-        Every service used to start in a single synchronous burst here, which
-        stampedede the Tk thread (and several worker threads) at the exact
-        moment the user begins interacting — the perceived post-launch lag.
-        Services are now queued in user-visible priority order and started
-        sequentially, with a short event-loop gap between each so the UI gets
-        a quiet turn in between. Component/widget construction itself remains
-        fully synchronous before the first paint (see _build_ui / __init__):
-        that ordering IS the priority phase and must not be split."""
+        # Windows DWM: force a complete non-client and client area redraw of the window
+        # hierarchy to clean away any stale GDI bitmaps or offset artifacts from resizing
+        # during startup.
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = self.root.winfo_id()
+                if hwnd:
+                    # RDW_INVALIDATE (0x1) | RDW_ERASE (0x4) | RDW_ALLCHILDREN (0x80) | RDW_UPDATENOW (0x100) = 0x0185
+                    ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0185)
+            except Exception:
+                pass
+
+        if getattr(self, "editor_mode", "default") == "monaco" and hasattr(self, "_resize_embedded_editor"):
+            try:
+                self._resize_embedded_editor()
+            except Exception:
+                pass
+
+    def _deferred_background_init(self):
+        """Start independent secondary services after the UI layout is stable.
+
+        The order below preserves the serial-monitor-before-esptool contract,
+        but each service immediately starts its own worker/thread.  The shared
+        pool is sized by the CPU/RAM policy, so independent startup work can
+        overlap without moving Tk calls off the Tk thread."""
         if (getattr(self, "_deferred_bg_done", False)
                 or getattr(self, "_deferred_bg_started", False)):
             return
@@ -687,20 +943,19 @@ class InitStartupMixin(_Base):
             ("syntax-checker", self._dbi_syntax_checker),
             ("terminal", self._dbi_terminal),
         ])
-        # Gap between services: long enough to give the event loop a real
-        # idle turn, short enough that the whole pipeline still settles well
-        # inside the existing 1.5 s settle window.
-        self._deferred_bg_step_gap_ms = 150
+        # Keep a real event-loop turn between services for Tk callbacks, but
+        # remove the old 150 ms artificial delay that left cores idle during
+        # startup. Heavy work is already asynchronous inside each service.
+        self._deferred_bg_step_gap_ms = 0
         self._advance_deferred_background_init()
+
+    _start_deferred_background_init = _deferred_background_init
 
     def _dbi_board_catalog(self):
         # Dynamic board matching is intentionally deferred until the main
         # window has painted. A cached catalog is already available when
         # possible; this refresh keeps it correct without blocking launch.
         self._reload_supported_boards()
-        # The restored board is already stored in _last_valid_board, so the
-        # normal board-change guard intentionally treats it as unchanged. Apply
-        # its family baud explicitly before the monitor starts.
         self._apply_board_monitor_baud()
         self._apply_board_upload_speed()
         self._on_board_changed()
@@ -795,6 +1050,7 @@ class InitStartupMixin(_Base):
         except Exception:
             pass
         _startup_event("optional-services-settled")
+        self._maybe_finish_startup_ready()
 
     def _startup_terminal_ready(self):
         """Return true only after the terminal has a usable native/fallback shell."""

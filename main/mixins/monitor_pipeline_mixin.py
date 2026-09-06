@@ -31,7 +31,7 @@ else:
 
 class MonitorPipelineMixin(_Base):
     """Mixin providing MonitorPipelineMixin capabilities for MCUUploadGUI."""
-    def _trigger_actual_board_reset(self, port: str) -> bool:
+    def _trigger_actual_board_reset(self, port: str, board_name: str | None = None, board_info: dict | None = None) -> bool:
         """Open the serial port and perform the ESP32 Reset(DTR/RTS) pulse.
 
         Returns True only when the pulse was actually sent.  Callers that run
@@ -42,8 +42,13 @@ class MonitorPipelineMixin(_Base):
         if owner_pid:
             self._append(f"  ⚠ Reset(DTR/RTS) blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "warning")
             return False
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        if board_name is None:
+            if threading.get_ident() == getattr(self, "_tk_thread_id", None):
+                board_name = self.board_var.get()
+            else:
+                board_name = getattr(self, "_active_board_name", None) or (self.board_var.get() if hasattr(self, "board_var") else "")
+        if board_info is None:
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
         platform = str(board_info.get("platform", "")).lower()
         is_uno = (platform == "atmelavr")
         self._append(f"  🔄 Triggering hardware reset on {port}...", "info")
@@ -138,7 +143,6 @@ class MonitorPipelineMixin(_Base):
         board_info = dict(config.get("board_info", {}))
         port_label = str(config.get("port_label", port))
         is_native_usb = bool(config.get("is_native_usb", False))
-        is_first_connect = bool(config.get("is_first_connect", False))
         is_manual_reset = bool(config.get("is_manual_reset", False))
         clear_on_connect = bool(config.get("clear_on_connect", False))
 
@@ -220,22 +224,18 @@ class MonitorPipelineMixin(_Base):
         serial_partial_idle_s = 0.12 if high_speed_serial else 0.08
 
         if not is_uno:
-            if is_first_connect or is_manual_reset:
-                # First connect: board is already running, no boot delay needed.
-                # Manual reset: board hasn't been reset yet — we'll do it after
-                # opening the port so we can read the boot output immediately.
-                # On native USB-CDC (ESP32-S3) any unnecessary delay between
-                # opening the port and starting to read risks filling the MCU's
-                # USB TX buffer, which blocks Serial.print() and freezes the
-                # running sketch permanently.
-                pass
-            else:
-                if stop_event.wait(1.0):
-                    return
+            # Passive monitor connections never need a boot delay. In
+            # particular, a device that was already running before the app
+            # opened must be observed immediately, and a physically-reset
+            # native USB board can emit its short boot stream as soon as it
+            # re-enumerates. Explicit reset requests still use the pulse path
+            # below and therefore retain their controlled timing.
+            pass
 
         # Try to open the port with retries to handle transient OS/driver locks (silently up to 5s)
         max_attempts = 25
         attempt = 0
+        conn = None
         while attempt < max_attempts:
             # Gracefully abort immediately if busy with upload/flash/reset, or if monitor is stopped/paused
             if (not _session_current()
@@ -286,8 +286,11 @@ class MonitorPipelineMixin(_Base):
                     self.serial_conn = conn
                 self._last_monitor_error = ""
 
-                # On Native USB / ESP32-S3 CDC ports, set DTR=True to signal CDC terminal active
-                if is_native_usb or is_s3_board(board_info.get("board", "")):
+                # Do not toggle native USB control lines during a passive
+                # connection. On some ESP32-S3/CDC implementations a DTR/RTS
+                # transition is itself interpreted as a reset request. These
+                # lines are raised only for an explicit app reset, below.
+                if is_manual_reset and (is_native_usb or is_s3_board(board_info.get("board", ""))):
                     try:
                         conn.dtr = True
                         conn.rts = True
@@ -357,7 +360,6 @@ class MonitorPipelineMixin(_Base):
         with self._serial_state_lock:
             self.serial_running = True
         self._monitor_should_run = True
-        self._first_connect_done = True
         self._set_serial_status(True)
         if is_uno:
             self._append_notif(f"  ✔ Connected — {port} @ {baud}  [Output captured]", "success")

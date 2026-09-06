@@ -8,6 +8,7 @@ from __future__ import annotations
 import sys
 import os
 import subprocess
+import threading
 import ctypes
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -145,11 +146,14 @@ class WindowLifecycleMixin(_Base):
             self._shell_stop_all()
         except Exception:
             pass
+        # Drop deferred user actions before teardown.  This prevents a queued
+        # Settings/Upload/tab callback from retaining widgets while background
+        # workers are being stopped and makes close deterministic under input
+        # bursts.
         try:
             self._dispose_project_terminal()
         except Exception:
             pass
-
         # If editor was detached, dispose/close that window first before destroying main GUI
         try:
             self._close_detached_editor_window()
@@ -207,14 +211,24 @@ class WindowLifecycleMixin(_Base):
                 self.editor_api.shutdown_ai_edit_backup()
             except Exception:
                 pass
-        if hasattr(self, "_bg_executor") and self._bg_executor:
-            try:
-                self._bg_executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
+        for executor_attr in ("_bg_executor", "_process_io_executor"):
+            if hasattr(self, executor_attr):
+                executor = getattr(self, executor_attr)
+                if executor:
+                    try:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass
         # Stop serial monitor on close without blocking Tk on thread.join().
         self._monitor_should_run = False
         self._stop_serial_session()
+        try:
+            self._port_poll_active = False
+            poll_stop = getattr(self, "_port_poll_stop_event", None)
+            if poll_stop:
+                poll_stop.set()
+        except Exception:
+            pass
 
         # Clean up this instance configuration from the shared file
         try:
@@ -275,6 +289,12 @@ class WindowLifecycleMixin(_Base):
         unrecoverable boot loop, so during that window we don't want the
         close path reachable at all, not just intercepted-and-warned.
         """
+        # Thread-safety: winfo_id() and GetSystemMenu are Tk widget calls
+        # that must run on the owning thread.  Worker threads (soft reset,
+        # upload, hard reset) must be dispatched to avoid Tcl deadlocks.
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            self._post_ui(lambda c=closable: self._set_window_closable(c))
+            return
         if win32gui is None or win32con is None:
             return  # non-Windows or pywin32 missing — the is_busy dialog in _on_close is still the backstop
         try:
@@ -284,4 +304,3 @@ class WindowLifecycleMixin(_Base):
             win32gui.EnableMenuItem(menu, win32con.SC_CLOSE, win32con.MF_BYCOMMAND | flag)
         except Exception:
             pass
-

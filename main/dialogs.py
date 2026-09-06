@@ -102,7 +102,16 @@ class ProjectSelectorDialog:
         self.initial_dir = initial_dir
         self.frame_existing: tk.Frame | None = None
         self.frame_new: tk.Frame | None = None
+        self._closed = False
+        self._recent_projects_poll_id = None
+        self._selector_topmost_after_id = None
 
+        # The recent-project scan runs away from Tk so slow disks/network
+        # folders cannot stall the selector.  Keep the handoff queue on the
+        # dialog itself: the worker only puts data here and the Tk poller is
+        # the sole owner of the widgets.  This must be initialized before
+        # _build_existing_tab() starts the worker.
+        self._recent_projects_queue = queue.Queue(maxsize=1)
         self.win = tk.Toplevel(root)
         self.win.withdraw()
         self.win.configure(bg=Theme.BG_DARKEST)
@@ -203,7 +212,9 @@ class ProjectSelectorDialog:
             self.win.lift()
             self.win.focus_force()
             self.win.attributes("-topmost", True)
-            self.win.after(500, self._unset_selector_topmost)
+            self._selector_topmost_after_id = self.win.after(
+                500, self._unset_selector_topmost
+            )
             self.win.grab_set()
         except Exception:
             try:
@@ -215,6 +226,7 @@ class ProjectSelectorDialog:
                 pass
 
     def _unset_selector_topmost(self):
+        self._selector_topmost_after_id = None
         try:
             if hasattr(self, "win") and self.win:
                 self.win.attributes("-topmost", False)
@@ -357,65 +369,75 @@ class ProjectSelectorDialog:
         # only computes recent-project data; the Tk-owned poller below performs
         # the final render so startup handoff cannot emit a cross-thread Tcl
         # exception while the selector is opening.
-        self._recent_projects_queue = queue.Queue(maxsize=1)
-        import threading
-        threading.Thread(target=self._populate_recent_projects, daemon=True).start()
-        self.win.after(40, self._poll_recent_projects_result)
+        executor = getattr(getattr(self, "root", None), "_bg_executor", None)
+        if executor:
+            try:
+                executor.submit(self._populate_recent_projects)
+            except Exception:
+                import threading
+                threading.Thread(target=self._populate_recent_projects, daemon=True).start()
+        else:
+            import threading
+            threading.Thread(target=self._populate_recent_projects, daemon=True).start()
+        self._recent_projects_poll_id = self.win.after(40, self._poll_recent_projects_result)
 
     def _populate_recent_projects(self):
         """Background-thread worker: scan recent projects and post the
         results back to the main thread for rendering."""
-        recent_list = load_recent_projects()
-        initial_dir = self.initial_dir
-        if initial_dir:
-            try:
-                curr_resolved = str(Path(initial_dir).resolve())
-                recent_list = [p for p in recent_list if str(Path(p).resolve()) != curr_resolved]
-            except Exception:
-                recent_list = [p for p in recent_list if p != initial_dir]
-
-        f_title, f_sub, f_label, f_btn, f_mono = self._fonts
-
-        # Pre-compute all the data we need off the main thread
         entries = []
-        for path in recent_list:
-            try:
-                p_path = Path(path)
-                owner_pid = folder_lock_owner(p_path) if p_path.exists() else None
-                is_locked = owner_pid is not None
-                files = self._get_project_files(p_path) if p_path.exists() else []
-                if files:
-                    files_str = "📄 " + "  •  ".join(files[:6]) + (f" (+{len(files)-6} more)" if len(files) > 6 else "")
-                    files_color = Theme.CYAN_DIM
-                else:
-                    files_str = "📄 (No .cpp / .ino / .h / .txt files found)"
-                    files_color = Theme.TEXT_DIM
+        try:
+            recent_list = load_recent_projects()
+            initial_dir = self.initial_dir
+            if initial_dir:
+                try:
+                    curr_resolved = str(Path(initial_dir).resolve())
+                    recent_list = [p for p in recent_list if str(Path(p).resolve()) != curr_resolved]
+                except Exception:
+                    recent_list = [p for p in recent_list if p != initial_dir]
 
-                if is_locked:
-                    btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
-                    fg_color = Theme.RED
-                    bg_idle = Theme.BG_DARK
-                    bg_hover = Theme.BG_DARK
-                    cursor = "no" if sys.platform == "win32" else "X_cursor"
-                else:
-                    btn_text = f" 📁 {p_path.name}  —  {path}"
-                    fg_color = Theme.TEXT_BRIGHT
-                    bg_idle = Theme.BG_DARK
-                    bg_hover = Theme.BG_HOVER
-                    cursor = "hand2"
+            # Pre-compute all the data we need off the main thread.
+            for path in recent_list:
+                try:
+                    p_path = Path(path)
+                    owner_pid = folder_lock_owner(p_path) if p_path.exists() else None
+                    is_locked = owner_pid is not None
+                    files = self._get_project_files(p_path) if p_path.exists() else []
+                    if files:
+                        files_str = "📄 " + "  •  ".join(files[:6]) + (f" (+{len(files)-6} more)" if len(files) > 6 else "")
+                        files_color = Theme.CYAN_DIM
+                    else:
+                        files_str = "📄 (No .cpp / .ino / .h / .txt files found)"
+                        files_color = Theme.TEXT_DIM
 
-                entries.append({
-                    "path": path,
-                    "btn_text": btn_text,
-                    "files_str": files_str,
-                    "files_color": files_color,
-                    "fg_color": fg_color,
-                    "bg_idle": bg_idle,
-                    "bg_hover": bg_hover,
-                    "cursor": cursor,
-                })
-            except Exception as ex:
-                print(f"[WARN] Error scanning recent path '{path}': {ex}")
+                    if is_locked:
+                        btn_text = f" 🔒 {p_path.name}  —  {path}   (in use — PID {owner_pid})"
+                        fg_color = Theme.RED
+                        bg_idle = Theme.BG_DARK
+                        bg_hover = Theme.BG_DARK
+                        cursor = "no" if sys.platform == "win32" else "X_cursor"
+                    else:
+                        btn_text = f" 📁 {p_path.name}  —  {path}"
+                        fg_color = Theme.TEXT_BRIGHT
+                        bg_idle = Theme.BG_DARK
+                        bg_hover = Theme.BG_HOVER
+                        cursor = "hand2"
+
+                    entries.append({
+                        "path": path,
+                        "btn_text": btn_text,
+                        "files_str": files_str,
+                        "files_color": files_color,
+                        "fg_color": fg_color,
+                        "bg_idle": bg_idle,
+                        "bg_hover": bg_hover,
+                        "cursor": cursor,
+                    })
+                except Exception as ex:
+                    print(f"[WARN] Error scanning recent path '{path}': {ex}")
+        except Exception as ex:
+            # Always complete the queue handoff.  A malformed/locked config
+            # must result in an empty state, never a permanent spinner.
+            print(f"[WARN] Could not load recent projects: {ex}")
 
         try:
             self._recent_projects_queue.put_nowait(entries)
@@ -429,7 +451,7 @@ class ProjectSelectorDialog:
         except queue.Empty:
             try:
                 if self.win.winfo_exists():
-                    self.win.after(40, self._poll_recent_projects_result)
+                    self._recent_projects_poll_id = self.win.after(40, self._poll_recent_projects_result)
             except Exception:
                 pass
             return
@@ -590,8 +612,7 @@ class ProjectSelectorDialog:
         if not _validate_and_scaffold_ino(self.win, p):
             return
 
-        self.result = p
-        self.win.destroy()
+        self._close(p)
 
     # ── New-project tab ─────────────────────────────────────────────────
     def _build_new_tab(self):
@@ -761,15 +782,53 @@ class ProjectSelectorDialog:
             mb.showerror("Could Not Create Project", f"Failed to create project:\n{e}", parent=self.win)
             return
 
-        self.result = project_dir
-        self.win.destroy()
+        self._close(project_dir)
 
     def _on_cancel(self):
-        self.result = None
-        self.win.destroy()
+        self._close(None)
+
+    def _close(self, result: Path | None) -> None:
+        """Close the selector without leaving a modal grab or timer behind."""
+        if self._closed:
+            return
+        self._closed = True
+        self.result = result
+
+        poll_id = getattr(self, "_recent_projects_poll_id", None)
+        if poll_id is not None:
+            try:
+                self.win.after_cancel(poll_id)
+            except Exception:
+                pass
+            self._recent_projects_poll_id = None
+
+        topmost_id = getattr(self, "_selector_topmost_after_id", None)
+        if topmost_id is not None:
+            try:
+                self.win.after_cancel(topmost_id)
+            except Exception:
+                pass
+            self._selector_topmost_after_id = None
+
+        # Explicitly release the selector's grab before destroying it.  Tk
+        # normally does this implicitly, but Windows native dialogs can leave
+        # the destroyed Toplevel as the grab owner on some Tk builds.
+        try:
+            self.win.grab_release()
+        except Exception:
+            pass
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
 
     def run(self) -> Path | None:
-        self.win.wait_window()
+        try:
+            self.win.wait_window()
+        except tk.TclError:
+            # The close callback may have destroyed the window during a native
+            # dialog handoff.  That is a normal cancellation path.
+            pass
         return self.result
 def _validate_and_scaffold_ino(parent_win, folder_path: Path) -> bool:
     """Validate that the project folder contains at least one .ino file.
@@ -1011,8 +1070,140 @@ class BoardSearchDialog(tk.Toplevel):
         self.destroy()
 
 
+class CompatibilityWarningDialog(tk.Toplevel):
+    """
+    Non-blocking modal confirmation dialog for MCU compatibility warnings.
+    Avoids native Win32 MessageBoxW to prevent cross-thread window hangs and
+    preserves Tkinter's event loop and embedded WebView2 instances.
+    """
+    def __init__(self, parent, warnings_list: list[str], severe: bool = False):
+        super().__init__(parent)
+        self.result = False
+        self.withdraw()
+        self.configure(bg=Theme.BG_DARKEST)
+        self.title("⚠ Compatibility Warning" if severe else "Sketch Compatibility")
+        self.resizable(False, False)
+
+        dpi_scale = _get_widget_dpi_scale(self)
+        dialog_w = round(560 * dpi_scale)
+        dialog_h = round(340 * dpi_scale)
+
+        # Header banner
+        hdr_bg = "#3a1417" if severe else Theme.BG_DARK
+        hdr_fg = Theme.RED if severe else Theme.YELLOW
+        hdr_frame = tk.Frame(self, bg=hdr_bg, pady=10, padx=14)
+        hdr_frame.pack(fill=tk.X)
+
+        icon_lbl = tk.Label(
+            hdr_frame, text="🚨" if severe else "⚠",
+            font=("Segoe UI", 16), bg=hdr_bg, fg=hdr_fg
+        )
+        icon_lbl.pack(side=tk.LEFT, padx=(0, 10))
+
+        hdr_text = (
+            "Severe Compatibility Exclusions Detected"
+            if severe else
+            "Sketch Compatibility Warnings Detected"
+        )
+        tk.Label(
+            hdr_frame, text=hdr_text,
+            font=("Segoe UI", 11, "bold"), fg=hdr_fg, bg=hdr_bg
+        ).pack(side=tk.LEFT)
+
+        # Body message
+        body_frame = tk.Frame(self, bg=Theme.BG_DARKEST, padx=14, pady=10)
+        body_frame.pack(fill=tk.BOTH, expand=True)
+
+        desc_text = (
+            "This project has compatibility warnings/exclusions that may cause board instability or affect firmware operation:"
+            if severe else
+            "The sketch uses pins or features that may not behave as expected on the selected board:"
+        )
+        tk.Label(
+            body_frame, text=desc_text, font=("Segoe UI", 9),
+            fg=Theme.TEXT, bg=Theme.BG_DARKEST, wraplength=max(200, dialog_w - 30),
+            justify=tk.LEFT, anchor=tk.W
+        ).pack(fill=tk.X, pady=(0, 8))
+
+        # Warnings listbox / text area
+        list_frame = tk.Frame(body_frame, bg=Theme.BG_LIGHT, bd=1, relief=tk.SOLID)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        text_widget = tk.Text(
+            list_frame, font=("Consolas", 9), bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
+            wrap=tk.WORD, borderwidth=0, padx=8, pady=6, height=5, highlightthickness=0
+        )
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        for w in warnings_list:
+            clean_w = w.lstrip("- ").strip()
+            text_widget.insert(tk.END, f"• {clean_w}\n")
+        text_widget.configure(state=tk.DISABLED)
+
+        sub_msg = (
+            "It may be dangerous to proceed. Do you still want to proceed with the upload?"
+            if severe else
+            "It will usually still work, but could cause instability. Proceed with upload?"
+        )
+        tk.Label(
+            body_frame, text=sub_msg, font=("Segoe UI", 9, "bold"),
+            fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor=tk.W
+        ).pack(fill=tk.X)
+
+        # Button row
+        btn_frame = tk.Frame(self, bg=Theme.BG_DARK, pady=10, padx=14)
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        f_btn = ("Segoe UI", 9, "bold")
+        btn_cancel = _make_dialog_btn(
+            btn_frame, "Cancel", self._on_cancel,
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, f_btn
+        )
+        btn_cancel.pack(side=tk.RIGHT, padx=(8, 0))
+
+        continue_bg = Theme.BTN_STOP if severe else Theme.BTN_COMPILE
+        continue_bg_h = Theme.BTN_STOP_H if severe else Theme.BTN_COMPILE_H
+        btn_continue = _make_dialog_btn(
+            btn_frame, "Proceed with Upload ▶", self._on_continue,
+            continue_bg, continue_bg_h, f_btn
+        )
+        btn_continue.pack(side=tk.RIGHT)
+
+        # Keyboard shortcuts
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Positioning & Grab
+        center_toplevel(self, width=560, height=340, parent=parent)
+        self.transient(parent)
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        btn_cancel.focus_set()
+
+    def _on_continue(self):
+        self.result = True
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = False
+        self.destroy()
+
+    def run(self) -> bool:
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+        self.wait_window()
+        return bool(self.result)
+
+
 __all__ = [
     "BoardSearchDialog",
+    "CompatibilityWarningDialog",
     "ProjectSelectorDialog",
     "_make_dialog_btn",
     "_make_toolbar_btn",

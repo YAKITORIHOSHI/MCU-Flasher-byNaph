@@ -524,9 +524,9 @@ class ConsoleSerialMixin(_Base):
             # Persist to database through the shared worker pool instead of
             # creating one new OS thread for every notification.
             if persist and text.strip():
-                db_target = self._get_project_notif_db_path()
                 def _bg_persist():
                     try:
+                        db_target = self._get_project_notif_db_path() if hasattr(self, "_get_project_notif_db_path") else None
                         dbs_create.add_notification(
                             category=cat,
                             level=lvl,
@@ -644,15 +644,15 @@ class ConsoleSerialMixin(_Base):
             if not visible:
                 delay_ms = 120
             elif backlog > 4000:
-                delay_ms = 12
-            elif backlog > 1000:
-                delay_ms = 16
-            elif high_rate:
-                delay_ms = 20
-            elif backlog:
                 delay_ms = 25
+            elif backlog > 1000:
+                delay_ms = 25
+            elif high_rate:
+                delay_ms = 25
+            elif backlog:
+                delay_ms = 30
             else:
-                delay_ms = 40
+                delay_ms = 45
 
             if self.root and self.root.winfo_exists():
                 self._serial_display_pump_after_id = self.root.after(delay_ms, self._serial_display_pump)
@@ -679,6 +679,15 @@ class ConsoleSerialMixin(_Base):
         lines = []
         chars = 0
         with self._serial_display_lock:
+            # If the queue accumulated a large backlog while the tab was hidden,
+            # clamp it to the newest 1,500 entries so the UI does not freeze over
+            # dozens of frames inserting and immediately deleting stale lines.
+            if len(self._serial_display_queue) > 1800:
+                excess = len(self._serial_display_queue) - 1500
+                for _ in range(excess):
+                    self._serial_display_queue.popleft()
+                self._serial_display_dropped_rows += excess
+
             while self._serial_display_queue and len(lines) < max_rows:
                 item = self._serial_display_queue[0]
                 item_chars = len(item[0]) + 1

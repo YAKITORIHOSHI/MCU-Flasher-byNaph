@@ -6,7 +6,6 @@ MCU Flasher by Naph — Modularized Architecture
 from __future__ import annotations
 
 import os
-import time
 import json
 import re
 import threading
@@ -36,6 +35,8 @@ else:
 
 class HardwarePortMixin(_Base):
     """Mixin providing HardwarePortMixin capabilities for MCUUploadGUI."""
+    _cached_comports: list = []
+    _cached_comports_lock = threading.Lock()
     def _save_selected_port(self, port_name: str | None):
         """Save the currently selected COM port in the instance config asynchronously on thread pool."""
         def _do_save():
@@ -78,16 +79,13 @@ class HardwarePortMixin(_Base):
             try:
                 ports = list(serial.tools.list_ports.comports())
                 occupied = get_occupied_ports()
+                with getattr(self, "_cached_comports_lock", threading.Lock()):
+                    self._cached_comports = list(ports)
             except Exception:
                 ports, occupied = [], None
-            try:
-                self.root.after(
-                    0,
-                    lambda: self._apply_port_scan(ports, occupied, force_select_port, called_from_hotplug),
-                )
-            except Exception:
-                # Window destroyed mid-scan; nothing left to update.
-                self._port_scan_inflight = False
+            self._post_ui(
+                lambda: self._apply_port_scan(ports, occupied, force_select_port, called_from_hotplug)
+            )
 
         threading.Thread(target=_scan_worker, name="PortScan", daemon=True).start()
 
@@ -134,6 +132,8 @@ class HardwarePortMixin(_Base):
         # Update last-known port set for hotplug detection. This tracks the
         # *physical* device set (not the occupancy-filtered view) using (device, hwid)
         # tuples so that port name collisions (e.g. sharing COM3) are detected properly.
+        with getattr(self, "_cached_comports_lock", threading.Lock()):
+            self._cached_comports = list(ports)
         self._last_known_ports = {(p.device, p.hwid or "") for p in ports}
 
         self.port_combo["values"] = port_list
@@ -172,21 +172,28 @@ class HardwarePortMixin(_Base):
                     return
 
         is_current_valid = False
+        matching_port_obj = None
         mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
-        if current_val:
-            if current_val in port_list and current_device.upper() != "COM1":
-                is_current_valid = True
-            elif current_val in port_list and current_device.upper() == "COM1":
-                # COM1 on PC motherboards is a generic Communications Port, NOT an MCU.
-                # Only keep COM1 if it explicitly contains known MCU bridge signatures.
-                for p in visible_ports:
-                    if p.device.upper() == "COM1":
+        if current_device:
+            for p in visible_ports:
+                if p.device.upper() == current_device.upper():
+                    if current_device.upper() != "COM1":
+                        is_current_valid = True
+                        matching_port_obj = p
+                        break
+                    else:
                         combined = f"{p.description} {p.hwid}".lower()
                         if any(kw in combined for kw in mcu_keywords) and "communications port" not in combined:
                             is_current_valid = True
+                            matching_port_obj = p
                             break
 
         if is_current_valid:
+            # Sync combo text to standard format if needed
+            if matching_port_obj:
+                canonical_label = f"{matching_port_obj.device}  -  {matching_port_obj.description or ''}"
+                if self.port_var.get() != canonical_label:
+                    self.port_combo.set(canonical_label)
             # Current selection is still valid, keep it and update config
             self._save_selected_port(current_device)
             # This also covers the initial scan. Subsequent refreshes only
@@ -200,7 +207,6 @@ class HardwarePortMixin(_Base):
         # Select a new one from what's still visible (strictly EXCLUDING COM1)
         unoccupied_ports = visible_ports
 
-        mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
         auto_port = None
         auto_port_device = None
 
@@ -210,7 +216,7 @@ class HardwarePortMixin(_Base):
                 continue
             combined = f"{p.description} {p.hwid}".lower()
             if any(kw in combined for kw in mcu_keywords):
-                auto_port = f"{p.device}  —  {p.description}"
+                auto_port = f"{p.device}  -  {p.description or ''}"
                 auto_port_device = p.device
                 break
 
@@ -218,7 +224,7 @@ class HardwarePortMixin(_Base):
         if not auto_port:
             for p in unoccupied_ports:
                 if p.device.upper() != "COM1":
-                    auto_port = f"{p.device}  —  {p.description}"
+                    auto_port = f"{p.device}  -  {p.description or ''}"
                     auto_port_device = p.device
                     break
 
@@ -249,8 +255,20 @@ class HardwarePortMixin(_Base):
     def _start_port_polling(self):
         """Start a dedicated background thread to monitor serial ports in real-time
         for USB hotplug, MCU disconnections, and instance port occupancy changes."""
-        self._last_known_occupied_ports: set[str] = get_occupied_ports()
+        # Startup/deferred-init paths can be retried. Never create a second
+        # port poller: two pollers race on the same snapshots and can enqueue
+        # alternating hardware states indefinitely.
+        existing = getattr(self, "_port_poll_thread", None)
+        if existing and existing.is_alive():
+            return
+        # Do not run the psutil/process scan synchronously from the Tk thread.
+        # On Windows this can briefly enumerate a large process list and was
+        # one of the remaining startup stalls when the hotplug monitor began.
+        # The dedicated poller fills the baseline on its first pass below.
+        self._last_known_occupied_ports: set[str] = set()
+        self._cached_comports_lock = threading.Lock()
         self._port_poll_active = True
+        self._port_poll_stop_event = threading.Event()
 
         # Perform one-time initial hardware state sync on thread start so project_state.json
         # is immediately and accurately populated with current board & port availability
@@ -261,20 +279,30 @@ class HardwarePortMixin(_Base):
 
         def _poll_thread_worker():
             poll_ticks = 0
-            while getattr(self, "_port_poll_active", True):
+            first_poll = True
+            stop_event = self._port_poll_stop_event
+            while getattr(self, "_port_poll_active", True) and not stop_event.is_set():
                 try:
                     cpus = os.cpu_count() or 4
                     poll_interval = 2.5 if cpus <= 4 else 2.0
-                    time.sleep(poll_interval)
+                    # Event.wait makes shutdown/restart immediate instead of
+                    # leaving a daemon poller asleep for another 2.5 seconds.
+                    initial_poll = first_poll
+                    if not initial_poll and stop_event.wait(poll_interval):
+                        break
+                    first_poll = False
                     poll_ticks += 1
 
-                    current_ports = {(p.device, p.hwid or "") for p in serial.tools.list_ports.comports()}
+                    raw_comports = list(serial.tools.list_ports.comports())
+                    with getattr(self, "_cached_comports_lock", threading.Lock()):
+                        self._cached_comports = list(raw_comports)
+                    current_ports = {(p.device, p.hwid or "") for p in raw_comports}
                     hardware_changed = current_ports != getattr(self, "_last_known_ports", set())
 
                     # Check occupancy when hardware changes or every ~3.6s
                     occupancy_changed = False
                     current_occupied = getattr(self, "_last_known_occupied_ports", set())
-                    if hardware_changed or (poll_ticks % 3 == 0):
+                    if hardware_changed or initial_poll or (poll_ticks % 3 == 0):
                         current_occupied = get_occupied_ports()
                         occupancy_changed = current_occupied != getattr(self, "_last_known_occupied_ports", set())
 
@@ -312,7 +340,14 @@ class HardwarePortMixin(_Base):
             new_mcu_device = None
             if added_devs:
                 mcu_keywords = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "usb", "serial", "arduino", "mcu"]
-                ports_info = serial.tools.list_ports.comports()
+                with getattr(self, "_cached_comports_lock", threading.Lock()):
+                    ports_info = list(getattr(self, "_cached_comports", []))
+                if not ports_info:
+                    try:
+                        ports_info = list(serial.tools.list_ports.comports())
+                        self._cached_comports = ports_info
+                    except Exception:
+                        ports_info = []
                 for p in ports_info:
                     if p.device in added_devs:
                         combined = f"{p.description} {p.hwid}".lower()
@@ -363,9 +398,13 @@ class HardwarePortMixin(_Base):
 
                 self._refresh_ports(force_select_port=force_select_port, called_from_hotplug=True)
 
-                # If a new device appeared, auto-start monitor on it with hardware reset so setup() is captured
+                # If a new device appeared, attach the monitor passively. A
+                # newly enumerated port may be an MCU that was already running,
+                # or a board that was physically reset by the user. The app
+                # must never turn that observation into an app-issued reset.
+                # An explicit reset request keeps _manual_reset_pending set by
+                # its own reset path and is therefore preserved here.
                 if added_devs and not self.serial_running:
-                    self._manual_reset_pending = True
                     self._schedule_auto_start_monitor(500)
             elif removed_devs:
                 current_port = self._get_port()
@@ -461,6 +500,7 @@ class HardwarePortMixin(_Base):
         """Constructs the clean board textfield + 🔍 Search Button (no combobox arrowdown)."""
         initial_board = ""
         self.board_var = tk.StringVar(value=initial_board)
+        self._active_board_name = initial_board
         self._last_valid_board = initial_board
 
         self.board_entry = tk.Entry(
@@ -569,6 +609,9 @@ class HardwarePortMixin(_Base):
         """Handle board selection change."""
         old_board = getattr(self, "_last_valid_board", "")
         board_name = self.board_var.get()
+        # Keep a plain-Python snapshot for background cache/build workers.
+        self._active_board_name = board_name
+        self._active_board_info = dict(SUPPORTED_BOARDS.get(board_name, {}))
 
         if old_board and old_board == board_name:
             # A restored/reloaded board can be logically unchanged while the
@@ -709,13 +752,11 @@ class HardwarePortMixin(_Base):
             self._sync_project_hardware_state()
             return True
 
-        # One background job performs descriptor recognition and its fallback.
-        # Keeping the complete detection in that job avoids probing the same
-        # port synchronously and then repeating it asynchronously.
         threading.Thread(
             target=self._auto_detect_board_from_port,
             args=(port_device,),
             kwargs={"show_msg": show_msg},
+            name=f"BoardDetect-{port_device}",
             daemon=True,
         ).start()
         return True
@@ -741,7 +782,16 @@ class HardwarePortMixin(_Base):
             if not port_device:
                 return None
 
-            for candidate in serial.tools.list_ports.comports():
+            with getattr(self, "_cached_comports_lock", threading.Lock()):
+                comports_list = list(getattr(self, "_cached_comports", []))
+            if not comports_list and threading.get_ident() != getattr(self, "_tk_thread_id", None):
+                try:
+                    comports_list = list(serial.tools.list_ports.comports())
+                    self._cached_comports = comports_list
+                except Exception:
+                    comports_list = []
+
+            for candidate in comports_list:
                 if candidate.device.upper() != port_device.upper():
                     continue
 
@@ -833,7 +883,7 @@ class HardwarePortMixin(_Base):
                 self._board_port_confirmed = True
                 self._update_hardware_action_buttons()
                 self._sync_project_hardware_state()
-            self.root.after(0, _apply_desc)
+            self._post_ui(_apply_desc)
             return
 
         # 2. Non-disruptive fallback: do NOT run esptool live probes on port selection/startup.
@@ -851,7 +901,7 @@ class HardwarePortMixin(_Base):
             self._update_hardware_action_buttons()
             self._sync_project_hardware_state()
             self._schedule_auto_start_monitor(50)
-        self.root.after(0, _non_disruptive_fallback)
+        self._post_ui(_non_disruptive_fallback)
 
     def _on_baud_changed(self):
         """Handle a real baud-rate change; ignore re-selecting the current value."""
@@ -1052,10 +1102,17 @@ class HardwarePortMixin(_Base):
 
     def _detect_port_chip(self) -> tuple[str, set, str] | None:
         """UI-facing selected-port wrapper around the snapshot-safe detector."""
-        port = self._get_port()
+        # Background compile/upload code must not read Tk variables.  The
+        # action entry point captures this label before starting its worker.
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            port_label = str(getattr(self, "_active_port_label", "") or "")
+            port = self._extract_port_device(port_label)
+        else:
+            port = self._get_port()
+            port_label = self.port_var.get()
         if not port:
             return None
-        return self._detect_port_chip_for(port, self.port_var.get())
+        return self._detect_port_chip_for(port, port_label)
 
     def _detect_port_chip_for(self, port: str, port_label: str = "") -> tuple[str, set, str] | None:
         """Detect a USB/serial family without reading Tk Variables.
@@ -1067,7 +1124,15 @@ class HardwarePortMixin(_Base):
             return None
         search_targets = [str(port_label or "").lower(), str(port).lower()]
         try:
-            for candidate in serial.tools.list_ports.comports():
+            with getattr(self, "_cached_comports_lock", threading.Lock()):
+                comports_list = list(getattr(self, "_cached_comports", []))
+            if not comports_list and threading.get_ident() != getattr(self, "_tk_thread_id", None):
+                try:
+                    comports_list = list(serial.tools.list_ports.comports())
+                    self._cached_comports = comports_list
+                except Exception:
+                    comports_list = []
+            for candidate in comports_list:
                 if candidate.device.upper() == str(port).upper():
                     if candidate.description:
                         search_targets.append(candidate.description.lower())
@@ -1150,9 +1215,14 @@ class HardwarePortMixin(_Base):
                     pass
 
     def _is_native_usb_port(self) -> bool:
-        port_label = self.port_var.get()
-        board_name = self.board_var.get()
-        board_info = SUPPORTED_BOARDS.get(board_name, {})
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            port_label = str(getattr(self, "_active_port_label", "") or "")
+            board_name = str(getattr(self, "_active_board_name", "") or "")
+            board_info = dict(getattr(self, "_active_board_info", {}) or {})
+        else:
+            port_label = self.port_var.get()
+            board_name = self.board_var.get()
+            board_info = SUPPORTED_BOARDS.get(board_name, {})
         low_label = port_label.lower()
         if not low_label:
             return False
@@ -1223,7 +1293,15 @@ class HardwarePortMixin(_Base):
         descriptor = str(port_label or "")
         port_info = None
         try:
-            for candidate in serial.tools.list_ports.comports():
+            with getattr(self, "_cached_comports_lock", threading.Lock()):
+                comports_list = list(getattr(self, "_cached_comports", []))
+            if not comports_list and threading.get_ident() != getattr(self, "_tk_thread_id", None):
+                try:
+                    comports_list = list(serial.tools.list_ports.comports())
+                    self._cached_comports = comports_list
+                except Exception:
+                    comports_list = []
+            for candidate in comports_list:
                 if candidate.device.upper() == port.upper():
                     port_info = candidate
                     descriptor = candidate.description or descriptor
@@ -1292,6 +1370,32 @@ class HardwarePortMixin(_Base):
         if not target:
             return False
         try:
+            with getattr(self, "_cached_comports_lock", threading.Lock()):
+                cached = list(getattr(self, "_cached_comports", []))
+            if cached:
+                for candidate in cached:
+                    if str(candidate.device or "").upper() == target:
+                        return True
+                return False
+
+            last_known = getattr(self, "_last_known_ports", None)
+            if last_known:
+                for dev, _ in last_known:
+                    if str(dev or "").upper() == target:
+                        return True
+                return False
+
+            if threading.get_ident() == getattr(self, "_tk_thread_id", None):
+                # On Tkinter UI thread: never perform synchronous SetupAPI enumeration.
+                # If cache is not ready yet, verify against current port variable or combobox.
+                val = str(getattr(self.port_var, "get", lambda: "")() or "")
+                if target in val.upper():
+                    return True
+                combo_vals = getattr(self.port_combo, "cget", lambda k: [])("values") or []
+                if any(target in str(v).upper() for v in combo_vals):
+                    return True
+                return False
+
             for candidate in serial.tools.list_ports.comports():
                 if str(candidate.device or "").upper() == target:
                     return True
@@ -1353,8 +1457,6 @@ class HardwarePortMixin(_Base):
 
         try:
             cache_dir = Path(sketch_dir) / PROJECT_BUILD_CACHE_DIR
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            hide_generated_directory(cache_dir)
 
             port_label = (self.port_var.get() if hasattr(self, "port_var") else "") or ""
             if not port_label and hasattr(self, "port_combo") and self.port_combo:
@@ -1477,8 +1579,18 @@ class HardwarePortMixin(_Base):
             }
 
             state_file = cache_dir / "project_state.json"
-            ensure_file_writable(state_file)
-            state_file.write_text(json.dumps(state_data, indent=2, ensure_ascii=False), encoding="utf-8")
-            ensure_hidden_read_first_md(sketch_dir)
+            payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
+
+            def _write_state_bg():
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    hide_generated_directory(cache_dir)
+                    ensure_file_writable(state_file)
+                    state_file.write_text(payload_text, encoding="utf-8")
+                    ensure_hidden_read_first_md(sketch_dir)
+                except Exception as exc:
+                    print(f"[MCU Flasher] Error syncing project state in background: {exc}")
+
+            self._run_bg_task(_write_state_bg)
         except Exception as exc:
             print(f"[MCU Flasher] Error syncing project state: {exc}")

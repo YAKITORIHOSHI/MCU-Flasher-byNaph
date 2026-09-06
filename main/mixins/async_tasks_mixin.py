@@ -48,6 +48,12 @@ class AsyncTasksMixin(_Base):
         except Exception:
             pass
 
+    def _ensure_ui_dispatch_pump(self) -> None:
+        """Guarantee the main-thread callback pump is active and scheduled."""
+        if threading.get_ident() == getattr(self, "_tk_thread_id", None):
+            if getattr(self, "_ui_dispatch_after_id", None) is None:
+                self._drain_ui_dispatch_queue()
+
     def _drain_ui_dispatch_queue(self) -> None:
         """Main-thread callback pump with a small per-frame time budget.
 
@@ -57,9 +63,9 @@ class AsyncTasksMixin(_Base):
         """
         self._ui_dispatch_after_id = None
         processed = 0
-        deadline = time.perf_counter() + 0.008  # ~8 ms of worker callbacks/frame for high refresh rates
+        deadline = time.perf_counter() + 0.004  # ~4 ms of worker callbacks/frame
         try:
-            while processed < 120 and time.perf_counter() < deadline:
+            while processed < 80 and time.perf_counter() < deadline:
                 try:
                     callback = self._ui_dispatch_queue.get_nowait()
                 except queue.Empty:
@@ -72,9 +78,10 @@ class AsyncTasksMixin(_Base):
         finally:
             try:
                 if self.root and self.root.winfo_exists():
-                    # If we consumed work, continue immediately on next turn; idle stays relaxed
+                    # If we consumed work, yield briefly to paint/input before
+                    # continuing the queue.  Idle polling stays inexpensive.
                     self._ui_dispatch_after_id = self.root.after(
-                        1 if processed else 15, self._drain_ui_dispatch_queue
+                        4 if processed else 20, self._drain_ui_dispatch_queue
                     )
             except Exception:
                 self._ui_dispatch_after_id = None
@@ -106,4 +113,3 @@ class AsyncTasksMixin(_Base):
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
         return t
-

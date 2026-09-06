@@ -110,33 +110,74 @@ except ImportError:
 
 
 def find_opencode_cli() -> str | None:
-    """Find opencode CLI executable on system PATH or standard npm/installation locations."""
+    """Find opencode CLI executable on system PATH, active processes, or standard npm locations."""
+    # Check active running processes first
+    try:
+        import psutil
+        for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or "").lower()
+                exe = proc.info.get('exe') or ""
+                if name in ("opencode.exe", "opencode") and exe:
+                    p = Path(exe)
+                    if p.is_file():
+                        return str(p.resolve())
+                cmdline = proc.info.get('cmdline') or []
+                for arg in cmdline:
+                    arg_l = str(arg).lower()
+                    if "opencode" in arg_l and (arg_l.endswith(".exe") or arg_l.endswith(".cmd")):
+                        p = Path(arg)
+                        if p.is_file():
+                            return str(p.resolve())
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+
     import shutil
-    exe = shutil.which("opencode") or shutil.which("opencode.cmd") or shutil.which("opencode.exe")
+    exe = shutil.which("opencode.exe") or shutil.which("opencode") or shutil.which("opencode.cmd")
     if exe:
         return exe
 
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA", "")
         if appdata:
-            npm_cmd = Path(appdata) / "npm" / "opencode.cmd"
-            if npm_cmd.exists():
-                return str(npm_cmd)
-            npm_exe = Path(appdata) / "npm" / "opencode.exe"
-            if npm_exe.exists():
-                return str(npm_exe)
-            npm_ps1 = Path(appdata) / "npm" / "opencode"
-            if npm_ps1.exists():
-                return str(npm_ps1)
+            for candidate in (
+                Path(appdata) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                Path(appdata) / "npm" / "opencode.exe",
+                Path(appdata) / "npm" / "opencode.cmd",
+                Path(appdata) / "npm" / "opencode",
+            ):
+                if candidate.exists() and candidate.stat().st_size > 0:
+                    return str(candidate)
 
         local_app = os.environ.get("LOCALAPPDATA", "")
         if local_app:
-            for candidate in [
+            for candidate in (
                 Path(local_app) / "Programs" / "opencode" / "opencode.exe",
                 Path(local_app) / "opencode" / "opencode.exe",
-            ]:
-                if candidate.exists():
+                Path(local_app) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                Path(local_app) / "npm" / "opencode.cmd",
+            ):
+                if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
+
+        user_prof = os.environ.get("USERPROFILE", "")
+        if user_prof:
+            for candidate in (
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
+            ):
+                if candidate.exists() and candidate.stat().st_size > 0:
+                    return str(candidate)
+
+        for candidate in (
+            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+            Path(r"C:\Program Files\nodejs\opencode.cmd"),
+        ):
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return str(candidate)
 
     return None
 
@@ -662,7 +703,7 @@ class TerminalServer:
 
 
 def find_free_pair(start_port=8765):
-    for p in range(start_port, start_port + 100, 2):
+    for p in range(start_port, start_port + 200, 2):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s1, \
                  socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
@@ -671,7 +712,12 @@ def find_free_pair(start_port=8765):
                 return p
         except Exception:
             pass
-    return start_port
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+    except Exception:
+        return start_port
 
 
 def apply_window_icon(window_title):
@@ -892,10 +938,15 @@ def close_active_opencode():
 
     if active_ai_proc and active_ai_proc.poll() is None:
         try:
-            subprocess.run(
+            # Do not synchronously wait for a large WebView2/OpenCode process
+            # tree while the Tk event loop is switching projects.  taskkill is
+            # forceful; it can finish tearing down the descendants in parallel
+            # while the replacement process starts in the new project.
+            subprocess.Popen(
                 ["taskkill", "/F", "/T", "/PID", str(active_ai_proc.pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
             closed = True

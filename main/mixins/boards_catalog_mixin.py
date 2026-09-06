@@ -9,7 +9,6 @@ import sys
 import os
 import shutil
 import subprocess
-import threading
 import ctypes
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -98,10 +97,7 @@ class BoardsCatalogMixin(_Base):
                 def _on_restored():
                     self._append_notif("  ⚡ Restored Download Manager instantly from memory (Sleep Mode).", "info")
 
-                try:
-                    self.root.after(0, _on_restored)
-                except Exception:
-                    pass
+                self._post_ui(_on_restored)
                 return
 
             env = os.environ.copy()
@@ -119,15 +115,15 @@ class BoardsCatalogMixin(_Base):
 
             try:
                 python_exe = None
-                # Priority 1: Bundled private Python runtime
-                # Priority 2: Virtualenv runtime
+                # Priority 1: Virtualenv runtime (where all pip packages reside)
+                # Priority 2: Bundled private Python runtime
                 # Priority 3: sys.executable (if not frozen)
                 # Priority 4: System PATH python
                 candidates = [
-                    SCRIPT_DIR / "src" / "_python" / "pythonw.exe",
-                    SCRIPT_DIR / "src" / "_python" / "python.exe",
                     SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe",
                     SCRIPT_DIR / "env" / "Scripts" / "python.exe",
+                    SCRIPT_DIR / "src" / "_python" / "pythonw.exe",
+                    SCRIPT_DIR / "src" / "_python" / "python.exe",
                 ]
                 for c in candidates:
                     if c.is_file():
@@ -160,21 +156,14 @@ class BoardsCatalogMixin(_Base):
                     self.root.after(1000, self._check_downloader_running)
                     self._append_notif("  ✔ Download Boards/Libraries Manager process ready.", "success")
 
-                try:
-                    self.root.after(0, _on_launched)
-                except Exception:
-                    pass
+                self._post_ui(_on_launched)
             except Exception as e:
                 def _on_err(err_str=str(e)):
                     self._append_notif(f"  ✖ Failed to launch download manager: {err_str}", "error")
 
-                try:
-                    self.root.after(0, _on_err)
-                except Exception:
-                    pass
+                self._post_ui(_on_err)
 
-        import threading
-        threading.Thread(target=_bg_launch_worker, daemon=True).start()
+        self._run_bg_task(_bg_launch_worker)
 
     def _check_downloader_running(self):
         # Filter completed processes
@@ -254,7 +243,7 @@ class BoardsCatalogMixin(_Base):
                 lambda boards=new_boards, usb_ids=new_usb_ids:
                     self._apply_reloaded_boards(boards, usb_ids)
             )
-        threading.Thread(target=_bg_load, daemon=True).start()
+        self._run_bg_task(_bg_load)
 
     def _apply_reloaded_boards(self, new_boards: dict, new_usb_ids=None):
         """Apply the reloaded board list on the main (UI) thread."""
@@ -337,4 +326,3 @@ class BoardsCatalogMixin(_Base):
             except Exception:
                 continue
         return False
-

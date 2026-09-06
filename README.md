@@ -50,6 +50,8 @@
 | **💻 Multi-Session Project Terminal** | Embedded terminal powered by pywinpty + xterm.js with VS Code-style multi-terminal tabs, **PowerShell ↔ CMD** creation, and individual session controls |
 | **🌐 Remote & UNC Share Support** | Direct compilation & flashing of projects on network shares (`\\server\share`) with automated drive mapping and local SSD build acceleration |
 | **⚡ Dual Reset Modes** | Fast software reset (re-flashing lightweight reset sketch) and native hardware reset via esptool DTR/RTS pulsing or bootloader recovery images |
+| **🔄 On-Demand Board Toolchains** | Newly downloaded boards (ESP8266, STM32, RP2040) install and prepare toolchains on demand during first compile without requiring an application restart |
+| **🍃 Supported-PC Optimization** | Dynamic CPU/RAM budgeting, below-normal process priority scheduling, and slow-disk watchdogs help keep the UI responsive on supported quad-core hardware |
 | **📦 Zero-Touch Bootstrapper** | Self-healing Python environment, pre-built PlatformIO core seeding (~1.7GB fast download), and offline CP210x driver installation |
 
 ---
@@ -60,7 +62,7 @@
 # Double-click the native launcher:
 MCU_Flasher.exe
 
-# Or launch via the elevated bootstrap script:
+# Or launch via the bootstrap script (normal startup does not require Administrator):
 direct\runThisOnWindows.vbs
 ```
 
@@ -69,11 +71,18 @@ direct\runThisOnWindows.vbs
 2. Auto-heals private portable Python runtime at `src/_python/` if needed.
 3. Configures isolated virtual environment (`env/`).
 4. Seeds pre-built PlatformIO toolchain and Arduino CLI binaries.
-5. Installs CP210x USB UART drivers silently.
+5. Checks required CP210x USB UART drivers; Windows requests UAC only when a machine-level installation is needed.
 6. Launches the main GUI seamlessly.
 
 > [!NOTE]
 > **Storage Requirement**: Initial installation requires approximately **6GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
+
+> **Hardware Requirement**: This app requires at least **4 logical CPU cores/threads**. On systems with fewer than 4, startup stops and displays a compatibility message because the editor, serial monitor, toolchain, and background services cannot operate reliably on the available CPU resources.
+
+> [!TIP]
+> The main window is revealed behind the loading cover while its UI components are laid out and painted. The cover is removed only after the layout is stable and the full startup pass has completed. Project scanning, editor file loading, port detection, serial monitoring, and optional services run through the background worker system without changing the monitor's logging behavior.
+>
+> An MCU already connected when the app opens is monitored passively; startup does not reset it. Reset happens only through the physical/on-app reset control or after an upload.
 
 ---
 
@@ -106,7 +115,7 @@ MCU Flasher by Naph/
 │   │
 │   └── mixins/                      # 27 domain mixins composing MCUUploadGUI (586 methods total)
 │       ├── __init__.py              # Mixins package re-exports
-│       ├── init_startup_mixin.py    # App init, startup overlay splash & deferred background init
+│       ├── init_startup_mixin.py    # App init, first-paint UI overlay/readiness & deferred background init
 │       ├── ui_layout_mixin.py       # Main UI builder, toolbar, responsive layout & button styling
 │       ├── console_serial_mixin.py  # Console output formatting, progress bars, serial pump
 │       ├── layout_panes_mixin.py    # Pane collapsing/expanding, editor detachment & floating window
@@ -143,7 +152,7 @@ MCU Flasher by Naph/
 │   └── runReset.cmd                 # Reset launcher
 │
 ├── direct/
-│   └── runThisOnWindows.vbs         # Silent UAC-elevated launcher for Windows
+│   └── runThisOnWindows.vbs         # Windows bootstrap launcher; targeted UAC only when required
 │
 ├── src/                             # Core system modules, offline editor assets & storage
 │   ├── _python/                     # Private portable Python 3 runtime (hidden via attrib +h)
@@ -151,7 +160,7 @@ MCU Flasher by Naph/
 │   ├── gui_config.json              # Persisted user settings (editor mode, themes, baud rates)
 │   ├── syntax_checker.py            # Realtime C++ syntax linter & AST regex analyzer
 │   ├── qscintilla_editor.py         # QScintilla code editor component (PyQt5)
-│   ├── qscintilla_viewer.py         # QScintilla library sample code viewer component (PyQt5)
+│   ├── qscintilla_viewer.py         # QScintilla sample-code viewer with adaptive filename tabs (PyQt5)
 │   ├── launcher.cpp                 # Native Windows executable wrapper source (C++)
 │   ├── launcher.cs                  # Native Windows executable wrapper source (C#)
 │   ├── resources.res                # Compiled Windows resource file (icon embedding)
@@ -216,6 +225,8 @@ MCU Flasher by Naph/
 ### 1. Launching & First-Run Auto-Bootstrap
 - Launch via **`MCU_Flasher.exe`** (or **`direct\runThisOnWindows.vbs`**).
 - The bootstrapper handles missing dependencies, Python packages (`pyserial`, `pywebview`, `pywinpty`), and the bundled AVR/ESP32 toolchains unattended. Additional downloaded board families are installed automatically on first compile or upload, keeping startup fast.
+- The window is revealed behind the loading cover while its components are laid out. The cover is removed only after the layout is stable and the full startup pass is complete; project loading, editor materialization, port detection, serial monitoring, and optional services run through the background worker system.
+- Normal startup and monitoring run with the current user permission. Windows shows a UAC prompt only when a missing machine-level component, such as a driver, genuinely requires it.
 - If launched from source in a developer terminal:
   ```powershell
   python mcu_flash_gui.py
@@ -225,6 +236,7 @@ MCU Flasher by Naph/
 
 ### 2. Opening, Selecting & Scaffolding Projects
 - Click **`📂 Select Project`** on the toolbar or choose from recent projects.
+- **Reselect a Project**: Right-click the current project name or folder icon to open the sketch/project picker. Choosing **Cancel** safely closes the native dialog and leaves the editor and monitor usable. The folder/new-project button opens the normal project selector and scaffolding flow.
 - **New Project Scaffolding**: Click **`✨ New Project`**, enter a project name, and MCU Flasher creates a structured project directory with boilerplate `.ino`, header inclusions, and ready-to-build configuration.
 - **Modify Project Files**: Click **`📝 Modify Files`** to add, rename, or delete sketch files (`.ino`, `.cpp`, `.h`).
 
@@ -237,9 +249,10 @@ MCU Flasher by Naph/
 ### 4. Compiling & Flashing Code
 - **Compile Only (`🔨 Compile`)**:
   - Compiles your project using the selected toolchain (PlatformIO or Arduino CLI).
-  - ESP8266 Arduino boards reuse an installed Arduino CLI core when available, so a separate PlatformIO Xtensa download is not required.
   - *Non-blocking*: Serial Monitor remains active and streaming while compiling!
   - Caches build artifacts in `.mcu_flasher_build_cache/` for near-instant incremental builds.
+  - **On-Demand Toolchain Setup (Zero App Restart)**: Newly downloaded board families (e.g. ESP8266, STM32, RP2040) automatically install and verify compilers on demand during first compile with live progress bars. When finished, compilation proceeds immediately without restarting the desktop app!
+  - **Supported-PC Optimization**: Dynamically measures available physical RAM and CPU cores, caps compiler jobs on supported quad-core/budget PCs, and schedules background processes with `BELOW_NORMAL_PRIORITY_CLASS` to help keep the UI and serial monitor responsive.
 - **Upload (`⚡ Upload`)**:
   - Compiles (if changes were made) and flashes the binary to the MCU.
   - Automatically pauses the Serial Monitor during the upload phase to prevent port conflicts, then auto-resumes the monitor once flashing finishes.
@@ -282,6 +295,7 @@ MCU Flasher by Naph/
 ### 9. Soft Reset & Hard Reset Recovery Flashing
 - **Soft Reset**: Flashes a minimal lightweight Arduino-framework routine through the selected board's PlatformIO definition. It is available to resolved Arduino/PlatformIO boards, including future families that do not have a Hard Reset handler.
 - **Hard Reset**: Uses an explicit board-family capability handler: ESP32 recovery images, ESP8266 full SPI-flash erase, or the existing AVR bootloader path. Other MCUs are refused safely instead of receiving an incompatible erase command.
+- Opening or switching projects never performs an implicit MCU reset. Reset remains an explicit physical/on-app action or part of the upload flow.
 
 ### 10. Remote Network Shares (UNC Paths)
 - Open projects directly from network storage (e.g. `\\nas\projects\iot_sensor`).
@@ -293,8 +307,8 @@ MCU Flasher by Naph/
 
 ### Root Entry Points & Launchers
 
-- **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Elevates if needed and executes `direct\runThisOnWindows.vbs` silently.
-- **`direct\runThisOnWindows.vbs`**: Windows VBScript bootstrapper that checks elevation, verifies drive storage type, and calls `src/modules/launcher.py`.
+- **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without forcing Administrator permission.
+- **`direct\runThisOnWindows.vbs`**: Windows VBScript bootstrapper that verifies drive storage type and calls `src/modules/launcher.py`; the bootstrap requests targeted UAC only for a specific machine-level setup task that needs it.
 - **`mcu_flash_gui.py`**: Root forwarder script that delegates directly to `main.mcu_flash_gui` for backward compatibility.
 
 ---
@@ -307,7 +321,7 @@ MCU Flasher by Naph/
   - `BoardSearchDialog`: Fast live-search dialog filtering across all 420+ board definitions.
 - **`main/widgets.py`**: Standalone UI components:
   - `ToolTip`: Hover tooltip bubble with dark-mode styling.
-  - `CircularLoadingOverlay`: Semi-transparent animated spinner for long operations.
+  - `CircularLoadingOverlay`: Opaque, borderless animated first-paint cover that prevents child-widget relief artifacts while the visible UI is laid out.
   - `_ShellTerminalBuffer`: Lightweight ANSI/VT terminal screen model for Windows PTY rendering.
   - `center_toplevel`, `safe_reclaim_os_focus`, and DPI scaling helpers.
 - **`main/editor_api.py`**:
@@ -333,7 +347,7 @@ MCU Flasher by Naph/
 
 | Mixin File | Mixin Class | Responsibilities & Methods |
 | --- | --- | --- |
-| `init_startup_mixin.py` | `InitStartupMixin` | `__init__`, startup splash overlay, deferred background subsystem initialization, sketch title marquee. |
+| `init_startup_mixin.py` | `InitStartupMixin` | `__init__`, stable first-paint/full-startup overlay readiness, concurrent background subsystem initialization, sketch title marquee. |
 | `ui_layout_mixin.py` | `UILayoutMixin` | `_build_ui`, toolbar creation, paned window layout, theme restyling, responsive width calculations, button states. |
 | `console_serial_mixin.py` | `ConsoleSerialMixin` | Console output appending, progress bar formatting, persistent notification drawer, serial monitor display pump. |
 | `layout_panes_mixin.py` | `LayoutPanesMixin` | Collapsing/expanding editor and monitor panes, detached editor window lifecycle, placeholder views. |
@@ -414,6 +428,7 @@ Preferences are persisted in `src/gui_config.json`:
 
 ### Requirements
 - Windows 10 / 11 (SSD / HDD recommended)
+- **4+ logical CPU cores/threads** (required; systems below this minimum are blocked at startup)
 - Python 3.10+
 - **6GB+** starting storage for toolchains and platform packages
 - Git LFS (`git lfs install`) for large binaries

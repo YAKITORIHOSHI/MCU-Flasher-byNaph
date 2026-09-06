@@ -2247,6 +2247,11 @@ class EditorModesMixin(_Base):
             self._editor_hwnd = hwnd
             self._editor_embedded = True
             self._embedding_in_progress = False
+            if not getattr(self, "editor_pane_visible", True):
+                try:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                except Exception:
+                    pass
             self._append("  ✓ Code editor embedded into the main window.", "success")
             self._editor_status_lbl.configure(text="📝 Rendering editor…")
             self._editor_desc_lbl.configure(text="Waiting for the editor page to finish loading…")
@@ -2464,11 +2469,14 @@ class EditorModesMixin(_Base):
         has to be done explicitly."""
         if not getattr(self, "_editor_embedded", False) or not self._editor_hwnd or win32gui is None:
             return
+        command = win32con.SW_SHOW if visible else win32con.SW_HIDE
         try:
-            win32gui.ShowWindow(
-                self._editor_hwnd,
-                win32con.SW_SHOW if visible else win32con.SW_HIDE
-            )
+            # The Monaco HWND belongs to pywebview's separate WinForms thread.
+            # ShowWindowAsync prevents a pane toggle after returning from
+            # another app from synchronously waiting on that message loop.
+            ctypes.windll.user32.ShowWindowAsync(int(self._editor_hwnd), int(command))
         except Exception:
-            pass
-
+            try:
+                win32gui.ShowWindow(self._editor_hwnd, command)
+            except Exception:
+                pass

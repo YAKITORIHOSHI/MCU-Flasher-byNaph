@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import threading
 from pathlib import Path
 
 
@@ -16,6 +17,13 @@ from main.core.theme import *
 from main.core.config import *
 from main.core.file_utils import *
 from main.core.toolchain import *
+
+# Process-wide RAM caches for board catalogs and Arduino core parsing
+_BOARD_CATALOG_CACHE_RAM: tuple[int, int, dict] | None = None
+_BOARD_CATALOG_RAM_LOCK = threading.Lock()
+
+_PIO_BOARD_CATALOG_RAM_CACHE: dict[str, tuple[tuple, list[dict]]] = {}
+_ARDUINO_BOARDS_TXT_RAM_CACHE: dict[str, tuple[int, int, list[dict]]] = {}
 
 def _get_download_dir() -> str:
     """Read the download directory from the shared settings file.
@@ -137,12 +145,27 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
     No PlatformIO board IDs are guessed here.  The Arduino identity (id, name,
     MCU, variant, USB IDs, etc.) is kept intact and is resolved against the
     PlatformIO board catalog in a separate step.
+
+    Uses _ARDUINO_BOARDS_TXT_RAM_CACHE to avoid re-parsing multi-thousand line
+    boards.txt files from disk on repeated queries.
     """
     records: list[dict] = []
     if not boards_path.is_dir():
         return records
 
     for boards_file in sorted(boards_path.glob("**/boards.txt"), key=lambda x: str(x).lower()):
+        f_key = str(boards_file)
+        try:
+            st = boards_file.stat()
+        except OSError:
+            continue
+
+        with _BOARD_CATALOG_RAM_LOCK:
+            cached = _ARDUINO_BOARDS_TXT_RAM_CACHE.get(f_key)
+            if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+                records.extend([dict(r) for r in cached[2]])
+                continue
+
         props_by_id: dict[str, dict[str, str]] = {}
         try:
             lines = boards_file.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -163,6 +186,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
                 continue
             props_by_id.setdefault(board_id, {})[key] = value.strip()
 
+        file_records: list[dict] = []
         for board_id, props in props_by_id.items():
             name = str(props.get("name") or "").strip()
             if not name:
@@ -183,7 +207,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
                 if "vid" in pair and "pid" in pair:
                     hwids.add((pair["vid"], pair["pid"]))
 
-            records.append({
+            file_records.append({
                 "arduino_id": board_id,
                 "name": name,
                 "mcu": str(props.get("build.mcu") or "").strip().lower(),
@@ -204,6 +228,11 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
                 "source_core": boards_file.parent.name,
                 "properties": props,
             })
+
+        with _BOARD_CATALOG_RAM_LOCK:
+            _ARDUINO_BOARDS_TXT_RAM_CACHE[f_key] = (st.st_mtime_ns, st.st_size, file_records)
+        records.extend([dict(r) for r in file_records])
+
     return records
 
 
@@ -232,10 +261,18 @@ def _json_safe_board_value(value):
 
 def _load_board_catalog_cache() -> dict | None:
     """Read the last known board catalog without scanning PlatformIO at launch."""
+    global _BOARD_CATALOG_CACHE_RAM
     try:
         path = _board_catalog_cache_path()
         if not path.is_file():
             return None
+        st = path.stat()
+        with _BOARD_CATALOG_RAM_LOCK:
+            if _BOARD_CATALOG_CACHE_RAM is not None:
+                cached_mtime, cached_size, cached_dict = _BOARD_CATALOG_CACHE_RAM
+                if cached_mtime == st.st_mtime_ns and cached_size == st.st_size:
+                    return {k: dict(v) for k, v in cached_dict.items()}
+
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != _BOARD_CATALOG_CACHE_VERSION:
             return None
@@ -250,13 +287,17 @@ def _load_board_catalog_cache() -> dict | None:
                 if isinstance(pair, (list, tuple)) and len(pair) >= 2
             }
             info["arduino_defines"] = set(info.get("arduino_defines", []))
-        return boards
+
+        with _BOARD_CATALOG_RAM_LOCK:
+            _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, boards)
+        return {k: dict(v) for k, v in boards.items()}
     except Exception:
         return None
 
 
 def _save_board_catalog_cache(boards: dict) -> None:
     """Atomically save the resolved catalog for the next fast launch."""
+    global _BOARD_CATALOG_CACHE_RAM
     temporary = None
     try:
         path = _board_catalog_cache_path()
@@ -268,9 +309,16 @@ def _save_board_catalog_cache(boards: dict) -> None:
         }
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, path)
+        try:
+            st = path.stat()
+            with _BOARD_CATALOG_RAM_LOCK:
+                _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, boards)
+        except OSError:
+            pass
     except Exception:
         try:
-            temporary.unlink(missing_ok=True)
+            if temporary:
+                temporary.unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -282,6 +330,9 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
     development platform's ``boards/*.json`` directory.  Scanning those same
     manifests gives this GUI the canonical board ID that PlatformIO itself will
     accept, instead of assuming an Arduino boards.txt key is interchangeable.
+
+    Uses _PIO_BOARD_CATALOG_RAM_CACHE in RAM to eliminate repeated disk I/O
+    and JSON parsing across hundreds of board files.
     """
     root_value = str(core_dir or os.environ.get("PLATFORMIO_CORE_DIR") or "").strip()
     if not root_value:
@@ -292,13 +343,34 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
     if not root_value:
         return []
     root = Path(os.path.expandvars(os.path.expanduser(root_value)))
+
+    # Compute fast directory fingerprint in RAM to detect if platforms or custom boards changed
+    global_boards = root / "boards"
+    platforms_root = root / "platforms"
+    try:
+        gb_mtime = global_boards.stat().st_mtime_ns if global_boards.is_dir() else 0
+        pr_mtime = platforms_root.stat().st_mtime_ns if platforms_root.is_dir() else 0
+        platform_st = []
+        if platforms_root.is_dir():
+            for p in sorted(platforms_root.iterdir()):
+                if p.is_dir():
+                    b = p / "boards"
+                    platform_st.append((p.name, p.stat().st_mtime_ns, b.stat().st_mtime_ns if b.is_dir() else 0))
+        fp = (gb_mtime, pr_mtime, tuple(platform_st))
+    except Exception:
+        fp = ()
+
+    cache_key = str(root)
+    with _BOARD_CATALOG_RAM_LOCK:
+        cached = _PIO_BOARD_CATALOG_RAM_CACHE.get(cache_key)
+        if cached is not None and fp and cached[0] == fp:
+            return [dict(x) for x in cached[1]]
+
     candidates: list[tuple[Path, str]] = []
 
-    global_boards = root / "boards"
     if global_boards.is_dir():
         candidates.extend((p, "") for p in global_boards.glob("*.json"))
 
-    platforms_root = root / "platforms"
     if platforms_root.is_dir():
         try:
             for platform_dir in platforms_root.iterdir():
@@ -367,7 +439,11 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             "arduino_defines": defines,
             "manifest": str(manifest_path),
         })
+
+    with _BOARD_CATALOG_RAM_LOCK:
+        _PIO_BOARD_CATALOG_RAM_CACHE[cache_key] = (fp, catalog)
     return catalog
+
 
 
 def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, list[str]]:

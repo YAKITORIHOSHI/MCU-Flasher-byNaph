@@ -945,15 +945,6 @@ class UploadPipelineMixin(_Base):
                         dots = max(3, (_connection_dot_count[0] % 10) + 1)
                         _connection_dot_count[0] = dots
                         dot_str = "." * dots
-                        # PlatformIO/esptool emits the connection dots without
-                        # newline characters, so the line reader cannot update
-                        # the console bar until the session ends. Reflect the
-                        # live polling window here without launching another
-                        # uploader process.
-                        self._append_connecting_progress(
-                            min(_MAX_CONNECT_RETRIES, max(1, dots - 2)),
-                            _MAX_CONNECT_RETRIES,
-                        )
                         self._set_status(
                             f"Connecting{dot_str} ({_connect_retry_count + 1}/{_MAX_CONNECT_RETRIES})",
                             Theme.MAGENTA,

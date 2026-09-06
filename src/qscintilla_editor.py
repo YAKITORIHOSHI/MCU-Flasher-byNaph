@@ -796,9 +796,14 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.embedded and hasattr(self, "tabs") and self.tabs:
-            self.tabs.setGeometry(0, 0, self.width(), self.height())
-            self.tabs.repaint()
+        # NOTE: self.tabs is set via setCentralWidget(), so QMainWindow's
+        # own layout already resizes it on every resize event for free.
+        # The previous version manually called setGeometry()+repaint()
+        # here, which fired on *every* pixel of a drag-resize and forced
+        # a synchronous, blocking redraw each time — that's what caused
+        # the UI to freeze while resizing (and made queued tab-click
+        # events appear to "freeze" too, since they piled up behind the
+        # blocked event loop). Nothing to do here anymore.
 
 
     def open_file(self):

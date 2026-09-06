@@ -5,7 +5,6 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
-import os
 import time
 import threading
 import hashlib
@@ -35,13 +34,40 @@ class SyntaxCheckerMixin(_Base):
     """Mixin providing SyntaxCheckerMixin capabilities for MCUUploadGUI."""
     def _start_periodic_syntax_check(self):
         """Runs periodically to check for errors and update the UI in real-time."""
+        # Main-thread periodic check relaxed: background thread handles project syntax
+        self.root.after(10000, self._start_periodic_syntax_check)
+
+    def _syntax_check_tab_index(self) -> int:
+        """Resolve the Syntax Check tab index in the bottom notebook."""
+        cached = getattr(self, "_syntax_check_tab_index_cache", None)
+        if cached is not None:
+            return cached
         try:
-            if not self.is_busy and not self._compile_background_lock.is_set():
-                if hasattr(self, "editor_mode") and self.editor_mode == "default":
-                    self._run_manual_syntax_check()
+            frame = getattr(self, "_syntax_check_frame", None)
+            if frame is not None and self.bottom_notebook.winfo_exists():
+                idx = self.bottom_notebook.index(frame)
+                self._syntax_check_tab_index_cache = idx
+                return idx
         except Exception:
             pass
-        self.root.after(3000, self._start_periodic_syntax_check)
+        try:
+            for i, tab_id in enumerate(self.bottom_notebook.tabs()):
+                if "Syntax Check" in self.bottom_notebook.tab(tab_id, "text"):
+                    self._syntax_check_tab_index_cache = i
+                    return i
+        except Exception:
+            pass
+        return 4
+
+    def _syntax_check_is_selected(self) -> bool:
+        """Return whether the Syntax Check tab is currently selected in the bottom notebook."""
+        try:
+            if not getattr(self, "monitors_pane_visible", True):
+                return False
+            current = self.bottom_notebook.select()
+            return bool(current) and self.bottom_notebook.index(current) == self._syntax_check_tab_index()
+        except Exception:
+            return False
 
     def _start_background_syntax_thread(self):
         """Launch a permanent background thread that periodically checks syntax
@@ -54,9 +80,7 @@ class SyntaxCheckerMixin(_Base):
         def _syntax_bg_loop():
             while getattr(self, "_syntax_bg_active", False):
                 try:
-                    cpus = os.cpu_count() or 4
-                    sleep_time = 5.0 if cpus <= 2 else 3.5
-                    time.sleep(sleep_time)
+                    time.sleep(3.0)
                     if not getattr(self, "_syntax_bg_active", False):
                         break
                 except Exception:
@@ -73,10 +97,10 @@ class SyntaxCheckerMixin(_Base):
                     if not getattr(self, "_editor_content_loaded", False):
                         continue
 
-                # Run lightweight background check (no auto-save)
-                self._post_ui(self._run_bg_syntax_check)
+                # Run background check directly on worker thread
+                self._run_bg_syntax_check()
 
-        bg_thread = threading.Thread(target=_syntax_bg_loop, daemon=True)
+        bg_thread = threading.Thread(target=_syntax_bg_loop, daemon=True, name="SyntaxBgLoop")
         bg_thread.start()
         self._syntax_bg_thread = bg_thread
 
@@ -84,8 +108,8 @@ class SyntaxCheckerMixin(_Base):
         self.root.after(4000, self._start_periodic_syntax_check)
 
     def _run_bg_syntax_check(self):
-        """Lightweight background syntax check — reads current editor content & project files
-        on a worker thread, then updates the syntax check UI tree without lag."""
+        """Lightweight multi-threaded background syntax check — analyzes project files
+        in parallel across all CPU cores, utilizing memory caching freely."""
         if (getattr(self, "is_busy", False)
                 or getattr(self, "_compile_background_lock", threading.Lock()).is_set()
                 or not getattr(self, "sketch_dir_path", None)):
@@ -99,10 +123,13 @@ class SyntaxCheckerMixin(_Base):
 
                 # Check if any files were modified since last scan
                 current_mtimes = {}
+                project_files = []
                 for ext in ["*.ino", "*.cpp", "*.h", "*.hpp"]:
                     for f in sketch_dir.glob(ext):
                         try:
-                            current_mtimes[str(f)] = f.stat().st_mtime
+                            st = f.stat()
+                            current_mtimes[str(f)] = (st.st_mtime_ns, st.st_size)
+                            project_files.append(f)
                         except Exception:
                             pass
 
@@ -111,24 +138,15 @@ class SyntaxCheckerMixin(_Base):
                     return
                 self._last_syntax_mtimes = current_mtimes
 
-                from src.syntax_checker import analyze_cpp_syntax, extract_project_functions
+                from src.syntax_checker import analyze_files_parallel, extract_project_functions
                 defined_funcs = extract_project_functions(sketch_dir)
-
-                all_errors = []
-                for ext in ["*.ino", "*.cpp", "*.h", "*.hpp"]:
-                    for file_path in sketch_dir.glob(ext):
-                        try:
-                            code = file_path.read_text(encoding="utf-8", errors="replace")
-                            errors = analyze_cpp_syntax(code, file_path, defined_funcs)
-                            all_errors.extend(errors)
-                        except Exception:
-                            pass
-
+                all_errors = analyze_files_parallel(project_files, defined_funcs)
+                all_errors.sort(key=lambda x: (x.get("file", ""), x.get("line", 0)))
                 self._post_ui(lambda all_errors=all_errors: self._update_syntax_check_ui(all_errors))
             except Exception:
                 pass
 
-        threading.Thread(target=_worker, daemon=True).start()
+        threading.Thread(target=_worker, daemon=True, name="BgSyntaxCheck").start()
 
 
     def _get_project_defined_functions(self) -> set[str]:
@@ -264,10 +282,7 @@ class SyntaxCheckerMixin(_Base):
             except Exception:
                 # Mirror the historical behaviour: no checker available,
                 # leave existing UI state untouched.
-                try:
-                    self.root.after(0, lambda: self._finish_manual_syntax_check({}, [], quiet=True))
-                except Exception:
-                    self._syntax_analysis_inflight = False
+                self._post_ui(lambda: self._finish_manual_syntax_check({}, [], quiet=True))
                 return
             try:
                 if sketch_dir and sketch_dir.exists():
@@ -283,25 +298,21 @@ class SyntaxCheckerMixin(_Base):
                     per_file_errors[str(fpath)] = errs
                     all_errors.extend(errs)
                 if sketch_dir and sketch_dir.exists():
-                    for ext in ["*.ino", "*.cpp", "*.h"]:
+                    disk_files = []
+                    for ext in ["*.ino", "*.cpp", "*.h", "*.hpp"]:
                         for file_path in sketch_dir.glob(ext):
                             try:
-                                if file_path.resolve() in checked_files:
-                                    continue
-                                code = file_path.read_text(encoding="utf-8", errors="replace")
-                            except Exception:
-                                continue
-                            try:
-                                all_errors.extend(analyze_cpp_syntax(code, file_path, defined_funcs))
+                                if file_path.resolve() not in checked_files:
+                                    disk_files.append(file_path)
                             except Exception:
                                 pass
+                    if disk_files:
+                        from src.syntax_checker import analyze_files_parallel
+                        all_errors.extend(analyze_files_parallel(disk_files, defined_funcs))
             finally:
-                try:
-                    self.root.after(0, lambda: self._finish_manual_syntax_check(per_file_errors, all_errors))
-                except Exception:
-                    self._syntax_analysis_inflight = False
+                self._post_ui(lambda: self._finish_manual_syntax_check(per_file_errors, all_errors))
 
-        threading.Thread(target=_worker, name="ManualSyntaxCheck", daemon=True).start()
+        threading.Thread(target=_worker, daemon=True, name="ManualSyntaxCheck").start()
 
     def _finish_manual_syntax_check(self, per_file_errors, all_errors, quiet=False):
         """UI-thread completion: paint inline tags and refresh the tree."""
@@ -313,7 +324,7 @@ class SyntaxCheckerMixin(_Base):
             return
 
         if hasattr(self, "editor_tab_data") and self.editor_tab_data:
-            for frame, data in self.editor_tab_data.items():
+            for frame, data in list(self.editor_tab_data.items()):
                 try:
                     if not frame.winfo_exists():
                         continue
@@ -322,14 +333,17 @@ class SyntaxCheckerMixin(_Base):
                 errs = per_file_errors.get(str(data["path"]))
                 if errs is None:
                     continue
-                txt = data["text"]
-                txt.tag_remove("syntax_error", "1.0", tk.END)
-                txt.tag_remove("syntax_warning", "1.0", tk.END)
-                for err in errs:
-                    line = err["line"]
-                    col = err["col"]
-                    tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
-                    txt.tag_add(tag, f"{line}.{max(0, col - 1)}", f"{line}.end")
+                try:
+                    txt = data["text"]
+                    txt.tag_remove("syntax_error", "1.0", tk.END)
+                    txt.tag_remove("syntax_warning", "1.0", tk.END)
+                    for err in errs:
+                        line = err["line"]
+                        col = err["col"]
+                        tag = "syntax_error" if err["severity"] == "error" else "syntax_warning"
+                        txt.tag_add(tag, f"{line}.{max(0, col - 1)}", f"{line}.end")
+                except Exception:
+                    pass
 
         self._update_syntax_check_ui(all_errors)
 
@@ -337,29 +351,54 @@ class SyntaxCheckerMixin(_Base):
             self.root.after(50, self._run_manual_syntax_check)
 
     def _update_syntax_check_ui(self, errors):
-        if not hasattr(self, "syntax_tree") or not self.syntax_tree or not self.syntax_tree.winfo_exists():
+        """Atomic UI update for syntax results on Tk thread."""
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            self._post_ui(lambda e=list(errors or ()): self._update_syntax_check_ui(e))
             return
-            
-        for child in self.syntax_tree.get_children():
-            self.syntax_tree.delete(child)
-            
-        err_count = sum(1 for e in errors if e["severity"] == "error")
-        warn_count = sum(1 for e in errors if e["severity"] == "warning")
-        
-        if not errors:
-            self.lbl_syntax_status.configure(text="✔ Clean (no issues)", fg=Theme.GREEN)
-        else:
-            status_text = f"{err_count} Error(s), {warn_count} Warning(s)"
-            fg_color = Theme.RED if err_count > 0 else Theme.ORANGE
-            self.lbl_syntax_status.configure(text=status_text, fg=fg_color)
-            
-        for err in errors:
-            tag = "error" if err["severity"] == "error" else "warning"
-            self.syntax_tree.insert(
-                "", tk.END,
-                values=(err["file"], err["line"], err["severity"].upper(), err["message"]),
-                tags=(tag,)
-            )
+
+        if not hasattr(self, "syntax_tree") or not self.syntax_tree:
+            return
+        try:
+            if not self.syntax_tree.winfo_exists():
+                return
+        except Exception:
+            return
+
+        try:
+            children = self.syntax_tree.get_children()
+            if children:
+                self.syntax_tree.delete(*children)
+        except Exception:
+            pass
+
+        result_errors = list(errors or ())
+        err_count = sum(1 for e in result_errors if e.get("severity") == "error")
+        warn_count = sum(1 for e in result_errors if e.get("severity") == "warning")
+
+        lbl = getattr(self, "lbl_syntax_status", None)
+        if lbl is not None:
+            try:
+                if not result_errors:
+                    lbl.configure(text="🔍 SYNTAX CHECK: ✔ Clean (no issues)", fg=Theme.GREEN)
+                else:
+                    status_text = f"🔍 SYNTAX CHECK: {err_count} Error(s), {warn_count} Warning(s)"
+                    if len(result_errors) > 200:
+                        status_text += " — showing first 200"
+                    fg_color = Theme.RED if err_count > 0 else Theme.ORANGE
+                    lbl.configure(text=status_text, fg=fg_color)
+            except Exception:
+                pass
+
+        for err in result_errors[:200]:
+            tag = "error" if err.get("severity") == "error" else "warning"
+            try:
+                self.syntax_tree.insert(
+                    "", tk.END,
+                    values=(err.get("file", ""), err.get("line", ""), str(err.get("severity", "")).upper(), err.get("message", "")),
+                    tags=(tag,)
+                )
+            except Exception:
+                pass
 
     def _on_syntax_tree_double_click(self, event):
         if not hasattr(self, "syntax_tree") or not self.syntax_tree:

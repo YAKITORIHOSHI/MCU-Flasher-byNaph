@@ -82,8 +82,18 @@ class SettingsDialogMixin(_Base):
 
         Skips the bootstrap pipeline since dependencies and tools are already
         verified on this machine. Directly restarts the GUI with the open project.
+        Passes '--from-bootstrap' so the new process bypasses the first-run VBS guard.
         """
-        project_path = str(Path(self.sketch_dir_path).resolve(strict=False))
+        gui_args = ["--from-bootstrap"]
+        if getattr(self, "sketch_dir_path", None):
+            project_path = str(Path(self.sketch_dir_path).resolve(strict=False))
+            gui_args.extend(["--project", project_path])
+        if "--new-window" in sys.argv:
+            gui_args.append("--new-window")
+
+        if getattr(sys, "frozen", False):
+            return [sys.executable] + gui_args
+
         gui_script = SCRIPT_DIR / "mcu_flash_gui.py"
         if not gui_script.exists():
             gui_script = SCRIPT_DIR / "main" / "mcu_flash_gui.py"
@@ -93,10 +103,7 @@ class SettingsDialogMixin(_Base):
             venv_python = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
         py_exe = str(venv_python if venv_python.exists() else sys.executable)
 
-        command = [py_exe, str(gui_script), "--project", project_path]
-        if "--new-window" in sys.argv:
-            command.append("--new-window")
-        return command
+        return [py_exe, str(gui_script)] + gui_args
 
     def _confirm_restart_edits(self, parent=None) -> bool:
         """Protect modified editor buffers before an application restart."""
@@ -173,6 +180,7 @@ class SettingsDialogMixin(_Base):
         command = self._build_editor_restart_command()
         logs_dir = SCRIPT_DIR / "logs"
         restart_log = logs_dir / "editor_restart.log"
+        gui_crash_log = logs_dir / "gui_crash.log"
         try:
             logs_dir.mkdir(parents=True, exist_ok=True)
             restart_log.write_text(
@@ -183,7 +191,13 @@ class SettingsDialogMixin(_Base):
             )
             # Remove stale crash output so an immediate restart failure can
             # only report diagnostics from the replacement being launched now.
-            (logs_dir / "gui_crash.log").write_text("", encoding="utf-8")
+            gui_crash_log.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
+        crash_log_fh = None
+        try:
+            crash_log_fh = open(gui_crash_log, "w", encoding="utf-8")
         except Exception:
             pass
 
@@ -210,6 +224,8 @@ class SettingsDialogMixin(_Base):
                 cwd=str(SCRIPT_DIR),
                 env=env,
                 stdin=subprocess.DEVNULL,
+                stdout=crash_log_fh or subprocess.DEVNULL,
+                stderr=crash_log_fh or subprocess.DEVNULL,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
                 close_fds=True,
@@ -230,6 +246,12 @@ class SettingsDialogMixin(_Base):
                 parent=parent or self.root,
             )
             return False
+        finally:
+            if crash_log_fh is not None:
+                try:
+                    crash_log_fh.close()
+                except Exception:
+                    pass
 
         # The previous implementation waited here with time.sleep() for two
         # seconds. Because this method runs on Tk's UI thread, that made the
@@ -257,7 +279,7 @@ class SettingsDialogMixin(_Base):
         except Exception:
             handoff_overlay = None
 
-        handoff_deadline = time.monotonic() + 2.0
+        handoff_deadline = time.monotonic() + 3.0
 
         def _remove_handoff_overlay():
             if handoff_overlay is not None:
@@ -1000,7 +1022,14 @@ class SettingsDialogMixin(_Base):
                 if g_val != current_g_setting:
                     self._append(f"  ✔ Graphics acceleration set to {g_val}.", "success")
                     try:
-                        self.main_pane.configure(opaqueresize=(g_val == "ON"))
+                        # Native WebView child windows must not be live-resized
+                        # by Tk on Windows; doing so can block the GUI thread.
+                        pane_resize = bool(
+                            g_val == "ON"
+                            and getattr(self, "_pane_opaque_resize", False)
+                        )
+                        self.main_pane.configure(opaqueresize=pane_resize)
+                        self.h_split_pane.configure(opaqueresize=pane_resize)
                     except Exception:
                         pass
                 if monitor_font_size_new != self.monitor_font_size:

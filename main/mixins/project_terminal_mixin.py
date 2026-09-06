@@ -646,7 +646,7 @@ class ProjectTerminalMixin(_Base):
                         self._reveal_project_terminal()
             except Exception:
                 pass
-            if getattr(self, "_project_terminal_embed_attempts", 0) >= 6:
+            if getattr(self, "_project_terminal_embed_attempts", 0) >= 30:
                 self._reveal_project_terminal()
 
         self._project_terminal_embed_attempts = getattr(
@@ -681,7 +681,18 @@ class ProjectTerminalMixin(_Base):
             return False
 
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            # Do not enter a synchronous User32 call against a child process
+            # that is still starting its WebView message loop.  The poller
+            # will retry after the process becomes responsive.
+            user32 = ctypes.windll.user32
+            if user32.IsHungAppWindow(hwnd):
+                return False
+            result = ctypes.c_ulong()
+            if not user32.SendMessageTimeoutW(
+                hwnd, 0, 0, 0, 0x0002, 30, ctypes.byref(result)
+            ):
+                return False
+            user32.ShowWindowAsync(int(hwnd), int(win32con.SW_HIDE))
             frame = self._shell_terminal_embed_frame
             frame.update_idletasks()
             tk_hwnd = frame.winfo_id()
@@ -713,7 +724,7 @@ class ProjectTerminalMixin(_Base):
             self._shell_terminal_embed_frame.pack(fill=tk.BOTH, expand=True)
             # Keep the native surface hidden until the child reports that
             # xterm.js and the selected shell prompt are actually ready.
-            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_HIDE))
             self._resize_project_terminal(force=True)
             self._shell_set_status(
                 f"Loading terminal • {self._shell_current_target()}"
@@ -735,6 +746,63 @@ class ProjectTerminalMixin(_Base):
             self._project_terminal_hwnd = None
             return False
 
+    def _set_embedded_terminal_visible(self, visible: bool):
+        """Coalesce terminal show/hide requests on Tk's owning thread.
+
+        The native child is controlled with ShowWindowAsync so Tk never waits
+        for the separate WebView/WinForms message loop.  All geometry reads and
+        resize scheduling remain on Tk; the old implementation started a
+        worker that called ``_resize_project_terminal`` and therefore touched
+        Tcl from a background thread, which could deadlock during tab spam or
+        after the main window regained focus.
+        """
+        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            self._post_ui(lambda v=visible: self._set_embedded_terminal_visible(v))
+            return
+        if not getattr(self, "_project_terminal_embedded", False):
+            return
+        hwnd = getattr(self, "_project_terminal_hwnd", None)
+        if not hwnd or win32gui is None or win32con is None:
+            return
+
+        self._project_terminal_visibility_pending = bool(visible)
+        if getattr(self, "_project_terminal_visibility_after_id", None) is not None:
+            return
+
+        def _apply_visibility():
+            self._project_terminal_visibility_after_id = None
+            requested = getattr(self, "_project_terminal_visibility_pending", None)
+            self._project_terminal_visibility_pending = None
+            if requested is None:
+                return
+            if not getattr(self, "_project_terminal_embedded", False):
+                return
+            current_hwnd = getattr(self, "_project_terminal_hwnd", None)
+            if not current_hwnd:
+                return
+
+            should_show = bool(
+                requested
+                and getattr(self, "_project_terminal_page_ready", False)
+                and self._shell_terminal_is_selected()
+                and getattr(self, "monitors_pane_visible", True)
+            )
+            command = win32con.SW_SHOW if should_show else win32con.SW_HIDE
+            try:
+                ctypes.windll.user32.ShowWindowAsync(int(current_hwnd), int(command))
+            except Exception:
+                try:
+                    win32gui.ShowWindow(current_hwnd, command)
+                except Exception:
+                    return
+            if should_show:
+                self._resize_project_terminal(force=True)
+
+        try:
+            self._project_terminal_visibility_after_id = self.root.after(16, _apply_visibility)
+        except Exception:
+            self._project_terminal_visibility_after_id = None
+
     def _reveal_project_terminal(self):
         if not getattr(self, "_project_terminal_embedded", False):
             return
@@ -744,10 +812,12 @@ class ProjectTerminalMixin(_Base):
         if not hwnd or win32gui is None or win32con is None:
             return
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-            self._shell_terminal_placeholder.place_forget()
             self._project_terminal_page_ready = True
-            self._resize_project_terminal(force=True)
+            self._shell_terminal_placeholder.place_forget()
+            self._set_embedded_terminal_visible(
+                self._shell_terminal_is_selected()
+                and getattr(self, "monitors_pane_visible", True)
+            )
             if getattr(self, "_shell_active_session_id", None):
                 self._shell_set_status(f"Running • {self._shell_current_target()}")
             else:
@@ -761,22 +831,55 @@ class ProjectTerminalMixin(_Base):
         hwnd = getattr(self, "_project_terminal_hwnd", None)
         if not hwnd or win32gui is None or win32con is None:
             return
-        try:
-            frame = self._shell_terminal_embed_frame
-            width = frame.winfo_width()
-            height = frame.winfo_height()
-            if not force and (width <= 50 or height <= 50):
-                # Avoid resizing WebView2 to 0x0 while unmapped in notebook
-                return
-            width = max(width, 20)
-            height = max(height, 20)
-            win32gui.SetWindowPos(
-                hwnd, 0, 0, 0, width, height,
-                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
-                win32con.SWP_NOACTIVATE | 0x4000,
-            )
-        except Exception:
-            pass
+
+        if hasattr(self, "_terminal_resize_job") and self._terminal_resize_job:
+            try:
+                self.root.after_cancel(self._terminal_resize_job)
+            except Exception:
+                pass
+            self._terminal_resize_job = None
+
+        def _do_resize():
+            self._terminal_resize_job = None
+            try:
+                if not getattr(self, "_project_terminal_embedded", False):
+                    return
+                _hwnd = getattr(self, "_project_terminal_hwnd", None)
+                if not _hwnd or win32gui is None or win32con is None:
+                    return
+                frame = getattr(self, "_shell_terminal_embed_frame", None)
+                if not frame:
+                    return
+                width = frame.winfo_width()
+                height = frame.winfo_height()
+                if not force and (width <= 50 or height <= 50):
+                    return
+                width = max(width, 20)
+                height = max(height, 20)
+
+                last_w = getattr(self, "_last_terminal_w", 0)
+                last_h = getattr(self, "_last_terminal_h", 0)
+                if not force and width == last_w and height == last_h:
+                    return
+                self._last_terminal_w = width
+                self._last_terminal_h = height
+
+                win32gui.SetWindowPos(
+                    _hwnd, 0, 0, 0, width, height,
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
+                    win32con.SWP_NOACTIVATE | 0x4000,
+                )
+            except Exception:
+                pass
+
+        if force:
+            _do_resize()
+        else:
+            try:
+                self._terminal_resize_job = self.root.after(90, _do_resize)
+            except Exception:
+                pass
+
 
     def _project_terminal_send_control(self, action: str, kind: str | None = None, extra: dict | None = None):
         if getattr(self, "_project_terminal_fallback", False):
@@ -806,7 +909,7 @@ class ProjectTerminalMixin(_Base):
             except Exception:
                 pass
 
-        threading.Thread(target=_send, daemon=True, name="MCUProjectTerminalSend").start()
+        self._run_bg_task(_send)
 
     def _activate_project_terminal_fallback(self, reason: str = ""):
         if getattr(self, "_project_terminal_fallback", False):
@@ -847,10 +950,15 @@ class ProjectTerminalMixin(_Base):
             try:
                 if proc.poll() is None:
                     if sys.platform == "win32":
-                        subprocess.run(
+                        # taskkill can wait indefinitely while a WebView2/PTY
+                        # child is tearing down.  Never hold Tk's event loop
+                        # on that external process; the tree kill is already
+                        # forceful and the next project owns a fresh terminal.
+                        subprocess.Popen(
                             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                         )
                     else:
@@ -871,6 +979,14 @@ class ProjectTerminalMixin(_Base):
 
     def _dispose_project_terminal(self):
         """Hide and terminate the isolated native Project Terminal child."""
+        visibility_job = getattr(self, "_project_terminal_visibility_after_id", None)
+        if visibility_job:
+            try:
+                self.root.after_cancel(visibility_job)
+            except Exception:
+                pass
+            self._project_terminal_visibility_after_id = None
+        self._project_terminal_visibility_pending = None
         job = getattr(self, "_project_terminal_status_job", None)
         if job:
             try:
@@ -1351,6 +1467,10 @@ class ProjectTerminalMixin(_Base):
         return "break"
 
     def _shell_stop_all(self):
+        try:
+            self._set_embedded_terminal_visible(False)
+        except Exception:
+            pass
         for kind in ("pwsh", "cmd"):
             try:
                 self._shell_stop(kind)
@@ -1377,17 +1497,11 @@ class ProjectTerminalMixin(_Base):
 
         if self._shell_terminal_is_selected():
             try:
-                self._terminal_ensure_initialized()
-                self._ensure_project_terminal_webview()
-                self._terminal_refresh_session_bar()
-                self.root.after_idle(lambda: self._resize_project_terminal(force=True))
-                active_id = getattr(self, "_shell_active_session_id", None)
-                if active_id:
-                    self._terminal_select_session(active_id)
-                if getattr(self, "_project_terminal_fallback", False):
-                    self._reveal_project_terminal_fallback()
-                    if active_id:
-                        self._shell_render_session(active_id)
+                self._set_embedded_terminal_visible(True)
+            except Exception:
+                pass
+            try:
+                self.root.after_idle(lambda: self._shell_select(self._shell_active_kind))
             except Exception:
                 pass
 
@@ -1400,4 +1514,3 @@ class ProjectTerminalMixin(_Base):
             self.root.after_idle(_after_click)
         except Exception:
             pass
-

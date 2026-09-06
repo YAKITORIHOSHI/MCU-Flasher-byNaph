@@ -18,13 +18,9 @@ import os
 
 import time
 
-import json
 
 import re
 
-import shutil
-
-import tempfile
 
 import subprocess
 
@@ -32,13 +28,9 @@ import threading
 
 import queue
 
-import ctypes
 
 import traceback
 
-import hashlib
-
-from collections import deque
 
 from datetime import datetime
 
@@ -2630,7 +2622,6 @@ class SoftResetMixin(_Base):
 
         # rewriting and deleting the last board's shared reset build.
 
-        import shutil
 
 
 
@@ -3509,6 +3500,3 @@ class SoftResetMixin(_Base):
                 "Soft Reset Failed", message, parent=self.root
 
             ))
-
-
-

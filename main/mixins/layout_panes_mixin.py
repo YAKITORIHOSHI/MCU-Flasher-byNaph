@@ -190,15 +190,21 @@ class LayoutPanesMixin(_Base):
                 if operation in ("compile", "upload"):
                     self.btn_stop.configure(state=tk.NORMAL)
                     if hasattr(self, "bottom_notebook"):
-                        self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
-                        if entering_busy:
-                            self.bottom_notebook.select(0)  # Switch once at operation start
+                        try:
+                            self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="normal")
+                            if entering_busy:
+                                self.bottom_notebook.select(0)  # Switch once at operation start
+                        except Exception:
+                            pass
                 elif operation in ("flash", "reset"):
                     self.btn_stop.configure(state=tk.DISABLED)
                     if hasattr(self, "bottom_notebook"):
-                        self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="disabled")
-                        if entering_busy:
-                            self.bottom_notebook.select(0)
+                        try:
+                            self.bottom_notebook.tab(self._serial_monitor_tab_index(), state="disabled")
+                            if entering_busy:
+                                self.bottom_notebook.select(0)
+                        except Exception:
+                            pass
                         self._set_window_closable(False)
                 else:
                     self.btn_stop.configure(state=tk.DISABLED)
@@ -223,11 +229,14 @@ class LayoutPanesMixin(_Base):
             else:
                 self._framework_download_active = False
                 is_compact = getattr(self, "_action_compact_mode", False)
-                self.btn_compile.configure(state=tk.NORMAL, text="Compile" if is_compact else "⚙ Compile")
-                self.btn_upload.configure(state=tk.NORMAL, text="Upload" if is_compact else "⚡ Upload")
-                self.btn_new_project.configure(state=tk.NORMAL)
-                self.btn_settings.configure(state=tk.NORMAL)
-                self.btn_stop.configure(state=tk.DISABLED, text="Stop" if is_compact else "■ Stop")
+                try:
+                    self.btn_compile.configure(state=tk.NORMAL, text="Compile" if is_compact else "⚙ Compile")
+                    self.btn_upload.configure(state=tk.NORMAL, text="Upload" if is_compact else "⚡ Upload")
+                    self.btn_new_project.configure(state=tk.NORMAL)
+                    self.btn_settings.configure(state=tk.NORMAL)
+                    self.btn_stop.configure(state=tk.DISABLED, text="Stop" if is_compact else "■ Stop")
+                except Exception:
+                    pass
                 if hasattr(self, "btn_reset_mcu") and self.btn_reset_mcu:
                     try:
                         can_reset = bool(self.board_var.get()) and self._is_board_recognized()
@@ -235,72 +244,79 @@ class LayoutPanesMixin(_Base):
                     except Exception:
                         pass
                 if hasattr(self, "bottom_notebook"):
-                    # If the tab was disabled (i.e. we just finished an
-                    # upload or reset that locked it), decide where the
-                    # selection should land now that it's unlocking:
-                    #   - if something requested a specific tab (e.g. a
-                    #     successful upload wants to jump to Serial Monitor),
-                    #     honor that one-shot request.
-                    #   - otherwise force it back to Build Console explicitly
-                    #     rather than trusting Tk to leave the current
-                    #     selection alone when a previously-disabled tab
-                    #     flips back to "normal".
-                    current_tab = self.bottom_notebook.select()
-                    serial_index = self._serial_monitor_tab_index()
-                    was_locked = self.bottom_notebook.tab(serial_index, "state") == "disabled"
-                    self.bottom_notebook.tab(serial_index, state="normal")
-                    target_tab = self._focus_tab_on_unlock
-                    self._focus_tab_on_unlock = None  # one-shot, always consume
-                    if target_tab is not None:
-                        self.bottom_notebook.select(target_tab)
-                    elif was_locked:
-                        # Keep a user-selected Compatible Devices/Notifications tab.
-                        # Only fall back when the selected tab itself was the one locked.
-                        try:
-                            if current_tab and self.bottom_notebook.index(current_tab) == serial_index:
+                    try:
+                        current_tab = self.bottom_notebook.select()
+                        serial_index = self._serial_monitor_tab_index()
+                        was_locked = self.bottom_notebook.tab(serial_index, "state") == "disabled"
+                        self.bottom_notebook.tab(serial_index, state="normal")
+                        target_tab = self._focus_tab_on_unlock
+                        self._focus_tab_on_unlock = None  # one-shot, always consume
+                        if target_tab is not None:
+                            self.bottom_notebook.select(target_tab)
+                        elif was_locked:
+                            try:
+                                if current_tab and self.bottom_notebook.index(current_tab) == serial_index:
+                                    self.bottom_notebook.select(0)
+                            except Exception:
                                 self.bottom_notebook.select(0)
-                        except Exception:
-                            self.bottom_notebook.select(0)
-                    if self._compatible_devices_is_selected():
-                        self.root.after_idle(self._repair_compatible_devices_interaction)
+                        if self._compatible_devices_is_selected():
+                            self.root.after_idle(self._repair_compatible_devices_interaction)
+                    except Exception:
+                        pass
                 
                 # Re-enable board/ports/baud selection
-                self.board_combo.configure(state="readonly")
-                self.port_combo.configure(state="readonly")
-                if hasattr(self, "serial_baud_combo"):
-                    self.serial_baud_combo.configure(state="readonly")
-                
-                # If board is AVR, keep upload speed combo disabled, else readonly
-                board_name = self.board_var.get()
-                board_info = SUPPORTED_BOARDS.get(board_name, {})
-                is_avr = (board_info.get("platform", "") == "atmelavr")
+                try:
+                    self.board_combo.configure(state="readonly")
+                    self.port_combo.configure(state="readonly")
+                    if hasattr(self, "serial_baud_combo"):
+                        self.serial_baud_combo.configure(state="readonly")
+                    # If board is AVR, keep upload speed combo disabled, else readonly
+                    board_name = self.board_var.get()
+                    board_info = SUPPORTED_BOARDS.get(board_name, {})
+                    is_avr = (board_info.get("platform", "") == "atmelavr")
 
-                if is_avr:
-                    self.upload_speed_combo.configure(state="disabled")
-                else:
-                    self.upload_speed_combo.configure(state="readonly")
+                    if is_avr:
+                        self.upload_speed_combo.configure(state="disabled")
+                    else:
+                        self.upload_speed_combo.configure(state="readonly")
+                except Exception:
+                    pass
 
-                # Re-enable Clean only when there is actually something to
-                # clean. Unconditionally forcing NORMAL here used to re-arm
-                # the button right after a successful Clean, letting users
-                # "clean" repeatedly with nothing left to remove.
-                self._update_clean_button_state()
+                try:
+                    self._update_clean_button_state()
+                except Exception:
+                    pass
                 
-                self.lbl_sketch.configure(cursor="hand2")
+                try:
+                    self.lbl_sketch.configure(cursor="hand2")
+                except Exception:
+                    pass
                 
                 # Always safe to restore closability once we're back to idle
-                self._set_window_closable(True)
+                try:
+                    self._set_window_closable(True)
+                except Exception:
+                    pass
 
                 # The block above unconditionally re-enabled Compile/Upload;
                 # re-apply the board-selected (and, for Upload, hardware-
                 # recognized & port-present) gating now that is_busy is back to False.
-                self._update_hardware_action_buttons()
+                try:
+                    self._update_hardware_action_buttons()
+                except Exception:
+                    pass
                 if refresh_ports_after_unlock:
-                    self._refresh_ports(called_from_hotplug=True)
+                    try:
+                        self._refresh_ports(called_from_hotplug=True)
+                    except Exception:
+                        pass
 
-            self._sync_detached_compact_actions()
+            try:
+                self._sync_detached_compact_actions()
+            except Exception:
+                pass
                 
-        self.root.after(0, _do)
+        self._post_ui(_do)
 
     def _toggle_editor_pane(self):
         """Show/hide the embedded code editor pane. When hidden, the
@@ -344,6 +360,8 @@ class LayoutPanesMixin(_Base):
             self.main_pane.forget(self.bottom_frame)
             self.monitors_pane_visible = False
             self.btn_toggle_monitors.configure(text="🗖 Show Monitors")
+            if hasattr(self, "_set_embedded_terminal_visible"):
+                self._set_embedded_terminal_visible(False)
             if not self.editor_pane_visible:
                 # Monitors was the last visible pane — bring Editor back
                 # so the window never goes blank.
@@ -359,6 +377,9 @@ class LayoutPanesMixin(_Base):
                 self.main_pane.add(self.bottom_frame, minsize=self._bottom_minsize, height=self._bottom_height)
             self.monitors_pane_visible = True
             self.btn_toggle_monitors.configure(text="🗖 Hide Monitors")
+            if hasattr(self, "_shell_terminal_is_selected") and self._shell_terminal_is_selected():
+                if hasattr(self, "_set_embedded_terminal_visible"):
+                    self._set_embedded_terminal_visible(True)
         self._update_pane_toggle_buttons()
 
     def _update_pane_toggle_buttons(self):
@@ -369,7 +390,18 @@ class LayoutPanesMixin(_Base):
         self.btn_toggle_monitors.configure(state=tk.NORMAL)
 
     def _toggle_editor_detachment(self):
-        if getattr(self, "editor_detached", False):
+        is_detached = bool(getattr(self, "editor_detached", False))
+        if not is_detached and getattr(self, "editor_mode", "default") == "monaco":
+            hwnd = getattr(self, "_editor_hwnd", None)
+            embed_frame = getattr(self, "_editor_embed_frame", None)
+            if hwnd and embed_frame and win32gui is not None:
+                try:
+                    tk_hwnd = embed_frame.winfo_id()
+                    if tk_hwnd and win32gui.GetParent(hwnd) != tk_hwnd:
+                        is_detached = True
+                except Exception:
+                    pass
+        if is_detached:
             self._attach_editor()
         else:
             self._detach_editor()
@@ -526,10 +558,9 @@ class LayoutPanesMixin(_Base):
                 except Exception:
                     pass
             
-            # 3. Ensure webview control visibility
+            # 3. Ensure webview window visibility
             try:
-                if hasattr(self, "editor_window") and self.editor_window:
-                    self.editor_window.show()
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
             except Exception:
                 pass
 
@@ -708,6 +739,9 @@ class LayoutPanesMixin(_Base):
                 win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
 
                 win32gui.SetParent(hwnd, tk_hwnd)
+                actual_parent = win32gui.GetParent(hwnd)
+                if actual_parent != tk_hwnd:
+                    return
                 
                 # Resize — flush pending Tk geometry before measuring
                 frame.update_idletasks()
@@ -715,7 +749,18 @@ class LayoutPanesMixin(_Base):
                 h = max(frame.winfo_height(), 50)
                 win32gui.SetWindowPos(
                     hwnd, 0, 0, 0, w, h,
-                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
+                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
+                    win32con.SWP_SHOWWINDOW | 0x4000
+                )
+                try:
+                    if hasattr(self, "editor_window") and self.editor_window:
+                        self.editor_window.show()
+                except Exception:
+                    pass
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.RedrawWindow(
+                    hwnd, None, None,
+                    win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
                 )
             except Exception:
                 pass
@@ -891,28 +936,30 @@ class LayoutPanesMixin(_Base):
         # Monaco is a native WebView window. Its page owns an equivalent bar
         # and calls EditorApi.run_action(), keeping the controls in the actual
         # detached editor window rather than in a separate helper window.
-        if getattr(self, "editor_mode", "default") == "monaco":
-            try:
-                if hasattr(self, "editor_window") and self.editor_window:
-                    self.editor_window.evaluate_js(
-                        "window.setDetachedActionBar && window.setDetachedActionBar(" +
-                        ("true" if active else "false") + ")"
-                    )
-                    states_json = json.dumps({
-                        "compile": actions_enabled,
-                        "upload": actions_enabled,
-                        "stop": stop_enabled,
-                        "clean": actions_enabled,
-                        "save": actions_enabled,
-                        "save_all": actions_enabled,
-                        "reload": actions_enabled,
-                        "modify": actions_enabled,
-                    })
-                    self.editor_window.evaluate_js(
-                        f"window.setDetachedButtonStates && window.setDetachedButtonStates({states_json});"
-                    )
-            except Exception:
-                pass
+        if getattr(self, "editor_mode", "default") == "monaco" and active:
+            def _async_sync_monaco_actions():
+                try:
+                    if hasattr(self, "editor_window") and self.editor_window:
+                        self.editor_window.evaluate_js(
+                            "window.setDetachedActionBar && window.setDetachedActionBar(true)"
+                        )
+                        states_json = json.dumps({
+                            "compile": actions_enabled,
+                            "upload": actions_enabled,
+                            "stop": stop_enabled,
+                            "clean": actions_enabled,
+                            "save": actions_enabled,
+                            "save_all": actions_enabled,
+                            "reload": actions_enabled,
+                            "modify": actions_enabled,
+                        })
+                        self.editor_window.evaluate_js(
+                            f"window.setDetachedButtonStates && window.setDetachedButtonStates({states_json});"
+                        )
+                except Exception:
+                    pass
+            self._run_bg_task(_async_sync_monaco_actions)
+
 
     def _show_detached_placeholder(self):
         # Clear/hide any existing widgets in editor_frame except the placeholder

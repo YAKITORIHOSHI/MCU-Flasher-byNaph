@@ -19,6 +19,43 @@ from main.core.toolchain import *
 from main.core.board_catalog import *
 from main.core.board_compat import *
 
+# ── Module-level ctypes setup (Windows only) ───────────────────────────
+# Hoisted from per-call function bodies so the struct class, argtypes,
+# and restype are created exactly once at import time rather than on
+# every resize event (which fires 30-60 times/second during a drag).
+_user32 = None
+_GetDpiForWindow = None
+_MONITORINFO = None
+
+if sys.platform == "win32":
+    try:
+        from ctypes import wintypes
+
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        _user32 = ctypes.windll.user32
+        _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        _user32.MonitorFromWindow.restype = ctypes.c_void_p
+        _user32.GetMonitorInfoW.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)
+        ]
+        _user32.GetMonitorInfoW.restype = wintypes.BOOL
+
+        _fn = getattr(_user32, "GetDpiForWindow", None)
+        if _fn is not None:
+            _fn.argtypes = [ctypes.c_void_p]
+            _fn.restype = ctypes.c_uint
+            _GetDpiForWindow = _fn
+        del _fn
+    except Exception:
+        pass
+
 class _ShellTerminalBuffer:
     """Small ANSI/VT screen model for the embedded Windows PTY.
 
@@ -376,17 +413,11 @@ def _get_widget_dpi_scale(widget: tk.Widget) -> float:
         tk_scale = float(widget.tk.call("tk", "scaling")) / (96.0 / 72.0)
     except Exception:
         tk_scale = 1.0
-    if sys.platform == "win32":
+    if _GetDpiForWindow is not None:
         try:
-            import ctypes
-
-            get_dpi = getattr(ctypes.windll.user32, "GetDpiForWindow", None)
-            if get_dpi is not None:
-                get_dpi.argtypes = [ctypes.c_void_p]
-                get_dpi.restype = ctypes.c_uint
-                dpi = int(get_dpi(ctypes.c_void_p(widget.winfo_id())))
-                if dpi > 0:
-                    tk_scale = dpi / 96.0
+            dpi = int(_GetDpiForWindow(ctypes.c_void_p(widget.winfo_id())))
+            if dpi > 0:
+                tk_scale = dpi / 96.0
         except Exception:
             pass
     return max(0.75, min(3.0, tk_scale))
@@ -398,31 +429,14 @@ def _get_monitor_work_area(widget: tk.Widget) -> tuple[int, int, int, int]:
         fallback = (0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight())
     except Exception:
         fallback = (0, 0, 1920, 1080)
-    if sys.platform != "win32":
+    if _user32 is None or _MONITORINFO is None:
         return fallback
     try:
-        import ctypes
         from ctypes import wintypes
-
-        class _MONITORINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("rcMonitor", wintypes.RECT),
-                ("rcWork", wintypes.RECT),
-                ("dwFlags", wintypes.DWORD),
-            ]
-
-        user32 = ctypes.windll.user32
-        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
-        user32.MonitorFromWindow.restype = ctypes.c_void_p
-        user32.GetMonitorInfoW.argtypes = [
-            ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)
-        ]
-        user32.GetMonitorInfoW.restype = wintypes.BOOL
-        monitor = user32.MonitorFromWindow(wintypes.HWND(widget.winfo_id()), 2)
+        monitor = _user32.MonitorFromWindow(wintypes.HWND(widget.winfo_id()), 2)
         info = _MONITORINFO()
         info.cbSize = ctypes.sizeof(_MONITORINFO)
-        if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        if monitor and _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
             rect = info.rcWork
             if rect.right > rect.left and rect.bottom > rect.top:
                 return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
@@ -618,7 +632,17 @@ class CircularLoadingOverlay(tk.Frame):
         fg_sub = fg_sub or Theme.TEXT_DIM
         track_color = track_color or Theme.BORDER
 
-        super().__init__(parent, bg=bg_color)
+        # Explicitly remove the native Tk frame border/highlight. Without
+        # this, the first paint can briefly expose child-widget relief edges
+        # through the loading cover on Windows.
+        super().__init__(
+            parent,
+            bg=bg_color,
+            bd=0,
+            borderwidth=0,
+            highlightthickness=0,
+            relief=tk.FLAT,
+        )
         self.bg_color = bg_color
         self.spinner_color = spinner_color
         self.track_color = track_color

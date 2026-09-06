@@ -110,10 +110,10 @@ class HardResetMixin(_Base):
             except tk.TclError:
                 pass
 
-        try:
-            self.root.after(0, _do)
-        except Exception:
-            pass
+        # This formatter is called by the hard-reset worker. Creating a Tcl
+        # timer from that thread can block on Windows while Tk is repainting;
+        # route the callback through the single UI dispatcher instead.
+        self._post_ui(_do)
 
     def _locate_hard_reset_recovery_images(self, board_name=None, board_info=None):
         """Return the dedicated Soft Reset recovery boot images for Hard Reset.
@@ -310,7 +310,7 @@ class HardResetMixin(_Base):
                 encoding="utf-8",
                 errors="replace",
                 creationflags=(
-                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                 ),
                 env=self._reset_platformio_subprocess_env(project_dir, jobs),
             )
@@ -485,6 +485,9 @@ class HardResetMixin(_Base):
         self._active_reset_kind = "hard"
         self.is_busy = True
         self._set_buttons_state(True, operation="reset")
+        self._active_board_name = board_name
+        self._active_board_info = dict(board_info)
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         threading.Thread(target=self._run_hard_reset, args=(port,), daemon=True).start()
 
     def _run_hard_reset(self, port: str):
@@ -494,6 +497,7 @@ class HardResetMixin(_Base):
         # silently discarded by _auto_start_monitor() while operation="reset".
         self._hard_reset_reconnect_monitor = False
         self._hard_reset_completed_successfully = False
+        operation_session_id = getattr(self, "_op_session_id", 0)
         reset_cache_lock = _try_acquire_reset_cache_lock()
         try:
             if reset_cache_lock is None:
@@ -530,21 +534,24 @@ class HardResetMixin(_Base):
             self._hard_reset_reconnect_monitor = False
             self._hard_reset_completed_successfully = False
 
+            current_session = getattr(self, "_op_session_id", 0) == operation_session_id
+
             # Set the one-shot focus target before the unlock callback runs.
-            if hard_reset_ok:
+            if hard_reset_ok and current_session:
                 self._focus_tab_on_unlock = self._serial_monitor_tab_index()
 
             # Clear both is_busy and _active_operation before asking the monitor
             # to reopen COM.  Otherwise _auto_start_monitor() exits immediately
             # and leaves the Serial Monitor tab permanently Disconnected.
-            self.is_busy = False
-            self._set_buttons_state(False)
-            self._set_window_closable(True)
+            if current_session:
+                self.is_busy = False
+                self._set_buttons_state(False)
+                self._set_window_closable(True)
 
-            if hard_reset_ok:
+            if hard_reset_ok and current_session:
                 self._activate_serial_monitor_after_success("Hard Reset")
 
-            if reconnect_monitor:
+            if reconnect_monitor and current_session:
                 self._monitor_should_run = True
                 # The final DTR/RTS pulse was already sent by Hard Reset.  Reopen
                 # the monitor without issuing a second reset pulse.
@@ -557,16 +564,19 @@ class HardResetMixin(_Base):
                     )
                     self._schedule_auto_start_monitor(250)
 
-                try:
-                    self.root.after(0, _restore_hard_reset_monitor)
-                except Exception:
-                    pass
+                self._post_ui(_restore_hard_reset_monitor)
 
     def _esptool_target(self, board_name: str | None = None,
                         board_info: dict | None = None) -> tuple[str | None, str]:
         """Resolve esptool chip name and bootloader offset from canonical ids."""
-        name = board_name if board_name is not None else self.board_var.get()
-        info = dict(board_info or SUPPORTED_BOARDS.get(name, {}))
+        name = board_name
+        if name is None:
+            name = (
+                str(getattr(self, "_active_board_name", "") or "")
+                if threading.get_ident() != getattr(self, "_tk_thread_id", None)
+                else self.board_var.get()
+            )
+        info = dict(board_info or getattr(self, "_active_board_info", {}) or SUPPORTED_BOARDS.get(name, {}))
         platform = str(info.get("platform", "")).lower()
         identity = " ".join((
             str(info.get("mcu", "")),
@@ -715,7 +725,7 @@ class HardResetMixin(_Base):
                 encoding="utf-8",
                 errors="replace",
                 creationflags=(
-                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                 ),
             )
             self.process = proc
@@ -804,8 +814,10 @@ class HardResetMixin(_Base):
             time.sleep(0.5)
 
         try:
-            board_name = self.board_var.get()
-            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            board_name = str(getattr(self, "_active_board_name", "") or "")
+            board_info = dict(getattr(self, "_active_board_info", {}) or {})
+            if not board_info:
+                board_info = dict(SUPPORTED_BOARDS.get(board_name, {}))
             platform_name = str(board_info.get("platform", "")).lower()
 
             self._append("")
@@ -872,7 +884,7 @@ class HardResetMixin(_Base):
                     errors="replace",
                     env=pio_env,
                     creationflags=(
-                        subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                        (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                     ),
                 )
                 for line in iter(self.process.stdout.readline, ""):
@@ -1098,7 +1110,7 @@ class HardResetMixin(_Base):
                 text=False,
                 bufsize=0,
                 creationflags=(
-                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                    (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                 ),
             )
 
@@ -1185,10 +1197,60 @@ class HardResetMixin(_Base):
                     tag = "normal"
                 self._append(stripped, tag)
 
+            # ── Threaded byte reader ────────────────────────────────────────
+            # A separate daemon thread feeds raw bytes into a queue so the main
+            # loop can check _stop_requested between reads.  During full-flash
+            # erase, esptool produces *no output* for 30-60s — without this,
+            # the Stop button is unresponsive and the GUI appears frozen.
+            import queue as _queue
+            _byte_queue: _queue.Queue = _queue.Queue()
+            _reader_done = threading.Event()
+
+            def _byte_reader():
+                try:
+                    while True:
+                        raw = self.process.stdout.read(1)
+                        if not raw:
+                            break
+                        _byte_queue.put(raw)
+                except Exception:
+                    pass
+                finally:
+                    _reader_done.set()
+                    _byte_queue.put(None)  # sentinel
+
+            _reader_thread = threading.Thread(target=_byte_reader, daemon=True)
+            _reader_thread.start()
+
+            _erase_heartbeat_tick = [0]
+            _erase_start_time = [time.time()]
+
             while True:
-                raw = self.process.stdout.read(1)
-                if not raw:
+                # --- Stop button support ---
+                if getattr(self, "_stop_requested", False):
+                    try:
+                        self.process.kill()
+                    except Exception:
+                        pass
                     break
+
+                try:
+                    raw = _byte_queue.get(timeout=0.25)
+                except _queue.Empty:
+                    # No data — show heartbeat during erase silence
+                    if erase_progress_started and not erase_progress_completed:
+                        _erase_heartbeat_tick[0] += 1
+                        dots = "." * ((_erase_heartbeat_tick[0] % 3) + 1)
+                        elapsed = int(time.time() - _erase_start_time[0])
+                        self._set_status(
+                            f"Erasing entire flash{dots} ({elapsed}s)",
+                            Theme.YELLOW,
+                        )
+                    continue
+
+                if raw is None:
+                    break
+
                 decoded = decoder.decode(raw)
                 for char in decoded:
                     if char in "\r\n":
@@ -1200,6 +1262,8 @@ class HardResetMixin(_Base):
                     if line_buffer.lower().startswith("connecting") and char == ".":
                         connection_step += 1
                         self._append_boot_connection_progress(connection_step)
+
+            _reader_thread.join(timeout=3)
 
             tail = decoder.decode(b"", final=True)
             if tail:

@@ -10,6 +10,8 @@ import os
 import time
 import re
 import subprocess
+import threading
+import queue
 from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
@@ -56,7 +58,6 @@ class CompilerPipelineMixin(_Base):
 
     def _run_compile(self, is_upload: bool = False) -> bool:
         self._stop_requested = False
-        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         is_clean_retry = getattr(self, "_clean_retry_in_progress", False)
         self._clean_retry_in_progress = False
 
@@ -74,10 +75,15 @@ class CompilerPipelineMixin(_Base):
 
         self.is_busy = True
         self._framework_download_active = False
-        self._set_buttons_state(True, operation="compile")
+        self._set_buttons_state(True, operation="upload" if is_upload else "compile")
         self._set_status("Compiling...", Theme.YELLOW)
 
-        board_info = self._resolve_board_info()
+        # ``_run_compile`` executes on a worker.  The UI entry point captures
+        # this immutable board snapshot before starting it; avoid resolving it
+        # through a Tk variable while the main loop may be painting/resizing.
+        board_info = dict(getattr(self, "_active_board_info", {}) or {})
+        if not board_info:
+            board_info = self._resolve_board_info()
         compiler_name = "PlatformIO"
 
         self._append("")
@@ -98,7 +104,7 @@ class CompilerPipelineMixin(_Base):
             self._append(f"  🌐 Source  : Network share ({_share})", "info")
         self._append("")
 
-        if is_upload and not self.skip_compile_var.get():
+        if is_upload and not getattr(self, "_active_skip_compile", False):
             self._append(
                 "  🔄 Skip Compile is unchecked — compiling firmware before upload.",
                 "info",
@@ -109,7 +115,7 @@ class CompilerPipelineMixin(_Base):
         # deleting those on the retry forced a complete rebuild after every
         # source fix.  The exact board workspace is either new/empty or safe to
         # retain, and PlatformIO incrementally reconciles changed inputs.
-        current_board = self.board_var.get()
+        current_board = str(getattr(self, "_active_board_name", "") or "")
         self._migrate_legacy_board_cache()
         if self._board_workspace().exists():
             if self._last_compiled_board != current_board:
@@ -254,9 +260,11 @@ class CompilerPipelineMixin(_Base):
             jobs=jobs,
         )
 
-        # Normal process priority keeps Tk, WebView2, USB handling, and the
-        # serial reader responsive while compiler workers are busy.
-        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        # Below-normal process priority keeps Tk, WebView2, USB handling, and the
+        # serial reader responsive on supported lower-core machines while compiler workers are busy.
+        creation_flags = (
+            (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
+        )
 
         hide_generated_directory(effective_cwd)
 
@@ -286,10 +294,8 @@ class CompilerPipelineMixin(_Base):
         # Read the merged stdout+stderr stream via a queue so the main
         # loop can process lines with a timeout (for the spinner).
         # stderr=subprocess.STDOUT ensures GCC diagnostics are never lost.
-        import queue as _queue
-        import threading as _threading
-
-        _line_queue: _queue.Queue = _queue.Queue()
+        _line_queue: queue.Queue = queue.Queue()
+        _queue = queue
 
         def _reader(stream, q):
             try:
@@ -301,7 +307,7 @@ class CompilerPipelineMixin(_Base):
             finally:
                 q.put(None)  # sentinel
 
-        _t_out = _threading.Thread(target=_reader, args=(self.process.stdout, _line_queue), daemon=True)
+        _t_out = threading.Thread(target=_reader, args=(self.process.stdout, _line_queue), daemon=True)
         _t_out.start()
 
         # ── Spinner thread ────────────────────────────────────────────────────
@@ -347,7 +353,7 @@ class CompilerPipelineMixin(_Base):
                     )
                 time.sleep(0.2)
 
-        _spin_thread = _threading.Thread(target=_spin_loop, daemon=True)
+        _spin_thread = threading.Thread(target=_spin_loop, daemon=True)
         _spin_thread.start()
 
         _sentinels_remaining = 1           # only one reader thread (merged stdout+stderr)
@@ -557,7 +563,7 @@ class CompilerPipelineMixin(_Base):
                     if _build_start[0] is None:
                         _build_start[0] = time.time()
                     try:
-                        self.btn_stop.configure(state=tk.NORMAL)
+                        self._post_ui(lambda: self.btn_stop.configure(state=tk.NORMAL))
                     except Exception:
                         pass
 
@@ -717,7 +723,7 @@ class CompilerPipelineMixin(_Base):
                         _tool_dl_start[0] = time.time()
                     self._framework_download_active = True
                     try:
-                        self.btn_stop.configure(state=tk.DISABLED)
+                        self._post_ui(lambda: self.btn_stop.configure(state=tk.DISABLED))
                     except Exception:
                         pass
                     _ensure_framework_download_banner()
@@ -901,11 +907,13 @@ class CompilerPipelineMixin(_Base):
                 self._set_status(f"Compile OK ({total_sec}s)", Theme.GREEN)
 
             # ── Board compatibility → dedicated 'Compatible Devices' tab ──
-            self._refresh_compatible_devices(force=True)
+            # This entry point performs Tk reads before launching its own
+            # analysis worker, so queue the complete call on Tk.
+            self._post_ui(lambda: self._refresh_compatible_devices(force=True))
             self._append("  ℹ Compatible devices analysis updated → see the '🔧 Compatible Devices' tab.", "dim")
 
             # ── Check for Selected Board Hardware Compatibility ─────────────
-            selected_board_name = self.board_var.get()
+            selected_board_name = str(getattr(self, "_active_board_name", "") or "")
             gpio_analysis = _analyze_gpio_compatibility(self.sketch_dir_path)
             
             if selected_board_name in gpio_analysis.get("excluded", set()):
@@ -957,21 +965,21 @@ class CompilerPipelineMixin(_Base):
                             msg,
                             parent=self.root
                         )
-                    self.root.after(100, _show_severe_gpio_popup)
+                    self._post_ui_after(100, _show_severe_gpio_popup)
 
             self._save_compile_cache()  # snapshot so upload can skip recompile
 
             # Automatically update the Skip Compile checkbox on successful compilation
-            self.root.after(0, self._update_skip_compile_state)
+            self._post_ui(self._update_skip_compile_state)
         elif was_killed:
             self._append("")
             self._append("  ■ Compilation stopped by user.", "warning")
             self._set_status("Compile stopped", Theme.YELLOW)
             if current_board:
                 self._last_compiled_board = current_board
-            self.root.after(0, self._update_skip_compile_state)
+            self._post_ui(self._update_skip_compile_state)
         else:
-            self.root.after(0, self._update_skip_compile_state)
+            self._post_ui(self._update_skip_compile_state)
             self._append("")
             self._append(f"  ✖ Compilation FAILED after {total_sec}s:", "error")
 
@@ -1019,7 +1027,7 @@ class CompilerPipelineMixin(_Base):
                 # ── Check if this is a board-mismatch rather than a real code bug ──
                 try:
                     compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
-                    selected_board = self.board_var.get()
+                    selected_board = str(getattr(self, "_active_board_name", "") or "")
                     is_board_mismatch = bool(compat_boards) and selected_board not in compat_boards
                 except Exception:
                     is_board_mismatch = False
@@ -1190,6 +1198,15 @@ class CompilerPipelineMixin(_Base):
                     "  ℹ Incremental cache preserved — fix the code and compile again; only changed/failed units rebuild.",
                     "info",
                 )
+            elif failure_kind == "long_path":
+                self._append(
+                    "  ⚠ Windows path length limit (MAX_PATH / 260 chars) was reached during package extraction or build.",
+                    "warning",
+                )
+                self._append(
+                    "  💡 Enable Long Paths in Windows: open Registry Editor → HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled = 1",
+                    "info",
+                )
             elif failure_kind == "configuration":
                 self._append(
                     "  ℹ Build cache preserved — correct the board/library/configuration issue and retry.",
@@ -1211,4 +1228,3 @@ class CompilerPipelineMixin(_Base):
             self._set_buttons_busy(False)
             self._set_buttons_state(False)
         return rc == 0
-

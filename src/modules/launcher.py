@@ -37,69 +37,43 @@ def _user_state_dir() -> Path:
 
 _USER_STATE_DIR = _user_state_dir()
 
-def _is_process_elevated() -> bool:
-    """Return True when this launcher already has an elevated Windows token."""
-    if sys.platform != "win32":
-        return True
+_MINIMUM_LOGICAL_CORES = 4
+
+
+def _enforce_minimum_cpu_requirement() -> bool:
+    """Reject unsupported low-core systems before bootstrap work begins."""
     try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        logical_cores = os.cpu_count()
     except Exception:
-        return False
+        logical_cores = None
 
+    if logical_cores is None or logical_cores >= _MINIMUM_LOGICAL_CORES:
+        return True
 
-def _ensure_elevated_launcher() -> None:
-    """Keep direct launcher.py starts consistent with the VBS launch path.
-
-    The VBS launcher normally performs this handoff first.  This second guard
-    covers direct development shortcuts, file associations, and packaged
-    launchers that invoke launcher.py without going through the VBS file.
-    Already-elevated launches are left alone, so users with an Administrator
-    shortcut do not receive a second elevation loop.
-    """
-    if sys.platform != "win32":
-        return
-    if _is_process_elevated() or "--elevated-launch" in sys.argv:
-        return
-
-    import subprocess
-
-    args = [str(Path(__file__).resolve()), *sys.argv[1:], "--elevated-launch"]
-    parameters = subprocess.list2cmdline(args)
-    try:
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            str(Path(sys.executable).resolve()),
-            parameters,
-            str(SCRIPT_DIR),
-            1,
-        )
-    except Exception as error:
-        result = 0
-        launch_error = error
-    else:
-        launch_error = None
-
-    if int(result or 0) > 32:
-        raise SystemExit(0)
-
-    detail = f"\n\nDetails: {launch_error}" if launch_error else ""
+    message = (
+        "MCU Flasher by Naph cannot run reliably on this computer.\n\n"
+        f"Detected logical CPU cores/threads: {logical_cores}\n"
+        f"Minimum required: {_MINIMUM_LOGICAL_CORES}\n\n"
+        "The editor, serial monitor, toolchain, and background services "
+        "require at least 4 logical CPU cores/threads.\n"
+        "Please enable more CPU cores or use a computer that meets the "
+        "minimum requirement, then start the app again."
+    )
     try:
         ctypes.windll.user32.MessageBoxW(
             0,
-            "MCU Flasher requires Administrator permission for its environment, "
-            "junction, driver, and toolchain setup.\n\n"
-            "Please approve the Windows prompt and start it again."
-            + detail,
-            "MCU Flasher by Naph — Administrator Permission Required",
-            0x10,
+            message,
+            "MCU Flasher by Naph — Unsupported Hardware",
+            0x10,  # MB_ICONERROR
         )
     except Exception:
         pass
-    raise SystemExit(1)
+    return False
 
-
-_ensure_elevated_launcher()
+# Normal startup intentionally stays unelevated.  Bootstrap performs any
+# required machine-level operation through its own narrowly scoped UAC helper;
+# opening the editor and monitoring an already-installed MCU must not require
+# Administrator permission.
 
 
 def _verify_storage_drive_type():
@@ -281,6 +255,8 @@ def _notify_already_starting():
 if __name__ == "__main__":
     if sys.platform != "win32":
         raise SystemExit("MCU Flasher launcher requires Windows 10 or newer.")
+    if not _enforce_minimum_cpu_requirement():
+        sys.exit(0)
     if "--new-window" not in sys.argv:
         if not _claim_launcher_slot():
             _notify_already_starting()

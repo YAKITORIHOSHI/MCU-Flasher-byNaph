@@ -81,7 +81,18 @@ class UILayoutMixin(_Base):
         )
         self.lbl_sketch_icon.pack(side=tk.LEFT)
         self.lbl_sketch_icon.bind("<Button-1>", lambda e: self._open_sketch_in_explorer())
-        self.lbl_sketch_icon.bind("<Button-3>", lambda e: self._select_sketch_folder())
+        # Let the mouse event finish before opening the native Windows picker.
+        # Opening a nested native modal directly from Button-3 can leave Tk's
+        # event/grab state stuck after Cancel, especially with an embedded
+        # WebView child in the same top-level window.
+        def _defer_project_picker(_event=None):
+            try:
+                self.root.after_idle(self._select_sketch_folder)
+            except Exception:
+                pass
+            return "break"
+
+        self.lbl_sketch_icon.bind("<Button-3>", _defer_project_picker)
 
         self.lbl_sketch = tk.Label(
             self.sketch_frame, text=self._get_sketch_display_name(),
@@ -90,7 +101,7 @@ class UILayoutMixin(_Base):
         )
         self.lbl_sketch.pack(side=tk.LEFT)
         self.lbl_sketch.bind("<Button-1>", lambda e: self._open_sketch_in_explorer())
-        self.lbl_sketch.bind("<Button-3>", lambda e: self._select_sketch_folder())
+        self.lbl_sketch.bind("<Button-3>", _defer_project_picker)
         ToolTip(self.lbl_sketch, lambda: f"{self.sketch_dir_path}  •  Left-click: open in Explorer  •  Right-click: change project folder")
         ToolTip(self.lbl_sketch_icon, lambda: f"{self.sketch_dir_path}  •  Left-click: open in Explorer  •  Right-click: change project folder")
 
@@ -394,11 +405,18 @@ class UILayoutMixin(_Base):
             graphics_accel = True
 
         # ── HORIZONTAL SPLIT PANE: Left (Editor + Monitors) | Right (AI Assistant) ──
+        # On Windows these panes can contain native WebView HWNDs. Opaque live
+        # sash resizing makes Tk synchronously re-layout and repaint those child
+        # windows for every mouse movement, which can make the whole process
+        # appear hung. Keep the setting available for Tk-only builds, but use
+        # the safe rubber-band mode when native windows are hosted.
+        pane_opaque_resize = bool(graphics_accel and sys.platform != "win32")
+        self._pane_opaque_resize = pane_opaque_resize
         self.h_split_pane = tk.PanedWindow(
             self.root, orient=tk.HORIZONTAL,
             bg=Theme.BORDER, sashwidth=4, sashrelief=tk.FLAT,
             borderwidth=0,
-            opaqueresize=graphics_accel,
+            opaqueresize=pane_opaque_resize,
         )
         self.h_split_pane.pack(fill=tk.BOTH, expand=True)
 
@@ -407,7 +425,7 @@ class UILayoutMixin(_Base):
             self.h_split_pane, orient=tk.VERTICAL,
             bg=Theme.BORDER, sashwidth=3, sashrelief=tk.FLAT,
             borderwidth=0,
-            opaqueresize=graphics_accel,
+            opaqueresize=pane_opaque_resize,
         )
         self.h_split_pane.add(self.main_pane, stretch="always")
 
@@ -528,7 +546,7 @@ class UILayoutMixin(_Base):
             highlightthickness=0,
             padx=12,
             pady=8,
-            wrap=tk.WORD,
+            wrap=tk.CHAR,
             state=tk.DISABLED,
             cursor="xterm",
         )
@@ -677,7 +695,10 @@ class UILayoutMixin(_Base):
             fg=Theme.TEXT,
             insertbackground=Theme.TEXT,
             relief=tk.FLAT,
-            wrap="word",
+            # Compatibility output is a few hundred readable lines. Word
+            # wrapping keeps it legible without recalculating a wrap point for
+            # every character when this tab is mapped after Serial Monitor.
+            wrap=tk.WORD,
             font=self.font_mono,
             padx=10, pady=8,
             spacing1=1, spacing3=1,
@@ -714,13 +735,19 @@ class UILayoutMixin(_Base):
         serial_header = tk.Frame(serial_monitor_frame, bg=Theme.BG_MID, pady=6, padx=10)
         serial_header.pack(fill=tk.X)
         self._serial_header = serial_header
-        self.lbl_serial_monitor_title = None
+
+        self.lbl_serial_monitor_title = tk.Label(
+            serial_header, text="📡 SERIAL MONITOR",
+            font=self.monitor_heading_font,
+            fg=Theme.CYAN, bg=Theme.BG_MID,
+        )
+        self.lbl_serial_monitor_title.pack(side=tk.LEFT)
 
         btn_reset_mcu = self._make_btn(
             serial_header, "↺ Reset", self._reset_mcu_from_monitor,
             "#8B5E3C", "#A0724F", font=self.font_mono_sm
         )
-        btn_reset_mcu.pack(side=tk.LEFT, padx=(0, 0))
+        btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
         self.btn_reset_mcu = btn_reset_mcu
 
         btn_pause_serial = self._make_btn(
@@ -748,10 +775,6 @@ class UILayoutMixin(_Base):
         )
         self.serial_baud_combo.pack(side=tk.LEFT, padx=(4, 0))
         self.serial_baud_combo.bind("<<ComboboxSelected>>", lambda e: self._on_serial_baud_changed())
-
-        # Setup real-time reactive auto-synchronization of project hardware state
-        if hasattr(self, "_setup_hardware_state_auto_sync"):
-            self._setup_hardware_state_auto_sync()
 
         # Small divider between BAUD RATE and status indicator
         tk.Frame(serial_header, bg=Theme.CYAN_DIM, width=1, height=20).pack(
@@ -895,7 +918,7 @@ class UILayoutMixin(_Base):
             widget.tag_configure("sent",    foreground=Theme.MAGENTA)
             widget.tag_configure("timestamp", foreground=Theme.TEXT_DIM, elide=True)
 
-        self.bottom_notebook.add(serial_monitor_frame, text=" 📡 Serial Monitor ")
+        self.bottom_notebook.add(serial_monitor_frame, text="  📡 Serial Monitor  ")
         self._serial_monitor_frame = serial_monitor_frame
         self._serial_monitor_tab_index_cache = len(self.bottom_notebook.tabs()) - 1
 
@@ -967,7 +990,7 @@ class UILayoutMixin(_Base):
             inactiveselectbackground=Theme.BG_HOVER,
             exportselection=False,
             font=self.monitor_font,
-            wrap=tk.WORD,
+            wrap=tk.CHAR,
             state=tk.DISABLED,
             padx=6, pady=6,
             relief=tk.FLAT,
@@ -1447,8 +1470,8 @@ class UILayoutMixin(_Base):
         )
         if width:
             btn.configure(width=width)
-        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
-        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
+        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
         self._scalable_buttons.append(btn)
         return btn
 
@@ -1461,8 +1484,8 @@ class UILayoutMixin(_Base):
             relief=tk.FLAT, borderwidth=0, width=width, cursor="hand2",
             highlightthickness=1, highlightbackground=Theme.BORDER, highlightcolor=Theme.BORDER_LIT,
         )
-        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
-        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+        btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
+        btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
         return btn
 
     def _restyle_btn(self, btn, bg, bg_hover, fg=None):
@@ -1474,8 +1497,8 @@ class UILayoutMixin(_Base):
                 bg=bg, activebackground=bg_hover, fg=btn_fg, activeforeground=btn_fg,
                 highlightbackground=Theme.BORDER, highlightcolor=Theme.BORDER_LIT,
             )
-            btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c))
-            btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c))
+            btn.bind("<Enter>", lambda e, b=btn, c=bg_hover: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
+            btn.bind("<Leave>", lambda e, b=btn, c=bg: b.configure(bg=c) if str(b.cget("state")) != "disabled" else None)
         except Exception:
             pass
 
@@ -1941,25 +1964,10 @@ class UILayoutMixin(_Base):
                 except Exception:
                     pass
 
-        if hasattr(self, "editor_text") and self.editor_text:
+        # Update Default Tkinter Editor across all open tabs, gutter, scrollbars, and syntax tags
+        if hasattr(self, "_apply_default_editor_theme"):
             try:
-                self.editor_text.configure(
-                    bg=Theme.BG_DARKEST,
-                    fg=Theme.TEXT_BRIGHT,
-                    insertbackground=Theme.CYAN,
-                    selectbackground=Theme.BG_HOVER,
-                    selectforeground=Theme.TEXT_BRIGHT,
-                )
-            except Exception:
-                pass
-        if hasattr(self, "editor_lineno") and self.editor_lineno:
-            try:
-                self.editor_lineno.configure(bg=Theme.BG_DARK, fg=Theme.TEXT_DIM)
-            except Exception:
-                pass
-        if hasattr(self, "editor_tab_frame") and self.editor_tab_frame:
-            try:
-                self.editor_tab_frame.configure(bg=Theme.BG_DARK)
+                self._apply_default_editor_theme(active_mode)
             except Exception:
                 pass
 
@@ -2098,6 +2106,18 @@ class UILayoutMixin(_Base):
         """Debounced handler for live window-resize rescaling of buttons."""
         if event.widget is not self.root:
             return
+
+        # Skip layout rescaling if window dimensions haven't changed (e.g. window move only)
+        cur_w = getattr(event, "width", None)
+        cur_h = getattr(event, "height", None)
+        last_w = getattr(self, "_last_cfg_w", None)
+        last_h = getattr(self, "_last_cfg_h", None)
+        if cur_w is not None and cur_h is not None and cur_w == last_w and cur_h == last_h:
+            return
+        if cur_w is not None and cur_h is not None:
+            self._last_cfg_w = cur_w
+            self._last_cfg_h = cur_h
+
         for attr in ("_resize_after_id", "_minwidth_after_id"):
             aid = getattr(self, attr, None)
             if aid:
@@ -2106,12 +2126,28 @@ class UILayoutMixin(_Base):
                 except Exception:
                     pass
                 setattr(self, attr, None)
-        self._resize_after_id = self.root.after(150, self._apply_dynamic_button_scale)
-        self._minwidth_after_id = self.root.after(150, self._update_min_window_width)
+
+        # Never perform editor loading or layout work inside Configure. Windows
+        # emits this event continuously during a drag/maximize transition, and
+        # synchronous work here blocks paint and input. A single quiet-period
+        # callback applies the latest dimensions after the event burst settles.
+        # Keep the two legacy attributes pointing at the same timer because
+        # shutdown/settings code still clears them by name.
+        delay = 120
+        resize_job = self.root.after(delay, self._apply_debounced_resize)
+        self._resize_after_id = resize_job
+        self._minwidth_after_id = resize_job
+
+    def _apply_debounced_resize(self):
+        """Apply the pending window geometry work in one Tk turn."""
+        self._resize_after_id = None
+        self._minwidth_after_id = None
+        self._update_min_window_width()
+        self._apply_dynamic_button_scale()
 
     def _update_min_window_width(self):
         """Set root minsize width to half the screen the window is currently on.
-        Called on every Configure event (move/resize), debounced 150 ms.
+        Applied after a quiet period following Configure events (move/resize).
         This keeps the window usable when dragged between monitors of different
         resolutions (e.g. 1920 px ↔ 1366 px)."""
         self._minwidth_after_id = None
@@ -2199,6 +2235,13 @@ class UILayoutMixin(_Base):
             except Exception:
                 pass
 
+        # The first responsive pass runs before this dynamic font/padding
+        # update. Re-evaluate once with the final control metrics so startup
+        # and DPI changes cannot leave the title-bar action row partially
+        # clipped until the next manual resize.
+        self._last_responsive_layout_key = None
+        self._apply_responsive_layout(width, height)
+
     def _apply_responsive_layout(self, width: int, height: int):
         """Keep the packed controls and vertical panes usable as the window
         changes size.  Widget widths are expressed in characters, so adapting
@@ -2219,10 +2262,33 @@ class UILayoutMixin(_Base):
                              950, 1000, 1100, 1150, 1200, 1350, 1400, 1450)
         width_bucket = tuple(int(width >= point) for point in width_breakpoints)
         height_bucket = (int(height >= 560), int(height >= 720))
+
+        # The action row shares the title bar with the logo and project controls.
+        # Root width alone is not enough to decide whether the full toolbar fits:
+        # on a scaled 1920px display the logical window can exceed 1200 while
+        # the title bar still has too little room, leaving button labels clipped.
+        # Remember the full toolbar's requested width before compact reflow so a
+        # later resize can safely restore it when enough room becomes available.
+        compact = width < 1200
+        try:
+            if not getattr(self, "_wide_action_req_width", 0):
+                self._wide_action_req_width = self.inner_actions.winfo_reqwidth()
+            side_req = (
+                self.title_left.winfo_reqwidth()
+                + self.sketch_frame.winfo_reqwidth()
+            )
+            title_available = max(0, actual_width - side_req)
+            compact = compact or title_available < (
+                self._wide_action_req_width + round(24 * display_scale)
+            )
+        except Exception:
+            pass
+
         layout_key = (
             width_bucket,
             height_bucket,
             round(display_scale, 3),
+            bool(compact),
             bool(getattr(self, "editor_detached", False)),
             bool(getattr(self, "_ai_side_visible", False)),
             bool(getattr(self, "editor_pane_visible", True)),
@@ -2243,9 +2309,6 @@ class UILayoutMixin(_Base):
             return
         self._last_responsive_layout_key = layout_key
 
-        # Below this width the title bar must give priority to the one-row
-        # action toolbar. Compact labels reclaim space without hiding actions.
-        compact = width < 1200
         if width < 650:
             port_chars = 8
             board_chars = 10
@@ -2336,7 +2399,7 @@ class UILayoutMixin(_Base):
 
         # Dynamic reflow of Title Bar elements based on width
         try:
-            if width < 1150:
+            if compact:
                 # Compact half-screen mode. Actions remain in the title row;
                 # only their contents collapse into Compile/Upload/Actions.
                 # 1. Unpack from their wide-mode container frames
@@ -2418,7 +2481,8 @@ class UILayoutMixin(_Base):
                     # The detached editor is the sole home for actions.
                     self.actions_frame.pack_forget()
                 else:
-                    self.actions_frame.pack(in_=self.title_row_top, side=tk.LEFT, fill=tk.BOTH, expand=True)
+                    if not self.actions_frame.winfo_ismapped():
+                        self.actions_frame.pack(in_=self.title_row_top, side=tk.LEFT, fill=tk.BOTH, expand=True)
                 
                 # Repack btn_settings back to options frame and set standard font
                 self.btn_settings.pack(in_=self.opt_buttons_frame, side=tk.LEFT, padx=(0, 8))
@@ -2492,85 +2556,28 @@ class UILayoutMixin(_Base):
                 self.cb_clear_serial_on_upload.configure(text="Auto-clear Serial Monitor on Action")
                 self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
                 self.cb_console_autoscroll.configure(text="Auto-scroll")
-
-            serial_tight = width < 820
-            self.lbl_serial_baud.configure(text="" if serial_tight else "BAUD RATE")
-            st = getattr(self, "_serial_status_state", "disconnected")
-            if st == "connected":
-                status_text = "● Connected"
-            elif st == "reconnecting":
-                status_text = "● Reconnecting..."
-            else:
-                status_text = "● Disconnected"
-
-            self.serial_status.configure(
-                text="●" if serial_tight else status_text
-            )
-            self.btn_reset_mcu.configure(text="Reset" if serial_tight else "↻ Reset")
-            self.btn_pause_serial.configure(
-                text="Resume" if self._monitor_paused else ("Pause" if serial_tight else "⏸ Pause")
-            )
-            self.btn_copy_serial_header.configure(text="Copy")
-            self.btn_clear_serial_header.configure(text="Clear")
-            if serial_tight:
-                self.cb_serial_autoscroll.pack_forget()
-                self.cb_ansi_clear.pack_forget()
-            else:
-                if not self.cb_ansi_clear.winfo_ismapped():
-                    self.cb_ansi_clear.pack(side=tk.RIGHT, padx=(0, 10))
-                if not self.cb_serial_autoscroll.winfo_ismapped():
-                    self.cb_serial_autoscroll.pack(side=tk.RIGHT, padx=(0, 10))
-
-            # Dynamic tab text and padding to prevent clipping on 1366x768 and smaller displays
-            target_tab_mode = "compact" if width < 1200 else "wide"
-            if getattr(self, "_last_applied_tab_mode", None) != target_tab_mode:
-                self._last_applied_tab_mode = target_tab_mode
-                if target_tab_mode == "compact":
-                    tab_specs = [
-                        (getattr(self, "_build_console_frame", None), "⚙ Build"),
-                        (getattr(self, "_compat_frame", None), "🔧 Devices"),
-                        (getattr(self, "_serial_monitor_frame", None), "📡 Serial"),
-                        (getattr(self, "_notif_frame", None), "🔔 Alerts"),
-                        (getattr(self, "_syntax_check_frame", None), "🔍 Syntax"),
-                        (getattr(self, "_shell_terminal_frame", None), "⌘ Terminal"),
-                    ]
+                if width < 950:
+                    if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title:
+                        self.lbl_serial_monitor_title.pack_forget()
                 else:
-                    tab_specs = [
-                        (getattr(self, "_build_console_frame", None), "⚙ Build Console"),
-                        (getattr(self, "_compat_frame", None), "🔧 Compatible Devices"),
-                        (getattr(self, "_serial_monitor_frame", None), "📡 Serial Monitor"),
-                        (getattr(self, "_notif_frame", None), "🔔 Notifications"),
-                        (getattr(self, "_syntax_check_frame", None), "🔍 Syntax Check"),
-                        (getattr(self, "_shell_terminal_frame", None), "⌘ Terminal"),
-                    ]
+                    if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title and not self.lbl_serial_monitor_title.winfo_ismapped():
+                        self.lbl_serial_monitor_title.pack_forget()
+                        self.btn_reset_mcu.pack_forget()
+                        self.btn_pause_serial.pack_forget()
+                        self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+                        self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
+                        self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
 
-                if hasattr(self, "bottom_notebook"):
-                    try:
-                        managed_tabs = set(self.bottom_notebook.tabs())
-                        for frame_w, label in tab_specs:
-                            if frame_w is not None and str(frame_w) in managed_tabs:
-                                try:
-                                    self.bottom_notebook.tab(frame_w, text=f" {label} ")
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-
-            pad_val = 6 if width < 850 else (8 if width < 1350 else 12)
-            pad_y = 4 if height < 600 else 5
-            font_size = 8 if width < 850 else 9
-            tab_style_key = (pad_val, pad_y, font_size)
-            if getattr(self, "_last_applied_tab_style_key", None) != tab_style_key:
-                self._last_applied_tab_style_key = tab_style_key
-                try:
-                    style = ttk.Style()
-                    style.configure(
-                        "Bottom.TNotebook.Tab",
-                        padding=[pad_val, pad_y],
-                        font=("Segoe UI", font_size, "bold"),
-                    )
-                except Exception:
-                    pass
+                style = ttk.Style()
+                style.configure(
+                    "Bottom.TNotebook.Tab",
+                    # Use one stable padding value for every state so switching
+                    # tabs cannot change their apparent size.  Keep the compact
+                    # layout on narrow windows, but reduce the desktop maximum a
+                    # little without making the labels cramped.
+                    padding=[8 if width < 700 else 12, 4 if height < 600 else 5],
+                    font=("Segoe UI", 8 if width < 700 else 9, "bold"),
+                )
 
             if width < 700:
                 self.editor_info_label.pack_forget()

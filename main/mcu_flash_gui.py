@@ -109,10 +109,58 @@ class MCUUploadGUI(
     pass
 
 
+MINIMUM_LOGICAL_CORES = 4
+
+
+def _enforce_minimum_cpu_requirement() -> bool:
+    """Stop unsupported low-core systems before bootstrap or GUI startup."""
+    try:
+        logical_cores = os.cpu_count()
+    except Exception:
+        logical_cores = None
+
+    # If Windows cannot report the count, do not block a potentially valid
+    # machine.  A reported count below four is an explicit unsupported case.
+    if logical_cores is None or logical_cores >= MINIMUM_LOGICAL_CORES:
+        return True
+
+    message = (
+        "MCU Flasher by Naph cannot run reliably on this computer.\n\n"
+        f"Detected logical CPU cores/threads: {logical_cores}\n"
+        f"Minimum required: {MINIMUM_LOGICAL_CORES}\n\n"
+        "The editor, serial monitor, toolchain, and background services "
+        "require at least 4 logical CPU cores/threads.\n"
+        "Please enable more CPU cores or use a computer that meets the "
+        "minimum requirement, then start the app again."
+    )
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            message,
+            "MCU Flasher by Naph — Unsupported Hardware",
+            0x10,  # MB_ICONERROR
+        )
+    except Exception:
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                "MCU Flasher by Naph — Unsupported Hardware",
+                message,
+                parent=root,
+            )
+            root.destroy()
+        except Exception:
+            pass
+    return False
+
+
 def main():
     import os
     if sys.platform != "win32":
         raise SystemExit("MCU Flasher by Naph requires Windows 10 or newer.")
+    if not _enforce_minimum_cpu_requirement():
+        return
     _startup_event("main-enter")
     _configure_windows_dpi_awareness()
     # Ensure Bootstrap is ALWAYS run first before the main GUI starts.
@@ -612,6 +660,9 @@ def main():
         width=1000,
         height=700,
         min_size=(360, 240),
+        # Let pywebview create and initialize the WebView2 controller without
+        # exposing a second top-level window. The native form is explicitly
+        # shown after it has been reparented into Tk.
         hidden=True,
         background_color="#151922",   # matches Theme.BG_DARKEST — no white flash
     )
@@ -652,7 +703,17 @@ def main():
         # timer operations, and reattachment work onto Tk's owning thread.
         def _reattach_on_tk():
             if getattr(app_val, "_editor_embedded", False):
-                return
+                hwnd = getattr(app_val, "_editor_hwnd", None)
+                embed_frame = getattr(app_val, "_editor_embed_frame", None)
+                if hwnd and embed_frame and win32gui is not None:
+                    try:
+                        tk_hwnd = embed_frame.winfo_id()
+                        if tk_hwnd and win32gui.GetParent(hwnd) == tk_hwnd:
+                            return
+                    except Exception:
+                        return
+                else:
+                    return
             poll_id = getattr(app_val, "_poll_detached_after_id", None)
             if poll_id is not None:
                 try:

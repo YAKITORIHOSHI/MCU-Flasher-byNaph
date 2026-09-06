@@ -410,6 +410,7 @@ class CleanBuildMixin(_Base):
         self.is_busy = True
         self._stop_requested = False
         self._op_session_id += 1
+        operation_session_id = self._op_session_id
         self._set_buttons_state(True, operation="clean")
         self._set_status("Cleaning build cache...", Theme.GREEN)
         self._append("")
@@ -419,6 +420,8 @@ class CleanBuildMixin(_Base):
             reset_cache_lock = _try_acquire_reset_cache_lock()
             if reset_cache_lock is None:
                 def _locked():
+                    if getattr(self, "_op_session_id", 0) != operation_session_id:
+                        return
                     self._restore_clean_hardware_selection(clean_hardware_snapshot)
                     self._clean_hardware_snapshot = None
                     self._append(
@@ -428,12 +431,14 @@ class CleanBuildMixin(_Base):
                     self._set_status("Clean blocked — reset cache is in use", Theme.YELLOW)
                     self.is_busy = False
                     self._set_buttons_state(False)
-                self.root.after(0, _locked)
+                self._post_ui(_locked)
                 return
             try:
                 removed, errors = self._perform_clean()
 
                 def _done():
+                    if getattr(self, "_op_session_id", 0) != operation_session_id:
+                        return
                     # Keep Clean strictly cache-only.  Port enumeration and
                     # board detection can complete asynchronously while the
                     # worker is deleting files, so restore the exact target
@@ -480,18 +485,20 @@ class CleanBuildMixin(_Base):
                     self._set_buttons_state(False)
                     self._clean_hardware_snapshot = None
                     if on_complete:
-                        self.root.after(0, on_complete)
+                        self._post_ui(on_complete)
 
-                self.root.after(0, _done)
+                self._post_ui(_done)
             except Exception as exc:
                 def _error(exc=exc):
+                    if getattr(self, "_op_session_id", 0) != operation_session_id:
+                        return
                     self._restore_clean_hardware_selection(clean_hardware_snapshot)
                     self._clean_hardware_snapshot = None
                     self._append(f"  ✖ Internal error during clean: {exc}", "error")
                     self._set_status("Clean FAILED", Theme.RED)
                     self.is_busy = False
                     self._set_buttons_state(False)
-                self.root.after(0, _error)
+                self._post_ui(_error)
             finally:
                 _release_reset_cache_lock(reset_cache_lock)
 
@@ -562,4 +569,3 @@ class CleanBuildMixin(_Base):
             except Exception:
                 pass
         return True
-

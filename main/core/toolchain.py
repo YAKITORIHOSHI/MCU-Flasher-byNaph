@@ -568,6 +568,10 @@ def _configure_platformio_environment(script_dir: Path) -> str:
 
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PLATFORMIO_UNBUFFERED"] = "1"
+os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+os.environ["PLATFORMIO_DISABLE_PROMPTS"] = "1"
+os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
+os.environ["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
 
 _PLATFORMIO_ENV_CONFIGURED = False
 _PLATFORMIO_ENV_CONFIG_LOCK = threading.RLock()
@@ -655,7 +659,31 @@ def _available_memory_gb() -> float | None:
         import psutil
         return psutil.virtual_memory().available / (1024 ** 3)
     except Exception:
-        return None
+        pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullAvailPhys / (1024 ** 3)
+        except Exception:
+            pass
+
+    return None
 
 
 def _system_reserved_cpu_count(total_cpus: int) -> int:
@@ -675,7 +703,8 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     Compiler processes are memory-heavy, so CPU count alone is not a safe
     multiplier. Reserve one logical CPU on low-end/midrange systems or two on systems
     with 8+ logical CPUs for Tk/WebView/serial handling, then cap workers by
-    currently available RAM (~450 MB per compiler job).
+    currently available RAM (~400-450 MB per compiler job).
+    When ample RAM (>4GB) is available, scale workers up to full CPU capacity.
     """
     cpus = max(1, int(total_cpus or os.cpu_count() or 2))
     memory_gb = _available_memory_gb() if available_gb is None else available_gb
@@ -683,8 +712,13 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     if memory_gb is not None:
         if memory_gb < 0.5:
             memory_budget = 1
+        elif memory_gb < 1.0:
+            memory_budget = 1
+        elif memory_gb < 2.0:
+            memory_budget = max(1, min(2, int((memory_gb - 0.25) / 0.45)))
         else:
-            memory_budget = max(1, int((memory_gb - 0.25) / 0.45))
+            # Ample RAM available (>2GB free): scale workers up to available memory
+            memory_budget = max(1, int((memory_gb - 0.5) / 0.35))
         cpu_budget = min(cpu_budget, memory_budget)
 
     normalized = str(mode or "HIGH").upper()
@@ -699,7 +733,9 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
 _max_cpu_jobs = str(_resource_safe_worker_count("HIGH"))
 
 os.environ["PLATFORMIO_BUILD_JOBS"] = _max_cpu_jobs
+os.environ["PLATFORMIO_RUN_JOBS"] = _max_cpu_jobs
 os.environ["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+os.environ["SCONS_CACHE_MSVC_FORCE_DEFAULTS"] = "1"
 os.environ["SCONSFLAGS"] = f"-j{_max_cpu_jobs}"
 
 # PlatformIO bootstraps its OWN private virtualenv ("penv") under

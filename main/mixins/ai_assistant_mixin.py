@@ -497,7 +497,22 @@ class AIAssistantMixin(_Base):
             return
 
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            # Avoid synchronously sending User32 messages to a WebView process
+            # whose GUI loop may still be starting or may have stalled.  The
+            # existing embedding poll retries when the window is responsive.
+            user32 = ctypes.windll.user32
+            if user32.IsHungAppWindow(hwnd):
+                if getattr(self, "_ai_side_visible", False):
+                    self._ai_embed_poll_job = self.root.after(100, self._try_embed_ai_window)
+                return
+            result = ctypes.c_ulong()
+            if not user32.SendMessageTimeoutW(
+                hwnd, 0, 0, 0, 0x0002, 30, ctypes.byref(result)
+            ):
+                if getattr(self, "_ai_side_visible", False):
+                    self._ai_embed_poll_job = self.root.after(100, self._try_embed_ai_window)
+                return
+            user32.ShowWindowAsync(int(hwnd), int(win32con.SW_HIDE))
             tk_hwnd = self.ai_embed_frame.winfo_id()
 
             # Set WS_CLIPCHILDREN on parent Tk frame
@@ -536,11 +551,10 @@ class AIAssistantMixin(_Base):
             # few inexpensive deferred resizes so first launch behaves exactly
             # like the previously-working hide/show cycle.
             try:
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                user32.ShowWindowAsync(int(hwnd), int(win32con.SW_SHOW))
                 win32gui.RedrawWindow(
                     hwnd, None, None,
-                    win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW |
-                    win32con.RDW_ALLCHILDREN,
+                    win32con.RDW_INVALIDATE | win32con.RDW_ALLCHILDREN,
                 )
             except Exception:
                 pass
@@ -554,25 +568,30 @@ class AIAssistantMixin(_Base):
         except Exception as e:
             print(f"[MCU Flasher] Error embedding AI window: {e}")
 
-    def _resize_embedded_ai(self, event=None):
+    def _resize_embedded_ai(self, event=None, force=False):
         if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
             return
         if win32gui is None or win32con is None:
             return
-        try:
-            if not win32gui.IsWindow(self._ai_hwnd):
-                self._ai_hwnd = None
-                return
-            if hasattr(self, "root") and self.root:
-                # <Configure> can fire while the paned-window layout is still
-                # settling (pane insertion, sash drags, first show), leaving
-                # the embedded window a few pixels short of the frame.  Re-read
-                # the frame's FINAL size after the idle layout pass and apply.
-                self.root.after_idle(self._apply_ai_embed_size)
-            else:
-                self._apply_ai_embed_size()
-        except Exception:
-            pass
+
+        if hasattr(self, "_ai_resize_job") and self._ai_resize_job:
+            try:
+                self.root.after_cancel(self._ai_resize_job)
+            except Exception:
+                pass
+            self._ai_resize_job = None
+
+        def _do_resize():
+            self._ai_resize_job = None
+            self._apply_ai_embed_size(force=force)
+
+        if force:
+            _do_resize()
+        else:
+            try:
+                self._ai_resize_job = self.root.after(90, _do_resize)
+            except Exception:
+                pass
 
     def _apply_ai_embed_size(self, force=False):
         if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
@@ -583,19 +602,26 @@ class AIAssistantMixin(_Base):
             if not win32gui.IsWindow(self._ai_hwnd):
                 self._ai_hwnd = None
                 return
-            frame = self.ai_embed_frame
+            frame = getattr(self, "ai_embed_frame", None)
+            if not frame:
+                return
             w = max(frame.winfo_width(), 50)
             h = max(frame.winfo_height(), 50)
-            # During first attachment force SetWindowPos even when the outer
-            # dimensions happen to match; WebView2 still needs the WM_SIZE paint.
-            left, top, right, bottom = win32gui.GetWindowRect(self._ai_hwnd)
-            if force or right - left != w or bottom - top != h:
-                win32gui.SetWindowPos(
-                    self._ai_hwnd, 0, 0, 0, w, h,
-                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
-                    win32con.SWP_SHOWWINDOW | 0x4000
-                )
-            self._force_ai_webview_fill(force=force)
+
+            last_w = getattr(self, "_last_ai_w", 0)
+            last_h = getattr(self, "_last_ai_h", 0)
+            if not force and w == last_w and h == last_h:
+                return
+            self._last_ai_w = w
+            self._last_ai_h = h
+
+            win32gui.SetWindowPos(
+                self._ai_hwnd, 0, 0, 0, w, h,
+                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
+                win32con.SWP_SHOWWINDOW | 0x4000
+            )
+            if force:
+                self._force_ai_webview_fill(force=True)
         except Exception:
             pass
 
@@ -756,6 +782,6 @@ class AIAssistantMixin(_Base):
                     )
 
         if hasattr(self, "root") and self.root:
-            self.root.after(0, _do_reload)
-            self.root.after(50, _do_notify)
+            self._post_ui(lambda: self.root.after(0, _do_reload))
+            self._post_ui(lambda: self.root.after(50, _do_notify))
 

@@ -13,6 +13,7 @@ once with a visible console window showing progress.
 Every launch runs the Bootstrap verification before the main GUI opens.
 """
 
+import hashlib
 import json
 import os
 import queue
@@ -25,6 +26,7 @@ import tempfile
 import time
 import urllib.request
 import importlib.util
+import importlib.machinery
 from pathlib import Path
 from typing import Optional
 
@@ -829,6 +831,10 @@ def _configure_platformio_environment(script_dir: Path) -> str:
         os.environ["PLATFORMIO_CACHE_DIR"] = str(cache_dir)
         os.environ["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir / "build")
         os.environ["PLATFORMIO_GLOBALLIB_DIR"] = str(lib_dir)
+        os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+        os.environ["PLATFORMIO_DISABLE_PROMPTS"] = "1"
+        os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
+        os.environ["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         os.environ["TMP"] = str(tmp_dir)
         os.environ["TEMP"] = str(tmp_dir)
         os.environ["TMPDIR"] = str(tmp_dir)
@@ -998,8 +1004,8 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
                 if gui and total_files > 0 and (now - last_extract_time >= 0.15 or idx == total_files):
                     last_extract_time = now
                     pct = min(99.0, (idx / total_files) * 100.0)
-                    filled = int(pct / 100.0 * 30)
-                    bar = "▰" * filled + "▱" * (30 - filled)
+                    filled = int(pct / 100.0 * 50)
+                    bar = "▰" * filled + "▱" * (50 - filled)
 
                     ext_mb = extracted_bytes / (1024 * 1024)
                     tot_mb = total_uncompressed_bytes / (1024 * 1024)
@@ -1213,7 +1219,7 @@ class BootstrapGUI:
             except Exception:
                 pass
         import tkinter as tk
-        from tkinter import scrolledtext, font as tkfont, ttk
+        from tkinter import font as tkfont, ttk
 
         self.root = tk.Tk()
         self.root.title("MCU Uploader IDE by Naph — Setup")
@@ -2628,6 +2634,12 @@ def run_update_checks(auto_update: bool = False):
 def ensure_pip() -> bool:
     """Make sure pip is available in the current Python."""
     try:
+        import pip  # noqa: F401 — availability probe
+        ok("pip already installed in target environment")
+        return True
+    except Exception:
+        pass
+    try:
         res = subprocess.run(
             [sys.executable, "-m", "pip", "--version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -2832,7 +2844,7 @@ def ensure_pywin32() -> bool:
 def ensure_esptool() -> bool:
     try:
         # pyrefly: ignore [missing-import]
-        import esptool
+        import esptool  # noqa: F401 — availability probe
         ok("esptool already installed")
         return True
     except ImportError:
@@ -2876,9 +2888,52 @@ def ensure_pywebview() -> bool:
 
 # ── 2e. Ensure PyQt5 + QScintilla ─────────────────────────────
 # ── Multithreaded Parallel Pip Package Manager ────────────────
-# Fast import check using importlib.util.find_spec (no actual import overhead)
+def _get_target_site_packages_dirs() -> list[str]:
+    """Return the search paths strictly for the target environment.
+    Never returns the host Python's site-packages when targeting a virtual environment."""
+    venv_root = None
+    if "VIRTUAL_ENV" in os.environ and os.environ["VIRTUAL_ENV"]:
+        venv_root = Path(os.environ["VIRTUAL_ENV"]).resolve()
+    elif sys.executable:
+        exe_p = Path(sys.executable).resolve()
+        if (exe_p.parent.parent / "pyvenv.cfg").is_file():
+            venv_root = exe_p.parent.parent
+    if not venv_root:
+        candidate_env = (SCRIPT_DIR / "env").resolve()
+        if candidate_env.is_dir():
+            venv_root = candidate_env
+
+    if venv_root and venv_root.is_dir():
+        sp = venv_root / "Lib" / "site-packages" if sys.platform == "win32" else venv_root / "lib" / "site-packages"
+        if sp.is_dir():
+            dirs = [str(sp)]
+            for sub in ("win32", "win32/lib"):
+                sub_p = sp / sub
+                if sub_p.is_dir():
+                    dirs.append(str(sub_p))
+            return dirs
+        return []
+    return [p for p in sys.path if "site-packages" in p.lower()]
+
 def _check_spec(import_name: str) -> bool:
-    return importlib.util.find_spec(import_name) is not None
+    """Fast check if import_name is present strictly in the target environment."""
+    target_dirs = _get_target_site_packages_dirs()
+    if not target_dirs:
+        return False
+    try:
+        parts = import_name.split(".")
+        cur_paths = target_dirs
+        for part in parts:
+            sp = importlib.machinery.PathFinder.find_spec(part, cur_paths)
+            if sp is None:
+                return False
+            if sp.submodule_search_locations:
+                cur_paths = list(sp.submodule_search_locations)
+            else:
+                cur_paths = None
+        return True
+    except Exception:
+        return False
 
 def _check_import_pyserial() -> bool:
     return _check_spec("serial") and _check_spec("serial.tools.list_ports")
@@ -2890,6 +2945,11 @@ def _check_import_pywin32() -> bool:
     """Verify pywin32 in a fresh interpreter so pywin32.pth is processed."""
     if sys.platform != "win32":
         return True
+    try:
+        import win32gui, win32con  # noqa: F401 — availability probe
+        return True
+    except Exception:
+        pass
     try:
         result = subprocess.run(
             [sys.executable, "-c", "import win32gui, win32con"],
@@ -2914,6 +2974,12 @@ def _check_import_pywebview() -> bool:
     """
     if not _check_spec("webview"):
         return False
+    try:
+        import webview
+        if webview is not None:
+            return True
+    except Exception:
+        pass
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
@@ -3006,11 +3072,7 @@ PIP_PACKAGES_SPEC = [
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
-        # The main MCU Flasher GUI is Tk/Monaco based.  PyQt5/QScintilla is
-        # only used by the standalone Arduino library-example viewer and must
-        # not hold the normal bootstrap hostage to a large Qt wheel download.
-        "critical": False,
-        "optional_feature": "qscintilla_viewer",
+        "critical": True,
     },
     {
         "id": "platformio",
@@ -3043,13 +3105,14 @@ def ensure_pip_packages_parallel(
       5. verify every package in a fresh/appropriate interpreter context;
       6. repair only packages that still fail, one at a time without cache.
 
-    Adaptive worker count is deliberately conservative so this remains stable
-    on old/low-power machines as well as modern desktops:
+    The normal GUI launcher rejects systems below four logical CPU
+    cores/threads before bootstrap begins. This helper keeps a conservative
+    fallback policy for standalone setup or repair calls:
         1-2 logical CPUs -> 1 download worker
         3-5 logical CPUs -> 2 download workers
         6+ logical CPUs  -> 3 download workers (hard cap)
 
-    The GUI keeps the original per-dependency 30-cell progress bars.  Raw pip
+    The GUI keeps the original per-dependency 50-cell progress bars.  Raw pip
     resolver output is hidden unless an operation fails.
 
     ``package_ids`` is reserved for feature-triggered installs (for example,
@@ -3093,14 +3156,15 @@ def ensure_pip_packages_parallel(
     def _render_table():
         if not gui or getattr(gui, "_closed", False):
             return
-        divider = "  " + "─" * 52
+        bar_cells = 50
+        divider = "  " + "─" * (bar_cells + 6)
         rows = [divider]
         for spec in active_specs:
             state = pkg_states[spec["id"]]
             pct = max(0, min(100, int(round(state["pct"]))))
-            filled = int(pct / 100 * 30)
-            bar = "▰" * filled + "▱" * (30 - filled)
-            rows.append(f"  {state['name']:<22}  {state['status']}")
+            filled = int(pct / 100 * bar_cells)
+            bar = "▰" * filled + "▱" * (bar_cells - filled)
+            rows.append(f"  {state['name']:<28}  {state['status']}")
             rows.append(f"  {bar}  {pct:3d}%")
             rows.append(divider)
         gui.update_pip_table_block("\n".join(rows))
@@ -3147,7 +3211,6 @@ def ensure_pip_packages_parallel(
 
     def _check(spec):
         try:
-            importlib.invalidate_caches()
             return bool(spec["check"]())
         except Exception:
             return False
@@ -3160,29 +3223,31 @@ def ensure_pip_packages_parallel(
             avg = sum(float(pkg_states[s["id"]]["pct"]) for s in active_specs) / len(active_specs)
         gui.set_progress_percent(max(0.0, min(100.0, avg)))
 
-    # Show the classic dependency table immediately.
     if gui:
         gui.set_status("Checking Python package dependencies...")
         gui.set_progress_percent(2)
-        _render_table()
 
-    def _precheck(spec):
-        installed = _check(spec)
-        if installed:
-            _set_state(
-                spec["id"], status_text="✔ Installed", pct=100,
-                done=True, ok_value=True,
-            )
-        else:
-            _set_state(
-                spec["id"], status_text="⏳ Waiting...", pct=0,
-                done=False, ok_value=False,
-            )
-        return installed
+    importlib.invalidate_caches()
 
     # Checks are read-only, so running these concurrently is safe.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(active_specs))) as executor:
-        installed_flags = list(executor.map(_precheck, active_specs))
+        installed_flags = list(executor.map(_check, active_specs))
+
+    with table_lock:
+        for spec, installed in zip(active_specs, installed_flags):
+            if installed:
+                pkg_states[spec["id"]]["status"] = "✔ Installed"
+                pkg_states[spec["id"]]["pct"] = 100
+                pkg_states[spec["id"]]["done"] = True
+                pkg_states[spec["id"]]["ok"] = True
+            else:
+                pkg_states[spec["id"]]["status"] = "⏳ Waiting..."
+                pkg_states[spec["id"]]["pct"] = 0
+                pkg_states[spec["id"]]["done"] = False
+                pkg_states[spec["id"]]["ok"] = False
+
+    # Render table immediately reflecting true state (no animating loading for packages already installed!)
+    _render_table()
 
     missing_specs = [spec for spec, installed in zip(active_specs, installed_flags) if not installed]
 
@@ -3658,6 +3723,7 @@ def ensure_pip_packages_parallel(
                     gui.log_dim(f"pip: {detail.splitlines()[-1]}")
             return False
 
+        _sync_private_python_site_packages()
         if gui:
             gui.log_ok("All required pip package dependencies installed & verified!")
         return True
@@ -3668,6 +3734,34 @@ def ensure_pip_packages_parallel(
             shutil.rmtree(temp_root, ignore_errors=True)
         except Exception:
             pass
+
+
+def _sync_private_python_site_packages() -> None:
+    """Ensure src/_python has PyQt5 & QScintilla if the private runtime folder is present."""
+    if sys.platform != "win32":
+        return
+    try:
+        private_py = SCRIPT_DIR / "src" / "_python" / "python.exe"
+        if not private_py.is_file():
+            return
+        res = subprocess.run(
+            [str(private_py), "-c", "import PyQt5.QtWidgets, PyQt5.Qsci"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=10,
+        )
+        if res.returncode != 0:
+            subprocess.run(
+                [str(private_py), "-m", "pip", "install", "PyQt5", "QScintilla",
+                 "--prefer-binary", "--disable-pip-version-check", "--no-input"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=180,
+            )
+    except Exception:
+        pass
 
 
 _OPTIONAL_PIP_FEATURE_PACKAGE_IDS: dict[str, set[str]] = {
@@ -4247,6 +4341,11 @@ _PLATFORM_INFO = {
 # Readiness is derived from successful environment builds and their actual package metadata.
 _FULL_FAMILY_MARKER_SCHEMA = 5
 _FULL_FAMILY_MARKER_DIR = ".mcu-family-complete"
+_BOARD_TOOLCHAIN_MARKER_DIR = ".mcu-board-ready"
+_BOARD_TOOLCHAIN_MARKER_SCHEMA = 2
+_BOARD_TOOLCHAIN_PREPARE_LOCK = threading.RLock()
+_PLATFORMIO_SETUP_ATTEMPTS = 3
+_PLATFORMIO_SETUP_TIMEOUT_S = 1800
 
 
 def _platform_manifest_path(pio_core_dir: str, platform: str) -> Path | None:
@@ -4282,6 +4381,15 @@ def _installed_platform_version(pio_core_dir: str, platform: str) -> str:
 
 def _full_family_marker_path(pio_core_dir: str, platform: str) -> Path:
     return Path(pio_core_dir) / _FULL_FAMILY_MARKER_DIR / f"{platform}.json"
+
+
+def _board_toolchain_marker_path(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> Path:
+    """Return the private readiness marker for one proven board environment."""
+    identity = "\0".join((str(platform), str(board_id), str(framework)))
+    key = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()
+    return Path(pio_core_dir) / _BOARD_TOOLCHAIN_MARKER_DIR / f"{key}.json"
 
 
 def _installed_package_dir_names(pio_core_dir: str) -> list[str]:
@@ -4611,6 +4719,72 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
     return _full_family_marker_valid(pio_core_dir, platform)
 
 
+def board_toolchain_ready(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> bool:
+    """Check whether a board was proven usable by a real PlatformIO build.
+
+    The full-family bootstrap marker is accepted first.  Main-app, on-demand
+    installs additionally record a board-specific marker so a newly added
+    board/platform can be prepared without pretending that one board build
+    covered every variant in the platform.
+    """
+    if not platform or not board_id:
+        return False
+    marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
+    if marker.is_file():
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            if int(data.get("schema", 0)) != _BOARD_TOOLCHAIN_MARKER_SCHEMA:
+                return False
+            if str(data.get("platform", "")).lower() != str(platform).lower():
+                return False
+            if str(data.get("board", "")) != str(board_id):
+                return False
+            if str(data.get("framework", "arduino")).lower() != str(framework).lower():
+                return False
+            current_version = _installed_platform_version(pio_core_dir, platform)
+            if not current_version or current_version != str(data.get("platform_version", "")):
+                return False
+            installed = set(_installed_package_dir_names(pio_core_dir))
+            snapshot = {str(x) for x in (data.get("package_dirs") or []) if str(x).strip()}
+            return bool(snapshot and snapshot.issubset(installed))
+        except Exception:
+            return False
+
+    # If the full platform family has been certified and installed by bootstrap,
+    # all toolchain packages for this platform are ready.
+    try:
+        if _platform_already_installed(pio_core_dir, platform):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _write_board_toolchain_marker(
+    pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
+) -> None:
+    """Persist the successful result of one board-specific prewarm build."""
+    marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": _BOARD_TOOLCHAIN_MARKER_SCHEMA,
+        "platform": str(platform),
+        "platform_version": _installed_platform_version(pio_core_dir, platform),
+        "board": str(board_id),
+        "framework": str(framework or "arduino"),
+        "install_mode": "main-app-board-specific-dummy-build",
+        "package_dirs": _installed_package_dir_names(pio_core_dir),
+    }
+    temporary = marker.with_name(marker.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.replace(temporary, marker)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 # Cache for PlatformIO CLI query results (avoid repeated subprocess calls)
 _PIO_PLATFORM_LIST_CACHE: dict[str, bool] = {}
 
@@ -4694,7 +4868,7 @@ def _platformio_live_bar(label: str, phase: str, item: str, pct: int | None) -> 
     if pct is None:
         return f"  {label}: {phase} — {safe_item}"
     pct = max(0, min(100, int(pct)))
-    width = 30
+    width = 50
     filled = int(round(width * pct / 100.0))
     bar = "▰" * filled + "▱" * (width - filled)
     return f"  {label}: {phase} — {safe_item}\n  {bar}  {pct:3d}%"
@@ -4711,6 +4885,11 @@ def _stream_platformio_setup(
     progress_end: float = 100.0,
     timeout: int = 1200,
     on_download_start=None,
+    on_line=None,
+    on_status=None,
+    on_progress=None,
+    cancel_requested=None,
+    on_process=None,
 ) -> bool:
     """Run one PlatformIO command with phase-accurate logging and a real timeout.
 
@@ -4739,6 +4918,11 @@ def _stream_platformio_setup(
         coarse_progress = target
         if _gui:
             _gui.set_progress_percent(coarse_progress)
+        if callable(on_progress):
+            try:
+                on_progress(coarse_progress)
+            except Exception:
+                pass
 
     def _start_phase(phase: str, item: str, kind: str, pct: int | None):
         nonlocal active_phase, active_phase_item, active_phase_kind, active_pct
@@ -4749,6 +4933,14 @@ def _stream_platformio_setup(
         active_phase_kind = kind or current_kind
         active_pct = None if pct is None else max(0, min(100, int(pct)))
         status(f"{label}: {phase} {active_phase_kind} - {active_phase_item}")
+        if callable(on_status):
+            try:
+                on_status(
+                    f"{label}: {phase} {active_phase_item}"
+                    + (f"... {active_pct}%" if active_pct is not None else "...")
+                )
+            except Exception:
+                pass
         if _gui:
             _gui.set_status(
                 f"{label}: {phase} {active_phase_item}"
@@ -4764,6 +4956,14 @@ def _stream_platformio_setup(
             return
         if pct is not None:
             active_pct = max(0, min(100, int(pct)))
+        if callable(on_status):
+            try:
+                on_status(
+                    f"{label}: {active_phase} {active_phase_item}"
+                    + (f"... {active_pct}%" if active_pct is not None else "...")
+                )
+            except Exception:
+                pass
         if _gui:
             _gui.set_status(
                 f"{label}: {active_phase} {active_phase_item}"
@@ -4798,6 +4998,11 @@ def _stream_platformio_setup(
         tail.append(stripped)
         if len(tail) > 120:
             del tail[:30]
+        if callable(on_line):
+            try:
+                on_line(stripped)
+            except Exception:
+                pass
         low = stripped.lower()
 
         if "tool manager:" in low or "platform manager:" in low:
@@ -4863,6 +5068,13 @@ def _stream_platformio_setup(
         except Exception:
             pass
 
+    def _notify_process(value):
+        if callable(on_process):
+            try:
+                on_process(value)
+            except Exception:
+                pass
+
     def _terminate_tree(proc):
         if not proc or proc.poll() is not None:
             return
@@ -4886,6 +5098,16 @@ def _stream_platformio_setup(
     if _gui:
         _gui.set_progress_percent(progress_start)
         _gui.set_status(f"{label}: {stage}")
+    if callable(on_progress):
+        try:
+            on_progress(progress_start)
+        except Exception:
+            pass
+    if callable(on_status):
+        try:
+            on_status(f"{label}: {stage}")
+        except Exception:
+            pass
 
     proc = None
     try:
@@ -4900,8 +5122,9 @@ def _stream_platformio_setup(
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            creationflags=(subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0,
         )
+        _notify_process(proc)
 
         line_queue: queue.Queue = queue.Queue()
         reader_done = [False]
@@ -4940,6 +5163,22 @@ def _stream_platformio_setup(
 
         while True:
             now = time.monotonic()
+            if callable(cancel_requested):
+                try:
+                    if cancel_requested():
+                        _terminate_tree(proc)
+                        _write_failure_log("CANCELLED by caller")
+                        if _gui:
+                            _gui.clear_platformio_progress_block()
+                        if callable(on_status):
+                            try:
+                                on_status(f"{label}: cancelled")
+                            except Exception:
+                                pass
+                        _notify_process(None)
+                        return False
+                except Exception:
+                    pass
             if now - started_at > max(1, int(timeout)):
                 _terminate_tree(proc)
                 raise subprocess.TimeoutExpired(cmd, timeout)
@@ -4947,7 +5186,8 @@ def _stream_platformio_setup(
             try:
                 raw = line_queue.get(timeout=0.2)
             except queue.Empty:
-                if now - last_output_at >= 300.0 and proc.poll() is None:
+                # 600s (10 min) silence threshold to accommodate slow HDDs, eMMC, and background antivirus scans on low-end hardware
+                if now - last_output_at >= 600.0 and proc.poll() is None:
                     _terminate_tree(proc)
                     raise RuntimeError(
                         f"PlatformIO produced no output for {int(now - last_output_at)}s while processing "
@@ -4956,15 +5196,22 @@ def _stream_platformio_setup(
                 # A silent Package Manager check is not necessarily frozen. Keep
                 # the UI explicit while still enforcing the absolute timeout.
                 if (
-                    _gui and current_item and active_phase is None
+                    current_item and active_phase is None
                     and now - last_output_at >= 3.0
                     and now - last_heartbeat_at >= 1.0
                 ):
                     last_heartbeat_at = now
-                    _gui.set_status(
+                    msg = (
                         f"{label}: checking {current_item}... "
                         f"{int(now - last_output_at)}s since last PlatformIO output"
                     )
+                    if _gui:
+                        _gui.set_status(msg)
+                    if callable(on_status):
+                        try:
+                            on_status(msg)
+                        except Exception:
+                            pass
                 if reader_done[0] and proc.poll() is not None:
                     break
                 continue
@@ -4980,6 +5227,7 @@ def _stream_platformio_setup(
                 _record_line(stripped)
 
         rc = proc.wait(timeout=15)
+        _notify_process(None)
         if active_phase:
             _finish_phase(inferred=(rc == 0))
 
@@ -4996,6 +5244,7 @@ def _stream_platformio_setup(
         return False
     except subprocess.TimeoutExpired:
         _terminate_tree(proc)
+        _notify_process(None)
         if _gui:
             _gui.clear_platformio_progress_block()
         _write_failure_log(f"TIMEOUT: {timeout}s")
@@ -5006,6 +5255,7 @@ def _stream_platformio_setup(
         return False
     except Exception as exc:
         _terminate_tree(proc)
+        _notify_process(None)
         if _gui:
             _gui.clear_platformio_progress_block()
         _write_failure_log(f"EXCEPTION: {exc}")
@@ -5227,6 +5477,28 @@ def ensure_board_toolchains() -> bool:
         env["PLATFORMIO_CORE_DIR"] = pio_core_dir
         env["PLATFORMIO_NO_TELEMETRY"] = "1"
         env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+
+        # Low-end device budgeting: throttle compiler jobs to prevent RAM thrashing and UI freezes
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        avail_gb = None
+        try:
+            import psutil
+            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+        except Exception:
+            pass
+        if avail_gb is not None and avail_gb < 1.0:
+            safe_jobs = "1"
+        elif cpu_count <= 2:
+            safe_jobs = "1"
+        else:
+            safe_jobs = str(max(1, min(cpu_count - 1, 4)))
+        env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
+        env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
+        env.setdefault("PLATFORMIO_DISABLE_UPGRADE_CHECK", "1")
+        env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
+        env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
 
         warning_shown = [False]
         def _warn_once():
@@ -5283,6 +5555,224 @@ def ensure_board_toolchains() -> bool:
             all_ok = False
 
     return all_ok
+
+
+def prepare_platformio_board_toolchain(
+    platform: str,
+    board_id: str,
+    framework: str = "arduino",
+    label: str | None = None,
+    *,
+    on_line=None,
+    on_status=None,
+    on_progress=None,
+    on_download_start=None,
+    cancel_requested=None,
+    on_process=None,
+) -> bool:
+    """Install and prove one board environment on demand from the main app.
+
+    This deliberately shares the bootstrap PlatformIO command runner and the
+    app-owned ``PLATFORMIO_CORE_DIR``.  The platform install is idempotent;
+    the temporary compile is what makes framework/toolchain readiness real for
+    the selected board, including packages that PlatformIO resolves only after
+    it has inspected that board's manifest.
+    """
+    platform = str(platform or "").strip()
+    board_id = str(board_id or "").strip()
+    framework = str(framework or "arduino").strip() or "arduino"
+    display = str(label or board_id or platform).strip() or platform
+    if not platform or not board_id:
+        if callable(on_status):
+            try:
+                on_status("Board toolchain preparation cannot start: board metadata is incomplete.")
+            except Exception:
+                pass
+        return False
+
+    with _BOARD_TOOLCHAIN_PREPARE_LOCK:
+        pio = find_pio()
+        if not pio:
+            if callable(on_status):
+                try:
+                    on_status("PlatformIO Core not found; installing it first...")
+                except Exception:
+                    pass
+            if not ensure_platformio():
+                return False
+            pio = find_pio()
+        if not pio:
+            return False
+
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(
+            _get_safe_platformio_core_dir(SCRIPT_DIR)
+        )
+        os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
+        if board_toolchain_ready(pio_core_dir, platform, board_id, framework):
+            if callable(on_status):
+                try:
+                    on_status(f"{display}: board framework/toolchain is already ready.")
+                except Exception:
+                    pass
+            if callable(on_progress):
+                try:
+                    on_progress(100)
+                except Exception:
+                    pass
+            return True
+        env = os.environ.copy()
+        env["PLATFORMIO_CORE_DIR"] = pio_core_dir
+        env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
+        env["PYTHONWARNINGS"] = "ignore"
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PLATFORMIO_UNBUFFERED"] = "1"
+
+        # Low-end device budgeting: throttle compiler jobs to prevent RAM thrashing and UI freezes
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        avail_gb = None
+        try:
+            import psutil
+            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+        except Exception:
+            pass
+        if avail_gb is not None and avail_gb < 1.0:
+            safe_jobs = "1"
+        elif cpu_count <= 2:
+            safe_jobs = "1"
+        else:
+            safe_jobs = str(max(1, min(cpu_count - 1, 4)))
+        env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
+        env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
+        env.setdefault("PLATFORMIO_DISABLE_UPGRADE_CHECK", "1")
+        env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
+        env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
+
+        if callable(on_status):
+            try:
+                on_status(f"Preparing {display} Framework & Toolchain...")
+            except Exception:
+                pass
+
+        try:
+            _check_and_extract_pio_zip_bundle(Path(pio_core_dir))
+        except Exception:
+            # A bundled archive is optional. PlatformIO can still download the
+            # missing package from its registry, so do not block the normal path.
+            pass
+
+        warning_sent = [False]
+
+        def _announce_download():
+            if not warning_sent[0]:
+                warning_sent[0] = True
+                _log_platformio_first_install_warning(
+                    display,
+                    _PLATFORM_INFO.get(platform, (platform, "a one-time"))[1],
+                )
+            if callable(on_download_start):
+                try:
+                    on_download_start()
+                except Exception:
+                    pass
+
+        platform_ok = False
+        for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+            if attempt > 1 and callable(on_status):
+                try:
+                    on_status(
+                        f"{display}: retrying platform preparation "
+                        f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                    )
+                except Exception:
+                    pass
+            platform_ok = _stream_platformio_setup(
+                list(pio) + ["platform", "install", platform],
+                env,
+                label=display,
+                stage=f"Checking PlatformIO platform {platform}",
+                progress_start=0,
+                progress_end=30,
+                timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
+                on_download_start=_announce_download,
+                on_line=on_line,
+                on_status=on_status,
+                on_progress=on_progress,
+                cancel_requested=cancel_requested,
+                on_process=on_process,
+            )
+            if platform_ok:
+                break
+        if not platform_ok:
+            return False
+
+        temporary_root = Path(tempfile.mkdtemp(prefix="mcu_flasher_toolchain_"))
+        try:
+            safe_board = re.sub(r"[^A-Za-z0-9_]+", "_", board_id).strip("_") or "board"
+            env_name = f"prepare_{safe_board[:48]}"
+            (temporary_root / "platformio.ini").write_text(
+                f"[env:{env_name}]\n"
+                f"platform = {platform}\n"
+                f"board = {board_id}\n"
+                f"framework = {framework}\n",
+                encoding="utf-8",
+            )
+            source_dir = temporary_root / "src"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            (source_dir / "main.cpp").write_text(
+                "#include <Arduino.h>\nvoid setup(){}\nvoid loop(){}\n",
+                encoding="utf-8",
+            )
+
+            if callable(on_status):
+                try:
+                    on_status(f"{display}: validating framework and toolchain for {board_id}...")
+                except Exception:
+                    pass
+            build_ok = False
+            for attempt in range(1, _PLATFORMIO_SETUP_ATTEMPTS + 1):
+                if attempt > 1 and callable(on_status):
+                    try:
+                        on_status(
+                            f"{display}: retrying framework/toolchain validation "
+                            f"({attempt}/{_PLATFORMIO_SETUP_ATTEMPTS})..."
+                        )
+                    except Exception:
+                        pass
+                build_ok = _stream_platformio_setup(
+                    list(pio) + ["run", "-e", env_name],
+                    env,
+                    cwd=temporary_root,
+                    label=display,
+                    stage=f"First-use compile validation for {board_id}",
+                    progress_start=30,
+                    progress_end=100,
+                    timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
+                    on_download_start=_announce_download,
+                    on_line=on_line,
+                    on_status=on_status,
+                    on_progress=on_progress,
+                    cancel_requested=cancel_requested,
+                    on_process=on_process,
+                )
+                if build_ok:
+                    break
+            if not build_ok:
+                return False
+
+            try:
+                _write_board_toolchain_marker(pio_core_dir, platform, board_id, framework)
+            except Exception as exc:
+                if callable(on_status):
+                    try:
+                        on_status(
+                            f"{display}: packages are installed, but readiness could not be cached ({exc})."
+                        )
+                    except Exception:
+                        pass
+            return True
+        finally:
+            shutil.rmtree(str(temporary_root), ignore_errors=True)
 
 
 ESP32_BOARD_INDEX_URL = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
@@ -5751,6 +6241,12 @@ class _RangeDownloadUnsupported(RuntimeError):
     """Raised when the GitHub/CDN endpoint does not honor byte ranges."""
 
 
+# Maximum seconds of silence (no data received) before a download read loop
+# gives up and lets the retry/curl fallback take over.  Matches the 45-second
+# --speed-time used by the curl fallback for consistency.
+_DOWNLOAD_STALL_TIMEOUT_SECONDS = 45
+
+
 def _parallel_range_download(
     url: str,
     partial: Path,
@@ -5839,8 +6335,8 @@ def _parallel_range_download(
                 else f"{speed_bps / 1024:.1f} KB/s"
             )
             pct = min(99.0, (received / expected_size) * 100.0)
-            filled = int(pct / 100.0 * 30)
-            bar = "▰" * filled + "▱" * (30 - filled)
+            filled = int(pct / 100.0 * 50)
+            bar = "▰" * filled + "▱" * (50 - filled)
             rec_mb = received / (1024 * 1024)
             total_mb = expected_size / (1024 * 1024)
             progress_block = (
@@ -5882,15 +6378,34 @@ def _parallel_range_download(
             if match.group(3) != "*" and int(match.group(3)) != expected_size:
                 raise _RangeDownloadUnsupported("range response reported an unexpected total size")
 
+            # Enforce per-read socket timeout so a CDN stall cannot
+            # block this thread forever.  urllib's timeout applies
+            # only to the TCP connect, not to individual reads.
+            try:
+                _raw_sock = response.fp.raw._sock if hasattr(response.fp, 'raw') else None
+                if _raw_sock is not None:
+                    _raw_sock.settimeout(_DOWNLOAD_STALL_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+
             with open(chunk_path, "ab" if existing_size else "wb") as output:
                 received = existing_size
+                _last_data_time = time.time()
                 while received < expected_chunk_size:
                     chunk_to_read = min(64 * 1024, expected_chunk_size - received)
-                    block = response.read(chunk_to_read)
+                    try:
+                        block = response.read(chunk_to_read)
+                    except (TimeoutError, OSError) as read_exc:
+                        raise OSError(
+                            f"download stalled for chunk {index} "
+                            f"({_DOWNLOAD_STALL_TIMEOUT_SECONDS}s with no data "
+                            f"at {received} of {expected_chunk_size} bytes)"
+                        ) from read_exc
                     if not block:
                         break
                     output.write(block)
                     received += len(block)
+                    _last_data_time = time.time()
                     with progress_lock:
                         bytes_by_chunk[index] = min(received, expected_chunk_size)
                     report_progress()
@@ -6076,16 +6591,34 @@ def _download_file(
                         response_total = base_received + response_length
                     total = expected_size_i or response_total
 
+                    # Enforce per-read socket timeout so a mid-stream
+                    # CDN stall cannot block this thread forever.
+                    try:
+                        _raw_sock = response.fp.raw._sock if hasattr(response.fp, 'raw') else None
+                        if _raw_sock is not None:
+                            _raw_sock.settimeout(_DOWNLOAD_STALL_TIMEOUT_SECONDS)
+                    except Exception:
+                        pass
+
                     with open(partial, write_mode) as output:
                         received = base_received
                         start_time = time.time()
                         last_update_time = 0.0
+                        last_data_time = time.time()
                         while True:
-                            block = response.read(128 * 1024)
+                            try:
+                                block = response.read(128 * 1024)
+                            except (TimeoutError, OSError) as read_exc:
+                                raise OSError(
+                                    f"download stalled "
+                                    f"({_DOWNLOAD_STALL_TIMEOUT_SECONDS}s with no data "
+                                    f"at {received} of {total or '?'} bytes)"
+                                ) from read_exc
                             if not block:
                                 break
                             output.write(block)
                             received += len(block)
+                            last_data_time = time.time()
 
                             now = time.time()
                             if _gui and (now - last_update_time >= 0.15 or (total and received >= total)):
@@ -6099,8 +6632,8 @@ def _download_file(
 
                                 if total > 0:
                                     pct = min(99.0, (received / total) * 100.0)
-                                    filled = int(pct / 100.0 * 30)
-                                    bar = "▰" * filled + "▱" * (30 - filled)
+                                    filled = int(pct / 100.0 * 50)
+                                    bar = "▰" * filled + "▱" * (50 - filled)
                                     rec_mb = received / (1024 * 1024)
                                     tot_mb = total / (1024 * 1024)
                                     progress_block = (
@@ -7215,9 +7748,63 @@ def _cp210x_driver_status_message(
     return False, f"CP210x driver is not yet available. {detail}"
 
 
+def find_running_opencode_exe() -> Optional[str]:
+    """Return the executable path of any currently running OpenCode process."""
+    try:
+        import psutil
+        for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or "").lower()
+                exe = proc.info.get('exe') or ""
+                if name in ("opencode.exe", "opencode") and exe:
+                    p = Path(exe)
+                    if p.is_file():
+                        return str(p.resolve())
+                cmdline = proc.info.get('cmdline') or []
+                for arg in cmdline:
+                    arg_l = str(arg).lower()
+                    if "opencode" in arg_l and (arg_l.endswith(".exe") or arg_l.endswith(".cmd")):
+                        p = Path(arg)
+                        if p.is_file():
+                            return str(p.resolve())
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def is_any_opencode_process_running() -> bool:
+    """Check whether an OpenCode AI Assistant process is currently active."""
+    try:
+        import psutil
+        for proc in psutil.process_iter(['name', 'exe', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or "").lower()
+                if name in ("opencode.exe", "opencode"):
+                    return True
+                exe = (proc.info.get('exe') or "").lower()
+                if "opencode" in exe and exe.endswith(".exe"):
+                    return True
+                cmdline = proc.info.get('cmdline') or []
+                for arg in cmdline:
+                    arg_l = str(arg).lower()
+                    if "opencode" in arg_l and (arg_l.endswith("opencode.exe") or arg_l.endswith("opencode.cmd")):
+                        return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def check_opencode_cli() -> Optional[str]:
     """Check if opencode CLI executable is installed on system or npm path."""
-    exe = shutil.which("opencode") or shutil.which("opencode.cmd") or shutil.which("opencode.exe")
+    running_exe = find_running_opencode_exe()
+    if running_exe:
+        return running_exe
+
+    exe = shutil.which("opencode.exe") or shutil.which("opencode") or shutil.which("opencode.cmd")
     if exe:
         return exe
 
@@ -7225,9 +7812,9 @@ def check_opencode_cli() -> Optional[str]:
         appdata = os.environ.get("APPDATA", "")
         if appdata:
             for candidate in [
-                Path(appdata) / "npm" / "opencode.cmd",
                 Path(appdata) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
                 Path(appdata) / "npm" / "opencode.exe",
+                Path(appdata) / "npm" / "opencode.cmd",
                 Path(appdata) / "npm" / "opencode",
             ]:
                 if candidate.exists() and candidate.stat().st_size > 0:
@@ -7238,8 +7825,8 @@ def check_opencode_cli() -> Optional[str]:
             for candidate in [
                 Path(local_app) / "Programs" / "opencode" / "opencode.exe",
                 Path(local_app) / "opencode" / "opencode.exe",
-                Path(local_app) / "npm" / "opencode.cmd",
                 Path(local_app) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                Path(local_app) / "npm" / "opencode.cmd",
             ]:
                 if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
@@ -7247,16 +7834,16 @@ def check_opencode_cli() -> Optional[str]:
         user_prof = os.environ.get("USERPROFILE", "")
         if user_prof:
             for candidate in [
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
                 Path(user_prof) / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
                 Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
+                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
             ]:
                 if candidate.exists() and candidate.stat().st_size > 0:
                     return str(candidate)
 
         for candidate in [
-            Path(r"C:\Program Files\nodejs\opencode.cmd"),
             Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+            Path(r"C:\Program Files\nodejs\opencode.cmd"),
         ]:
             if candidate.exists() and candidate.stat().st_size > 0:
                 return str(candidate)
@@ -7589,13 +8176,21 @@ def ensure_opencode_cli() -> bool:
     def _cli_works(path: str | None) -> bool:
         if not path:
             return False
+        if is_any_opencode_process_running():
+            return True
         p = Path(path)
         if not p.exists() and not shutil.which(path):
             return False
         try:
+            test_target = path
             is_script = str(path).lower().endswith((".cmd", ".bat"))
+            if is_script and sys.platform == "win32":
+                sibling_exe = Path(path).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+                if sibling_exe.is_file():
+                    test_target = str(sibling_exe)
+                    is_script = False
             result = subprocess.run(
-                [path, "--version"],
+                [test_target, "--version"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -7610,10 +8205,31 @@ def ensure_opencode_cli() -> bool:
         except Exception:
             return False
 
+    running_cli = find_running_opencode_exe()
+    if running_cli:
+        ok(f"OpenCode AI Assistant is active and running ({running_cli})")
+        return True
+    if is_any_opencode_process_running():
+        ok("OpenCode AI Assistant is active and running in an external session.")
+        return True
+
     existing_cli = check_opencode_cli()
     if _cli_works(existing_cli):
         ok(f"OpenCode AI Assistant is already installed ({existing_cli})")
         return True
+
+    # If OpenCode is actively in use or its binary is locked, do not attempt destructive npm operations
+    if is_any_opencode_process_running():
+        ok("OpenCode AI Assistant process detected in another window; skipping npm install.")
+        return True
+
+    if existing_cli and Path(existing_cli).is_file():
+        try:
+            with open(existing_cli, "a"):
+                pass
+        except OSError:
+            ok(f"OpenCode binary is currently locked by an active process ({existing_cli}); skipping npm reinstall.")
+            return True
 
     section("Installing OpenCode AI Assistant")
     npm_cmd = _find_usable_npm_cmd()
@@ -7675,6 +8291,9 @@ def ensure_opencode_cli() -> bool:
         return subprocess.CompletedProcess(cmd, returncode=proc.returncode, stdout=stdout or "")
 
     try:
+        if is_any_opencode_process_running():
+            ok("OpenCode AI Assistant is active in another window; skipping npm install.")
+            return True
         uninstall_cmd = [
             npm_cmd,
             "uninstall",
@@ -8732,9 +9351,10 @@ def _activate_bootstrap_venv(venv_dir: Path, venv_python: Path) -> bool:
             scripts_dir = venv_dir / "bin"
         if site_packages.is_dir():
             site_path = str(site_packages)
-            if site_path in sys.path:
-                sys.path.remove(site_path)
-            sys.path.insert(0, site_path)
+            # Remove any host site-packages so bootstrap doesn't accidentally resolve host packages
+            sys.path = [p for p in sys.path if "site-packages" not in p.lower() or p.lower() == site_path.lower()]
+            if site_path not in sys.path:
+                sys.path.insert(0, site_path)
         os.environ["VIRTUAL_ENV"] = str(venv_dir)
         os.environ["PATH"] = str(scripts_dir) + os.pathsep + os.environ.get("PATH", "")
         # All bootstrap subprocesses use this value, so pip and the final
@@ -8976,8 +9596,8 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         if not ensure_pip_packages_parallel(gui):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
-        gui.root.after(0, lambda: gui.log_dim(
-            "Optional PyQt5/QScintilla viewer deferred until an example is opened."
+        gui.root.after(0, lambda: gui.log_ok(
+            "All core and code viewer dependencies (including PyQt5 & QScintilla) verified."
         ))
 
         # ── Monaco runtime (required for the selected editor) ──────────
@@ -9120,102 +9740,85 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         gui.root.after(0, _finish)
 
-        # Hide Bootstrap before the main process is spawned. The old flow
-        # waited for the main GUI's crash check before closing this window,
-        # which let the Project Selector appear while Bootstrap was still
-        # visibly disposing. Keep the crash check, but remove that overlap.
-        #
-        # The window is intentionally kept visible for BOOTSTRAP_CLOSE_DELAY_S
-        # seconds so the user can read the final summary block (dependency
-        # check results, update status, etc.) before it is withdrawn.
+        # ── Launch Main GUI & Dispose Bootstrap ──────────────────────
+        # Allow the user to read the final summary status before withdrawing
+        # the window.
         bootstrap_hidden = threading.Event()
 
-        def _hide_bootstrap_before_launch():
-            def _do_hide():
-                try:
-                    gui.root.withdraw()
-                finally:
-                    bootstrap_hidden.set()
-            gui.root.after(int(BOOTSTRAP_CLOSE_DELAY_S * 1000), _do_hide)
+        def _hide_bootstrap():
+            try:
+                gui.root.withdraw()
+            finally:
+                bootstrap_hidden.set()
 
-        gui.root.after(0, _hide_bootstrap_before_launch)
+        gui.root.after(
+            int(BOOTSTRAP_CLOSE_DELAY_S * 1000),
+            _hide_bootstrap,
+        )
         bootstrap_hidden.wait(timeout=BOOTSTRAP_CLOSE_DELAY_S + 5.0)
 
+        # Spawn the detached main GUI process
         proc, gui_log = _spawn_main_gui()
 
-        def _launch_done(proc=proc, gui_log=gui_log):
-            if proc is None:
-                gui.log_fail("Could not start the MCU Uploader IDE process.")
-                gui.stop_spinner("GUI target missing", ok=False)
-                gui.show_error("MCU Uploader IDE by Naph — Error",
-                               f"Target application not found in:\n{SCRIPT_DIR}")
-                gui.close_after_delay()
-                return
-
-            # Brief wait — check if it exited right away
-            for _ in range(4):
-                time.sleep(0.5)
-                if proc.poll() is not None:
-                    break
-
-            exit_code = proc.poll()
-            if exit_code is not None:
-                # Exit code 0 means clean exit (e.g. user cancelled project selector).
-                # Non-zero exit means an actual crash.
-                if exit_code == 0:
-                    _record_bootstrap_log("FINISH", "Main GUI exited cleanly during bootstrap handoff.")
-                    # Clean exit — just close the bootstrap window quietly
-                    try:
-                        if gui_log and gui_log.exists() and gui_log.stat().st_size == 0:
-                            gui_log.unlink()
-                    except Exception:
-                        pass
-                    gui.close_after_delay(0.5)
-                    return
-
-                # Read crash log
-                try:
-                    crash_text = gui_log.read_text(encoding="utf-8", errors="replace").strip() if gui_log else ""
-                except Exception:
-                    crash_text = ""
-
-                def _show_crash(crash_text=crash_text, code=exit_code, gui_log=gui_log):
-                    try:
-                        gui.root.deiconify()
-                        gui.root.lift()
-                    except Exception:
-                        pass
-                    gui.log_fail(f"MCU GUI crashed immediately (exit code {code}).")
-                    if crash_text:
-                        gui.log_section("Crash output")
-                        for ln in crash_text.splitlines()[:30]:
-                            gui.log_fail(f"  {ln}")
-                    gui.stop_spinner("GUI crashed", ok=False)
-                    gui.show_error(
-                        "MCU Uploader IDE by Naph — Crash",
-                        f"The GUI crashed immediately (code {code}).\n\n"
-                        + (crash_text[:600] if crash_text else "(no output captured)")
-                        + f"\n\nLog: {gui_log}",
-                    )
-                    gui.close_after_delay()
-
-                gui.root.after(0, _show_crash)
-                return
-
-            # GUI alive — clean up empty log and close bootstrap window
-            _record_bootstrap_log(
-                "FINISH",
-                "Main GUI started successfully after mandatory Bootstrap verification.",
-            )
+        if proc is None:
+            _record_bootstrap_log("ERROR", "Could not start the MCU Uploader IDE process.")
             try:
-                if gui_log and gui_log.exists() and gui_log.stat().st_size == 0:
-                    gui_log.unlink()
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"Target application not found in:\n{SCRIPT_DIR}",
+                    "MCU Uploader IDE by Naph — Error",
+                    0x10,
+                )
+            except Exception:
+                pass
+            gui.root.after(0, gui.close)
+            return
+
+        # Fast probe (0.5s) to detect an immediate startup crash before disposing
+        time.sleep(0.5)
+        exit_code = proc.poll()
+        if exit_code is not None and exit_code != 0:
+            # Main GUI crashed immediately
+            _record_bootstrap_log(
+                "ERROR",
+                f"Main GUI crashed immediately (exit code {exit_code}).",
+            )
+            crash_text = ""
+            try:
+                crash_text = gui_log.read_text(encoding="utf-8", errors="replace").strip() if gui_log else ""
             except Exception:
                 pass
 
-            gui.close_after_delay(BOOTSTRAP_CLOSE_DELAY_S)
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"The GUI crashed immediately (code {exit_code}).\n\n"
+                    + (crash_text[:600] if crash_text else "(no output captured)")
+                    + f"\n\nLog: {gui_log}",
+                    "MCU Uploader IDE by Naph — Crash",
+                    0x10,
+                )
+            except Exception:
+                pass
+            gui.root.after(0, gui.close)
+            return
 
-        _launch_done()
+        # Main GUI process is running! Clean up empty crash log and
+        # COMPLETELY dispose bootstrap immediately so it doesn't linger or lag.
+        _record_bootstrap_log(
+            "FINISH",
+            "Main GUI started successfully after mandatory Bootstrap verification.",
+        )
+        try:
+            if gui_log and gui_log.exists() and gui_log.stat().st_size == 0:
+                gui_log.unlink()
+        except Exception:
+            pass
+
+        # Destroy Tk window, quit event loop, and terminate bootstrap process
+        gui.root.after(0, gui.close)
 
     except Exception as exc:
         _record_bootstrap_exception("Unhandled exception in bootstrap setup worker")
@@ -9453,6 +10056,9 @@ def main():
     t.start()
 
     gui.mainloop_until_done()
+    _gui = None
+    import gc
+    gc.collect()
     sys.exit(0)
 
 

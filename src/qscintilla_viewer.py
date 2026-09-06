@@ -10,12 +10,12 @@ import sys
 
 try:
     # pyrefly: ignore [missing-import]
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QSize
     # pyrefly: ignore [missing-import]
     from PyQt5.QtGui import QColor, QFont, QFontInfo, QIcon
     # pyrefly: ignore [missing-import]
     from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QVBoxLayout, QWidget, QTabWidget
+        QApplication, QMainWindow, QVBoxLayout, QWidget, QTabBar, QTabWidget
     )
 except ImportError:
     sys.exit("PyQt5 is required. Install with: pip install PyQt5 PyQt5-QScintilla")
@@ -82,6 +82,33 @@ THEME = {
     "matched_brace_bg": "#1c2532",
     "matched_brace_fg": "#39c5bb",
 }
+
+
+class AdaptiveTabBar(QTabBar):
+    """Keep filename tabs inside the available bar width.
+
+    Long sample filenames remain identifiable through middle elision while
+    their complete paths stay available in the tab tooltip. The bar still
+    scrolls when there are more tabs than can reasonably fit on screen.
+    """
+
+    def tabSizeHint(self, index):
+        hint = super().tabSizeHint(index)
+        count = max(1, self.count())
+        available = self.width()
+        if available <= 0:
+            available = 1000
+
+        # Give every tab a useful minimum, but share the visible width when
+        # several long sample names are open. QTabBar then applies the
+        # configured middle-elision mode instead of painting text out of bounds.
+        gap = max(0, count - 1) * 3
+        width_per_tab = max(92, min(260, (available - gap) // count))
+        return QSize(min(hint.width(), width_per_tab), hint.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.updateGeometry()
 
 class CodeViewer(QsciScintilla):
     def __init__(self, parent=None):
@@ -178,8 +205,28 @@ class MainWindow(QMainWindow):
         self.resize(1000, 700)
         self.setStyleSheet(f"QMainWindow {{ background-color: {THEME['background']}; }}")
 
-        # Set window icon if available
+        # Load application font if available
         src_dir = os.path.dirname(os.path.abspath(__file__))
+        fonts_static = os.path.join(src_dir, "fonts", "Montserrat", "static")
+        if os.path.isdir(fonts_static):
+            try:
+                from PyQt5.QtGui import QFontDatabase
+                for f_name in ("Montserrat-Regular.ttf", "Montserrat-Medium.ttf", "Montserrat-SemiBold.ttf"):
+                    f_path = os.path.join(fonts_static, f_name)
+                    if os.path.exists(f_path):
+                        QFontDatabase.addApplicationFont(f_path)
+            except Exception:
+                pass
+        else:
+            font_path = os.path.join(src_dir, "fonts", "Montserrat", "Montserrat-VariableFont_wght.ttf")
+            if os.path.exists(font_path):
+                try:
+                    from PyQt5.QtGui import QFontDatabase
+                    QFontDatabase.addApplicationFont(font_path)
+                except Exception:
+                    pass
+
+        # Set window icon if available
         icon_path = os.path.join(src_dir, "assets", "mcu_icon.ico")
         if not os.path.exists(icon_path):
             icon_path = os.path.join(src_dir, "mcu_icon.ico")
@@ -192,29 +239,61 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
 
         self.tabs = QTabWidget(central_widget)
+        self.tabs.setTabBar(AdaptiveTabBar(self.tabs))
         self.tabs.setTabsClosable(False)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideMiddle)
+        self.tabs.tabBar().setElideMode(Qt.ElideMiddle)
+        self.tabs.tabBar().setExpanding(False)
         self.tabs.setStyleSheet(f"""
+            QTabWidget {{
+                background-color: {THEME['background']};
+            }}
             QTabWidget::pane {{
                 border: 1px solid {THEME['margin_bg']};
                 background-color: {THEME['background']};
+                top: -1px;
+            }}
+            QTabBar {{
+                qproperty-drawBase: 0;
+                background-color: transparent;
             }}
             QTabBar::tab {{
                 background-color: {THEME['margin_bg']};
-                color: {THEME['foreground']};
+                color: #8b99a7;
                 border: 1px solid {THEME['margin_bg']};
                 border-bottom: none;
-                padding: 6px 16px;
-                margin-right: 2px;
-                font-family: Montserrat, sans-serif;
-                font-size: 9pt;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                min-height: 28px;
+                min-width: 80px;
+                padding: 4px 10px 6px 10px;
+                margin-right: 3px;
+                font-family: "Montserrat Medium", "Montserrat", "Segoe UI", -apple-system, sans-serif;
+                font-size: 10pt;
             }}
             QTabBar::tab:selected {{
                 background-color: {THEME['background']};
                 color: #39c5bb; /* Theme.CYAN */
                 border: 1px solid {THEME['margin_bg']};
                 border-bottom: 2px solid #39c5bb;
+                margin-bottom: -1px;
+                font-weight: bold;
             }}
-            QTabBar::tab:hover {{
+            QTabBar::tab:hover:!selected {{
+                background-color: {THEME['selection']};
+                color: #ffffff;
+            }}
+            QTabBar::scroller {{
+                width: 24px;
+            }}
+            QTabBar QToolButton {{
+                background-color: {THEME['margin_bg']};
+                border: 1px solid {THEME['margin_bg']};
+                color: {THEME['foreground']};
+                border-radius: 2px;
+            }}
+            QTabBar QToolButton:hover {{
                 background-color: {THEME['selection']};
             }}
         """)
@@ -268,6 +347,12 @@ def main():
             files.insert(0, focus_file)
     else:
         files = [focus_file]
+
+    # Enable High DPI scaling before QApplication creation
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, "AA_UseHighDpiPixmaps"):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     # Set DPI awareness on Windows to match main GUI
     if sys.platform == "win32":

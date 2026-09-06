@@ -1231,28 +1231,45 @@ class EditorApi:
         if not self._gui:
             return "[]"
         try:
-            from src.syntax_checker import analyze_cpp_syntax
-            from pathlib import Path
             import json
-            
+            from pathlib import Path
+            from src.syntax_checker import analyze_cpp_syntax
+
             p = Path(file_path)
-            defined_funcs = self._gui._get_project_defined_functions()
-            errors = analyze_cpp_syntax(content, p, defined_funcs)
-            
-            # Write errors to the project-cache JSON so external readers (like
-            # QScintilla) stay in sync without recreating root metadata.
-            if self._gui.sketch_dir_path:
-                err_file = get_project_temp_file(self._gui.sketch_dir_path, ".mcu_flash_syntax_errors.json")
-                try:
-                    ensure_file_writable(err_file)
-                    err_file.write_text(json.dumps(errors, indent=2), encoding="utf-8")
-                    hide_hidden_attribute(err_file)
-                except Exception:
-                    pass
-            
+            content_key = (str(file_path), len(content), hash(content))
+            cached_errors = getattr(self, "_syntax_buffer_cache", {}).get(content_key)
+            if cached_errors is not None:
+                errors = cached_errors
+            else:
+                defined_funcs = self._gui._get_project_defined_functions()
+                errors = analyze_cpp_syntax(content, p, defined_funcs)
+                if not hasattr(self, "_syntax_buffer_cache"):
+                    self._syntax_buffer_cache = {}
+                if len(self._syntax_buffer_cache) > 64:
+                    self._syntax_buffer_cache.clear()
+                self._syntax_buffer_cache[content_key] = errors
+
+            # Write errors to the project-cache JSON asynchronously so external
+            # readers stay in sync without blocking the pywebview bridge or UI thread
+            # with synchronous disk I/O and Win32 attribute modifications.
+            sketch_dir = getattr(self._gui, "sketch_dir_path", None)
+            if sketch_dir:
+                def _write_syntax_json(s_dir=sketch_dir, errs=errors):
+                    try:
+                        err_file = get_project_temp_file(s_dir, ".mcu_flash_syntax_errors.json")
+                        ensure_file_writable(err_file)
+                        err_file.write_text(json.dumps(errs, indent=2), encoding="utf-8")
+                        hide_hidden_attribute(err_file)
+                    except Exception:
+                        pass
+                if hasattr(self._gui, "_run_bg_task"):
+                    self._gui._run_bg_task(_write_syntax_json)
+                else:
+                    threading.Thread(target=_write_syntax_json, daemon=True).start()
+
             # Update the bottom panel through the Tk owner's dispatch queue.
             self._gui._post_ui(lambda: self._gui._update_syntax_check_ui(errors))
-            
+
             # Return JSON string of errors to JavaScript
             return json.dumps(errors)
         except Exception as e:

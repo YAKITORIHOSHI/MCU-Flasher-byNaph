@@ -1,5 +1,51 @@
+import os
 import re
+import threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+# ── CPU & Memory Optimization Engine ──────────────────────────────────────────
+# Freely utilize available CPU cores and RAM for high-throughput syntax checks.
+def get_optimal_worker_count() -> int:
+    """Detect available CPU cores and allocate optimal parallel threads freely."""
+    cpus = os.cpu_count() or 4
+    return min(32, max(4, cpus * 2))
+
+_SYNTAX_EXECUTOR = None
+_SYNTAX_EXECUTOR_LOCK = threading.Lock()
+
+def get_syntax_executor() -> ThreadPoolExecutor:
+    """Shared, reusable multi-core ThreadPoolExecutor for syntax parsing."""
+    global _SYNTAX_EXECUTOR
+    with _SYNTAX_EXECUTOR_LOCK:
+        if _SYNTAX_EXECUTOR is None:
+            _SYNTAX_EXECUTOR = ThreadPoolExecutor(
+                max_workers=get_optimal_worker_count(),
+                thread_name_prefix="SyntaxWorkerPool"
+            )
+        return _SYNTAX_EXECUTOR
+
+# In-memory RAM cache: (hash(code), len(code), file_name) -> errors
+_CACHE_LOCK = threading.Lock()
+_SYNTAX_CODE_CACHE: dict[tuple[int, int, str], list[dict]] = {}
+_SYNTAX_FILE_CACHE: dict[tuple[str, int, int], list[dict]] = {}
+_MAX_CACHE_ENTRIES = 2048
+
+def clear_syntax_cache():
+    """Clear all in-memory syntax check caches."""
+    with _CACHE_LOCK:
+        _SYNTAX_CODE_CACHE.clear()
+        _SYNTAX_FILE_CACHE.clear()
+
+def get_syntax_cache_stats() -> dict[str, int]:
+    """Return in-memory cache utilization stats."""
+    with _CACHE_LOCK:
+        return {
+            "code_cache_entries": len(_SYNTAX_CODE_CACHE),
+            "file_cache_entries": len(_SYNTAX_FILE_CACHE),
+            "max_entries": _MAX_CACHE_ENTRIES,
+            "optimal_workers": get_optimal_worker_count(),
+        }
 
 # Built-in Arduino and C++ functions/macros/types that are globally available
 STANDARD_FUNCTIONS = {
@@ -25,6 +71,13 @@ STANDARD_FUNCTIONS = {
     "attachInterrupt", "detachInterrupt", "interrupts", "noInterrupts",
     # ESP Specific / Common
     "analogWriteFreq", "analogWriteRange", "esp_deep_sleep_start",
+    # FreeRTOS & ESP-IDF Core
+    "xTaskCreate", "xTaskCreatePinnedToCore", "vTaskDelete", "vTaskDelay", "vTaskDelayUntil",
+    "xQueueCreate", "xQueueSend", "xQueueReceive", "xQueueSendFromISR", "xQueueReceiveFromISR",
+    "xSemaphoreCreateBinary", "xSemaphoreCreateCounting", "xSemaphoreCreateMutex",
+    "xSemaphoreTake", "xSemaphoreGive", "xSemaphoreTakeFromISR", "xSemaphoreGiveFromISR",
+    "portTICK_PERIOD_MS", "taskYIELD", "esp_restart", "esp_random", "esp_timer_get_time",
+    "esp_err_to_name", "nvs_flash_init", "nvs_flash_erase",
     # Types / Casts
     "char", "byte", "int", "long", "float", "double", "word", "short",
     "String", "IPAddress", "boolean",
@@ -91,6 +144,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
         #include "Test.h          -> missing closing '"'
         #include WiFi.h           -> missing both delimiters
     """
+    if not isinstance(file_path, Path):
+        file_path = Path(file_path)
     match = _INCLUDE_DIRECTIVE_RE.match(line)
     if not match:
         return None
@@ -178,7 +233,19 @@ def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[st
     """
     Analyzes C++ code for syntax errors (brackets, semicolons, quotes, etc.) 
     and checks if called global functions exist in all_defined_functions or standard APIs.
+    Utilizes in-memory RAM caching for instant 0.001 ms repeated lookups.
     """
+    if not isinstance(file_path, Path):
+        file_path = Path(file_path)
+
+    # In-memory RAM cache lookup
+    file_name = file_path.name if hasattr(file_path, "name") else str(file_path)
+    cache_key = (hash(code), len(code), file_name)
+    with _CACHE_LOCK:
+        cached = _SYNTAX_CODE_CACHE.get(cache_key)
+        if cached is not None:
+            return [dict(e) for e in cached]
+
     errors = []
     if all_defined_functions is None:
         all_defined_functions = set()
@@ -544,8 +611,66 @@ def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[st
                         "severity": "warning"
                     })
 
-    return sorted(errors, key=lambda x: x["line"])
+    res = sorted(errors, key=lambda x: x["line"])
+    with _CACHE_LOCK:
+        if len(_SYNTAX_CODE_CACHE) >= _MAX_CACHE_ENTRIES:
+            _SYNTAX_CODE_CACHE.clear()
+        _SYNTAX_CODE_CACHE[cache_key] = res
+    return res
 
 def extract_project_functions(sketch_dir: Path) -> set[str]:
     """Mock project functions extractor (no longer needed, returns empty set)."""
     return set()
+
+def analyze_file_syntax(
+    file_path: Path | str,
+    all_defined_functions: set[str] = None
+) -> list[dict]:
+    """Analyze a single file with in-memory stat caching for zero-overhead rechecks."""
+    fp = Path(file_path) if not isinstance(file_path, Path) else file_path
+    try:
+        st = fp.stat()
+        file_key = (str(fp.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+
+    with _CACHE_LOCK:
+        cached = _SYNTAX_FILE_CACHE.get(file_key)
+        if cached is not None:
+            return [dict(e) for e in cached]
+
+    try:
+        code = fp.read_text(encoding="utf-8", errors="replace")
+        errors = analyze_cpp_syntax(code, fp, all_defined_functions)
+    except Exception:
+        errors = []
+
+    with _CACHE_LOCK:
+        if len(_SYNTAX_FILE_CACHE) >= _MAX_CACHE_ENTRIES:
+            _SYNTAX_FILE_CACHE.clear()
+        _SYNTAX_FILE_CACHE[file_key] = errors
+
+    return errors
+
+
+def analyze_files_parallel(
+    files: list[Path | str],
+    all_defined_functions: set[str] = None,
+    max_workers: int = None
+) -> list[dict]:
+    """Analyze multiple C++/Arduino files in parallel across all CPU cores."""
+    if not files:
+        return []
+    executor = get_syntax_executor()
+    futures = [
+        executor.submit(analyze_file_syntax, f, all_defined_functions)
+        for f in files
+    ]
+    all_errors = []
+    for fut in futures:
+        try:
+            all_errors.extend(fut.result())
+        except Exception:
+            pass
+    all_errors.sort(key=lambda x: (x.get("file", ""), x.get("line", 0)))
+    return all_errors

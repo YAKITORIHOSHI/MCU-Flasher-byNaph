@@ -32,6 +32,17 @@ The project provides a modern Windows desktop interface for compiling, flashing,
    - Dual toolchain support: **Arduino CLI** and **PlatformIO**.
    - Supporting modules: `main/editor_api.py` (pywebview JS↔Python bridge), `main/core/theme.py` (color constants), `main/dialogs.py` (`ProjectSelectorDialog`, `BoardSearchDialog`), `main/widgets.py` (`ToolTip`, `CircularLoadingOverlay`, `_ShellTerminalBuffer`).
 
+   **Startup readiness contract**
+   - Build the visible Tk UI before starting project scans, editor file materialization, port detection, serial monitor startup, syntax checks, or terminal work.
+   - `_startup_ui_ready` is the visual-readiness signal after stable geometry samples. Release `CircularLoadingOverlay` only when that signal and `_startup_ready` (editor/project/background startup complete) are both true.
+   - Start independent non-Tk startup work concurrently through the CPU/RAM-budgeted worker pool; preserve the serial-monitor-before-esptool ordering and marshal every widget update back to Tk.
+   - Keep the startup cover opaque, borderless, and above Tk children during first paint so button relief and child surfaces cannot bleed through.
+   - Startup of an already-attached MCU is passive: never set manual reset pending or pulse DTR/RTS on initial connection. Reset only from explicit reset controls or the upload flow.
+
+   **Project selection and cancellation contract**
+   - Right-clicking the project title or icon schedules the native picker with `root.after_idle`; Cancel must release modal grab/focus and leave Tk/WebView responsive.
+   - Keep blocking native pickers and external process termination off the Button-3/Tk callback path. Project-selector cancellation must be idempotent.
+
 2. **Monaco Editor Frontend (`src/editor/index.html` + `bundle.js`)**
    - Self-contained HTML page loaded by pywebview, backed by a local offline Monaco `bundle.js` (no CDN).
    - Exposes global JS functions called from Python via `editor_window.evaluate_js()`:
@@ -67,13 +78,14 @@ The project provides a modern Windows desktop interface for compiling, flashing,
 
 5. **QScintilla External Viewer (`src/qscintilla_editor.py`, `src/qscintilla_viewer.py`)**
    - Optional rich code viewer using QScintilla (PyQt5). Launched as a subprocess via `sys.argv[1]`.
+   - Sample-file tabs use adaptive widths and middle elision for long names; keep the complete file path in each tab tooltip so labels never paint outside their bounds.
    - Shares syntax error data with the main GUI through `.mcu_flasher_build_cache/.mcu_flash_syntax_errors.json`.
 
 6. **Launchers & Native Wrappers**
    - `src/modules/launcher.py`: Python entry point for initializing configuration and launching the main GUI.
    - `src/launcher.cpp`: Native C++ executable wrapper that initializes environment variables and launches `launcher.py` / `mcu_flash_gui.py` silently on Windows without popping a console window.
    - `src/launcher.cs`: C# launcher source (compiles to `MCU_Flasher.exe`).
-   - `direct/runThisOnWindows.vbs`: Windows bootstrap launcher (elevates when needed, hides console).
+   - `direct/runThisOnWindows.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for machine-level setup that requires it.
 
 7. **Realtime C++ Syntax Linter (`src/syntax_checker.py`)**
    - Lightweight C++ AST & regex engine for validating `.ino`, `.cpp`, and `.h` files without invoking full compiler runs.
@@ -149,7 +161,7 @@ MCU Flasher by Naph/
 │   ├── gui_config.json        # Persisted GUI settings (editor_mode, autosave, baud, themes)
 │   ├── syntax_checker.py      # Realtime C++ syntax linter & AST analyzer
 │   ├── qscintilla_editor.py   # QScintilla code editor component (PyQt5)
-│   ├── qscintilla_viewer.py   # QScintilla read-only viewer component (PyQt5)
+│   ├── qscintilla_viewer.py   # QScintilla read-only viewer with adaptive sample tabs (PyQt5)
 │   ├── launcher.cpp           # Native Windows executable wrapper (suppresses console)
 │   ├── launcher.cs            # C# native launcher source
 │   ├── resources.rc           # Windows resource definition (icon embed)
@@ -229,6 +241,16 @@ MCU Flasher by Naph/
   - All microcontroller architectures (**ESP32**, **ESP8266**, **Atmel AVR**, etc.) compile uniformly through the PlatformIO SCons build engine using parallel CPU workers (`-j <jobs>`).
   - Automatic `platformio.ini` environment generation for all boards based on canonical board manifests.
   - SCons incremental compilation caches object files in isolated board workspaces (`.mcu_flasher_build_cache/boards/<board-key>/`), recompiling only modified or dependent translation units.
+- **On-Demand Board Toolchain Preparation (Zero App Restart)**:
+  - Downloaded board families (such as `Additional - ESP82XX` for NodeMCU, or third-party STM32/RP2040 packages) install and prepare their toolchains on demand when first compiled (`prepare_platformio_board_toolchain()`).
+  - The compiler pipeline pipes real-time package download/unpacking stdout (`on_line`) to the main console with live progress bars (`_append_toolchain_progress`) and heartbeat status.
+  - Completed board environments write private certification markers (`.mcu-board-ready/<key>.json`), and `board_toolchain_ready()` ensures all subsequent builds start immediately with zero delay.
+- **Low-End Device Adaptations & CPU/RAM Resource Budgeting**:
+  - Compiler job budgeting dynamically checks logical CPUs and available physical RAM via `psutil`:
+    - The application requires at least **4 logical CPU cores/threads**; systems below that minimum show a compatibility error and stop before project selection or MCU monitoring begins.
+    - Supported systems reserve UI/OS headroom and cap compile/background workers using available CPU and RAM, preventing RAM thrashing and disk freezing.
+   - **Process Scheduling Priority**: Background compiler and toolchain subprocesses are launched with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`) on Windows. The Windows kernel prioritizes the Tkinter message pump, Monaco editor, and serial monitor, helping keep the UI responsive under heavy CPU loads.
+  - **Extended Silence Watchdog**: Watchdog timeout is set to 600s (10 min) to accommodate slow 5400 RPM mechanical HDDs, budget eMMCs, and background Windows Defender scans, while updating heartbeat status every second.
 - **PlatformIO & Toolchain Management**: Managed via bootstrap virtual environment wrappers (`ensure_platformio_penv_with_hook`). Core dir is junctioned to `C:\.platformio-mcu-gui` on Windows to avoid long path issues.
 - **Dynamic Board Search Roots & USB VID/PID Discovery**:
   - `_get_arduino_board_search_roots()` scans both the application's download folder (`Boards/`) and local Arduino packages (`%LOCALAPPDATA%/Arduino15/packages`).
@@ -255,6 +277,7 @@ MCU Flasher by Naph/
 ### 7. Bootstrap & First-Run Pipeline (`src/modules/bootstrap.py`)
 - `_heal_private_python_runtime()`: Auto-detects and repairs damaged/missing portable Python.
 - `_ensure_platformio_core_prebuilt()`: Downloads pre-built PlatformIO toolchain zip with progress bar, resume, and SHA256 verification.
+- **Target-Isolated Dependency Verification**: `_check_spec()` uses `importlib.machinery.PathFinder.find_spec()` strictly against `env/Lib/site-packages`, avoiding false-positive 100% installed reports from host Python leakage.
 - Google Drive downloads: Uses `urllib` (not `requests`) because bootstrap runs before pip dependencies are installed. Handles Google's virus-scan confirmation HTML page by parsing the form and extracting hidden fields.
 - `[WinError 32]` file lock handling: `.zip.part` files during download may be locked by antivirus. The bootstrap pipeline retries with exponential backoff and falls back to from-scratch installation.
 - Progress reporting is inline to the bootstrap console: download percent, speed (MB/s), and extraction progress.
@@ -318,6 +341,10 @@ MCU Flasher by Naph/
 ## Verification & Testing Checklist
 
 - [ ] **GUI Launch**: Verify application opens cleanly with `python mcu_flash_gui.py` or `python launcher.py`.
+- [ ] **Startup UI Readiness**: Verify the loading cover remains until the visible UI is laid out/painted and the full startup contract has settled, with no button silhouettes or relief artifacts showing through.
+- [ ] **Passive Startup Monitoring**: With an MCU already attached, verify startup connects/monitors its current state without resetting it; reset occurs only from an explicit physical/on-app reset or upload flow.
+- [ ] **Project Picker Cancellation**: Right-click the current project title/icon, open the picker, choose Cancel, and verify the app remains responsive; also verify the normal reselect and new-project flows.
+- [ ] **Normal Launcher Permissions**: Verify normal startup does not require Administrator and that UAC appears only for a missing machine-level component that actually needs it.
 - [ ] **Toolchain Detection**: Check that Arduino CLI / PlatformIO are detected without thrown exceptions.
 - [ ] **Thread Safety**: Ensure GUI updates from worker threads are routed through `root.after()` or queue-based events to prevent UI crashes.
 - [ ] **Monaco Editor**: Verify the pywebview editor loads, embeds into the Tkinter frame, and tab switching works.

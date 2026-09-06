@@ -32,6 +32,7 @@ import time
 import importlib.util
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from pathlib import Path
 import webbrowser
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -216,10 +217,24 @@ def _validate_index_payload(data, expected_key: str) -> dict:
     return data
 
 
+# Process-wide RAM cache for parsed library & board index JSONs (up to 59+ MB on disk)
+_INDEX_JSON_RAM_CACHE: dict[str, tuple[float, int, dict]] = {}
+_INDEX_JSON_RAM_LOCK = threading.Lock()
+
+
 def _read_index_cache(cache_file: str, expected_key: str) -> dict | None:
     try:
+        st = os.stat(cache_file)
+        with _INDEX_JSON_RAM_LOCK:
+            cached = _INDEX_JSON_RAM_CACHE.get(cache_file)
+            if cached is not None and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                return cached[2]
+
         with open(cache_file, "r", encoding="utf-8-sig") as fh:
-            return _validate_index_payload(json.load(fh), expected_key)
+            data = _validate_index_payload(json.load(fh), expected_key)
+            with _INDEX_JSON_RAM_LOCK:
+                _INDEX_JSON_RAM_CACHE[cache_file] = (st.st_mtime, st.st_size, data)
+            return data
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
 
@@ -232,6 +247,13 @@ def _write_index_cache(cache_file: str, raw_text: str) -> None:
         with open(temp_file, "w", encoding="utf-8") as fh:
             fh.write(raw_text)
         os.replace(temp_file, cache_file)
+        try:
+            st = os.stat(cache_file)
+            # Invalidate stale RAM cache entry so next read loads new text
+            with _INDEX_JSON_RAM_LOCK:
+                _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
+        except OSError:
+            pass
     finally:
         try:
             if os.path.exists(temp_file):
@@ -461,8 +483,10 @@ def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9,
         disabledforeground=Theme.TEXT_DIM,
         relief=tk.FLAT, borderwidth=0, padx=14, pady=4, cursor="hand2"
     )
-    btn.bind("<Enter>", lambda e: btn.configure(bg=bg_hover) if btn["state"] != "disabled" else None)
-    btn.bind("<Leave>", lambda e: btn.configure(bg=bg) if btn["state"] != "disabled" else None)
+    btn._normal_bg = bg
+    btn._hover_bg = bg_hover
+    btn.bind("<Enter>", lambda e: btn.configure(bg=btn._hover_bg, cursor="hand2") if str(btn["state"]) != "disabled" else btn.configure(cursor="arrow"))
+    btn.bind("<Leave>", lambda e: btn.configure(bg=btn._normal_bg) if str(btn["state"]) != "disabled" else None)
     return btn
 
 
@@ -558,66 +582,246 @@ class CircularLoadingOverlay(tk.Frame):
             pass
 
 
-def _qscintilla_available() -> bool:
-    """Return whether the optional standalone code viewer can start."""
-    try:
-        return (
-            importlib.util.find_spec("PyQt5.QtWidgets") is not None
-            and importlib.util.find_spec("PyQt5.Qsci") is not None
-        )
-    except Exception:
+def _find_code_viewer_python() -> Optional[str]:
+    """Find a Python executable that has PyQt5 and QScintilla available."""
+    # Check candidates: current sys.executable, env virtualenv, and src/_python runtime
+    candidates = [
+        Path(sys.executable),
+        Path(SCRIPT_DIR) / "env" / "Scripts" / "pythonw.exe",
+        Path(SCRIPT_DIR) / "env" / "Scripts" / "python.exe",
+        Path(SCRIPT_DIR) / "src" / "_python" / "pythonw.exe",
+        Path(SCRIPT_DIR) / "src" / "_python" / "python.exe",
+    ]
+    seen = set()
+    for cand in candidates:
+        cand_str = str(cand.resolve()) if cand.is_file() else ""
+        if not cand_str or cand_str.lower() in seen:
+            continue
+        seen.add(cand_str.lower())
+        try:
+            res = subprocess.run(
+                [cand_str, "-c", "import PyQt5.QtWidgets, PyQt5.Qsci"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                return cand_str
+        except Exception:
+            continue
+    return None
+
+
+def _open_fallback_editor(file_path: str, parent=None, reason: Optional[str] = None) -> bool:
+    """Open sketch file in the default system editor or Notepad as graceful fallback."""
+    if not file_path or not os.path.exists(file_path):
         return False
-
-
-def _launch_code_viewer(file_path, all_paths=None):
-    viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
-    if not os.path.exists(viewer_script):
-        # Fallback to notepad/editor if the viewer script is missing
+    try:
+        if sys.platform == "win32":
+            os.startfile(file_path)
+            return True
+        else:
+            subprocess.Popen(["xdg-open", file_path])
+            return True
+    except Exception:
         try:
             if sys.platform == "win32":
-                import ctypes
-                SW_SHOWNORMAL = 1
-                ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
-            else:
-                messagebox.showerror(
-                    "Windows Required",
-                    "The MCU Flasher code viewer is supported on Windows only.",
-                )
-        except Exception as e:
-            messagebox.showerror("Error", f"Viewer script not found and fallback failed:\n{e}")
+                subprocess.Popen(["notepad.exe", file_path])
+                return True
+        except Exception:
+            pass
+    if parent and reason:
+        messagebox.showerror("Code Viewer", f"{reason}\n\nFile: {file_path}", parent=parent)
+    return False
+
+
+def _qscintilla_available() -> bool:
+    """Return whether the standalone code viewer can start."""
+    try:
+        if (
+            importlib.util.find_spec("PyQt5.QtWidgets") is not None
+            and importlib.util.find_spec("PyQt5.Qsci") is not None
+        ):
+            return True
+    except Exception:
+        pass
+    return _find_code_viewer_python() is not None
+
+
+def _launch_code_viewer(file_path, all_paths=None, parent=None):
+    viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
+    if not os.path.exists(viewer_script):
+        _open_fallback_editor(file_path, parent=parent, reason=f"Viewer script not found:\n{viewer_script}")
         return
 
+    py_exe = _find_code_viewer_python() or sys.executable
     try:
-        # Launch standalone PyQt5 viewer with focus file and all library example files
-        cmd = [sys.executable, viewer_script, file_path]
+        cmd = [str(py_exe), viewer_script, file_path]
         if all_paths:
             cmd.extend(all_paths)
-        subprocess.Popen(cmd)
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        subprocess.Popen(cmd, creationflags=creationflags)
     except Exception as e:
-        messagebox.showerror("Error", f"Failed to launch QScintilla viewer:\n{e}")
+        _open_fallback_editor(file_path, parent=parent, reason=f"Failed to launch QScintilla viewer:\n{e}")
+
+
+def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
+    """Install PyQt5/QScintilla on first use, then launch the viewer.
+
+    Called from a background thread.  GUI updates are marshalled to the
+    Tk thread via ``root.after()``.  Uses the module-level
+    ``_QSCINTILLA_INSTALL_LOCK`` to prevent concurrent install attempts
+    from multiple "View Source" clicks.
+    """
+    root = parent
+    progress_win = None
+    progress_label = None
+
+    def _create_progress():
+        nonlocal progress_win, progress_label
+        try:
+            progress_win = tk.Toplevel(root) if root else tk.Tk()
+            progress_win.title("Installing Code Viewer")
+            progress_win.configure(bg=Theme.BG_DARKEST)
+            progress_win.resizable(False, False)
+            progress_win.attributes("-topmost", True)
+            progress_win.geometry("420x120")
+            try:
+                progress_win.update_idletasks()
+                sw = progress_win.winfo_screenwidth()
+                sh = progress_win.winfo_screenheight()
+                x = (sw - 420) // 2
+                y = (sh - 120) // 2
+                progress_win.geometry(f"420x120+{x}+{y}")
+            except Exception:
+                pass
+            tk.Label(
+                progress_win,
+                text="Installing QScintilla Code Viewer…",
+                font=("Montserrat", 11, "bold"),
+                fg=Theme.TEXT_BRIGHT,
+                bg=Theme.BG_DARKEST,
+            ).pack(pady=(18, 4))
+            progress_label = tk.Label(
+                progress_win,
+                text="Downloading PyQt5 & QScintilla (this is a one-time setup)…",
+                font=("Montserrat", 9),
+                fg=Theme.TEXT_DIM,
+                bg=Theme.BG_DARKEST,
+            )
+            progress_label.pack(pady=(0, 12))
+            progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
+        except Exception:
+            pass
+
+    def _close_progress():
+        nonlocal progress_win
+        try:
+            if progress_win:
+                progress_win.destroy()
+                progress_win = None
+        except Exception:
+            pass
+
+    def _update_progress(msg):
+        try:
+            if progress_label and progress_label.winfo_exists():
+                progress_label.configure(text=msg)
+        except Exception:
+            pass
+
+    # Show progress dialog on the Tk thread
+    try:
+        target = root if root else (parent or None)
+        if target and hasattr(target, "after"):
+            target.after(0, _create_progress)
+        else:
+            _create_progress()
+    except Exception:
+        _create_progress()
+
+    # Brief pause to let the progress window render
+    import time as _time
+    _time.sleep(0.3)
+
+    installed = False
+    with _QSCINTILLA_INSTALL_LOCK:
+        # Re-check after acquiring lock — another thread may have installed it
+        if _qscintilla_available():
+            installed = True
+        else:
+            try:
+                # Import bootstrap's on-demand feature installer
+                modules_dir = os.path.join(SCRIPT_DIR, "src", "modules")
+                if modules_dir not in sys.path:
+                    sys.path.insert(0, modules_dir)
+                from bootstrap import ensure_optional_pip_feature
+                installed = ensure_optional_pip_feature("qscintilla_viewer")
+            except ImportError:
+                # Bootstrap not available — try direct pip install as fallback
+                try:
+                    if target and hasattr(target, "after"):
+                        target.after(0, lambda: _update_progress("Installing via pip…"))
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install",
+                         "PyQt5", "QScintilla",
+                         "--disable-pip-version-check", "--prefer-binary",
+                         "--progress-bar", "off", "--no-input"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=300,
+                        creationflags=(subprocess.CREATE_NO_WINDOW
+                                       if sys.platform == "win32" else 0),
+                    )
+                    installed = _qscintilla_available()
+                except Exception:
+                    installed = False
+            except Exception:
+                installed = False
+
+    # Close the progress dialog and launch the viewer
+    def _finish():
+        _close_progress()
+        if (installed or _qscintilla_available()) and _qscintilla_available():
+            _launch_code_viewer(file_path, all_paths, parent=parent)
+        else:
+            _open_fallback_editor(
+                file_path,
+                parent=parent,
+                reason="QScintilla Code Viewer (PyQt5 & QScintilla) is not available. Opening in default editor.",
+            )
+
+    try:
+        target = root if root else (parent or None)
+        if target and hasattr(target, "after"):
+            target.after(0, _finish)
+        else:
+            _finish()
+    except Exception:
+        _finish()
 
 
 def _open_code_viewer(file_path, all_paths=None, parent=None):
-    """Open the QScintilla code viewer, with offline fallback to default editor.
-    Installed library sample files are ALWAYS accessible and viewable.
+    """Open the QScintilla code viewer.
+    Installed library sample files are viewable through the dedicated viewer.
+
+    If QScintilla is not yet installed, a one-time background install is
+    triggered with a progress dialog, and the viewer opens once installed.
     """
     if _qscintilla_available():
-        _launch_code_viewer(file_path, all_paths)
+        _launch_code_viewer(file_path, all_paths, parent=parent)
         return
 
-    # Fallback to notepad/system editor seamlessly if QScintilla is not yet available
-    try:
-        if sys.platform == "win32":
-            import ctypes
-            SW_SHOWNORMAL = 1
-            ctypes.windll.shell32.ShellExecuteW(None, "open", "notepad.exe", f'"{file_path}"', None, SW_SHOWNORMAL)
-            return
-        else:
-            webbrowser.open("file://" + file_path)
-            return
-    except Exception as e:
-        messagebox.showerror("Error", f"Could not open sample file:\n{e}", parent=parent)
-        return
+    # QScintilla not available — install it on first use in a background thread
+    # so the Tk event loop stays responsive during the pip download.
+    install_thread = threading.Thread(
+        target=_install_qscintilla_on_demand,
+        args=(file_path, all_paths, parent),
+        daemon=True,
+        name="QScintillaInstall",
+    )
+    install_thread.start()
 
 
 def _load_settings() -> dict:
@@ -1378,6 +1582,15 @@ class InstalledTab:
     """A tab that shows all locally installed libraries / board platforms
     and indicates available updates."""
 
+    @staticmethod
+    def _item_icon(item: dict) -> str:
+        """Return the Installed-tab icon for a library or board platform."""
+        return "📖" if str(item.get("type", "")).casefold() == "library" else "🔌"
+
+    def _display_item_name(self, item: dict) -> str:
+        """Decorate a displayed name without changing its searchable value."""
+        return f"{self._item_icon(item)} {item['name']}"
+
     def __init__(self, parent: ttk.Frame, app: "ArduinoBrowser"):
         self.app = app
         self.installed_items: list[dict] = []   # list of installed info dicts
@@ -1520,6 +1733,7 @@ class InstalledTab:
             Theme.BTN_STOP, Theme.BTN_STOP_H
         )
         self.delete_btn.pack(side="left")
+        self._set_update_btn_state(False)
 
         # --- Sample Codes (Examples) section --- (expands vertically to fill remaining space)
         self._examples_section = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
@@ -1814,7 +2028,10 @@ class InstalledTab:
         self.listbox.delete(0, tk.END)
         for item in self.filtered_items:
             up_prefix = "⬆ " if item.get("update_available") else ""
-            self.listbox.insert(tk.END, f"{up_prefix}{item['name']} ({item['installed_version']})")
+            self.listbox.insert(
+                tk.END,
+                f"{up_prefix}{self._display_item_name(item)} ({item['installed_version']})",
+            )
 
         if selected_name:
             for i, item in enumerate(self.filtered_items):
@@ -1829,13 +2046,50 @@ class InstalledTab:
             self._detail_content.pack_forget()
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._clear_examples()
+        self._set_update_btn_state(False)
+
+    def _set_update_btn_state(self, enabled: bool):
+        """Make the update button unclickable and visually disabled when no update is available."""
+        if not hasattr(self, "update_btn"):
+            return
+        if enabled:
+            self.update_btn.config(
+                state="normal",
+                cursor="hand2",
+                bg=Theme.BTN_COMPILE,
+                activebackground=Theme.BTN_COMPILE_H,
+                fg=Theme.TEXT_BRIGHT,
+                text="⬇ Update",
+                command=self._update_item,
+            )
+        else:
+            self.update_btn.config(
+                state="disabled",
+                cursor="arrow",
+                bg=Theme.BG_MID,
+                activebackground=Theme.BG_MID,
+                fg=Theme.TEXT_DIM,
+                text="⬇ Update",
+                command=self._update_item,
+            )
+
+    def refresh_update_button_state(self):
+        """Refresh the Update button state according to the currently selected item."""
+        sel = self.listbox.curselection()
+        if not sel or sel[0] >= len(self.filtered_items):
+            self._set_update_btn_state(False)
+            return
+        item = self.filtered_items[sel[0]]
+        self._set_update_btn_state(bool(item.get("update_available")))
 
     def _on_select(self, event=None):
         sel = self.listbox.curselection()
         if not sel:
+            self._set_update_btn_state(False)
             return
         idx = sel[0]
         if idx >= len(self.filtered_items):
+            self._set_update_btn_state(False)
             return
         item = self.filtered_items[idx]
 
@@ -1846,7 +2100,7 @@ class InstalledTab:
         if hasattr(self, "_detail_content") and not self._detail_content.winfo_ismapped():
             self._detail_content.pack(side=tk.LEFT, fill="both", expand=True, padx=10, pady=8)
 
-        self.lbl_name.config(text=item["name"])
+        self.lbl_name.config(text=self._display_item_name(item))
         self.lbl_type.config(text=f"Type: {item['type']}")
 
         self.lbl_installed_ver.config(text=f"Installed version: {item['installed_version']}")
@@ -1854,10 +2108,10 @@ class InstalledTab:
 
         if item.get("update_available"):
             self.lbl_update_status.config(text="⬆ Update available", fg=Theme.YELLOW)
-            self.update_btn.config(state="normal")
+            self._set_update_btn_state(True)
         else:
             self.lbl_update_status.config(text="✓ Up‑to‑date", fg=Theme.GREEN)
-            self.update_btn.config(state="disabled")
+            self._set_update_btn_state(False)
 
         self.lbl_path.config(text=item["path"])
 
@@ -1908,9 +2162,11 @@ class InstalledTab:
     def _update_item(self):
         sel = self.listbox.curselection()
         if not sel:
+            self._set_update_btn_state(False)
             return
         item = self.filtered_items[sel[0]]
         if not item.get("update_available"):
+            self._set_update_btn_state(False)
             return
         is_board = item["type"] == "Board Platform"
         old_path = item.get("path", "")
@@ -2959,6 +3215,8 @@ class ArduinoBrowser:
                 # same malformed JSON forever.
                 try:
                     os.unlink(cache_file)
+                    with _INDEX_JSON_RAM_LOCK:
+                        _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
                 except OSError:
                     pass
 
@@ -3360,8 +3618,10 @@ class ArduinoBrowser:
         self._set_status("Download complete")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
-        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
+            self.installed_tab.refresh_update_button_state()
+        elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -3372,6 +3632,8 @@ class ArduinoBrowser:
         try:
             if self.notebook.index(self.notebook.select()) == 2:
                 self.installed_tab.populate(self._installed_items)
+            elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
+                self.installed_tab.refresh_update_button_state()
         except Exception:
             pass
         
@@ -3383,8 +3645,10 @@ class ArduinoBrowser:
         self._set_status("Download cancelled")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
-        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
+            self.installed_tab.refresh_update_button_state()
+        elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -3397,8 +3661,10 @@ class ArduinoBrowser:
         self._set_status("Download failed")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
-        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item)
+        if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
+            self.installed_tab.refresh_update_button_state()
+        elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
+            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         

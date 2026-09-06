@@ -10,6 +10,7 @@ import time
 import json
 import re
 import ctypes
+import threading
 from pathlib import Path
 
 
@@ -192,20 +193,31 @@ def _own_create_time():
         return None
 
 
+_pid_create_times_cache: "dict[str, float] | None" = None
+_pid_create_times_timestamp: float = 0.0
+_pid_cache_lock = threading.Lock()
+
+
 def _get_alive_pid_create_times() -> "dict[str, float] | None":
     """Return {pid_str: create_time} for every process currently running,
-    or None if psutil isn't available. Used instead of a bare PID-membership
-    check: Windows recycles PIDs quickly, so a lock/registration entry left
-    behind by a crashed or force-killed instance can otherwise be mistaken
-    for still-alive just because some unrelated process later reused its PID."""
-    try:
-        import psutil as _psutil_check
-        return {
-            str(p.pid): p.info.get("create_time")
-            for p in _psutil_check.process_iter(["create_time"])
-        }
-    except Exception:
-        return None
+    or None if psutil isn't available. Cached for 2.0s to avoid expensive
+    system-wide process enumeration on rapid successive calls."""
+    global _pid_create_times_cache, _pid_create_times_timestamp
+    now = time.monotonic()
+    with _pid_cache_lock:
+        if _pid_create_times_cache is not None and (now - _pid_create_times_timestamp) < 2.0:
+            return _pid_create_times_cache
+        try:
+            import psutil as _psutil_check
+            result = {
+                str(p.pid): p.info.get("create_time")
+                for p in _psutil_check.process_iter(["create_time"])
+            }
+            _pid_create_times_cache = result
+            _pid_create_times_timestamp = now
+            return result
+        except Exception:
+            return None
 
 
 def _instance_is_alive(pid: str, inst: dict, alive: "dict[str, float] | None") -> bool:

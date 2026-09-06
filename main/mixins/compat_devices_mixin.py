@@ -148,17 +148,21 @@ class CompatDevicesMixin(_Base):
             if not getattr(self, "monitors_pane_visible", True):
                 self._toggle_monitors_pane()
             idx = self._compatible_devices_tab_index()
-            self.bottom_notebook.tab(idx, state="normal")
-            if select_tab:
+            try:
+                if self.bottom_notebook.tab(idx, "state") != "normal":
+                    self.bottom_notebook.tab(idx, state="normal")
+            except Exception:
+                pass
+            if select_tab and not self._compatible_devices_is_selected():
                 self.bottom_notebook.select(idx)
             self._repair_compatible_devices_interaction()
             entry = self.compat_search_entry
-            safe_reclaim_os_focus(entry)
 
             def _finish_focus():
                 try:
+                    if not self._compatible_devices_is_selected():
+                        return
                     entry.configure(state=tk.NORMAL)
-                    entry.focus_force()
                     entry.focus_set()
                     if select_all:
                         entry.selection_range(0, tk.END)

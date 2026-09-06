@@ -9,6 +9,7 @@ import os
 import json
 import re
 import hashlib
+import threading
 from typing import TYPE_CHECKING
 from pathlib import Path
 
@@ -55,7 +56,12 @@ class SoftResetTemplateMixin(_Base):
         leaves room for future MCU-specific reset projects without adding more
         top-level folders to the repository.
         """
-        name = board_name if board_name is not None else self.board_var.get()
+        if board_name is not None:
+            name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = getattr(self, "_active_board_name", "") or ""
+        else:
+            name = self.board_var.get()
         info = dict(board_info or SUPPORTED_BOARDS.get(name, {}))
         base = self._reset_project_base_name(info)
         return SCRIPT_DIR / "soft_reset" / base / "boards" / self._board_cache_key(name)
@@ -309,10 +315,15 @@ class SoftResetTemplateMixin(_Base):
         env["PYTHONWARNINGS"] = "ignore"
         env["PLATFORMIO_UNBUFFERED"] = "1"
         env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
+        env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+        env["PLATFORMIO_DISABLE_PROMPTS"] = "1"
+        env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "0"
         if jobs is not None:
             safe_jobs = max(1, int(jobs))
             env["PLATFORMIO_BUILD_JOBS"] = str(safe_jobs)
+            env["PLATFORMIO_RUN_JOBS"] = str(safe_jobs)
             env["SCONSFLAGS"] = f"-j{safe_jobs}"
         return env
 
@@ -395,7 +406,12 @@ class SoftResetTemplateMixin(_Base):
         and .pio/libdeps/<id> folders instead of overwriting each other —
         switching boards and back no longer throws away the other board's
         build."""
-        name = board_name if board_name is not None else self.board_var.get()
+        if board_name is not None:
+            name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = getattr(self, "_active_board_name", "") or ""
+        else:
+            name = self.board_var.get()
         if not name:
             return "mcu_flash"
         # The surrounding workspace is already exact-board isolated, so the
@@ -406,7 +422,12 @@ class SoftResetTemplateMixin(_Base):
 
     def _legacy_pio_env_name(self, board_name: str | None = None) -> str:
         """Environment name used before paths were bounded; migration only."""
-        name = board_name if board_name is not None else self.board_var.get()
+        if board_name is not None:
+            name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = getattr(self, "_active_board_name", "") or ""
+        else:
+            name = self.board_var.get()
         if not name:
             return "mcu_flash"
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
@@ -414,7 +435,12 @@ class SoftResetTemplateMixin(_Base):
 
     def _get_mcu_folder_name(self, board_name: str | None = None) -> str:
         """Return clean, user-friendly folder name for storing compiled binaries per MCU family (e.g. ESP32, ESP32S3, Arduino_UNO, Arduino_Mega)."""
-        name = board_name if board_name is not None else self.board_var.get()
+        if board_name is not None:
+            name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = getattr(self, "_active_board_name", "") or ""
+        else:
+            name = self.board_var.get()
         board_info = SUPPORTED_BOARDS.get(name, {})
         p_board = str(board_info.get("board", "")).lower()
         platform = str(board_info.get("platform", "")).lower()

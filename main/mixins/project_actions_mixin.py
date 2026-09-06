@@ -59,19 +59,42 @@ class ProjectActionsMixin(_Base):
         if self.is_busy:
             return
         from tkinter import filedialog, messagebox
-        init_dir = str(self.sketch_dir_path) if self.sketch_dir_path.exists() else str(Path.home())
+        try:
+            init_dir = (
+                str(self.sketch_dir_path)
+                if self.sketch_dir_path and self.sketch_dir_path.exists()
+                else str(Path.home())
+            )
+        except Exception:
+            init_dir = str(Path.home())
 
-        selected = filedialog.askopenfilename(
-            initialdir=init_dir,
-            title="Select Sketch / Project File (.ino, .cpp, .h, platformio.ini)",
-            parent=self.root,
-            filetypes=[
-                ("Project Files & Sketches (*.ino, *.cpp, *.h)", "*.ino;*.cpp;*.h;*.hpp;platformio.ini;*.txt"),
-                ("Arduino Sketches (*.ino)", "*.ino"),
-                ("C/C++ Source & Headers (*.cpp, *.h)", "*.cpp;*.h;*.hpp"),
-                ("All Files (*.*)", "*.*")
-            ]
-        )
+        # This method is scheduled with after_idle by the right-click bindings,
+        # so the native picker does not run inside the Button-3 dispatch.
+        selected = ""
+        try:
+            selected = filedialog.askopenfilename(
+                initialdir=init_dir,
+                title="Select Sketch / Project File (.ino, .cpp, .h, platformio.ini)",
+                parent=self.root,
+                filetypes=[
+                    ("Project Files & Sketches (*.ino, *.cpp, *.h)", "*.ino;*.cpp;*.h;*.hpp;platformio.ini;*.txt"),
+                    ("Arduino Sketches (*.ino)", "*.ino"),
+                    ("C/C++ Source & Headers (*.cpp, *.h)", "*.cpp;*.h;*.hpp"),
+                    ("All Files (*.*)", "*.*")
+                ]
+            )
+        except tk.TclError:
+            # A native picker can be dismissed while the main window is
+            # closing.  Treat that exactly like Cancel and leave Tk usable.
+            selected = ""
+        finally:
+            # Native dialogs temporarily own focus.  Reclaim it explicitly so
+            # Cancel cannot leave an embedded WebView or hidden child as the
+            # apparent foreground window.
+            try:
+                self.root.focus_force()
+            except Exception:
+                pass
         if selected:
             p = Path(selected)
             new_path = p.parent if p.is_file() else p
@@ -110,71 +133,76 @@ class ProjectActionsMixin(_Base):
         freshly scaffolded project — same effect as startup project selection."""
         if self.is_busy:
             return
-        dlg = ProjectSelectorDialog(self.root, str(self.sketch_dir_path))
-        project_dir = dlg.run()
-        if project_dir:
-            if project_dir.resolve() != self.sketch_dir_path.resolve():
-                # When another task is already live, let the user decide
-                # whether this project replaces the current task or deserves
-                # an explicitly independent window.  The latter gets its own
-                # PID-scoped config/editor state and cannot be created by an
-                # accidental VBS relaunch.
-                data = _load_raw_config()
-                alive = _get_alive_pid_create_times()
-                other_ids = [pid for pid, inst in data.get("instances", {}).items()
-                             if pid != _INSTANCE_ID and _instance_is_alive(pid, inst, alive)]
-                if self.root.winfo_exists():
+        try:
+            dlg = ProjectSelectorDialog(self.root, str(self.sketch_dir_path))
+            project_dir = dlg.run()
+            if project_dir:
+                if project_dir.resolve() != self.sketch_dir_path.resolve():
+                    # When another task is already live, let the user decide
+                    # whether this project replaces the current task or deserves
+                    # an explicitly independent window.  The latter gets its own
+                    # PID-scoped config/editor state and cannot be created by an
+                    # accidental VBS relaunch.
+                    data = _load_raw_config()
+                    alive = _get_alive_pid_create_times()
+                    other_ids = [
+                        pid for pid, inst in data.get("instances", {}).items()
+                        if pid != _INSTANCE_ID and _instance_is_alive(pid, inst, alive)
+                    ]
+                    if self.root.winfo_exists():
+                        from tkinter import messagebox
+                        run_here = messagebox.askyesno(
+                            "Open Project",
+                            f"Current task ID: {_INSTANCE_ID}"
+                            + (f"\nOther running task(s): {', '.join(other_ids)}" if other_ids else "")
+                            + "\n\n"
+                            f"Do you want to open '{project_dir.name}' on another window?\n\n"
+                            "Yes = open an independent window\nNo = use this window",
+                            parent=self.root,
+                        )
+                        if run_here:
+                            try:
+                                flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                                if getattr(sys, "frozen", False):
+                                    gui_command = [sys.executable]
+                                else:
+                                    gui_entrypoint = SCRIPT_DIR / "main" / "mcu_flash_gui.py"
+                                    if not gui_entrypoint.exists():
+                                        gui_entrypoint = SCRIPT_DIR / "mcu_flash_gui.py"
+                                    gui_command = [sys.executable, str(gui_entrypoint)]
+                                proc = subprocess.Popen(
+                                    gui_command + [
+                                        "--from-bootstrap", "--new-window",
+                                        "--project", str(project_dir),
+                                    ],
+                                    cwd=str(SCRIPT_DIR), creationflags=flags,
+                                )
+                                messagebox.showinfo(
+                                    "Independent Task Started",
+                                    f"Project: {project_dir.name}\nTask ID: {proc.pid}\n\n"
+                                    "This window remains on its current project.",
+                                    parent=self.root,
+                                )
+                            except Exception as exc:
+                                messagebox.showerror("Cannot Open New Window", str(exc), parent=self.root)
+                            return
+                    self.sketch_dir_path = project_dir
+                    config = load_gui_config()
+                    config["last_sketch_dir"] = str(self.sketch_dir_path)
+                    save_gui_config(config)
+                    self._on_folder_changed()
+                else:
                     from tkinter import messagebox
-                    run_here = messagebox.askyesno(
-                        "Open Project",
-                        f"Current task ID: {_INSTANCE_ID}"
-                        + (f"\nOther running task(s): {', '.join(other_ids)}" if other_ids else "")
-                        + "\n\n"
-                        f"Do you want to open '{project_dir.name}' on another window?\n\n"
-                        "Yes = open an independent window\nNo = use this window",
-                        parent=self.root,
+                    messagebox.showinfo(
+                        "Project Active",
+                        "✔ This project is already currently active.",
+                        parent=self.root
                     )
-                    if run_here:
-                        try:
-                            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                            if getattr(sys, "frozen", False):
-                                gui_command = [sys.executable]
-                            else:
-                                gui_entrypoint = SCRIPT_DIR / "main" / "mcu_flash_gui.py"
-                                if not gui_entrypoint.exists():
-                                    gui_entrypoint = SCRIPT_DIR / "mcu_flash_gui.py"
-                                gui_command = [sys.executable, str(gui_entrypoint)]
-                            proc = subprocess.Popen(
-                                gui_command + [
-                                    "--from-bootstrap", "--new-window",
-                                    "--project", str(project_dir),
-                                ],
-                                cwd=str(SCRIPT_DIR), creationflags=flags,
-                            )
-                            messagebox.showinfo(
-                                "Independent Task Started",
-                                f"Project: {project_dir.name}\nTask ID: {proc.pid}\n\n"
-                                "This window remains on its current project.",
-                                parent=self.root,
-                            )
-                        except Exception as exc:
-                            messagebox.showerror("Cannot Open New Window", str(exc), parent=self.root)
-                        return
-                self.sketch_dir_path = project_dir
-                config = load_gui_config()
-                config["last_sketch_dir"] = str(self.sketch_dir_path)
-                save_gui_config(config)
-                self._on_folder_changed()
-            else:
-                from tkinter import messagebox
-                messagebox.showinfo(
-                    "Project Active",
-                    "✔ This project is already currently active.",
-                    parent=self.root
-                )
-
-        self.is_busy = False
-        self._set_buttons_busy(False)
+        finally:
+            # A cancelled modal, a failed project scan, or a native dialog
+            # exception must never strand the main window in a busy state.
+            self.is_busy = False
+            self._set_buttons_busy(False)
 
     def _open_modify_files_dialog(self):
         """Open a tabbed modal for managing project source files:
@@ -623,6 +651,44 @@ class ProjectActionsMixin(_Base):
         Updates the UI label, invalidates the compile cache, then scans
         includes in a background thread so the console gets an instant
         project-summary report."""
+        # A project switch can be triggered repeatedly while the user is
+        # exploring folders.  Keep only the latest editor reload request so a
+        # stale WebView callback cannot rebuild the previous project after the
+        # user has already moved on.
+        def _queue_editor_reload():
+            if not callable(getattr(self, "_load_editor_files", None)):
+                return
+            old_reload_job = getattr(self, "_project_editor_reload_after_id", None)
+            if old_reload_job is not None:
+                try:
+                    self.root.after_cancel(old_reload_job)
+                except Exception:
+                    pass
+
+            def _reload_latest_project():
+                self._project_editor_reload_after_id = None
+                if getattr(self, "_editor_files_load_pending", False):
+                    # The initial default-editor load is already scheduled and
+                    # will read the current sketch_dir_path when it runs.
+                    return
+                loader = getattr(self, "_load_editor_files", None)
+                if not callable(loader):
+                    return
+                if getattr(self, "editor_mode", "default") == "monaco":
+                    # evaluate_js can wait on WebView2 while a page is being
+                    # reparented.  Keep that wait off Tk; the editor bridge
+                    # itself remains the owner of file/project state.
+                    self._run_bg_task(loader)
+                else:
+                    loader()
+
+            try:
+                self._project_editor_reload_after_id = self.root.after(
+                    50, _reload_latest_project
+                )
+            except Exception:
+                _reload_latest_project()
+
         # The native terminal owns its PTY sessions in a child process. Close
         # that child before rebinding the project so the next Terminal-tab
         # activation starts both shells in the new folder.
@@ -663,15 +729,26 @@ class ProjectActionsMixin(_Base):
                     self.ai_controller.reset_monitoring_state()
             except Exception as exc:
                 print(f"[MCU Flasher] Could not restart AI Assistant: {exc}")
-        if getattr(self, "editor_api", None):
-            try:
-                self.editor_api.bind_project(self.sketch_dir_path)
-                if getattr(self, "editor_window", None):
-                    self.editor_window.evaluate_js(
+        editor_api = getattr(self, "editor_api", None)
+        project_path_for_editor = Path(self.sketch_dir_path)
+        if editor_api:
+            def _bind_editor_project():
+                editor_api.bind_project(project_path_for_editor)
+                editor_window = getattr(self, "editor_window", None)
+                if editor_window:
+                    editor_window.evaluate_js(
                         "if (window.resetAiReviewForProject) window.resetAiReviewForProject();"
                     )
-            except Exception as exc:
+
+            def _editor_bind_failed(exc):
                 print(f"[MCU Flasher] Could not bind AI review journal: {exc}")
+                _queue_editor_reload()
+
+            self._run_bg_task(
+                _bind_editor_project,
+                on_success=lambda _result: _queue_editor_reload(),
+                on_error=_editor_bind_failed,
+            )
         self._clear_console()
         self._clear_serial_console()
         self._sketch_marquee_idx = 0
@@ -705,11 +782,8 @@ class ProjectActionsMixin(_Base):
         except Exception as exc:
             print(f"[MCU Flasher] Error updating project state & notifications: {exc}")
 
-        if hasattr(self, "_load_editor_files") and not getattr(self, "_editor_files_load_pending", False):
-            try:
-                self._load_editor_files()
-            except Exception:
-                pass
+        if not editor_api:
+            _queue_editor_reload()
 
         try:
             add_recent_project(str(self.sketch_dir_path))
@@ -726,13 +800,22 @@ class ProjectActionsMixin(_Base):
             self._auto_select_board(show_msg=True)
 
         self._compat_warnings_approved_hash = None
-        self._load_compile_cache()
-        self._update_skip_compile_state()
-        # Folder changes do not necessarily fire _on_board_changed (for
-        # example when the selected board remains valid and no port is
-        # connected). Re-apply the action gating after the project/cache
-        # transition so Compile reflects the still-selected board immediately.
-        self._update_hardware_action_buttons()
+
+        def _finish_project_cache_load(_result=None):
+            self._update_skip_compile_state()
+            # Folder changes do not necessarily fire _on_board_changed (for
+            # example when the selected board remains valid and no port is
+            # connected). Re-apply the action gating after the project/cache
+            # transition so Compile reflects the still-selected board.
+            self._update_hardware_action_buttons()
+
+        # Hashing/stat-ing a large or network-backed sketch can take long
+        # enough to look like a frozen UI.  The cache loader is now worker-safe;
+        # only its existing UI gating is applied when the worker completes.
+        self._run_bg_task(
+            self._load_compile_cache,
+            on_success=_finish_project_cache_load,
+        )
 
         # Project reporting performs network-share reads, volume checks, and
         # include resolution. Keep it in the bounded worker pool; only its
@@ -750,4 +833,3 @@ class ProjectActionsMixin(_Base):
         # (the analysis itself is compile-driven — folder switches only
         # reload the snapshot, never re-scan).
         self._load_compat_cache()
-

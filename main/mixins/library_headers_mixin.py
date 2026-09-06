@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 from typing import TYPE_CHECKING
 from pathlib import Path
 
@@ -31,6 +32,11 @@ if TYPE_CHECKING:
     _Base = MCUUploadGUI
 else:
     _Base = object
+
+# Process-wide RAM cache for installed libraries & header mapping
+_INSTALLED_LIBS_RAM_CACHE: dict[str, tuple[tuple, dict[str, str], dict[str, str]]] = {}
+_BOARD_VARIANT_VERIFY_RAM_CACHE: dict[tuple[str, str], tuple[bool, str]] = {}
+_INSTALLED_LIBS_RAM_LOCK = threading.Lock()
 
 class LibraryHeadersMixin(_Base):
     """Mixin providing LibraryHeadersMixin capabilities for MCUUploadGUI."""
@@ -53,6 +59,26 @@ class LibraryHeadersMixin(_Base):
         libs_dir = Path(download_dir) / "Libs"
         if not libs_dir.exists():
             return libs_map, header_map
+
+        # Check in-memory RAM cache first before disk walk
+        try:
+            libs_dir_mtime = libs_dir.stat().st_mtime_ns
+            sub_st = []
+            for item in sorted(libs_dir.iterdir()):
+                if item.is_dir():
+                    try:
+                        sub_st.append((item.name, item.stat().st_mtime_ns))
+                    except OSError:
+                        pass
+            fp = (libs_dir_mtime, tuple(sub_st))
+        except Exception:
+            fp = ()
+
+        f_key = str(libs_dir)
+        with _INSTALLED_LIBS_RAM_LOCK:
+            cached = _INSTALLED_LIBS_RAM_CACHE.get(f_key)
+            if cached is not None and fp and cached[0] == fp:
+                return dict(cached[1]), dict(cached[2])
 
         # Scan each subdirectory in Libs
         try:
@@ -119,6 +145,9 @@ class LibraryHeadersMixin(_Base):
                     title="Library Installed"
                 )
         self._known_installed_libs = current_lib_names
+
+        with _INSTALLED_LIBS_RAM_LOCK:
+            _INSTALLED_LIBS_RAM_CACHE[f_key] = (fp, dict(libs_map), dict(header_map))
 
         return libs_map, header_map
 
@@ -275,6 +304,11 @@ class LibraryHeadersMixin(_Base):
         not installed yet, etc.) — this check must never block a compile
         just because it wasn't able to look something up.
         """
+        cache_key = (str(p_platform).lower(), str(p_board).lower())
+        with _INSTALLED_LIBS_RAM_LOCK:
+            if cache_key in _BOARD_VARIANT_VERIFY_RAM_CACHE:
+                return _BOARD_VARIANT_VERIFY_RAM_CACHE[cache_key]
+
         try:
             core_dir_str = os.environ.get("PLATFORMIO_CORE_DIR")
             if not core_dir_str:
@@ -312,7 +346,11 @@ class LibraryHeadersMixin(_Base):
             # Search every installed framework-* package rather than assuming
             # which specific package name provides variants for this platform.
             found = any(packages_dir.glob(f"framework-*/variants/{variant}/pins_arduino.h"))
-            return (True, "") if found else (False, variant)
+            res = (True, "") if found else (False, variant)
+            if found:
+                with _INSTALLED_LIBS_RAM_LOCK:
+                    _BOARD_VARIANT_VERIFY_RAM_CACHE[cache_key] = res
+            return res
         except Exception:
             return True, ""  # never block a compile due to our own check failing
 
@@ -321,6 +359,8 @@ class LibraryHeadersMixin(_Base):
         package via its own CLI. p_platform is whatever the resolved
         board actually specifies — never a hardcoded platform name — so
         this repairs any corrupted/incomplete platform, not just ESP32."""
+        with _INSTALLED_LIBS_RAM_LOCK:
+            _BOARD_VARIANT_VERIFY_RAM_CACHE.clear()
         self._append(f"  🔄 Reinstalling '{p_platform}' platform (this can take a few minutes)...", "info")
         try:
             result = subprocess.run(

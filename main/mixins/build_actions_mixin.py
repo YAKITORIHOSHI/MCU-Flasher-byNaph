@@ -243,6 +243,12 @@ class BuildActionsMixin(_Base):
         # inside the COMPILING section header (not before it).
         compat_boards, compat_reasons = self._get_compat_analysis()
         selected_board = self.board_var.get()
+        self._active_board_name = selected_board
+        self._active_skip_compile = bool(self.skip_compile_var.get()) if hasattr(self, "skip_compile_var") else False
+        self._active_upload_speed = str(
+            self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+        )
+        self._active_board_info = dict(SUPPORTED_BOARDS.get(selected_board, {}))
         self._board_mismatch_detected = (
             bool(compat_boards) and selected_board not in compat_boards
         )
@@ -255,6 +261,8 @@ class BuildActionsMixin(_Base):
         self._clear_console_if_action_enabled()
         self.is_busy = True
         self._stop_requested = False
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        operation_session_id = self._op_session_id
         self._compile_background_lock.set()
         self._set_buttons_state(True, operation="compile")
 
@@ -262,6 +270,8 @@ class BuildActionsMixin(_Base):
         # prepare packages for a while, but it must never follow a later board
         # change or allow a background recognizer to alter its target.
         selected_board_info = dict(SUPPORTED_BOARDS.get(selected_board, {}))
+        self._active_board_info = selected_board_info
+        self._active_port_label = str(self.port_var.get() or "")
 
         def _safe_compile():
             compile_succeeded = False
@@ -280,7 +290,7 @@ class BuildActionsMixin(_Base):
                 # PlatformIO can scan libraries and touch disk.  More
                 # importantly, A -> B -> A must restore A's generated config
                 # before comparing its build-config fingerprint.
-                if self.skip_compile_var.get() and self._has_prior_build():
+                if getattr(self, "_active_skip_compile", False) and self._has_prior_build():
                     if self._ensure_platformio_ini():
                         recompile_needed, _reason = self._needs_recompile()
                         if not recompile_needed:
@@ -309,13 +319,14 @@ class BuildActionsMixin(_Base):
                 self._set_status("Compile FAILED", Theme.RED)
             finally:
                 # Guarantee busy state is always cleared, even on unhandled exceptions
-                self.is_busy = False
-                self._compile_background_lock.clear()
-                self._set_buttons_state(False)
+                if getattr(self, "_op_session_id", 0) == operation_session_id:
+                    self.is_busy = False
+                    self._compile_background_lock.clear()
+                    self._set_buttons_state(False)
                 # Keep a failed mapping available for diagnostics/retry.  A
                 # standalone Compile owns its temporary network drive and may
                 # remove it only after the compile genuinely succeeds.
-                if compile_succeeded:
+                if compile_succeeded and getattr(self, "_op_session_id", 0) == operation_session_id:
                     self._unmap_unc_after_build()
 
         threading.Thread(target=_safe_compile, daemon=True).start()
@@ -368,6 +379,19 @@ class BuildActionsMixin(_Base):
 
         selected_board = self.board_var.get()
         selected_board_info = dict(SUPPORTED_BOARDS.get(selected_board, {}))
+        self._active_board_name = selected_board
+        self._active_board_info = selected_board_info
+        self._active_upload_speed = self.upload_speed_var.get() if hasattr(self, "upload_speed_var") else "460800"
+        self._active_skip_compile = bool(self.skip_compile_var.get()) if hasattr(self, "skip_compile_var") else False
+        self._active_clear_serial_on_upload = bool(
+            getattr(self, "clear_serial_on_upload_var", None)
+            and self.clear_serial_on_upload_var.get()
+        )
+        self._active_monitor_baud = str(
+            (self.serial_baud_var.get() if hasattr(self, "serial_baud_var") else self.baud_var.get())
+            or ""
+        )
+        self._active_port_label = str(self.port_var.get() or "")
 
         if not self._is_board_recognized():
             self._append("  ✖ Upload rejected: board on this port hasn't been recognized yet.", "error")
@@ -424,15 +448,18 @@ class BuildActionsMixin(_Base):
                 self._set_status("Upload FAILED", Theme.RED)
                 self._append(f"  ✖ Internal error in upload thread: {e}", "error")
             finally:
-                self.is_busy = False
-                self._compile_background_lock.clear()
-                self._set_buttons_busy(False)
-                self._set_buttons_state(False)
-                if upload_succeeded:
-                    self._unmap_unc_after_build()
+                if getattr(self, "_op_session_id", 0) == operation_session_id:
+                    self.is_busy = False
+                    self.process = None
+                    self._compile_background_lock.clear()
+                    self._set_buttons_state(False)
+                    if upload_succeeded:
+                        self._unmap_unc_after_build()
 
 
         self.is_busy = True
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        operation_session_id = self._op_session_id
         self._set_buttons_state(True, operation="upload")
         threading.Thread(target=_safe_run, daemon=True).start()
 
@@ -492,7 +519,6 @@ class BuildActionsMixin(_Base):
             self._clear_serial_console()
         silent = bool(getattr(self, "_silent_reset", False))
         is_manual_reset = bool(getattr(self, "_manual_reset_pending", False))
-        is_first_connect = not bool(getattr(self, "_first_connect_done", False))
         port_label = str(port_raw)
 
         native_keywords = ("esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug")
@@ -521,7 +547,6 @@ class BuildActionsMixin(_Base):
                 "clear_on_connect": clear_on_connect,
                 "silent": silent,
                 "is_manual_reset": is_manual_reset,
-                "is_first_connect": is_first_connect,
                 "is_native_usb": is_native_usb,
             }
             worker = threading.Thread(
@@ -542,7 +567,7 @@ class BuildActionsMixin(_Base):
         session_id = getattr(self, "_op_session_id", 0)
         if self.process and self.process.poll() is None:
             try:
-                self.root.after(0, lambda: self.btn_stop.configure(
+                self._post_ui(lambda: self.btn_stop.configure(
                     text="■ Stopping...", state=tk.DISABLED))
             except Exception:
                 pass
@@ -569,16 +594,20 @@ class BuildActionsMixin(_Base):
                 # operation session has started in the meantime.
                 time.sleep(5)
                 if self.is_busy and getattr(self, "_op_session_id", 0) == session_id:
-                    self.is_busy = False
-                    self._set_buttons_state(False)
-                    self._set_status("Stopped (failsafe)", Theme.YELLOW)
-                    self._append("  ⚠ Busy state cleared by failsafe timer.", "warning")
+                    def _force_clear():
+                        if self.is_busy and getattr(self, "_op_session_id", 0) == session_id:
+                            self.is_busy = False
+                            self.process = None
+                            self._set_buttons_state(False)
+                            self._set_status("Stopped (failsafe)", Theme.YELLOW)
+                            self._append("  ⚠ Busy state cleared by failsafe timer.", "warning")
+                    self._post_ui(_force_clear)
 
-            threading.Thread(target=_kill, daemon=True).start()
+            self._run_bg_task(_kill)
         elif self.is_busy:
             if getattr(self, "_reconnect_waiting", False):
                 try:
-                    self.root.after(0, lambda: self.btn_stop.configure(
+                    self._post_ui(lambda: self.btn_stop.configure(
                         text="■ Stopping...", state=tk.DISABLED))
                 except Exception:
                     pass
@@ -655,11 +684,12 @@ class BuildActionsMixin(_Base):
             self._append_notif("  ⏸ Paused for upload…", "dim")
         return was_running
 
-    def _resume_monitor(self):
+    def _resume_monitor(self, pulse_reset: bool = True):
         """Resume monitor after an operation; Tk configuration stays on Tk's thread."""
         def _resume_on_ui():
             self._monitor_should_run = True
-            self._manual_reset_pending = True
+            if pulse_reset:
+                self._manual_reset_pending = True
             board_name = self.board_var.get()
             board_info = SUPPORTED_BOARDS.get(board_name, {})
             is_avr = (board_info.get("platform", "") == "atmelavr")
