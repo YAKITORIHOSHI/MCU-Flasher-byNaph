@@ -4,13 +4,14 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import time
 import re
 import threading
 import queue
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
@@ -70,7 +71,7 @@ class ConsoleSerialMixin(_Base):
             return any(cls._warning_tag_present(part) for part in tag)
         return str(tag or "").strip().lower() == "warning"
 
-    def _should_hide_build_console_warning(self, tag="") -> bool:
+    def _should_hide_build_console_warning(self, tag: Any = "") -> bool:
         """Check the display-only warning filter for Build Console output.
 
         This is deliberately evaluated when the queued UI callback runs, so a
@@ -372,10 +373,10 @@ class ConsoleSerialMixin(_Base):
                 and current_total is not None
                 and available_cols >= 88
             )
-            bytes_suffix = (
-                f" | {int(current_written):,}/{int(current_total):,} bytes"
-                if show_bytes else ""
-            )
+            if show_bytes and current_written is not None and current_total is not None:
+                bytes_suffix = f" | {int(current_written):,}/{int(current_total):,} bytes"
+            else:
+                bytes_suffix = ""
             status = "✔ Flashed" if current_percent >= 99.95 else "⚡ Flashing"
             fixed_width = len(
                 f"  {status} [{current['stage']}/{current['stage_total']}] "

@@ -7,6 +7,7 @@ Specialized for viewing Arduino/C++ code (.ino / .cpp / .h) in read-only mode.
 
 import os
 import sys
+from typing import Any
 
 try:
     # pyrefly: ignore [missing-import]
@@ -54,10 +55,10 @@ class ArduinoLexer(QsciLexerCPP):
         self.setFoldComments(True)
         self.setFoldPreprocessor(True)
 
-    def keywords(self, kw_set):
-        if kw_set == 2:
+    def keywords(self, set: int):
+        if set == 2:
             return " ".join(ARDUINO_KEYWORDS_SET2)
-        return super().keywords(kw_set)
+        return super().keywords(set)
 
     def description(self, style):
         if style == QsciLexerCPP.KeywordSet2:
@@ -106,8 +107,8 @@ class AdaptiveTabBar(QTabBar):
         width_per_tab = max(92, min(260, (available - gap) // count))
         return QSize(min(hint.width(), width_per_tab), hint.height())
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
+    def resizeEvent(self, a0):
+        super().resizeEvent(a0)
         self.updateGeometry()
 
 class CodeViewer(QsciScintilla):
@@ -115,7 +116,8 @@ class CodeViewer(QsciScintilla):
         super().__init__(parent)
         self.file_path = None
         self.setReadOnly(True)
-        self.setFocusPolicy(Qt.StrongFocus)
+        focus_policy: Any = getattr(Qt, "StrongFocus", 0x1 | 0x2 | 0x8)
+        self.setFocusPolicy(focus_policy)
         self._configure_font()
         self._configure_lexer()
         self._configure_margins()
@@ -133,7 +135,7 @@ class CodeViewer(QsciScintilla):
         QShortcut(QKeySequence("Ctrl+-"), self, self.zoomOut)
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.ControlModifier:
+        if event.modifiers() & getattr(Qt, "ControlModifier", 0x04000000):
             event.accept()
             return
         super().wheelEvent(event)
@@ -148,30 +150,30 @@ class CodeViewer(QsciScintilla):
         self._base_font = font
 
     def _configure_lexer(self):
-        self.lexer = ArduinoLexer(self)
-        self.lexer.setDefaultFont(self._base_font)
-        self.lexer.setDefaultColor(QColor(THEME["foreground"]))
-        self.lexer.setDefaultPaper(QColor(THEME["background"]))
+        lexer = ArduinoLexer(self)
+        lexer.setDefaultFont(self._base_font)
+        lexer.setDefaultColor(QColor(THEME["foreground"]))
+        lexer.setDefaultPaper(QColor(THEME["background"]))
 
         style_colors = {
-            self.lexer.Comment: THEME["comment"],
-            self.lexer.CommentLine: THEME["comment"],
-            self.lexer.CommentDoc: THEME["comment"],
-            self.lexer.Number: THEME["number"],
-            self.lexer.Keyword: THEME["keyword"],
-            self.lexer.DoubleQuotedString: THEME["string"],
-            self.lexer.SingleQuotedString: THEME["string"],
-            self.lexer.PreProcessor: THEME["preprocessor"],
-            self.lexer.Operator: THEME["operator"],
-            self.lexer.Identifier: THEME["identifier"],
-            self.lexer.KeywordSet2: THEME["arduino_api"],
+            getattr(QsciLexerCPP, "Comment", 1): THEME["comment"],
+            getattr(QsciLexerCPP, "CommentLine", 2): THEME["comment"],
+            getattr(QsciLexerCPP, "CommentDoc", 3): THEME["comment"],
+            getattr(QsciLexerCPP, "Number", 4): THEME["number"],
+            getattr(QsciLexerCPP, "Keyword", 5): THEME["keyword"],
+            getattr(QsciLexerCPP, "DoubleQuotedString", 6): THEME["string"],
+            getattr(QsciLexerCPP, "SingleQuotedString", 7): THEME["string"],
+            getattr(QsciLexerCPP, "PreProcessor", 9): THEME["preprocessor"],
+            getattr(QsciLexerCPP, "Operator", 10): THEME["operator"],
+            getattr(QsciLexerCPP, "Identifier", 11): THEME["identifier"],
+            getattr(QsciLexerCPP, "KeywordSet2", 16): THEME["arduino_api"],
         }
         for style, color in style_colors.items():
-            self.lexer.setColor(QColor(color), style)
-            self.lexer.setPaper(QColor(THEME["background"]), style)
-            self.lexer.setFont(self._base_font, style)
+            lexer.setColor(QColor(color), style)
+            lexer.setPaper(QColor(THEME["background"]), style)
+            lexer.setFont(self._base_font, style)
 
-        self.setLexer(self.lexer)
+        self.setLexer(lexer)
         self.setPaper(QColor(THEME["background"]))
         self.setColor(QColor(THEME["foreground"]))
 
@@ -242,9 +244,12 @@ class MainWindow(QMainWindow):
         self.tabs.setTabBar(AdaptiveTabBar(self.tabs))
         self.tabs.setTabsClosable(False)
         self.tabs.setUsesScrollButtons(True)
-        self.tabs.setElideMode(Qt.ElideMiddle)
-        self.tabs.tabBar().setElideMode(Qt.ElideMiddle)
-        self.tabs.tabBar().setExpanding(False)
+        elide_middle: Any = getattr(Qt, "ElideMiddle", 2)
+        self.tabs.setElideMode(elide_middle)
+        tb = self.tabs.tabBar()
+        if tb is not None:
+            tb.setElideMode(elide_middle)
+            tb.setExpanding(False)
         self.tabs.setStyleSheet(f"""
             QTabWidget {{
                 background-color: {THEME['background']};
@@ -350,9 +355,9 @@ def main():
 
     # Enable High DPI scaling before QApplication creation
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        QApplication.setAttribute(getattr(Qt, "AA_EnableHighDpiScaling"), True)
     if hasattr(Qt, "AA_UseHighDpiPixmaps"):
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        QApplication.setAttribute(getattr(Qt, "AA_UseHighDpiPixmaps"), True)
 
     # Set DPI awareness on Windows to match main GUI
     if sys.platform == "win32":

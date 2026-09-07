@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import os
 import json
@@ -62,10 +63,12 @@ class CleanBuildMixin(_Base):
             return
         if build_root is None:
             build_root = self._board_build_root()
+        if not build_root:
+            return
         try:
-            safe_root = Path(build_root).resolve(strict=False)
+            safe_root = Path(str(build_root)).resolve(strict=False)
         except Exception:
-            safe_root = Path(build_root)
+            safe_root = Path(str(build_root))
         active_env = safe_root / env_name
 
         for stale_text in reported_paths:

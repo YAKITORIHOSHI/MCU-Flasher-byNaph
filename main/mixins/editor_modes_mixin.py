@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -12,10 +13,21 @@ import json
 import re
 import threading
 import ctypes
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, font as tkfont
+
+win32gui: Any = None
+win32con: Any = None
+win32process: Any = None
+
+try:
+    import win32gui
+    import win32con
+    import win32process
+except ImportError:
+    pass
 
 
 from main.core.constants import *
@@ -64,6 +76,7 @@ class EditorModesMixin(_Base):
         self._editor_embedded = False
         self._editor_reparent_attempts = 0
         self._editor_fallback_ready = False
+        self._user_explicitly_detached = False
 
         # Placeholder / fallback UI. Hidden automatically once the editor
         # is successfully embedded; stays visible (with the popup button)
@@ -123,6 +136,8 @@ class EditorModesMixin(_Base):
         self._save_all_editor_files = lambda: self.editor_window.evaluate_js("saveAllFiles()") if hasattr(self, "editor_window") else None
         self._save_current_editor_file = lambda: self.editor_window.evaluate_js("saveActiveFile()") if hasattr(self, "editor_window") else None
         self._reload_current_editor_file = lambda: self.editor_window.evaluate_js("reloadActiveFile()") if hasattr(self, "editor_window") else None
+
+        # Attachment watchdog is started only after the editor embeds successfully in _reveal_editor_if_ready()
 
     def _build_editor_default(self, parent_frame):
         """Build the embedded tabbed code-editor container showing all .ino / .cpp / .h
@@ -319,7 +334,7 @@ class EditorModesMixin(_Base):
             start = text_widget.index("insert linestart")
             end = text_widget.index("insert lineend + 1c")
             text_widget.tag_add("active_line", start, end)
-            text_widget._mcu_active_line_range = (start, end)
+            setattr(text_widget, "_mcu_active_line_range", (start, end))
 
         # ── Find & Replace Panel & Logic ──────────────────────────────────
         find_panel = tk.Frame(parent_frame, bg=Theme.BG_MID, pady=6, padx=12)
@@ -679,8 +694,9 @@ class EditorModesMixin(_Base):
                 content = content[:-1]
             try:
                 data["path"].write_text(content, encoding="utf-8")
-                if getattr(self, "ai_controller", None):
-                    self.ai_controller.note_local_save(data["path"], content)
+                ai = getattr(self, "ai_controller", None)
+                if ai is not None:
+                    ai.note_local_save(data["path"], content)
                 data["original"] = content + "\n"   # match Tk's representation
                 data["modified"] = False
                 nb.tab(frame, text=data["path"].name)
@@ -913,7 +929,7 @@ class EditorModesMixin(_Base):
                     t.delete(f"{row}.0", f"{row}.{spaces}")
             return "break"
 
-        def _on_closing_brace(event, t: tk.Text) -> str:
+        def _on_closing_brace(event, t: tk.Text) -> str | None:
             """}  key: dedent closing brace to align with its opening line."""
             cur_line = _get_line_text(t)
             # Only auto-dedent when the line so far is all spaces
@@ -930,7 +946,7 @@ class EditorModesMixin(_Base):
                 return "break"
             return None   # fall through to normal insertion
 
-        def _on_backspace(event, t: tk.Text) -> str:
+        def _on_backspace(event, t: tk.Text) -> str | None:
             """Backspace: delete whole indent chunk when cursor is on spaces."""
             # If there's a selection, let default behaviour handle it
             try:
@@ -954,7 +970,7 @@ class EditorModesMixin(_Base):
                 return "break"
             return None
 
-        def _on_open_pair(event, t: tk.Text, open_ch: str) -> str:
+        def _on_open_pair(event, t: tk.Text, open_ch: str) -> str | None:
             """Auto-close (, [, { with the matching closing character."""
             close_ch = AUTO_PAIRS[open_ch]
             t.edit_separator()
@@ -964,7 +980,7 @@ class EditorModesMixin(_Base):
             t.see(tk.INSERT)
             return "break"
 
-        def _on_close_pair(event, t: tk.Text, close_ch: str) -> str:
+        def _on_close_pair(event, t: tk.Text, close_ch: str) -> str | None:
             """Skip over an already-present closing char instead of doubling it."""
             next_char = t.get(tk.INSERT, f"{t.index(tk.INSERT)} +1c")
             if next_char == close_ch:
@@ -1619,10 +1635,14 @@ class EditorModesMixin(_Base):
             txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             txt.bind("<Button-1>", lambda e: safe_reclaim_os_focus(txt), add="+")
 
+            def _sync_vsb(*a):
+                txt.yview(*a)
+                lineno_text.yview(*a)
+
             # Scrollbars
             vsb = tk.Scrollbar(
                 editor_area, orient=tk.VERTICAL,
-                command=lambda *a: [txt.yview(*a), lineno_text.yview(*a)],
+                command=_sync_vsb,
                 bg=Theme.TEXT_DIM,  # Highly visible flat grey-blue handle
                 troughcolor=Theme.BG_DARKEST,
                 activebackground=Theme.CYAN,  # Glow cyan when hovered or active
@@ -2029,20 +2049,38 @@ class EditorModesMixin(_Base):
     def _find_editor_hwnd(self):
         """Locate the pywebview editor's native window handle.
 
-        Searches via EnumWindows for the unique substring in the window title.
-        This is extremely robust against title re-writes and WebView2 subprocess boundaries
-        which otherwise fail simple PID checks.
+        Searches via EnumWindows prioritizing windows belonging to our own PID,
+        matching the editor window title or new top-level windows created after
+        pre-creation snapshot.
         """
-        if win32gui is None:
+        if win32gui is None or win32process is None:
             return None
 
-        # 1. Substring search for unique editor identifier
-        found = []
+        my_pid = os.getpid()
+        root_hwnd = None
+        try:
+            root_hwnd = self.root.winfo_id()
+        except Exception:
+            pass
+
+        # 1. Search for unique editor identifiers, prioritizing our own PID
+        own_found = []
+        any_found = []
         def _cb(hwnd, _):
             try:
+                if root_hwnd and hwnd == root_hwnd:
+                    return True
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 title = win32gui.GetWindowText(hwnd)
-                if any(k in title for k in ("Embedded Code Editor", "Monaco Code Editor", "Monaco Editor")):
-                    found.append(hwnd)
+                matches_title = any(k in title for k in (
+                    "Embedded Code Editor", "Monaco Code Editor", "Monaco Editor",
+                    EDITOR_WINDOW_TITLE, "MCU Flasher — Code Editor"
+                ))
+                if matches_title:
+                    if pid == my_pid:
+                        own_found.append(hwnd)
+                    else:
+                        any_found.append(hwnd)
             except Exception:
                 pass
             return True
@@ -2052,40 +2090,34 @@ class EditorModesMixin(_Base):
         except Exception:
             pass
 
-        if found:
-            return found[0]
+        if own_found:
+            return own_found[0]
+        if any_found:
+            return any_found[0]
 
         # 2. Fallback to exact match or title variants
-        for variant in (EDITOR_WINDOW_TITLE, "Monaco Code Editor", "Embedded Code Editor"):
+        for variant in (EDITOR_WINDOW_TITLE, "MCU Flasher — Embedded Code Editor", "Monaco Code Editor", "Embedded Code Editor"):
             hwnd = win32gui.FindWindow(None, variant)
-            if hwnd:
+            if hwnd and hwnd != root_hwnd:
                 return hwnd
 
+        # 3. New HWND diff since before creation snapshot in our PID
         before = getattr(self, "_editor_pre_create_hwnds", None)
-        if before is None:
-            return None
+        if before is not None:
+            current = _list_own_toplevel_hwnds()
+            new_hwnds = [h for h in (current - before) if h != root_hwnd]
+            if len(new_hwnds) == 1:
+                return new_hwnds[0]
+            if len(new_hwnds) > 1:
+                for h in new_hwnds:
+                    try:
+                        t = win32gui.GetWindowText(h)
+                        if any(k in t for k in ("MCU Flasher", "Embedded Code Editor", "Monaco")):
+                            return h
+                    except Exception:
+                        pass
+                return new_hwnds[0]
 
-        root_hwnd = None
-        try:
-            root_hwnd = self.root.winfo_id()
-        except Exception:
-            pass
-
-        current = _list_own_toplevel_hwnds()
-        new_hwnds = [h for h in (current - before) if h != root_hwnd]
-        if len(new_hwnds) == 1:
-            return new_hwnds[0]
-        if len(new_hwnds) > 1:
-            # Ambiguous — prefer one that still reports our title text
-            # somewhere, otherwise just take the first candidate.
-            for h in new_hwnds:
-                try:
-                    t = win32gui.GetWindowText(h)
-                    if any(k in t for k in ("MCU Flasher", "Embedded Code Editor", "Monaco")):
-                        return h
-                except Exception:
-                    pass
-            return new_hwnds[0]
         return None
 
     def _animate_editor_spinner(self):
@@ -2123,19 +2155,122 @@ class EditorModesMixin(_Base):
             self._stop_editor_spinner()
             self._editor_placeholder.place_forget()
             self._mark_startup_ready("Monaco Editor ready")
-            # Editor is ready! Trigger deferred background init immediately
+            # Editor is ready! Trigger deferred background init and start steady-state watchdog
             self.root.after(10, self._deferred_background_init)
+            self.root.after(1000, self._start_editor_attachment_watchdog)
+
+    def _dispose_and_retry_attach_editor(self, reason=""):
+        """Dispose any unattached or detached editor window state and retry
+        attaching it to the main window Tkinter frame immediately.
+        Guarantees that the editor is always attached and never remains
+        detached, especially during first run. Does NOT unparent to desktop."""
+        hwnd = getattr(self, "_editor_hwnd", None) or self._find_editor_hwnd()
+        if hwnd and win32gui is not None:
+            try:
+                # Keep it strictly hidden so user never sees a floating/detached window
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+
+        if hasattr(self, "editor_window") and self.editor_window:
+            try:
+                self.editor_window.hide()
+            except Exception:
+                pass
+
+        # Reset state flags
+        self._editor_embedded = False
+        self.editor_detached = False
+        self._editor_fallback_ready = False
+        self._embedding_in_progress = False
+
+        # Cancel detached window polling
+        poll_id = getattr(self, "_poll_detached_after_id", None)
+        if poll_id is not None:
+            try:
+                self.root.after_cancel(poll_id)
+            except Exception:
+                pass
+            self._poll_detached_after_id = None
+
+        # Clean up any detached or fallback controls in the main window
+        if hasattr(self, "_editor_fallback_btn"):
+            try:
+                self._editor_fallback_btn.pack_forget()
+            except Exception:
+                pass
+
+        # Restore placeholder in editor embed frame with clear progress message
+        if hasattr(self, "_editor_placeholder") and hasattr(self, "_editor_embed_frame"):
+            try:
+                self._editor_placeholder.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+                if hasattr(self, "_editor_status_lbl"):
+                    self._editor_status_lbl.configure(text="📝 Attaching code editor…")
+                if hasattr(self, "_editor_desc_lbl"):
+                    self._editor_desc_lbl.configure(text="Ensuring code editor is attached to the main window…")
+                if hasattr(self, "_editor_spinner_canvas"):
+                    self._editor_spinner_canvas.pack(pady=(0, 6))
+                self._animate_editor_spinner()
+            except Exception:
+                pass
+
+        try:
+            self.root.update_idletasks()
+            if hasattr(self, "_editor_embed_frame") and self._editor_embed_frame:
+                self._editor_embed_frame.update_idletasks()
+        except Exception:
+            pass
+
+        if reason:
+            self._append(f"  ℹ Attaching editor to main window ({reason})…", "info")
+
+        # Retry embedding after short interval
+        self.root.after(150, self._try_embed_editor_window)
+
+    def _start_editor_attachment_watchdog(self):
+        """Periodically verify that Monaco editor is properly attached and embedded
+        into the main window. If it ever becomes unparented or detached without
+        an explicit user detach action, automatically re-attach."""
+        if getattr(self, "_editor_watchdog_running", False):
+            return
+        self._editor_watchdog_running = True
+        self._poll_editor_attachment_watchdog()
+
+    def _poll_editor_attachment_watchdog(self):
+        try:
+            if getattr(self, "editor_mode", "default") == "monaco":
+                # Only monitor AFTER startup is fully ready and editor is marked embedded!
+                if getattr(self, "_startup_ready", False) and getattr(self, "_editor_embedded", False):
+                    # Only monitor if the user did NOT explicitly detach it via the button
+                    if not getattr(self, "_user_explicitly_detached", False):
+                        hwnd = getattr(self, "_editor_hwnd", None)
+                        embed_frame = getattr(self, "_editor_embed_frame", None)
+                        if hwnd and embed_frame and win32gui is not None:
+                            try:
+                                tk_hwnd = embed_frame.winfo_id()
+                                actual_parent = win32gui.GetParent(hwnd)
+                                if actual_parent != tk_hwnd or getattr(self, "editor_detached", False):
+                                    self._append("  ℹ Re-embedding unparented code editor into main window…", "info")
+                                    self._attach_editor()
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        # Steady-state check every 2.5s
+        try:
+            self.root.after(2500, self._poll_editor_attachment_watchdog)
+        except Exception:
+            self._editor_watchdog_running = False
 
     def _try_embed_editor_window(self):
         """Reparent the pywebview native window into the Tkinter editor
-        frame (Windows only, requires pywin32). Retries briefly since the
-        native window may not exist yet the first time this fires — it's
-        created asynchronously once webview.start() takes over the main
-        thread. Falls back to the 'Open Editor Window' button if pywin32
-        is unavailable or embedding doesn't succeed after several tries.
+        frame (Windows only, requires pywin32). Retries persistently until
+        the editor window is created and embedded. It must never give up
+        or fall back to detached during first run or startup.
         """
         if win32gui is None or win32con is None:
-            self._append("  ⚠ pywin32 not available — editor will open in its own window.", "warning")
+            self._append("  ⚠ pywin32 not available — editor cannot be embedded.", "warning")
             self._show_editor_fallback_button()
             return
 
@@ -2152,13 +2287,18 @@ class EditorModesMixin(_Base):
         if not hwnd:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
-            if self._editor_reparent_attempts < 100:
-                poll_delay = 60 if self._editor_reparent_attempts < 20 else 100
-                self.root.after(poll_delay, self._try_embed_editor_window)
+            # Adaptive polling interval — never give up during startup / first run!
+            if self._editor_reparent_attempts < 30:
+                poll_delay = 60
+            elif self._editor_reparent_attempts < 100:
+                poll_delay = 120
+                if hasattr(self, "_editor_desc_lbl") and self._editor_reparent_attempts == 40:
+                    self._editor_desc_lbl.configure(text="Initializing editor runtime (first run setup in progress)…")
             else:
-                self._append("  ✖ Could not locate the editor's window to embed it after 8s — "
-                              "falling back to a separate window.", "error")
-                self._show_editor_fallback_button()
+                poll_delay = 250
+                if hasattr(self, "_editor_desc_lbl") and self._editor_reparent_attempts == 110:
+                    self._editor_desc_lbl.configure(text="Waiting for toolchain & editor components to settle…")
+            self.root.after(poll_delay, self._try_embed_editor_window)
             return
 
         # Ensure the webview host thread is actively pumping messages before attempting
@@ -2170,23 +2310,17 @@ class EditorModesMixin(_Base):
             if user32.IsHungAppWindow(hwnd):
                 self._embedding_in_progress = False
                 self._editor_reparent_attempts += 1
-                if self._editor_reparent_attempts < 80:
-                    self.root.after(100, self._try_embed_editor_window)
-                else:
-                    self._append("  ✖ Editor window stopped responding during startup — falling back to separate window.", "error")
-                    self._show_editor_fallback_button()
+                # Thread is temporarily busy initializing (common during first run); retry after 200ms
+                self.root.after(200, self._try_embed_editor_window)
                 return
 
             res = wintypes.DWORD()
-            # SMTO_ABORTIFHUNG = 0x0002 — non-blocking check if thread responds within 30ms
-            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 30, ctypes.byref(res)):
+            # SMTO_ABORTIFHUNG = 0x0002 — non-blocking check if thread responds within 60ms
+            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 60, ctypes.byref(res)):
                 self._embedding_in_progress = False
                 self._editor_reparent_attempts += 1
-                if self._editor_reparent_attempts < 80:
-                    self.root.after(100, self._try_embed_editor_window)
-                else:
-                    self._append("  ✖ Editor window host thread timed out during embed retry.", "error")
-                    self._show_editor_fallback_button()
+                # Thread didn't respond within 60ms; retry after 150ms without giving up
+                self.root.after(150, self._try_embed_editor_window)
                 return
         except Exception:
             pass
@@ -2194,6 +2328,7 @@ class EditorModesMixin(_Base):
         try:
             frame = self._editor_embed_frame
             frame.update_idletasks()
+            self.root.update_idletasks()
             tk_hwnd = frame.winfo_id()
 
             # Set WS_CLIPCHILDREN on parent Tk frame to prevent paint overlap
@@ -2222,8 +2357,28 @@ class EditorModesMixin(_Base):
             ex_style |= win32con.WS_EX_TOOLWINDOW
             win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
 
+            # Apply style change before SetParent to ensure Windows accepts child reparenting
+            win32gui.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_FRAMECHANGED
+            )
+
             # Re-parent it under the Tkinter frame.
             win32gui.SetParent(hwnd, tk_hwnd)
+
+            # Strict verification: Did SetParent actually take effect?
+            actual_parent = win32gui.GetParent(hwnd)
+            if actual_parent != tk_hwnd:
+                # Parenting failed or was deferred by Windows.
+                # Keep window strictly hidden and retry.
+                self._embedding_in_progress = False
+                self._editor_reparent_attempts += 1
+                try:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                except Exception:
+                    pass
+                self.root.after(150, self._try_embed_editor_window)
+                return
 
             w = max(frame.winfo_width(), 50)
             h = max(frame.winfo_height(), 50)
@@ -2232,12 +2387,6 @@ class EditorModesMixin(_Base):
                 win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
             )
 
-            # Raw SetWindowPos(SWP_SHOWWINDOW) only flips the native HWND's
-            # visible bit. WebView2's own Controller.IsVisible flag tracks
-            # the managed WinForms control's Visible property instead, which
-            # only flips when pywebview's own show() runs. Skip this and the
-            # HWND is visible but the browser control never paints — you get
-            # a blank white rectangle instead of content.
             try:
                 if hasattr(self, "editor_window"):
                     self.editor_window.show()
@@ -2246,6 +2395,8 @@ class EditorModesMixin(_Base):
 
             self._editor_hwnd = hwnd
             self._editor_embedded = True
+            self.editor_detached = False
+            self._editor_fallback_ready = False
             self._embedding_in_progress = False
             if not getattr(self, "editor_pane_visible", True):
                 try:
@@ -2259,11 +2410,8 @@ class EditorModesMixin(_Base):
         except Exception as e:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
-            if self._editor_reparent_attempts < 80:  # ~8 seconds of retrying
-                self.root.after(100, self._try_embed_editor_window)
-            else:
-                self._append(f"  ✖ Failed to embed editor window after retries: {e}", "error")
-                self._show_editor_fallback_button()
+            # Never fall back to separate window on first run/startup. Retry cleanly!
+            self.root.after(200, self._try_embed_editor_window)
 
     def _start_editor_hang_watchdog(self, tk_hwnd, tk_tid, editor_tid):
         """Watch for the exact failure mode AttachThreadInput can cause:
@@ -2406,6 +2554,12 @@ class EditorModesMixin(_Base):
         reachable."""
         if getattr(self, "_editor_embedded", False):
             return
+        # On Windows 10/11 with pywin32, never leave the editor detached during
+        # startup or first run. Dispose and retry attachment automatically!
+        if sys.platform == "win32" and win32gui is not None and not getattr(self, "_user_explicitly_detached", False):
+            self._dispose_and_retry_attach_editor(reason="fallback prevented on first run")
+            return
+
         self._editor_fallback_ready = True
         self._editor_status_lbl.configure(text="📝 Monaco Editor Active")
         self._editor_desc_lbl.configure(text="The editor is running in a separate window.")

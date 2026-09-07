@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import time
@@ -12,6 +13,19 @@ from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
+
+from typing import TYPE_CHECKING, Optional, Any
+
+win32gui: Any = None
+win32con: Any = None
+win32process: Any = None
+
+try:
+    import win32gui
+    import win32con
+    import win32process
+except ImportError:
+    pass
 
 
 from main.core.constants import *
@@ -33,7 +47,7 @@ else:
 
 class LayoutPanesMixin(_Base):
     """Mixin providing LayoutPanesMixin capabilities for MCUUploadGUI."""
-    def _update_editor_info(self, cursor_pos: str = None):
+    def _update_editor_info(self, cursor_pos: Optional[str] = None):
         """Update editor statistics without scanning project files on Tk."""
         label = getattr(self, "editor_info_label", None)
         if label is None:
@@ -543,6 +557,7 @@ class LayoutPanesMixin(_Base):
 
             # Save timestamp for grace period in _poll_detached_window
             self._detach_timestamp = time.time()
+            self._user_explicitly_detached = True
 
             # 1. Reparent to desktop (0)
             try:
@@ -671,6 +686,7 @@ class LayoutPanesMixin(_Base):
         if getattr(self, "_is_attaching_editor", False):
             return
         self._is_attaching_editor = True
+        self._user_explicitly_detached = False
         # Cancel any pending poll timer so it cannot fire a duplicate
         # _attach_editor() call while we are mid-attach.
         poll_id = getattr(self, "_poll_detached_after_id", None)
@@ -693,11 +709,36 @@ class LayoutPanesMixin(_Base):
                 return
             hwnd = getattr(self, "_editor_hwnd", None)
             if not hwnd:
+                if hasattr(self, "_find_editor_hwnd"):
+                    hwnd = self._find_editor_hwnd()
+                    if hwnd:
+                        self._editor_hwnd = hwnd
+            if not hwnd:
                 return
                 
             # Hide placeholder
             if hasattr(self, "_editor_placeholder"):
                 self._editor_placeholder.place_forget()
+
+            # Ensure the editor pane is visible in the main window so the
+            # editor frame is actually shown inside main_pane.
+            self.editor_pane_visible = True
+            if hasattr(self, "editor_frame") and hasattr(self, "main_pane"):
+                try:
+                    main_panes = [str(p) for p in self.main_pane.panes()]
+                    if str(self.editor_frame) not in main_panes and self.editor_frame not in self.main_pane.panes():
+                        if hasattr(self, "bottom_frame") and (str(self.bottom_frame) in main_panes or self.bottom_frame in self.main_pane.panes()):
+                            self.main_pane.add(self.editor_frame, before=self.bottom_frame,
+                                               minsize=getattr(self, "_editor_minsize", 100),
+                                               height=getattr(self, "_editor_height", 400))
+                        else:
+                            self.main_pane.add(self.editor_frame,
+                                               minsize=getattr(self, "_editor_minsize", 100),
+                                               height=getattr(self, "_editor_height", 400))
+                except Exception:
+                    pass
+            if hasattr(self, "btn_toggle_editor") and self.btn_toggle_editor and self.btn_toggle_editor.winfo_exists():
+                self.btn_toggle_editor.configure(text="🗖 Hide Editor")
 
             # 0. Hide the detached window and reclaim OS focus BEFORE
             #    reparenting.  This prevents Windows from dispatching
@@ -741,6 +782,8 @@ class LayoutPanesMixin(_Base):
                 win32gui.SetParent(hwnd, tk_hwnd)
                 actual_parent = win32gui.GetParent(hwnd)
                 if actual_parent != tk_hwnd:
+                    # Parenting failed or was deferred by Windows; retry shortly
+                    self.root.after(100, self._attach_editor)
                     return
                 
                 # Resize — flush pending Tk geometry before measuring
@@ -758,16 +801,30 @@ class LayoutPanesMixin(_Base):
                 except Exception:
                     pass
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                win32gui.RedrawWindow(
-                    hwnd, None, None,
-                    win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
-                )
+                try:
+                    win32gui.RedrawWindow(  # type: ignore
+                        hwnd, (0, 0, w, h), 0,
+                        win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
                 
             self._editor_embedded = True
             self.editor_detached = False
             self._update_detach_button_style()
+
+            try:
+                if hasattr(self, "editor_window") and self.editor_window:
+                    self.editor_window.evaluate_js(
+                        "if (window.setDetachedActionBar) window.setDetachedActionBar(false);"
+                    )
+            except Exception:
+                pass
+
+            self._sync_ai_and_editor_layout()
+            self._update_pane_toggle_buttons()
 
             # Let Tk's layout settle, then sync the editor size one more time
             self.root.after(200, lambda: self._resize_embedded_editor())
@@ -790,9 +847,10 @@ class LayoutPanesMixin(_Base):
                     pass
                 self.editor_content_frame = None
                 
-            if hasattr(self, "_default_placeholder_frame"):
+            ph_frame = getattr(self, "_default_placeholder_frame", None)
+            if ph_frame is not None:
                 try:
-                    self._default_placeholder_frame.destroy()
+                    ph_frame.destroy()
                 except Exception:
                     pass
                 self._default_placeholder_frame = None
@@ -998,12 +1056,21 @@ class LayoutPanesMixin(_Base):
                 )
                 desc_lbl.pack(pady=5)
                 
-            self._default_placeholder_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+            ph = getattr(self, "_default_placeholder_frame", None)
+            if ph is not None:
+                ph.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
     def _poll_detached_window(self):
         if not getattr(self, "editor_detached", False) or not self._editor_hwnd:
             self._poll_detached_after_id = None
             return
+        # If the editor was detached without an explicit user detach button click,
+        # immediately heal it by re-attaching to the main window!
+        if not getattr(self, "_user_explicitly_detached", False):
+            self._poll_detached_after_id = None
+            self._attach_editor()
+            return
+
         # Grace period: allow 1.5s after detaching before checking visibility
         detach_time = getattr(self, "_detach_timestamp", 0)
         if time.time() - detach_time < 1.5:

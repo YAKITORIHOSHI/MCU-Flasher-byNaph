@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import os
 import time
@@ -86,8 +87,9 @@ class AIAssistantMixin(_Base):
         try:
             self._hide_ai_side_panel()
             was_closed = False
-            if getattr(self, "ai_controller", None):
-                was_closed = self.ai_controller.dispose()
+            ctrl = getattr(self, "ai_controller", None)
+            if ctrl is not None:
+                was_closed = ctrl.dispose()
             else:
                 try:
                     # pyrefly: ignore [missing-import]
@@ -160,15 +162,18 @@ class AIAssistantMixin(_Base):
         # The first-click consent was already accepted before the worker was
         # scheduled, so this launch must not display the controller's prompt
         # a second time.
-        self.ai_controller.disclaimer_accepted = True
+        ctrl = getattr(self, "ai_controller", None)
+        if ctrl is None:
+            return
+        ctrl.disclaimer_accepted = True
         if hasattr(self, "_sync_project_hardware_state"):
             try:
                 self._sync_project_hardware_state()
             except Exception:
                 pass
-        if getattr(self.ai_controller, "is_launching", False) or module.is_opencode_running():
+        if getattr(ctrl, "is_launching", False) or module.is_opencode_running():
             return
-        started = self.ai_controller.toggle_ai()
+        started = ctrl.toggle_ai()
         if not started:
             self._hide_ai_side_panel()
 
@@ -231,12 +236,13 @@ class AIAssistantMixin(_Base):
         # so doing that before returning to Tk makes the first click appear
         # frozen on slower or antivirus-scanned machines.
         self._show_ai_side_panel()
-        if getattr(self, "ai_controller", None):
+        ctrl = getattr(self, "ai_controller", None)
+        if ctrl is not None:
             try:
                 # pyrefly: ignore [missing-import]
                 from dedicated_AI import is_opencode_running
                 if not is_opencode_running():
-                    started = self.ai_controller.toggle_ai()
+                    started = ctrl.toggle_ai()
                     if not started:
                         self._hide_ai_side_panel()
             except Exception as exc:
@@ -307,8 +313,8 @@ class AIAssistantMixin(_Base):
         try:
             hwnd = getattr(self, "_ai_hwnd", None)
             embedded = bool(hwnd and getattr(self, "_ai_is_embedded", False))
-            if embedded and win32gui is not None:
-                embedded = bool(win32gui.IsWindow(hwnd))
+            if embedded and win32gui is not None and hwnd is not None:
+                embedded = bool(win32gui.IsWindow(int(hwnd)))
 
             sketch_dir = getattr(self, "sketch_dir_path", None)
             if sketch_dir:
@@ -411,10 +417,11 @@ class AIAssistantMixin(_Base):
         # Trigger launch if AI process is not running.  If the optional module
         # is still being prepared, the background completion callback will do
         # this later; no import or package probe belongs on the Tk thread.
-        if getattr(self, "ai_controller", None):
+        ctrl = getattr(self, "ai_controller", None)
+        if ctrl is not None:
             try:
-                if not ai_running and not getattr(self.ai_controller, "is_launching", False):
-                    started = self.ai_controller.toggle_ai()
+                if not ai_running and not getattr(ctrl, "is_launching", False):
+                    started = ctrl.toggle_ai()
                     if not started:
                         self._hide_ai_side_panel()
                         return
@@ -478,9 +485,10 @@ class AIAssistantMixin(_Base):
             return
 
         # Check if already embedded and HWND is still valid
-        if getattr(self, "_ai_hwnd", None):
+        ai_h = getattr(self, "_ai_hwnd", None)
+        if ai_h is not None:
             try:
-                if win32gui.IsWindow(self._ai_hwnd):
+                if win32gui.IsWindow(int(ai_h)):
                     self._resize_embedded_ai()
                     return
             except Exception:
@@ -552,8 +560,8 @@ class AIAssistantMixin(_Base):
             # like the previously-working hide/show cycle.
             try:
                 user32.ShowWindowAsync(int(hwnd), int(win32con.SW_SHOW))
-                win32gui.RedrawWindow(
-                    hwnd, None, None,
+                getattr(win32gui, "RedrawWindow")(
+                    int(hwnd), None, None,
                     win32con.RDW_INVALIDATE | win32con.RDW_ALLCHILDREN,
                 )
             except Exception:
@@ -594,12 +602,13 @@ class AIAssistantMixin(_Base):
                 pass
 
     def _apply_ai_embed_size(self, force=False):
-        if not getattr(self, "_ai_hwnd", None) or not getattr(self, "_ai_is_embedded", False):
+        ai_h = getattr(self, "_ai_hwnd", None)
+        if not ai_h or not getattr(self, "_ai_is_embedded", False):
             return
         if win32gui is None or win32con is None:
             return
         try:
-            if not win32gui.IsWindow(self._ai_hwnd):
+            if not win32gui.IsWindow(int(ai_h)):
                 self._ai_hwnd = None
                 return
             frame = getattr(self, "ai_embed_frame", None)
@@ -616,7 +625,7 @@ class AIAssistantMixin(_Base):
             self._last_ai_h = h
 
             win32gui.SetWindowPos(
-                self._ai_hwnd, 0, 0, 0, w, h,
+                int(ai_h), 0, 0, 0, w, h,
                 win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
                 win32con.SWP_SHOWWINDOW | 0x4000
             )
@@ -633,16 +642,17 @@ class AIAssistantMixin(_Base):
         keep a stale layout, leaving a dead strip at the bottom/right of the
         embedded view. Check each child HWND and resize so it fills the full container.
         """
-        if not getattr(self, "_ai_hwnd", None) or win32gui is None:
+        ai_h = getattr(self, "_ai_hwnd", None)
+        if not ai_h or win32gui is None:
             return
         try:
-            if not win32gui.IsWindow(self._ai_hwnd):
+            if not win32gui.IsWindow(int(ai_h)):
                 self._ai_hwnd = None
                 return
             frame = getattr(self, "ai_embed_frame", None)
             fw = frame.winfo_width() if frame else 0
             fh = frame.winfo_height() if frame else 0
-            cr = win32gui.GetClientRect(self._ai_hwnd)
+            cr = win32gui.GetClientRect(int(ai_h))
             cw, ch = cr[2], cr[3]
             target_w = max(fw, cw)
             target_h = max(fh, ch)
@@ -679,14 +689,15 @@ class AIAssistantMixin(_Base):
                 self._ai_size_watchdog_job = None
                 return
             try:
-                if getattr(self, "_ai_hwnd", None) and win32gui is not None:
-                    if not win32gui.IsWindow(self._ai_hwnd):
+                ai_h = getattr(self, "_ai_hwnd", None)
+                if ai_h is not None and win32gui is not None:
+                    if not win32gui.IsWindow(int(ai_h)):
                         self._ai_hwnd = None
                     else:
                         frame = self.ai_embed_frame
                         w = max(frame.winfo_width(), 50)
                         h = max(frame.winfo_height(), 50)
-                        left, top, right, bottom = win32gui.GetWindowRect(self._ai_hwnd)
+                        left, top, right, bottom = win32gui.GetWindowRect(int(ai_h))
                         if right - left != w or bottom - top != h:
                             self._apply_ai_embed_size()
                         else:
@@ -710,7 +721,7 @@ class AIAssistantMixin(_Base):
         Invokes the Reload button to automatically update the editor view,
         and posts a notification so the user can see what the AI changed.
         """
-        review_notification_state = {"queued": None}
+        review_notification_state: dict[str, bool | None] = {"queued": None}
 
         def _do_reload():
             if getattr(self, "editor_mode", "default") == "monaco" and hasattr(self, "editor_window") and self.editor_window:

@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import time
 import re
@@ -48,7 +49,7 @@ class MonitorPipelineMixin(_Base):
             else:
                 board_name = getattr(self, "_active_board_name", None) or (self.board_var.get() if hasattr(self, "board_var") else "")
         if board_info is None:
-            board_info = SUPPORTED_BOARDS.get(board_name, {})
+            board_info = SUPPORTED_BOARDS.get(board_name, {}) or {}
         platform = str(board_info.get("platform", "")).lower()
         is_uno = (platform == "atmelavr")
         self._append(f"  🔄 Triggering hardware reset on {port}...", "info")
@@ -350,6 +351,9 @@ class MonitorPipelineMixin(_Base):
                         if getattr(self, "_monitor_should_run", False) and not (getattr(self, "is_busy", False) and getattr(self, "_active_operation", None) in ("upload", "flash", "reset")):
                             self._schedule_auto_start_monitor(2000)
                     return
+
+        if conn is None:
+            return
 
         if not _session_current():
             try:

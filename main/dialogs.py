@@ -241,20 +241,23 @@ class ProjectSelectorDialog:
                 self.btn_tab_existing.configure(bg=Theme.BTN_FULL)
             if hasattr(self, "btn_tab_new") and self.btn_tab_new:
                 self.btn_tab_new.configure(bg=Theme.BTN_CLEAR)
-            if getattr(self, "frame_new", None):
-                self.frame_new.pack_forget()
-            if getattr(self, "frame_existing", None):
-                self.frame_existing.pack(fill=tk.BOTH, expand=True)
+            fn = getattr(self, "frame_new", None)
+            if fn is not None:
+                fn.pack_forget()
+            fe = getattr(self, "frame_existing", None)
+            if fe is not None:
+                fe.pack(fill=tk.BOTH, expand=True)
         else:
             if hasattr(self, "btn_tab_new") and self.btn_tab_new:
                 self.btn_tab_new.configure(bg=Theme.BTN_FULL)
             if hasattr(self, "btn_tab_existing") and self.btn_tab_existing:
                 self.btn_tab_existing.configure(bg=Theme.BTN_CLEAR)
-            if getattr(self, "frame_existing", None):
-                self.frame_existing.pack_forget()
-            if getattr(self, "frame_new", None):
-                self.frame_new.pack(fill=tk.BOTH, expand=True)
-
+            fe = getattr(self, "frame_existing", None)
+            if fe is not None:
+                fe.pack_forget()
+            fn = getattr(self, "frame_new", None)
+            if fn is not None:
+                fn.pack(fill=tk.BOTH, expand=True)
     def _get_project_files(self, folder_path: Path | str) -> list[str]:
         """Scan only the selected project folder for user-owned source files.
 

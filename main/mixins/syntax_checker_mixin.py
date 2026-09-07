@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import time
 import threading
@@ -88,7 +89,7 @@ class SyntaxCheckerMixin(_Base):
 
                 # Skip if busy compiling or no project loaded
                 if (getattr(self, "is_busy", False)
-                        or getattr(self, "_compile_background_lock", threading.Lock()).is_set()
+                        or getattr(self, "_compile_background_lock", threading.Event()).is_set()
                         or not getattr(self, "sketch_dir_path", None)):
                     continue
 
@@ -111,7 +112,7 @@ class SyntaxCheckerMixin(_Base):
         """Lightweight multi-threaded background syntax check — analyzes project files
         in parallel across all CPU cores, utilizing memory caching freely."""
         if (getattr(self, "is_busy", False)
-                or getattr(self, "_compile_background_lock", threading.Lock()).is_set()
+                or getattr(self, "_compile_background_lock", threading.Event()).is_set()
                 or not getattr(self, "sketch_dir_path", None)):
             return
 

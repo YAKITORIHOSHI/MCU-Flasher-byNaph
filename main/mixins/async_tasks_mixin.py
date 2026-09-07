@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import time
 import threading
@@ -97,11 +98,13 @@ class AsyncTasksMixin(_Base):
             try:
                 result = task_func(*args)
                 if on_success and callable(on_success):
-                    self._post_ui(lambda result=result: on_success(result))
+                    cb_succ = on_success
+                    self._post_ui(lambda result=result: cb_succ(result))
                 return result
             except Exception as exc:
                 if on_error and callable(on_error):
-                    self._post_ui(lambda exc=exc: on_error(exc))
+                    cb_err = on_error
+                    self._post_ui(lambda exc=exc: cb_err(exc))
                 return None
 
         if hasattr(self, "_bg_executor") and self._bg_executor:

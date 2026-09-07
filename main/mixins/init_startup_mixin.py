@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import time
@@ -15,6 +16,15 @@ from typing import TYPE_CHECKING
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
+
+try:
+    import win32gui
+    import win32con
+    import win32process
+except ImportError:
+    win32gui = None
+    win32con = None
+    win32process = None
 
 
 from main.core.constants import *
@@ -270,6 +280,7 @@ class InitStartupMixin(_Base):
         
         # Check if project was passed in command line arguments (e.g. after a restart)
         cmd_project = None
+        project_dir = None
         if "--project" in sys.argv:
             try:
                 idx = sys.argv.index("--project")
@@ -765,9 +776,9 @@ class InitStartupMixin(_Base):
 
         # Safety fallback: if the layout checker never receives usable geometry
         # (e.g. a native child/window-manager edge case), allow the degraded
-        # editor path to begin after 8s. The cover still waits for the full
+        # editor path to begin after 12s. The cover still waits for the full
         # startup contract rather than disappearing on this fallback alone.
-        _STARTUP_SAFETY_TIMEOUT = 8.0
+        _STARTUP_SAFETY_TIMEOUT = 12.0
         created_at = getattr(self, "_startup_overlay_created_at", 0.0)
         if created_at and (time.monotonic() - created_at) >= _STARTUP_SAFETY_TIMEOUT:
             self._mark_startup_ui_ready()
@@ -780,17 +791,31 @@ class InitStartupMixin(_Base):
                 "⚡ MCU Flasher by Naph", "Finishing application initialization…"
             )
         elif getattr(self, "editor_mode", "default") == "monaco":
+            hwnd = getattr(self, "_editor_hwnd", None)
+            embed_frame = getattr(self, "_editor_embed_frame", None)
+            tk_hwnd = embed_frame.winfo_id() if embed_frame else None
+            is_parented = (
+                hwnd is not None
+                and tk_hwnd is not None
+                and win32gui is not None
+                and win32gui.GetParent(hwnd) == tk_hwnd
+            )
             editor_ready = (
                 getattr(self, "_editor_embedded", False)
+                and is_parented
                 and getattr(self, "_editor_content_loaded", False)
+                and not getattr(self, "editor_detached", False)
             )
-            fallback_ready = getattr(self, "_editor_fallback_ready", False)
-            if editor_ready or fallback_ready:
-                self._mark_startup_ready("Application ready")
+            if editor_ready:
+                self._mark_startup_ready("Monaco Editor ready and attached")
                 return
-            else:
+            elif getattr(self, "_editor_embedded", False) and is_parented:
                 self._set_startup_overlay_message(
                     "⚡ MCU Flasher by Naph", "Loading Monaco Editor…"
+                )
+            else:
+                self._set_startup_overlay_message(
+                    "⚡ MCU Flasher by Naph", "Attaching Monaco Editor…"
                 )
         elif getattr(self, "_default_editor_ready", False):
             self._mark_startup_ready("Code editor ready")
@@ -1080,9 +1105,10 @@ class InitStartupMixin(_Base):
 
     def _update_sketch_marquee(self):
         """Perform a smooth sliding/marquee text animation step for the project name label."""
-        if getattr(self, "_sketch_marquee_after_id", None) is not None:
+        marquee_id = getattr(self, "_sketch_marquee_after_id", None)
+        if marquee_id is not None:
             try:
-                self.root.after_cancel(self._sketch_marquee_after_id)
+                self.root.after_cancel(marquee_id)
             except Exception:
                 pass
             self._sketch_marquee_after_id = None

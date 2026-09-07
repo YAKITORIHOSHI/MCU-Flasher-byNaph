@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 
 from main.core.constants import *
@@ -239,10 +240,11 @@ def detect_chip_on_port(port: str) -> tuple[str | None, str | None]:
         try:
             chip_name = getattr(esp, "CHIP_NAME", None)
         finally:
-            try:
-                esp._port.close()
-            except Exception:
-                pass
+            if esp is not None and getattr(esp, "_port", None) is not None:
+                try:
+                    esp._port.close()
+                except Exception:
+                    pass
 
         if not chip_name:
             return None, None
@@ -628,7 +630,7 @@ def _analyze_gpio_compatibility(sketch_dir: Path) -> dict:
 
     # Classify each pin against board limits dynamically
     excluded: set[str] = set()
-    warnings: list[tuple[str, str]] = []
+    warnings: list[tuple[Any, ...]] = []
     pin_hits: dict[str, list] = {name: [] for name in SUPPORTED_BOARDS.keys()}
 
     seen_reserved: set[tuple[str, int]] = set()   # avoid duplicate warnings

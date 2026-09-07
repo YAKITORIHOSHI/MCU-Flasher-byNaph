@@ -28,7 +28,7 @@ import urllib.request
 import importlib.util
 import importlib.machinery
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Any
 
 def _configure_windows_dpi_awareness() -> None:
     """Make Tk size and position controls in physical pixels on mixed-DPI displays."""
@@ -270,7 +270,7 @@ def _clear_editor_config_after_new_environment() -> bool:
 
     return removed_local
 
-def ensure_platformio_penv_with_hook(script_dir: Path = None) -> bool:
+def ensure_platformio_penv_with_hook(script_dir: Path | None = None) -> bool:
     """
     Install the subprocess-hide hook into PlatformIO's private venv (penv)
     so that compiler subprocesses spawned by SCons don't flash console windows.
@@ -1182,7 +1182,7 @@ T_RED         = _T_PALETTE["T_RED"]
 T_MAGENTA     = _T_PALETTE["T_MAGENTA"]
 
 # ── Shared GUI state (set up by BootstrapGUI) ────────────────
-_gui: "BootstrapGUI | None" = None   # set when the window is live
+_gui: Any = None   # set when the window is live
 
 # How long (in seconds) to wait after the final "All dependencies ready!" line
 # (or any other finish/launch/launch-failed path) before the bootstrap window
@@ -1454,6 +1454,8 @@ class BootstrapGUI:
         # Total number of top-level "Checking X" steps in the setup flow.
         self.TOTAL_STEPS = 9
         self._step_index = 0
+        self._busy_generation: int = 0
+        self._current_step_pct: float = 0.0
 
         self._spin_idx = 0
         self._spinning = True
@@ -2975,6 +2977,7 @@ def _check_import_pywebview() -> bool:
     if not _check_spec("webview"):
         return False
     try:
+        # pyrefly: ignore [missing-import]
         import webview
         if webview is not None:
             return True
@@ -4027,6 +4030,7 @@ def _get_board_download_dir() -> Path:
         # path is expected to become stale. Rewrite only this app-owned
         # setting to the current user's portable default.
         settings["download_dir"] = str(default_dir)
+        temporary: Optional[Path] = None
         try:
             temporary = settings_file.with_name(
                 settings_file.name + f".tmp-{os.getpid()}"
@@ -4034,10 +4038,11 @@ def _get_board_download_dir() -> Path:
             temporary.write_text(json.dumps(settings, indent=2), encoding="utf-8")
             os.replace(temporary, settings_file)
         except Exception:
-            try:
-                temporary.unlink(missing_ok=True)
-            except Exception:
-                pass
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except Exception:
+                    pass
     return default_dir
 
 
@@ -4133,7 +4138,8 @@ def _load_installed_pio_board_catalog(pio_core_dir: str, platform: str = "") -> 
                 continue
             if not isinstance(data, dict):
                 continue
-            build = data.get("build") if isinstance(data.get("build"), dict) else {}
+            build_raw = data.get("build")
+            build: dict[str, Any] = build_raw if isinstance(build_raw, dict) else {}
             frameworks = data.get("frameworks") or []
             if isinstance(frameworks, str):
                 frameworks = [frameworks]
@@ -6312,20 +6318,41 @@ def _parallel_range_download(
         current_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
         bytes_by_chunk[index] = min(current_size, expected_chunk_size)
 
+    initial_prefix_size = prefix_size
     progress_lock = threading.RLock()
     started_at = time.time()
     last_ui_update = 0.0
-    initial_received = prefix_size + sum(bytes_by_chunk)
+    initial_received = initial_prefix_size + sum(bytes_by_chunk)
+
+    abort_event = threading.Event()
+    active_sockets_lock = threading.Lock()
+    active_sockets = set()
+
+    def abort_all() -> None:
+        """Signal abort and actively close worker sockets to unblock threads."""
+        abort_event.set()
+        with active_sockets_lock:
+            for s in list(active_sockets):
+                try:
+                    s.close()
+                except Exception:
+                    pass
+            active_sockets.clear()
 
     def report_progress(force: bool = False) -> None:
         nonlocal last_ui_update
-        if not _gui:
+        if abort_event.is_set() or not _gui:
+            return
+        now = time.time()
+        if not force and now - last_ui_update < 0.12:
             return
         with progress_lock:
-            now = time.time()
-            if not force and now - last_ui_update < 0.15:
+            if abort_event.is_set():
                 return
-            received = prefix_size + sum(bytes_by_chunk)
+            now = time.time()
+            if not force and now - last_ui_update < 0.12:
+                return
+            received = initial_prefix_size + sum(bytes_by_chunk)
             last_ui_update = now
             elapsed = max(0.001, now - started_at)
             speed_bps = max(0, received - initial_received) / elapsed
@@ -6339,84 +6366,156 @@ def _parallel_range_download(
             bar = "▰" * filled + "▱" * (50 - filled)
             rec_mb = received / (1024 * 1024)
             total_mb = expected_size / (1024 * 1024)
+            remaining_bytes = max(0, expected_size - received)
+            eta_sec = int(remaining_bytes / speed_bps) if speed_bps > 1024 else 0
+            eta_str = f" • ETA {eta_sec // 60}m {eta_sec % 60:02d}s" if eta_sec > 0 else ""
             progress_block = (
                 f"  Downloading {display_name} (parallel)...\n"
-                f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {total_mb:.2f} MB) • {speed_str}"
+                f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {total_mb:.2f} MB) • {speed_str}{eta_str}"
             )
             _gui.set_progress_percent(pct)
             _gui.set_status(
-                f"Downloading {display_name}... {rec_mb:.1f}/{total_mb:.1f} MB ({pct:.1f}%) • {speed_str}"
+                f"Downloading {display_name}... {rec_mb:.1f}/{total_mb:.1f} MB ({pct:.1f}%) • {speed_str}{eta_str}"
             )
             _gui.update_platformio_progress_block(progress_block)
 
     def download_chunk(spec: tuple[int, int, Path, int]) -> None:
         index, start, chunk_path, expected_chunk_size = spec
-        existing_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
-        if existing_size >= expected_chunk_size:
-            with progress_lock:
-                bytes_by_chunk[index] = expected_chunk_size
-            report_progress()
-            return
+        max_chunk_retries = 3
+        for attempt in range(1, max_chunk_retries + 1):
+            if abort_event.is_set():
+                return
+            existing_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+            if existing_size >= expected_chunk_size:
+                with progress_lock:
+                    bytes_by_chunk[index] = expected_chunk_size
+                report_progress()
+                return
 
-        request_start = start + existing_size
-        headers = {
-            "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; ESP32 bootstrap)",
-            "Accept": "*/*",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-            "Range": f"bytes={request_start}-{start + expected_chunk_size - 1}",
-        }
-        request = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            status_code = int(getattr(response, "status", response.getcode()) or 200)
-            content_range = str(response.headers.get("Content-Range", "") or "")
-            match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
-            if status_code != 206 or not match or int(match.group(1)) != request_start:
-                raise _RangeDownloadUnsupported(
-                    f"range request was not honored for bytes {request_start}-{start + expected_chunk_size - 1}"
-                )
-            if match.group(3) != "*" and int(match.group(3)) != expected_size:
-                raise _RangeDownloadUnsupported("range response reported an unexpected total size")
-
-            # Enforce per-read socket timeout so a CDN stall cannot
-            # block this thread forever.  urllib's timeout applies
-            # only to the TCP connect, not to individual reads.
+            request_start = start + existing_size
+            headers = {
+                "User-Agent": "MCU-Flasher-by-Naph/1.0 (Windows; ESP32 bootstrap)",
+                "Accept": "*/*",
+                "Accept-Encoding": "identity",
+                "Connection": "close",
+                "Range": f"bytes={request_start}-{start + expected_chunk_size - 1}",
+            }
+            request = urllib.request.Request(url, headers=headers)
+            sock = None
             try:
-                _raw_sock = response.fp.raw._sock if hasattr(response.fp, 'raw') else None
-                if _raw_sock is not None:
-                    _raw_sock.settimeout(_DOWNLOAD_STALL_TIMEOUT_SECONDS)
-            except Exception:
-                pass
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    status_code = int(getattr(response, "status", response.getcode()) or 200)
+                    content_range = str(response.headers.get("Content-Range", "") or "")
+                    match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
+                    if status_code != 206 or not match or int(match.group(1)) != request_start:
+                        raise _RangeDownloadUnsupported(
+                            f"range request was not honored for bytes {request_start}-{start + expected_chunk_size - 1}"
+                        )
+                    if match.group(3) != "*" and int(match.group(3)) != expected_size:
+                        raise _RangeDownloadUnsupported("range response reported an unexpected total size")
 
-            with open(chunk_path, "ab" if existing_size else "wb") as output:
-                received = existing_size
-                _last_data_time = time.time()
-                while received < expected_chunk_size:
-                    chunk_to_read = min(64 * 1024, expected_chunk_size - received)
+                    # Enforce per-read socket timeout and register for abort cleanup
                     try:
-                        block = response.read(chunk_to_read)
-                    except (TimeoutError, OSError) as read_exc:
-                        raise OSError(
-                            f"download stalled for chunk {index} "
-                            f"({_DOWNLOAD_STALL_TIMEOUT_SECONDS}s with no data "
-                            f"at {received} of {expected_chunk_size} bytes)"
-                        ) from read_exc
-                    if not block:
-                        break
-                    output.write(block)
-                    received += len(block)
-                    _last_data_time = time.time()
-                    with progress_lock:
-                        bytes_by_chunk[index] = min(received, expected_chunk_size)
-                    report_progress()
-                output.flush()
+                        raw_fp = getattr(response, "fp", None)
+                        raw_io = getattr(raw_fp, "raw", None)
+                        sock = getattr(raw_io, "_sock", None)
+                        if sock is not None:
+                            sock.settimeout(_DOWNLOAD_STALL_TIMEOUT_SECONDS)
+                            try:
+                                import socket as _socket
+                                sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_RCVBUF, 1024 * 1024)
+                                sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+                            except Exception:
+                                pass
+                            with active_sockets_lock:
+                                if abort_event.is_set():
+                                    try:
+                                        sock.close()
+                                    except Exception:
+                                        pass
+                                    return
+                                active_sockets.add(sock)
+                    except Exception:
+                        pass
 
-        final_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
-        if final_size != expected_chunk_size:
-            raise OSError(f"incomplete range {index} ({final_size} of {expected_chunk_size} bytes)")
-        with progress_lock:
-            bytes_by_chunk[index] = expected_chunk_size
-        report_progress()
+                    with open(chunk_path, "ab" if existing_size else "wb", buffering=512 * 1024) as output:
+                        received = existing_size
+                        last_reported = received
+                        while received < expected_chunk_size:
+                            if abort_event.is_set():
+                                return
+                            chunk_to_read = min(256 * 1024, expected_chunk_size - received)
+                            try:
+                                block = response.read(chunk_to_read)
+                            except (TimeoutError, OSError) as read_exc:
+                                if abort_event.is_set():
+                                    return
+                                raise OSError(
+                                    f"download stalled for chunk {index} "
+                                    f"({_DOWNLOAD_STALL_TIMEOUT_SECONDS}s with no data "
+                                    f"at {received} of {expected_chunk_size} bytes)"
+                                ) from read_exc
+                            if not block:
+                                break
+                            output.write(block)
+                            received += len(block)
+                            if received - last_reported >= 512 * 1024 or received >= expected_chunk_size:
+                                last_reported = received
+                                with progress_lock:
+                                    bytes_by_chunk[index] = min(received, expected_chunk_size)
+                                report_progress()
+                        output.flush()
+
+                final_size = chunk_path.stat().st_size if chunk_path.is_file() else 0
+                if final_size >= expected_chunk_size:
+                    with progress_lock:
+                        bytes_by_chunk[index] = expected_chunk_size
+                    report_progress()
+                    return
+                if abort_event.is_set():
+                    return
+                raise OSError(f"incomplete range {index} ({final_size} of {expected_chunk_size} bytes)")
+
+            except _RangeDownloadUnsupported:
+                raise
+            except Exception as exc:
+                if abort_event.is_set():
+                    return
+                # Check for non-retryable HTTP errors (403/404)
+                if getattr(exc, "code", None) in (403, 404, 410, 416):
+                    raise _RangeDownloadUnsupported(f"HTTP {getattr(exc, 'code')} on range request") from exc
+                if attempt < max_chunk_retries:
+                    abort_event.wait(min(attempt * 1.5, 4.0))
+                    continue
+                raise
+            finally:
+                if sock is not None:
+                    with active_sockets_lock:
+                        active_sockets.discard(sock)
+
+    def _consolidate_completed_prefix() -> None:
+        """Append contiguous completed chunks from prefix_size into partial.
+
+        Saves disk space and ensures single-stream fallback or subsequent runs
+        resume from the latest contiguous byte without losing progress.
+        """
+        nonlocal prefix_size
+        if not parts_dir.is_dir():
+            return
+        with open(partial, "ab") as output:
+            for spec in chunk_specs:
+                idx, start_byte, c_path, exp_size = spec
+                if start_byte < prefix_size:
+                    continue
+                if not c_path.is_file():
+                    break
+                if c_path.stat().st_size != exp_size:
+                    break
+                with open(c_path, "rb") as c_in:
+                    shutil.copyfileobj(c_in, output, length=1024 * 1024)
+                output.flush()
+                prefix_size += exp_size
+                safe_unlink(c_path)
 
     if _gui:
         _gui.start_busy()
@@ -6428,27 +6527,22 @@ def _parallel_range_download(
         for future in as_completed(futures):
             future.result()
     except Exception:
+        abort_all()
         try:
             executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             executor.shutdown(wait=False)
+        _consolidate_completed_prefix()
         raise
     else:
         executor.shutdown(wait=True)
 
-    if prefix_size + sum(bytes_by_chunk) != expected_size:
+    total_downloaded = initial_prefix_size + sum(bytes_by_chunk)
+    if total_downloaded != expected_size:
         raise OSError("parallel download did not produce all expected bytes")
 
-    # All ranges are complete. Append them in byte order to the contiguous
-    # prefix. If the process stops during this step, the resulting partial is
-    # still a valid prefix and can be continued on the next launch.
-    with open(partial, "ab") as output:
-        for index in range(chunk_count):
-            chunk_path = parts_dir / f"{index:05d}.part"
-            if chunk_path.is_file():
-                with open(chunk_path, "rb") as chunk:
-                    shutil.copyfileobj(chunk, output, length=1024 * 1024)
-        output.flush()
+    # Consolidate all remaining completed ranges into partial, freeing chunk space incrementally
+    _consolidate_completed_prefix()
 
     if partial.stat().st_size != expected_size:
         raise OSError(f"assembled download is {partial.stat().st_size} of {expected_size} bytes")
@@ -6541,6 +6635,8 @@ def _download_file(
             # Preserve completed range checkpoints so a later invocation can
             # resume them.  The single-stream retry loop remains the safety net.
             last_error = exc
+            warn(f"Parallel download interrupted ({exc}); continuing {dest.name} with resumable stream...")
+            _record_bootstrap_log("WARN", f"Parallel download of {dest.name} interrupted: {exc}")
             if _gui:
                 _gui.clear_platformio_progress_block()
 
@@ -6597,17 +6693,23 @@ def _download_file(
                         _raw_sock = response.fp.raw._sock if hasattr(response.fp, 'raw') else None
                         if _raw_sock is not None:
                             _raw_sock.settimeout(_DOWNLOAD_STALL_TIMEOUT_SECONDS)
+                            try:
+                                import socket as _socket
+                                _raw_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_RCVBUF, 1024 * 1024)
+                                _raw_sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
-                    with open(partial, write_mode) as output:
+                    with open(partial, write_mode, buffering=512 * 1024) as output:
                         received = base_received
                         start_time = time.time()
                         last_update_time = 0.0
                         last_data_time = time.time()
                         while True:
                             try:
-                                block = response.read(128 * 1024)
+                                block = response.read(256 * 1024)
                             except (TimeoutError, OSError) as read_exc:
                                 raise OSError(
                                     f"download stalled "
@@ -6636,12 +6738,15 @@ def _download_file(
                                     bar = "▰" * filled + "▱" * (50 - filled)
                                     rec_mb = received / (1024 * 1024)
                                     tot_mb = total / (1024 * 1024)
+                                    remaining_bytes = max(0, total - received)
+                                    eta_sec = int(remaining_bytes / speed_bps) if speed_bps > 1024 else 0
+                                    eta_str = f" • ETA {eta_sec // 60}m {eta_sec % 60:02d}s" if eta_sec > 0 else ""
                                     progress_block = (
                                         f"  Downloading {dest.name}...\n"
-                                        f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {tot_mb:.2f} MB) • {speed_str}"
+                                        f"  {bar}  {pct:5.1f}% ({rec_mb:.2f} MB / {tot_mb:.2f} MB) • {speed_str}{eta_str}"
                                     )
                                     _gui.set_progress_percent(pct)
-                                    _gui.set_status(f"Downloading {dest.name}... {rec_mb:.1f}/{tot_mb:.1f} MB ({pct:.1f}%) • {speed_str}")
+                                    _gui.set_status(f"Downloading {dest.name}... {rec_mb:.1f}/{tot_mb:.1f} MB ({pct:.1f}%) • {speed_str}{eta_str}")
                                 else:
                                     rec_mb = received / (1024 * 1024)
                                     progress_block = (
@@ -7869,7 +7974,7 @@ def _summarize_process_output(result: subprocess.CompletedProcess, limit: int = 
     return text
 
 
-def _prepend_existing_paths(paths: list[Path | str]) -> None:
+def _prepend_existing_paths(paths: Sequence[Path | str]) -> None:
     current_parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
     known = {os.path.normcase(os.path.normpath(p)) for p in current_parts}
     for path in reversed(paths):
@@ -8119,9 +8224,9 @@ def _install_nodejs_lts_direct() -> bool:
                     downloaded += len(chunk)
                     if total and _gui:
                         pct = min(int(downloaded * 100 / total), 100)
-                        _gui.root.after(0, lambda p=pct: _gui.update_step(
+                        _gui.root.after(0, lambda p=pct: _gui.set_status(
                             f"Downloading Node.js LTS... {p}%"
-                        ) if hasattr(_gui, 'update_step') else None)
+                        ) if hasattr(_gui, 'set_status') else None)
         finally:
             response.close()
 

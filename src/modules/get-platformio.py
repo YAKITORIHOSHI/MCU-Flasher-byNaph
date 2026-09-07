@@ -43,10 +43,9 @@ def create_temp_dir():
 
 
 def bootstrap():
-    # pyrefly: ignore [missing-import]
-    import pioinstaller.__main__
-
-    pioinstaller.__main__.main()
+    import importlib
+    pio = importlib.import_module("pioinstaller.__main__")
+    pio.main()
 
 
 def main():

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import ctypes
+from typing import Any
 import tkinter as tk
 from tkinter import ttk
 
@@ -23,27 +24,28 @@ from main.core.board_compat import *
 # Hoisted from per-call function bodies so the struct class, argtypes,
 # and restype are created exactly once at import time rather than on
 # every resize event (which fires 30-60 times/second during a drag).
-_user32 = None
-_GetDpiForWindow = None
-_MONITORINFO = None
+_user32: Any = None
+_GetDpiForWindow: Any = None
+_MONITORINFO: Any = None
 
 if sys.platform == "win32":
     try:
         from ctypes import wintypes
 
-        class _MONITORINFO(ctypes.Structure):
+        class _MonitorInfo(ctypes.Structure):
             _fields_ = [
                 ("cbSize", wintypes.DWORD),
                 ("rcMonitor", wintypes.RECT),
                 ("rcWork", wintypes.RECT),
                 ("dwFlags", wintypes.DWORD),
             ]
+        _MONITORINFO = _MonitorInfo
 
         _user32 = ctypes.windll.user32
         _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
         _user32.MonitorFromWindow.restype = ctypes.c_void_p
         _user32.GetMonitorInfoW.argtypes = [
-            ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)
+            ctypes.c_void_p, ctypes.POINTER(_MonitorInfo)
         ]
         _user32.GetMonitorInfoW.restype = wintypes.BOOL
 
@@ -407,7 +409,7 @@ class _ShellTerminalBuffer:
             rendered.append(runs)
         return rendered
 
-def _get_widget_dpi_scale(widget: tk.Widget) -> float:
+def _get_widget_dpi_scale(widget: tk.Misc) -> float:
     """Return the display scale for a Tk window (1.0 at 96 DPI)."""
     try:
         tk_scale = float(widget.tk.call("tk", "scaling")) / (96.0 / 72.0)
@@ -423,7 +425,7 @@ def _get_widget_dpi_scale(widget: tk.Widget) -> float:
     return max(0.75, min(3.0, tk_scale))
 
 
-def _get_monitor_work_area(widget: tk.Widget) -> tuple[int, int, int, int]:
+def _get_monitor_work_area(widget: tk.Misc) -> tuple[int, int, int, int]:
     """Return (left, top, right, bottom) for the window's nearest monitor."""
     try:
         fallback = (0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight())
@@ -510,7 +512,7 @@ def safe_reclaim_os_focus(widget: tk.Widget):
         pass
 
 
-def setup_combobox_place_popdown(root: tk.Widget):
+def setup_combobox_place_popdown(root: tk.Misc):
     """Override Tcl ::ttk::combobox::PlacePopdown to support opening popdown lists upwards ('above')
     when requested via set_combobox_direction(combo, 'above').
     """

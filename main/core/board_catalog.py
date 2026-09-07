@@ -10,6 +10,7 @@ import json
 import re
 import threading
 from pathlib import Path
+from typing import Optional, Any
 
 
 from main.core.constants import *
@@ -55,6 +56,7 @@ def _get_download_dir() -> str:
         # The settings file is copied with the project. Replace a stale
         # absolute path from another account/machine with this user's default.
         settings["download_dir"] = str(default_dir)
+        temporary: Optional[Path] = None
         try:
             temporary = settings_file.with_name(
                 settings_file.name + f".tmp-{os.getpid()}"
@@ -62,10 +64,11 @@ def _get_download_dir() -> str:
             temporary.write_text(json.dumps(settings, indent=2), encoding="utf-8")
             os.replace(temporary, settings_file)
         except Exception:
-            try:
-                temporary.unlink(missing_ok=True)
-            except Exception:
-                pass
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except Exception:
+                    pass
     return str(default_dir)
 
 
@@ -390,9 +393,12 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             continue
         if not isinstance(data, dict):
             continue
-        build = data.get("build") if isinstance(data.get("build"), dict) else {}
-        arduino_build = build.get("arduino") if isinstance(build.get("arduino"), dict) else {}
-        upload = data.get("upload") if isinstance(data.get("upload"), dict) else {}
+        build_raw = data.get("build")
+        build: dict[str, Any] = build_raw if isinstance(build_raw, dict) else {}
+        arduino_build_raw = build.get("arduino")
+        arduino_build: dict[str, Any] = arduino_build_raw if isinstance(arduino_build_raw, dict) else {}
+        upload_raw = data.get("upload")
+        upload: dict[str, Any] = upload_raw if isinstance(upload_raw, dict) else {}
         frameworks = data.get("frameworks") or []
         if isinstance(frameworks, str):
             frameworks = [frameworks]

@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import json
 import traceback
@@ -358,11 +359,12 @@ class CompatDevicesMixin(_Base):
             last = updated_at or cache_state.get("updated_at") or "-"
             _add(f"  ⚠ Sources changed since the last compile — recompile to refresh. (last: {last})", "warning")
         if needle:
+            filter_str = (filter_text or "").strip()
             if filtered:
-                _add(f"  🔍 {len(filtered)} of {len(boards)} boards match '{filter_text.strip()}'.",
+                _add(f"  🔍 {len(filtered)} of {len(boards)} boards match '{filter_str}'.",
                      "dim")
             else:
-                _add(f"  ✖ No boards match '{filter_text.strip()}'.", "error")
+                _add(f"  ✖ No boards match '{filter_str}'.", "error")
         else:
             _add(f"  ✔ {len(boards)} of {total} supported boards pass the static check.",
                  "success" if boards else "error")
@@ -460,9 +462,10 @@ class CompatDevicesMixin(_Base):
         Debounced (120 ms) so rapid typing never triggers a full 400+-line
         rebuild per keystroke on the UI thread; the render runs once the
         user pauses."""
-        if getattr(self, "_compat_filter_job", None):
+        filter_job = getattr(self, "_compat_filter_job", None)
+        if filter_job is not None:
             try:
-                self.root.after_cancel(self._compat_filter_job)
+                self.root.after_cancel(str(filter_job))
             except Exception:
                 pass
             self._compat_filter_job = None

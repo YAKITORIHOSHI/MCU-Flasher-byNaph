@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -922,7 +923,7 @@ default_envs = {self._pio_env_name()}
                 continue
 
             # Determine the display name and search key
-            lib_display_name = HEADER_TO_LIB_NAME.get(header, header[:-2]) # remove .h if not in override map
+            lib_display_name = HEADER_TO_LIB_NAME.get(header, header[:-2]) or header[:-2] # remove .h if not in override map
             norm_key = normalize_lib_name(lib_display_name)
             
             # Check if this library is in the list of installed libraries

@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -592,10 +593,9 @@ class ProjectActionsMixin(_Base):
             relief=tk.FLAT, borderwidth=0, padx=20, pady=8, width=10, cursor="hand2",
         )
         btn_action.pack(side=tk.LEFT, padx=8)
-        btn_action._bg_idle = Theme.BTN_COMPILE
-        btn_action._bg_hover = Theme.BTN_COMPILE_H
-        btn_action.bind("<Enter>", lambda e: btn_action.configure(bg=btn_action._bg_hover))
-        btn_action.bind("<Leave>", lambda e: btn_action.configure(bg=btn_action._bg_idle))
+        btn_action_bg = {"idle": Theme.BTN_COMPILE, "hover": Theme.BTN_COMPILE_H}
+        btn_action.bind("<Enter>", lambda e: btn_action.configure(bg=btn_action_bg["hover"]))
+        btn_action.bind("<Leave>", lambda e: btn_action.configure(bg=btn_action_bg["idle"]))
 
         def _switch(which):
             current_tab[0] = which
@@ -609,8 +609,8 @@ class ProjectActionsMixin(_Base):
 
             text, bg, bg_hover, cmd = ACTIONS[which]
             btn_action.configure(text=text, bg=bg, activebackground=bg_hover, command=cmd)
-            btn_action._bg_idle = bg
-            btn_action._bg_hover = bg_hover
+            btn_action_bg["idle"] = bg
+            btn_action_bg["hover"] = bg_hover
 
         tab_btns["add"] = self._make_btn(
             tab_bar, "➕ Add", lambda: _switch("add"), Theme.BTN_FULL, Theme.BTN_FULL_H, font=dlg_btn_font
@@ -706,10 +706,11 @@ class ProjectActionsMixin(_Base):
         # sketch directory becomes its session root instead of the previous
         # project's folder. When no AI process is active, only the watcher
         # baselines need refreshing for the new project.
-        if getattr(self, "ai_controller", None):
+        controller = getattr(self, "ai_controller", None)
+        if controller:
             try:
-                if hasattr(self.ai_controller, "relaunch_for_project"):
-                    relaunched = self.ai_controller.relaunch_for_project(
+                if hasattr(controller, "relaunch_for_project"):
+                    relaunched = controller.relaunch_for_project(
                         self.sketch_dir_path
                     )
                     if relaunched and getattr(self, "_ai_side_visible", False):
@@ -725,8 +726,8 @@ class ProjectActionsMixin(_Base):
                             self._start_ai_embedding_poll()
                         except Exception:
                             pass
-                elif hasattr(self.ai_controller, "reset_monitoring_state"):
-                    self.ai_controller.reset_monitoring_state()
+                elif hasattr(controller, "reset_monitoring_state"):
+                    controller.reset_monitoring_state()
             except Exception as exc:
                 print(f"[MCU Flasher] Could not restart AI Assistant: {exc}")
         editor_api = getattr(self, "editor_api", None)

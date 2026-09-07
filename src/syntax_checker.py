@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import threading
@@ -229,7 +231,7 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
         "severity": "error"
     }
 
-def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[str] = None) -> list[dict]:
+def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[str] | None = None) -> list[dict]:
     """
     Analyzes C++ code for syntax errors (brackets, semicolons, quotes, etc.) 
     and checks if called global functions exist in all_defined_functions or standard APIs.
@@ -624,7 +626,7 @@ def extract_project_functions(sketch_dir: Path) -> set[str]:
 
 def analyze_file_syntax(
     file_path: Path | str,
-    all_defined_functions: set[str] = None
+    all_defined_functions: set[str] | None = None
 ) -> list[dict]:
     """Analyze a single file with in-memory stat caching for zero-overhead rechecks."""
     fp = Path(file_path) if not isinstance(file_path, Path) else file_path
@@ -655,8 +657,8 @@ def analyze_file_syntax(
 
 def analyze_files_parallel(
     files: list[Path | str],
-    all_defined_functions: set[str] = None,
-    max_workers: int = None
+    all_defined_functions: set[str] | None = None,
+    max_workers: int | None = None
 ) -> list[dict]:
     """Analyze multiple C++/Arduino files in parallel across all CPU cores."""
     if not files:

@@ -537,6 +537,7 @@ def is_volume_writable(path) -> bool:
     USB flash drives with the hardware lock switch engaged, read-only
     mounts, and volumes flagged dirty after an unsafe removal.  Result is
     cached per volume.  Handles both drive-letter and UNC paths."""
+    cache_key = None
     try:
         cache_key = _volume_cache_key_for(path)
         if not cache_key or cache_key in _writability_cache:
@@ -571,7 +572,8 @@ def is_volume_writable(path) -> bool:
         result = False
     except Exception:
         result = True
-    _writability_cache[cache_key] = result
+    if cache_key:
+        _writability_cache[cache_key] = result
     return result
 
 
@@ -777,6 +779,7 @@ class AIEditBackupStore:
 
     def __init__(self, project_dir, root=None):
         self.project_dir = Path(project_dir).expanduser().resolve(strict=False)
+        self.current_project: str = str(self.project_dir)
         self.root = Path(root) if root else get_ai_edit_backup_root(self.project_dir)
         self.root.mkdir(parents=True, exist_ok=True)
         self.started_at = datetime.now().astimezone()

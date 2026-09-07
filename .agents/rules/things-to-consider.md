@@ -122,6 +122,14 @@ This application is deployed publicly and will run on budget/older hardware (e.g
 
 ---
 
+## Proactive Error & Warning Audit
+
+- **Never leave errors or warnings unresolved:** Whenever making changes to any file, always check for syntax errors, undefined variables, missing imports, and linter/IDE warnings (such as Pyright/Pylance `reportUndefinedVariable`).
+- **Explicit imports over implicit assumptions:** In Python files, always explicitly import external and win32 modules (`win32gui`, `win32con`, `win32process`, etc.) with proper fallbacks rather than relying on dynamic wildcard imports (`from ... import *`), which cause static analysis and IDE diagnostic errors.
+- **Pre-completion verification:** Before concluding any turn or declaring a task complete, run compilation (`py_compile`) and check diagnostics across all modified files. If any error or warning is detected, fix it immediately before concluding.
+
+---
+
 ## Test & Temp Directory Isolation (`temp/`, `test/`, `tests/`)
 
 - **Strict zero-touch default:** Never read, scan, search, modify, edit, or update files inside `temp/`, `test/`, or `tests/` during standard maintenance, refactoring, or feature development.

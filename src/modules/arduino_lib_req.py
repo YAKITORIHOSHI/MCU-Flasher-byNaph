@@ -20,6 +20,7 @@ Features
   comma-separated vendor URLs.
 """
 
+from __future__ import annotations
 import json
 import hashlib
 import os
@@ -30,6 +31,7 @@ import subprocess
 import threading
 import time
 import importlib.util
+from typing import Optional, Any
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
@@ -143,7 +145,7 @@ def _normalize_board_manager_url(value: str) -> str | None:
     # before attempting JSON parsing.
     github_parts = [part for part in path.split("/") if part]
     if (
-        parsed.hostname.casefold() == "github.com"
+        (parsed.hostname or "").casefold() == "github.com"
         and len(github_parts) >= 5
         and github_parts[2].casefold() in {"blob", "raw"}
     ):
@@ -170,7 +172,8 @@ def parse_additional_board_urls(value) -> list[str]:
     """
     result: list[str] = []
     seen: set[str] = set()
-    default_key = _normalize_board_manager_url(BOARD_INDEX_URL).casefold()
+    default_norm = _normalize_board_manager_url(BOARD_INDEX_URL)
+    default_key = default_norm.casefold() if default_norm else ""
     for candidate in _url_parts(value):
         normalized = _normalize_board_manager_url(candidate)
         if not normalized:
@@ -186,7 +189,8 @@ def parse_additional_board_urls(value) -> list[str]:
 def invalid_additional_board_urls(value) -> list[str]:
     """Return non-empty URL entries that are not valid HTTP(S) URLs."""
     invalid: list[str] = []
-    default_key = _normalize_board_manager_url(BOARD_INDEX_URL).casefold()
+    default_norm = _normalize_board_manager_url(BOARD_INDEX_URL)
+    default_key = default_norm.casefold() if default_norm else ""
     for candidate in _url_parts(value):
         if _normalize_board_manager_url(candidate):
             continue
@@ -483,10 +487,8 @@ def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9,
         disabledforeground=Theme.TEXT_DIM,
         relief=tk.FLAT, borderwidth=0, padx=14, pady=4, cursor="hand2"
     )
-    btn._normal_bg = bg
-    btn._hover_bg = bg_hover
-    btn.bind("<Enter>", lambda e: btn.configure(bg=btn._hover_bg, cursor="hand2") if str(btn["state"]) != "disabled" else btn.configure(cursor="arrow"))
-    btn.bind("<Leave>", lambda e: btn.configure(bg=btn._normal_bg) if str(btn["state"]) != "disabled" else None)
+    btn.bind("<Enter>", lambda e, b=btn, h=bg_hover: b.configure(bg=h, cursor="hand2") if str(b["state"]) != "disabled" else b.configure(cursor="arrow"))
+    btn.bind("<Leave>", lambda e, b=btn, n=bg: b.configure(bg=n) if str(b["state"]) != "disabled" else None)
     return btn
 
 
@@ -732,6 +734,7 @@ def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
             pass
 
     # Show progress dialog on the Tk thread
+    target = None
     try:
         target = root if root else (parent or None)
         if target and hasattr(target, "after"):
@@ -871,7 +874,7 @@ def _version_key(version_str: str):
     """Return a sort key that orders semantic versions correctly."""
     m = _VERSION_RE.match(version_str.strip())
     if not m:
-        return (0, 0, 0, 0, version_str)
+        return (0, 0, 0, 0, [(1, version_str)])
 
     major = int(m.group(1))
     minor = int(m.group(2)) if m.group(2) else 0
@@ -1353,7 +1356,29 @@ class BrowseTab:
         self._loading_more = False
         self._load_more_after_id = None
 
-        self._wrapping_labels: list[ttk.Label] = []
+        self._wrapping_labels: list[Any] = []
+        self.lbl_name: Any = None
+        self.lbl_package: Any = None
+        self.lbl_author: Any = None
+        self.lbl_maintainer: Any = None
+        self.lbl_category: Any = None
+        self.lbl_arch: Any = None
+        self.lbl_boards_header: Any = None
+        self.lbl_boards: Any = None
+        self.lbl_sentence: Any = None
+        self.lbl_paragraph: Any = None
+        self.lbl_size: Any = None
+        self.lbl_available: Any = None
+        self.link_website: Any = None
+        self.link_help: Any = None
+        self.link_repo: Any = None
+        self.version_combo: Any = None
+        self.version_var: Any = None
+        self.download_btn: Any = None
+        self._current_website: Any = None
+        self._current_help: Any = None
+        self._current_repo: Any = None
+        self._current_item: Any = None
 
         self._build(parent)
 
@@ -1493,8 +1518,9 @@ class BrowseTab:
         self._populate_listbox()
 
     def _populate_listbox(self):
-        if getattr(self, "_load_more_after_id", None) is not None:
-            self.app.root.after_cancel(self._load_more_after_id)
+        _load_more_after_id = getattr(self, "_load_more_after_id", None)
+        if _load_more_after_id is not None:
+            self.app.root.after_cancel(str(_load_more_after_id))
             self._load_more_after_id = None
         self._loading_more = False
 
@@ -1599,6 +1625,8 @@ class InstalledTab:
         self._wrapping_labels = []
         self._all_examples = []
         self._all_boards = []
+        self._select_req_id: int = 0
+        self._loading_complete_req_id: int = 0
 
         self._build(parent)
 
@@ -3459,7 +3487,7 @@ class ArduinoBrowser:
         archive: str,
         dest_dir: str,
         download_option: str,
-        cleanup_old: tuple = None,
+        cleanup_old: tuple | None = None,
         package_metadata: dict | None = None,
     ):
         import shutil

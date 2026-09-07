@@ -5,10 +5,12 @@ MCU Flasher by Naph — ESP32 Compile, Upload & Serial Monitor
 A modern dark-themed GUI tool for Arduino ESP32 development.
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
 from pathlib import Path
+from typing import Any, Optional
 
 # Add project root and src/modules to sys.path so modules resolve anywhere
 _this_file = Path(__file__).resolve()
@@ -28,6 +30,15 @@ import ctypes
 import traceback
 import tkinter as tk
 from tkinter import messagebox
+
+try:
+    import win32gui
+    import win32con
+    import win32process
+except ImportError:
+    win32gui = None
+    win32con = None
+    win32process = None
 
 # Import all core constants, theme, config, file utilities, toolchains, catalogs, and compatibilities
 from main.core.constants import *
@@ -109,6 +120,7 @@ class MCUUploadGUI(
     pass
 
 
+_current_app: Optional[MCUUploadGUI] = None
 MINIMUM_LOGICAL_CORES = 4
 
 
@@ -368,7 +380,8 @@ def main():
 
     import threading
 
-    global _RESOLVED_EDITOR_MODE
+    global _RESOLVED_EDITOR_MODE, _current_app
+    _current_app = None
     requested_mode = get_editor_mode()
     monaco_crashed_last_time = False
     if requested_mode == "monaco" and get_monaco_boot_pending():
@@ -389,8 +402,8 @@ def main():
 
     root_ready = threading.Event()
     project_cancelled.clear()
-    root_val = None
-    app_val = None
+    root_val: Optional[tk.Tk] = None
+    app_val: Optional[MCUUploadGUI] = None
     startup_state = {"stage": "creating the Tk root window"}
     startup_failure = {}
 
@@ -454,6 +467,8 @@ def main():
 
         startup_state["stage"] = "opening the selected project and building the main interface"
         app_val = MCUUploadGUI(root_val)
+        global _current_app
+        _current_app = app_val
         _startup_event("gui-constructed")
 
         # If the user cancelled the Project Selector, __init__ destroyed
@@ -488,15 +503,17 @@ def main():
         if monaco_crashed_last_time:
             def _notify_monaco_reverted():
                 from tkinter import messagebox
-                messagebox.showwarning(
-                    "Editor Reverted to Default",
-                    "The Monaco editor did not start cleanly last time "
-                    "(the app closed unexpectedly during startup), so the "
-                    "File Editor has been reset to Default.\n\n"
-                    "You can re-enable Monaco from MCU Flasher Settings.",
-                    parent=root_val
-                )
-            root_val.after(500, _notify_monaco_reverted)
+                if root_val is not None:
+                    messagebox.showwarning(
+                        "Editor Reverted to Default",
+                        "The Monaco editor did not start cleanly last time "
+                        "(the app closed unexpectedly during startup), so the "
+                        "File Editor has been reset to Default.\n\n"
+                        "You can re-enable Monaco from MCU Flasher Settings.",
+                        parent=root_val
+                    )
+            if root_val is not None:
+                root_val.after(500, _notify_monaco_reverted)
 
         # Startup deliberately does NOT auto-maximize the window anymore --
         # it opens at the geometry set above (sized for the display) and
@@ -511,7 +528,7 @@ def main():
                 pass
             if app_val:
                 app_val._on_close()
-            else:
+            elif root_val is not None:
                 root_val.destroy()
                 os._exit(0)
         root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
@@ -589,7 +606,14 @@ def main():
     # Import the heavyweight native WebView runtime only after the Tk window
     # and its loading placeholder are visible. Tk runs on its dedicated thread,
     # so this import can no longer freeze the visual transition.
-    webview = _load_webview()
+    if app_val is None or root_val is None:
+        tk_thread.join(timeout=1.0)
+        return
+
+    app: Any = app_val
+    root: Any = root_val
+
+    webview: Any = _load_webview()
     if webview is None:
         requested_mode = "default"
         _RESOLVED_EDITOR_MODE = requested_mode
@@ -601,24 +625,24 @@ def main():
 
         def _fallback_to_default_editor():
             try:
-                app_val._cleanup_active_editor()
-                app_val.editor_mode = "default"
-                app_val._build_editor_default(app_val.editor_frame)
-                app_val._update_editor_info()
-                app_val._append(
+                app._cleanup_active_editor()
+                app.editor_mode = "default"
+                app._build_editor_default(app.editor_frame)
+                app._update_editor_info()
+                app._append(
                     "  ⚠ Monaco is selected, but WebView2/pywebview is unavailable; using the lightweight Default editor for this launch.",
                     "warning",
                 )
                 if _WEBVIEW_IMPORT_ERROR:
-                    app_val._append(f"    Reason: {_WEBVIEW_IMPORT_ERROR}", "warning")
+                    app._append(f"    Reason: {_WEBVIEW_IMPORT_ERROR}", "warning")
             except Exception as exc:
                 try:
-                    app_val._set_status(f"Default editor recovery failed: {exc}", Theme.RED)
+                    app._set_status(f"Default editor recovery failed: {exc}", Theme.RED)
                 except Exception:
                     pass
 
         try:
-            app_val._post_ui(_fallback_to_default_editor)
+            app._post_ui(_fallback_to_default_editor)
         except Exception:
             pass
         tk_thread.join()
@@ -638,22 +662,22 @@ def main():
     def _confirm_monaco_booted():
         set_monaco_boot_pending(False)
 
-    # Tk owns root_val; queue the timer creation onto the Tk thread instead
+    # Tk owns root; queue the timer creation onto the Tk thread instead
     # of calling root.after from the WebView/main thread.
-    app_val._post_ui(lambda: root_val.after(3500, _confirm_monaco_booted))
+    app._post_ui(lambda: root.after(3500, _confirm_monaco_booted))
 
     # Now run pywebview on the main thread
-    api = EditorApi(app_val)
-    app_val.editor_api = api
+    api = EditorApi(app)
+    app.editor_api = api
 
     html_path = SCRIPT_DIR / "src" / "editor" / "index.html"
 
     # Snapshot this process's top-level windows *before* creating the
     # editor window, so we can later spot "whatever new window appeared"
     # even if its title gets rewritten by the page's <title> tag.
-    app_val._editor_pre_create_hwnds = _list_own_toplevel_hwnds()
+    app._editor_pre_create_hwnds = _list_own_toplevel_hwnds()
 
-    editor_window = webview.create_window(
+    editor_window: Any = webview.create_window(
         title=EDITOR_WINDOW_TITLE,
         url=str(html_path),
         js_api=api,
@@ -666,7 +690,7 @@ def main():
         hidden=True,
         background_color="#151922",   # matches Theme.BG_DARKEST — no white flash
     )
-    app_val.editor_window = editor_window
+    app.editor_window = editor_window
     
     def _on_editor_page_loaded():
         # Fires on pywebview's own GUI thread — marshal back to the Tk thread.
@@ -676,9 +700,22 @@ def main():
             pass
 
         def _page_loaded_on_tk():
-            setattr(app_val, "_editor_content_loaded", True)
-            app_val._reveal_editor_if_ready()
-            app_val._update_editor_info()
+            setattr(app, "_editor_content_loaded", True)
+            # Ensure the window is verified attached to the Tk frame
+            hwnd = getattr(app, "_editor_hwnd", None)
+            embed_frame = getattr(app, "_editor_embed_frame", None)
+            tk_hwnd = embed_frame.winfo_id() if embed_frame else None
+            is_parented = (
+                hwnd is not None
+                and tk_hwnd is not None
+                and win32gui is not None
+                and win32gui.GetParent(hwnd) == tk_hwnd
+            )
+            if not getattr(app, "_editor_embedded", False) or not is_parented:
+                app._try_embed_editor_window()
+            else:
+                app._reveal_editor_if_ready()
+            app._update_editor_info()
             try:
                 active_t = get_theme_mode()
                 editor_window.evaluate_js(f"if (typeof window.setEditorTheme === 'function') window.setEditorTheme('{active_t}');")
@@ -686,25 +723,25 @@ def main():
                 pass
             # Defer background syntax parsing by 2 seconds to avoid CPU
             # contention while Monaco paints.
-            root_val.after(2000, app_val._start_background_syntax_thread)
+            root.after(2000, app._start_background_syntax_thread)
             # Sync symbol navigation compiled state after page load.
-            root_val.after(1000, lambda: app_val._set_symbol_cache_compiled_state(
-                getattr(app_val, "_project_compiled_cache_active", False)
+            root.after(1000, lambda: app._set_symbol_cache_compiled_state(
+                getattr(app, "_project_compiled_cache_active", False)
             ))
 
-        app_val._post_ui(_page_loaded_on_tk)
+        app._post_ui(_page_loaded_on_tk)
     editor_window.events.loaded += _on_editor_page_loaded
 
     # Kick off the embed attempt now.
-    app_val._post_ui(lambda: root_val.after(50, app_val._try_embed_editor_window))
+    app._post_ui(lambda: root.after(50, app._try_embed_editor_window))
 
     def on_closing():
         # This callback is raised by the WebView thread. Queue all Tk reads,
         # timer operations, and reattachment work onto Tk's owning thread.
         def _reattach_on_tk():
-            if getattr(app_val, "_editor_embedded", False):
-                hwnd = getattr(app_val, "_editor_hwnd", None)
-                embed_frame = getattr(app_val, "_editor_embed_frame", None)
+            if getattr(app, "_editor_embedded", False):
+                hwnd = getattr(app, "_editor_hwnd", None)
+                embed_frame = getattr(app, "_editor_embed_frame", None)
                 if hwnd and embed_frame and win32gui is not None:
                     try:
                         tk_hwnd = embed_frame.winfo_id()
@@ -714,16 +751,16 @@ def main():
                         return
                 else:
                     return
-            poll_id = getattr(app_val, "_poll_detached_after_id", None)
+            poll_id = getattr(app, "_poll_detached_after_id", None)
             if poll_id is not None:
                 try:
-                    root_val.after_cancel(poll_id)
+                    root.after_cancel(poll_id)
                 except Exception:
                     pass
-                app_val._poll_detached_after_id = None
-            app_val._attach_editor()
+                app._poll_detached_after_id = None
+            app._attach_editor()
 
-        app_val._post_ui(_reattach_on_tk)
+        app._post_ui(_reattach_on_tk)
         return False  # Intercept close and just hide/re-parent
 
     editor_window.events.closing += on_closing

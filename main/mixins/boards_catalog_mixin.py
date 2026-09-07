@@ -4,13 +4,14 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
 import shutil
 import subprocess
 import ctypes
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from pathlib import Path
 
 
@@ -201,7 +202,7 @@ class BoardsCatalogMixin(_Base):
             boards_path = Path(download_dir) / "Boards"
             if boards_path.is_dir():
                 # Build a snapshot of board folder names + boards.txt mtimes
-                current_snapshot = {("__download_dir__", download_dir)}
+                current_snapshot: set[tuple[str, Any]] = {("__download_dir__", download_dir)}
                 for p in boards_path.glob("**/boards.txt"):
                     try:
                         current_snapshot.add((str(p), os.path.getmtime(p)))
@@ -264,6 +265,7 @@ class BoardsCatalogMixin(_Base):
         
         old_boards = getattr(self, "_known_board_names", None)
         new_board_names = set(new_boards.keys())
+        added_boards: set[str] = set()
         if old_boards is not None:
             added_boards = new_board_names - old_boards
             for board_name in added_boards:

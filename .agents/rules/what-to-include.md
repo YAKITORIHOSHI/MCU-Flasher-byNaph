@@ -48,6 +48,7 @@ The project follows a specific directory layout. Respect these conventions when 
 - **Don't overthink simple requests.** If the user asks for a small change (e.g., "add a notice to the README"), don't create a full implementation plan or modify unrelated files. Just make the targeted edit.
 - **Follow the user's pointed references.** When the user @-mentions specific files, focus edits on those files. Don't expand scope unless asked.
 - **Continue interrupted work.** If the user says "Continue" after a crash or interruption, check the conversation transcript and task list from the previous session and resume where you left off.
+- **Always check for errors & warnings and deal with them:** Never leave code changes with unresolved lint errors, warnings, syntax issues, or undefined variables (e.g. missing imports). After making modifications, proactively audit, verify, and resolve any IDE diagnostics, compiler errors, or lint warnings in all affected files before finalizing your response.
 - **QA Engineer mode.** When asked to "act like a QA Engineer," produce structured defect reports with: reproduction steps, root cause analysis, severity/priority, affected components, and a remediation plan — before writing any code.
 
 ## Test & Temp Directory Isolation (`test/`, `tests/`, `temp/`)

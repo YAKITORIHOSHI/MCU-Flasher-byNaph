@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -45,7 +46,7 @@ _SOURCE_HASH_MEMO_CACHE: dict[str, tuple[tuple, str]] = {}
 
 class CompileCacheMixin(_Base):
     """Mixin providing CompileCacheMixin capabilities for MCUUploadGUI."""
-    def _is_framework_downloaded(self, board_name: str = None) -> bool:
+    def _is_framework_downloaded(self, board_name: str | None = None) -> bool:
         """Check if the core framework and toolchains for the board's platform are installed."""
         if not board_name:
             board_name = (
@@ -68,7 +69,7 @@ class CompileCacheMixin(_Base):
             return True
         return False
 
-    def _mark_env_just_created(self, board_name: str = None):
+    def _mark_env_just_created(self, board_name: str | None = None):
         """Mark an environment as newly created so compile won't be skipped until first successful build."""
         if not hasattr(self, "_just_created_envs") or not isinstance(self._just_created_envs, set):
             self._just_created_envs = set()
@@ -88,6 +89,7 @@ class CompileCacheMixin(_Base):
             getattr(self, "_active_board_name", "")
             or (self.board_var.get() if threading.get_ident() == getattr(self, "_tk_thread_id", None) else "")
         )
+        board_key = ""
         if self._last_compiled_board:
             board_key = self._board_cache_key(self._last_compiled_board)
             if not hasattr(self, "_build_config_hash_by_board"):
@@ -98,7 +100,7 @@ class CompileCacheMixin(_Base):
             if config_hash:
                 self._build_config_hash_by_board[board_key] = config_hash
         self._compile_cache_hash = self._hash_sources()
-        if self._last_compiled_board:
+        if self._last_compiled_board and board_key:
             self._compile_cache_by_board[board_key] = self._compile_cache_hash
         if not hasattr(self, "_just_created_envs") or not isinstance(self._just_created_envs, set):
             self._just_created_envs = set()

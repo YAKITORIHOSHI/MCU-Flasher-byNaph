@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import time
@@ -468,9 +469,10 @@ class BuildActionsMixin(_Base):
         if threading.get_ident() != getattr(self, "_tk_thread_id", None):
             self._post_ui(lambda d=int(delay_ms): self._schedule_auto_start_monitor(d))
             return
-        if getattr(self, "_auto_start_after_id", None):
+        auto_id = getattr(self, "_auto_start_after_id", None)
+        if auto_id is not None:
             try:
-                self.root.after_cancel(self._auto_start_after_id)
+                self.root.after_cancel(str(auto_id))
             except Exception:
                 pass
         self._auto_start_after_id = self.root.after(max(0, int(delay_ms)), self._auto_start_monitor)

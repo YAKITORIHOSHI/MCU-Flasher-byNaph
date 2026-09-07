@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -137,11 +138,13 @@ class WindowLifecycleMixin(_Base):
                 pass
 
         try:
-            if getattr(self, "_shell_prewarm_after_id", None) is not None:
-                self.root.after_cancel(self._shell_prewarm_after_id)
+            prewarm_id = getattr(self, "_shell_prewarm_after_id", None)
+            if prewarm_id is not None:
+                self.root.after_cancel(str(prewarm_id))
                 self._shell_prewarm_after_id = None
-            if getattr(self, "_shell_terminal_pump_after_id", None) is not None:
-                self.root.after_cancel(self._shell_terminal_pump_after_id)
+            pump_id = getattr(self, "_shell_terminal_pump_after_id", None)
+            if pump_id is not None:
+                self.root.after_cancel(str(pump_id))
                 self._shell_terminal_pump_after_id = None
             self._shell_stop_all()
         except Exception:
@@ -164,7 +167,6 @@ class WindowLifecycleMixin(_Base):
         if self.process and self.process.poll() is None:
             try:
                 if sys.platform == "win32":
-                    import subprocess
                     subprocess.run(
                         ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -180,7 +182,6 @@ class WindowLifecycleMixin(_Base):
             if p.poll() is None:
                 try:
                     if sys.platform == "win32":
-                        import subprocess
                         subprocess.run(
                             ["taskkill", "/F", "/T", "/PID", str(p.pid)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -301,6 +302,6 @@ class WindowLifecycleMixin(_Base):
             hwnd = self.root.winfo_id()
             menu = win32gui.GetSystemMenu(hwnd, False)
             flag = win32con.MF_ENABLED if closable else win32con.MF_GRAYED
-            win32gui.EnableMenuItem(menu, win32con.SC_CLOSE, win32con.MF_BYCOMMAND | flag)
+            getattr(win32gui, "EnableMenuItem")(menu, win32con.SC_CLOSE, win32con.MF_BYCOMMAND | flag)
         except Exception:
             pass

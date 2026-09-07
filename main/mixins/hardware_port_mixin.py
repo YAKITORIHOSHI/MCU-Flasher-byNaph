@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import os
 import json
@@ -228,12 +229,12 @@ class HardwarePortMixin(_Base):
                     auto_port_device = p.device
                     break
 
-        if auto_port:
+        if auto_port and auto_port_device:
             self.port_combo.set(auto_port)
             self._save_selected_port(auto_port_device)
             self._board_port_confirmed = False
             self._update_hardware_action_buttons()
-            self._start_auto_board_detection(auto_port_device, show_msg=False)
+            self._start_auto_board_detection(str(auto_port_device), show_msg=False)
         else:
             # A port scan only owns the physical-port selection.  A board is
             # also the compile target, so it must remain available when no
@@ -449,9 +450,10 @@ class HardwarePortMixin(_Base):
 
         # 2. Board marquee (only if not currently focused by user)
         try:
-            if hasattr(self, 'board_combo') and self.board_combo.entry.winfo_exists():
-                if self.root.focus_get() != self.board_combo.entry:
-                    pos = self.board_combo.entry.xview()
+            board_widget = getattr(self, 'board_combo', None)
+            if board_widget and board_widget.winfo_exists():
+                if self.root.focus_get() != board_widget:
+                    pos = board_widget.xview()
                     if pos[0] == 0.0 and pos[1] >= 0.999:
                         self._board_marquee_dir = 1
                         self._board_marquee_pause = 0
@@ -466,7 +468,7 @@ class HardwarePortMixin(_Base):
                                 self._board_marquee_dir = 1
                                 self._board_marquee_pause = 8  # pause at start
                                 
-                            self.board_combo.entry.xview_scroll(self._board_marquee_dir, "units")
+                            board_widget.xview_scroll(self._board_marquee_dir, "units")
                         delay_ms = 150
         except Exception:
             pass
@@ -525,7 +527,7 @@ class HardwarePortMixin(_Base):
         self.board_entry.pack(side=tk.LEFT, padx=(0, 4), fill=tk.BOTH, expand=True, ipady=pady_val)
 
         # Alias for backward compatibility with external references
-        self.board_entry.entry = self.board_entry
+        setattr(self.board_entry, "entry", self.board_entry)
         self.board_combo = self.board_entry
 
         self.board_entry.bind("<Button-1>", lambda e: safe_reclaim_os_focus(self.board_entry), add="+")
@@ -1280,7 +1282,7 @@ class HardwarePortMixin(_Base):
             "espressif32": "ESP32",
             "espressif8266": "ESP8266"
         }
-        allowed = " or ".join(platform_labels.get(p, p) for p in sorted(allowed_platforms))
+        allowed = " or ".join(str(platform_labels.get(p, p) or p) for p in sorted(allowed_platforms))
         return f"{label} detected — that's a {allowed} board, not \"{board_name}\""
 
     def _unrecognized_mcu_port_warning(self, port: str, port_label: str | None = None) -> str | None:

@@ -13,6 +13,7 @@ import re
 import threading
 import mimetypes
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import tkinter as tk
@@ -36,10 +37,10 @@ def check_internet_connection(timeout: float = 2.0) -> bool:
     return False
 
 try:
-    # pyrefly: ignore [missing-import]
-    import filetype
+    import filetype  # type: ignore
     HAS_FILETYPE = True
 except ImportError:
+    filetype = None  # type: ignore
     HAS_FILETYPE = False
 
 
@@ -57,7 +58,7 @@ def get_filename_from_response(response, fallback_stem="downloaded_file"):
 
 
 def detect_extension_from_bytes(filepath: Path):
-    if not HAS_FILETYPE:
+    if not HAS_FILETYPE or filetype is None:
         return ""
     kind = filetype.guess(str(filepath))
     return f".{kind.extension}" if kind else ""
@@ -128,7 +129,7 @@ def _extract_download_form_url(html: str):
     if not fields:
         return None
     action = form.group(1)
-    params = "&".join(f"{name}={requests.utils.quote(value)}" for name, value in fields)
+    params = "&".join(f"{name}={quote(value)}" for name, value in fields)
     return f"{action}?{params}"
 
 
@@ -202,16 +203,14 @@ class DownloaderApp(tk.Tk):
         self._build_widgets()
 
     def _build_widgets(self):
-        pad = {"padx": 12, "pady": 6}
-
         # URL entry
-        tk.Label(self, text="Download link (direct or Google Drive):").pack(anchor="w", **pad)
+        tk.Label(self, text="Download link (direct or Google Drive):").pack(anchor="w", padx=12, pady=6)
         self.url_entry = tk.Entry(self, width=70)
         self.url_entry.pack(fill="x", padx=12)
 
         # Destination folder
         dest_frame = tk.Frame(self)
-        dest_frame.pack(fill="x", **pad)
+        dest_frame.pack(fill="x", padx=12, pady=6)
         tk.Label(dest_frame, text="Save to:").pack(side="left")
         tk.Entry(dest_frame, textvariable=self.download_dir, width=45).pack(
             side="left", padx=6, fill="x", expand=True

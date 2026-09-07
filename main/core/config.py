@@ -209,8 +209,8 @@ def _get_alive_pid_create_times() -> "dict[str, float] | None":
             return _pid_create_times_cache
         try:
             import psutil as _psutil_check
-            result = {
-                str(p.pid): p.info.get("create_time")
+            result: dict[str, float] = {
+                str(p.pid): float(p.info.get("create_time") or 0.0)
                 for p in _psutil_check.process_iter(["create_time"])
             }
             _pid_create_times_cache = result

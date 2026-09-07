@@ -12,18 +12,18 @@ import subprocess
 import threading
 import ctypes
 from pathlib import Path
-
+from typing import Any
 
 from main.core.constants import *
 from main.core.theme import *
 from main.core.config import *
 from main.core.file_utils import *
 
-_bootstrap_module = None
-_dedicated_ai_module = None
+_bootstrap_module: Any = None
+_dedicated_ai_module: Any = None
 _PIO_EXECUTABLE_CACHE: list[str] | None = None
 
-def _get_bootstrap():
+def _get_bootstrap() -> Any:
     """Import (once) and cache the bootstrap module, or return None on failure."""
     global _bootstrap_module
     if _bootstrap_module is None:
@@ -106,7 +106,7 @@ def prepare_platformio_board_toolchain(
     except Exception:
         return False
 
-def _load_dedicated_ai():
+def _load_dedicated_ai() -> Any:
     """Load the optional AI integration only when the user needs it."""
     global _dedicated_ai_module
     if _dedicated_ai_module is None:
@@ -812,7 +812,9 @@ def find_pio_executable() -> list[str] | None:
                                 try:
                                     # pyrefly: ignore [missing-import]
                                     import win_subprocess_hide as _wsh_inner
-                                    _wsh_inner.install_platformio_penv_hook(pio_core_dir)
+                                    fn = getattr(_wsh_inner, "install_platformio_penv_hook", None)
+                                    if fn is not None:
+                                        fn(pio_core_dir)
                                 except Exception:
                                     pass
                             return [str(py_cand), "-m", "platformio"]

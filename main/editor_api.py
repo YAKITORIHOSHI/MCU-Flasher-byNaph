@@ -13,6 +13,7 @@ import tempfile
 import threading
 import ctypes
 from pathlib import Path
+from typing import Any
 
 
 from main.core.constants import *
@@ -30,9 +31,9 @@ EDITOR_WINDOW_TITLE = "MCU Flasher — Embedded Code Editor (Closing this window
 # Tkinter frame via the Win32 API. Import is best-effort — if pywin32
 # isn't installed, the app still runs fine, it just falls back to the
 # old "Open Editor Window" popup behavior instead of true embedding.
-win32gui = None
-win32con = None
-win32process = None
+win32gui: Any = None
+win32con: Any = None
+win32process: Any = None
 _wm_set_embedded = 0
 if sys.platform == "win32":
     try:
@@ -566,9 +567,10 @@ class EditorApi:
         # A version-1 backup may be the deliberately stale copy left behind by
         # the previous writer, including after the last review was resolved.
         # Never resurrect it when its primary is absent or corrupt.
+        backup_name = backup_path.name if backup_path is not None else "backup"
         if not primary and backup and backup["version"] < 2:
             load_errors.append(
-                f"{backup_path.name}: legacy backup cannot prove it is the newest generation"
+                f"{backup_name}: legacy backup cannot prove it is the newest generation"
             )
             loaded_candidates = []
 
@@ -578,7 +580,7 @@ class EditorApi:
         # silently omit the newest review.
         if primary and primary["version"] >= 2 and backup_path in failed_candidates:
             load_errors.append(
-                f"{backup_path.name}: corrupt commit replica makes the primary ambiguous"
+                f"{backup_name}: corrupt commit replica makes the primary ambiguous"
             )
             loaded_candidates = []
 

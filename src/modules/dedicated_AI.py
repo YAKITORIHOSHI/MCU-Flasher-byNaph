@@ -1011,11 +1011,12 @@ class AIController:
         after_exists=True,
     ):
         """Trigger the on_ai_edit_func reload callback if defined."""
-        if self.on_ai_edit_func and callable(self.on_ai_edit_func):
+        callback_fn = self.on_ai_edit_func
+        if callback_fn and callable(callback_fn):
             def _invoke():
                 try:
                     import inspect
-                    parameters = list(inspect.signature(self.on_ai_edit_func).parameters.values())
+                    parameters = list(inspect.signature(callback_fn).parameters.values())
                     accepts_varargs = any(
                         parameter.kind is inspect.Parameter.VAR_POSITIONAL
                         for parameter in parameters
@@ -1031,7 +1032,7 @@ class AIController:
                     accepts_varargs = True
                     positional_count = 5
                 if accepts_varargs or positional_count >= 5:
-                    self.on_ai_edit_func(
+                    callback_fn(
                         filepath,
                         before_content,
                         after_content,
@@ -1041,9 +1042,9 @@ class AIController:
                 elif positional_count >= 3:
                     # Compatibility with the previous three-argument
                     # callback contract.
-                    self.on_ai_edit_func(filepath, before_content, after_content)
+                    callback_fn(filepath, before_content, after_content)
                 else:
-                    self.on_ai_edit_func(filepath)
+                    callback_fn(filepath)
             if self.root:
                 try:
                     self.root.after(0, _invoke)
@@ -1298,7 +1299,7 @@ class AIController:
                 "Do you want to proceed and launch OpenCode AI Assistant?"
             )
 
-            proceed = messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root)
+            proceed = messagebox.askyesno(disclaimer_title, disclaimer_msg, parent=self.root) if self.root else messagebox.askyesno(disclaimer_title, disclaimer_msg)
             if not proceed:
                 return False
             self.disclaimer_accepted = True
@@ -1514,7 +1515,7 @@ class AIController:
                             "before_exists": before_exists,
                         }
 
-                signal_file = Path(sketch_dir) / ".ai_edit_signal"
+                signal_file = Path(str(sketch_dir or "")) / ".ai_edit_signal"
                 if signal_file.exists():
                     try:
                         sig_mtime = signal_file.stat().st_mtime

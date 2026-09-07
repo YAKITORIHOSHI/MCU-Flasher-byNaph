@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import time
@@ -314,19 +315,20 @@ class HardResetMixin(_Base):
                 ),
                 env=self._reset_platformio_subprocess_env(project_dir, jobs),
             )
-            for raw in iter(self.process.stdout.readline, ""):
-                line = raw.rstrip()
-                if not line:
-                    continue
-                output_lines.append(line)
-                low = line.lower()
-                if any(token in low for token in (
-                    "compiling", "linking", "building", "error", "warning", "success", "took"
-                )):
-                    tag = "error" if "error" in low else (
-                        "warning" if "warning" in low else "dim"
-                    )
-                    self._append(f"  {line}", tag)
+            if self.process and self.process.stdout is not None:
+                for raw in iter(self.process.stdout.readline, ""):
+                    line = raw.rstrip()
+                    if not line:
+                        continue
+                    output_lines.append(line)
+                    low = line.lower()
+                    if any(token in low for token in (
+                        "compiling", "linking", "building", "error", "warning", "success", "took"
+                    )):
+                        tag = "error" if "error" in low else (
+                            "warning" if "warning" in low else "dim"
+                        )
+                        self._append(f"  {line}", tag)
             self.process.wait()
         except Exception as exc:
             return None, f"Reset cache build could not start: {exc}"
@@ -729,10 +731,11 @@ class HardResetMixin(_Base):
                 ),
             )
             self.process = proc
-            for line in iter(proc.stdout.readline, ""):
-                if getattr(self, "_stop_requested", False):
-                    break
-                _handle_line(line)
+            if proc.stdout is not None:
+                for line in iter(proc.stdout.readline, ""):
+                    if getattr(self, "_stop_requested", False):
+                        break
+                    _handle_line(line)
             if getattr(self, "_stop_requested", False) and proc.poll() is None:
                 try:
                     proc.terminate()
@@ -887,12 +890,13 @@ class HardResetMixin(_Base):
                         (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                     ),
                 )
-                for line in iter(self.process.stdout.readline, ""):
-                    stripped = line.rstrip()
-                    if stripped:
-                        low = stripped.lower()
-                        tag = "error" if "error" in low or "failed" in low else "normal"
-                        self._append(stripped, tag)
+                if self.process and self.process.stdout is not None:
+                    for line in iter(self.process.stdout.readline, ""):
+                        stripped = line.rstrip()
+                        if stripped:
+                            low = stripped.lower()
+                            tag = "error" if "error" in low or "failed" in low else "normal"
+                            self._append(stripped, tag)
                 self.process.wait()
                 if self.process.returncode != 0:
                     self._append(
@@ -1208,11 +1212,14 @@ class HardResetMixin(_Base):
 
             def _byte_reader():
                 try:
-                    while True:
-                        raw = self.process.stdout.read(1)
-                        if not raw:
-                            break
-                        _byte_queue.put(raw)
+                    proc = getattr(self, "process", None)
+                    proc_stdout = proc.stdout if proc else None
+                    if proc_stdout is not None:
+                        while True:
+                            raw = proc_stdout.read(1)
+                            if not raw:
+                                break
+                            _byte_queue.put(raw)
                 except Exception:
                     pass
                 finally:

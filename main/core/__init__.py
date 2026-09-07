@@ -1,3 +1,4 @@
+# pyright: reportUnsupportedDunderAll=false
 from main.core import constants, theme, config, file_utils, toolchain, board_catalog, board_compat
 from main.core.constants import *
 from main.core.theme import *

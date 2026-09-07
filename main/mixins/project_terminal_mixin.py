@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -673,7 +674,6 @@ class ProjectTerminalMixin(_Base):
             self._resize_project_terminal()
             return True
         try:
-            import ctypes
             hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - Project Terminal")
         except Exception:
             hwnd = 0
@@ -1409,7 +1409,7 @@ class ProjectTerminalMixin(_Base):
 
     def _shell_clear_output(self):
         with self._shell_state_lock:
-            session = self._shell_sessions.get(self._shell_active_kind)
+            session = self._shell_sessions.get(str(self._shell_active_kind or ""))
             if session:
                 session["output"] = ""
                 session["plain_output"] = ""
@@ -1501,7 +1501,7 @@ class ProjectTerminalMixin(_Base):
             except Exception:
                 pass
             try:
-                self.root.after_idle(lambda: self._shell_select(self._shell_active_kind))
+                self.root.after_idle(lambda: self._shell_select(str(self._shell_active_kind or "pwsh")))
             except Exception:
                 pass
 

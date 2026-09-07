@@ -9,6 +9,7 @@ MCU Flasher by Naph — Modularized Architecture
 """
 
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 
 
@@ -34,7 +35,7 @@ import traceback
 
 from datetime import datetime
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pathlib import Path
 
@@ -691,7 +692,7 @@ class SoftResetMixin(_Base):
 
             platform = PlatformFactory.new(str(platform_dir))
 
-            board = platform.board_config(board_id)
+            board: Any = platform.board_config(board_id)
 
             debug_tools = board.get("debug.tools", {}) or {}
 
@@ -1787,10 +1788,9 @@ class SoftResetMixin(_Base):
                 def _read_fast_output():
 
                     try:
-
-                        for raw_line in iter(proc.stdout.readline, ""):
-
-                            output_queue.put(raw_line)
+                        if proc.stdout is not None:
+                            for raw_line in iter(proc.stdout.readline, ""):
+                                output_queue.put(raw_line)
 
                     finally:
 
@@ -3063,14 +3063,11 @@ class SoftResetMixin(_Base):
 
                     )
 
-                    for line in iter(self.process.stdout.readline, ""):
-
+                    _readline = self.process.stdout.readline if self.process and self.process.stdout else lambda: ""
+                    for line in iter(_readline, ""):
                         stripped = line.rstrip()
-
                         if not stripped:
-
                             continue
-
                         output_lines.append(stripped)
 
                         low = stripped.lower()

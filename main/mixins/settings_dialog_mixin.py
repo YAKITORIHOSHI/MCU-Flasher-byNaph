@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -36,9 +37,10 @@ class SettingsDialogMixin(_Base):
     """Mixin providing SettingsDialogMixin capabilities for MCUUploadGUI."""
     def _restart_periodic_reload(self):
         """Cancel any existing periodic reload timer and restart if enabled."""
-        if getattr(self, "_periodic_reload_after_id", None):
+        reload_id = getattr(self, "_periodic_reload_after_id", None)
+        if reload_id is not None:
             try:
-                self.root.after_cancel(self._periodic_reload_after_id)
+                self.root.after_cancel(str(reload_id))
             except Exception:
                 pass
             self._periodic_reload_after_id = None
@@ -764,10 +766,10 @@ class SettingsDialogMixin(_Base):
         # Track whether the user has confirmed the Monaco crash-risk warning
         # during this dialog session, so we don't nag them repeatedly if they
         # flip the combobox back and forth before hitting Save.
-        editor_var._monaco_confirmed = (current_editor_mode == "monaco")
+        monaco_confirmed = [current_editor_mode == "monaco"]
 
         def _on_editor_choice(event=None):
-            if editor_var.get() == monaco_label and not getattr(editor_var, "_monaco_confirmed", False):
+            if editor_var.get() == monaco_label and not monaco_confirmed[0]:
                 from tkinter import messagebox
                 proceed = messagebox.askyesno(
                     "Monaco Editor Warning",
@@ -778,7 +780,7 @@ class SettingsDialogMixin(_Base):
                     parent=dlg
                 )
                 if proceed:
-                    editor_var._monaco_confirmed = True
+                    monaco_confirmed[0] = True
                 else:
                     editor_var.set(default_label)
 
@@ -931,7 +933,7 @@ class SettingsDialogMixin(_Base):
             theme_var.set(theme_default_label)
             _on_theme_system_toggle()
             editor_var.set(default_label)
-            editor_var._monaco_confirmed = False
+            monaco_confirmed[0] = False
             self._append("  ℹ Settings reset to default values. Click Save to apply.", "info")
             
         reset_btn = self._make_btn(btn_frame, "Reset Defaults", reset_settings, Theme.BTN_CLEAR, Theme.BTN_CLEAR_H, font=self.font_label)
@@ -1137,8 +1139,8 @@ class SettingsDialogMixin(_Base):
         dlg.minsize(min(sp(420), desired_width), min(sp(420), desired_height))
         center_toplevel(
             dlg, self.root,
-            width=desired_width / settings_scale,
-            height=desired_height / settings_scale,
+            width=int(round(desired_width / settings_scale)),
+            height=int(round(desired_height / settings_scale)),
         )
         # The first measurement may use the narrow stacked layout while the
         # canvas is still only one pixel wide. Re-measure once the target
@@ -1151,7 +1153,7 @@ class SettingsDialogMixin(_Base):
         if abs(fitted_height - desired_height) > sp(4):
             center_toplevel(
                 dlg, self.root,
-                width=desired_width / settings_scale,
-                height=fitted_height / settings_scale,
+                width=int(round(desired_width / settings_scale)),
+                height=int(round(fitted_height / settings_scale)),
             )
         dlg.after_idle(_sync_settings_scrollbar)

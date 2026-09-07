@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import time
@@ -11,7 +12,7 @@ import re
 import subprocess
 import threading
 import textwrap
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tkinter import messagebox
 
 
@@ -75,28 +76,30 @@ class UploadPipelineMixin(_Base):
             # (detect_flash_size / flash_id) are available.  Without the stub
             # those calls silently fail on most ESP32 variants because the ROM
             # loader doesn't implement the underlying SPI commands.
-            # run_stub() returns the stub object; fall back to the ROM loader
-            # if it's unavailable (very old esptool or unsupported chip rev).
+            if esp is None:
+                return
+
+            esp_device: Any = esp
             try:
-                esp = esp.run_stub()
+                esp_device = esp_device.run_stub()
             except Exception:
                 pass  # keep the ROM-loader object and try anyway
 
-            chip_model = getattr(esp, "CHIP_NAME", "Unknown")
+            chip_model = getattr(esp_device, "CHIP_NAME", "Unknown")
 
             try:
-                features = ", ".join(esp.get_chip_features())
+                features = ", ".join(esp_device.get_chip_features())
             except Exception:
                 features = "N/A"
 
             try:
-                mac_bytes = esp.read_mac()
+                mac_bytes = esp_device.read_mac()
                 mac = ":".join(f"{b:02X}" for b in mac_bytes)
             except Exception:
                 mac = "N/A"
 
             try:
-                crystal = esp.get_crystal_freq()
+                crystal = esp_device.get_crystal_freq()
                 crystal_str = f"{crystal} MHz"
             except Exception:
                 crystal_str = "N/A"
@@ -112,8 +115,8 @@ class UploadPipelineMixin(_Base):
                 try:
                     # pyrefly: ignore [missing-import]
                     from esptool.cmds import detect_flash_size, attach_flash
-                    attach_flash(esp)                 # arms SPI flash access on stub
-                    detected = detect_flash_size(esp) # returns e.g. "8MB" or None
+                    attach_flash(esp_device)                 # arms SPI flash access on stub
+                    detected = detect_flash_size(esp_device) # returns e.g. "8MB" or None
                     if detected:
                         flash_str = detected
                 except Exception:
@@ -124,9 +127,10 @@ class UploadPipelineMixin(_Base):
                     try:
                         # pyrefly: ignore [missing-import]
                         from esptool.cmds import DETECTED_FLASH_SIZES
-                        raw = esp.flash_id()
-                        size_id = (raw >> 16) & 0xFF   # capacity byte is the HIGH byte
-                        flash_str = DETECTED_FLASH_SIZES.get(size_id, "N/A")
+                        raw = esp_device.flash_id()
+                        if isinstance(raw, int):
+                            size_id = (raw >> 16) & 0xFF   # capacity byte is the HIGH byte
+                            flash_str = DETECTED_FLASH_SIZES.get(size_id, "N/A")
                     except Exception:
                         pass
             except Exception:
@@ -424,7 +428,7 @@ class UploadPipelineMixin(_Base):
                 self._append(f"  • {clean}", "warning")
             self._append("")
             # Show interactive confirmation dialog box (thread-safe on Windows)
-            proceed = [None]
+            proceed: list[bool | None] = [None]
             def _prompt():
                 reasons_text = "\n".join(f"- {r}" for r in warnings_list)
                 from tkinter import messagebox

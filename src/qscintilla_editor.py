@@ -8,6 +8,7 @@ Specialized for writing Arduino/C++ code (.ino / .cpp / .h).
 import os
 import sys
 import argparse
+from typing import Any
 
 try:
     # pyrefly: ignore [missing-import]
@@ -92,10 +93,10 @@ class ArduinoLexer(QsciLexerCPP):
         self.setFoldComments(True)
         self.setFoldPreprocessor(True)
 
-    def keywords(self, kw_set):
-        if kw_set == 2:
+    def keywords(self, set: int):
+        if set == 2:
             return " ".join(ARDUINO_KEYWORDS_SET2)
-        return super().keywords(kw_set)
+        return super().keywords(set)
 
     def description(self, style):
         if style == QsciLexerCPP.KeywordSet2:
@@ -133,8 +134,10 @@ class ArduinoEditor(QsciScintilla):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.file_path = None
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFocusPolicy(Qt.StrongFocus)
+        sb_policy: Any = getattr(Qt, "ScrollBarAlwaysOff", 1)
+        self.setHorizontalScrollBarPolicy(sb_policy)
+        focus_policy: Any = getattr(Qt, "StrongFocus", 0x1 | 0x2 | 0x8)
+        self.setFocusPolicy(focus_policy)
 
         self._configure_font()
         self._configure_lexer()
@@ -160,15 +163,17 @@ class ArduinoEditor(QsciScintilla):
         QShortcut(QKeySequence("Ctrl+="), self, self.zoomIn)
         QShortcut(QKeySequence("Ctrl+-"), self, self.zoomOut)
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, e):
         """Ensure this widget has Qt focus when clicked — critical for
         cross-process embedding where Windows delivers mouse events but
         Qt's internal focus tracking may not follow."""
-        self.setFocus(Qt.MouseFocusReason)
-        super().mousePressEvent(event)
+        mouse_reason: Any = getattr(Qt, "MouseFocusReason", 1)
+        self.setFocus(mouse_reason)
+        super().mousePressEvent(e)
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.ControlModifier:
+        ctrl_mod: Any = getattr(Qt, "ControlModifier", 0x04000000)
+        if event.modifiers() & ctrl_mod:
             event.accept()
             return
         super().wheelEvent(event)
@@ -183,30 +188,30 @@ class ArduinoEditor(QsciScintilla):
         self._base_font = font
 
     def _configure_lexer(self):
-        self.lexer = ArduinoLexer(self)
-        self.lexer.setDefaultFont(self._base_font)
-        self.lexer.setDefaultColor(QColor(THEME["foreground"]))
-        self.lexer.setDefaultPaper(QColor(THEME["background"]))
+        self._arduino_lexer = ArduinoLexer(self)
+        self._arduino_lexer.setDefaultFont(self._base_font)
+        self._arduino_lexer.setDefaultColor(QColor(THEME["foreground"]))
+        self._arduino_lexer.setDefaultPaper(QColor(THEME["background"]))
 
         style_colors = {
-            self.lexer.Comment: THEME["comment"],
-            self.lexer.CommentLine: THEME["comment"],
-            self.lexer.CommentDoc: THEME["comment"],
-            self.lexer.Number: THEME["number"],
-            self.lexer.Keyword: THEME["keyword"],
-            self.lexer.DoubleQuotedString: THEME["string"],
-            self.lexer.SingleQuotedString: THEME["string"],
-            self.lexer.PreProcessor: THEME["preprocessor"],
-            self.lexer.Operator: THEME["operator"],
-            self.lexer.Identifier: THEME["identifier"],
-            self.lexer.KeywordSet2: THEME["arduino_api"],
+            getattr(QsciLexerCPP, "Comment", 1): THEME["comment"],
+            getattr(QsciLexerCPP, "CommentLine", 2): THEME["comment"],
+            getattr(QsciLexerCPP, "CommentDoc", 3): THEME["comment"],
+            getattr(QsciLexerCPP, "Number", 4): THEME["number"],
+            getattr(QsciLexerCPP, "Keyword", 5): THEME["keyword"],
+            getattr(QsciLexerCPP, "DoubleQuotedString", 6): THEME["string"],
+            getattr(QsciLexerCPP, "SingleQuotedString", 7): THEME["string"],
+            getattr(QsciLexerCPP, "PreProcessor", 9): THEME["preprocessor"],
+            getattr(QsciLexerCPP, "Operator", 10): THEME["operator"],
+            getattr(QsciLexerCPP, "Identifier", 11): THEME["identifier"],
+            getattr(QsciLexerCPP, "KeywordSet2", 16): THEME["arduino_api"],
         }
         for style, color in style_colors.items():
-            self.lexer.setColor(QColor(color), style)
-            self.lexer.setPaper(QColor(THEME["background"]), style)
-            self.lexer.setFont(self._base_font, style)
+            self._arduino_lexer.setColor(QColor(color), style)
+            self._arduino_lexer.setPaper(QColor(THEME["background"]), style)
+            self._arduino_lexer.setFont(self._base_font, style)
 
-        self.setLexer(self.lexer)
+        self.setLexer(self._arduino_lexer)
         self.setPaper(QColor(THEME["background"]))
         self.setColor(QColor(THEME["foreground"]))
 
@@ -242,8 +247,8 @@ class ArduinoEditor(QsciScintilla):
         self.setSelectionForegroundColor(QColor(THEME["foreground"]))
 
     def _configure_autocomplete(self):
-        self.api = QsciAPIs(self.lexer)
-        cpp_keywords = self.lexer.keywords(1) or ""
+        self.api = QsciAPIs(self._arduino_lexer)
+        cpp_keywords = self._arduino_lexer.keywords(1) or ""
         for word in cpp_keywords.split() + ARDUINO_KEYWORDS_SET2:
             self.api.add(word)
         # Defer the expensive index build so the editor is interactive immediately.
@@ -519,20 +524,27 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._update_title)
         self.setCentralWidget(self.tabs)
 
-        if self.layout():
-            self.layout().setContentsMargins(0, 0, 0, 0)
-            self.layout().setSpacing(0)
+        lay = self.layout()
+        if lay is not None:
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
 
         # Always build menu and toolbar so they are available when detached
         self._build_menu_and_toolbar()
 
         if embedded:
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.Tool)
+            wflags: Any = getattr(Qt, "FramelessWindowHint", 0) | getattr(Qt, "Window", 0) | getattr(Qt, "Tool", 0)
+            self.setWindowFlags(wflags)
             self.move(-10000, -10000)
-            self.menuBar().hide()
-            self.statusBar().hide()
-            if hasattr(self, "action_toolbar"):
-                self.action_toolbar.hide()
+            mb = self.menuBar()
+            if mb is not None:
+                mb.hide()
+            sb = self.statusBar()
+            if sb is not None:
+                sb.hide()
+            atb = getattr(self, "action_toolbar", None)
+            if atb is not None:
+                atb.hide()
             self.tabs.setDocumentMode(True)
             self.tabs.setContentsMargins(0, 0, 0, 0)
             self.setContentsMargins(0, 0, 0, 0)
@@ -543,7 +555,9 @@ class MainWindow(QMainWindow):
             self._focus_timer.start(100)
 
         # Connect tab movement signal to save tab order
-        self.tabs.tabBar().tabMoved.connect(self.on_tab_moved)
+        tb = self.tabs.tabBar()
+        if tb is not None:
+            tb.tabMoved.connect(self.on_tab_moved)
         
         self.find_dialog = FindReplaceDialog(self.current_editor, self)
         
@@ -556,8 +570,8 @@ class MainWindow(QMainWindow):
         # Keyboard shortcuts
         self._setup_shortcuts()
 
-    def showEvent(self, event):
-        super().showEvent(event)
+    def showEvent(self, a0):
+        super().showEvent(a0)
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -623,47 +637,55 @@ class MainWindow(QMainWindow):
 
     def _build_menu_and_toolbar(self):
         menubar = self.menuBar()
-        menubar.hide()
+        if menubar is not None:
+            menubar.hide()
 
         self.action_toolbar = self.addToolBar("Actions")
-        self.action_toolbar.setMovable(False)
-        self.action_toolbar.setFloatable(False)
-        self.action_toolbar.setStyleSheet(
-            f"QToolBar {{ background: {THEME['margin_bg']}; border: none; spacing: 4px; padding: 6px; }}"
-        )
-
-        label = QLabel("ACTIONS")
-        label.setStyleSheet("color: #7f8c8d; font-weight: 700; font-size: 11px; "
-                            "background: transparent; padding-right: 6px;")
-        self.action_toolbar.addWidget(label)
-
-        def _add_action_btn(text, color, action_id):
-            btn = QPushButton(text)
-            btn.setStyleSheet(
-                f"QPushButton {{ "
-                f"  background: {color}; color: #f4f7fb; border: 0; "
-                f"  padding: 6px 12px; font: 600 11px 'Montserrat', 'Segoe UI', sans-serif; "
-                f"}}"
-                f"QPushButton:hover {{ filter: brightness(1.18); }}"
+        if self.action_toolbar is not None:
+            self.action_toolbar.setMovable(False)
+            self.action_toolbar.setFloatable(False)
+            self.action_toolbar.setStyleSheet(
+                f"QToolBar {{ background: {THEME['margin_bg']}; border: none; spacing: 4px; padding: 6px; }}"
             )
-            btn.clicked.connect(lambda checked, aid=action_id: self._dispatch_action(aid))
-            self.action_toolbar.addWidget(btn)
-            return btn
 
-        _add_action_btn("Compile", "#2d7d46", "compile")
-        _add_action_btn("Upload", "#2077b0", "upload")
-        _add_action_btn("Stop", "#a03030", "stop")
-        _add_action_btn("Clean", "#3a4555", "clean")
+            label = QLabel("ACTIONS")
+            label.setStyleSheet("color: #7f8c8d; font-weight: 700; font-size: 11px; "
+                                "background: transparent; padding-right: 6px;")
+            self.action_toolbar.addWidget(label)
 
-        div = QLabel("")
-        div.setStyleSheet("background: #222938; min-width: 2px; max-width: 2px; "
-                          "min-height: 22px; margin: 0 6px;")
-        self.action_toolbar.addWidget(div)
+            def _add_action_btn(text, color, action_id):
+                btn = QPushButton(text)
+                btn.setStyleSheet(
+                    f"QPushButton {{ "
+                    f"  background: {color}; color: #f4f7fb; border: 0; "
+                    f"  padding: 6px 12px; font: 600 11px 'Montserrat', 'Segoe UI', sans-serif; "
+                    f"}}"
+                    f"QPushButton:hover {{ filter: brightness(1.18); }}"
+                )
+                btn.clicked.connect(lambda checked, aid=action_id: self._dispatch_action(aid))
+                if self.action_toolbar is not None:
+                    self.action_toolbar.addWidget(btn)
+                return btn
 
-        _add_action_btn("Save", "#2d7d46", "save")
-        _add_action_btn("Save All", "#8244a0", "save_all")
-        _add_action_btn("Reload", "#3a4555", "reload")
-        _add_action_btn("Modify", "#1a7a70", "modify")
+            _add_action_btn("Compile", "#2d7d46", "compile")
+            _add_action_btn("Upload", "#2077b0", "upload")
+            _add_action_btn("Stop", "#a03030", "stop")
+            _add_action_btn("Clean", "#3a4555", "clean")
+
+            div = QLabel("")
+            div.setStyleSheet("background: #222938; min-width: 2px; max-width: 2px; "
+                              "min-height: 22px; margin: 0 6px;")
+            self.action_toolbar.addWidget(div)
+
+            _add_action_btn("Save", "#2d7d46", "save")
+            _add_action_btn("Save All", "#8244a0", "save_all")
+            _add_action_btn("Reload", "#3a4555", "reload")
+            _add_action_btn("Modify", "#1a7a70", "modify")
+
+    def _editor_action(self, method_name: str, *args):
+        ed = self.current_editor()
+        if ed is not None and hasattr(ed, method_name):
+            getattr(ed, method_name)(*args)
 
     def _setup_shortcuts(self):
         # Save shortcut
@@ -681,37 +703,37 @@ class MainWindow(QMainWindow):
         # Copy shortcut
         copy_shortcut = QAction(self)
         copy_shortcut.setShortcut(QKeySequence("Ctrl+C"))
-        copy_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().SendScintilla(2178))
+        copy_shortcut.triggered.connect(lambda *args: self._editor_action("SendScintilla", 2178))
         self.addAction(copy_shortcut)
 
         # Paste shortcut
         paste_shortcut = QAction(self)
         paste_shortcut.setShortcut(QKeySequence("Ctrl+V"))
-        paste_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().SendScintilla(2179))
+        paste_shortcut.triggered.connect(lambda *args: self._editor_action("SendScintilla", 2179))
         self.addAction(paste_shortcut)
 
         # Cut shortcut
         cut_shortcut = QAction(self)
         cut_shortcut.setShortcut(QKeySequence("Ctrl+X"))
-        cut_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().SendScintilla(2177))
+        cut_shortcut.triggered.connect(lambda *args: self._editor_action("SendScintilla", 2177))
         self.addAction(cut_shortcut)
 
         # Undo shortcut
         undo_shortcut = QAction(self)
         undo_shortcut.setShortcut(QKeySequence("Ctrl+Z"))
-        undo_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().undo())
+        undo_shortcut.triggered.connect(lambda *args: self._editor_action("undo"))
         self.addAction(undo_shortcut)
 
         # Redo shortcut
         redo_shortcut = QAction(self)
         redo_shortcut.setShortcut(QKeySequence("Ctrl+Y"))
-        redo_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().redo())
+        redo_shortcut.triggered.connect(lambda *args: self._editor_action("redo"))
         self.addAction(redo_shortcut)
 
         # Select All shortcut
         select_all_shortcut = QAction(self)
         select_all_shortcut.setShortcut(QKeySequence("Ctrl+A"))
-        select_all_shortcut.triggered.connect(lambda *args: self.current_editor() and self.current_editor().selectAll())
+        select_all_shortcut.triggered.connect(lambda *args: self._editor_action("selectAll"))
         self.addAction(select_all_shortcut)
 
     def current_editor(self):
@@ -747,7 +769,7 @@ class MainWindow(QMainWindow):
 
     def close_tab(self, index):
         editor = self.tabs.widget(index)
-        if editor.isModified():
+        if editor is not None and getattr(editor, "isModified", lambda: False)():
             resp = QMessageBox.question(
                 self, "Unsaved changes",
                 f"Save changes to {self.tabs.tabText(index)}?",
@@ -794,8 +816,8 @@ class MainWindow(QMainWindow):
         else:
             self.setWindowTitle(f"{name} — MCU Flasher Editor")
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
+    def resizeEvent(self, a0):
+        super().resizeEvent(a0)
         # NOTE: self.tabs is set via setCentralWidget(), so QMainWindow's
         # own layout already resizes it on every resize event for free.
         # The previous version manually called setGeometry()+repaint()
@@ -1000,7 +1022,8 @@ class MainWindow(QMainWindow):
                     return
             editor = self.tabs.currentWidget()
             if editor and not editor.hasFocus():
-                editor.setFocus(Qt.OtherFocusReason)
+                focus_reason: Any = getattr(Qt, "OtherFocusReason", 0)
+                editor.setFocus(focus_reason)
         except Exception:
             pass
 
@@ -1009,7 +1032,8 @@ class MainWindow(QMainWindow):
         if eventType == b"windows_generic_MSG" and sys.platform == "win32":
             try:
                 import ctypes
-                msg = ctypes.wintypes.MSG.from_address(int(message))
+                import ctypes.wintypes
+                msg = ctypes.wintypes.MSG.from_address(int(message))  # type: ignore
                 # WM_SETFOCUS = 0x0007 — forward Qt focus to the active
                 # editor tab when the native window receives keyboard
                 # focus.  Without this, cross-process reparenting often
@@ -1018,7 +1042,8 @@ class MainWindow(QMainWindow):
                 if msg.message == 0x0007:
                     editor = self.tabs.currentWidget()
                     if editor:
-                        editor.setFocus(Qt.OtherFocusReason)
+                        focus_reason: Any = getattr(Qt, "OtherFocusReason", 0)
+                        editor.setFocus(focus_reason)
                 if msg.message == WM_MCU_SAVE_ALL and WM_MCU_SAVE_ALL != 0:
                     self.save_all_files()
                     return True, 0
@@ -1052,39 +1077,54 @@ class MainWindow(QMainWindow):
         self.embedded = embedded
         self.tabs.setTabsClosable(False)
         if embedded:
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window | Qt.Tool)
-            self.menuBar().hide()
-            self.statusBar().hide()
-            if hasattr(self, "action_toolbar"):
-                self.action_toolbar.hide()
+            wflags: Any = getattr(Qt, "FramelessWindowHint", 0) | getattr(Qt, "Window", 0) | getattr(Qt, "Tool", 0)
+            self.setWindowFlags(wflags)
+            mb = self.menuBar()
+            if mb is not None:
+                mb.hide()
+            sb = self.statusBar()
+            if sb is not None:
+                sb.hide()
+            atb = getattr(self, "action_toolbar", None)
+            if atb is not None:
+                atb.hide()
             self.tabs.setDocumentMode(True)
             self.tabs.setContentsMargins(0, 0, 0, 0)
             self.setContentsMargins(0, 0, 0, 0)
             self.show()
             editor = self.tabs.currentWidget()
             if editor:
-                editor.setFocus(Qt.OtherFocusReason)
+                reason: Any = getattr(Qt, "OtherFocusReason", 0)
+                editor.setFocus(reason)
         else:
-            self.setWindowFlags(Qt.Window)
-            self.menuBar().hide()
-            self.statusBar().show()
-            if hasattr(self, "action_toolbar"):
-                self.action_toolbar.show()
+            wflag: Any = getattr(Qt, "Window", 0)
+            self.setWindowFlags(wflag)
+            mb = self.menuBar()
+            if mb is not None:
+                mb.hide()
+            sb = self.statusBar()
+            if sb is not None:
+                sb.show()
+            atb = getattr(self, "action_toolbar", None)
+            if atb is not None:
+                atb.show()
             self.tabs.setDocumentMode(False)
             self.show()
             editor = self.tabs.currentWidget()
             if editor:
-                QTimer_cls.singleShot(100, lambda: editor.setFocus(Qt.OtherFocusReason))
+                reason: Any = getattr(Qt, "OtherFocusReason", 0)
+                QTimer_cls.singleShot(100, lambda: editor.setFocus(reason))
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0):
         if self.started_embedded:
             self.hide()
-            event.ignore()
+            if a0 is not None:
+                a0.ignore()
             return
         
         for i in range(self.tabs.count()):
             editor = self.tabs.widget(i)
-            if editor.isModified():
+            if editor is not None and getattr(editor, "isModified", lambda: False)():
                 self.tabs.setCurrentIndex(i)
                 resp = QMessageBox.question(
                     self, "Unsaved changes",
@@ -1094,9 +1134,11 @@ class MainWindow(QMainWindow):
                 if resp == QMessageBox.Save:
                     self.save_file()
                 elif resp == QMessageBox.Cancel:
-                    event.ignore()
+                    if a0 is not None:
+                        a0.ignore()
                     return
-        event.accept()
+        if a0 is not None:
+            a0.accept()
 
 
 def main():

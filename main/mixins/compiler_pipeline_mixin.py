@@ -4,6 +4,7 @@
 MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
+# pyright: reportGeneralTypeIssues=false
 
 import sys
 import os
@@ -287,7 +288,7 @@ class CompilerPipelineMixin(_Base):
         output_lines = []
         line_count = 0
         compile_start = time.time()
-        _build_start   = [None]   # set to time.time() the instant framework download finishes
+        _build_start: list[float | None] = [None]   # set to time.time() the instant framework download finishes
         spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         was_killed = False
 
@@ -317,7 +318,7 @@ class CompilerPipelineMixin(_Base):
         _spinner_active = [True]
         _spin_frame     = [0]
         _package_check_active = [False]
-        _package_check_start = [None]
+        _package_check_start: list[float | None] = [None]
         _package_check_item = [""]
 
         def _spin_loop():
@@ -363,7 +364,7 @@ class CompilerPipelineMixin(_Base):
         _error_block_type = ["error"]
 
         _tool_dl_active = [False]
-        _tool_dl_start = [None]
+        _tool_dl_start: list[float | None] = [None]
         _tool_dl_total = [0.0]
 
         # One framework/toolchain setup session can contain many PlatformIO
@@ -384,7 +385,7 @@ class CompilerPipelineMixin(_Base):
         # lines (PlatformIO emits one "Archiving <lib>.a" per library, and both
         # "Checking size" + "Retrieving maximum program size") don't show up as
         # repeated redundant rows in the console.
-        _last_progress_text = [None]
+        _last_progress_text: list[str | None] = [None]
 
         def _diagnostic_location(raw_path: str) -> str:
             """Return a compact, useful source path for GCC diagnostics."""
@@ -1025,9 +1026,9 @@ class CompilerPipelineMixin(_Base):
                     errors_by_file.setdefault(err["file"], []).append(err)
 
                 # ── Check if this is a board-mismatch rather than a real code bug ──
+                selected_board = str(getattr(self, "_active_board_name", "") or "")
                 try:
                     compat_boards, compat_reasons = detect_board_compatibility(self.sketch_dir_path)
-                    selected_board = str(getattr(self, "_active_board_name", "") or "")
                     is_board_mismatch = bool(compat_boards) and selected_board not in compat_boards
                 except Exception:
                     is_board_mismatch = False
@@ -1046,7 +1047,7 @@ class CompilerPipelineMixin(_Base):
                         "atmelavr": "Arduino AVR (Uno, Nano, Mega …)",
                     }
                     family_names = sorted(
-                        _plat_labels.get(p, p) for p in _platforms if p
+                        str(_plat_labels.get(p, p) or p) for p in _platforms if p
                     )
                     compat_summary = ", ".join(family_names) if family_names else "other boards"
                     self._append("")
