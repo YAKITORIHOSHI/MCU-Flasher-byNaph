@@ -684,9 +684,14 @@ class AIAssistantMixin(_Base):
         (missed <Configure>, show/hide toggle, sash drag) left it short."""
         if not hasattr(self, "root") or not self.root:
             return
+        # Showing the panel repeatedly must reuse the existing timer.  Without
+        # this guard each open added another permanent 500 ms callback until
+        # the panel was hidden, multiplying Win32 geometry work.
+        if getattr(self, "_ai_size_watchdog_job", None):
+            return
         def _watch():
+            self._ai_size_watchdog_job = None
             if not getattr(self, "_ai_side_visible", False):
-                self._ai_size_watchdog_job = None
                 return
             try:
                 ai_h = getattr(self, "_ai_hwnd", None)

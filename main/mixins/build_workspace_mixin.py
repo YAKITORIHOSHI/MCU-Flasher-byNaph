@@ -13,26 +13,30 @@ import re
 import subprocess
 import ctypes
 import hashlib
+import threading
+import shutil
+import string
 from typing import TYPE_CHECKING
 from pathlib import Path
 
-
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
-from main.core.board_catalog import *
-from main.core.board_compat import *
-from main.widgets import *
-from main.dialogs import *
-from main.editor_api import *
+from main.core.constants import SCRIPT_DIR
+from main.core.file_utils import (
+    _migrate_legacy_project_generated_files,
+    _unc_share_root,
+    hide_generated_directory,
+    is_unc_or_network_path,
+)
+from main.core.toolchain import _refresh_platformio_core_environment
+from main.core.board_catalog import SUPPORTED_BOARDS
 
 if TYPE_CHECKING:
     from main.mcu_flash_gui import MCUUploadGUI
     _Base = MCUUploadGUI
 else:
     _Base = object
+
+_BOARD_CACHE_KEY_MEMO: dict[str, str] = {}
+
 
 class BuildWorkspaceMixin(_Base):
     """Mixin providing BuildWorkspaceMixin capabilities for MCUUploadGUI."""
@@ -47,9 +51,17 @@ class BuildWorkspaceMixin(_Base):
         """
         if board_name is not None:
             name = board_name
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = getattr(self, "_active_board_name", "") or ""
         else:
             board_var = getattr(self, "board_var", None)
             name = board_var.get() if board_var is not None else ""
+        if not name:
+            name = "unknown_board"
+        memo_val = _BOARD_CACHE_KEY_MEMO.get(name)
+        if memo_val is not None:
+            return memo_val
+
         info = dict(SUPPORTED_BOARDS.get(name, {}))
         identity = {
             # Display name is always part of the identity.  Downloaded board
@@ -75,7 +87,9 @@ class BuildWorkspaceMixin(_Base):
         # Keep this deliberately compact for Windows installations whose
         # sketch path is already close to the legacy MAX_PATH limit.  The
         # digest, rather than the readable prefix, provides uniqueness.
-        return f"{(slug or 'board')[:20]}_{digest}"
+        key = f"{(slug or 'board')[:20]}_{digest}"
+        _BOARD_CACHE_KEY_MEMO[name] = key
+        return key
 
     def _mapped_or_sketch_dir(self, project_dir: Path | None = None) -> Path:
         """Return the effective sketch directory, rewriting to the mapped drive
@@ -109,7 +123,6 @@ class BuildWorkspaceMixin(_Base):
                 return Path(share_root) / rel if rel else Path(share_root)
         if sys.platform == "win32" and len(p_str) >= 2 and p_str[1] == ":":
             try:
-                import ctypes
                 buf = ctypes.create_unicode_buffer(512)
                 cb = ctypes.c_ulong(512)
                 res = ctypes.windll.mpr.WNetGetConnectionW(p_str[:2], buf, ctypes.byref(cb))
@@ -136,8 +149,6 @@ class BuildWorkspaceMixin(_Base):
         canonical = self._canonical_sketch_path(project_dir)
         if not is_unc_or_network_path(canonical):
             return None
-        import hashlib
-        import re
         proj_hash = hashlib.sha1(str(canonical).lower().encode("utf-8")).hexdigest()[:12]
         proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', canonical.name) or "project"
         core_store = os.environ.get("PLATFORMIO_CORE_DIR")
@@ -229,15 +240,14 @@ class BuildWorkspaceMixin(_Base):
         )
         legacy_env_names = [env_name, self._legacy_pio_env_name(board_name)]
         try:
-            import shutil as _cache_shutil
             for legacy_name in dict.fromkeys(legacy_env_names):
                 legacy_env = legacy_root / legacy_name
                 if legacy_env.is_dir() and not destination_env.exists():
                     destination_root.mkdir(parents=True, exist_ok=True)
-                    _cache_shutil.move(str(legacy_env), str(destination_env))
+                    shutil.move(str(legacy_env), str(destination_env))
                     legacy_checksum = legacy_root / "project.checksum"
                     if legacy_checksum.is_file():
-                        _cache_shutil.copy2(
+                        shutil.copy2(
                             legacy_checksum, destination_root / "project.checksum"
                         )
                     break
@@ -246,7 +256,7 @@ class BuildWorkspaceMixin(_Base):
             # still used the unbounded display-name environment.
             old_workspace_env = destination_root / self._legacy_pio_env_name(board_name)
             if old_workspace_env.is_dir() and not destination_env.exists():
-                _cache_shutil.move(str(old_workspace_env), str(destination_env))
+                shutil.move(str(old_workspace_env), str(destination_env))
 
             destination_libdeps = (
                 self._board_workspace(project, board_name) / "libdeps" / env_name
@@ -258,7 +268,7 @@ class BuildWorkspaceMixin(_Base):
                 )
                 if legacy_libdeps.is_dir() and not destination_libdeps.exists():
                     destination_libdeps.parent.mkdir(parents=True, exist_ok=True)
-                    _cache_shutil.move(str(legacy_libdeps), str(destination_libdeps))
+                    shutil.move(str(legacy_libdeps), str(destination_libdeps))
                     break
         except Exception:
             # Cache migration must never block a compile; a miss simply causes
@@ -406,7 +416,6 @@ class BuildWorkspaceMixin(_Base):
             pass
 
         # Find a free drive letter (Z: down to A:).
-        import string
         mapped_letter = None
         for letter in reversed(string.ascii_uppercase):
             test_root = f"{letter}:\\"

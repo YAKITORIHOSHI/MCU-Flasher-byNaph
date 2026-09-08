@@ -12,13 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 
 
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
-from main.core.board_catalog import *
-from main.core.board_compat import *
+from main.core.theme import Theme
 
 # ── Module-level ctypes setup (Windows only) ───────────────────────────
 # Hoisted from per-call function bodies so the struct class, argtypes,
@@ -329,7 +323,7 @@ class _ShellTerminalBuffer:
 
     def feed(self, data):
         if isinstance(data, bytes):
-            data = data.decode("utf-8", errors="replace")
+            data = data.decode("utf-8", errors="ignore").replace("\x00", "").replace("\ufffd", "")
         for char in str(data or ""):
             if self.escape:
                 self.escape += char

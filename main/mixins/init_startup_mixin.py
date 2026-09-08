@@ -154,7 +154,7 @@ class InitStartupMixin(_Base):
         # batches, and suspends expensive Text rendering while the Serial Monitor
         # tab is not visible.  This prevents 921600-baud traffic from starving tab
         # changes and other Tk events.
-        self._serial_display_queue: deque[tuple[str, str, bool]] = deque(maxlen=12000)
+        self._serial_display_queue: deque[tuple[str, str, bool]] = deque(maxlen=4000)
         self._serial_display_lock = threading.Lock()
         self._serial_display_flush_scheduled = False  # legacy state; pump owns scheduling
         self._serial_display_dropped_rows = 0
@@ -162,6 +162,7 @@ class InitStartupMixin(_Base):
         self._serial_display_pump_after_id = None
         self._serial_last_trim_monotonic = 0.0
         self._serial_last_autoscroll_monotonic = 0.0
+        self._serial_lines_since_trim = 0
         # The monitor worker adapts this coalescing window to the selected baud.
         self._serial_display_flush_delay_ms = 25
         # Local shell tabs use one dedicated PTY thread per shell.  They do not
@@ -181,6 +182,16 @@ class InitStartupMixin(_Base):
         self._shell_terminal_pump_after_id = None
         self._shell_prewarm_after_id = None
         self._shells_prewarmed = False
+        self._preloading_tabs = False
+        self._bottom_tabs_preloaded = False
+        self._serial_title_visible = True
+        self._project_overlay = None
+        self._project_overlay_created_at = 0.0
+        self._project_loading_in_progress = False
+        self._project_editor_ready = False
+        self._project_cache_ready = False
+        self._project_overlay_safety_job = None
+        self._project_overlay_raise_job = None
         # The visible Project Terminal is hosted by the same isolated
         # pywebview + xterm.js + pywinpty child process used by OpenCode.  Keep
         # the older Tk PTY state available as a runtime fallback for machines
@@ -390,6 +401,11 @@ class InitStartupMixin(_Base):
         # Re-tune button padding/font live as the window is resized. Bind before
         # deiconifying so no startup configure/maximize events are dropped.
         self.root.bind("<Configure>", self._on_root_configure)
+
+        # Pre-warm and realize all bottom notebook tabs under the startup cover
+        # so child widgets, buttons, and geometries are cached and ready.
+        if hasattr(self, "_preload_bottom_notebook_tabs"):
+            self._preload_bottom_notebook_tabs()
 
         self.root.update_idletasks()
 
@@ -675,6 +691,8 @@ class InitStartupMixin(_Base):
                     pass
                 self._resize_after_id = None
                 self._minwidth_after_id = None
+            if hasattr(self, "_preload_bottom_notebook_tabs"):
+                self._preload_bottom_notebook_tabs()
             if hasattr(self, "_apply_debounced_resize"):
                 self._apply_debounced_resize()
             elif hasattr(self, "_apply_dynamic_button_scale"):
@@ -968,10 +986,10 @@ class InitStartupMixin(_Base):
             ("syntax-checker", self._dbi_syntax_checker),
             ("terminal", self._dbi_terminal),
         ])
-        # Keep a real event-loop turn between services for Tk callbacks, but
-        # remove the old 150 ms artificial delay that left cores idle during
-        # startup. Heavy work is already asynchronous inside each service.
-        self._deferred_bg_step_gap_ms = 0
+        # Keep a real event-loop turn between services. A small gap prevents a
+        # burst of startup callbacks from running back-to-back with the native
+        # editor attach handshake, while remaining imperceptible to the user.
+        self._deferred_bg_step_gap_ms = 40
         self._advance_deferred_background_init()
 
     _start_deferred_background_init = _deferred_background_init
@@ -981,14 +999,17 @@ class InitStartupMixin(_Base):
         # window has painted. A cached catalog is already available when
         # possible; this refresh keeps it correct without blocking launch.
         self._reload_supported_boards()
-        self._apply_board_monitor_baud()
-        self._apply_board_upload_speed()
-        self._on_board_changed()
+        # Do not call _on_board_changed() from the startup service queue. It
+        # also restarts the serial monitor, emits notifications, and performs
+        # project-state synchronization while Tk is handing off to Monaco.
+        # The selected board is already restored by the UI builder, while the
+        # catalog completion callback refreshes the button state.
 
     def _dbi_serial_monitor(self):
-        # Signals the esptool probe to bail out immediately once running.
-        self._monitor_should_run = True
-        self._schedule_auto_start_monitor(0)
+        port = self._get_port() if hasattr(self, "_get_port") else ""
+        if port:
+            self._monitor_should_run = True
+            self._schedule_auto_start_monitor(0)
 
     def _dbi_port_scan(self):
         # Async since the port-scan rework: kicks a worker thread off the Tk
@@ -1018,10 +1039,13 @@ class InitStartupMixin(_Base):
         try:
             if queue:
                 name, service = queue.popleft()
+                _startup_event(f"deferred-{name}-begin")
                 try:
                     service()
                 except Exception as e:
                     print(f"[MCU Flasher] Deferred service '{name}' failed: {e}")
+                finally:
+                    _startup_event(f"deferred-{name}-done")
                 if queue:
                     try:
                         self.root.after(

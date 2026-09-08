@@ -18,16 +18,21 @@ from pathlib import Path
 import tkinter as tk
 
 
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
-from main.core.board_catalog import *
-from main.core.board_compat import *
-from main.widgets import *
-from main.dialogs import *
-from main.editor_api import *
+from main.core.theme import Theme
+from main.core.file_utils import (
+    _unc_share_root,
+    ensure_file_writable,
+    get_project_root_source_files,
+    get_project_temp_file,
+    get_volume_info,
+    hide_hidden_attribute,
+    hide_internal_project_metadata,
+    is_unc_or_network_path,
+    is_volume_writable,
+)
+from main.core.toolchain import board_toolchain_ready
+from main.core.board_catalog import SUPPORTED_BOARDS, _strip_terminal_escapes
+from main.core.board_compat import is_s3_board
 
 if TYPE_CHECKING:
     from main.mcu_flash_gui import MCUUploadGUI
@@ -232,15 +237,16 @@ class CompileCacheMixin(_Base):
             self._build_metadata_by_board = {}
         self._build_metadata_by_board[board_key] = entry
 
-    def _needs_recompile(self) -> tuple[bool, str]:
+    def _needs_recompile(self, board_name: str | None = None) -> tuple[bool, str]:
         """Return (needs_recompile, reason_string).
         False  → binary is up-to-date for the CURRENTLY selected board, safe to skip compile.
         True   → sources changed, framework missing, env just created, board never compiled,
                  or firmware binary missing from disk (e.g. cleaned manually or by board switch)."""
-        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
-            board_name = str(getattr(self, "_active_board_name", "") or "")
-        else:
-            board_name = self.board_var.get()
+        if board_name is None:
+            if threading.get_ident() != getattr(self, "_tk_thread_id", None):
+                board_name = str(getattr(self, "_active_board_name", "") or "")
+            else:
+                board_name = self.board_var.get()
         env_name = self._pio_env_name(board_name)
 
         # 1. Check if board framework is downloaded
@@ -255,17 +261,17 @@ class CompileCacheMixin(_Base):
         #    The hash cache may say "sources unchanged" from a previous session, but if
         #    the .pio directory was cleaned (or this is a different machine), the binary
         #    is gone and we must recompile regardless.
-        if not self._has_prior_build():
+        if not self._has_prior_build(board_name):
             return True, "no firmware binary found for this board (build folder may have been cleaned)"
 
         board_key = self._board_cache_key(board_name)
         cached_hash = self._compile_cache_by_board.get(board_key)
-        if cached_hash is None:
+        if cached_hash is None and board_name:
             # One-time compatibility with cache JSON written by older builds.
             cached_hash = self._compile_cache_by_board.get(board_name)
         if cached_hash is None:
             return True, "no previous compile for this board"
-        current = self._hash_sources()
+        current = self._hash_sources(board_name)
         if current != cached_hash:
             return True, "source files have changed since this board was last compiled"
         return False, "sources unchanged"
@@ -525,7 +531,7 @@ class CompileCacheMixin(_Base):
             return cache.get(key) or cache.get(name)  # legacy display-name key
         return None
 
-    def _hash_sources(self) -> str:
+    def _hash_sources(self, board_name: str | None = None) -> str:
         """Return a single MD5 digest over the content of every source file
         in the current sketch folder.  The desired board configuration is
         included canonically; the mutable generated platformio.ini is not.
@@ -540,18 +546,21 @@ class CompileCacheMixin(_Base):
         _SOURCE_HASH_MEMO_CACHE) to avoid repetitive disk I/O and return
         memoized hashes in sub-microsecond time when sources are unchanged.
         """
-        if threading.get_ident() != getattr(self, "_tk_thread_id", None):
-            board_name = str(getattr(self, "_active_board_name", "") or "")
+        if board_name is not None:
+            name = board_name
+            board_info = dict(SUPPORTED_BOARDS.get(name, {}) or {})
+        elif threading.get_ident() != getattr(self, "_tk_thread_id", None):
+            name = str(getattr(self, "_active_board_name", "") or "")
             board_info = dict(getattr(self, "_active_board_info", {}) or {})
         else:
-            board_name = self.board_var.get()
-            board_info = SUPPORTED_BOARDS.get(board_name, {})
-        board_key = self._board_cache_key(board_name)
+            name = self.board_var.get()
+            board_info = dict(SUPPORTED_BOARDS.get(name, {}) or {})
+        board_key = self._board_cache_key(name)
         try:
             board_info_str = json.dumps(board_info, sort_keys=True, default=str)
         except Exception:
             board_info_str = ""
-        config_fingerprint = str(self._build_config_fingerprint(board_name) or "missing")
+        config_fingerprint = str(self._build_config_fingerprint(name) or "missing")
 
         native_usb = False
         try:
@@ -638,24 +647,65 @@ class CompileCacheMixin(_Base):
     def _update_skip_compile_state(self):
         """Auto-detect if the project was already compiled.
         If yes, enable the 'Skip recompile' checkbox and check it.
-        If no, disable the checkbox and uncheck it."""
+        If no, disable the checkbox and uncheck it.
+
+        Performs disk presence and source hash verification on a background
+        thread to prevent UI thread freezing when switching boards or editing files.
+        """
         if not hasattr(self, "cb_skip_compile") or getattr(self, "is_busy", False):
             return
-        if self._has_prior_build():
-            needs_recompile, reason = self._needs_recompile()
-            if not needs_recompile:
-                self.skip_compile_var.set(True)
-                self.cb_skip_compile.configure(state=tk.NORMAL)
-                return
-        self.skip_compile_var.set(False)
-        self.cb_skip_compile.configure(state=tk.DISABLED)
 
-    def _has_prior_build(self) -> bool:
+        board_name = self.board_var.get() if hasattr(self, "board_var") else ""
+        if not board_name:
+            self.skip_compile_var.set(False)
+            self.cb_skip_compile.configure(state=tk.DISABLED)
+            return
+
+        # Fast conservative state if the board changed
+        if getattr(self, "_last_skip_compile_checked_board", None) != board_name:
+            self.skip_compile_var.set(False)
+            self.cb_skip_compile.configure(state=tk.DISABLED)
+            self._last_skip_compile_checked_board = board_name
+
+        gen = getattr(self, "_skip_compile_check_gen", 0) + 1
+        self._skip_compile_check_gen = gen
+
+        def _bg_check():
+            can_skip = False
+            try:
+                if self._has_prior_build(board_name):
+                    needs_recompile, _ = self._needs_recompile(board_name)
+                    can_skip = not needs_recompile
+            except Exception:
+                can_skip = False
+
+            def _apply():
+                if getattr(self, "_skip_compile_check_gen", 0) != gen:
+                    return
+                if getattr(self, "is_busy", False):
+                    return
+                if not hasattr(self, "cb_skip_compile") or not hasattr(self, "skip_compile_var"):
+                    return
+                if can_skip:
+                    self.skip_compile_var.set(True)
+                    self.cb_skip_compile.configure(state=tk.NORMAL)
+                else:
+                    self.skip_compile_var.set(False)
+                    self.cb_skip_compile.configure(state=tk.DISABLED)
+
+            self._post_ui(_apply)
+
+        if hasattr(self, "_run_bg_task"):
+            self._run_bg_task(_bg_check)
+        else:
+            threading.Thread(target=_bg_check, daemon=True).start()
+
+    def _has_prior_build(self, board_name: str | None = None) -> bool:
         """Return True if a compiled firmware binary exists for the CURRENTLY
         selected board specifically.  This check is deliberately read-only:
         restoring family-bucketed binaries could flash one board's firmware to
         another board and could also undo an explicit Clean."""
-        build_dir = self._board_build_dir()
+        build_dir = self._board_build_dir(board_name=board_name)
         return (
             build_dir.exists() and (
                 (build_dir / "firmware.elf").exists() or

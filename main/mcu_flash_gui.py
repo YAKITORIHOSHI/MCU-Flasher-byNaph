@@ -387,10 +387,12 @@ def main():
     if requested_mode == "monaco" and get_monaco_boot_pending():
         # The previous launch set the "about to try Monaco" sentinel and
         # never cleared it — meaning the process died before Monaco could
-        # confirm it started cleanly. Revert to the safe default.
+        # confirm it started cleanly. Use the safe default for this one
+        # launch, but preserve the user's Monaco preference for the next
+        # normal launch. A watchdog/forced shutdown must not silently rewrite
+        # their editor setting.
         requested_mode = "default"
         monaco_crashed_last_time = True
-        set_editor_mode("default")
         set_monaco_boot_pending(False)
 
     _RESOLVED_EDITOR_MODE = requested_mode
@@ -506,10 +508,10 @@ def main():
                 if root_val is not None:
                     messagebox.showwarning(
                         "Editor Reverted to Default",
-                        "The Monaco editor did not start cleanly last time "
-                        "(the app closed unexpectedly during startup), so the "
-                        "File Editor has been reset to Default.\n\n"
-                        "You can re-enable Monaco from MCU Flasher Settings.",
+                        "The Monaco editor did not start cleanly last time, "
+                        "so this launch is using the Default editor.\n\n"
+                        "Your Monaco preference was kept; restart once the "
+                        "app is stable to try it again.",
                         parent=root_val
                     )
             if root_val is not None:
@@ -529,7 +531,11 @@ def main():
             if app_val:
                 app_val._on_close()
             elif root_val is not None:
-                root_val.destroy()
+                try:
+                    root_val.withdraw()
+                    root_val.destroy()
+                except Exception:
+                    pass
                 os._exit(0)
         root_val.protocol("WM_DELETE_WINDOW", on_tk_close)
 
@@ -683,11 +689,17 @@ def main():
         js_api=api,
         width=1000,
         height=700,
+        # WinForms performs a private Show/Hide cycle even for hidden=True.
+        # Keep that native form outside every monitor so the required first
+        # WebView2 paint handshake can never flash a gray detached window.
+        x=-32000,
+        y=-32000,
         min_size=(360, 240),
         # Let pywebview create and initialize the WebView2 controller without
         # exposing a second top-level window. The native form is explicitly
         # shown after it has been reparented into Tk.
         hidden=True,
+        focus=False,
         background_color="#151922",   # matches Theme.BG_DARKEST — no white flash
     )
     app.editor_window = editor_window
@@ -718,7 +730,15 @@ def main():
             app._update_editor_info()
             try:
                 active_t = get_theme_mode()
-                editor_window.evaluate_js(f"if (typeof window.setEditorTheme === 'function') window.setEditorTheme('{active_t}');")
+                # pywebview's WinForms evaluate_js uses a synchronous Invoke.
+                # Never wait for that STA from Tk while the editor is still
+                # attaching; the page can apply the theme when its queue is
+                # available without holding the application event loop.
+                app._run_bg_task(
+                    lambda theme=active_t: editor_window.evaluate_js(
+                        f"if (typeof window.setEditorTheme === 'function') window.setEditorTheme('{theme}');"
+                    )
+                )
             except Exception:
                 pass
             # Defer background syntax parsing by 2 seconds to avoid CPU
@@ -732,8 +752,37 @@ def main():
         app._post_ui(_page_loaded_on_tk)
     editor_window.events.loaded += _on_editor_page_loaded
 
+    def _on_editor_native_shown():
+        """Retry immediately after pywebview has created its WinForms HWND."""
+        # ``hidden=True`` still performs an internal Show/Hide cycle in the
+        # WinForms backend.  Its shown event is the earliest reliable point at
+        # which the native handle exists, so use it to wake the Tk-side attach
+        # state machine instead of relying only on fixed polling intervals.
+        def _on_shown_on_tk():
+            # Do not mark the managed form as visible here.  pywebview's
+            # hidden=True implementation raises this event for its private
+            # Show/Hide setup cycle, and the final managed Hide leaves the
+            # WebView2 controller invisible.  The attach path must perform a
+            # real managed show *before* native SetParent.
+            # The WinForms backend still has to finish its internal Hide()
+            # after raising Shown.  Let that Show/Hide pair settle before the
+            # first native SetParent operation.
+            root.after(250, lambda: _mark_editor_native_settled())
+
+        def _mark_editor_native_settled():
+            app._editor_native_settled = True
+            root.after(0, app._try_embed_editor_window)
+
+        try:
+            app._post_ui(_on_shown_on_tk)
+        except Exception:
+            pass
+    editor_window.events.shown += _on_editor_native_shown
+
     # Kick off the embed attempt now.
-    app._post_ui(lambda: root.after(50, app._try_embed_editor_window))
+    # Give hidden=True's WinForms Show/Hide creation cycle time to finish;
+    # the shown-event callback also schedules the first attempt after settling.
+    app._post_ui(lambda: root.after(300, app._try_embed_editor_window))
 
     def on_closing():
         # This callback is raised by the WebView thread. Queue all Tk reads,
@@ -841,4 +890,3 @@ if __name__ == "__main__":
             except Exception:
                 pass
         raise SystemExit(1)
-

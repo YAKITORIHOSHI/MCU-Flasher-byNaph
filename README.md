@@ -42,7 +42,8 @@
 | Feature | Description |
 | --- | --- |
 | **🔨 One-Click Build & Flash** | Compile and upload to ESP32 / Arduino microcontrollers via Arduino CLI or PlatformIO |
-| **🔌 Disconnect-Safe Uploads** | Two-phase uploads tolerate unplugging: compilation always finishes on host CPU, and flashing is cleanly skipped (with recovery hints) if the MCU is missing |
+| **🎯 Manual Hardware Selection** | Clean startup with manual board and port selection, giving full control over target microcontrollers without unexpected auto-switches |
+| **🔌 Disconnect-Safe Uploads & Zero-Reset Connection** | Two-phase uploads tolerate unplugging, and passive serial connection with de-asserted DTR/RTS keeps running ESP32 firmware uninterrupted |
 | **📟 Advanced Serial Monitor** | Real-time terminal with ANSI color rendering, timestamps, baud rate control, and instant MCU reset |
 | **🎨 Modern Multi-Theme UI** | Dark Cyberpunk, Light Mode, and Solarized styling with Montserrat typography and responsive layout |
 | **✏️ Dual Code Editor** | Switchable between **Monaco Editor** (VS Code engine with C++ syntax highlighting, Go-To-Definition, hover cards) and lightweight **Tkinter Default** editor |
@@ -80,9 +81,9 @@ direct\runThisOnWindows.vbs
 > **Hardware Requirement**: This app requires at least **4 logical CPU cores/threads**. On systems with fewer than 4, startup stops and displays a compatibility message because the editor, serial monitor, toolchain, and background services cannot operate reliably on the available CPU resources.
 
 > [!TIP]
-> The main window is revealed behind the loading cover while its UI components are laid out and painted. The cover is removed only after the layout is stable and the full startup pass has completed. Project scanning, editor file loading, port detection, serial monitoring, and optional services run through the background worker system without changing the monitor's logging behavior.
+> The main window is revealed behind the loading cover while its UI components are laid out and painted. The cover is removed only after the layout is stable and the full startup pass has completed. Project scanning, editor file loading, port detection, and optional services run through the background worker system.
 >
-> An MCU already connected when the app opens is monitored passively; startup does not reset it. Reset happens only through the physical/on-app reset control or after an upload.
+> MCU Flasher opens with no port or board pre-selected, giving you full control. An MCU already connected when the app opens is never reset on connection; reset happens only through the physical/on-app reset control or after an upload.
 
 ---
 
@@ -122,7 +123,7 @@ MCU Flasher by Naph/
 │       ├── async_tasks_mixin.py     # Thread-safe UI dispatch queue (_post_ui, _run_bg_task)
 │       ├── compat_devices_mixin.py  # Compatible devices tab, scanning, filtering & rendering
 │       ├── project_terminal_mixin.py# Embedded PowerShell/CMD terminal with ConPTY & xterm.js
-│       ├── hardware_port_mixin.py   # USB COM port polling, auto-board matching, baud rate controls
+│       ├── hardware_port_mixin.py   # USB COM port enumeration, manual board resolution, baud rate controls
 │       ├── clean_build_mixin.py     # Allowlist-based build cache cleanup & stale path cleaner
 │       ├── build_actions_mixin.py   # Compile, Upload, Stop action handlers & monitor scheduling
 │       ├── project_actions_mixin.py # Project selection, sketch folder changer, file modifier dialog
@@ -241,8 +242,13 @@ MCU Flasher by Naph/
 - **Modify Project Files**: Click **`📝 Modify Files`** to add, rename, or delete sketch files (`.ino`, `.cpp`, `.h`).
 
 ### 3. Selecting Boards & COM Ports
-- **COM Port Selection**: The top-right dropdown shows detected USB serial ports. Plug in your microcontroller, and MCU Flasher automatically selects the new port and identifies the connected chip (ESP32, ESP32-S3, ESP32-C3, CH340, CP210x).
-- **Board Catalog Search**: Click **`🔍 Search Boards`** to search through 420+ supported microcontrollers by keyword, architecture, or manufacturer.
+- **Manual Selection on Startup**: MCU Flasher opens with no port or board pre-selected (`""`), giving you complete manual control over target hardware and preventing unintended connections or resets.
+- **COM Port Selection**: The top-right dropdown enumerates all active serial ports along with their hardware descriptions (e.g. `COM9  -  USB-SERIAL CH340 (COM9)`). Clicking the dropdown opens the list immediately, allowing you to select your target port.
+- **Zero-Reset ESP32 Protection**: Opening or selecting a serial port establishes the connection with DTR and RTS strictly de-asserted (`conn.dtr = False`, `conn.rts = False` before opening). Background `esptool` probing is disabled, guaranteeing that running firmware on an attached ESP32 continues running smoothly without an unintended reset.
+- **Board Catalog Search**: Click **`🔍 Search Boards`** to open the search modal and filter through 420+ supported microcontrollers by keyword, architecture, or manufacturer.
+- **Action Button Gating**:
+  - **`⚙ Compile`**: Enabled as soon as a target board is selected (compilation is board-only and does not require an attached MCU).
+  - **`⚡ Upload` & `↺ Reset MCU`**: Enabled once both a recognized board and an active COM port are selected.
 - **Baud Rate & Upload Speed**: The Serial Monitor defaults to `74880` for ESP8266-family boards, `115200` for ESP32-family boards, and `9600` for AVR boards. ESP8266/ESP32-family boards automatically start uploads at `460800`; upload speed remains a separate setting (up to `921600` baud for ultra-fast uploads).
 - **Additional Board Manager URLs**: Open **`⬇ Download Boards/Libraries`**, enter one or more vendor package-index URLs in **Additional board manager URLs** (comma-separated), then click **`⟳ Apply & Refresh`**. The default Arduino index is always included, and HTTP(S), GitHub raw/blob, redirects, stale-cache fallback, checksum verification, and ZIP/tar package archives are handled dynamically so indexes such as the ESP8266 package catalog can be used alongside it.
 

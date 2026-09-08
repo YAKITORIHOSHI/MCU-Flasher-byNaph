@@ -597,20 +597,30 @@ class ConsoleSerialMixin(_Base):
             return
         entries = []
         for line, is_newline in rows:
-            low = line.lower()
-            if "error" in low or "fatal" in low or "fail" in low:
-                tag = "error"
-            elif "warning" in low or "warn" in low:
-                tag = "warning"
-            elif any(k in low for k in ("ok", "success", "done", "ready", "established")):
-                tag = "success"
-            elif "[debug]" in low:
-                tag = "dim"
-            elif line.startswith("[") and "]" in line:
-                tag = "system"
+            clean_line = str(line or "").replace("\x00", "").replace("\ufffd", "")
+            if "\x1b" in clean_line:
+                clean_line = ANSI_CSI_RE.sub("", clean_line)
+            if not clean_line and not is_newline:
+                continue
+
+            check_slice = clean_line[:250]
+            if check_slice:
+                low = check_slice.lower()
+                if "error" in low or "fatal" in low or "fail" in low:
+                    tag = "error"
+                elif "warning" in low or "warn" in low:
+                    tag = "warning"
+                elif any(k in low for k in ("ok", "success", "done", "ready", "established")):
+                    tag = "success"
+                elif "[debug]" in low:
+                    tag = "dim"
+                elif clean_line.startswith("[") and "]" in clean_line:
+                    tag = "system"
+                else:
+                    tag = ""
             else:
                 tag = ""
-            entries.append((line, tag, bool(is_newline)))
+            entries.append((clean_line, tag, bool(is_newline)))
 
         with self._serial_display_lock:
             maxlen = self._serial_display_queue.maxlen
@@ -635,25 +645,21 @@ class ConsoleSerialMixin(_Base):
         try:
             visible = self._serial_monitor_is_selected()
             self._serial_tab_visible = visible
-            if visible:
+            paused = bool(getattr(self, "_monitor_paused", False))
+            if visible and not paused:
                 self._flush_tagged_serial_lines()
 
             with self._serial_display_lock:
                 backlog = len(self._serial_display_queue)
-            high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
 
-            if not visible:
+            if not visible or paused:
                 delay_ms = 120
-            elif backlog > 4000:
-                delay_ms = 25
             elif backlog > 1000:
-                delay_ms = 25
-            elif high_rate:
-                delay_ms = 25
+                delay_ms = 50
             elif backlog:
-                delay_ms = 30
+                delay_ms = 60
             else:
-                delay_ms = 45
+                delay_ms = 70
 
             if self.root and self.root.winfo_exists():
                 self._serial_display_pump_after_id = self.root.after(delay_ms, self._serial_display_pump)
@@ -664,27 +670,28 @@ class ConsoleSerialMixin(_Base):
                 self._serial_display_pump_after_id = None
 
     def _flush_tagged_serial_lines(self):
-        """Render a row/character-bounded batch on Tk's main thread.
+        """Render a row/character-bounded batch on Tk's main thread with high performance.
 
-        Character budgeting matters because one newline-free/binary chunk can be
-        far more expensive than hundreds of short log rows.  The limits below
-        comfortably exceed 921600-baud input throughput while bounding the work
-        handed to a single Tk Text.insert call.
+        Uses chunk coalescing (merging consecutive rows sharing the same tag),
+        adaptive queue clamping (dropping excess when saturated to stay real-time),
+        and strict time slicing to prevent Tk event loop starvation.
         """
         if not getattr(self, "_serial_tab_visible", False):
             return
 
-        high_rate = int(getattr(self, "_serial_display_flush_delay_ms", 25)) >= 40
-        max_rows = 300 if high_rate else 220
-        max_chars = 32768 if high_rate else 24576
-        lines = []
+        max_rows = 350
+        max_chars = 49152
+
+        lines: list[tuple[str, str, bool]] = []
         chars = 0
+
         with self._serial_display_lock:
-            # If the queue accumulated a large backlog while the tab was hidden,
-            # clamp it to the newest 1,500 entries so the UI does not freeze over
-            # dozens of frames inserting and immediately deleting stale lines.
-            if len(self._serial_display_queue) > 1800:
-                excess = len(self._serial_display_queue) - 1500
+            q_len = len(self._serial_display_queue)
+            # Active queue clamping: whether visible or not, if queue exceeds
+            # 2000 items, clamp it down to the newest 1000 items so the UI
+            # never falls behind real time or starves the main Tk thread.
+            if q_len > 2000:
+                excess = q_len - 1000
                 for _ in range(excess):
                     self._serial_display_queue.popleft()
                 self._serial_display_dropped_rows += excess
@@ -696,56 +703,113 @@ class ConsoleSerialMixin(_Base):
                     break
                 lines.append(self._serial_display_queue.popleft())
                 chars += item_chars
+
             dropped = self._serial_display_dropped_rows
             self._serial_display_dropped_rows = 0
+
         if not lines and not dropped:
             return
 
         try:
             self.serial_console.configure(state=tk.NORMAL)
-            insert_args: list[object] = []
             batch_ts = datetime.now().strftime("%H:%M:%S")
+            show_ts = bool(getattr(self, "timestamp_var", None) and self.timestamp_var.get())
+            ansi_clear_enabled = bool(getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get())
+
+            inserted_something = False
 
             if dropped:
-                insert_args.extend((f"[{batch_ts}] ", "timestamp"))
-                insert_args.extend((f"… {dropped} serial rows skipped while the display was busy/hidden …\n", "warning"))
+                ts_prefix = f"[{batch_ts}] " if show_ts else ""
+                self.serial_console.insert(
+                    tk.END,
+                    f"{ts_prefix}… {dropped} serial rows skipped to keep display real-time …\n",
+                    "warning"
+                )
                 self._serial_at_line_start = True
+                inserted_something = True
 
-            ansi_clear_enabled = bool(getattr(self, "ansi_clear_var", None) and self.ansi_clear_var.get())
+            # Process lines and coalesce contiguous chunks with identical tags.
+            # Merging consecutive untagged/identically-tagged lines turns hundreds
+            # of individual Tk Text.insert() calls into 1-3 bulk C insertions!
+            coalesced_chunks: list[tuple[str, str]] = []
+            curr_pieces: list[str] = []
+            curr_tag: str = ""
+
+            def _flush_current_chunk():
+                nonlocal curr_tag
+                if curr_pieces:
+                    coalesced_chunks.append(("".join(curr_pieces), curr_tag))
+                    curr_pieces.clear()
+
             for clean_text, tag, is_newline in lines:
-                if ansi_clear_enabled and ANSI_CLEAR_RE.search(clean_text):
-                    insert_args = []
-                    self.serial_console.delete("1.0", tk.END)
-                    self._serial_at_line_start = True
-                    clean_text = ANSI_CLEAR_RE.sub("", clean_text)
+                if "\x1b" in clean_text:
+                    if ansi_clear_enabled and ANSI_CLEAR_RE.search(clean_text):
+                        _flush_current_chunk()
+                        for c_text, c_tag in coalesced_chunks:
+                            if c_tag:
+                                self.serial_console.insert(tk.END, c_text, c_tag)
+                            else:
+                                self.serial_console.insert(tk.END, c_text)
+                        coalesced_chunks.clear()
+                        self.serial_console.delete("1.0", tk.END)
+                        self._serial_at_line_start = True
+                        clean_text = ANSI_CLEAR_RE.sub("", clean_text)
+                    clean_text = ANSI_CSI_RE.sub("", clean_text)
 
-                clean_text = ANSI_CSI_RE.sub("", clean_text)
                 if not clean_text and not is_newline:
                     continue
 
-                if self._serial_at_line_start and clean_text:
-                    insert_args.extend((f"[{batch_ts}] ", "timestamp"))
+                line_tag = tag or ""
+                # If timestamps are enabled, include timestamp prefix at line start
+                if show_ts and self._serial_at_line_start and clean_text:
+                    if curr_tag != "timestamp":
+                        _flush_current_chunk()
+                        curr_tag = "timestamp"
+                    curr_pieces.append(f"[{batch_ts}] ")
 
                 payload = clean_text + ("\n" if is_newline else "")
                 if payload:
-                    insert_args.extend((payload, tag or ""))
+                    if line_tag != curr_tag:
+                        _flush_current_chunk()
+                        curr_tag = line_tag
+                    curr_pieces.append(payload)
+
                 self._serial_at_line_start = bool(is_newline)
 
-            if insert_args:
-                self.serial_console.insert(tk.END, insert_args[0], *insert_args[1:])
+            _flush_current_chunk()
 
+            # Perform bulk inserts into Tk Text
+            for chunk_text, chunk_tag in coalesced_chunks:
+                if chunk_text:
+                    if chunk_tag:
+                        self.serial_console.insert(tk.END, chunk_text, chunk_tag)
+                    else:
+                        self.serial_console.insert(tk.END, chunk_text)
+                    inserted_something = True
+
+            # Incremental line buffer trimming:
+            # Maintain a responsive history ceiling (~1500 lines max, trim to 1000)
             now = time.monotonic()
-            if now - self._serial_last_trim_monotonic >= 0.75:
+            lines_added = len(lines)
+            self._serial_lines_since_trim = getattr(self, "_serial_lines_since_trim", 0) + lines_added
+
+            if self._serial_lines_since_trim >= 200 or (now - getattr(self, "_serial_last_trim_monotonic", 0.0) >= 1.2):
                 self._serial_last_trim_monotonic = now
-                total_lines = int(self.serial_console.index("end-1c").split(".")[0])
-                if total_lines > 2600:
-                    keep_lines = 1700
-                    self.serial_console.delete("1.0", f"{total_lines - keep_lines + 1}.0")
+                self._serial_lines_since_trim = 0
+                try:
+                    total_lines = int(self.serial_console.index("end-1c").split(".")[0])
+                    if total_lines > 1500:
+                        self.serial_console.delete("1.0", f"{total_lines - 1000 + 1}.0")
+                except Exception:
+                    pass
 
             self.serial_console.configure(state=tk.DISABLED)
-            if self.serial_autoscroll_var.get() and now - self._serial_last_autoscroll_monotonic >= 0.06:
+
+            # Autoscroll throttled to max 16 FPS (60ms) and only when new text was added
+            if inserted_something and self.serial_autoscroll_var.get() and (now - self._serial_last_autoscroll_monotonic >= 0.06):
                 self._serial_last_autoscroll_monotonic = now
                 self.serial_console.see(tk.END)
+
         except tk.TclError:
             pass
         finally:
@@ -788,15 +852,19 @@ class ConsoleSerialMixin(_Base):
                 if not getattr(self, "_serial_at_line_start", True):
                     self.serial_console.insert(tk.END, "\n")
                     self._serial_at_line_start = True
-                if newline and text.strip():
+                show_ts = bool(getattr(self, "timestamp_var", None) and self.timestamp_var.get())
+                if show_ts and newline and text.strip():
                     ts = datetime.now().strftime("%H:%M:%S")
                     self.serial_console.insert(tk.END, f"[{ts}] ", "timestamp")
-                self.serial_console.insert(tk.END, text + ("\n" if newline else ""), tag)
+                if tag:
+                    self.serial_console.insert(tk.END, text + ("\n" if newline else ""), tag)
+                else:
+                    self.serial_console.insert(tk.END, text + ("\n" if newline else ""))
                 if newline:
                     self._serial_at_line_start = True
                 total_lines = int(self.serial_console.index("end-1c").split(".")[0])
-                if total_lines > 1800:
-                    self.serial_console.delete("1.0", f"{total_lines - 1500 + 1}.0")
+                if total_lines > 1500:
+                    self.serial_console.delete("1.0", f"{total_lines - 1000 + 1}.0")
                 self.serial_console.configure(state=tk.DISABLED)
                 if self.serial_autoscroll_var.get():
                     self.serial_console.see(tk.END)

@@ -77,6 +77,19 @@ class EditorModesMixin(_Base):
         self._editor_reparent_attempts = 0
         self._editor_fallback_ready = False
         self._user_explicitly_detached = False
+        self._editor_watchdog_running = False
+        self._editor_watchdog_after_id = None
+        self._editor_embed_retry_after_id = None
+        self._editor_watchdog_repair_logged = False
+        self._editor_reveal_scheduled = False
+        self._editor_webview_shown = False
+        self._editor_managed_show_in_progress = False
+        self._editor_managed_show_attempt = 0
+        self._editor_native_settled = False
+        self._editor_watchdog_misses = 0
+        self._editor_postload_presented = False
+        self._editor_paint_recovery_job = None
+        self._editor_paint_show_job = None
 
         # Placeholder / fallback UI. Hidden automatically once the editor
         # is successfully embedded; stays visible (with the popup button)
@@ -115,9 +128,26 @@ class EditorModesMixin(_Base):
         self._editor_desc_lbl = desc_lbl
 
         def open_editor_win():
+            # The native WebView2 HWND is already created by the hidden
+            # pywebview startup path.  Keep this button non-blocking: calling
+            # Window.show() here synchronously invokes the WinForms STA and
+            # can wait behind a cold browser process.  The native visibility
+            # helper is safe from Tk and the optional restore is best-effort.
+            hwnd = getattr(self, "_editor_hwnd", None)
+            if hwnd and win32gui is not None and win32con is not None:
+                try:
+                    ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_SHOW))
+                except Exception:
+                    pass
             if hasattr(self, "editor_window"):
-                self.editor_window.show()
-                self.editor_window.restore()
+                try:
+                    # restore() also marshals synchronously to WinForms; keep
+                    # the fallback action non-blocking for the same reason as
+                    # show().
+                    editor_window = self.editor_window
+                    self._run_bg_task(lambda: editor_window.restore())
+                except Exception:
+                    pass
 
         self._editor_fallback_btn = self._make_btn(
             placeholder, "Open Editor Window", open_editor_win,
@@ -1888,6 +1918,19 @@ class EditorModesMixin(_Base):
                     _update_cursor_label(data["text"])
                     lbl_editor_status.config(text="")
 
+                # Preload editor tabs so switching between open sketch files is instant
+                if len(nb.tabs()) > 1:
+                    try:
+                        active_editor_tab = nb.select()
+                        for t in nb.tabs():
+                            nb.select(t)
+                            self.root.update_idletasks()
+                        if active_editor_tab:
+                            nb.select(active_editor_tab)
+                        self.root.update_idletasks()
+                    except Exception:
+                        pass
+
             # Schedule deferred highlighting for background tabs one at a time
             # so the event loop stays responsive between each tab.
             def _highlight_deferred(remaining):
@@ -2063,9 +2106,36 @@ class EditorModesMixin(_Base):
         except Exception:
             pass
 
-        # 1. Search for unique editor identifiers, prioritizing our own PID
+        # Prefer the handle exposed by pywebview itself.  This avoids selecting
+        # a stale/foreign window when another WebView2 window happens to have a
+        # similar title during startup.
+        try:
+            native = getattr(getattr(self, "editor_window", None), "native", None)
+            native_handle = getattr(native, "Handle", None)
+        except Exception:
+            native_handle = None
+        if native_handle:
+            try:
+                native_handle = native_handle.ToInt32()
+            except Exception:
+                try:
+                    native_handle = int(native_handle)
+                except Exception:
+                    native_handle = None
+            if native_handle:
+                try:
+                    if not win32gui.IsWindow(native_handle):
+                        raise RuntimeError("native editor handle is not a window")
+                    _, pid = win32process.GetWindowThreadProcessId(native_handle)
+                    if pid == my_pid and native_handle != root_hwnd:
+                        return native_handle
+                except Exception:
+                    pass
+
+        # 1. Search for unique editor identifiers, restricted to our own PID.
+        # Reparenting a window from another process is unsafe and can leave the
+        # real editor floating while a different window is embedded instead.
         own_found = []
-        any_found = []
         def _cb(hwnd, _):
             try:
                 if root_hwnd and hwnd == root_hwnd:
@@ -2079,8 +2149,6 @@ class EditorModesMixin(_Base):
                 if matches_title:
                     if pid == my_pid:
                         own_found.append(hwnd)
-                    else:
-                        any_found.append(hwnd)
             except Exception:
                 pass
             return True
@@ -2092,14 +2160,18 @@ class EditorModesMixin(_Base):
 
         if own_found:
             return own_found[0]
-        if any_found:
-            return any_found[0]
 
-        # 2. Fallback to exact match or title variants
+        # 2. Fallback to exact match or title variants, still restricted to
+        # this process.  FindWindow has no PID filter, so verify it explicitly.
         for variant in (EDITOR_WINDOW_TITLE, "MCU Flasher — Embedded Code Editor", "Monaco Code Editor", "Embedded Code Editor"):
             hwnd = win32gui.FindWindow(None, variant)
             if hwnd and hwnd != root_hwnd:
-                return hwnd
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if pid == my_pid:
+                        return hwnd
+                except Exception:
+                    pass
 
         # 3. New HWND diff since before creation snapshot in our PID
         before = getattr(self, "_editor_pre_create_hwnds", None)
@@ -2120,9 +2192,177 @@ class EditorModesMixin(_Base):
 
         return None
 
+    def _schedule_editor_embed_retry(self, delay_ms: int = 150):
+        """Queue one editor embed retry without building up duplicate timers."""
+        if getattr(self, "_editor_embed_retry_after_id", None) is not None:
+            return
+        try:
+            self._editor_embed_retry_after_id = self.root.after(
+                max(25, int(delay_ms)), self._run_editor_embed_retry
+            )
+        except Exception:
+            self._editor_embed_retry_after_id = None
+
+    def _run_editor_embed_retry(self):
+        self._editor_embed_retry_after_id = None
+        self._try_embed_editor_window()
+
+    def _prepare_editor_hwnd_for_embedding(self, hwnd, frame=None, show=True) -> bool:
+        """Make *hwnd* a verified child of the Tk editor frame.
+
+        The WinForms host can process ``Show``/``Activate`` asynchronously.  All
+        native changes therefore go through this helper and are verified after
+        every reparent.  Callers must not set ``_editor_embedded`` until this
+        returns true.
+        """
+        if (not hwnd or win32gui is None or win32con is None
+                or not win32gui.IsWindow(hwnd)):
+            return False
+        frame = frame if frame is not None else getattr(self, "_editor_embed_frame", None)
+        if frame is None:
+            return False
+
+        frame.update_idletasks()
+        tk_hwnd = frame.winfo_id()
+        if not tk_hwnd:
+            return False
+
+        # Keep the Tk host from painting over the native child.
+        try:
+            tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
+            win32gui.SetWindowLong(
+                tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN
+            )
+        except Exception:
+            pass
+
+        if (getattr(self, "_original_editor_style", None) is None):
+            self._original_editor_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            self._original_editor_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+
+        style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+        style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                   win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                   win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+        style |= win32con.WS_CHILD
+        win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                      win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+        ex_style |= win32con.WS_EX_TOOLWINDOW
+        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+        # Force Windows to apply the style transition before changing parents.
+        # ASYNCWINDOWPOS is important here because the WinForms/WebView2 host
+        # owns a different UI thread; a synchronous frame-change message can
+        # make Tk wait behind a cold WebView2 startup.
+        win32gui.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
+            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE |
+            win32con.SWP_FRAMECHANGED | 0x4000,  # SWP_ASYNCWINDOWPOS
+        )
+        win32gui.SetParent(hwnd, tk_hwnd)
+        if win32gui.GetParent(hwnd) != tk_hwnd:
+            return False
+
+        width = max(frame.winfo_width(), 50)
+        height = max(frame.winfo_height(), 50)
+        flags = (
+            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE |
+            win32con.SWP_FRAMECHANGED | 0x4000  # SWP_ASYNCWINDOWPOS
+        )
+        if show:
+            flags |= win32con.SWP_SHOWWINDOW
+        win32gui.SetWindowPos(hwnd, 0, 0, 0, width, height, flags)
+        if show:
+            try:
+                ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_SHOW))
+            except Exception:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+        return win32gui.GetParent(hwnd) == tk_hwnd
+
+    def _schedule_embedded_editor_paint(self, force=False):
+        """Present a loaded embedded WebView2 child without reparenting it.
+
+        WinForms can finish its hidden-startup visibility transition after the
+        child HWND has already been attached.  A short asynchronous hide/show
+        sequence is the native equivalent of the user's Hide Editor / Show
+        Editor workaround, but it never promotes the child to a top-level
+        window or blocks Tk waiting on the WebView2 UI thread.
+        """
+        if (getattr(self, "editor_mode", "default") != "monaco"
+                or not getattr(self, "_editor_embedded", False)
+                or not getattr(self, "editor_pane_visible", True)
+                or win32gui is None or win32con is None):
+            return
+        if not force and getattr(self, "_editor_postload_presented", False):
+            return
+        if (getattr(self, "_editor_paint_recovery_job", None) is not None
+                or getattr(self, "_editor_paint_show_job", None) is not None):
+            return
+        if not force:
+            self._editor_postload_presented = True
+
+        def _show_after_reset():
+            self._editor_paint_show_job = None
+            hwnd = getattr(self, "_editor_hwnd", None)
+            frame = getattr(self, "_editor_embed_frame", None)
+            if not hwnd or frame is None or not getattr(self, "editor_pane_visible", True):
+                return
+            try:
+                if (not win32gui.IsWindow(hwnd)
+                        or win32gui.GetParent(hwnd) != frame.winfo_id()):
+                    return
+                width = max(frame.winfo_width(), 50)
+                height = max(frame.winfo_height(), 50)
+                flags = (win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE |
+                         win32con.SWP_SHOWWINDOW | 0x4000)  # SWP_ASYNCWINDOWPOS
+                win32gui.SetWindowPos(hwnd, 0, 0, 0, width, height, flags)
+                ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_SHOW))
+                # Invalidate asynchronously.  RDW_UPDATENOW sends paint
+                # messages synchronously to the WebView2 STA and can make the
+                # Tk thread appear hung while Monaco is doing first paint.
+                ctypes.windll.user32.InvalidateRect(int(hwnd), None, True)
+            except Exception:
+                pass
+
+        def _reset_then_show():
+            self._editor_paint_recovery_job = None
+            hwnd = getattr(self, "_editor_hwnd", None)
+            frame = getattr(self, "_editor_embed_frame", None)
+            if not hwnd or frame is None or not getattr(self, "editor_pane_visible", True):
+                return
+            try:
+                if (not win32gui.IsWindow(hwnd)
+                        or win32gui.GetParent(hwnd) != frame.winfo_id()):
+                    return
+                ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_HIDE))
+                self._editor_paint_show_job = self.root.after(16, _show_after_reset)
+            except Exception:
+                pass
+
+        try:
+            self._editor_paint_recovery_job = self.root.after(35, _reset_then_show)
+        except Exception:
+            self._editor_paint_recovery_job = None
+
     def _animate_editor_spinner(self):
         """Rotating-arc spinner — keeps the panel visibly 'alive' while
         loading instead of looking like a dead/blank box."""
+        canvas = getattr(self, "_editor_spinner_canvas", None)
+        if not canvas or not canvas.winfo_exists():
+            self._editor_spinner_job = None
+            return
+        # A retry can be requested while the existing animation is still
+        # running.  Keep one Tk timer only; otherwise every failed attach adds
+        # another permanent 50 ms callback.
+        if getattr(self, "_editor_spinner_job", None):
+            return
+        self._draw_editor_spinner_frame()
+
+    def _draw_editor_spinner_frame(self):
         canvas = getattr(self, "_editor_spinner_canvas", None)
         if not canvas or not canvas.winfo_exists():
             self._editor_spinner_job = None
@@ -2135,7 +2375,7 @@ class EditorModesMixin(_Base):
             outline=Theme.CYAN, width=4, style=tk.ARC
         )
         self._editor_spinner_angle = (angle + 20) % 360
-        self._editor_spinner_job = self.root.after(50, self._animate_editor_spinner)
+        self._editor_spinner_job = self.root.after(50, self._draw_editor_spinner_frame)
 
     def _stop_editor_spinner(self):
         job = getattr(self, "_editor_spinner_job", None)
@@ -2152,12 +2392,16 @@ class EditorModesMixin(_Base):
         loading. Doing it in one step (right after .show()) is what left
         a blank gap before — the window was visible but empty."""
         if getattr(self, "_editor_embedded", False) and getattr(self, "_editor_content_loaded", False):
+            self._schedule_embedded_editor_paint()
             self._stop_editor_spinner()
             self._editor_placeholder.place_forget()
             self._mark_startup_ready("Monaco Editor ready")
-            # Editor is ready! Trigger deferred background init and start steady-state watchdog
-            self.root.after(10, self._deferred_background_init)
-            self.root.after(1000, self._start_editor_attachment_watchdog)
+            # Editor is ready! Trigger deferred background init once and keep
+            # the attachment watchdog alive for the entire startup transition.
+            if not getattr(self, "_editor_reveal_scheduled", False):
+                self._editor_reveal_scheduled = True
+                self.root.after(10, self._deferred_background_init)
+            self._start_editor_attachment_watchdog()
 
     def _dispose_and_retry_attach_editor(self, reason=""):
         """Dispose any unattached or detached editor window state and retry
@@ -2172,11 +2416,10 @@ class EditorModesMixin(_Base):
             except Exception:
                 pass
 
-        if hasattr(self, "editor_window") and self.editor_window:
-            try:
-                self.editor_window.hide()
-            except Exception:
-                pass
+        # Do not call pywebview.hide() here.  Its WinForms implementation sets
+        # the managed form invisible; a later native reparent/show would then
+        # produce a blank child even though the HWND is correctly attached.
+        # The native hide above is sufficient while a retry is pending.
 
         # Reset state flags
         self._editor_embedded = False
@@ -2224,44 +2467,117 @@ class EditorModesMixin(_Base):
         if reason:
             self._append(f"  ℹ Attaching editor to main window ({reason})…", "info")
 
-        # Retry embedding after short interval
-        self.root.after(150, self._try_embed_editor_window)
+        # Retry embedding after a short interval, coalescing retries created by
+        # the page-loaded callback and the watchdog.
+        self._schedule_editor_embed_retry(150)
 
     def _start_editor_attachment_watchdog(self):
-        """Periodically verify that Monaco editor is properly attached and embedded
-        into the main window. If it ever becomes unparented or detached without
-        an explicit user detach action, automatically re-attach."""
-        if getattr(self, "_editor_watchdog_running", False):
+        """Start one coalesced watchdog for the native editor child.
+
+        This starts as soon as the HWND is first embedded, not only after all
+        optional startup services finish.  That closes the startup race where a
+        late WinForms ``Show``/``Activate`` transition could unparent the editor
+        before the old watchdog was armed.
+        """
+        if (getattr(self, "editor_mode", "default") != "monaco"
+                or win32gui is None or win32con is None):
             return
         self._editor_watchdog_running = True
-        self._poll_editor_attachment_watchdog()
+        if getattr(self, "_editor_watchdog_after_id", None) is None:
+            try:
+                self._editor_watchdog_after_id = self.root.after(
+                    150, self._poll_editor_attachment_watchdog
+                )
+            except Exception:
+                self._editor_watchdog_running = False
+
+    def _stop_editor_attachment_watchdog(self):
+        self._editor_watchdog_running = False
+        job = getattr(self, "_editor_watchdog_after_id", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._editor_watchdog_after_id = None
 
     def _poll_editor_attachment_watchdog(self):
+        self._editor_watchdog_after_id = None
+        next_delay = 2000
         try:
-            if getattr(self, "editor_mode", "default") == "monaco":
-                # Only monitor AFTER startup is fully ready and editor is marked embedded!
-                if getattr(self, "_startup_ready", False) and getattr(self, "_editor_embedded", False):
-                    # Only monitor if the user did NOT explicitly detach it via the button
-                    if not getattr(self, "_user_explicitly_detached", False):
-                        hwnd = getattr(self, "_editor_hwnd", None)
-                        embed_frame = getattr(self, "_editor_embed_frame", None)
-                        if hwnd and embed_frame and win32gui is not None:
-                            try:
-                                tk_hwnd = embed_frame.winfo_id()
-                                actual_parent = win32gui.GetParent(hwnd)
-                                if actual_parent != tk_hwnd or getattr(self, "editor_detached", False):
-                                    self._append("  ℹ Re-embedding unparented code editor into main window…", "info")
-                                    self._attach_editor()
-                            except Exception:
-                                pass
+            if (getattr(self, "editor_mode", "default") != "monaco"
+                    or not getattr(self, "_editor_watchdog_running", False)):
+                return
+
+            # Keep polling more frequently until the editor and startup shell
+            # have both settled; then back off to avoid needless Win32 calls.
+            if not getattr(self, "_startup_ready", False):
+                next_delay = 350
+
+            if not getattr(self, "_user_explicitly_detached", False):
+                hwnd = getattr(self, "_editor_hwnd", None)
+                embed_frame = getattr(self, "_editor_embed_frame", None)
+                parented = False
+                parent_ok = False
+                if hwnd and embed_frame and win32gui is not None:
+                    try:
+                        parented = (
+                            win32gui.IsWindow(hwnd)
+                            and win32gui.GetParent(hwnd) == embed_frame.winfo_id()
+                        )
+                        visible_ok = (
+                            not getattr(self, "editor_pane_visible", True)
+                            or win32gui.IsWindowVisible(hwnd)
+                        )
+                        parent_ok = parented and visible_ok
+                    except Exception:
+                        parented = False
+                        parent_ok = False
+
+                if (getattr(self, "_editor_embedded", False)
+                        and (not parent_ok or getattr(self, "editor_detached", False))
+                        and not getattr(self, "_is_attaching_editor", False)
+                        and not getattr(self, "_embedding_in_progress", False)):
+                    self._editor_watchdog_misses = getattr(self, "_editor_watchdog_misses", 0) + 1
+                    # A child can briefly report invisible while WebView2
+                    # completes its first paint.  Repair that cheaply first;
+                    # reserve a full reparent for a persistent bad parent or
+                    # repeated visibility failure.
+                    if parented and not getattr(self, "editor_detached", False):
+                        self._schedule_embedded_editor_paint(force=True)
+                    if self._editor_watchdog_misses < 3:
+                        next_delay = 200
+                        return self._reschedule_editor_attachment_watchdog(next_delay)
+                    if not getattr(self, "_editor_watchdog_repair_logged", False):
+                        self._append(
+                            "  ℹ Re-embedding the code editor into the main window…",
+                            "info",
+                        )
+                        self._editor_watchdog_repair_logged = True
+                    next_delay = 100
+                    self._attach_editor()
+                elif (not getattr(self, "_editor_embedded", False)
+                      and not getattr(self, "_editor_fallback_ready", False)):
+                    next_delay = 100
+                    self._try_embed_editor_window()
+                elif parent_ok:
+                    self._editor_watchdog_repair_logged = False
+                    self._editor_watchdog_misses = 0
         except Exception:
             pass
 
-        # Steady-state check every 2.5s
+        self._reschedule_editor_attachment_watchdog(next_delay)
+
+    def _reschedule_editor_attachment_watchdog(self, delay_ms):
+        if not getattr(self, "_editor_watchdog_running", False):
+            return
         try:
-            self.root.after(2500, self._poll_editor_attachment_watchdog)
+            self._editor_watchdog_after_id = self.root.after(
+                delay_ms, self._poll_editor_attachment_watchdog
+            )
         except Exception:
             self._editor_watchdog_running = False
+            self._editor_watchdog_after_id = None
 
     def _try_embed_editor_window(self):
         """Reparent the pywebview native window into the Tkinter editor
@@ -2279,11 +2595,25 @@ class EditorModesMixin(_Base):
 
         # Ensure main window is viewable (mapped) before embedding
         if not self.root.winfo_exists() or not self.root.winfo_viewable():
-            self.root.after(150, self._try_embed_editor_window)
+            self._schedule_editor_embed_retry(150)
+            return
+
+        # pywebview's hidden WinForms backend performs Show/Hide during native
+        # creation.  Wait until that transition has settled before entering
+        # the attach critical section; otherwise its final Hide can hide an
+        # already-parented child and leave startup waiting indefinitely.
+        if not getattr(self, "_editor_native_settled", False):
+            self._schedule_editor_embed_retry(250)
             return
 
         self._embedding_in_progress = True
-        hwnd = self._find_editor_hwnd()
+        hwnd = getattr(self, "_editor_hwnd", None)
+        try:
+            if not hwnd or not win32gui.IsWindow(hwnd):
+                hwnd = None
+        except Exception:
+            hwnd = None
+        hwnd = hwnd or self._find_editor_hwnd()
         if not hwnd:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
@@ -2298,105 +2628,95 @@ class EditorModesMixin(_Base):
                 poll_delay = 250
                 if hasattr(self, "_editor_desc_lbl") and self._editor_reparent_attempts == 110:
                     self._editor_desc_lbl.configure(text="Waiting for toolchain & editor components to settle…")
-            self.root.after(poll_delay, self._try_embed_editor_window)
+            self._schedule_editor_embed_retry(poll_delay)
             return
-
-        # Ensure the webview host thread is actively pumping messages before attempting
-        # reparenting. Avoid heavy SendMessageTimeout blocking while WebView2 is initializing.
-        import ctypes
-        from ctypes import wintypes
-        try:
-            user32 = ctypes.windll.user32
-            if user32.IsHungAppWindow(hwnd):
-                self._embedding_in_progress = False
-                self._editor_reparent_attempts += 1
-                # Thread is temporarily busy initializing (common during first run); retry after 200ms
-                self.root.after(200, self._try_embed_editor_window)
-                return
-
-            res = wintypes.DWORD()
-            # SMTO_ABORTIFHUNG = 0x0002 — non-blocking check if thread responds within 60ms
-            if not user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, 60, ctypes.byref(res)):
-                self._embedding_in_progress = False
-                self._editor_reparent_attempts += 1
-                # Thread didn't respond within 60ms; retry after 150ms without giving up
-                self.root.after(150, self._try_embed_editor_window)
-                return
-        except Exception:
-            pass
 
         try:
             frame = self._editor_embed_frame
-            frame.update_idletasks()
-            self.root.update_idletasks()
-            tk_hwnd = frame.winfo_id()
+            # hidden=True creates the WebView2 controller with a private
+            # Show/Hide cycle, but the WinForms form still needs one managed
+            # Show to make its browser controller paint.  Window.show() uses a
+            # synchronous WinForms Invoke, so doing it on Tk would deadlock or
+            # make the whole shell Not Responding. Run that one transition in
+            # the background executor and retry the native attach when it has
+            # completed.
+            if not getattr(self, "_editor_webview_shown", False):
+                if getattr(self, "_editor_managed_show_in_progress", False):
+                    self._embedding_in_progress = False
+                    self._schedule_editor_embed_retry(100)
+                    return
+                editor_window = getattr(self, "editor_window", None)
+                if editor_window is not None:
+                    # Put the managed form off-screen before its synchronous
+                    # WinForms Show is dispatched to the worker.  This is a
+                    # second guard for systems that briefly ignore pywebview's
+                    # hidden=True opacity during WebView2 initialization.
+                    try:
+                        win32gui.SetWindowPos(
+                            hwnd, 0, -32000, -32000, 0, 0,
+                            win32con.SWP_NOSIZE | win32con.SWP_NOZORDER |
+                            win32con.SWP_NOACTIVATE | 0x4000,
+                        )
+                        ctypes.windll.user32.ShowWindowAsync(
+                            int(hwnd), int(win32con.SW_HIDE)
+                        )
+                    except Exception:
+                        pass
+                    self._editor_managed_show_in_progress = True
+                    self._editor_managed_show_attempt = (
+                        getattr(self, "_editor_managed_show_attempt", 0) + 1
+                    )
+                    show_attempt = self._editor_managed_show_attempt
 
-            # Set WS_CLIPCHILDREN on parent Tk frame to prevent paint overlap
+                    def _show_managed_editor():
+                        editor_window.show()
+                        return True
+
+                    def _managed_show_done(_result=None, attempt=show_attempt):
+                        if attempt != getattr(self, "_editor_managed_show_attempt", attempt):
+                            return
+                        self._editor_managed_show_in_progress = False
+                        self._editor_webview_shown = True
+                        self._schedule_editor_embed_retry(0)
+
+                    def _managed_show_failed(_error=None, attempt=show_attempt):
+                        if attempt != getattr(self, "_editor_managed_show_attempt", attempt):
+                            return
+                        self._editor_managed_show_in_progress = False
+                        # Native attachment can still succeed on WebView2
+                        # builds that reject a second managed Show after the
+                        # hidden initialization cycle.
+                        self._schedule_editor_embed_retry(150)
+
+                    self._run_bg_task(
+                        _show_managed_editor,
+                        on_success=_managed_show_done,
+                        on_error=_managed_show_failed,
+                    )
+                    self._embedding_in_progress = False
+                    return
+
             try:
-                tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
-                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
+                ctypes.windll.user32.ShowWindowAsync(int(hwnd), int(win32con.SW_HIDE))
             except Exception:
                 pass
 
-            # Strip title bar / borders / system menu so the window
-            # behaves like a plain child control rather than a floating top-level window.
-            if not hasattr(self, "_original_editor_style") or getattr(self, "_original_editor_style", None) is None:
-                self._original_editor_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-                self._original_editor_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-
-            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-            style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
-                       win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
-                       win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
-            style |= win32con.WS_CHILD
-            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
-
-            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
-                          win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
-            ex_style |= win32con.WS_EX_TOOLWINDOW
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
-
-            # Apply style change before SetParent to ensure Windows accepts child reparenting
-            win32gui.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_FRAMECHANGED
-            )
-
-            # Re-parent it under the Tkinter frame.
-            win32gui.SetParent(hwnd, tk_hwnd)
-
-            # Strict verification: Did SetParent actually take effect?
-            actual_parent = win32gui.GetParent(hwnd)
-            if actual_parent != tk_hwnd:
-                # Parenting failed or was deferred by Windows.
-                # Keep window strictly hidden and retry.
-                self._embedding_in_progress = False
-                self._editor_reparent_attempts += 1
-                try:
-                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
-                except Exception:
-                    pass
-                self.root.after(150, self._try_embed_editor_window)
-                return
-
-            w = max(frame.winfo_width(), 50)
-            h = max(frame.winfo_height(), 50)
-            win32gui.SetWindowPos(
-                hwnd, 0, 0, 0, w, h,
-                win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_SHOWWINDOW | 0x4000
-            )
-
-            try:
-                if hasattr(self, "editor_window"):
-                    self.editor_window.show()
-            except Exception as e:
-                self._append(f"  ⚠ editor_window.show() failed: {e}", "warning")
+            # SetParent itself is the safe readiness test.  Do not gate it on
+            # IsHungAppWindow/SendMessageTimeout: WebView2's STA form can be
+            # classified as hung while it is loading even though SetParent
+            # and the subsequent native resize are valid.  Those gates caused
+            # the initial attach to retry indefinitely and left a floating
+            # editor visible.
+            if not self._prepare_editor_hwnd_for_embedding(
+                    hwnd, frame, show=getattr(self, "editor_pane_visible", True)):
+                raise RuntimeError("SetParent did not attach the editor HWND")
 
             self._editor_hwnd = hwnd
             self._editor_embedded = True
             self.editor_detached = False
             self._editor_fallback_ready = False
+            self._editor_postload_presented = False
+            self._editor_watchdog_misses = 0
             self._embedding_in_progress = False
             if not getattr(self, "editor_pane_visible", True):
                 try:
@@ -2406,12 +2726,20 @@ class EditorModesMixin(_Base):
             self._append("  ✓ Code editor embedded into the main window.", "success")
             self._editor_status_lbl.configure(text="📝 Rendering editor…")
             self._editor_desc_lbl.configure(text="Waiting for the editor page to finish loading…")
+            self._editor_watchdog_repair_logged = False
+            self._start_editor_attachment_watchdog()
             self._reveal_editor_if_ready()
         except Exception as e:
             self._embedding_in_progress = False
             self._editor_reparent_attempts += 1
-            # Never fall back to separate window on first run/startup. Retry cleanly!
-            self.root.after(200, self._try_embed_editor_window)
+            try:
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except Exception:
+                pass
+            # Never fall back to a separate window during startup. Retry
+            # cleanly and let the coalesced watchdog keep healing later races.
+            self._schedule_editor_embed_retry(200)
 
     def _start_editor_hang_watchdog(self, tk_hwnd, tk_tid, editor_tid):
         """Watch for the exact failure mode AttachThreadInput can cause:
@@ -2497,9 +2825,13 @@ class EditorModesMixin(_Base):
             except Exception:
                 pass
         
-        if hasattr(self, "editor_window") and self.editor_window:
+        # Do not synchronously invoke WinForms while Tk is shutting down.
+        # The native HWND is already hidden and detached above; managed hide
+        # is only a best-effort cleanup operation.
+        editor_window = getattr(self, "editor_window", None)
+        if editor_window:
             try:
-                self.editor_window.hide()
+                self._run_bg_task(lambda: editor_window.hide())
             except Exception:
                 pass
 
@@ -2514,6 +2846,14 @@ class EditorModesMixin(_Base):
             self._editor_attached_threads = None
 
         # 4. Cancel pending Tk after jobs
+        self._stop_editor_attachment_watchdog()
+        retry_job = getattr(self, "_editor_embed_retry_after_id", None)
+        if retry_job is not None:
+            try:
+                self.root.after_cancel(retry_job)
+            except Exception:
+                pass
+            self._editor_embed_retry_after_id = None
         for job_attr in (
             "_editor_spinner_job",
             "_editor_resize_job",
@@ -2543,7 +2883,23 @@ class EditorModesMixin(_Base):
         self._editor_hwnd = None
         self._editor_embedded = False
         self._editor_content_loaded = False
+        self._editor_webview_shown = False
+        self._editor_managed_show_in_progress = False
+        self._editor_managed_show_attempt = getattr(self, "_editor_managed_show_attempt", 0) + 1
+        self._editor_native_settled = False
+        self._editor_watchdog_misses = 0
+        self._editor_postload_presented = False
+        for attr in ("_editor_paint_recovery_job", "_editor_paint_show_job"):
+            job = getattr(self, attr, None)
+            if job is not None:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+            setattr(self, attr, None)
         self._editor_reparent_attempts = 0
+        self._editor_reveal_scheduled = False
+        self._editor_watchdog_repair_logged = False
         self.editor_notebook = None
         if hasattr(self, "editor_tab_data"):
             self.editor_tab_data.clear()

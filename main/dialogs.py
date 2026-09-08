@@ -1065,12 +1065,18 @@ class BoardSearchDialog(tk.Toplevel):
 
     def _confirm_selection(self):
         sel = self.listbox.curselection()
+        board = None
         if sel:
             board = self.listbox.get(sel[0])
             self.result = board
-            if self.on_select_callback:
-                self.on_select_callback(board)
+        cb = self.on_select_callback
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         self.destroy()
+        if board and cb:
+            cb(board)
 
 
 class CompatibilityWarningDialog(tk.Toplevel):

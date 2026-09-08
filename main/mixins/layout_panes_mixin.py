@@ -754,77 +754,44 @@ class LayoutPanesMixin(_Base):
             except Exception:
                 pass
 
-            # 1. Reparent back to editor frame
+            # 1. Reparent back to editor frame.  The editor mixin owns the
+            # Win32 transition so startup attach, watchdog repair, and manual
+            # reattach all use the same verified parent/style sequence.
             try:
                 frame = self._editor_embed_frame
-                frame.update_idletasks()
-                frame.update()
-                tk_hwnd = frame.winfo_id()
-                
-                # Set WS_CLIPCHILDREN on parent Tk frame to isolate child rendering
-                tk_style = win32gui.GetWindowLong(tk_hwnd, win32con.GWL_STYLE)
-                win32gui.SetWindowLong(tk_hwnd, win32con.GWL_STYLE, tk_style | win32con.WS_CLIPCHILDREN)
-
-                # Strip styles again to embed
-                style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-                style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
-                           win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
-                           win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
-                style |= win32con.WS_CHILD
-                win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
-
-                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-                ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
-                              win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
-                ex_style |= win32con.WS_EX_TOOLWINDOW
-                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
-
-                win32gui.SetParent(hwnd, tk_hwnd)
-                actual_parent = win32gui.GetParent(hwnd)
-                if actual_parent != tk_hwnd:
-                    # Parenting failed or was deferred by Windows; retry shortly
-                    self.root.after(100, self._attach_editor)
-                    return
-                
-                # Resize — flush pending Tk geometry before measuring
-                frame.update_idletasks()
-                w = max(frame.winfo_width(), 50)
-                h = max(frame.winfo_height(), 50)
-                win32gui.SetWindowPos(
-                    hwnd, 0, 0, 0, w, h,
-                    win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER |
-                    win32con.SWP_SHOWWINDOW | 0x4000
-                )
-                try:
-                    if hasattr(self, "editor_window") and self.editor_window:
-                        self.editor_window.show()
-                except Exception:
-                    pass
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                try:
-                    win32gui.RedrawWindow(  # type: ignore
-                        hwnd, (0, 0, w, h), 0,
-                        win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
-                    )
-                except Exception:
-                    pass
+                if not self._prepare_editor_hwnd_for_embedding(
+                        hwnd, frame, show=True):
+                    raise RuntimeError("Editor HWND was unparented during reattach")
             except Exception:
-                pass
+                self._editor_embedded = False
+                self.editor_detached = False
+                self._sync_ai_and_editor_layout()
+                try:
+                    self._schedule_editor_embed_retry(100)
+                except Exception:
+                    self.root.after(100, self._attach_editor)
+                return
                 
             self._editor_embedded = True
             self.editor_detached = False
+            self._editor_watchdog_misses = 0
+            self._editor_postload_presented = False
             self._update_detach_button_style()
 
-            try:
-                if hasattr(self, "editor_window") and self.editor_window:
-                    self.editor_window.evaluate_js(
+            # evaluate_js() synchronously invokes the WebView2 STA. Never
+            # wait for it on Tk's event thread during reattachment.
+            editor_window = getattr(self, "editor_window", None)
+            if editor_window:
+                self._run_bg_task(
+                    lambda: editor_window.evaluate_js(
                         "if (window.setDetachedActionBar) window.setDetachedActionBar(false);"
                     )
-            except Exception:
-                pass
+                )
 
             self._sync_ai_and_editor_layout()
             self._update_pane_toggle_buttons()
+            if getattr(self, "_editor_content_loaded", False):
+                self._schedule_embedded_editor_paint()
 
             # Let Tk's layout settle, then sync the editor size one more time
             self.root.after(200, lambda: self._resize_embedded_editor())

@@ -150,10 +150,12 @@ class UILayoutMixin(_Base):
         self.btn_compile = self._make_btn(self.root, "⚙ Compile", self._do_compile,
                                            Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         self.btn_compile.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+        self.btn_compile.configure(state=tk.DISABLED)
 
         self.btn_upload = self._make_btn(self.root, "⚡ Upload", self._do_upload,
                                           Theme.BTN_FULL, Theme.BTN_FULL_H)
         self.btn_upload.pack(in_=self.inner_actions, side=tk.LEFT, padx=3)
+        self.btn_upload.configure(state=tk.DISABLED)
 
         self.btn_stop = self._make_btn(self.root, "■ Stop", self._do_stop,
                                         Theme.BTN_STOP, Theme.BTN_STOP_H)
@@ -239,10 +241,13 @@ class UILayoutMixin(_Base):
             self.port_row, textvariable=self.port_var, width=port_width,
             font=self.font_mono_sm, state="readonly", justify="left",
             postcommand=self._refresh_ports,
+            exportselection=False,
         )
         self.port_combo.pack(side=tk.LEFT, padx=(0, 4))
         self.port_combo.bind("<<ComboboxSelected>>", lambda e: self._on_port_changed())
-        self.port_combo.bind("<Button-1>", lambda e: safe_reclaim_os_focus(self.port_combo), add="+")
+        self.port_combo.bind("<FocusIn>", lambda e: self.root.after_idle(self.port_combo.selection_clear))
+        self.port_combo.bind("<<Selection>>", lambda e: self.root.after_idle(self.port_combo.selection_clear))
+        self.port_combo.bind("<ButtonRelease-1>", lambda e: self.root.after_idle(self.port_combo.selection_clear))
 
         self._marquee_dir = 1
         self._marquee_pause = 0
@@ -743,6 +748,7 @@ class UILayoutMixin(_Base):
             fg=Theme.CYAN, bg=Theme.BG_MID,
         )
         self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+        self._serial_title_visible = True
 
         btn_reset_mcu = self._make_btn(
             serial_header, "↺ Reset", self._reset_mcu_from_monitor,
@@ -886,7 +892,7 @@ class UILayoutMixin(_Base):
             highlightthickness=0,
             padx=10,
             pady=6,
-            wrap=tk.WORD,
+            wrap=tk.CHAR,
             state=tk.DISABLED,
             cursor="xterm",
         )
@@ -1264,6 +1270,46 @@ class UILayoutMixin(_Base):
         self.monitors_pane_visible = True
         self._update_pane_toggle_buttons()
 
+    def _preload_bottom_notebook_tabs(self, force: bool = False):
+        """Pre-map and realize all tabs in bottom_notebook during startup or project change.
+
+        ttk.Notebook delays child window creation and geometry negotiation
+        until each tab is selected for the first time. Pre-selecting each tab
+        under the loading cover ensures all child widgets (buttons, comboboxes,
+        entries, fonts, and text tags) are fully realized and cached in Tk
+        memory, eliminating visual reload/redraw churn during later tab switches.
+        """
+        if not force and getattr(self, "_bottom_tabs_preloaded", False):
+            return
+        nb = getattr(self, "bottom_notebook", None)
+        if not nb or not nb.winfo_exists():
+            return
+        initial_tab = ""
+        try:
+            initial_tab = str(nb.select() or "")
+            tabs = nb.tabs()
+            if not tabs:
+                return
+            self._preloading_tabs = True
+            for tab_id in tabs:
+                nb.select(tab_id)
+                self.root.update_idletasks()
+        except Exception:
+            pass
+        finally:
+            try:
+                if initial_tab:
+                    nb.select(initial_tab)
+                else:
+                    nb.select(0)
+                self.root.update_idletasks()
+            except Exception:
+                pass
+            self._preloading_tabs = False
+            self._bottom_tabs_preloaded = True
+            if hasattr(self, "_serial_monitor_is_selected"):
+                self._serial_tab_visible = self._serial_monitor_is_selected()
+
         # ── Status Bar ──
         tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill=tk.X)
 
@@ -1286,18 +1332,32 @@ class UILayoutMixin(_Base):
         # Style ttk widgets (comboboxes, scrollbars)
         style = ttk.Style()
         setup_combobox_place_popdown(self.root)
+        try:
+            self.root.tk.eval("""
+            proc ::ttk::combobox::SelectEntry {cb index} {
+                $cb current $index
+                $cb selection clear
+                $cb icursor end
+                event generate $cb <<ComboboxSelected>> -when mark
+            }
+            """)
+        except Exception:
+            pass
+
         style.configure("TCombobox",
                          fieldbackground=Theme.BG_LIGHT,
                          background=Theme.BG_HOVER,
                          foreground=Theme.TEXT_BRIGHT,
-                         selectbackground=Theme.CYAN_DIM,
+                         selectbackground=Theme.BG_LIGHT,
                          selectforeground=Theme.TEXT_BRIGHT,
                          bordercolor=Theme.BORDER,
                          arrowcolor=Theme.TEXT_DIM)
         style.map("TCombobox",
-                   fieldbackground=[("readonly", Theme.BG_LIGHT)],
-                   selectbackground=[("readonly", Theme.CYAN_DIM)],
-                   selectforeground=[("readonly", Theme.TEXT_BRIGHT)])
+                   fieldbackground=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)],
+                   foreground=[("readonly", Theme.TEXT_BRIGHT), ("focus", Theme.TEXT_BRIGHT)],
+                   selectbackground=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)],
+                   selectforeground=[("readonly", Theme.TEXT_BRIGHT), ("focus", Theme.TEXT_BRIGHT)],
+                   focusfill=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)])
 
         # Style the dropdown popup listbox for ttk.Combobox (the "clam" theme
         # uses a plain Tk Listbox for its popdown, so we set global Listbox
@@ -1979,7 +2039,7 @@ class UILayoutMixin(_Base):
                 fieldbackground=Theme.BG_LIGHT,
                 background=Theme.BG_HOVER,
                 foreground=Theme.TEXT_BRIGHT,
-                selectbackground=Theme.CYAN_DIM,
+                selectbackground=Theme.BG_LIGHT,
                 selectforeground=Theme.TEXT_BRIGHT,
                 bordercolor=Theme.BORDER,
                 arrowcolor=Theme.TEXT_BRIGHT,
@@ -1988,8 +2048,9 @@ class UILayoutMixin(_Base):
                 "TCombobox",
                 fieldbackground=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)],
                 foreground=[("readonly", Theme.TEXT_BRIGHT), ("focus", Theme.TEXT_BRIGHT)],
-                selectbackground=[("readonly", Theme.CYAN_DIM)],
-                selectforeground=[("readonly", Theme.TEXT_BRIGHT)],
+                selectbackground=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)],
+                selectforeground=[("readonly", Theme.TEXT_BRIGHT), ("focus", Theme.TEXT_BRIGHT)],
+                focusfill=[("readonly", Theme.BG_LIGHT), ("focus", Theme.BG_LIGHT)],
                 bordercolor=[("focus", Theme.BORDER_LIT), ("hover", Theme.BORDER_LIT)],
             )
             style.configure(
@@ -2558,16 +2619,20 @@ class UILayoutMixin(_Base):
                 self.cb_clear_build_console_on_action.configure(text="Clear Screen on Action")
                 self.cb_console_autoscroll.configure(text="Auto-scroll")
                 if width < 950:
-                    if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title:
-                        self.lbl_serial_monitor_title.pack_forget()
+                    if getattr(self, "_serial_title_visible", True):
+                        if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title:
+                            self.lbl_serial_monitor_title.pack_forget()
+                        self._serial_title_visible = False
                 else:
-                    if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title and not self.lbl_serial_monitor_title.winfo_ismapped():
-                        self.lbl_serial_monitor_title.pack_forget()
-                        self.btn_reset_mcu.pack_forget()
-                        self.btn_pause_serial.pack_forget()
-                        self.lbl_serial_monitor_title.pack(side=tk.LEFT)
-                        self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
-                        self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
+                    if not getattr(self, "_serial_title_visible", True):
+                        if hasattr(self, "lbl_serial_monitor_title") and self.lbl_serial_monitor_title:
+                            self.lbl_serial_monitor_title.pack_forget()
+                            self.btn_reset_mcu.pack_forget()
+                            self.btn_pause_serial.pack_forget()
+                            self.lbl_serial_monitor_title.pack(side=tk.LEFT)
+                            self.btn_reset_mcu.pack(side=tk.LEFT, padx=(10, 0))
+                            self.btn_pause_serial.pack(side=tk.LEFT, padx=(6, 0))
+                        self._serial_title_visible = True
 
                 style = ttk.Style()
                 style.configure(

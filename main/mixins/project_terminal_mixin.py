@@ -1478,6 +1478,8 @@ class ProjectTerminalMixin(_Base):
                 pass
 
     def _on_bottom_notebook_tab_changed(self, _event=None):
+        if getattr(self, "_preloading_tabs", False):
+            return
         # This handler runs on Tk's thread, so it is the authoritative place to
         # publish whether serial rendering should be active.  The serial reader
         # itself never queries Tk widgets.

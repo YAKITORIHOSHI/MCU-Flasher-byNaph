@@ -219,7 +219,7 @@ class MonitorPipelineMixin(_Base):
         # reads/inserts.  The reader therefore uses larger OS/Python batches and
         # the display side coalesces them for a few extra milliseconds.
         high_speed_serial = int(baud) >= 460800
-        self._serial_display_flush_delay_ms = 40 if high_speed_serial else 25
+        self._serial_display_flush_delay_ms = 50 if high_speed_serial else 35
         serial_read_cap = 131072 if high_speed_serial else 32768
         serial_no_newline_cap = 65536 if high_speed_serial else 32768
         serial_partial_idle_s = 0.12 if high_speed_serial else 0.08
@@ -428,20 +428,39 @@ class MonitorPipelineMixin(_Base):
                         "info",
                     )
 
-        def _resync_complete_boot_line(raw_text: str) -> str:
-            """Recover a known ESP ROM banner after a reset tears an UART line.
+        def _clean_serial_text(raw_bytes: bytes | bytearray | memoryview) -> str:
+            """Decode serial RX data cleanly without manufacturing '\ufffd' ('?') replacement characters.
 
-            A very fast reset can interrupt a line in flight and the next ROM banner
-            can begin immediately, occasionally yielding text such as
-            ``Build\ufffdESP-ROM:esp32s3-...``.  This is not a byte-buffer slicing bug;
-            it is an incomplete line followed by a fresh, recognizable banner.  When
-            the replacement-character marker proves the prefix was damaged, discard
-            only that damaged prefix and resume at the canonical ROM banner.
+            Electrical noise during board resets, DTR toggles, and UART baud transitions can
+            momentarily inject framing-error bytes. Standard UTF-8 decoding with errors='replace'
+            substitutes these with '\ufffd' (which renders as a '?' question-mark glyph).
+            This helper suppresses framing noise, handles valid UTF-8 and CP1252 symbols,
+            and eliminates stray NUL/replacement characters.
             """
+            if not raw_bytes:
+                return ""
+            raw = bytes(raw_bytes)
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    candidate = raw.decode("cp1252")
+                    if any(c in "°µ±²³¼½¾×÷§©®" for c in candidate):
+                        text = candidate
+                    else:
+                        text = raw.decode("utf-8", errors="ignore")
+                except Exception:
+                    text = raw.decode("utf-8", errors="ignore")
+            if "\x00" in text or "\ufffd" in text:
+                text = text.replace("\x00", "").replace("\ufffd", "")
+            return text
+
+        def _resync_complete_boot_line(raw_text: str) -> str:
+            """Recover a known ESP ROM banner after a reset tears an UART line."""
             text = str(raw_text or "")
             low_t = text.lower()
             marker = low_t.find("esp-rom:")
-            if marker > 0 and "\ufffd" in text[:marker]:
+            if marker > 0:
                 return text[marker:]
             return text
 
@@ -449,7 +468,7 @@ class MonitorPipelineMixin(_Base):
             """Keep a partial ROM line buffered until its CR/LF terminator arrives."""
             if not byte_buf:
                 return False
-            text = byte_buf.decode("utf-8", errors="replace").lstrip()
+            text = _clean_serial_text(byte_buf).lstrip()
             low_t = text.lower()
             if low_t.startswith(_BOOT_LINE_PREFIXES) or low_t.startswith("esp-rom:"):
                 return True
@@ -459,36 +478,25 @@ class MonitorPipelineMixin(_Base):
             return low_t.startswith("ets ")
 
         def _drain_complete_serial_lines(byte_buf: bytearray) -> list[bytes]:
-            """Remove and return every complete CR/LF-delimited line in one scan.
+            """Remove and return every complete CR/LF-delimited line in one fast scan.
 
-            Repeated ``bytes.find`` + front slicing is fine at 115200, but at
-            921600 a single driver read can contain many lines.  Scan that chunk
-            once, preserve the incomplete tail, and treat CRLF/LFCR as one line
-            ending.  Empty separator-only rows are harmless and ignored later.
+            Returns a list of raw byte slices without trailing separators and
+            leaves any trailing incomplete fragment inside byte_buf.
             """
             if not byte_buf:
                 return []
+            if 10 not in byte_buf and 13 not in byte_buf:
+                return []
 
-            complete: list[bytes] = []
-            start = 0
-            i = 0
-            size = len(byte_buf)
-            while i < size:
-                value = byte_buf[i]
-                if value not in (10, 13):  # LF / CR
-                    i += 1
-                    continue
+            p1 = byte_buf.rfind(10)
+            p2 = byte_buf.rfind(13)
+            last_nl = max(p1, p2)
+            if last_nl == -1:
+                return []
 
-                complete.append(bytes(byte_buf[start:i]))
-                first_sep = value
-                i += 1
-                if i < size and byte_buf[i] in (10, 13) and byte_buf[i] != first_sep:
-                    i += 1
-                start = i
-
-            if start:
-                del byte_buf[:start]
-            return complete
+            ready = bytes(byte_buf[:last_nl + 1])
+            del byte_buf[:last_nl + 1]
+            return ready.splitlines()
 
         # ── Read loop ────────────────────────────────────────────────────
         # This is the actual monitor: keep pulling bytes off the port and
@@ -515,6 +523,20 @@ class MonitorPipelineMixin(_Base):
         try:
             while _session_current() and self._monitor_should_run:
                 _drain_tx_queue()
+
+                # Fast path when monitor display is paused:
+                # Discard incoming bytes with zero processing and sleep so the GUI has 100% CPU.
+                if getattr(self, "_monitor_paused", False):
+                    buf.clear()
+                    try:
+                        waiting = int(conn.in_waiting or 0)
+                        if waiting > 0:
+                            conn.read(min(waiting, serial_read_cap))
+                    except Exception:
+                        pass
+                    time.sleep(0.015)
+                    continue
+
                 try:
                     waiting = int(conn.in_waiting or 0)
                     if waiting > 0:
@@ -542,9 +564,9 @@ class MonitorPipelineMixin(_Base):
                         and (time.monotonic() - last_read_time) > serial_partial_idle_s
                         and not _buffer_looks_like_boot_line(bytes(buf))
                     ):
-                        text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                        text = _clean_serial_text(buf).rstrip("\r")
                         buf.clear()
-                        if text and not self._monitor_paused:
+                        if text and not getattr(self, "_monitor_paused", False):
                             self._append_tagged_line(text, is_newline=False)
                     continue
 
@@ -555,12 +577,12 @@ class MonitorPipelineMixin(_Base):
                 # scan.  This keeps the reader comfortably ahead of a 921600-baud
                 # producer instead of repeatedly rescanning the same prefix.
                 complete_rows = _drain_complete_serial_lines(buf)
-                if not self._monitor_paused and complete_rows:
+                if not getattr(self, "_monitor_paused", False) and complete_rows:
                     display_rows = []
                     for raw in complete_rows:
                         if not raw:
                             continue
-                        text = raw.decode("utf-8", errors="replace").rstrip("\r")
+                        text = _clean_serial_text(raw).rstrip("\r")
                         if text:
                             text = _resync_complete_boot_line(text)
                             _observe_complete_boot_loop_line(text)
@@ -574,7 +596,8 @@ class MonitorPipelineMixin(_Base):
                                     display_rows.append((text[pos:end], end >= len(text)))
                             else:
                                 display_rows.append((text, True))
-                    self._append_tagged_lines(display_rows)
+                    if display_rows:
+                        self._append_tagged_lines(display_rows)
 
                 # Guard against an application/binary stream that never emits a
                 # line ending.  Flush a large bounded chunk rather than allowing RAM
@@ -584,15 +607,20 @@ class MonitorPipelineMixin(_Base):
                     flush_size = 32768 if high_speed_serial else 16384
                     raw_partial = bytes(buf[:flush_size])
                     del buf[:flush_size]
-                    text = raw_partial.decode("utf-8", errors="replace")
-                    if text and not self._monitor_paused:
+                    text = _clean_serial_text(raw_partial)
+                    if text and not getattr(self, "_monitor_paused", False):
                         self._append_tagged_line(text, is_newline=False)
+
+                # Cooperative sleep: yield Python GIL and CPU slice so
+                # Tkinter's event loop (clicks, drags, keyboard) remains 100% fluid
+                # without dropping incoming bytes (buffered cleanly in OS driver).
+                time.sleep(0.010 if waiting > 0 else 0.005)
         finally:
             # This worker owns only `conn`; never close whatever a newer
             # generation may have installed into self.serial_conn.
             active_before_close = _session_current()
             if active_before_close and buf and not self._monitor_paused:
-                text = bytes(buf).decode("utf-8", errors="replace").rstrip("\r")
+                text = _clean_serial_text(buf).rstrip("\r")
                 if text:
                     text = _resync_complete_boot_line(text)
                     _observe_complete_boot_loop_line(text)

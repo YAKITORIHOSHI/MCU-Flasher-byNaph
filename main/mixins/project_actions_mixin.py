@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import os
+import time
 import subprocess
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -116,6 +117,7 @@ class ProjectActionsMixin(_Base):
                 if not _validate_and_scaffold_ino(self.root, new_path):
                     return
 
+                self._show_project_loading_overlay(new_path.name)
                 self.sketch_dir_path = new_path
                 config = load_gui_config()
                 config["last_sketch_dir"] = str(self.sketch_dir_path)
@@ -187,6 +189,7 @@ class ProjectActionsMixin(_Base):
                             except Exception as exc:
                                 messagebox.showerror("Cannot Open New Window", str(exc), parent=self.root)
                             return
+                    self._show_project_loading_overlay(project_dir.name)
                     self.sketch_dir_path = project_dir
                     config = load_gui_config()
                     config["last_sketch_dir"] = str(self.sketch_dir_path)
@@ -646,17 +649,163 @@ class ProjectActionsMixin(_Base):
         except Exception:
             pass
 
+    def _show_project_loading_overlay(self, project_name: str | None = None):
+        """Display a loading overlay while switching projects mid-session."""
+        # Never compete with the startup overlay during initial launch
+        if getattr(self, "_startup_overlay", None) is not None and not getattr(self, "_startup_overlay_released", False):
+            return
+
+        name = project_name or (self.sketch_dir_path.name if getattr(self, "sketch_dir_path", None) else "Project")
+
+        # Cancel any pending dismiss or safety jobs from a previous project switch
+        for attr in ("_project_overlay_safety_job", "_project_overlay_raise_job"):
+            job = getattr(self, attr, None)
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        overlay = getattr(self, "_project_overlay", None)
+        if overlay is not None:
+            try:
+                if overlay.winfo_exists():
+                    overlay.lift()
+                    overlay.update_message(
+                        "⚡ MCU Flasher by Naph",
+                        f"Opening {name}…",
+                    )
+                    self._project_overlay_created_at = time.monotonic()
+                    self._project_loading_in_progress = True
+                    self._project_editor_ready = False
+                    self._project_cache_ready = False
+                    self._raise_project_overlay()
+                    self._project_overlay_safety_job = self.root.after(
+                        5000, self._dismiss_project_loading_overlay
+                    )
+                    return
+            except Exception:
+                pass
+            self._project_overlay = None
+
+        try:
+            overlay = CircularLoadingOverlay(
+                self.root,
+                bg_color=Theme.BG_DARKEST,
+                spinner_color=Theme.CYAN,
+                fg_title=Theme.TEXT_BRIGHT,
+                fg_sub=Theme.TEXT_DIM,
+                track_color=Theme.BORDER,
+                text="⚡ MCU Flasher by Naph",
+            )
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            overlay.lift()
+            overlay.update_message(
+                "⚡ MCU Flasher by Naph",
+                f"Opening {name}…",
+            )
+            self._project_overlay = overlay
+            self._project_overlay_created_at = time.monotonic()
+            self._project_loading_in_progress = True
+            self._project_editor_ready = False
+            self._project_cache_ready = False
+            self._raise_project_overlay()
+            # Safety watchdog: guarantee dismissal even if an unexpected exception occurs
+            self._project_overlay_safety_job = self.root.after(
+                5000, self._dismiss_project_loading_overlay
+            )
+        except Exception:
+            self._project_overlay = None
+            self._project_loading_in_progress = False
+
+    def _raise_project_overlay(self):
+        """Keep the Tk cover above packed widgets and embedded windows during project switch."""
+        overlay = getattr(self, "_project_overlay", None)
+        if overlay is None or not getattr(self, "_project_loading_in_progress", False):
+            self._project_overlay_raise_job = None
+            return
+        try:
+            if not overlay.winfo_exists():
+                self._project_overlay_raise_job = None
+                return
+            overlay.lift()
+            self._project_overlay_raise_job = self.root.after(
+                50, self._raise_project_overlay
+            )
+        except Exception:
+            self._project_overlay_raise_job = None
+
+    def _on_project_editor_loaded(self):
+        """Callback when editor files have finished reloading for the active project."""
+        self._project_editor_ready = True
+        self._check_project_loading_complete()
+
+    def _check_project_loading_complete(self):
+        """Dismiss the project loading overlay once both editor and build cache are ready."""
+        if not getattr(self, "_project_loading_in_progress", False):
+            return
+        if not getattr(self, "_project_editor_ready", False) or not getattr(self, "_project_cache_ready", False):
+            return
+
+        # Ensure a minimum visual display duration (e.g. 450ms) to prevent jarring 1-frame flashes
+        elapsed = time.monotonic() - getattr(self, "_project_overlay_created_at", 0.0)
+        remaining_ms = max(0, int((0.45 - elapsed) * 1000))
+        if remaining_ms > 0:
+            self.root.after(remaining_ms, self._dismiss_project_loading_overlay)
+        else:
+            self._dismiss_project_loading_overlay()
+
+    def _dismiss_project_loading_overlay(self):
+        """Gracefully stop and destroy the project switch loading overlay."""
+        self._project_loading_in_progress = False
+        for attr in ("_project_overlay_safety_job", "_project_overlay_raise_job"):
+            job = getattr(self, attr, None)
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        overlay = getattr(self, "_project_overlay", None)
+        if overlay is None:
+            return
+        self._project_overlay = None
+        try:
+            overlay.stop_and_destroy()
+        except Exception:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+
+        # Ensure full layout synchronization once the cover is gone
+        try:
+            self._last_responsive_layout_key = None
+            self._last_cfg_w = None
+            self._last_cfg_h = None
+            if hasattr(self, "_apply_dynamic_button_scale"):
+                self._apply_dynamic_button_scale()
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
     def _on_folder_changed(self):
         """Called whenever sketch_dir_path is set to a new folder.
         Updates the UI label, invalidates the compile cache, then scans
         includes in a background thread so the console gets an instant
         project-summary report."""
+        proj_name = self.sketch_dir_path.name if self.sketch_dir_path else None
+        self._show_project_loading_overlay(proj_name)
+
         # A project switch can be triggered repeatedly while the user is
         # exploring folders.  Keep only the latest editor reload request so a
         # stale WebView callback cannot rebuild the previous project after the
         # user has already moved on.
         def _queue_editor_reload():
             if not callable(getattr(self, "_load_editor_files", None)):
+                self._on_project_editor_loaded()
                 return
             old_reload_job = getattr(self, "_project_editor_reload_after_id", None)
             if old_reload_job is not None:
@@ -670,17 +819,26 @@ class ProjectActionsMixin(_Base):
                 if getattr(self, "_editor_files_load_pending", False):
                     # The initial default-editor load is already scheduled and
                     # will read the current sketch_dir_path when it runs.
+                    self._on_project_editor_loaded()
                     return
                 loader = getattr(self, "_load_editor_files", None)
                 if not callable(loader):
+                    self._on_project_editor_loaded()
                     return
                 if getattr(self, "editor_mode", "default") == "monaco":
                     # evaluate_js can wait on WebView2 while a page is being
                     # reparented.  Keep that wait off Tk; the editor bridge
                     # itself remains the owner of file/project state.
-                    self._run_bg_task(loader)
+                    self._run_bg_task(
+                        loader,
+                        on_success=lambda _r: self._on_project_editor_loaded(),
+                        on_error=lambda _e: self._on_project_editor_loaded(),
+                    )
                 else:
-                    loader()
+                    try:
+                        loader()
+                    finally:
+                        self._on_project_editor_loaded()
 
             try:
                 self._project_editor_reload_after_id = self.root.after(
@@ -752,6 +910,10 @@ class ProjectActionsMixin(_Base):
             )
         self._clear_console()
         self._clear_serial_console()
+        try:
+            self._preload_bottom_notebook_tabs(force=True)
+        except Exception:
+            pass
         self._sketch_marquee_idx = 0
         self._sketch_marquee_dir = 1
         self._update_sketch_marquee()
@@ -791,14 +953,7 @@ class ProjectActionsMixin(_Base):
         except Exception:
             pass
         
-        # Board recognition belongs to the selected port, not to the project.
-        # If this port was already handled, preserve the user's board choice
-        # while they explore another project.
-        port = self.port_var.get()
-        if port and not port.startswith("─"):
-            self._start_auto_board_detection(port, show_msg=True)
-        else:
-            self._auto_select_board(show_msg=True)
+        # Board selection is manual; do not auto-detect or auto-select board on project open.
 
         self._compat_warnings_approved_hash = None
 
@@ -809,6 +964,8 @@ class ProjectActionsMixin(_Base):
             # connected). Re-apply the action gating after the project/cache
             # transition so Compile reflects the still-selected board.
             self._update_hardware_action_buttons()
+            self._project_cache_ready = True
+            self._check_project_loading_complete()
 
         # Hashing/stat-ing a large or network-backed sketch can take long
         # enough to look like a frozen UI.  The cache loader is now worker-safe;
@@ -816,6 +973,7 @@ class ProjectActionsMixin(_Base):
         self._run_bg_task(
             self._load_compile_cache,
             on_success=_finish_project_cache_load,
+            on_error=lambda _e: _finish_project_cache_load(),
         )
 
         # Project reporting performs network-share reads, volume checks, and

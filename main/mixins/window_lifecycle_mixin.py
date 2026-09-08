@@ -35,8 +35,62 @@ else:
 
 class WindowLifecycleMixin(_Base):
     """Mixin providing WindowLifecycleMixin capabilities for MCUUploadGUI."""
+    def _hide_ui_immediately(self):
+        """Immediately hide all UI windows at both Win32 OS and Tkinter levels
+        so the application vanishes from the screen and taskbar with zero visual latency.
+        """
+        try:
+            # Win32 immediate HWND hide for zero-latency DWM removal
+            hwnd = getattr(self.root, "winfo_id", lambda: None)()
+            if hwnd:
+                try:
+                    ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        if getattr(self, "default_editor_toplevel", None):
+            try:
+                top_hwnd = getattr(self.default_editor_toplevel, "winfo_id", lambda: None)()
+                if top_hwnd:
+                    try:
+                        ctypes.windll.user32.ShowWindow(top_hwnd, 0)
+                    except Exception:
+                        pass
+                self.default_editor_toplevel.withdraw()
+            except Exception:
+                pass
+        if getattr(self, "detached_editor_toplevel", None):
+            try:
+                top_hwnd = getattr(self.detached_editor_toplevel, "winfo_id", lambda: None)()
+                if top_hwnd:
+                    try:
+                        ctypes.windll.user32.ShowWindow(top_hwnd, 0)
+                    except Exception:
+                        pass
+                self.detached_editor_toplevel.withdraw()
+            except Exception:
+                pass
+        try:
+            # Hide reparented Monaco WebView2 window if present
+            win = getattr(self, "editor_window", None)
+            if win and hasattr(win, "hide"):
+                win.hide()
+        except Exception:
+            pass
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
     def _on_close(self):
-        self._dispose_active_ai_assistant()
+        if getattr(self, "_is_closing", False):
+            return
+
         if getattr(self, "_framework_download_active", False):
             from tkinter import messagebox
             messagebox.showwarning(
@@ -120,22 +174,14 @@ class WindowLifecycleMixin(_Base):
                         if hasattr(self, "_save_all_editor_files"):
                             self._save_all_editor_files()
 
+        self._is_closing = True
+
         # Instantly hide all UI windows so the user experiences an immediate, clean close
         # without seeing background teardowns, subprocess disposes, or window lag.
-        try:
-            self.root.withdraw()
-        except Exception:
-            pass
-        if getattr(self, "default_editor_toplevel", None):
-            try:
-                self.default_editor_toplevel.withdraw()
-            except Exception:
-                pass
-        if getattr(self, "detached_editor_toplevel", None):
-            try:
-                self.detached_editor_toplevel.withdraw()
-            except Exception:
-                pass
+        self._hide_ui_immediately()
+
+        # Dispose active AI assistant process window
+        self._dispose_active_ai_assistant()
 
         try:
             prewarm_id = getattr(self, "_shell_prewarm_after_id", None)

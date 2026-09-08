@@ -342,7 +342,7 @@ MCU Flasher by Naph/
 
 - [ ] **GUI Launch**: Verify application opens cleanly with `python mcu_flash_gui.py` or `python launcher.py`.
 - [ ] **Startup UI Readiness**: Verify the loading cover remains until the visible UI is laid out/painted and the full startup contract has settled, with no button silhouettes or relief artifacts showing through.
-- [ ] **Passive Startup Monitoring**: With an MCU already attached, verify startup connects/monitors its current state without resetting it; reset occurs only from an explicit physical/on-app reset or upload flow.
+- [ ] **Manual Startup Hardware Selection**: On startup, verify that no board and no port are automatically selected, and action buttons (Compile, Upload, Reset) remain disabled until the user manually selects them.
 - [ ] **Project Picker Cancellation**: Right-click the current project title/icon, open the picker, choose Cancel, and verify the app remains responsive; also verify the normal reselect and new-project flows.
 - [ ] **Normal Launcher Permissions**: Verify normal startup does not require Administrator and that UAC appears only for a missing machine-level component that actually needs it.
 - [ ] **Toolchain Detection**: Check that Arduino CLI / PlatformIO are detected without thrown exceptions.

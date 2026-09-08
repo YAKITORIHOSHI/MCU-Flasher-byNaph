@@ -25,6 +25,7 @@ from main.core.theme import *
 from main.core.config import *
 
 _PROJECT_CACHE_MIGRATION_LOCK = threading.RLock()
+_MIGRATED_PROJECTS: set[str] = set()
 
 def get_project_build_cache_root(project_dir, create=True) -> Path:
     """Return the one hidden folder owned by MCU Flasher for a sketch.
@@ -77,7 +78,14 @@ def _migrate_legacy_project_generated_files(project_dir) -> Path:
     """
     project = Path(project_dir).expanduser().resolve(strict=False)
     cache = get_project_build_cache_root(project, create=True)
+    norm_key = str(project).lower()
+    if norm_key in _MIGRATED_PROJECTS:
+        return cache
+
     with _PROJECT_CACHE_MIGRATION_LOCK:
+        if norm_key in _MIGRATED_PROJECTS:
+            return cache
+
         import shutil
 
         def move_if_possible(source: Path, destination: Path, predicate=True):
@@ -169,6 +177,7 @@ def _migrate_legacy_project_generated_files(project_dir) -> Path:
             )
 
         hide_generated_directory(cache)
+        _MIGRATED_PROJECTS.add(norm_key)
     return cache
 
 
