@@ -16,14 +16,28 @@ This project (MCU Flasher by Naph) will be deployed across multiple Windows 10/1
 
 ---
 
-## Threading & UI Safety (Tkinter)
+## Threading & UI Safety (Qt / PySide6 & Tkinter)
 
-The GUI is a monolithic Tkinter application (`mcu_flash_gui.py`, ~31k lines). Threading violations are a primary source of freeze/crash bugs.
+The primary desktop application is built with PySide6 (Qt) in `main/qt/` and backed by `main/web_bridge.py`. Threading violations are a primary source of freeze/crash bugs.
 
-- **All GUI updates from worker threads MUST go through `self.root.after(0, callback)`.** Never call `.config()`, `.insert()`, `.delete()`, `.set()`, or any Tkinter widget method directly from a non-main thread.
-- **Detached windows (editor, panels) must handle `WM_DELETE_WINDOW` gracefully.** Closing a detached window via the native `[X]` button must not trigger thread deadlocks or freeze the main application. Always use `protocol("WM_DELETE_WINDOW", handler)` and ensure the handler runs reattach/cleanup on the main thread.
-- **Non-blocking operations:** Compile, upload, serial read, and AI assistant tasks MUST run on background threads using `threading.Thread`. Never block the Tkinter main loop.
+- **All GUI updates from worker threads MUST go through Qt signals or `QTimer.singleShot(0, ...)` / `self.emit()`.** Never call widget methods (`setText()`, `setCurrentWidget()`, `setEnabled()`, `.config()`) directly from a non-main worker thread.
+- **Signal Bus Pattern:** Backend events emitted via `self.emit(event, data)` are routed to Qt signals on the main thread via `QtSignalBus`. Custom workers must respect this bus instead of holding direct widget references.
+- **Clean Service Shutdown:** The main window's `closeEvent` must call `backend.stop_services()` to cleanly terminate serial threads, port watchdogs, and background workers before exiting.
+- **Detached windows (editor, panels) must handle close events gracefully.** Native window closing must never trigger thread deadlocks or freeze the main event loop.
+- **Non-blocking operations:** Compile, upload, serial read, reset, and AI assistant tasks MUST run on background threads using `threading.Thread`. Never block the Qt/Tk main event loop.
 - **`_active_operation` phase scoping:** Respect the phase system — `"compile"` leaves serial monitor active; `"upload"` / `"flash"` / `"reset"` locks the COM port and pauses the monitor.
+
+---
+
+## Post-Operation Phase Transitions & Tab Focusing (Upload & Reset Parity)
+
+The bottom panel manages multiple tabs (Build Console, Serial Monitor, Compatible Devices, Notifications, Syntax Check, Terminal). Actions must adhere to the tab focusing contract:
+
+- **Upload & Reset Completion Parity:** Just like a successful `upload` or `flash`, completing a successful `hard_reset` or `soft_reset` must automatically switch the focused bottom tab to the **Serial Monitor** after a 500ms delay (`_focus_serial_monitor()`) so MCU boot logs are immediately visible.
+- **Error Visibility Retention:** If an operation fails (`success=False`), NEVER switch tabs — keep the focus on the **Build Console** so compilation, flashing, or reset error traces remain visible and actionable for the user.
+- **Auto-Monitoring Parity:** Worker completion routines for both upload and reset must resume serial monitoring (`_start_serial_monitor()`) if `is_success` OR `was_monitoring` was true.
+- **Rapid-Action Grace Guard:** Tab focus callbacks (`_focus_serial_monitor()`) must verify `_active_operation is None` before switching widgets. If the user initiated a new operation (e.g. Compile or another Reset) during the 500ms delay, the focus switch must abort immediately to avoid interrupting the new task.
+- **Safe Port Re-acquisition:** Always cleanly release port control lines (DTR/RTS) before reopening the serial monitor so the MCU exits bootloader mode into normal run mode without bootlooping.
 
 ---
 
@@ -70,6 +84,7 @@ The bootstrap system (`src/modules/bootstrap.py`) must handle a completely fresh
 - **Multi-Attempt Toolchain Retries:** Transient network issues during platform installation or dummy compile prewarming are retried automatically (`_PLATFORMIO_SETUP_ATTEMPTS = 3`). Non-default platforms defer prewarming until first actual use to ensure instant application startup.
 - **Google Drive downloads use urllib (not requests)** because bootstrap runs before pip dependencies are installed. The downloader handles Google's virus-scan confirmation HTML page by parsing the form and extracting hidden fields.
 - **`[WinError 32]` file locks:** Antivirus scanners may lock `.zip.part` download files. Always handle with retry logic, exponential backoff, and clear error messages. Never crash on a lock error.
+- **Driver Installer Presence Guards:** USB-to-UART driver installers (e.g. `installers/CH34x/`, `installers/CP210x/`) must verify the directory and executable exist before triggering elevated UAC prompts (`runas`). Never attempt elevated execution on missing directories, which causes unhandled `FileNotFoundError` or confusing UAC prompts on minimal/stripped repository distributions.
 - **Progress feedback is mandatory:** Downloads, extractions, and toolchain installs must show progress (percent, speed, ETA) inline in the bootstrap console.
 
 ---
@@ -126,12 +141,19 @@ This application is deployed publicly and will run on budget/older hardware (e.g
 
 - **Never leave errors or warnings unresolved:** Whenever making changes to any file, always check for syntax errors, undefined variables, missing imports, and linter/IDE warnings (such as Pyright/Pylance `reportUndefinedVariable`).
 - **Explicit imports over implicit assumptions:** In Python files, always explicitly import external and win32 modules (`win32gui`, `win32con`, `win32process`, etc.) with proper fallbacks rather than relying on dynamic wildcard imports (`from ... import *`), which cause static analysis and IDE diagnostic errors.
-- **Pre-completion verification:** Before concluding any turn or declaring a task complete, run compilation (`py_compile`) and check diagnostics across all modified files. If any error or warning is detected, fix it immediately before concluding.
+- **Pre-completion verification:** Before concluding any turn or declaring a task complete, run compilation (`py_compile`) and check diagnostics across all modified files. If any error or warning is detected, fix it immediately before concluding. Never yield control with broken code or unresolved diagnostics.
 
 ---
 
-## Test & Temp Directory Isolation (`temp/`, `test/`, `tests/`)
+## Authorized Agent Working Directory (`temp/`)
 
-- **Strict zero-touch default:** Never read, scan, search, modify, edit, or update files inside `temp/`, `test/`, or `tests/` during standard maintenance, refactoring, or feature development.
-- **Explicit user trigger only:** Only access, view, run, or update files in `temp/`, `test/`, or `tests/` if the user explicitly asks for them in their prompt (e.g. `@temp/...`, `@test/...`, or specifically asking to inspect temp files or run tests).
-- **Git exclusion:** Temporary archives and test sandboxes (`temp/`, `test/`, `tests/`, `___*.py`, `old-*`) must remain strictly ignored by git and never be bundled into clean releases or fresh-install distributions.
+- **Full absolute control authorized by owner/user:** The user/owner has explicitly authorized the agent to have full, unrestricted control over the workspace `temp/` directory (`<workspaceRoot>/temp/`).
+- **Autonomous storage & scratchpad:** The agent may freely store, create, read, update, inspect, search, and manage files in `temp/` for current and future operations without needing per-action confirmation. This includes scratch scripts, analysis dumps, cached benchmarks, intermediate diffs, logs, notes, or large collections of utility files (hundreds or thousands of files as needed).
+- **Git exclusion:** The `temp/` directory is strictly gitignored (`.gitignore`) so that any files placed there remain isolated to the local workspace and never pollute releases or version control commits.
+
+---
+
+## Test Directory Isolation (`test/`, `tests/`)
+
+- **Strict zero-touch default for test fixtures:** Never read, scan, search, modify, edit, or update files inside `test/` or `tests/` during standard maintenance, refactoring, or feature development unless explicitly directed by the user (e.g. `@test/...`, `@tests/...`, or asking to run/debug tests).
+- **Git exclusion:** Test sandboxes (`test/`, `tests/`, `___*.py`, `old-*`) must remain strictly ignored by git and never be bundled into clean releases or fresh-install distributions.

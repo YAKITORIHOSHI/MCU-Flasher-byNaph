@@ -182,7 +182,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
     <div id="terminal-root">
-        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
+        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
             <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px; color: __THEME_FG__;">No Terminal Session Open</div>
             <div>Click <b>[▾]</b> in the top toolbar to open a new PowerShell or Command Prompt terminal.</div>
         </div>
@@ -229,18 +229,6 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
         applyTheme(currentTheme);
 
-        function sanitizeTerminalInput(data) {
-            if (!data || typeof data !== "string") return "";
-            return data
-                .replace(/\x1b\[\?[0-9;]*c/g, "")
-                .replace(/\x1b\[>[0-9;]*c/g, "")
-                .replace(/\x1b\[\?[0-9;]*\$y/g, "")
-                .replace(/\x1b\[[0-9;]*\$y/g, "")
-                .replace(/\x1b\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
-                .replace(/\x1bP>\|[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
-                .replace(/\x1b\[>[0-9;]*q/g, "");
-        }
-
         function getOrCreateHost(id) {
             let host = hosts[id] || document.getElementById("term-" + id);
             if (!host) {
@@ -266,21 +254,8 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             Object.keys(hosts).forEach(k => {
                 if (hosts[k]) hosts[k].classList.toggle("active", k === activeShell);
             });
-            window.requestAnimationFrame(() => {
-                const host = hosts[activeShell];
-                if (host && host.offsetWidth > 40 && host.offsetHeight > 40) {
-                    if (fitAddons[activeShell]) {
-                        try { fitAddons[activeShell].fit(); } catch (e) {}
-                    }
-                    if (terminals[activeShell]) {
-                        try {
-                            terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
-                            terminals[activeShell].focus();
-                        } catch (e) {}
-                    }
-                    sendResize(activeShell);
-                }
-            });
+            scheduleFit();
+            [30, 80, 150, 300, 600].forEach(ms => setTimeout(scheduleFit, ms));
         }
 
         function makeTerminal(kind) {
@@ -291,6 +266,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             }
             try {
                 const host = getOrCreateHost(kind);
+                if (activeShell === kind) {
+                    host.classList.add("active");
+                    if (emptyState) emptyState.style.display = "none";
+                }
                 const term = new Terminal({
                     cursorBlink: true,
                     cursorStyle: "block",
@@ -305,10 +284,19 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 term.open(host);
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
+
+                if (typeof ResizeObserver !== "undefined") {
+                    try {
+                        const hostObserver = new ResizeObserver(() => {
+                            if (activeShell === kind) scheduleFit();
+                        });
+                        hostObserver.observe(host);
+                    } catch (e) {}
+                }
+
                 term.onData(data => {
-                    const clean = sanitizeTerminalInput(data);
-                    if (clean && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
-                        socket.send(JSON.stringify({ type: "input", shell: kind, data: clean }));
+                    if (data && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
+                        socket.send(JSON.stringify({ type: "input", shell: kind, data: data }));
                     }
                 });
                 return true;
@@ -355,22 +343,60 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             }
         }
 
+        let fitDebounceTimer = null;
+        let fitRetryCount = 0;
         function fitAll() {
             if (!activeShell) return;
             const host = hosts[activeShell];
-            if (!host || host.offsetWidth <= 50 || host.offsetHeight <= 50) return;
+            if (!host || host.offsetWidth <= 20 || host.offsetHeight <= 20) {
+                if (fitRetryCount < 30) {
+                    fitRetryCount++;
+                    setTimeout(fitAll, 50);
+                }
+                return;
+            }
+            fitRetryCount = 0;
             if (fitAddons[activeShell]) {
                 try { fitAddons[activeShell].fit(); } catch (e) {}
             }
             if (terminals[activeShell]) {
-                try { terminals[activeShell].refresh(0, terminals[activeShell].rows - 1); } catch (e) {}
+                try {
+                    terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
+                    if (terminals[activeShell].cols <= 10) {
+                        setTimeout(() => {
+                            try { fitAddons[activeShell].fit(); } catch (e) {}
+                            try { terminals[activeShell].refresh(0, terminals[activeShell].rows - 1); } catch (e) {}
+                        }, 50);
+                    }
+                } catch (e) {}
             }
             sendResize(activeShell);
         }
 
-        window.addEventListener("resize", () => {
+        function scheduleFit() {
+            fitRetryCount = 0;
+            fitAll();
             window.requestAnimationFrame(fitAll);
+            if (fitDebounceTimer) clearTimeout(fitDebounceTimer);
+            fitDebounceTimer = setTimeout(fitAll, 60);
+        }
+
+        window.addEventListener("resize", scheduleFit);
+        window.addEventListener("focus", scheduleFit);
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) scheduleFit();
         });
+
+        if (typeof ResizeObserver !== "undefined") {
+            try {
+                const resizeObserver = new ResizeObserver(() => {
+                    scheduleFit();
+                });
+                resizeObserver.observe(document.documentElement);
+                resizeObserver.observe(document.body);
+                if (root) resizeObserver.observe(root);
+            } catch (e) {}
+        }
 
         if (window.xtermErr) {
             enableFallback();
@@ -382,7 +408,8 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 
         if (socket) {
             socket.onopen = () => {
-                fitAll();
+                scheduleFit();
+                [50, 150, 350, 700].forEach(ms => setTimeout(scheduleFit, ms));
                 socket.send(JSON.stringify({ type: "client_ready", xterm: !fallback }));
             };
             socket.onmessage = event => {
@@ -392,6 +419,11 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     if (activeShell && terminals[activeShell]) terminals[activeShell].write(event.data);
                     return;
                 }
+                if (message.type === "fit" || message.type === "resize") {
+                    scheduleFit();
+                    [50, 150, 300].forEach(ms => setTimeout(scheduleFit, ms));
+                    return;
+                }
                 if (message.type === "theme") {
                     applyTheme(message.theme);
                     return;
@@ -399,6 +431,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 if (message.type === "create") {
                     makeTerminal(message.shell);
                     setActiveShell(message.shell);
+                    scheduleFit();
                     return;
                 }
                 if (message.type === "destroy") {
@@ -430,7 +463,12 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 if (message.type === "output") {
                     makeTerminal(message.shell);
                     const term = terminals[message.shell];
-                    if (term) term.write(message.data || "");
+                    if (term) {
+                        term.write(message.data || "");
+                        if (activeShell === message.shell && (term.cols <= 10 || term.rows <= 3)) {
+                            scheduleFit();
+                        }
+                    }
                     return;
                 }
             };
@@ -595,6 +633,7 @@ class ProjectTerminalServer:
         self.session_counter = 0
         self.clients = set()
         self.clients_lock = threading.RLock()
+        self.window = None
 
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
@@ -744,7 +783,8 @@ class ProjectTerminalServer:
 
     def control(self, message: dict) -> dict:
         action = str(message.get("action", "")).lower()
-        shell_id = str(message.get("shell", message.get("session_id", self.active_shell)))
+        raw_shell = message.get("shell") or message.get("session_id") or self.active_shell
+        shell_id = str(raw_shell) if raw_shell and str(raw_shell) != "None" else ""
         kind = str(message.get("kind", "pwsh")).lower()
         title = str(message.get("title", ""))
 
@@ -823,17 +863,24 @@ class ProjectTerminalServer:
                 return {"success": True, "shell": shell_id}
             return {"success": False, "error": "Unknown shell"}
 
+        if action in ("resize", "fit"):
+            self.broadcast({"type": "fit"})
+            return {"success": True}
+
         return {"success": False, "error": "Unknown action"}
 
     async def websocket_handler(self, websocket):
         with self.clients_lock:
             self.clients.add(websocket)
         try:
-            await self._send(websocket, {"type": "activate", "shell": self.active_shell})
-            for kind, session in self.sessions.items():
+            for sid, session in list(self.sessions.items()):
+                await self._send(websocket, {"type": "create", "shell": sid, "kind": session.kind})
+            if self.active_shell:
+                await self._send(websocket, {"type": "activate", "shell": self.active_shell})
+            for sid, session in list(self.sessions.items()):
                 history = session.history_text()
                 if history:
-                    await self._send(websocket, {"type": "output", "shell": kind, "data": history})
+                    await self._send(websocket, {"type": "output", "shell": sid, "data": history})
             async for raw in websocket:
                 try:
                     message = json.loads(raw)
@@ -855,14 +902,14 @@ class ProjectTerminalServer:
                     session = self.sessions.get(kind)
                     if not session:
                         continue
-                    clean_data = sanitize_terminal_input(message.get("data", ""))
-                    if not clean_data:
+                    input_data = str(message.get("data", ""))
+                    if not input_data:
                         continue
                     with session.lock:
                         pty = session.pty if session.running else None
                     if pty:
                         try:
-                            pty.write(clean_data)
+                            pty.write(input_data)
                         except Exception:
                             pass
                     continue
@@ -1058,16 +1105,18 @@ def run_standalone_project_terminal(target_directory: str, initial_cwd: str, por
     _apply_window_icon()
     try:
         terminal_theme = _resolve_terminal_theme()
-        webview.create_window(
+        window = webview.create_window(
             title=WINDOW_TITLE,
             url=f"http://127.0.0.1:{port}",
             width=900,
             height=520,
             min_size=(320, 180),
+            resizable=True,
             hidden=True,
             focus=False,
             background_color=terminal_theme["bg"],
         )
+        server.window = window
         webview.start(debug=False)
     finally:
         server.stop()

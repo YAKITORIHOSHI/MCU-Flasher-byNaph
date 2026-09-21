@@ -266,12 +266,15 @@ def _write_index_cache(cache_file: str, raw_text: str) -> None:
             pass
 
 # Settings cache (remembers download folder and board indexes across sessions)
-SETTINGS_FILE = (
-    os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json")
-    if os.path.exists(os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json"))
-    or not os.path.exists(os.path.join(SCRIPT_DIR, "arduino_browser_settings.json"))
-    else os.path.join(SCRIPT_DIR, "arduino_browser_settings.json")
-)
+_index_settings = os.path.join(SCRIPT_DIR, "index_json", "arduino_browser_settings.json")
+_dbs_settings = os.path.join(SCRIPT_DIR, "src", "dbs", "arduino_browser_settings.json")
+_root_settings = os.path.join(SCRIPT_DIR, "arduino_browser_settings.json")
+if os.path.exists(_index_settings) or os.path.isdir(os.path.join(SCRIPT_DIR, "index_json")):
+    SETTINGS_FILE = _index_settings
+elif os.path.exists(_dbs_settings):
+    SETTINGS_FILE = _dbs_settings
+else:
+    SETTINGS_FILE = _root_settings
 
 # Default download location
 DEFAULT_DOWNLOAD_DIR = os.path.join(
@@ -585,12 +588,8 @@ class CircularLoadingOverlay(tk.Frame):
 
 
 def _find_code_viewer_python() -> Optional[str]:
-    """Find a Python executable that has PyQt5 and QScintilla available."""
-    # Check candidates: current sys.executable, env virtualenv, and src/_python runtime
+    """Find a Python executable from the private src/_python runtime that has PyQt5 and QScintilla available."""
     candidates = [
-        Path(sys.executable),
-        Path(SCRIPT_DIR) / "env" / "Scripts" / "pythonw.exe",
-        Path(SCRIPT_DIR) / "env" / "Scripts" / "python.exe",
         Path(SCRIPT_DIR) / "src" / "_python" / "pythonw.exe",
         Path(SCRIPT_DIR) / "src" / "_python" / "python.exe",
     ]
@@ -806,25 +805,11 @@ def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
 
 
 def _open_code_viewer(file_path, all_paths=None, parent=None):
-    """Open the QScintilla code viewer.
-    Installed library sample files are viewable through the dedicated viewer.
-
-    If QScintilla is not yet installed, a one-time background install is
-    triggered with a progress dialog, and the viewer opens once installed.
-    """
+    """Open the code viewer or default system editor for library files."""
     if _qscintilla_available():
         _launch_code_viewer(file_path, all_paths, parent=parent)
         return
-
-    # QScintilla not available — install it on first use in a background thread
-    # so the Tk event loop stays responsive during the pip download.
-    install_thread = threading.Thread(
-        target=_install_qscintilla_on_demand,
-        args=(file_path, all_paths, parent),
-        daemon=True,
-        name="QScintillaInstall",
-    )
-    install_thread.start()
+    _open_fallback_editor(file_path, parent=parent)
 
 
 def _load_settings() -> dict:
@@ -1532,7 +1517,10 @@ class BrowseTab:
             self.listbox.insert(tk.END, *self.filtered_names[:self.loaded_count])
         else:
             if total == 0:
-                self.lbl_search_status.config(text="No matches found")
+                if not getattr(self.app, "_is_online", True) and not self.all_items:
+                    self.lbl_search_status.config(text="⚠ Offline Mode: Connect to internet to browse catalog")
+                else:
+                    self.lbl_search_status.config(text="No matches found")
             else:
                 self.lbl_search_status.config(text=f"Found {total} matches")
             if self.filtered_names:
@@ -2137,6 +2125,9 @@ class InstalledTab:
         if item.get("update_available"):
             self.lbl_update_status.config(text="⬆ Update available", fg=Theme.YELLOW)
             self._set_update_btn_state(True)
+        elif item.get("latest_version") in ("—", "— (Offline)", item.get("installed_version")):
+            self.lbl_update_status.config(text="✓ Installed", fg=Theme.GREEN)
+            self._set_update_btn_state(False)
         else:
             self.lbl_update_status.config(text="✓ Up‑to‑date", fg=Theme.GREEN)
             self._set_update_btn_state(False)
@@ -2195,6 +2186,13 @@ class InstalledTab:
         item = self.filtered_items[sel[0]]
         if not item.get("update_available"):
             self._set_update_btn_state(False)
+            return
+        if not check_internet_connection(timeout=0.6):
+            messagebox.showwarning(
+                "Offline Mode",
+                "Downloading package updates requires an active internet connection.\n\nPlease connect to the internet to update this item.",
+                parent=self.app.root,
+            )
             return
         is_board = item["type"] == "Board Platform"
         old_path = item.get("path", "")
@@ -2364,6 +2362,7 @@ class ArduinoBrowser:
                     pass
 
         # Installed items cache (computed from disk + indexes)
+        self._is_online: bool = True
         self._installed_items: list[dict] = []
 
         self._build_ui()
@@ -2747,6 +2746,15 @@ class ArduinoBrowser:
         settings["additional_board_urls"] = urls
         _save_settings(settings)
 
+        if not check_internet_connection(timeout=0.6):
+            self._set_status("Board manager URLs saved. (Indexes will download when online)")
+            messagebox.showinfo(
+                "Offline Mode",
+                "Board manager URLs saved.\n\nSince you are currently offline, the new board indexes will be downloaded when an internet connection is available.",
+                parent=self.root,
+            )
+            return
+
         self._set_status("Board manager URLs saved — refreshing indexes…")
         self._refresh_all()
 
@@ -3035,6 +3043,7 @@ class ArduinoBrowser:
         """Scan download folders in fast O(1) time against loaded indexes to determine what is
         installed and whether an update is available without freezing Tkinter."""
         items = []
+        seen_paths = set()
 
         # Fast disk inventory: read local Libs and Boards directories directly
         libs_dir = os.path.join(self._download_dir, "Libs")
@@ -3054,6 +3063,11 @@ class ArduinoBrowser:
             except Exception:
                 local_boards = set()
 
+        matched_lib_folders = set()
+        matched_lib_archives = set()
+        matched_board_folders = set()
+        matched_board_archives = set()
+
         # Helper: check an index item against the pre-scanned directory contents
         def check_index_item(name: str, index_entry: dict, local_set: set, subfolder_name: str, type_label: str):
             dest_dir = os.path.join(self._download_dir, subfolder_name)
@@ -3070,27 +3084,161 @@ class ArduinoBrowser:
                 if has_folder or has_archive:
                     installed_version = ver_entry["version"]
                     path = os.path.join(dest_dir, folder_name) if has_folder else os.path.join(dest_dir, archive)
-                    update_available = _version_key(latest_version) > _version_key(installed_version)
-                    items.append({
-                        "type": type_label,
-                        "name": name,
-                        "installed_version": installed_version,
-                        "latest_version": latest_version,
-                        "update_available": update_available,
-                        "path": path,
-                        "archive": archive,
-                    })
+                    update_available = (_version_key(latest_version) > _version_key(installed_version)) if getattr(self, "_is_online", True) else False
+                    norm_p = os.path.normpath(path).lower()
+                    if norm_p not in seen_paths:
+                        seen_paths.add(norm_p)
+                        items.append({
+                            "type": type_label,
+                            "name": name,
+                            "installed_version": installed_version,
+                            "latest_version": latest_version if getattr(self, "_is_online", True) else installed_version,
+                            "update_available": update_available,
+                            "path": path,
+                            "archive": archive,
+                        })
+                    if type_label == "Library":
+                        if has_folder:
+                            matched_lib_folders.add(folder_name)
+                        if has_archive:
+                            matched_lib_archives.add(archive)
+                    else:
+                        if has_folder:
+                            matched_board_folders.add(folder_name)
+                        if has_archive:
+                            matched_board_archives.add(archive)
                     break  # only report the newest installed version
 
-        # Libraries
+        # Libraries from catalog index
         if self.lib_tab.all_items and local_libs:
             for name, entry in self.lib_tab.all_items.items():
                 check_index_item(name, entry, local_libs, "Libs", "Library")
 
-        # Boards
+        # Boards from catalog index
         if self.board_tab.all_items and local_boards:
             for name, entry in self.board_tab.all_items.items():
                 check_index_item(name, entry, local_boards, "Boards", "Board Platform")
+
+        # --- Direct Filesystem Discovery: Unmatched / Offline Local Libraries ---
+        if os.path.isdir(libs_dir):
+            for entry in sorted(local_libs, key=str.lower):
+                if entry in matched_lib_folders or entry in matched_lib_archives:
+                    continue
+                if entry.startswith(".") or entry.endswith((".part", ".tmp")):
+                    continue
+                entry_path = os.path.join(libs_dir, entry)
+                lib_name = entry
+                lib_ver = ""
+
+                if os.path.isdir(entry_path):
+                    prop_file = os.path.join(entry_path, "library.properties")
+                    if os.path.isfile(prop_file):
+                        try:
+                            with open(prop_file, "r", encoding="utf-8", errors="replace") as pf:
+                                for line in pf:
+                                    line = line.strip()
+                                    if line.startswith("name="):
+                                        val = line.split("=", 1)[1].strip()
+                                        if val:
+                                            lib_name = val
+                                    elif line.startswith("version="):
+                                        lib_ver = line.split("=", 1)[1].strip()
+                        except Exception:
+                            pass
+                    if not lib_ver:
+                        m = re.search(r'[-_v](\d+\.\d+(?:\.\d+)?(?:[-_+][\w\.]+)?)$', entry)
+                        if m:
+                            lib_ver = m.group(1)
+                            if lib_name == entry:
+                                lib_name = entry[:m.start()].rstrip("-_v")
+                    if not lib_ver:
+                        lib_ver = "Installed"
+                    archive_name = f"{entry}.zip"
+                elif os.path.isfile(entry_path):
+                    m = re.search(r'[-_v](\d+\.\d+(?:\.\d+)?(?:[-_+][\w\.]+)?)(?:\.zip|\.tar|\.tgz)', entry, re.IGNORECASE)
+                    if m:
+                        lib_ver = m.group(1)
+                        lib_name = entry[:m.start()].rstrip("-_v")
+                    else:
+                        lib_name = _get_folder_name(entry)
+                        lib_ver = "Installed"
+                    archive_name = entry
+                else:
+                    continue
+
+                norm_p = os.path.normpath(entry_path).lower()
+                if norm_p not in seen_paths:
+                    seen_paths.add(norm_p)
+                    items.append({
+                        "type": "Library",
+                        "name": lib_name,
+                        "installed_version": lib_ver,
+                        "latest_version": lib_ver if not getattr(self, "_is_online", True) else "—",
+                        "update_available": False,
+                        "path": entry_path,
+                        "archive": archive_name,
+                    })
+
+        # --- Direct Filesystem Discovery: Unmatched / Offline Local Boards ---
+        if os.path.isdir(boards_dir):
+            for entry in sorted(local_boards, key=str.lower):
+                if entry in matched_board_folders or entry in matched_board_archives:
+                    continue
+                if entry.startswith(".") or entry.endswith((".part", ".tmp")):
+                    continue
+                entry_path = os.path.join(boards_dir, entry)
+                board_name = entry
+                board_ver = ""
+
+                if os.path.isdir(entry_path):
+                    for root, dirs, files in os.walk(entry_path):
+                        if "platform.txt" in files:
+                            try:
+                                with open(os.path.join(root, "platform.txt"), "r", encoding="utf-8", errors="replace") as pf:
+                                    for line in pf:
+                                        line = line.strip()
+                                        if line.startswith("name="):
+                                            val = line.split("=", 1)[1].strip()
+                                            if val:
+                                                board_name = val
+                                        elif line.startswith("version="):
+                                            board_ver = line.split("=", 1)[1].strip()
+                                break
+                            except Exception:
+                                pass
+                    if not board_ver:
+                        m = re.search(r'[-_v](\d+\.\d+(?:\.\d+)?(?:[-_+][\w\.]+)?)$', entry)
+                        if m:
+                            board_ver = m.group(1)
+                            if board_name == entry:
+                                board_name = entry[:m.start()].rstrip("-_v")
+                    if not board_ver:
+                        board_ver = "Installed"
+                    archive_name = f"{entry}.tar.bz2"
+                elif os.path.isfile(entry_path):
+                    m = re.search(r'[-_v](\d+\.\d+(?:\.\d+)?(?:[-_+][\w\.]+)?)(?:\.tar|\.zip|\.tgz)', entry, re.IGNORECASE)
+                    if m:
+                        board_ver = m.group(1)
+                        board_name = entry[:m.start()].rstrip("-_v")
+                    else:
+                        board_name = _get_folder_name(entry)
+                        board_ver = "Installed"
+                    archive_name = entry
+                else:
+                    continue
+
+                norm_p = os.path.normpath(entry_path).lower()
+                if norm_p not in seen_paths:
+                    seen_paths.add(norm_p)
+                    items.append({
+                        "type": "Board Platform",
+                        "name": board_name,
+                        "installed_version": board_ver,
+                        "latest_version": board_ver if not getattr(self, "_is_online", True) else "—",
+                        "update_available": False,
+                        "path": entry_path,
+                        "archive": archive_name,
+                    })
 
         # Sort alphabetically
         items.sort(key=lambda x: x["name"].lower())
@@ -3101,23 +3249,21 @@ class ArduinoBrowser:
     # ------------------------------------------------------------------
 
     def _initial_load(self):
-        """Called once on startup. Loads both indexes with circular loading overlay."""
-        self._set_status("Loading indexes…")
-        if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
-            try:
-                self._loading_overlay = CircularLoadingOverlay(
-                    self.notebook,
-                    title="Loading Arduino Library & Board Indexes...",
-                    subtitle="Downloading & parsing package definitions on background thread..."
-                )
-                self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            except Exception:
-                pass
+        """Called once on startup. Checks network connectivity and loads indexes or offline mode."""
+        self._set_status("Initializing package manager…")
         self._start_thread(self._load_both)
 
     def _refresh_all(self):
         if self._busy:
             return
+        if not check_internet_connection(timeout=0.6):
+            messagebox.showwarning(
+                "Offline Mode",
+                "Cannot refresh catalog indexes while offline.\n\nPlease connect to the internet to check for updates.",
+                parent=self.root,
+            )
+            return
+        self._is_online = True
         self._set_status("Refreshing all indexes…")
         if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
             try:
@@ -3147,10 +3293,123 @@ class ArduinoBrowser:
 
     def _load_both(self, force_refresh=False):
         """Load both library and board indexes (runs in worker thread)."""
+        online = check_internet_connection(timeout=0.6)
+        self._is_online = online
+
         libs = {}
         boards = {}
         board_sources_loaded = 0
         failed_additional_urls: list[str] = []
+
+        if not online:
+            # -------------------------------------------------------------
+            # OFFLINE MODE: Load cached indexes from disk if available,
+            # but NEVER attempt network I/O or freeze on timeouts.
+            # -------------------------------------------------------------
+            self.root.after(0, self._set_status, "Offline Mode: Loading local package caches…")
+
+            # Try to read library index cache from disk (regardless of age)
+            lib_data = None
+            if os.path.isfile(LIBRARY_CACHE_FILE):
+                lib_data = _read_index_cache(LIBRARY_CACHE_FILE, "libraries")
+
+            if lib_data is not None:
+                libs = _group_libraries(lib_data.get("libraries", []))
+                self.root.after(0, self.lib_tab.populate, libs)
+                self.root.after(0, lambda: self.lib_tab.lbl_search_status.config(
+                    text=f"Offline Mode: Showing {len(libs)} cached libraries (Internet required to download)"
+                ))
+            else:
+                self.root.after(0, self.lib_tab.populate, {})
+                self.root.after(0, lambda: self.lib_tab.lbl_search_status.config(
+                    text="⚠ Offline Mode: No internet connection"
+                ))
+                self.root.after(0, lambda: self.lib_tab.lbl_placeholder.config(
+                    text="⚠ Offline Mode\n\nInternet connection required to search and download new libraries.\nPlease switch to the 'Installed' tab to view local items."
+                ))
+
+            # Try to read board index caches from disk
+            settings = _load_settings()
+            additional_urls = parse_additional_board_urls(
+                settings.get("additional_board_urls", [])
+            )
+            board_urls = [BOARD_INDEX_URL, *additional_urls]
+            board_indexes = []
+
+            for index_num, board_url in enumerate(board_urls):
+                is_default = index_num == 0
+                cache_file = (
+                    BOARD_CACHE_FILE
+                    if is_default
+                    else _board_index_cache_file(board_url)
+                )
+                if os.path.isfile(cache_file):
+                    bdata = _read_index_cache(cache_file, "packages")
+                    if bdata is not None:
+                        board_indexes.append((index_num, bdata))
+                        board_sources_loaded += 1
+
+            if board_indexes:
+                board_indexes.sort(key=lambda item: item[0])
+                packages = []
+                for _index_num, board_data in board_indexes:
+                    source_packages = board_data.get("packages", [])
+                    if isinstance(source_packages, list):
+                        packages.extend(source_packages)
+                boards = _group_boards(packages)
+                self.root.after(0, self.board_tab.populate, boards)
+                self.root.after(0, lambda: self.board_tab.lbl_search_status.config(
+                    text=f"Offline Mode: Showing {len(boards)} cached board platforms (Internet required to download)"
+                ))
+            else:
+                self.root.after(0, self.board_tab.populate, {})
+                self.root.after(0, lambda: self.board_tab.lbl_search_status.config(
+                    text="⚠ Offline Mode: No internet connection"
+                ))
+                self.root.after(0, lambda: self.board_tab.lbl_placeholder.config(
+                    text="⚠ Offline Mode\n\nInternet connection required to search and download new board platforms.\nPlease switch to the 'Installed' tab to view local items."
+                ))
+
+            # Recompute installed items directly from disk and indexes
+            self._compute_installed_items()
+
+            # In offline mode, switch automatically to the Installed tab!
+            def _finish_offline():
+                if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
+                    try:
+                        self._loading_overlay.stop_and_destroy()
+                    except Exception:
+                        pass
+                    self._loading_overlay = None
+                self.progress.stop()
+                self.progress.config(mode="determinate", value=0)
+                self._busy = False
+                self.refresh_btn.config(state="normal")
+                try:
+                    self.notebook.select(2)  # Focus on Installed tab
+                except Exception:
+                    pass
+                self.installed_tab.populate(self._installed_items)
+                self._set_status(f"Offline Mode — {len(self._installed_items)} installed package(s) available")
+
+            self.root.after(0, _finish_offline)
+            return
+
+        # -----------------------------------------------------------------
+        # ONLINE MODE: Download/refresh newest indexes with overlay feedback
+        # -----------------------------------------------------------------
+        def _show_online_overlay():
+            if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
+                try:
+                    self._loading_overlay = CircularLoadingOverlay(
+                        self.notebook,
+                        title="Loading Arduino Library & Board Indexes...",
+                        subtitle="Downloading & parsing package definitions on background thread..."
+                    )
+                    self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+                except Exception:
+                    pass
+        self.root.after(0, _show_online_overlay)
 
         # --- Libraries ---
         lib_data = self._load_index(
@@ -3161,15 +3420,12 @@ class ArduinoBrowser:
             self.root.after(0, self.lib_tab.populate, libs)
 
         # --- Boards ---
-        # Arduino's default index remains first, then each user-configured
-        # vendor index is loaded into its own cache. Keeping caches separate
-        # prevents one source from overwriting another source's package data.
         settings = _load_settings()
         additional_urls = parse_additional_board_urls(
             settings.get("additional_board_urls", [])
         )
         board_urls = [BOARD_INDEX_URL, *additional_urls]
-        board_indexes: list[tuple[int, dict]] = []
+        board_indexes = []
 
         def _load_board_source(index_num: int, board_url: str):
             is_default = index_num == 0
@@ -3188,9 +3444,6 @@ class ArduinoBrowser:
                 data = None
             return index_num, board_url, data
 
-        # A user may paste many entries from the community list. A bounded
-        # pool keeps slow/dead vendors from blocking every later source while
-        # the result list remains ordered exactly as entered.
         from concurrent.futures import ThreadPoolExecutor
         worker_count = min(8, max(1, len(board_urls)))
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="BoardIndex") as executor:
@@ -3238,15 +3491,17 @@ class ArduinoBrowser:
             if cached is not None:
                 return cached
             else:
-                # A copied or interrupted index cache must be discarded before
-                # the refresh attempt, otherwise an offline launch retries the
-                # same malformed JSON forever.
                 try:
                     os.unlink(cache_file)
                     with _INDEX_JSON_RAM_LOCK:
                         _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
                 except OSError:
                     pass
+
+        # Offline safety guard: If offline flag is active or no connection, never make network calls!
+        if not getattr(self, "_is_online", True):
+            stale = _read_index_cache(cache_file, expected_key)
+            return stale
 
         def _update_overlay():
             self._set_status(f"Downloading {label} index…")
@@ -3268,7 +3523,7 @@ class ArduinoBrowser:
 
         if requests is not None:
             try:
-                resp = requests.get(normalized_url, timeout=60, headers=DEFAULT_HEADERS)
+                resp = requests.get(normalized_url, timeout=(10, 30), headers=DEFAULT_HEADERS)
                 resp.raise_for_status()
                 response_bytes = getattr(resp, "content", b"")
                 if not response_bytes:
@@ -3282,7 +3537,7 @@ class ArduinoBrowser:
             try:
                 import urllib.request
                 req = urllib.request.Request(normalized_url, headers=DEFAULT_HEADERS)
-                with urllib.request.urlopen(req, timeout=60) as uresp:
+                with urllib.request.urlopen(req, timeout=30) as uresp:
                     data, raw_text = _parse_response(uresp.read())
             except Exception as e:
                 errors.append(str(e))
@@ -3291,14 +3546,10 @@ class ArduinoBrowser:
             try:
                 _write_index_cache(cache_file, raw_text)
             except OSError:
-                # A read-only cache should not prevent the current session
-                # from using a successfully downloaded index.
                 pass
             return data
 
-        # A failed refresh must not throw away the last known-good index. This
-        # is especially important for vendor URLs that occasionally move or
-        # go offline while their package archives remain valid.
+        # A failed refresh must not throw away the last known-good index.
         stale = _read_index_cache(cache_file, expected_key)
         if stale is not None:
             self.root.after(0, self._set_status, f"Offline/unavailable: loaded cached {label} index")
@@ -3390,6 +3641,13 @@ class ArduinoBrowser:
     def _download(self, tab: BrowseTab):
         sel = tab.listbox.curselection()
         if not sel or self._busy:
+            return
+        if not check_internet_connection(timeout=0.6):
+            messagebox.showwarning(
+                "Offline Mode",
+                "Downloading packages requires an active internet connection.\n\nPlease connect to the internet and try again.",
+                parent=self.root,
+            )
             return
         name = tab.filtered_names[sel[0]]
         item = tab.all_items[name]

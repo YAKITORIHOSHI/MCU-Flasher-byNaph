@@ -5,6 +5,37 @@
   <meta charset="UTF-8" />
   <title>MCU Flasher — Embedded Code Editor</title>
   <style>
+    @font-face {
+      font-family: 'Montserrat';
+      src: url('../fonts/Montserrat/static/Montserrat-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Montserrat';
+      src: url('../fonts/Montserrat/static/Montserrat-Italic.ttf') format('truetype');
+      font-weight: 400;
+      font-style: italic;
+    }
+    @font-face {
+      font-family: 'Montserrat';
+      src: url('../fonts/Montserrat/static/Montserrat-Medium.ttf') format('truetype');
+      font-weight: 500;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Montserrat';
+      src: url('../fonts/Montserrat/static/Montserrat-SemiBold.ttf') format('truetype');
+      font-weight: 600;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Montserrat';
+      src: url('../fonts/Montserrat/static/Montserrat-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+
     :root, body.theme-default {
       --bg-darkest: #151922;
       --bg-dark: #0f121a;
@@ -176,15 +207,54 @@
     }
 
     #tab-bar::-webkit-scrollbar {
-      height: 3px;
+      height: 6px;
     }
 
     #tab-bar::-webkit-scrollbar-track {
-      background: var(--bg-dark);
+      background: var(--bg-darkest);
     }
 
     #tab-bar::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: #3e4f6d;
+      border-radius: 3px;
+    }
+
+    #tab-bar::-webkit-scrollbar-thumb:hover {
+      background: var(--accent);
+    }
+
+    /* High-visibility scrollbars for webview & editor */
+    ::-webkit-scrollbar {
+      width: 12px;
+      height: 12px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #0b0e14;
+      border-left: 1px solid #1c2333;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #3e4f6d;
+      border-radius: 6px;
+      border: 2px solid #0b0e14;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #56cfbf;
+    }
+
+    .monaco-editor .scrollbar .slider {
+      background: rgba(74, 91, 120, 0.65) !important;
+      border-radius: 5px !important;
+    }
+
+    .monaco-editor .scrollbar .slider:hover {
+      background: rgba(86, 207, 191, 0.85) !important;
+    }
+
+    .monaco-editor .scrollbar .slider.active {
+      background: rgba(78, 201, 148, 1.0) !important;
     }
 
     .tab {
@@ -264,25 +334,26 @@
       opacity: 0.5;
     }
 
-    /* Modern VS Code / Antigravity Style Floating Information & Hover Window */
+    /* Modern VS Code / Antigravity Style Floating Definition & Variable Inspection Window */
     #monaco-custom-hover-card {
       position: fixed;
       z-index: 99999;
       display: none;
       background: var(--hover-bg);
       border: 1px solid var(--hover-border);
-      border-radius: 8px;
+      border-radius: 9px;
       box-shadow: var(--hover-shadow);
-      padding: 10px 14px;
-      max-width: 480px;
-      font-family: 'Consolas', 'Segoe UI', monospace;
+      padding: 11px 15px;
+      max-width: 540px;
+      min-width: 290px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 12px;
       line-height: 1.45;
       color: var(--text);
       pointer-events: auto;
       user-select: text;
-      transition: opacity 0.15s ease, transform 0.15s ease;
-      backdrop-filter: blur(10px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+      backdrop-filter: blur(14px);
     }
 
     #monaco-custom-hover-card .hover-header {
@@ -290,48 +361,141 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 6px;
-      padding-bottom: 4px;
+      margin-bottom: 7px;
+      padding-bottom: 6px;
       border-bottom: 1px solid var(--hover-border);
+      flex-wrap: wrap;
     }
 
-    #monaco-custom-hover-card .hover-kind {
-      color: var(--hover-kind);
-      font-size: 11px;
+    #monaco-custom-hover-card .hover-kind-badge {
+      font-size: 10px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      font-family: 'Segoe UI', sans-serif;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
+    }
+
+    #monaco-custom-hover-card .hover-kind-variable {
+      color: #00d2ff;
+      background: rgba(0, 210, 255, 0.12);
+      border: 1px solid rgba(0, 210, 255, 0.32);
+    }
+    #monaco-custom-hover-card .hover-kind-constant {
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+    #monaco-custom-hover-card .hover-kind-parameter {
+      color: #c084fc;
+      background: rgba(192, 132, 252, 0.14);
+      border: 1px solid rgba(192, 132, 252, 0.35);
+    }
+    #monaco-custom-hover-card .hover-kind-function {
+      color: #4ade80;
+      background: rgba(74, 222, 128, 0.13);
+      border: 1px solid rgba(74, 222, 128, 0.32);
+    }
+    #monaco-custom-hover-card .hover-kind-macro {
+      color: #fb7185;
+      background: rgba(251, 113, 133, 0.13);
+      border: 1px solid rgba(251, 113, 133, 0.32);
+    }
+    #monaco-custom-hover-card .hover-kind-type,
+    #monaco-custom-hover-card .hover-kind-class,
+    #monaco-custom-hover-card .hover-kind-struct {
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.13);
+      border: 1px solid rgba(56, 189, 248, 0.32);
+    }
+
+    #monaco-custom-hover-card .hover-meta-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    #monaco-custom-hover-card .hover-scope-pill {
+      font-size: 10.5px;
+      color: var(--text-dim);
+      background: var(--hover-code-bg);
+      border: 1px solid var(--hover-border);
+      padding: 1px 7px;
+      border-radius: 4px;
+      font-family: 'Consolas', monospace;
     }
 
     #monaco-custom-hover-card .hover-loc {
       color: var(--text-dim);
-      font-size: 11px;
-      font-family: 'Segoe UI', sans-serif;
+      font-size: 10.5px;
+      font-family: 'Consolas', monospace;
+      background: var(--hover-code-bg);
+      border: 1px solid var(--hover-border);
+      padding: 1px 7px;
+      border-radius: 4px;
     }
 
     #monaco-custom-hover-card .hover-proto {
-      color: var(--hover-proto);
       background: var(--hover-code-bg);
       border: 1px solid var(--hover-border);
-      padding: 6px 10px;
-      border-radius: 5px;
+      padding: 7px 11px;
+      border-radius: 6px;
       margin: 6px 0;
       white-space: pre-wrap;
       word-break: break-all;
+      font-family: 'Consolas', 'JetBrains Mono', monospace;
       font-size: 12px;
-      font-weight: 500;
+      line-height: 1.5;
     }
 
-    #monaco-custom-hover-card .hover-detail {
+    #monaco-custom-hover-card .hover-details-box {
       margin-top: 6px;
-      font-size: 11px;
-      color: var(--text);
-      word-break: break-word;
+      padding: 4px 0;
     }
 
-    #monaco-custom-hover-card .hover-detail strong {
-      color: var(--hover-kind);
+    #monaco-custom-hover-card .hover-prop-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 5px;
+      font-size: 11px;
+    }
+
+    #monaco-custom-hover-card .hover-prop-key {
+      color: var(--text-dim);
+      font-weight: 600;
+      font-size: 11px;
+      min-width: 82px;
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
+    }
+
+    #monaco-custom-hover-card .hover-prop-val {
+      font-family: 'Consolas', monospace;
+      color: #7ee787;
+      background: var(--hover-code-bg);
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid var(--hover-border);
+      font-size: 11px;
+      max-width: 380px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #monaco-custom-hover-card .hover-type-tag {
+      background: var(--hover-code-bg);
+      color: var(--hover-type);
+      border: 1px solid var(--hover-border);
+      padding: 1px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: 'Consolas', monospace;
     }
 
     #monaco-custom-hover-card .hover-param-tag {
@@ -341,13 +505,13 @@
       padding: 1px 6px;
       border-radius: 4px;
       font-size: 11px;
-      margin-right: 4px;
+      font-family: 'Consolas', monospace;
       display: inline-block;
     }
 
     #monaco-custom-hover-card .hover-footer {
       margin-top: 8px;
-      padding-top: 6px;
+      padding-top: 7px;
       border-top: 1px solid var(--hover-border);
       display: flex;
       align-items: center;
@@ -356,14 +520,14 @@
 
     #monaco-custom-hover-card .hover-goto-btn {
       color: var(--hover-link);
-      font-family: 'Segoe UI', sans-serif;
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 8px;
+      gap: 5px;
+      padding: 3px 9px;
       border-radius: 4px;
       background: var(--hover-code-bg);
       border: 1px solid var(--hover-border);
@@ -773,16 +937,64 @@
         </span>
       </div>
     </div>
-    <div id="definition-hover-card" role="tooltip"></div>
+    <div id="monaco-custom-hover-card" role="tooltip"></div>
   </div>
 
   <!-- Expose Monaco globally so themes and models can be managed dynamically -->
   <script>
     window.MonacoEnvironment = { globalAPI: true };
   </script>
+  <!-- QWebChannel bridge for Qt / PySide6 embedded environment -->
+  <script src="qwebchannel.js"></script>
+  <script>
+    (function () {
+      function initQtWebChannel() {
+        if (typeof QWebChannel === 'undefined') return;
+        if (typeof qt === 'undefined' || !qt.webChannelTransport) return;
+        if (window.__webChannelReady) return;
+        window.__webChannelReady = true;
+
+        new QWebChannel(qt.webChannelTransport, function (channel) {
+          const bridge = channel.objects.editorBridge;
+          window.editorBridge = bridge;
+          window.pywebview = {
+            api: new Proxy(bridge, {
+              get(target, prop) {
+                if (typeof target[prop] === 'function') {
+                  return function (...args) {
+                    return new Promise((resolve, reject) => {
+                      try {
+                        target[prop](...args, function (res) {
+                          resolve(res);
+                        });
+                      } catch (err) {
+                        reject(err);
+                      }
+                    });
+                  };
+                }
+                return target[prop];
+              }
+            })
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+          if (typeof window.safeLoadProject === 'function') {
+            window.safeLoadProject();
+          } else if (typeof window.loadProject === 'function') {
+            window.loadProject();
+          }
+        });
+      }
+      initQtWebChannel();
+      window.__initQtWebChannel = initQtWebChannel;
+    })();
+  </script>
   <!-- Local, C++-only trimmed Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
   <script>
+    if (!window.pywebview && window.parent && window.parent.pywebview) {
+      window.pywebview = window.parent.pywebview;
+    }
     (function () {
       // The page loads the project once at DOMContentLoaded, while the host
       // may request a refresh at the same time when the project is attached.
@@ -814,6 +1026,7 @@
           tab.remove();
         });
       }
+      window.dedupeProjectTabs = dedupeProjectTabs;
 
       const projectTabBar = document.getElementById('tab-bar');
       if (projectTabBar) {
@@ -978,6 +1191,33 @@
       window.addEventListener('keydown', handleZoom, true);
       document.addEventListener('keydown', handleZoom, true);
 
+      function handleEditorShortcuts(e) {
+        if (e.ctrlKey || e.metaKey) {
+          const key = e.key.toLowerCase();
+          if (key === 'r') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.pywebview && window.pywebview.api) {
+              window.pywebview.api.run_action('compile');
+            }
+          } else if (key === 'u') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.pywebview && window.pywebview.api) {
+              window.pywebview.api.run_action('upload');
+            }
+          } else if (key === 's') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.pywebview && window.pywebview.api) {
+              window.pywebview.api.save_all_files();
+            }
+          }
+        }
+      }
+      window.addEventListener('keydown', handleEditorShortcuts, true);
+      document.addEventListener('keydown', handleEditorShortcuts, true);
+
       window.setEditorMarkers = function (errorsJsonStr) {
         if (!window.editorInstance) return;
         const model = window.editorInstance.getModel();
@@ -986,20 +1226,27 @@
           const errors = JSON.parse(errorsJsonStr);
           const markers = errors.map(err => {
             const lineContent = model.getLineContent(err.line) || "";
-            let endCol = err.col + 1;
-            if (err.col - 1 < lineContent.length) {
-              let idx = err.col - 1;
-              while (idx < lineContent.length && /\w/.test(lineContent[idx])) {
-                idx++;
+            const maxCol = Math.max(1, lineContent.length + 1);
+            let startCol = Math.max(1, Math.min(err.col || 1, maxCol));
+            let endLine = err.endLine || err.line;
+            let endCol = err.endCol;
+            if (!endCol) {
+              endCol = startCol + 1;
+              if (startCol - 1 < lineContent.length) {
+                let idx = startCol - 1;
+                while (idx < lineContent.length && /\w/.test(lineContent[idx])) {
+                  idx++;
+                }
+                endCol = Math.max(startCol + 1, idx + 1);
               }
-              endCol = Math.max(err.col + 1, idx + 1);
             }
+            endCol = Math.max(startCol + 1, Math.min(endCol, maxCol + 1));
             return {
               severity: err.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
               message: err.message,
               startLineNumber: err.line,
-              startColumn: err.col,
-              endLineNumber: err.line,
+              startColumn: startCol,
+              endLineNumber: endLine,
               endColumn: endCol
             };
           });
@@ -2156,11 +2403,16 @@
         ]);
         if (keywords.has(targetWord)) return false;
 
-        const sym = await findProjectSymbol(targetWord, model);
+        let sym = await findProjectSymbol(targetWord, model);
+        if (!sym || !sym.line) {
+          sym = parseSymbolDetails(targetWord, model, pos);
+        }
         if (sym && sym.line) {
-          activateProjectFile(sym.path);
-          const targetModel = editor.getModel();
-          const lineText = targetModel.getLineContent(sym.line) || '';
+          if (sym.path) {
+            activateProjectFile(sym.path);
+          }
+          const targetModel = (sym.model) || editor.getModel();
+          const lineText = targetModel ? (targetModel.getLineContent(sym.line) || '') : '';
           const colIndex = lineText.indexOf(targetWord);
           const targetCol = colIndex !== -1 ? colIndex + 1 : 1;
 
@@ -2199,8 +2451,20 @@
         return jumpToDefinitionAtPosition(null, word);
       };
 
-      // Built-in Arduino function registry for rich tooltips
+      // Built-in Arduino function & constant registry for rich tooltips
       const BUILTIN_ARDUINO = {
+        'HIGH': { kind: 'constant', subKind: 'Built-in constant', returnType: 'uint8_t', value: '1 (0x1)', prototype: '#define HIGH 0x1' },
+        'LOW': { kind: 'constant', subKind: 'Built-in constant', returnType: 'uint8_t', value: '0 (0x0)', prototype: '#define LOW 0x0' },
+        'INPUT': { kind: 'constant', subKind: 'Built-in constant', returnType: 'uint8_t', value: '0 (0x0)', prototype: '#define INPUT 0x0' },
+        'OUTPUT': { kind: 'constant', subKind: 'Built-in constant', returnType: 'uint8_t', value: '1 (0x1)', prototype: '#define OUTPUT 0x1' },
+        'INPUT_PULLUP': { kind: 'constant', subKind: 'Built-in constant', returnType: 'uint8_t', value: '2 (0x2)', prototype: '#define INPUT_PULLUP 0x2' },
+        'LED_BUILTIN': { kind: 'constant', subKind: 'Built-in pin', returnType: 'uint8_t', value: 'Built-in board LED', prototype: '#define LED_BUILTIN ...' },
+        'DEC': { kind: 'constant', subKind: 'Built-in constant', returnType: 'int', value: '10 (Decimal base)', prototype: '#define DEC 10' },
+        'HEX': { kind: 'constant', subKind: 'Built-in constant', returnType: 'int', value: '16 (Hexadecimal base)', prototype: '#define HEX 16' },
+        'OCT': { kind: 'constant', subKind: 'Built-in constant', returnType: 'int', value: '8 (Octal base)', prototype: '#define OCT 8' },
+        'BIN': { kind: 'constant', subKind: 'Built-in constant', returnType: 'int', value: '2 (Binary base)', prototype: '#define BIN 2' },
+        'PI': { kind: 'constant', subKind: 'Built-in constant', returnType: 'double', value: '3.141592653589793', prototype: '#define PI 3.14159265358979323846' },
+        'SERIAL_8N1': { kind: 'constant', subKind: 'Serial config', returnType: 'uint32_t', value: '8 data bits, no parity, 1 stop bit', prototype: 'SERIAL_8N1' },
         'pinMode': { kind: 'function', returnType: 'void', params: ['uint8_t pin', 'uint8_t mode'], prototype: 'void pinMode(uint8_t pin, uint8_t mode)' },
         'digitalWrite': { kind: 'function', returnType: 'void', params: ['uint8_t pin', 'uint8_t val'], prototype: 'void digitalWrite(uint8_t pin, uint8_t val)' },
         'digitalRead': { kind: 'function', returnType: 'int', params: ['uint8_t pin'], prototype: 'int digitalRead(uint8_t pin)' },
@@ -2235,25 +2499,24 @@
       async function findProjectSymbol(word, activeModel) {
         const files = window.projectFileList || [];
         const api = window.pywebview && window.pywebview.api;
-        if (!word || !api || !files.length) return null;
+        if (!word || !files.length) return null;
 
         const activeTab = document.querySelector('#tab-bar .tab.active');
         const activePath = activeTab && activeTab._filePath;
         const orderedFiles = files.slice().sort((a, b) => {
           return a.path === activePath ? -1 : b.path === activePath ? 1 : 0;
         });
-        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const macroPattern = new RegExp('#\\s*define\\s+' + esc + '(?:\\(([^)]*)\\))?\\s*(.*)', 'i');
         const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short)\\s+)*[a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:\\s*[*&])*)';
-        const functionPattern = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*\\(([^)]*)\\)', 'i');
-        const variablePattern = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*(=|;|,|\\[)', 'i');
-        const macroPattern = new RegExp('#\\s*define\\s+' + escapedWord + '\\b', 'i');
+        const functionPattern = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + esc + '\\s*\\(([^)]*)\\)', 'i');
         let fallback = null;
 
         for (const file of orderedFiles) {
           let content = '';
           if (file.path === activePath && activeModel) {
             content = activeModel.getValue();
-          } else {
+          } else if (api) {
             try {
               const result = await api.read_file(file.path);
               content = result && result.content || '';
@@ -2262,12 +2525,25 @@
             }
           }
 
+          if (!content) continue;
           const lines = content.split(/\r?\n/);
           for (let index = 0; index < lines.length; index++) {
             const line = lines[index].trim();
             if (!line || line.startsWith('//')) continue;
-            if (macroPattern.test(line)) {
-              return { path: file.path, line: index + 1, kind: 'macro', isDefinition: true };
+            const macroMatch = line.match(macroPattern);
+            if (macroMatch) {
+              const macroVal = (macroMatch[2] || '').trim();
+              return {
+                path: file.path,
+                line: index + 1,
+                kind: 'macro',
+                subKind: 'Macro definition',
+                name: word,
+                value: macroVal,
+                prototype: `#define ${word}${macroMatch[1] ? '(' + macroMatch[1] + ')' : ''}${macroVal ? ' ' + macroVal : ''}`,
+                scopeText: 'Project macro',
+                isDefinition: true
+              };
             }
 
             const functionMatch = line.match(functionPattern);
@@ -2278,22 +2554,27 @@
                 path: file.path,
                 line: index + 1,
                 kind: 'function',
+                subKind: isDefinition ? 'Function definition' : 'Function declaration',
+                name: word,
                 returnType: functionMatch[1].trim(),
                 params: functionMatch[2].trim(),
+                prototype: `${functionMatch[1].trim()} ${word}(${functionMatch[2].trim()})`,
+                scopeText: isDefinition ? 'Function implementation' : 'Function prototype',
                 isDefinition
               };
               if (isDefinition) return symbol;
               if (!fallback) fallback = symbol;
             }
 
-            const variableMatch = line.match(variablePattern);
-            if (!fallback && variableMatch) {
+            const varDecl = parseVariableDeclaration(line, word);
+            if (varDecl && !fallback) {
               fallback = {
                 path: file.path,
                 line: index + 1,
-                kind: 'variable',
-                returnType: variableMatch[1].trim(),
-                isDefinition: false
+                ...varDecl,
+                subKind: varDecl.isConst ? 'Global constant' : 'Global variable',
+                scopeText: 'Global scope',
+                isDefinition: true
               };
             }
           }
@@ -2314,69 +2595,206 @@
         return match ? '<strong>' + match[1] + '</strong>' + match[2] : text;
       }
 
-      function getHoveredDeclaration(word, model, position) {
-        if (!model || !position) return null;
-        if (isPositionInStringOrComment(model, position)) return null;
-        const line = model.getLineContent(position.lineNumber) || '';
-        const wordIdx = line.indexOf(word);
-        const eqIdx = line.indexOf('=');
-        // Word comes AFTER '=' on line: it is an assigned value (e.g. dir = "STABLE"), NOT the declared variable name!
-        if (eqIdx !== -1 && wordIdx > eqIdx) {
+      function parseVariableDeclaration(line, word) {
+        if (!line || !word) return null;
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) return null;
+
+        const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const wordRegex = new RegExp(`\\b${esc}\\b`);
+        const matchWord = wordRegex.exec(line);
+        if (!matchWord) return null;
+
+        const wordIndex = matchWord.index;
+        let beforeText = line.substring(0, wordIndex).trim();
+        const afterText = line.substring(wordIndex + word.length).trim();
+
+        // If inside a for-loop: "for (int i = 0; ..."
+        if (/^for\s*\([^;]*$/.test(beforeText)) {
+          beforeText = beforeText.replace(/^for\s*\(\s*/, '').trim();
+        } else if (/^(?:if|while|switch|case)\s*\(/i.test(beforeText)) {
           return null;
         }
-        const escapedWord = word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
-        const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short)\\s+)*[a-zA-Z_]\\w*(?:::[a-zA-Z_]\\w*)?(?:\\s*[*&])*)';
-        const functionMatch = line.match(new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*\\(([^)]*)\\)', 'i'));
-        if (functionMatch) {
-          const isDefinition = line.includes('{') ||
-            (position.lineNumber < model.getLineCount() && model.getLineContent(position.lineNumber + 1).trim().startsWith('{'));
-          return {
-            kind: 'function', returnType: functionMatch[1].trim(),
-            params: functionMatch[2].trim(), isDefinition
-          };
+
+        const INVALID_TYPES = new Set(['return', 'goto', 'throw', 'delete', 'new', 'sizeof', 'typeof', 'case', 'default', 'break', 'continue']);
+
+        // Exclude function calls e.g. digitalWrite(word, ...)
+        if (/^[a-zA-Z_]\w*\s*\([^)]*$/.test(beforeText)) {
+          return null;
         }
-        const variableMatch = line.match(new RegExp('(?:^|;\\s*|\\{\\s*|(?:^|\\s)(?:const|static|volatile|extern|inline|constexpr|unsigned|signed|long|short|int|float|double|char|bool|void|auto|String|[a-zA-Z_]\\w*)\\s+)' + typePattern + '\\s+' + escapedWord + '\\b\\s*(=|;|,|\\[)', 'i'));
-        return variableMatch ? { kind: 'variable', returnType: variableMatch[1].trim(), isDefinition: true } : null;
+        // If followed by '(' with parameters and then '{' or line ends with no assignment -> this is a function definition
+        if (/^\s*\(([^)]*)\)\s*(?:\{|;|$)/.test(afterText) && !/^(?:WiFiClient|HardwareSerial|TwoWire|File)\b/.test(beforeText)) {
+          if (/^[a-zA-Z_]\w*(?:\s+[*&]*)?\s*$/.test(beforeText)) {
+            return null;
+          }
+        }
+
+        const typeQualifierPattern = '(?:(?:const|constexpr|static|volatile|extern|inline|register|unsigned|signed|short|long)\\s+)*';
+        const baseTypePattern = '(?:void|bool|boolean|char|byte|int|word|float|double|uint8_t|uint16_t|uint32_t|uint64_t|int8_t|int16_t|int32_t|int64_t|size_t|ssize_t|auto|String|IPAddress|File|HardwareSerial|TwoWire|SPIClass|WiFiClient|WiFiServer|std::[a-zA-Z_]\\w*|[A-Z][a-zA-Z0-9_]*|[a-zA-Z_]\\w*_t)';
+        const fullTypeRegex = new RegExp(`(?:^|[;{}(])\\s*(${typeQualifierPattern}${baseTypePattern}(?:<[^>]+>)?(?:\\s*[*&]+|\\s+)+)`, 'i');
+
+        let typeStr = '';
+        let isConst = false;
+        let isStatic = false;
+
+        // Case A: Direct declaration: "const int LED_PIN = 13;" or "int i"
+        const directMatch = beforeText.match(new RegExp(`(?:^|[;{}(])\\s*(${typeQualifierPattern}${baseTypePattern}(?:<[^>]+>)?(?:\\s*[*&]+|\\s+)*)$`, 'i'));
+        if (directMatch && directMatch[1]) {
+          typeStr = directMatch[1].trim();
+        } else if (beforeText.includes(',')) {
+          // Case B: Multi-variable declaration: "int a = 1, b = 2;"
+          const stmtStart = beforeText.match(fullTypeRegex);
+          if (stmtStart && stmtStart[1]) {
+            typeStr = stmtStart[1].trim();
+          }
+        }
+
+        if (!typeStr || INVALID_TYPES.has(typeStr.toLowerCase())) return null;
+
+        isConst = /\b(const|constexpr)\b/i.test(typeStr);
+        isStatic = /\bstatic\b/i.test(typeStr);
+
+        // Extract array dimensions: e.g. "[64]" or "[]" or "[4][4]"
+        let arrayDim = '';
+        let remainingAfter = afterText;
+        const arrMatch = afterText.match(/^(\[[^\]]*\](?:\s*\[[^\]]*\])*)/);
+        if (arrMatch) {
+          arrayDim = arrMatch[1].replace(/\s+/g, '');
+          remainingAfter = afterText.substring(arrMatch[0].length).trim();
+        }
+
+        // Extract initial value / constructor arguments
+        let initVal = '';
+        if (remainingAfter.startsWith('=')) {
+          const eqText = remainingAfter.substring(1).trim();
+          let endIdx = 0;
+          let inQuotes = false;
+          let quoteChar = '';
+          let braceDepth = 0;
+          let parenDepth = 0;
+          while (endIdx < eqText.length) {
+            const ch = eqText[endIdx];
+            if (inQuotes) {
+              if (ch === quoteChar && eqText[endIdx - 1] !== '\\') inQuotes = false;
+            } else if (ch === '"' || ch === "'") {
+              inQuotes = true;
+              quoteChar = ch;
+            } else if (ch === '{') {
+              braceDepth++;
+            } else if (ch === '}') {
+              braceDepth--;
+            } else if (ch === '(') {
+              parenDepth++;
+            } else if (ch === ')') {
+              parenDepth--;
+            } else if ((ch === ';' || ch === ',') && braceDepth <= 0 && parenDepth <= 0) {
+              break;
+            }
+            endIdx++;
+          }
+          initVal = eqText.substring(0, endIdx).trim();
+        } else if (remainingAfter.startsWith('(')) {
+          const ctorMatch = remainingAfter.match(/^\(([^)]*)\)/);
+          if (ctorMatch) {
+            initVal = `(${ctorMatch[1].trim()})`;
+          }
+        }
+
+        return {
+          kind: isConst ? 'constant' : 'variable',
+          subKind: isConst ? 'Constant' : 'Variable',
+          name: word,
+          returnType: typeStr,
+          isConst,
+          isStatic,
+          arrayDim,
+          value: initVal,
+          prototype: `${typeStr} ${word}${arrayDim}${initVal ? ' = ' + initVal : ''}`
+        };
       }
 
-      function showDefinitionCard(anchorElement, word, symbol, declaration, model, position) {
-        const card = document.getElementById('definition-hover-card');
-        if (!card || !anchorElement || !symbol) return;
-        const info = declaration || symbol;
-        const label = info.kind === 'function'
-          ? (info.isDefinition ? 'Function definition' : 'Function declaration')
-          : info.kind === 'variable' ? 'Variable declaration' : 'Macro declaration';
-        const signature = info.kind === 'function'
-          ? '<strong>' + escapeHtml(info.returnType) + '</strong> ' + escapeHtml(word) +
-          '(' + formatTypedName(info.params) + ')' + (info.isDefinition ? ' {}' : ';')
-          : '<strong>' + escapeHtml(info.returnType || '') + '</strong> ' + escapeHtml(word);
-        const line = model.getLineContent(position.lineNumber) || '';
-        const callMatch = !declaration && line.match(new RegExp(
-          word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'
-        ));
-        const callValues = callMatch && callMatch[1].trim();
-        let details = '';
-        if (info.kind === 'function' && callValues) {
-          details =
-            '<div class="symbol-detail"><strong>Parameter/s:</strong> ' + escapeHtml(word) +
-            '(' + escapeHtml(callValues) + ') &rarr; ' + escapeHtml(callValues) + '</div>' +
-            '<div class="symbol-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
-            '(' + formatTypedName(info.params) + ') &rarr; ' + formatTypedName(info.params) + '</div>';
-        } else if (info.kind === 'function') {
-          details = '<div class="symbol-detail"><strong>Argument/s:</strong> ' + escapeHtml(word) +
-            '(' + formatTypedName(info.params) + ') &rarr; ' + formatTypedName(info.params) + '</div>';
+      function parseFunctionParameters(funcLine, word) {
+        if (!funcLine || !word) return null;
+        const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const fnMatch = funcLine.match(/(?:^|\s)(?:(?:const|static|inline|virtual|unsigned|signed|void|int|float|double|bool|auto|String|[a-zA-Z_]\w*)\s+)+([a-zA-Z_]\w*)\s*\(([^)]*)\)/);
+        if (!fnMatch) return null;
+
+        const funcName = fnMatch[1];
+        const paramsStr = fnMatch[2].trim();
+        if (!paramsStr) return null;
+
+        const params = paramsStr.split(',').map(p => p.trim());
+        for (const p of params) {
+          const pMatch = p.match(new RegExp(`^(.*?)\\b${esc}\\b(?:\\s*=\\s*(.*))?$`));
+          if (pMatch) {
+            const typeStr = pMatch[1].trim();
+            const defaultVal = pMatch[2] ? pMatch[2].trim() : '';
+            return {
+              kind: 'parameter',
+              subKind: 'Function parameter',
+              name: word,
+              returnType: typeStr || 'auto',
+              parentFunction: funcName,
+              value: defaultVal,
+              prototype: `${typeStr || 'auto'} ${word}${defaultVal ? ' = ' + defaultVal : ''}`,
+              scopeText: `Parameter of ${funcName}()`
+            };
+          }
         }
-        card.innerHTML = '<div class="symbol-kind">' + label + '</div><div class="signature">' +
-          signature + '</div>' + details;
-        const rect = anchorElement.getBoundingClientRect();
-        card.style.left = Math.max(8, rect.left) + 'px';
-        card.style.top = Math.max(8, rect.top - 7) + 'px';
-        card.style.display = 'block';
+        return null;
       }
 
-      function hideDefinitionCard() {
-        const card = document.getElementById('definition-hover-card');
-        if (card) card.style.display = 'none';
+      function parsePythonVariable(line, word) {
+        if (!line || !word) return null;
+        const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pyVarMatch = line.match(new RegExp(`(?:^|\\s)(?:self\\.)?${esc}\\s*(?::\\s*([^=]+))?\\s*=\\s*(.+)`));
+        if (!pyVarMatch) return null;
+        const typeStr = pyVarMatch[1] ? pyVarMatch[1].trim() : '';
+        const valStr = pyVarMatch[2] ? pyVarMatch[2].trim().replace(/#.*$/, '').trim() : '';
+        return {
+          kind: 'variable',
+          subKind: 'Variable',
+          name: word,
+          returnType: typeStr,
+          value: valStr,
+          prototype: `${word}${typeStr ? ': ' + typeStr : ''} = ${valStr}`
+        };
+      }
+
+      function formatHighlightedPrototype(info) {
+        if (!info) return '';
+        if (info.kind === 'function') {
+          const retHtml = `<span style="color:var(--hover-type); font-weight:600;">${escapeHtml(info.returnType || 'void')}</span>`;
+          const fnHtml = `<span style="color:#d2a8ff; font-weight:bold;">${escapeHtml(info.name)}</span>`;
+          const paramsList = Array.isArray(info.params) ? info.params : (info.params ? String(info.params).split(',').map(s => s.trim()).filter(Boolean) : []);
+          const paramsHtml = paramsList.map(p => escapeHtml(p)).join(', ');
+          return `${retHtml} ${fnHtml}(<span style="color:var(--hover-param);">${paramsHtml}</span>)${info.isDefinition ? ' {}' : ';'}`;
+        }
+        if (info.kind === 'macro') {
+          return `<span style="color:#ff7b72; font-weight:bold;">#define</span> <span style="color:#ffffff; font-weight:bold;">${escapeHtml(info.name)}</span>${info.value ? ` <span style="color:#7ee787;">${escapeHtml(info.value)}</span>` : ''}`;
+        }
+        if (info.kind === 'class' || info.kind === 'struct') {
+          return `<span style="color:#ff7b72; font-weight:bold;">${escapeHtml(info.kind)}</span> <span style="color:#ffffff; font-weight:bold;">${escapeHtml(info.name)}</span>`;
+        }
+
+        // Variable / Constant / Parameter
+        const typeStr = info.returnType || 'auto';
+        const typeParts = escapeHtml(typeStr).split(/\s+/);
+        const typeHtml = typeParts.map(part => {
+          if (['const', 'constexpr', 'static', 'volatile', 'extern', 'inline', 'register', 'unsigned', 'signed', 'short', 'long', 'auto'].includes(part.toLowerCase())) {
+            return `<span style="color:#ff7b72; font-weight:600;">${part}</span>`;
+          }
+          return `<span style="color:var(--hover-type); font-weight:600;">${part}</span>`;
+        }).join(' ');
+
+        const nameHtml = `<span style="color:#ffffff; font-weight:bold;">${escapeHtml(info.name)}</span>`;
+        const dimHtml = info.arrayDim ? `<span style="color:#d2a8ff; font-weight:600;">${escapeHtml(info.arrayDim)}</span>` : '';
+        const valHtml = info.value ? ` <span style="color:#8b949e;">=</span> <span style="color:#7ee787;">${escapeHtml(info.value)}</span>` : '';
+        return `${typeHtml} ${nameHtml}${dimHtml}${valHtml}<span style="color:#8b949e;">;</span>`;
+      }
+
+      function getHoveredDeclaration(word, model, position) {
+        return parseSymbolDetails(word, model, position);
       }
 
       function parseSymbolDetails(word, currentModel, position) {
@@ -2398,79 +2816,107 @@
           const b = BUILTIN_ARDUINO[word];
           return {
             kind: b.kind || 'function',
+            subKind: b.subKind || (b.kind === 'constant' ? 'Built-in constant' : 'Built-in function'),
             name: word,
             returnType: b.returnType || '',
+            value: b.value || '',
             params: b.params || [],
-            prototype: b.prototype || `${word}()`
+            prototype: b.prototype || `${word}()`,
+            scopeText: 'Arduino built-in'
           };
         }
 
-        // 2. Scan open Monaco models
+        const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        // 2. Scope-aware lookup within currentModel using position context
+        if (currentModel && position && position.lineNumber) {
+          const targetLineNum = position.lineNumber;
+          const curLine = currentModel.getLineContent(targetLineNum) || '';
+
+          // 2a. Check if word is declared right on the current line
+          const curDecl = parseVariableDeclaration(curLine, word);
+          if (curDecl) {
+            return {
+              ...curDecl,
+              line: targetLineNum,
+              model: currentModel,
+              scopeText: `Declared on line ${targetLineNum}`
+            };
+          }
+
+          // 2b. Check enclosing function parameters and local variables scanning backwards
+          let braceDepth = 0;
+          let enclosingFunction = null;
+
+          for (let l = targetLineNum - 1; l >= 1; l--) {
+            const lineText = currentModel.getLineContent(l);
+            if (!lineText) continue;
+
+            const openBraces = (lineText.match(/\{/g) || []).length;
+            const closeBraces = (lineText.match(/\}/g) || []).length;
+            braceDepth += (openBraces - closeBraces);
+
+            // Check if this line defines a function
+            if (!enclosingFunction && /\{/.test(lineText)) {
+              const paramMatch = parseFunctionParameters(lineText, word);
+              if (paramMatch) {
+                return {
+                  ...paramMatch,
+                  line: l,
+                  model: currentModel
+                };
+              }
+              const fnHeaderMatch = lineText.match(/(?:^|\s)(?:(?:const|static|inline|virtual|unsigned|signed|void|int|float|double|bool|auto|String|[a-zA-Z_]\w*)\s+)+([a-zA-Z_]\w*)\s*\(([^)]*)\)/);
+              if (fnHeaderMatch) {
+                enclosingFunction = fnHeaderMatch[1];
+              }
+            }
+
+            // Check local variable declaration
+            const varMatch = parseVariableDeclaration(lineText, word);
+            if (varMatch) {
+              return {
+                ...varMatch,
+                subKind: varMatch.isConst ? 'Local constant' : 'Local variable',
+                scopeText: enclosingFunction ? `Local in ${enclosingFunction}()` : `Local scope (line ${l})`,
+                line: l,
+                model: currentModel
+              };
+            }
+
+            // If we walked past the enclosing function opening brace, exit local scope check
+            if (braceDepth > 0 && enclosingFunction) {
+              break;
+            }
+          }
+        }
+
+        // 3. Scan open models for definitions
         const models = (typeof monaco !== 'undefined' && monaco.editor) ? monaco.editor.getModels() : (currentModel ? [currentModel] : []);
         if (currentModel) {
           models.sort((a, b) => (a === currentModel ? -1 : b === currentModel ? 1 : 0));
         }
 
-        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const typePattern = '((?:(?:const|static|volatile|extern|inline|constexpr|virtual|unsigned|signed|long|short|void|int|float|double|char|bool|uint8_t|uint16_t|uint32_t|int8_t|int16_t|int32_t|size_t|auto|String|[a-zA-Z_]\\w*)\\s+)+[*&]*)';
-        const funcRegex = new RegExp('(?:^|\\s)' + typePattern + '\\s+(?:[a-zA-Z_]\\w*::)?' + escapedWord + '\\s*\\(([^)]*)\\)', 'i');
-        const macroRegex = new RegExp('#\\s*define\\s+' + escapedWord + '(?:\\(([^)]*)\\))?\\s*(.*)', 'i');
-        const varRegex = new RegExp('(?:^|\\s)' + typePattern + '\\s+' + escapedWord + '\\s*(?:=\\s*[^;,]+|\\[[^\\]]*\\]|;|,)', 'i');
-        const typeRegex = new RegExp('(class|struct|enum|union)\\s+' + escapedWord, 'i');
-
-        // Python specific symbol matchers
-        const pyFuncRegex = new RegExp('(?:^|\\s)(?:async\\s+)?def\\s+' + escapedWord + '\\s*\\(([^)]*)\\)(?:\\s*->\\s*([^{\\n:]+))?', 'i');
-        const pyClassRegex = new RegExp('(?:^|\\s)class\\s+' + escapedWord + '(?:\\(([^)]*)\\))?', 'i');
-        const pyVarRegex = new RegExp('(?:^|\\s)' + escapedWord + '\\s*(?::\\s*([a-zA-Z_]\\w*))?\\s*=', 'i');
+        const funcRegex = new RegExp('(?:^|\\s)' + typePattern + '\\s+(?:[a-zA-Z_]\\w*::)?' + esc + '\\s*\\(([^)]*)\\)', 'i');
+        const macroRegex = new RegExp('#\\s*define\\s+' + esc + '(?:\\(([^)]*)\\))?\\s*(.*)', 'i');
+        const typeRegex = new RegExp('(class|struct|enum|union)\\s+' + esc, 'i');
 
         let fallbackSym = null;
 
         for (const m of models) {
           const count = m.getLineCount();
           for (let l = 1; l <= count; l++) {
-            const line = m.getLineContent(l).trim();
-            if (!line || line.startsWith('//')) continue;
+            const line = m.getLineContent(l);
+            if (!line || line.trim().startsWith('//')) continue;
 
-            const mPyFunc = line.match(pyFuncRegex);
-            if (mPyFunc) {
-              const paramStr = mPyFunc[1] ? mPyFunc[1].trim() : '';
-              const retType = mPyFunc[2] ? mPyFunc[2].trim() : '';
+            const pyVar = parsePythonVariable(line, word);
+            if (pyVar) {
               return {
-                kind: 'function',
-                name: word,
-                returnType: retType,
-                params: paramStr ? paramStr.split(',').map(s => s.trim()) : [],
-                prototype: `def ${word}(${paramStr})${retType ? ' -> ' + retType : ''}`,
+                ...pyVar,
                 line: l,
-                model: m
-              };
-            }
-
-            const mPyClass = line.match(pyClassRegex);
-            if (mPyClass) {
-              const baseClass = mPyClass[1] ? mPyClass[1].trim() : '';
-              return {
-                kind: 'class',
-                name: word,
-                returnType: '',
-                params: [],
-                prototype: `class ${word}${baseClass ? '(' + baseClass + ')' : ''}`,
-                line: l,
-                model: m
-              };
-            }
-
-            const mPyVar = line.match(pyVarRegex);
-            if (mPyVar && !fallbackSym) {
-              const typeAnnotation = mPyVar[1] ? mPyVar[1].trim() : '';
-              fallbackSym = {
-                kind: 'variable',
-                name: word,
-                returnType: typeAnnotation,
-                params: [],
-                prototype: typeAnnotation ? `${word}: ${typeAnnotation}` : `${word}`,
-                line: l,
-                model: m
+                model: m,
+                scopeText: `Line ${l}`
               };
             }
 
@@ -2478,10 +2924,12 @@
             if (mType) {
               return {
                 kind: mType[1].toLowerCase(),
+                subKind: mType[1] + ' declaration',
                 name: word,
                 returnType: '',
-                params: [],
-                prototype: mType[0],
+                value: '',
+                prototype: line.trim(),
+                scopeText: `Global ${mType[1]}`,
                 line: l,
                 model: m
               };
@@ -2490,12 +2938,16 @@
             const mMacro = line.match(macroRegex);
             if (mMacro) {
               const macroParams = mMacro[1] ? mMacro[1].split(',').map(s => s.trim()) : [];
+              const macroVal = (mMacro[2] || '').trim();
               return {
                 kind: 'macro',
+                subKind: 'Macro definition',
                 name: word,
                 returnType: '',
+                value: macroVal,
                 params: macroParams,
-                prototype: `#define ${word}${mMacro[1] ? '(' + mMacro[1] + ')' : ''} ${mMacro[2] || ''}`.trim(),
+                prototype: `#define ${word}${mMacro[1] ? '(' + mMacro[1] + ')' : ''}${macroVal ? ' ' + macroVal : ''}`,
+                scopeText: 'Global macro',
                 line: l,
                 model: m
               };
@@ -2507,43 +2959,39 @@
               const paramStr = mFunc[2].trim();
               const paramsList = paramStr ? paramStr.split(',').map(s => s.trim()) : [];
               const isImpl = line.includes('{') || (l < count && m.getLineContent(l + 1).trim().startsWith('{'));
-              const symObj = {
+              const fnSym = {
                 kind: 'function',
+                subKind: isImpl ? 'Function definition' : 'Function declaration',
                 name: word,
                 returnType: retType,
                 params: paramsList,
                 prototype: `${retType} ${word}(${paramStr})`,
+                scopeText: isImpl ? 'Function implementation' : 'Function prototype',
                 line: l,
                 model: m
               };
-              if (isImpl) {
-                return symObj;
-              } else if (!fallbackSym) {
-                fallbackSym = symObj;
-              }
+              if (isImpl) return fnSym;
+              if (!fallbackSym) fallbackSym = fnSym;
             }
 
-            const mVar = line.match(varRegex);
-            if (mVar && !fallbackSym) {
-              const retType = mVar[1].trim();
-              fallbackSym = {
-                kind: 'variable',
-                name: word,
-                returnType: retType,
-                params: [],
-                prototype: `${retType} ${word}`,
+            const varDecl = parseVariableDeclaration(line, word);
+            if (varDecl) {
+              const sym = {
+                ...varDecl,
+                subKind: varDecl.isConst ? 'Global constant' : 'Global variable',
+                scopeText: 'Global scope',
                 line: l,
                 model: m
               };
+              if (sym.isConst || sym.value) return sym;
+              if (!fallbackSym) fallbackSym = sym;
             }
           }
         }
 
-        if (fallbackSym) {
-          return fallbackSym;
-        }
+        if (fallbackSym) return fallbackSym;
 
-        // 3. Context check at position in currentModel
+        // 4. Context check at position in currentModel
         if (currentModel && position) {
           const lineContent = currentModel.getLineContent(position.lineNumber) || '';
           const wordInfo = currentModel.getWordAtPosition(position);
@@ -2555,22 +3003,26 @@
               const callArgsList = callArgsStr ? callArgsStr.split(',').map(s => s.trim()) : [];
               return {
                 kind: 'function',
+                subKind: 'Function call',
                 name: word,
                 returnType: '',
                 params: callArgsList,
-                prototype: `${word}(${callArgsStr})`
+                prototype: `${word}(${callArgsStr})`,
+                scopeText: 'Function call'
               };
             }
           }
         }
 
-        // 4. Default fallback: Variable
+        // 5. Default fallback
         return {
           kind: 'variable',
+          subKind: 'Variable',
           name: word,
-          returnType: '',
-          params: [],
-          prototype: word
+          returnType: 'auto',
+          value: '',
+          prototype: `${word}`,
+          scopeText: 'Symbol'
         };
       }
 
@@ -2703,24 +3155,16 @@
           }
 
           lastHoverWord = word;
-          const declaration = getHoveredDeclaration(word, model, pos);
-          const symbol = await findProjectSymbol(word, model) || parseSymbolDetails(word, model, pos);
+          const symbol = (model && pos ? parseSymbolDetails(word, model, pos) : null)
+            || await findProjectSymbol(word, model)
+            || parseSymbolDetails(word, model, null);
           if (word !== lastHoverWord || !symbol) return;
 
-          const info = declaration || symbol;
+          const info = symbol;
           const isFunction = info.kind === 'function';
           const paramsList = Array.isArray(info.params) ? info.params : (info.params ? String(info.params).split(',').map(s => s.trim()).filter(Boolean) : []);
-          const label = isFunction
-            ? (info.isDefinition ? 'Function definition' : 'Function declaration')
-            : info.kind === 'macro'
-              ? 'Macro declaration'
-              : info.kind === 'class'
-                ? 'Class declaration'
-                : info.kind === 'struct'
-                  ? 'Struct declaration'
-                  : (declaration || (info && (info.returnType || info.line)))
-                    ? 'Variable declaration'
-                    : 'Symbol';
+          const kindBadgeClass = 'hover-kind-' + (info.kind || 'variable');
+          const kindTitle = info.subKind || (isFunction ? (info.isDefinition ? 'Function definition' : 'Function declaration') : (info.kind ? info.kind.toUpperCase() : 'SYMBOL'));
 
           // Location badge text
           let locText = '';
@@ -2731,42 +3175,60 @@
             locText = `line ${symbol.line}`;
           }
 
-          const signature = isFunction
-            ? '<span style="color:var(--hover-keyword); font-weight:bold;">' + escapeHtml(info.returnType || 'void') + '</span> ' +
-              '<span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>' +
-              '(' + formatTypedName(paramsList.join(', ')) + ')' + (info.isDefinition ? ' {}' : ';')
-            : info.kind === 'macro'
-              ? '<span style="color:var(--hover-keyword); font-weight:bold;">#define</span> <span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>'
-              : '<span style="color:var(--hover-keyword); font-weight:bold;">' + escapeHtml(info.returnType || 'auto') + '</span> <span style="color:var(--text-bright); font-weight:600;">' + escapeHtml(word) + '</span>';
-
           const currentLine = model.getLineContent(pos.lineNumber) || '';
-          const callMatch = !declaration && currentLine.match(new RegExp(
+          const callMatch = currentLine.match(new RegExp(
             word.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]*)\\)'
           ));
           const callValues = callMatch && callMatch[1].trim();
 
           let html = `
             <div class="hover-header">
-              <span class="hover-kind">${label}</span>
-              ${locText ? `<span class="hover-loc">${escapeHtml(locText)}</span>` : ''}
+              <span class="hover-kind-badge ${kindBadgeClass}">${escapeHtml(kindTitle)}</span>
+              <div class="hover-meta-group">
+                ${info.scopeText ? `<span class="hover-scope-pill">${escapeHtml(info.scopeText)}</span>` : ''}
+                ${locText ? `<span class="hover-loc">${escapeHtml(locText)}</span>` : ''}
+              </div>
             </div>
-            <div class="hover-proto">${signature}</div>
+            <div class="hover-proto">${formatHighlightedPrototype(info)}</div>
           `;
 
+          let detailsHtml = '<div class="hover-details-box">';
+          let hasDetails = false;
+
+          if (info.value && (info.kind === 'variable' || info.kind === 'constant' || info.kind === 'parameter')) {
+            detailsHtml += `<div class="hover-prop-row"><span class="hover-prop-key">Initial value:</span><code class="hover-prop-val">${escapeHtml(info.value)}</code></div>`;
+            hasDetails = true;
+          }
+          if (info.returnType && info.returnType !== 'auto') {
+            detailsHtml += `<div class="hover-prop-row"><span class="hover-prop-key">Data type:</span><span class="hover-type-tag">${escapeHtml(info.returnType)}</span></div>`;
+            hasDetails = true;
+          }
+          if (info.arrayDim) {
+            detailsHtml += `<div class="hover-prop-row"><span class="hover-prop-key">Dimensions:</span><span class="hover-type-tag">${escapeHtml(info.arrayDim)}</span></div>`;
+            hasDetails = true;
+          }
+          if (info.parentFunction) {
+            detailsHtml += `<div class="hover-prop-row"><span class="hover-prop-key">Function:</span><span class="hover-type-tag">${escapeHtml(info.parentFunction)}()</span></div>`;
+            hasDetails = true;
+          }
           if (isFunction && paramsList.length > 0) {
             const paramTags = paramsList.map(p => `<span class="hover-param-tag">${escapeHtml(p)}</span>`).join('');
-            html += `<div class="hover-detail"><strong>Parameters:</strong> <div style="margin-top:4px; display:flex; flex-wrap:wrap; gap:4px;">${paramTags}</div></div>`;
+            detailsHtml += `<div class="hover-prop-row" style="align-items:flex-start;"><span class="hover-prop-key">Parameters:</span><div style="display:flex; flex-wrap:wrap; gap:4px;">${paramTags}</div></div>`;
+            hasDetails = true;
+          }
+          if (isFunction && callValues) {
+            detailsHtml += `<div class="hover-prop-row"><span class="hover-prop-key">Caller args:</span><code class="hover-prop-val">${escapeHtml(callValues)}</code></div>`;
+            hasDetails = true;
           }
 
-          if (isFunction && callValues) {
-            html += `<div class="hover-detail" style="margin-top:5px;"><strong>Caller values:</strong> <code style="color:var(--hover-param); background:var(--hover-code-bg); padding:1px 5px; border-radius:3px;">${escapeHtml(callValues)}</code></div>`;
-          }
+          detailsHtml += '</div>';
+          if (hasDetails) html += detailsHtml;
 
           html += `
             <div class="hover-footer">
               <button class="hover-goto-btn" onclick="window.jumpToDefinitionWord('${escapeHtml(word)}')">
                 <span>👉 Go to Definition</span>
-                <kbd style="font-size:10px; opacity:0.8; margin-left:3px; background:var(--hover-code-bg); padding:1px 4px; border-radius:3px; border:1px solid var(--hover-border);">F12</kbd>
+                <kbd style="font-size:10px; opacity:0.85; margin-left:4px; background:var(--hover-code-bg); padding:1px 5px; border-radius:3px; border:1px solid var(--hover-border);">F12</kbd>
               </button>
               <span style="font-size:10px; color:var(--text-dim);">Ctrl+Click / F12 to jump</span>
             </div>
@@ -2780,8 +3242,8 @@
             ? anchorElement.getBoundingClientRect() : null;
           const anchorX = anchorRect && anchorRect.width ? anchorRect.left : clientX;
           const anchorTop = anchorRect && anchorRect.height ? anchorRect.top : clientY;
-          const cardWidth = customHoverCard.offsetWidth || 360;
-          const cardHeight = customHoverCard.offsetHeight || 130;
+          const cardWidth = customHoverCard.offsetWidth || 380;
+          const cardHeight = customHoverCard.offsetHeight || 140;
 
           let left = Math.min(window.innerWidth - cardWidth - 12, Math.max(12, anchorX));
           let top = anchorTop - cardHeight - 8;
@@ -2918,38 +3380,42 @@
                 if (keywords.has(wordInfo.word)) return null;
 
                 const sym = parseSymbolDetails(wordInfo.word, model, position);
+                if (!sym) return null;
 
                 const lines = [];
-                if (sym) {
-                  lines.push(`**${sym.kind}** \`${sym.name}\``);
-                  if (sym.returnType) {
-                    lines.push(`&nbsp;&nbsp;&nbsp;&nbsp;→ \`${sym.returnType}\``);
-                  }
-                  if (sym.kind === 'function' || (sym.params && sym.params.length > 0)) {
-                    if (sym.params && sym.params.length > 0) {
-                      lines.push(`\n**Parameters / Arguments:**`);
-                      sym.params.forEach(p => lines.push(`&nbsp;&nbsp;\`${p}\``));
-                    } else {
-                      lines.push(`\n**Parameters:** \`none\``);
-                    }
-                  }
-                  if (sym.prototype) {
-                    lines.push(`\n---`);
-                    lines.push(`**Symbol Prototype**`);
-                    const encodedWord = encodeURIComponent(JSON.stringify([sym.name]));
-                    lines.push(`[👉 \`${sym.prototype}\`](command:gotoDefinitionWord?${encodedWord})`);
-                  }
-                } else {
-                  lines.push(`**(variable)** \`${wordInfo.word}\``);
-                  const encodedWord = encodeURIComponent(JSON.stringify([wordInfo.word]));
-                  lines.push(`[👉 Jump to Definition](command:gotoDefinitionWord?${encodedWord})`);
+                const kindTitle = sym.subKind || (sym.kind ? sym.kind.toUpperCase() : 'SYMBOL');
+                const scopeStr = sym.scopeText ? ` (${sym.scopeText})` : '';
+
+                lines.push(`**${kindTitle}**${scopeStr} \`${sym.name}\``);
+
+                if (sym.prototype) {
+                  lines.push('```cpp\n' + sym.prototype + '\n```');
                 }
+
+                if (sym.value && (sym.kind === 'variable' || sym.kind === 'constant' || sym.kind === 'parameter')) {
+                  lines.push(`**Initial value:** \`${sym.value}\``);
+                }
+                if (sym.returnType && sym.returnType !== 'auto') {
+                  lines.push(`**Type:** \`${sym.returnType}\``);
+                }
+                if (sym.arrayDim) {
+                  lines.push(`**Dimensions:** \`${sym.arrayDim}\``);
+                }
+                if (sym.parentFunction) {
+                  lines.push(`**Function:** \`${sym.parentFunction}()\``);
+                }
+                if (sym.kind === 'function' && sym.params && sym.params.length > 0) {
+                  lines.push(`**Parameters:** ` + sym.params.map(p => `\`${p}\``).join(', '));
+                }
+
+                const encodedWord = encodeURIComponent(JSON.stringify([sym.name]));
+                lines.push(`[👉 Go to Definition (F12)](command:gotoDefinitionWord?${encodedWord})`);
 
                 return {
                   range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
                   contents: [
                     {
-                      value: lines.join('\n  \n'),
+                      value: lines.join('\n\n'),
                       isTrusted: true
                     }
                   ]
@@ -3118,7 +3584,7 @@
         if (themeName === 'light') {
           document.body.classList.add('theme-light');
           targetMonacoTheme = 'mcu-light';
-        } else if (themeName === 'solarized_dark' || themeName === 'solarized' || themeName === 'solarize_dark') {
+        } else if (themeName === 'solarized_dark' || themeName === 'solarized' || themeName === 'solarize_dark' || themeName === 'solarized-dark') {
           document.body.classList.add('theme-solarized-dark');
           targetMonacoTheme = 'mcu-solarized-dark';
         } else {
@@ -3142,6 +3608,14 @@
         }
       };
 
+      window.setEditorFontSize = function (sz) {
+        if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
+          try {
+            window.editorInstance.updateOptions({ fontSize: Number(sz) });
+          } catch (e) {}
+        }
+      };
+
       async function autoInitTheme() {
         if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_theme_mode === 'function') {
           try {
@@ -3153,13 +3627,25 @@
         }
       }
 
+      async function autoInitFontSize() {
+        if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_font_size === 'function') {
+          try {
+            const sz = await window.pywebview.api.get_font_size();
+            if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
+              window.editorInstance.updateOptions({ fontSize: Number(sz) });
+            }
+          } catch (e) {}
+        }
+      }
+
       window.addEventListener('pywebviewready', () => {
         autoInitTheme();
+        autoInitFontSize();
       });
       document.addEventListener('DOMContentLoaded', () => {
         registerCustomMonacoThemes();
-        setTimeout(autoInitTheme, 50);
-        setTimeout(autoInitTheme, 300);
+        setTimeout(() => { autoInitTheme(); autoInitFontSize(); }, 50);
+        setTimeout(() => { autoInitTheme(); autoInitFontSize(); }, 300);
       });
     })();
   </script>

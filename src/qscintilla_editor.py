@@ -324,12 +324,15 @@ class ArduinoEditor(QsciScintilla):
                 
             # Determine word/token length to highlight
             indicator_len = 1
-            idx = pos
-            while idx < text_len and (text[idx].isalnum() or text[idx] == '_'):
-                idx += 1
-            word_len = idx - pos
-            if word_len > 0:
-                indicator_len = word_len
+            if err.get("endCol") and err.get("col") and err.get("endLine", err.get("line")) == err.get("line"):
+                indicator_len = max(1, err["endCol"] - err["col"])
+            else:
+                idx = pos
+                while idx < text_len and (text[idx].isalnum() or text[idx] == '_'):
+                    idx += 1
+                word_len = idx - pos
+                if word_len > 0:
+                    indicator_len = word_len
                 
             indic_num = 8 if severity == "error" else 9
             self.SendScintilla(SCI_SETINDICATORCURRENT, indic_num)

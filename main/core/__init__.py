@@ -1,12 +1,12 @@
 # pyright: reportUnsupportedDunderAll=false
 from main.core import constants, theme, config, file_utils, toolchain, board_catalog, board_compat
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
-from main.core.board_catalog import *
-from main.core.board_compat import *
+from main.core.constants import *  # noqa: F401, F403
+from main.core.theme import *  # noqa: F401, F403
+from main.core.config import *  # noqa: F401, F403
+from main.core.file_utils import *  # noqa: F401, F403
+from main.core.toolchain import *  # noqa: F401, F403
+from main.core.board_catalog import *  # noqa: F401, F403
+from main.core.board_compat import *  # noqa: F401, F403
 
 __all__ = (
     constants.__all__ +

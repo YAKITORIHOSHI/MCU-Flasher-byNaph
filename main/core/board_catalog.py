@@ -8,16 +8,13 @@ from __future__ import annotations
 import os
 import json
 import re
+import difflib
 import threading
 from pathlib import Path
 from typing import Optional, Any
 
-
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
+from main.core.constants import SCRIPT_DIR
+from main.core.toolchain import _get_safe_platformio_core_dir
 
 # Process-wide RAM caches for board catalogs and Arduino core parsing
 _BOARD_CATALOG_CACHE_RAM: tuple[int, int, dict] | None = None
@@ -35,7 +32,9 @@ def _get_download_dir() -> str:
     same, up-to-date path — even if the user changed it while the
     Download Manager was open.
     """
-    settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
+    settings_file = SCRIPT_DIR / "index_json" / "arduino_browser_settings.json"
+    if not settings_file.exists():
+        settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
     if not settings_file.exists() and (SCRIPT_DIR / "arduino_browser_settings.json").exists():
         settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
     default_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src"
@@ -497,7 +496,6 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, l
 
     # Token/name similarity is a secondary signal only. Strong identity fields
     # above (variant, USB IDs, Arduino define, exact name/id) dominate it.
-    import difflib
     rec_words = _board_name_tokens(f"{record.get('name','')} {record.get('arduino_id','')}")
     pio_words = _board_name_tokens(f"{candidate.get('name','')} {candidate.get('id','')} {candidate.get('vendor','')}")
     if rec_words and pio_words:
@@ -803,7 +801,7 @@ _ESPTOOL_V5_WRITE_PROGRESS_RE = re.compile(
     r"\bWriting\s+at\s+(?P<address>0x[0-9a-f]+)\b"
     r"[^\d\r\n]*"
     r"(?P<percent>\d{1,3}(?:\.\d+)?)\s*%"
-    r"(?:\s*(?P<written>[\d,]+(?:\.\d+)?[kmg]?b?)\s*/\s*(?P<total>[\d,]+(?:\.\d+)?[kmg]?b?))?",
+    r"(?:[^\d\r\n/]+(?P<written>[\d,]+(?:\.\d+)?\s*[kmg]?b?)\s*/\s*(?P<total>[\d,]+(?:\.\d+)?\s*[kmg]?b?))?",
     re.IGNORECASE,
 )
 _ESPTOOL_V4_WRITE_PROGRESS_RE = re.compile(
@@ -908,6 +906,10 @@ def _parse_esptool_write_progress(line: str) -> dict | None:
         return None
     written = match.groupdict().get("written")
     total = match.groupdict().get("total")
+    if written and total and not re.search(r"[a-zA-Z]", written):
+        unit_match = re.search(r"([a-zA-Z]+)$", total.strip())
+        if unit_match:
+            written = f"{written.strip()}{unit_match.group(1)}"
     return {
         "address": match.group("address").lower(),
         "percent": max(0.0, min(100.0, float(match.group("percent")))),
@@ -950,7 +952,7 @@ def _format_upload_progress_row(label: str, stage: int, stage_total: int,
     pct = max(0.0, min(100.0, float(percent)))
     width = max(8, int(bar_width))
     filled = max(0, min(width, int(round(width * pct / 100.0))))
-    bar = "█" * filled + "░" * (width - filled)
+    bar = "▰" * filled + "▱" * (width - filled)
     complete = pct >= 99.95
     status = "✔ Flashed" if complete else "⚡ Flashing"
     row = f"  {status} [{stage}/{stage_total}] {label} [ {bar} ] | {pct:.1f}%"

@@ -4,21 +4,23 @@
 
 static bool FileExists(const std::wstring &path) {
   DWORD attrib = GetFileAttributesW(path.c_str());
-  return (attrib != INVALID_FILE_ATTRIBUTES && !(attrib & FILE_ATTRIBUTE_DIRECTORY));
+  return (attrib != INVALID_FILE_ATTRIBUTES &&
+          !(attrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 static bool DirExists(const std::wstring &path) {
   DWORD attrib = GetFileAttributesW(path.c_str());
-  return (attrib != INVALID_FILE_ATTRIBUTES && (attrib & FILE_ATTRIBUTE_DIRECTORY));
+  return (attrib != INVALID_FILE_ATTRIBUTES &&
+          (attrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
-                   LPSTR lpCmdLine, int nCmdShow) {
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+                     PWSTR lpCmdLine, int nCmdShow) {
   // 1. Get current executable's full path dynamically
   wchar_t exePath[32768];
   if (GetModuleFileNameW(NULL, exePath, 32768) == 0) {
-    MessageBoxW(NULL, L"Failed to retrieve executable path.", L"MCU Flasher Launcher",
-                MB_ICONERROR | MB_OK);
+    MessageBoxW(NULL, L"Failed to retrieve executable path.",
+                L"MCU Flasher Launcher", MB_ICONERROR | MB_OK);
     return 1;
   }
 
@@ -26,8 +28,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   std::wstring exeStr(exePath);
   size_t lastBackslash = exeStr.find_last_of(L'\\');
   if (lastBackslash == std::wstring::npos) {
-    MessageBoxW(NULL, L"Failed to parse directory path.", L"MCU Flasher Launcher",
-                MB_ICONERROR | MB_OK);
+    MessageBoxW(NULL, L"Failed to parse directory path.",
+                L"MCU Flasher Launcher", MB_ICONERROR | MB_OK);
     return 1;
   }
   std::wstring dirPath = exeStr.substr(0, lastBackslash);
@@ -37,8 +39,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
       dirPath + L"\\direct\\runThisOnWindows.vbs",
       dirPath + L"\\runThisOnWindows.vbs",
       dirPath + L"\\..\\direct\\runThisOnWindows.vbs",
-      dirPath + L"\\..\\runThisOnWindows.vbs"
-  };
+      dirPath + L"\\..\\runThisOnWindows.vbs"};
 
   std::wstring vbsPath = L"";
   for (const auto &candidate : candidates) {
@@ -55,13 +56,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
   // 4. Verify that target VBS was located
   if (vbsPath.empty() || !FileExists(vbsPath)) {
-    std::wstring errMsg =
-        L"Could not find 'runThisOnWindows.vbs' in:\n" + dirPath + L"\n\n"
-        L"Checked locations:\n"
-        L" • " + dirPath + L"\\direct\\runThisOnWindows.vbs\n"
-        L" • " + dirPath + L"\\runThisOnWindows.vbs\n\n"
-        L"Please ensure MCU_Flasher.exe is located inside the MCU Flasher application folder.";
-    MessageBoxW(NULL, errMsg.c_str(), L"MCU Flasher Launcher", MB_ICONERROR | MB_OK);
+    std::wstring errMsg = L"Could not find 'runThisOnWindows.vbs' in:\n" +
+                          dirPath +
+                          L"\n\n"
+                          L"Checked locations:\n"
+                          L" • " +
+                          dirPath +
+                          L"\\direct\\runThisOnWindows.vbs\n"
+                          L" • " +
+                          dirPath +
+                          L"\\runThisOnWindows.vbs\n\n"
+                          L"Please ensure MCU_Flasher.exe is located inside "
+                          L"the MCU Flasher application folder.";
+    MessageBoxW(NULL, errMsg.c_str(), L"MCU Flasher Launcher",
+                MB_ICONERROR | MB_OK);
     return 1;
   }
 
@@ -93,17 +101,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
   }
 
-  // 7. Launch wscript.exe with quoted VBS path to handle spaces
+  // 7. Launch wscript.exe with quoted VBS path and forward any command line
+  // arguments
   std::wstring argStr = L"\"" + vbsPath + L"\"";
+  if (lpCmdLine && wcslen(lpCmdLine) > 0) {
+    argStr += L" ";
+    argStr += lpCmdLine;
+  }
 
-  HINSTANCE result =
-      ShellExecuteW(NULL, L"open", wscriptExe.c_str(), argStr.c_str(),
-                    workDir.c_str(), SW_HIDE);
+  HINSTANCE result = ShellExecuteW(NULL, L"open", wscriptExe.c_str(),
+                                   argStr.c_str(), workDir.c_str(), SW_HIDE);
 
   // ShellExecute returns value > 32 on success
   if ((INT_PTR)result <= 32) {
     std::wstring errMsg = L"Failed to run launcher script:\n" + vbsPath;
-    MessageBoxW(NULL, errMsg.c_str(), L"MCU Flasher Launch Error", MB_ICONERROR | MB_OK);
+    MessageBoxW(NULL, errMsg.c_str(), L"MCU Flasher Launch Error",
+                MB_ICONERROR | MB_OK);
     return 1;
   }
 

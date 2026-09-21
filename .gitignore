@@ -141,3 +141,8 @@ tests/src/
 # === Temporary / Archived Reports & Plans ===
 temp/
 old-*
+
+# === Root tool state and lock files (stored in index_json/) ===
+/skills-lock.json
+/.mcu_flasher_project_hardware.json
+/arduino_browser_settings.json

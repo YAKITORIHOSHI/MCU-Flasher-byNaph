@@ -24,6 +24,8 @@ This project has two environments:
 
 The project follows a specific directory layout. Respect these conventions when moving files or adding new ones:
 
+- **`main/qt/`** — Native PySide6 (Qt) UI components, panels (`main_window.py`, `toolbar.py`, `serial_panel.py`, `console_panel.py`, `settings_dialog.py`).
+- **`main/web_bridge.py`** — Unified RPC backend and toolchain bridge bridging Qt signals to background compilation, upload, serial monitor, and reset tasks.
 - **`src/modules/`** — Core bootstrap and environment management modules (`bootstrap.py`, `launcher.py`, `dedicated_AI.py`).
 - **`src/libs/`** — Utility libraries (`arduino_lib_req.py`, `detector.py`, `win_subprocess_hide.py`, `reset_editor.py`).
 - **`src/editor/`** — Monaco Editor offline Web UI (`index.html`, `bundle.js`, fonts).
@@ -51,12 +53,17 @@ The project follows a specific directory layout. Respect these conventions when 
 - **Always check for errors & warnings and deal with them:** Never leave code changes with unresolved lint errors, warnings, syntax issues, or undefined variables (e.g. missing imports). After making modifications, proactively audit, verify, and resolve any IDE diagnostics, compiler errors, or lint warnings in all affected files before finalizing your response.
 - **QA Engineer mode.** When asked to "act like a QA Engineer," produce structured defect reports with: reproduction steps, root cause analysis, severity/priority, affected components, and a remediation plan — before writing any code.
 
-## Test & Temp Directory Isolation (`test/`, `tests/`, `temp/`)
+## Authorized Agent Working Directory (`temp/`)
 
-- **Strict zero-touch default:** Never read, scan, view, search, edit, modify, or delete any files inside `test/`, `tests/`, or `temp/` during standard development, refactoring, or maintenance tasks.
-- **Explicit user trigger only:** Only access, view, read, update, or touch files in `temp/`, `test/`, or `tests/` if the user explicitly asks for it in their prompt (e.g., `@temp/...`, `@test/...`, or specifically asking to inspect/use temporary files or run tests).
-- **Excluded from Git:** The `temp/`, `test/`, and `tests/` directories are strictly gitignored and must never be tracked or committed to the repository for clean releases and fresh installations.
-- **Search exclusion:** When performing repository searches, refactorings, or audits, exclude `temp/`, `test/`, and `tests/` unless explicitly prompted by the user.
+- **Full absolute control authorized by owner/user:** The user/owner has explicitly authorized the agent to have full, unrestricted control over the workspace `temp/` directory (`<workspaceRoot>/temp/`).
+- **Autonomous storage & scratchpad:** The agent may freely store, create, read, update, inspect, search, and manage files in `temp/` for current and future operations without needing per-action confirmation. This includes scratch scripts, analysis dumps, cached benchmarks, intermediate diffs, logs, notes, or large collections of utility files (hundreds or thousands of files as needed).
+- **Git exclusion:** The `temp/` directory is strictly gitignored (`.gitignore`) so that any files placed there remain isolated to the local workspace and never pollute releases or version control commits.
+
+## Test Directory Isolation (`test/`, `tests/`)
+
+- **Strict zero-touch default for test fixtures:** Never read, scan, view, search, edit, modify, or delete any files inside `test/` or `tests/` during standard development, refactoring, or maintenance tasks unless explicitly prompted by the user (e.g., `@test/...`, `@tests/...`, or asking to run/debug tests).
+- **Excluded from Git:** The `test/` and `tests/` directories are strictly gitignored and must never be tracked or committed to the repository for clean releases and fresh installations.
+- **Search exclusion:** When performing repository searches, refactorings, or audits, exclude `test/` and `tests/` unless explicitly prompted by the user.
 
 ## Documentation Updates
 

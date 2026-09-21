@@ -9,13 +9,12 @@ import sys
 import time
 import json
 import re
-import ctypes
 import threading
 from pathlib import Path
 
 
-from main.core.constants import *
-from main.core.theme import *
+from main.core.constants import is_application_codebase_dir, SCRIPT_DIR
+from main.core.theme import Theme, get_theme_mode, get_theme_settings
 
 LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
 GUI_CONFIG_FILE = LOCAL_GUI_CONFIG if (SCRIPT_DIR / "src").exists() else (Path.home() / ".mcu_gui_config.json")
@@ -96,45 +95,18 @@ def _release_reset_cache_lock(handle) -> None:
 
 
 def _claim_gui_instance() -> bool:
-    """Claim the normal GUI slot, returning False when it is already in use."""
-    global _GUI_INSTANCE_MUTEX
-    if sys.platform != "win32" or "--new-window" in sys.argv:
-        return True
-    try:
-        import ctypes
-        ctypes.set_last_error(0)
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\MCUFlasherByNaph.MainGUI")
-        if not handle:
-            return True  # do not block a launch merely because the API failed
-        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return False
-        _GUI_INSTANCE_MUTEX = handle
-    except Exception:
-        return True
+    """Allow multiple GUI instances to run simultaneously.
+
+    Per-project isolation is handled dynamically by find_project_window()
+    so users can work on multiple different sketches concurrently without
+    artificial whole-app singleton blocking (Arduino IDE pattern).
+    """
     return True
 
 
 def _release_gui_instance() -> bool:
-    """Release the normal-GUI mutex for an intentional restart handoff.
-
-    A replacement process cannot pass _claim_gui_instance() while the current
-    process still owns this handle.  The old restart path destroyed Tk first
-    and then called os.execv(), so any failed replacement left no window.
-    Closing the mutex before spawning lets the replacement claim the normal
-    slot while the current GUI remains available to report launch failures.
-    """
-    global _GUI_INSTANCE_MUTEX
-    handle = _GUI_INSTANCE_MUTEX
-    if sys.platform != "win32" or not handle:
-        return False
-    try:
-        import ctypes
-        ctypes.windll.kernel32.CloseHandle(handle)
-        _GUI_INSTANCE_MUTEX = None
-        return True
-    except Exception:
-        return False
+    """No-op release for multi-window support."""
+    return True
 
 
 _CONFIG_MEM_CACHE: dict = {}
@@ -479,6 +451,7 @@ def load_gui_config() -> dict:
         if "instances" not in data:
             data["instances"] = {}
         fallback_dir = ""
+        fallback_board = ""
         if "shared" in data and "last_sketch_dir" in data["shared"]:
             fallback_dir = data["shared"]["last_sketch_dir"]
         else:
@@ -486,7 +459,12 @@ def load_gui_config() -> dict:
                 if inst.get("last_sketch_dir"):
                     fallback_dir = inst["last_sketch_dir"]
                     break
-        data["instances"][_INSTANCE_ID] = {"last_sketch_dir": fallback_dir}
+        if fallback_dir and is_application_codebase_dir(fallback_dir):
+            fallback_dir = ""
+
+        # Board always starts empty / unconfigured on launch (per user requirement)
+        new_inst = {"last_sketch_dir": fallback_dir, "selected_board": ""}
+        data["instances"][_INSTANCE_ID] = new_inst
         _save_raw_config(data)
 
     # Backfill create_time if this entry doesn't have one yet (covers both
@@ -497,11 +475,17 @@ def load_gui_config() -> dict:
         inst["create_time"] = _own_create_time()
         _save_raw_config(data)
 
-    return data["instances"].get(_INSTANCE_ID, {})
+    res = data["instances"].get(_INSTANCE_ID, {})
+    if res.get("last_sketch_dir") and is_application_codebase_dir(res.get("last_sketch_dir")):
+        res["last_sketch_dir"] = ""
+    return res
 
 
 def save_gui_config(config: dict):
     """Persist this instance's config dict without touching other instances."""
+    if "last_sketch_dir" in config and is_application_codebase_dir(config["last_sketch_dir"]):
+        config["last_sketch_dir"] = ""
+
     data = _load_raw_config()
     if "instances" not in data:
         data = {"instances": {}, "shared": {}}
@@ -510,30 +494,62 @@ def save_gui_config(config: dict):
     # Also update the shared config so new instances can inherit it
     if "shared" not in data:
         data["shared"] = {}
-    if "last_sketch_dir" in config:
+    if "last_sketch_dir" in config and config["last_sketch_dir"]:
         data["shared"]["last_sketch_dir"] = config["last_sketch_dir"]
+    if "selected_board" in config and config["selected_board"]:
+        data["shared"]["selected_board"] = config["selected_board"]
+        if config.get("last_sketch_dir"):
+            data["shared"].setdefault("project_board_map", {})[config["last_sketch_dir"]] = config["selected_board"]
         
-    # Prune stale instance entries (processes that no longer exist, or whose
-    # PID has since been recycled by an unrelated process)
-    alive = _get_alive_pid_create_times()
-    if alive is not None:
-        data["instances"] = {
-            k: v for k, v in data["instances"].items()
-            if k == _INSTANCE_ID or _instance_is_alive(k, v, alive)
-        }
+    # Prune stale instance entries only when the table accumulates entries (> 5),
+    # preventing expensive system-wide psutil process enumeration on every config save.
+    if len(data.get("instances", {})) > 5:
+        alive = _get_alive_pid_create_times()
+        if alive is not None:
+            data["instances"] = {
+                k: v for k, v in data["instances"].items()
+                if k == _INSTANCE_ID or _instance_is_alive(k, v, alive)
+            }
     _save_raw_config(data)
+
+
+def get_project_remembered_board(project_dir: str) -> str:
+    """Return the remembered board for a specific sketch project directory, if any."""
+    if not project_dir:
+        return ""
+    try:
+        data = _load_raw_config()
+        p_str = str(Path(project_dir).resolve())
+        return data.get("shared", {}).get("project_board_map", {}).get(p_str, "") or data.get("shared", {}).get("selected_board", "")
+    except Exception:
+        return ""
+
+
+def set_project_remembered_board(project_dir: str, board_name: str) -> None:
+    """Persist the board association for a specific sketch project directory."""
+    if not project_dir or not board_name:
+        return
+    try:
+        data = _load_raw_config()
+        shared = data.setdefault("shared", {})
+        shared["selected_board"] = board_name
+        p_str = str(Path(project_dir).resolve())
+        shared.setdefault("project_board_map", {})[p_str] = board_name
+        _save_raw_config(data)
+    except Exception:
+        pass
 
 
 def load_recent_projects() -> list[str]:
     """Load and return the list of recently opened project paths (up to 10),
-    automatically filtering out folders that no longer exist on disk."""
+    automatically filtering out folders that no longer exist on disk or belong to the application codebase."""
     data = _load_raw_config()
     recent = data.get("shared", {}).get("recent_projects", [])
     valid_recent = []
     changed = False
     for p in recent:
         try:
-            if Path(p).is_dir():
+            if Path(p).is_dir() and not is_application_codebase_dir(p):
                 valid_recent.append(p)
             else:
                 changed = True
@@ -550,6 +566,8 @@ def load_recent_projects() -> list[str]:
 def add_recent_project(path: str):
     """Add a project folder path to the recent list (max 10 folders),
     bumping it to the top of the list if it already exists."""
+    if not path or is_application_codebase_dir(path):
+        return
     data = _load_raw_config()
     if "shared" not in data:
         data["shared"] = {}
@@ -558,12 +576,46 @@ def add_recent_project(path: str):
         path = str(Path(path).resolve())
     except Exception:
         path = str(path)
+    if is_application_codebase_dir(path):
+        return
     if path in recent:
         recent.remove(path)
     recent.insert(0, path)
     recent = recent[:10]
     data["shared"]["recent_projects"] = recent
     _save_raw_config(data)
+
+
+def load_recent_boards() -> list[str]:
+    """Load and return the list of recently selected boards (up to 5)."""
+    data = _load_raw_config()
+    recent = data.get("shared", {}).get("recent_boards", [])
+    if not isinstance(recent, list):
+        return []
+    return [str(b).strip() for b in recent if b and isinstance(b, str)][:5]
+
+
+def add_recent_board(board_name: str) -> list[str]:
+    """Add a board name to the recent list (max 5 boards),
+    bumping it to the top of the list if it already exists."""
+    if not board_name or not isinstance(board_name, str):
+        return load_recent_boards()
+    name = board_name.strip()
+    if not name:
+        return load_recent_boards()
+    data = _load_raw_config()
+    if "shared" not in data:
+        data["shared"] = {}
+    recent = data["shared"].get("recent_boards", [])
+    if not isinstance(recent, list):
+        recent = []
+    if name in recent:
+        recent.remove(name)
+    recent.insert(0, name)
+    recent = recent[:5]
+    data["shared"]["recent_boards"] = recent
+    _save_raw_config(data)
+    return recent
 
 
 def port_occupied_owner(port: str | None) -> str | None:
@@ -646,20 +698,151 @@ def folder_lock_owner(path) -> str | None:
     live instance, else None. Accepts a str or Path; resolves before
     comparing so trailing slashes / '.' segments / case-on-Windows don't
     cause false negatives."""
+    info = find_project_window(path, exclude_self=True)
+    return str(info["pid"]) if info else None
+
+
+def find_project_window(path, exclude_self: bool = False) -> dict | None:
+    """Return {'pid': int, 'hwnd': int, 'folder': str} if `path` is currently
+    active in a live instance, else None.
+
+    Resolves canonical path and matches case-insensitively on Windows.
+    Automatically filters out stale/dead processes. If exclude_self is True,
+    skips the current process instance.
+    """
+    if not path:
+        return None
     try:
-        resolved = str(Path(path).resolve())
+        cand = Path(path).resolve()
+        resolved = str(cand.parent if cand.is_file() else cand)
     except Exception:
         resolved = str(path)
-    occupied = get_occupied_folders()
-    # Path.resolve() is already case-normalized on Windows, but compare
-    # case-insensitively there too in case one side couldn't resolve.
-    if sys.platform == "win32":
-        resolved_l = resolved.lower()
-        for folder, pid in occupied.items():
-            if folder.lower() == resolved_l:
-                return pid
-        return None
-    return occupied.get(resolved)
+
+    data = _load_raw_config()
+    alive = _get_alive_pid_create_times()
+    resolved_l = resolved.lower() if sys.platform == "win32" else resolved
+
+    for pid, inst in data.get("instances", {}).items():
+        if exclude_self and pid == _INSTANCE_ID:
+            continue
+        if not _instance_is_alive(pid, inst, alive):
+            continue
+        folder = inst.get("active_sketch_dir")
+        if folder:
+            try:
+                f_cand = Path(folder).resolve()
+                f_res = str(f_cand.parent if f_cand.is_file() else f_cand)
+            except Exception:
+                f_res = str(folder)
+            f_cmp = f_res.lower() if sys.platform == "win32" else f_res
+            if f_cmp == resolved_l:
+                return {
+                    "pid": int(pid) if pid.isdigit() else pid,
+                    "hwnd": int(inst.get("hwnd", 0) or 0),
+                    "folder": f_res,
+                }
+    return None
+
+
+def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
+    """Restore and bring the specified window to the foreground.
+
+    If hwnd is 0 or invalid, attempts to resolve the top-level visible window
+    belonging to pid. Uses Win32 AttachThreadInput to bypass foreground lock.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        target_hwnd = hwnd if (hwnd and user32.IsWindow(hwnd)) else 0
+
+        # If no valid hwnd, search for top-level visible window by pid
+        if not target_hwnd and pid:
+            found_hwnds: list[int] = []
+
+            def _enum_cb(h, lparam):
+                if user32.IsWindowVisible(h):
+                    proc_id = ctypes.c_ulong()
+                    user32.GetWindowThreadProcessId(h, ctypes.byref(proc_id))
+                    if proc_id.value == pid:
+                        length = user32.GetWindowTextLengthW(h)
+                        if length > 0:
+                            found_hwnds.append(h)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            cb = WNDENUMPROC(_enum_cb)
+            user32.EnumWindows(cb, 0)
+            if found_hwnds:
+                target_hwnd = found_hwnds[0]
+
+        if not target_hwnd or not user32.IsWindow(target_hwnd):
+            return False
+
+        SW_RESTORE = 9
+        SW_SHOWNORMAL = 1
+        if user32.IsIconic(target_hwnd):
+            user32.ShowWindow(target_hwnd, SW_RESTORE)
+        else:
+            user32.ShowWindow(target_hwnd, SW_SHOWNORMAL)
+
+        user32.BringWindowToTop(target_hwnd)
+        user32.SetForegroundWindow(target_hwnd)
+
+        # AttachThreadInput trick to guarantee foreground lock transfer
+        cur_thread = kernel32.GetCurrentThreadId()
+        tgt_thread = user32.GetWindowThreadProcessId(target_hwnd, None)
+        if cur_thread != tgt_thread:
+            user32.AttachThreadInput(cur_thread, tgt_thread, True)
+            user32.SetForegroundWindow(target_hwnd)
+            user32.AttachThreadInput(cur_thread, tgt_thread, False)
+
+        return True
+    except Exception:
+        return False
+
+
+def set_active_sketch_dir(folder_path: str, hwnd: int = 0):
+    """Set the currently active sketch directory for this instance and update hwnd."""
+    cfg = load_gui_config()
+    if folder_path:
+        try:
+            cand = Path(folder_path).resolve()
+            folder_path = str(cand.parent if cand.is_file() else cand)
+        except Exception:
+            folder_path = str(folder_path)
+    cfg["active_sketch_dir"] = folder_path or ""
+    if hwnd:
+        cfg["hwnd"] = int(hwnd)
+    save_gui_config(cfg)
+
+
+def set_instance_hwnd(hwnd: int):
+    """Store the Win32 window handle for this instance."""
+    if not hwnd:
+        return
+    cfg = load_gui_config()
+    cfg["hwnd"] = int(hwnd)
+    save_gui_config(cfg)
+
+
+def clear_active_sketch_dir():
+    """Clear the active sketch directory for this instance upon project switch/close."""
+    cfg = load_gui_config()
+    cfg["active_sketch_dir"] = ""
+    save_gui_config(cfg)
+
+
+def clean_instance_config(pid_to_remove: str = None):
+    """Remove this instance's record from the instances table upon exit."""
+    target_pid = str(pid_to_remove or _INSTANCE_ID)
+    data = _load_raw_config()
+    if "instances" in data and target_pid in data["instances"]:
+        del data["instances"][target_pid]
+        _save_raw_config(data)
 
 
 __all__ = [
@@ -679,7 +862,12 @@ __all__ = [
     "_release_reset_cache_lock",
     "_save_raw_config",
     "_try_acquire_reset_cache_lock",
+    "add_recent_board",
     "add_recent_project",
+    "clean_instance_config",
+    "clear_active_sketch_dir",
+    "find_project_window",
+    "focus_project_window",
     "folder_lock_owner",
     "get_auto_clear_serial_monitor",
     "get_autosave_settings",
@@ -692,21 +880,26 @@ __all__ = [
     "get_occupied_folders",
     "get_occupied_ports",
     "get_periodic_reload_settings",
+    "get_project_remembered_board",
     "get_remembered_board_for_port",
     "get_theme_mode",
     "get_theme_settings",
     "load_gui_config",
+    "load_recent_boards",
     "load_recent_projects",
     "port_occupied_owner",
     "remember_port_board",
     "save_gui_config",
+    "set_active_sketch_dir",
     "set_auto_clear_serial_monitor",
     "set_autosave_settings",
     "set_clear_build_console_on_action",
     "set_clear_serial_on_upload",
     "set_hide_build_console_warnings",
     "set_editor_mode",
+    "set_instance_hwnd",
     "set_monaco_boot_pending",
     "set_periodic_reload_settings",
+    "set_project_remembered_board",
     "set_theme_mode"
 ]

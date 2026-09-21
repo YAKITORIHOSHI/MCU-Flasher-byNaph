@@ -10,12 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
-from main.core.toolchain import *
-from main.core.board_catalog import *
+from main.core.board_catalog import SUPPORTED_BOARDS, _normalize_board_identity
 
 def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None:
     """Return the safest resolved board for a platform / MCU-family hint.

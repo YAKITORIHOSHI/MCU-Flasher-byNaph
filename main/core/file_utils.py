@@ -10,19 +10,18 @@ import os
 import json
 import time
 import re
-import shutil
 import tempfile
 import subprocess
 import threading
-import ctypes
 import hashlib
 from datetime import datetime
 from pathlib import Path
 
 
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
+from main.core.constants import (
+    is_application_codebase_dir, SCRIPT_DIR,
+    PROJECT_BUILD_CACHE_DIR, PROJECT_BUILD_CACHE_MARKER, MAX_BAUD_RATE,
+)
 
 _PROJECT_CACHE_MIGRATION_LOCK = threading.RLock()
 _MIGRATED_PROJECTS: set[str] = set()
@@ -1216,8 +1215,14 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         hw = state_info.get("hardware", {})
         live_board = hw.get("board_name") if hw.get("board_selected") and hw.get("board_name") else "None (No board currently selected in GUI)"
         live_port = hw.get("port") if hw.get("mcu_connected") and hw.get("port") else "None (No microcontroller connected)"
-        live_baud = hw.get("baud_rate") or 115200
-        live_upload_spd = hw.get("upload_speed") or 460800
+        try:
+            live_baud = min(int(hw.get("baud_rate") or 115200), MAX_BAUD_RATE)
+        except Exception:
+            live_baud = 115200
+        try:
+            live_upload_spd = min(int(hw.get("upload_speed") or 460800), MAX_BAUD_RATE)
+        except Exception:
+            live_upload_spd = 460800
         live_summary = state_info.get("status_summary") or "No board selected in GUI and no microcontroller connected."
         live_platform = hw.get("platform") or "N/A"
         live_fqbn = hw.get("fqbn") or "N/A"
@@ -1370,16 +1375,22 @@ def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
     s_dir = Path(sketch_dir)
     if not s_dir.exists():
         return []
-    
+
+    # SAFETY GUARD: Never treat MCU Flasher application codebase as a sketch!
+    if is_application_codebase_dir(s_dir):
+        return []
+
     ignored_dir_names = {
         ".git", ".vscode", "env", "node_modules", "__pycache__",
         ".platformio", "build", ".pio", "src", "mcu-flasher-src", "mcu_flasher_src",
         "compiled_builds", "build_artifacts", ".build_artifacts", ".clangd", ".cache", "_temp",
-        ".mcu_ai_edits", PROJECT_BUILD_CACHE_DIR, "logs",
+        ".mcu_ai_edits", PROJECT_BUILD_CACHE_DIR, "logs", "installers", "direct", "index_json",
+        ".agents", ".github",
     }
-    
+
     results = []
-    supp_set = {ext.lower() for ext in supported_extensions} if supported_extensions else None
+    default_sketch_exts = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
+    supp_set = {ext.lower() for ext in supported_extensions} if supported_extensions is not None else default_sketch_exts
 
     def _walk(current_dir):
         try:
@@ -1391,7 +1402,7 @@ def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
                     _walk(entry.path)
                 elif entry.is_file(follow_symlinks=False):
                     p = Path(entry.path)
-                    if supp_set is None or p.suffix.lower() in supp_set:
+                    if p.suffix.lower() in supp_set:
                         results.append(p)
         except Exception:
             pass
@@ -1581,7 +1592,6 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
         def _heal_extra_dirs_match(match):
             nonlocal modified
             line = match.group(0)
-            key = match.group(1)
             raw_dirs = match.group(2).strip()
 
             dir_parts = [d.strip() for d in raw_dirs.split(",") if d.strip()]
@@ -1608,19 +1618,16 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
 
         if modified or content != old_content:
             _write_ok = False
-            _last_err = None
             for _i in range(6):
                 try:
                     ensure_file_writable(p)
                     p.write_text(content, encoding="utf-8")
                     _write_ok = True
                     break
-                except Exception as _e:
-                    _last_err = _e
+                except Exception:
                     time.sleep(0.15 * (_i + 1))
             if not _write_ok:
                 try:
-                    import tempfile as _tf
                     _bak = p.with_suffix(p.suffix + ".locked")
                     _bak.write_text(content, encoding="utf-8")
                 except Exception:
@@ -1695,7 +1702,7 @@ def align_sketch_filename_case(folder_path: Path | str) -> list[tuple[Path, Path
                     f.rename(temp_name)
                     temp_name.rename(target_path)
                     renamed.append((f, target_path))
-            except Exception as item_err:
+            except Exception:  # noqa: broad-except for resilient fallback
                 try:
                     target_filename = f"{folder_name}{f.suffix}"
                     target_path = folder / target_filename
@@ -1737,6 +1744,7 @@ __all__ = [
     "hide_generated_directory",
     "hide_hidden_attribute",
     "hide_internal_project_metadata",
+    "is_application_codebase_dir",
     "is_nonfatal_pio_clean_report",
     "is_ntfs_path",
     "is_transient_file_lock_error",

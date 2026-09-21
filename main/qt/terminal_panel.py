@@ -1,0 +1,994 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+main.qt.terminal_panel — Integrated Project Terminal panel for MCU Flasher by Naph.
+
+Faithfully aligned with the original native architecture:
+  • Child process isolation: runs src/modules/project_terminal.py with a local HTTP/WS server
+  • Real interactive ConPTY sessions (PowerShell & Command Prompt) via pywinpty + xterm.js
+  • Win32 HWND embedding (SetParent) into a native Qt widget container
+  • True multi-session tabs: PowerShell and Command Prompt tabs with individual scrollback and lifecycle
+  • Toolbar controls: + New Terminal ▾ (pwsh/cmd), ↺ Restart, Clear, Pop-out (↗ / ↙ Detach & Reattach)
+  • Active theme synchronization: live updates xterm.js colors when theme changes
+  • Seamless resizing: dynamically updates terminal geometry on splitter or window resize
+"""
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QTabBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+try:
+    import win32con
+    import win32gui
+except ImportError:
+    win32gui = None
+    win32con = None
+
+_this_file = Path(__file__).resolve()
+_project_root = _this_file.parent.parent.parent
+_SPIN_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+class _EmbedContainer(QWidget):
+    """Native window embedding container with automatic geometry synchronization."""
+
+    def __init__(self, panel: "TerminalPanel", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._panel = panel
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_PaintOnScreen, True)
+        self.setStyleSheet("background: #0b0e14;")
+        self.setMinimumSize(100, 80)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def mousePressEvent(self, event) -> None:
+        super().mousePressEvent(event)
+        self._panel.focus_terminal()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self._panel.focus_terminal()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self._panel, "_resize_embedded_terminal"):
+            self._panel._resize_embedded_terminal()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if hasattr(self._panel, "_resize_embedded_terminal"):
+            self._panel._resize_embedded_terminal(show=True)
+            QTimer.singleShot(30, lambda: self._panel._resize_embedded_terminal(show=True))
+            QTimer.singleShot(100, lambda: self._panel._resize_embedded_terminal(show=True))
+            QTimer.singleShot(250, self._panel.focus_terminal)
+
+
+class TerminalPanel(QWidget):
+    """
+    Bottom dock tab displaying multi-session tabbed Project Terminals.
+    Embeds the native xterm.js + ConPTY pywebview window via Win32 SetParent.
+    """
+
+    def __init__(self, backend=None, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._backend = backend
+        self._proc: Optional[subprocess.Popen] = None
+        self._port: Optional[int] = None
+        self._port_file: Optional[Path] = None
+
+        self._is_active = False
+        self._is_embedded = False
+        self._is_ready = False
+        self._term_hwnd: Optional[int] = None
+        self._original_style: Optional[int] = None
+        self._original_ex_style: Optional[int] = None
+
+        self._sessions_meta: dict[str, dict] = {}
+        self._active_session_id: Optional[str] = None
+        self._session_counter = 0
+        self._pending_controls: list[tuple[str, Optional[str], Optional[dict]]] = []
+
+        self._current_theme = "default"
+        self._current_font_size = 11
+
+        self._spin_timer = QTimer(self)
+        self._spin_timer.setInterval(90)
+        self._spin_timer.timeout.connect(self._tick_spinner)
+        self._spin_idx = 0
+
+        self._embed_poll_timer = QTimer(self)
+        self._embed_poll_timer.setInterval(60)
+        self._embed_poll_timer.timeout.connect(self._poll_for_terminal_window)
+        self._poll_attempts = 0
+
+        self._ready_poll_timer = QTimer(self)
+        self._ready_poll_timer.setInterval(100)
+        self._ready_poll_timer.timeout.connect(self._poll_for_terminal_readiness)
+        self._ready_attempts = 0
+
+        self._build_ui()
+        self._update_buttons_state()
+
+    def _build_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # ── Header Bar ────────────────────────────────────────────────────────
+        header = QFrame()
+        header.setObjectName("terminal-header")
+        header.setFixedHeight(34)
+        header.setStyleSheet("QFrame#terminal-header { background: #151922; border-bottom: 1px solid #1c2333; }")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(8, 2, 8, 2)
+        hl.setSpacing(6)
+        self._header_layout = hl
+
+        lbl = QLabel("🖥 Terminal")
+        self._title_lbl = lbl
+        lbl.setStyleSheet("color: #56cfbf; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;")
+        hl.addWidget(lbl)
+
+        # ── New Terminal ▾ dropdown button ────────────────────────────────────
+        self._btn_new = QPushButton("+ New Terminal ▾")
+        self._btn_new.setObjectName("btn-terminal-new")
+        self._btn_new.setFixedHeight(22)
+        self._btn_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_new.setStyleSheet("""
+            QPushButton#btn-terminal-new {
+                background: #1c2333; color: #56cfbf; font-size: 11px; font-weight: 600;
+                border: 1px solid #2d3748; border-radius: 3px; padding: 2px 8px;
+            }
+            QPushButton#btn-terminal-new:hover { background: #253347; color: #ffffff; border-color: #56cfbf; }
+        """)
+        new_menu = QMenu(self)
+        new_menu.setStyleSheet("""
+            QMenu {
+                background: #151922; color: #cdd6f4; border: 1px solid #2d3748;
+                font-size: 11px; padding: 4px;
+            }
+            QMenu::item { padding: 4px 16px; border-radius: 2px; }
+            QMenu::item:selected { background: #253347; color: #56cfbf; }
+        """)
+        act_pwsh = new_menu.addAction("PowerShell (pwsh)")
+        act_pwsh.triggered.connect(lambda: self.add_session("pwsh"))
+        act_cmd = new_menu.addAction("Command Prompt (cmd)")
+        act_cmd.triggered.connect(lambda: self.add_session("cmd"))
+        self._btn_new.setMenu(new_menu)
+        hl.addWidget(self._btn_new)
+
+        # ── Session Tabs in Header Bar ────────────────────────────────────────
+        self._tab_bar = QTabBar()
+        self._tab_bar.setTabsClosable(True)
+        self._tab_bar.setMovable(True)
+        self._tab_bar.setDrawBase(False)
+        self._tab_bar.setExpanding(False)
+        self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        self._tab_bar.tabCloseRequested.connect(self._on_tab_close_requested)
+        self._tab_bar.setStyleSheet("""
+            QTabBar { background: transparent; border: none; }
+            QTabBar::tab {
+                background: #10151c; color: #8fa1b3; border: 1px solid #1c2333;
+                border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+                margin-right: 4px; min-height: 18px;
+            }
+            QTabBar::tab:selected {
+                background: #1c2333; color: #56cfbf; border: 1px solid #56cfbf;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #18202c; color: #e0e6ed;
+            }
+            QTabBar::close-button {
+                subcontrol-position: right; margin-left: 5px;
+            }
+            QTabBar::close-button:hover {
+                background: #e74c3c; border-radius: 2px;
+            }
+        """)
+        hl.addWidget(self._tab_bar)
+
+        hl.addStretch()
+
+        # ── Status Badge ──────────────────────────────────────────────────────
+        self._status_badge = QLabel("● Ready")
+        self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
+        hl.addWidget(self._status_badge)
+
+        # ── Action Buttons ────────────────────────────────────────────────────
+        self._btn_restart = QPushButton("↺ Restart")
+        self._btn_restart.setObjectName("btn-terminal-restart")
+        self._btn_restart.setToolTip("Reset / restart active terminal session")
+        self._btn_restart.setFixedHeight(22)
+        self._btn_restart.setEnabled(False)
+        self._btn_restart.setCursor(Qt.CursorShape.ArrowCursor)
+        self._btn_restart.setStyleSheet("""
+            QPushButton#btn-terminal-restart:enabled {
+                background: #1c2333; color: #cdd6f4; font-size: 11px; font-weight: 600;
+                border: 1px solid #2d3748; border-radius: 3px; padding: 2px 8px;
+            }
+            QPushButton#btn-terminal-restart:enabled:hover { background: #253347; color: #ffffff; }
+            QPushButton#btn-terminal-restart:disabled {
+                background: #151922; color: #4b5563; font-size: 11px;
+                border: 1px solid #1c2333; border-radius: 3px; padding: 2px 8px;
+            }
+        """)
+        self._btn_restart.clicked.connect(self._restart_active_session)
+        hl.addWidget(self._btn_restart)
+
+        self._btn_clear = QPushButton("Clear")
+        self._btn_clear.setObjectName("btn-terminal-clear")
+        self._btn_clear.setToolTip("Clear active terminal display")
+        self._btn_clear.setFixedHeight(22)
+        self._btn_clear.setEnabled(False)
+        self._btn_clear.setCursor(Qt.CursorShape.ArrowCursor)
+        self._btn_clear.setStyleSheet("""
+            QPushButton#btn-terminal-clear:enabled {
+                background: #1c2333; color: #cdd6f4; font-size: 11px; font-weight: 600;
+                border: 1px solid #2d3748; border-radius: 3px; padding: 2px 8px;
+            }
+            QPushButton#btn-terminal-clear:enabled:hover { background: #253347; color: #ffffff; }
+            QPushButton#btn-terminal-clear:disabled {
+                background: #151922; color: #4b5563; font-size: 11px;
+                border: 1px solid #1c2333; border-radius: 3px; padding: 2px 8px;
+            }
+        """)
+        self._btn_clear.clicked.connect(self._clear_active_session)
+        hl.addWidget(self._btn_clear)
+
+        self._btn_popout = QPushButton("↗")
+        self._btn_popout.setToolTip("Open in external window")
+        self._btn_popout.setFixedSize(22, 22)
+        self._btn_popout.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_popout.setStyleSheet("""
+            QPushButton {
+                background: #1c2333; color: #cdd6f4; font-size: 12px; font-weight: 700;
+                border: 1px solid #2d3748; border-radius: 3px;
+            }
+            QPushButton:hover { background: #253347; color: #56cfbf; border-color: #56cfbf; }
+        """)
+        self._btn_popout.clicked.connect(self._popout_terminal)
+        hl.addWidget(self._btn_popout)
+
+        main_layout.addWidget(header)
+
+        # ── Stacked View (Loader, Embedded Container, Empty Placeholder) ─────
+        self._stack = QStackedWidget(self)
+
+        # 0. Loading View
+        self._loader_card = QFrame()
+        self._loader_card.setStyleSheet("QFrame { background: #0b0e14; border: none; }")
+        lv = QVBoxLayout(self._loader_card)
+        lv.setContentsMargins(20, 20, 20, 20)
+        lv.setSpacing(10)
+        lv.addStretch()
+
+        self._spin_lbl = QLabel("⠋")
+        self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._spin_lbl.setStyleSheet("font-size: 28px; color: #56cfbf;")
+        lv.addWidget(self._spin_lbl)
+
+        self._load_title = QLabel("Initializing Project Terminal…")
+        self._load_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._load_title.setStyleSheet("color: #56cfbf; font-size: 13px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
+        lv.addWidget(self._load_title)
+
+        self._load_sub = QLabel("Preparing ConPTY terminal engine & environment…")
+        self._load_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._load_sub.setStyleSheet("color: #8fa1b3; font-size: 11px; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
+        self._load_sub.setWordWrap(True)
+        lv.addWidget(self._load_sub)
+        lv.addStretch()
+
+        self._stack.addWidget(self._loader_card)
+
+        # 1. Native Embedding Container View
+        self._embed_container = _EmbedContainer(self)
+        self._stack.addWidget(self._embed_container)
+
+        # 2. Empty state card
+        self._empty_card = QFrame()
+        self._empty_card.setStyleSheet("QFrame { background: #0b0e14; border: none; }")
+        el = QVBoxLayout(self._empty_card)
+        el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        el.setSpacing(10)
+
+        lbl_no_term = QLabel("No active terminal sessions")
+        lbl_no_term.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 600;")
+        el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        btn_new_empty = QPushButton("+ Open Terminal Session")
+        btn_new_empty.setObjectName("btn-terminal-open")
+        btn_new_empty.setFixedWidth(180)
+        btn_new_empty.setFixedHeight(28)
+        btn_new_empty.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_new_empty.setStyleSheet("""
+            QPushButton#btn-terminal-open {
+                background: #1c2333; color: #56cfbf; font-size: 12px; font-weight: 600;
+                border: 1px solid #2d3748; border-radius: 4px; padding: 4px 12px;
+            }
+            QPushButton#btn-terminal-open:hover { background: #253347; color: #ffffff; border-color: #56cfbf; }
+        """)
+        btn_new_empty.clicked.connect(lambda: self.add_session("pwsh"))
+        el.addWidget(btn_new_empty, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._stack.addWidget(self._empty_card)
+
+        self._stack.setCurrentWidget(self._empty_card)
+        main_layout.addWidget(self._stack, stretch=1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.set_responsive_width(event.size().width())
+        if hasattr(self, "_resize_embedded_terminal"):
+            self._resize_embedded_terminal()
+
+    def set_responsive_width(self, width: int) -> None:
+        """Dynamically adapt terminal header buttons based on width."""
+        self._current_responsive_width = width
+        if width >= 1100:
+            self._is_ultra_compact = False
+            self._title_lbl.setText("🖥 Terminal")
+            self._btn_new.setText("+ New Terminal ▾")
+            self._btn_restart.setText("↺ Restart")
+            self._btn_clear.setText("Clear")
+            if hasattr(self, "_header_layout"):
+                self._header_layout.setSpacing(6)
+        elif width >= 850:
+            self._is_ultra_compact = False
+            self._title_lbl.setText("🖥 Term")
+            self._btn_new.setText("+ New ▾")
+            self._btn_restart.setText("↺")
+            self._btn_clear.setText("Clear")
+            if hasattr(self, "_header_layout"):
+                self._header_layout.setSpacing(4)
+        else:
+            self._is_ultra_compact = True
+            self._title_lbl.setText("🖥")
+            self._btn_new.setText("+")
+            self._btn_restart.setText("↺")
+            self._btn_clear.setText("🗑")
+            if hasattr(self, "_header_layout"):
+                self._header_layout.setSpacing(3)
+
+    def _tick_spinner(self) -> None:
+        self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
+        self._spin_lbl.setText(_SPIN_CHARS[self._spin_idx])
+
+    def _get_target_dir(self) -> str:
+        if self._backend and hasattr(self._backend, "sketch_dir_path") and self._backend.sketch_dir_path:
+            p = Path(self._backend.sketch_dir_path)
+            if p.exists():
+                return str(p)
+        return str(_project_root)
+
+    # ── Startup & Embedding ──────────────────────────────────────────────────
+    def ensure_started(self) -> None:
+        """Ensure the project terminal child process is running."""
+        if not self._is_active:
+            self._start_terminal()
+
+    def _start_terminal(self) -> None:
+        script_path = _project_root / "src" / "modules" / "project_terminal.py"
+        if not script_path.exists():
+            QMessageBox.critical(self, "Terminal Error", f"Missing terminal script at {script_path}")
+            return
+
+        from src.modules.private_python_guard import get_private_python_exe
+        py_exe = get_private_python_exe(prefer_pythonw=True)
+        target_dir = str(Path(self._get_target_dir()).resolve())
+
+        try:
+            fd, port_file = tempfile.mkstemp(prefix="mcu-terminal-", suffix=".json")
+            os.close(fd)
+            try:
+                os.unlink(port_file)
+            except OSError:
+                pass
+            self._port_file = Path(port_file)
+        except Exception:
+            self._port_file = _project_root / "temp" / f"terminal_port_{os.getpid()}.json"
+
+        # Show loading view
+        self._is_ready = False
+        self._poll_attempts = 0
+        self._ready_attempts = 0
+        self._stack.setCurrentWidget(self._loader_card)
+        self._status_badge.setText("● Initializing…")
+        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
+        self._load_title.setText("Initializing Project Terminal…")
+        self._load_sub.setText("Preparing ConPTY terminal engine & environment…")
+        self._spin_timer.start()
+
+        cmd = [
+            str(py_exe),
+            str(script_path),
+            "--launch-terminal", target_dir,
+            "--initial-cwd", target_dir,
+            "--port-file", str(self._port_file),
+        ]
+
+        try:
+            creationflags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+            self._proc = subprocess.Popen(
+                cmd,
+                cwd=str(_project_root),
+                creationflags=creationflags,
+            )
+            self._is_active = True
+            self._poll_attempts = 0
+            self._embed_poll_timer.start()
+        except Exception as e:
+            self._spin_timer.stop()
+            self._status_badge.setText("● Error")
+            self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
+            self._load_title.setText("Terminal Startup Error")
+            self._load_sub.setText(f"Failed to start Project Terminal: {e}")
+            QMessageBox.critical(self, "Terminal Error", f"Failed to start Project Terminal:\n\n{e}")
+
+    def _poll_for_terminal_window(self) -> None:
+        """Poll for the hidden pywebview OS window and embed into self._embed_container."""
+        self._poll_attempts += 1
+        if win32gui is None or win32con is None:
+            self._embed_poll_timer.stop()
+            self._spin_timer.stop()
+            return
+
+        if self._port_file and self._port_file.exists():
+            try:
+                data = json.loads(self._port_file.read_text(encoding="utf-8"))
+                if "port" in data:
+                    self._port = int(data["port"])
+            except Exception:
+                pass
+
+        hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - Project Terminal")
+        if not hwnd or hwnd == 0:
+            if self._poll_attempts > 240:  # ~15 seconds timeout
+                self._embed_poll_timer.stop()
+                self._spin_timer.stop()
+                self._status_badge.setText("● Timeout")
+                self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
+                self._load_title.setText("Connection Timed Out")
+                self._load_sub.setText("Could not attach to the Project Terminal window.")
+            return
+
+        # Check if window is responsive
+        user32 = ctypes.windll.user32
+        if user32.IsHungAppWindow(hwnd):
+            return
+
+        self._embed_poll_timer.stop()
+        self._embed_terminal_hwnd(hwnd)
+
+        self._load_title.setText("Starting Project Terminal…")
+        self._load_sub.setText("Loading interactive shell session…")
+        self._ready_attempts = 0
+        self._ready_poll_timer.start()
+
+    def _embed_terminal_hwnd(self, hwnd: int) -> None:
+        """Reparent the native pywebview window into the Qt container."""
+        if win32gui is None or win32con is None:
+            return
+
+        try:
+            container_hwnd = int(self._embed_container.winId())
+
+            # Ensure WS_CLIPCHILDREN is set on container and stack so Qt paint events don't paint over terminal
+            try:
+                c_style = win32gui.GetWindowLong(container_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(container_hwnd, win32con.GWL_STYLE, c_style | win32con.WS_CLIPCHILDREN)
+                s_hwnd = int(self._stack.winId())
+                s_style = win32gui.GetWindowLong(s_hwnd, win32con.GWL_STYLE)
+                win32gui.SetWindowLong(s_hwnd, win32con.GWL_STYLE, s_style | win32con.WS_CLIPCHILDREN)
+            except Exception:
+                pass
+
+            if self._original_style is None:
+                self._original_style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                self._original_ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            style &= ~(win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                       win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX |
+                       win32con.WS_SYSMENU | win32con.WS_POPUP | win32con.WS_BORDER)
+            style |= win32con.WS_CHILD
+            win32gui.SetWindowLong(hwnd, win32con.GWL_STYLE, style)
+
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            ex_style &= ~(win32con.WS_EX_DLGMODALFRAME | win32con.WS_EX_APPWINDOW |
+                          win32con.WS_EX_WINDOWEDGE | win32con.WS_EX_CLIENTEDGE)
+            ex_style |= win32con.WS_EX_TOOLWINDOW
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+
+            win32gui.SetParent(hwnd, container_hwnd)
+            self._term_hwnd = hwnd
+            self._is_embedded = True
+
+            if not self._is_ready:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                self._resize_embedded_terminal(show=False)
+                self._stack.setCurrentWidget(self._loader_card)
+            else:
+                should_show = self.isVisible()
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW if should_show else win32con.SW_HIDE)
+                self._resize_embedded_terminal(show=should_show)
+                if len(self._sessions_meta) > 0:
+                    self._stack.setCurrentWidget(self._embed_container)
+                else:
+                    self._stack.setCurrentWidget(self._empty_card)
+                self._status_badge.setText("● Active")
+                self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
+                self._btn_popout.setText("↗")
+                self._btn_popout.setToolTip("Open in external window")
+        except Exception as e:
+            print(f"[MCU Flasher] Error embedding Project Terminal window: {e}")
+
+    def _poll_for_terminal_readiness(self) -> None:
+        """Poll until the terminal engine reports ready before revealing."""
+        self._ready_attempts += 1
+
+        if self._proc and self._proc.poll() is not None:
+            self._ready_poll_timer.stop()
+            self._spin_timer.stop()
+            self._status_badge.setText("● Stopped")
+            self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
+            self._load_title.setText("Terminal Exited")
+            self._load_sub.setText("The terminal subprocess terminated unexpectedly.")
+            return
+
+        is_ready = False
+        if self._port_file and self._port_file.exists():
+            try:
+                data = json.loads(self._port_file.read_text(encoding="utf-8"))
+                if not self._port and "port" in data:
+                    self._port = int(data["port"])
+                if data.get("ready") is True:
+                    is_ready = True
+            except Exception:
+                pass
+
+        if is_ready or (self._ready_attempts >= 100):  # ~10s safety fallback
+            self._ready_poll_timer.stop()
+            self._spin_timer.stop()
+            self._is_ready = True
+
+            # Flush queued control actions
+            self._flush_pending_controls()
+
+            # Apply active theme to xterm
+            self.apply_theme(self._current_theme)
+
+            has_sessions = len(self._sessions_meta) > 0
+            if has_sessions:
+                self.refresh_terminal()
+            else:
+                self._stack.setCurrentWidget(self._empty_card)
+
+            self._status_badge.setText("● Active" if has_sessions else "● Ready")
+            self._status_badge.setStyleSheet(
+                "color: #4ec994; font-size: 11px; font-weight: 600;" if has_sessions
+                else "color: #56cfbf; font-size: 11px; font-weight: 600;"
+            )
+            self._btn_popout.setText("↗")
+            self._update_buttons_state()
+
+    # ── Session Management ───────────────────────────────────────────────────
+    def add_session(self, kind: str = "pwsh") -> None:
+        """Create and append a new terminal session (PowerShell or Command Prompt)."""
+        self.ensure_started()
+        self._session_counter += 1
+        num = self._session_counter
+        session_id = f"{kind}_{num}"
+        title = "PowerShell" if kind == "pwsh" else "Command Prompt"
+
+        self._sessions_meta[session_id] = {
+            "id": session_id,
+            "kind": kind,
+            "title": title,
+        }
+
+        # Add tab to QTabBar
+        self._tab_bar.blockSignals(True)
+        idx = self._tab_bar.addTab(f"★ {title}")
+        self._tab_bar.setTabData(idx, session_id)
+        self._tab_bar.setCurrentIndex(idx)
+        self._tab_bar.blockSignals(False)
+
+        self._active_session_id = session_id
+        self._send_control("new", session_id, extra={"kind": kind, "title": title})
+
+        if self._is_ready:
+            self.refresh_terminal()
+        else:
+            self._stack.setCurrentWidget(self._loader_card)
+
+        self._status_badge.setText("● Active")
+        self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
+        self._update_buttons_state()
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Handle user selecting a different session tab."""
+        if index < 0 or index >= self._tab_bar.count():
+            return
+        session_id = self._tab_bar.tabData(index)
+        if session_id:
+            self._active_session_id = session_id
+            self._send_control("select", session_id)
+            self._update_buttons_state()
+            self.refresh_terminal()
+            QTimer.singleShot(50, self.focus_terminal)
+
+    def _on_tab_close_requested(self, index: int) -> None:
+        """Handle user clicking close button (✕) on a session tab."""
+        if index < 0 or index >= self._tab_bar.count():
+            return
+        session_id = self._tab_bar.tabData(index)
+        self._tab_bar.removeTab(index)
+
+        if session_id in self._sessions_meta:
+            del self._sessions_meta[session_id]
+            self._send_control("kill", session_id)
+
+        if self._tab_bar.count() == 0:
+            self._active_session_id = None
+            self._stack.setCurrentWidget(self._empty_card)
+            if self._term_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._term_hwnd)):
+                try:
+                    win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
+                except Exception:
+                    pass
+            self._status_badge.setText("● Ready")
+            self._status_badge.setStyleSheet("color: #56cfbf; font-size: 11px; font-weight: 600;")
+        else:
+            curr_idx = self._tab_bar.currentIndex()
+            if curr_idx >= 0:
+                new_sid = self._tab_bar.tabData(curr_idx)
+                self._active_session_id = new_sid
+                self._send_control("select", new_sid)
+
+        self._update_buttons_state()
+
+    def _restart_active_session(self) -> None:
+        if self._active_session_id:
+            self._send_control("restart", self._active_session_id)
+
+    def _clear_active_session(self) -> None:
+        if self._active_session_id:
+            self._send_control("clear", self._active_session_id)
+
+    def _update_buttons_state(self) -> None:
+        has_active = bool(self._tab_bar.count() > 0 and self._active_session_id)
+        self._btn_restart.setEnabled(has_active)
+        self._btn_restart.setCursor(Qt.CursorShape.PointingHandCursor if has_active else Qt.CursorShape.ArrowCursor)
+        self._btn_clear.setEnabled(has_active)
+        self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor if has_active else Qt.CursorShape.ArrowCursor)
+
+    # ── Control Message Protocol ─────────────────────────────────────────────
+    def _send_control(self, action: str, shell_id: Optional[str] = None, extra: Optional[dict] = None) -> None:
+        """Send a control command to the project terminal HTTP endpoint."""
+        port = self._port
+        if not port:
+            self._pending_controls.append((action, shell_id, extra))
+            return
+
+        payload = {"action": action, "shell": shell_id or ""}
+        if extra:
+            payload.update(extra)
+        data = json.dumps(payload).encode("utf-8")
+        url = f"http://127.0.0.1:{int(port)}/control"
+
+        def _worker():
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=2.0):
+                    pass
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True, name="TerminalSendControl").start()
+
+    def _flush_pending_controls(self) -> None:
+        if not self._port or not self._pending_controls:
+            return
+        actions = list(self._pending_controls)
+        self._pending_controls.clear()
+        for action, shell_id, extra in actions:
+            self._send_control(action, shell_id, extra)
+
+    # ── Geometry & Sizing ────────────────────────────────────────────────────
+    def focus_terminal(self) -> None:
+        """Focus the embedded native terminal window so keyboard input flows to ConPTY."""
+        if self._term_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._term_hwnd)):
+            try:
+                hwnd = int(self._term_hwnd)
+                win32gui.SetFocus(hwnd)
+                def _find_leaf(c_hwnd, acc):
+                    acc.append(c_hwnd)
+                    return True
+                leaves = []
+                win32gui.EnumChildWindows(hwnd, _find_leaf, leaves)
+                for c in reversed(leaves):
+                    cname = win32gui.GetClassName(c)
+                    if "Chrome_RenderWidgetHostHWND" in cname or "Chrome_WidgetWin" in cname or "WindowsForms" in cname:
+                        try:
+                            win32gui.SetFocus(c)
+                            break
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    def refresh_terminal(self) -> None:
+        """Self-refresh the terminal view, geometry, and xterm layout."""
+        if not self._is_active:
+            self.ensure_started()
+            return
+        has_sessions = len(self._sessions_meta) > 0
+        if has_sessions:
+            self._stack.setCurrentWidget(self._embed_container)
+            if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
+                win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
+                self._resize_embedded_terminal(show=True)
+                QTimer.singleShot(30, lambda: self._resize_embedded_terminal(show=True))
+                QTimer.singleShot(100, lambda: self._resize_embedded_terminal(show=True))
+                QTimer.singleShot(250, self.focus_terminal)
+                QTimer.singleShot(500, lambda: self._resize_embedded_terminal(show=True))
+        else:
+            self._stack.setCurrentWidget(self._empty_card)
+            if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
+                try:
+                    win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
+                except Exception:
+                    pass
+        if self._port and self._is_ready:
+            self._send_control("fit")
+
+    def _resize_embedded_terminal(self, show: Optional[bool] = None) -> None:
+        """Resize the embedded Win32 window to match the Qt container."""
+        if not self._term_hwnd or not self._is_embedded or win32gui is None or win32con is None:
+            return
+        try:
+            if not win32gui.IsWindow(int(self._term_hwnd)):
+                self._term_hwnd = None
+                return
+
+            w = self._embed_container.width()
+            h = self._embed_container.height()
+            if w <= 100 or h <= 80:
+                w = max(self._stack.width(), self.width(), 100)
+                h = max(self._stack.height(), self.height() - 34, 80)
+
+            has_sessions = len(self._sessions_meta) > 0
+            should_show = (self.isVisible() and self._is_ready and has_sessions) if show is None else show
+            flags = win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER
+            if should_show:
+                flags |= win32con.SWP_SHOWWINDOW
+            else:
+                flags |= win32con.SWP_NOACTIVATE
+
+            hwnd = int(self._term_hwnd)
+            win32gui.SetWindowPos(hwnd, 0, 0, 0, w, h, flags)
+
+            def _enum_child(c_hwnd, _):
+                try:
+                    win32gui.SetWindowPos(c_hwnd, 0, 0, 0, w, h, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                except Exception:
+                    pass
+                return True
+
+            try:
+                win32gui.EnumChildWindows(hwnd, _enum_child, None)
+            except Exception:
+                pass
+
+            # Notify the terminal server over IPC to trigger xterm fit
+            if self._port and self._is_ready and should_show:
+                self._send_control("fit")
+        except Exception:
+            pass
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.ensure_started()
+        self.refresh_terminal()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
+            try:
+                ctypes.windll.user32.ShowWindowAsync(int(self._term_hwnd), int(win32con.SW_HIDE))
+            except Exception:
+                try:
+                    win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
+                except Exception:
+                    pass
+
+    def _on_tab_revealed(self) -> None:
+        """Called when bottom dock notebook switches onto this tab."""
+        self.ensure_started()
+        self.refresh_terminal()
+
+    def _on_tab_hidden(self) -> None:
+        """Called when bottom dock notebook switches away from this tab."""
+        if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
+            try:
+                ctypes.windll.user32.ShowWindowAsync(int(self._term_hwnd), int(win32con.SW_HIDE))
+            except Exception:
+                try:
+                    win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
+                except Exception:
+                    pass
+
+    # ── Pop-out (Detach & Reattach) ──────────────────────────────────────────
+    def _popout_terminal(self) -> None:
+        if not self._term_hwnd or win32gui is None or not win32gui.IsWindow(int(self._term_hwnd)):
+            if not self._is_active:
+                self._start_terminal()
+            return
+
+        if self._is_embedded:
+            # Detach to desktop
+            self._is_embedded = False
+            win32gui.SetParent(int(self._term_hwnd), 0)
+            orig_style = self._original_style or (
+                win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_THICKFRAME |
+                win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX | win32con.WS_SYSMENU
+            )
+            orig_ex = self._original_ex_style or 0
+            win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_STYLE, orig_style)
+            win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_EXSTYLE, orig_ex)
+            win32gui.SetWindowPos(
+                int(self._term_hwnd), 0, 120, 120, 920, 560,
+                win32con.SWP_FRAMECHANGED | win32con.SWP_SHOWWINDOW,
+            )
+            self._load_title.setText("Project Terminal (Detached)")
+            self._load_sub.setText("The terminal is running in a separate window.")
+            self._stack.setCurrentWidget(self._loader_card)
+            self._btn_popout.setText("↙")
+            self._btn_popout.setToolTip("Reattach Terminal to panel")
+            self._status_badge.setText("● Detached")
+            self._status_badge.setStyleSheet("color: #5ca4f0; font-size: 11px; font-weight: 600;")
+        else:
+            # Reattach into panel
+            self._embed_terminal_hwnd(self._term_hwnd)
+
+    # ── Theme & Font Configuration ───────────────────────────────────────────
+    def _build_terminal_theme_payload(self, theme_mode: str) -> dict:
+        from main.qt.theme import get_palette
+        pal = get_palette(theme_mode)
+        bg = pal.get("BG_DARKEST", "#10151c")
+        fg = pal.get("TEXT", "#e0e6ed")
+        cyan = pal.get("CYAN", "#00d2ff")
+        hover = pal.get("BG_HOVER", "#243040")
+        return {
+            "background": bg,
+            "foreground": fg,
+            "cursor": cyan,
+            "selectionBackground": hover,
+            "black": pal.get("TEXT_DIM", "#8fa1b3"),
+            "red": pal.get("BTN_STOP", "#f05050"),
+            "green": pal.get("BTN_COMPILE", "#5ccc6e"),
+            "yellow": "#e8b83a",
+            "blue": "#61afef",
+            "magenta": "#c678dd",
+            "cyan": cyan,
+            "white": pal.get("TEXT_BRIGHT", "#ffffff"),
+            "brightBlack": pal.get("TEXT_DIM", "#8fa1b3"),
+            "brightRed": pal.get("BTN_STOP_H", "#ff6b6b"),
+            "brightGreen": pal.get("BTN_COMPILE_H", "#69db7c"),
+            "brightYellow": "#ffd43b",
+            "brightBlue": "#74c0fc",
+            "brightMagenta": "#da77f2",
+            "brightCyan": cyan,
+            "brightWhite": "#ffffff",
+        }
+
+    def apply_theme(self, theme_name: str) -> None:
+        """Update xterm.js theme and Qt container styles on theme change."""
+        self._current_theme = theme_name
+        payload = self._build_terminal_theme_payload(theme_name)
+        self._send_control("theme", extra={"theme": payload})
+
+    def set_font_size(self, size: int) -> None:
+        try:
+            self._current_font_size = int(size)
+        except (ValueError, TypeError):
+            self._current_font_size = 11
+
+    def connect_signals(self, sig_bus) -> None:
+        if hasattr(sig_bus, "font_size_changed"):
+            sig_bus.font_size_changed.connect(self.set_font_size)
+        if hasattr(sig_bus, "theme_changed"):
+            sig_bus.theme_changed.connect(self.apply_theme)
+
+    # ── Project Realignment ──────────────────────────────────────────────────
+    def reset_for_project(self, new_project_dir: str) -> None:
+        """Restart terminal process pointing to the new project directory."""
+        if not self._is_active:
+            return
+        self._stop_shell()
+        self._is_active = False
+        self._is_embedded = False
+        self._is_ready = False
+        self._term_hwnd = None
+        self._sessions_meta.clear()
+        self._tab_bar.blockSignals(True)
+        while self._tab_bar.count() > 0:
+            self._tab_bar.removeTab(0)
+        self._tab_bar.blockSignals(False)
+        self._active_session_id = None
+        self._update_buttons_state()
+        if self.isVisible():
+            self.ensure_started()
+            self.add_session("pwsh")
+
+    # ── Cleanup & Shutdown ───────────────────────────────────────────────────
+    def _stop_shell(self) -> None:
+        """Cleanly terminate child process tree on shutdown."""
+        self._embed_poll_timer.stop()
+        self._ready_poll_timer.stop()
+        self._spin_timer.stop()
+
+        proc = self._proc
+        self._proc = None
+        if proc is not None:
+            try:
+                if sys.platform == "win32":
+                    subprocess.Popen(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=0x08000000,
+                    )
+                else:
+                    proc.terminate()
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if self._port_file:
+            try:
+                self._port_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._port_file = None
+        self._port = None
+
+    def closeEvent(self, event) -> None:
+        self._stop_shell()
+        super().closeEvent(event)

@@ -4,6 +4,7 @@ launcher.py — Entry point launcher for MCU Flasher.
 """
 import sys
 import os
+import time
 import ctypes
 from pathlib import Path
 
@@ -20,6 +21,15 @@ if sys.platform == "win32":
         pass
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Add src/modules to sys.path
+modules_path = SCRIPT_DIR / "src" / "modules"
+if str(modules_path) not in sys.path:
+    sys.path.insert(0, str(modules_path))
+
+# Strict enforcement: NEVER run with system/desktop Python
+from private_python_guard import enforce_private_python
+enforce_private_python(prefer_pythonw=True)
 
 
 def _user_state_dir() -> Path:
@@ -86,7 +96,7 @@ def _verify_storage_drive_type():
         drive_type = ctypes.windll.kernel32.GetDriveTypeW(str(drive_root))
         if drive_type == DRIVE_REMOVABLE:
             msg = (
-                f"MCU Uploader IDE by Naph cannot be run directly from a USB flash drive or removable disk ({drive_root}).\n\n"
+                f"MCU Flasher by Naph cannot be run directly from a USB flash drive or removable disk ({drive_root}).\n\n"
                 f"Current Path: {SCRIPT_DIR}\n\n"
                 "High-speed disk access (SSD/HDD) is required for toolchain compilation and workspace storage.\n\n"
                 "Please copy the entire MCU Flasher folder to an internal SSD or HDD drive (e.g. C:\\ or D:\\ drive) "
@@ -96,7 +106,7 @@ def _verify_storage_drive_type():
                 ctypes.windll.user32.MessageBoxW(
                     0,
                     msg,
-                    "MCU Uploader IDE by Naph — Storage Location Notice",
+                    "MCU Flasher by Naph — Storage Location Notice",
                     0x10,  # MB_ICONERROR
                 )
             except Exception:
@@ -243,9 +253,9 @@ def _notify_already_starting():
     try:
         ctypes.windll.user32.MessageBoxW(
             0,
-            "MCU Uploader IDE by Naph is already starting up in another window.\n\n"
+            "MCU Flasher by Naph is already starting up in another window.\n\n"
             "Please wait for it to finish loading before launching it again.",
-            "MCU Uploader IDE by Naph",
+            "MCU Flasher by Naph",
             0x40,  # MB_ICONINFORMATION
         )
     except Exception:
@@ -257,6 +267,48 @@ if __name__ == "__main__":
         raise SystemExit("MCU Flasher launcher requires Windows 10 or newer.")
     if not _enforce_minimum_cpu_requirement():
         sys.exit(0)
+
+    # Fast collision check: if opening an active project, switch to that window immediately
+    try:
+        cand_project = None
+        if "--project" in sys.argv:
+            p_idx = sys.argv.index("--project")
+            if p_idx + 1 < len(sys.argv):
+                c_path = Path(sys.argv[p_idx + 1]).resolve(strict=False)
+                if c_path.exists():
+                    cand_project = c_path
+        if cand_project is None:
+            for arg in sys.argv[1:]:
+                if not arg.startswith("-"):
+                    c_path = Path(arg).resolve(strict=False)
+                    if c_path.exists():
+                        cand_project = c_path
+                        break
+        if cand_project:
+            from main.core.config import find_project_window, focus_project_window
+            owner = find_project_window(cand_project)
+            if owner:
+                focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0))
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"The sketch project '{cand_project.name}' is already open in another window.\n\n"
+                    "Switched focus to the active window.",
+                    "MCU Flasher by Naph",
+                    0x40,
+                )
+                sys.exit(0)
+    except Exception:
+        pass
+
+    # If another main GUI window is already active, skip bootstrap completely and launch the new window directly
+    try:
+        from bootstrap import _is_main_gui_running, _spawn_main_gui
+        if _is_main_gui_running() and not any(arg in sys.argv for arg in ("--setup", "--repair", "--reinstall")):
+            _spawn_main_gui()
+            sys.exit(0)
+    except Exception:
+        pass
+
     if "--new-window" not in sys.argv:
         if not _claim_launcher_slot():
             _notify_already_starting()
@@ -377,19 +429,12 @@ except Exception as e:
         crash_log.write_text(traceback.format_exc(), encoding="utf-8")
     except Exception:
         pass
-    msg = f"MCU Uploader IDE setup error:\n\n{e}\n\nLog: {crash_log}"
-    if isinstance(e, ModuleNotFoundError) and getattr(e, "name", "") == "tkinter":
-        msg = (
-            "MCU Uploader IDE requires Python with Tkinter support.\n\n"
-            "The current Python installation is missing Tkinter ('import tkinter' failed).\n"
-            "Please launch using 'runThisOnWindows.vbs' to automatically install or select Python with Tkinter.\n\n"
-            f"Log: {crash_log}"
-        )
+    msg = f"MCU Flasher setup error:\n\n{e}\n\nLog: {crash_log}"
     try:
         ctypes.windll.user32.MessageBoxW(
             0,
             msg,
-            "MCU Uploader IDE by Naph — Startup Error",
+            "MCU Flasher by Naph — Startup Error",
             0x10,
         )
     except Exception:

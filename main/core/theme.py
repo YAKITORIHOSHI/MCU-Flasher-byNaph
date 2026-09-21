@@ -7,7 +7,6 @@ from __future__ import annotations
 
 
 
-from main.core.constants import *
 
 class Theme:
     PALETTES = {
@@ -185,8 +184,10 @@ class Theme:
     @classmethod
     def apply_theme(cls, mode: str = "default") -> str:
         mode_key = (mode or "default").lower().strip()
-        if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+        if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
             mode_key = "solarized_dark"
+        elif mode_key in ("light", "clean"):
+            mode_key = "light"
         elif mode_key not in cls.PALETTES:
             mode_key = "default"
         palette = cls.PALETTES[mode_key]
@@ -196,6 +197,27 @@ class Theme:
         return mode_key
 
 
+def get_theme_mode() -> str:
+    """Return the active theme mode preference."""
+    from main.core.config import get_theme_mode as _gtm
+    return _gtm()
+
+
+def set_theme_mode(mode: str, follow_system: bool = False):
+    """Persist theme mode and update Theme attributes."""
+    from main.core.config import set_theme_mode as _stm
+    return _stm(mode, follow_system=follow_system)
+
+
+def get_theme_settings() -> tuple:
+    """Return (theme_mode: str, follow_system: bool)."""
+    from main.core.config import get_theme_settings as _gts
+    return _gts()
+
+
 __all__ = [
-    "Theme"
+    "Theme",
+    "get_theme_mode",
+    "set_theme_mode",
+    "get_theme_settings",
 ]

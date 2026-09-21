@@ -16,8 +16,21 @@ import threading
 import subprocess
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-import tkinter as tk
-from tkinter import messagebox
+try:
+    import tkinter as tk
+    from tkinter import messagebox
+except ImportError:
+    tk = None
+    messagebox = None
+
+# Add src/modules to sys.path
+_modules_dir = Path(__file__).resolve().parent
+if str(_modules_dir) not in sys.path:
+    sys.path.insert(0, str(_modules_dir))
+
+# Strict enforcement: NEVER run with system/desktop Python
+from private_python_guard import enforce_private_python
+enforce_private_python(prefer_pythonw=True)
 
 # Set AppUserModelID so taskbar groups windows under custom app icon
 if sys.platform == "win32":
@@ -109,6 +122,18 @@ except ImportError:
         webview = None
 
 
+def _is_valid_pe_binary(path: Path | str) -> bool:
+    """Return True if path is a genuine Windows PE executable (starts with b'MZ' and >= 1KB)."""
+    try:
+        p = Path(path)
+        if not p.is_file() or p.stat().st_size < 1024:
+            return False
+        with p.open("rb") as f:
+            return f.read(2) == b"MZ"
+    except Exception:
+        return False
+
+
 def find_opencode_cli() -> str | None:
     """Find opencode CLI executable on system PATH, active processes, or standard npm locations."""
     # Check active running processes first
@@ -120,14 +145,14 @@ def find_opencode_cli() -> str | None:
                 exe = proc.info.get('exe') or ""
                 if name in ("opencode.exe", "opencode") and exe:
                     p = Path(exe)
-                    if p.is_file():
+                    if p.is_file() and (not exe.lower().endswith(".exe") or _is_valid_pe_binary(p)):
                         return str(p.resolve())
                 cmdline = proc.info.get('cmdline') or []
                 for arg in cmdline:
                     arg_l = str(arg).lower()
                     if "opencode" in arg_l and (arg_l.endswith(".exe") or arg_l.endswith(".cmd")):
                         p = Path(arg)
-                        if p.is_file():
+                        if p.is_file() and (not arg_l.endswith(".exe") or _is_valid_pe_binary(p)):
                             return str(p.resolve())
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
@@ -135,48 +160,55 @@ def find_opencode_cli() -> str | None:
         pass
 
     import shutil
-    exe = shutil.which("opencode.exe") or shutil.which("opencode") or shutil.which("opencode.cmd")
-    if exe:
-        return exe
+    for exe_name in ("opencode.cmd", "opencode.exe", "opencode"):
+        found = shutil.which(exe_name)
+        if found:
+            if found.lower().endswith(".exe"):
+                if _is_valid_pe_binary(found):
+                    return found
+            elif Path(found).is_file():
+                return found
 
     if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            for candidate in (
-                Path(appdata) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(appdata) / "npm" / "opencode.exe",
-                Path(appdata) / "npm" / "opencode.cmd",
-                Path(appdata) / "npm" / "opencode",
-            ):
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
+        candidates = []
+        for env_var in ("APPDATA", "LOCALAPPDATA", "USERPROFILE"):
+            base = os.environ.get(env_var, "")
+            if not base:
+                continue
+            p_base = Path(base)
+            if env_var == "APPDATA":
+                candidates.extend([
+                    p_base / "npm" / "opencode.cmd",
+                    p_base / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                    p_base / "npm" / "opencode.exe",
+                    p_base / "npm" / "opencode",
+                ])
+            elif env_var == "LOCALAPPDATA":
+                candidates.extend([
+                    p_base / "Programs" / "opencode" / "opencode.exe",
+                    p_base / "opencode" / "opencode.exe",
+                    p_base / "npm" / "opencode.cmd",
+                    p_base / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                ])
+            elif env_var == "USERPROFILE":
+                candidates.extend([
+                    p_base / "AppData" / "Roaming" / "npm" / "opencode.cmd",
+                    p_base / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                    p_base / "AppData" / "Roaming" / "npm" / "opencode.exe",
+                ])
 
-        local_app = os.environ.get("LOCALAPPDATA", "")
-        if local_app:
-            for candidate in (
-                Path(local_app) / "Programs" / "opencode" / "opencode.exe",
-                Path(local_app) / "opencode" / "opencode.exe",
-                Path(local_app) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(local_app) / "npm" / "opencode.cmd",
-            ):
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
-
-        user_prof = os.environ.get("USERPROFILE", "")
-        if user_prof:
-            for candidate in (
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
-            ):
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
-
-        for candidate in (
-            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+        candidates.extend([
             Path(r"C:\Program Files\nodejs\opencode.cmd"),
-        ):
-            if candidate.exists() and candidate.stat().st_size > 0:
+            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+        ])
+
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            if candidate.suffix.lower() == ".exe":
+                if _is_valid_pe_binary(candidate):
+                    return str(candidate)
+            elif candidate.stat().st_size > 0:
                 return str(candidate)
 
     return None
@@ -618,8 +650,10 @@ class TerminalServer:
                 if (
                     webview_connected[0]
                     and meaningful_output
-                    and elapsed >= 4.0
-                    and quiet_for >= 1.75
+                    and (
+                        (elapsed >= 3.0 and quiet_for >= 1.0)
+                        or (elapsed >= 6.5)
+                    )
                 ):
                     write_ready_marker("opencode-ready")
                     return
@@ -835,19 +869,17 @@ def _pre_hide_console_for_conpty():
 def run_standalone_ai(target_directory=None):
     """Entry point when executed as an independent AI terminal process."""
     if not check_internet_connection():
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            r = tk.Tk()
-            r.withdraw()
-            messagebox.showwarning(
-                "No Internet Connection",
-                "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
-                "Please check your network connection and try again."
-            )
-            r.destroy()
-        except Exception:
-            pass
+        msg = (
+            "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
+            "Please check your network connection and try again."
+        )
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    0, msg, "No Internet Connection", 0x30  # MB_ICONWARNING
+                )
+            except Exception:
+                pass
         return
 
     _pre_hide_console_for_conpty()
@@ -919,8 +951,14 @@ def launch_opencode_elevated_cmd(target_directory=None):
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
     try:
+        from private_python_guard import get_private_python_exe
+        py_exe = str(get_private_python_exe(prefer_pythonw=True))
+    except Exception:
+        py_exe = sys.executable
+
+    try:
         active_ai_proc = subprocess.Popen(
-            [sys.executable, script_path, "--launch-ai", target_directory],
+            [py_exe, script_path, "--launch-ai", target_directory],
             cwd=target_directory,
             creationflags=flags
         )
@@ -1589,8 +1627,10 @@ class AIController:
             self._set_idle_state()
 
 
-class DedicatedAIApp(tk.Tk):
+class DedicatedAIApp(tk.Tk if tk else object):
     def __init__(self):
+        if not tk:
+            return
         super().__init__()
 
         self.title("MCU Flash GUI - OpenCode AI Controller Test")
@@ -1615,10 +1655,9 @@ class DedicatedAIApp(tk.Tk):
         body_frame.pack(fill=tk.BOTH, expand=True, padx=25, pady=15)
 
         info_text = (
-            "• pywebview + xterm.js + pywinpty native terminal.\n"
-            "• Animated button state during launching.\n"
-            "• Dynamic toggle: '🤖 AI Assistant' -> '⏳ Launching...' -> '🔴 Close AI'.\n"
-            "• Automatic detection when the AI window is closed."
+            "OpenCode AI is designed to run automatically within MCU Flash GUI.\n\n"
+            "This standalone launcher allows you to test the AI controller directly.\n"
+            "Click below to start OpenCode AI inside a dedicated native window."
         )
 
         lbl_info = tk.Label(
@@ -1656,6 +1695,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--launch-ai":
         target_dir = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
         run_standalone_ai(target_dir)
-    else:
+    elif tk:
         app = DedicatedAIApp()
         app.mainloop()
+    else:
+        target_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+        run_standalone_ai(target_dir)

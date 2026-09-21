@@ -24,7 +24,6 @@ import sys
 import threading
 import tempfile
 import time
-import urllib.request
 import importlib.util
 import importlib.machinery
 from pathlib import Path
@@ -50,6 +49,19 @@ def _configure_windows_dpi_awareness() -> None:
 
 _configure_windows_dpi_awareness()
 
+def _suppress_windows_error_dialogs() -> None:
+    """Suppress Windows modal error dialogs (such as 'Unsupported 16-Bit Application')."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        # SEM_FAILCRITICALERRORS (1) | SEM_NOGPFAULTERRORBOX (2) | SEM_NOOPENFILEERRORBOX (0x8000)
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
+    except Exception:
+        pass
+
+_suppress_windows_error_dialogs()
+
 # Configure stdout/stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":
     try:
@@ -64,6 +76,15 @@ if getattr(sys, 'frozen', False):
     SCRIPT_DIR = Path(sys.executable).resolve().parent
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Add src/modules to sys.path
+_modules_dir = SCRIPT_DIR / "src" / "modules"
+if str(_modules_dir) not in sys.path:
+    sys.path.insert(0, str(_modules_dir))
+
+# Strict enforcement: NEVER run under desktop/system Python
+from private_python_guard import enforce_private_python
+enforce_private_python()
 
 def purge_python_cache(root_dir: Path | str = SCRIPT_DIR) -> None:
     """Purge all __pycache__ directories and *.pyc/*.pyo files recursively."""
@@ -104,6 +125,7 @@ _BOOTSTRAP_LOG_FILE = (
     / f"bootstrap-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
 )
 _BOOTSTRAP_STARTUP_NOTE = ""
+_gui: Any = None
 
 
 def get_bootstrap_log_file() -> Path:
@@ -230,14 +252,20 @@ def _update_check_skip_reason(gui=None) -> str | None:
         return "MCU_FLASH_GUI_SKIP_UPDATES is enabled"
 
     active_gui = gui if gui is not None else _gui
-    skip_var = getattr(active_gui, "_skip_updates_var", None) if active_gui else None
-    if skip_var is not None:
-        try:
-            if skip_var.get():
+    if active_gui is not None:
+        skip_val = getattr(active_gui, "_skip_updates", None)
+        if isinstance(skip_val, bool):
+            if skip_val:
                 return "the Skip Updates checkbox is selected"
             return None
-        except Exception:
-            pass
+        skip_var = getattr(active_gui, "_skip_updates_var", None)
+        if skip_var is not None:
+            try:
+                if skip_var.get():
+                    return "the Skip Updates checkbox is selected"
+                return None
+            except Exception:
+                pass
 
     if load_bootstrap_config().get("skip_updates", DEFAULT_SKIP_UPDATES):
         return "bootstrap_config.json has skip_updates set to true"
@@ -289,7 +317,6 @@ def ensure_platformio_penv_with_hook(script_dir: Path | None = None) -> bool:
         return False  # penv not created yet — called again after first compile
 
     try:
-        from win_subprocess_hide import install_venv_site_hook
         # Re-use the existing hook installer but targeting the penv site-packages
         hook_py  = penv_site / "mcu_flash_gui_subprocess_hook.py"
         hook_pth = penv_site / "mcu_flash_gui_subprocess_hook.pth"
@@ -1065,11 +1092,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-GUI_SCRIPT = (
-    SCRIPT_DIR / "main" / "mcu_flash_gui.py"
-    if (SCRIPT_DIR / "main" / "mcu_flash_gui.py").exists()
-    else SCRIPT_DIR / "mcu_flash_gui.py"
-)
+GUI_SCRIPT = SCRIPT_DIR / "mcu_flash_gui.py"
 
 # ── ANSI codes kept for any direct print() fallbacks ────────
 CYAN = "\033[96m"
@@ -1095,7 +1118,33 @@ def _detect_system_theme() -> str:
 
 
 # ── Theme colours matching MCU Flash GUI exactly ─────────────
-def _resolve_bootstrap_theme() -> dict:
+def _resolve_bootstrap_theme() -> tuple[dict, str]:
+    try:
+        from main.core.config import get_theme_mode
+        from main.core.theme import Theme
+        mode = get_theme_mode()
+        pal = Theme.PALETTES.get(mode, Theme.PALETTES.get("default", {}))
+        result = {
+            "T_BG_DARKEST": pal.get("BG_DARKEST", "#0a0e14"),
+            "T_BG_DARK": pal.get("BG_DARK", "#10151c"),
+            "T_BG_MID": pal.get("BG_MID", "#161d27"),
+            "T_BG_LIGHT": pal.get("BG_LIGHT", "#1c2532"),
+            "T_BG_HOVER": pal.get("BG_HOVER", "#243040"),
+            "T_BORDER": pal.get("BORDER", "#2a3545"),
+            "T_BORDER_LIT": pal.get("BORDER_LIT", pal.get("CYAN", "#00d2ff")),
+            "T_TEXT": pal.get("TEXT", "#c8d2dc"),
+            "T_TEXT_DIM": pal.get("TEXT_DIM", "#6b7d94"),
+            "T_TEXT_BRIGHT": pal.get("TEXT_BRIGHT", "#e8edf3"),
+            "T_CYAN": pal.get("CYAN", "#00d2ff"),
+            "T_GREEN": pal.get("GREEN", "#5ccc6e"),
+            "T_YELLOW": pal.get("YELLOW", "#e8b83a"),
+            "T_RED": pal.get("RED", "#f05050"),
+            "T_MAGENTA": pal.get("MAGENTA", "#c678dd"),
+        }
+        return result, mode
+    except Exception:
+        pass
+
     palettes = {
         "default": {
             "T_BG_DARKEST": "#0a0e14",
@@ -1104,25 +1153,27 @@ def _resolve_bootstrap_theme() -> dict:
             "T_BG_LIGHT": "#1c2532",
             "T_BG_HOVER": "#243040",
             "T_BORDER": "#2a3545",
+            "T_BORDER_LIT": "#00d2ff",
             "T_TEXT": "#c8d2dc",
             "T_TEXT_DIM": "#6b7d94",
             "T_TEXT_BRIGHT": "#e8edf3",
-            "T_CYAN": "#39c5bb",
+            "T_CYAN": "#00d2ff",
             "T_GREEN": "#5ccc6e",
             "T_YELLOW": "#e8b83a",
             "T_RED": "#f05050",
             "T_MAGENTA": "#c678dd",
         },
         "light": {
-            "T_BG_DARKEST": "#f4f6f9",
-            "T_BG_DARK": "#e9ecef",
+            "T_BG_DARKEST": "#f6f8fa",
+            "T_BG_DARK": "#eef2f5",
             "T_BG_MID": "#ffffff",
-            "T_BG_LIGHT": "#dee2e6",
-            "T_BG_HOVER": "#d0d7de",
-            "T_BORDER": "#c5ccd6",
+            "T_BG_LIGHT": "#f0f3f6",
+            "T_BG_HOVER": "#e1e4e8",
+            "T_BORDER": "#d0d7de",
+            "T_BORDER_LIT": "#0969da",
             "T_TEXT": "#24292f",
             "T_TEXT_DIM": "#57606a",
-            "T_TEXT_BRIGHT": "#1a1f24",
+            "T_TEXT_BRIGHT": "#1f2328",
             "T_CYAN": "#0969da",
             "T_GREEN": "#1a7f37",
             "T_YELLOW": "#9a6700",
@@ -1136,9 +1187,10 @@ def _resolve_bootstrap_theme() -> dict:
             "T_BG_LIGHT": "#0d4a59",
             "T_BG_HOVER": "#115d70",
             "T_BORDER": "#166b80",
+            "T_BORDER_LIT": "#2aa198",
             "T_TEXT": "#ffffff",
-            "T_TEXT_DIM": "#d0e4e8",
-            "T_TEXT_BRIGHT": "#ffffff",
+            "T_TEXT_DIM": "#93a1a1",
+            "T_TEXT_BRIGHT": "#fdf6e3",
             "T_CYAN": "#2aa198",
             "T_GREEN": "#859900",
             "T_YELLOW": "#b58900",
@@ -1147,7 +1199,7 @@ def _resolve_bootstrap_theme() -> dict:
         }
     }
     mode = "default"
-    for cfg in (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
+    for cfg in (SCRIPT_DIR / "src" / "gui_config.json", SCRIPT_DIR / "src" / "dbs" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
         try:
             if cfg.exists():
                 data = json.loads(cfg.read_text(encoding="utf-8"))
@@ -1155,17 +1207,19 @@ def _resolve_bootstrap_theme() -> dict:
                 if shared.get("theme_follow_system", False):
                     mode = _detect_system_theme()
                     break
-                m = shared.get("theme_mode", "default")
-                if m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+                m = shared.get("theme_mode") or data.get("theme_mode", "default")
+                if m in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
                     m = "solarized_dark"
+                elif m in ("light", "clean"):
+                    m = "light"
                 if m in palettes:
                     mode = m
                     break
         except Exception:
             pass
-    return palettes[mode]
+    return palettes.get(mode, palettes["default"]), mode
 
-_T_PALETTE = _resolve_bootstrap_theme()
+_T_PALETTE, _BOOTSTRAP_THEME_MODE = _resolve_bootstrap_theme()
 T_BG_DARKEST  = _T_PALETTE["T_BG_DARKEST"]
 T_BG_DARK     = _T_PALETTE["T_BG_DARK"]
 T_BG_MID      = _T_PALETTE["T_BG_MID"]
@@ -1191,596 +1245,737 @@ _gui: Any = None   # set when the window is live
 BOOTSTRAP_CLOSE_DELAY_S: float = 2.5
 
 # ─────────────────────────────────────────────────────────────
-# BootstrapGUI — dark Tkinter window with scrollable log,
-# animated spinner, and a status bar; matches MCU Flash GUI.
+# BootstrapGUI — Native PySide6 (Qt for Python) Setup Window
+# Matches MCU Flash Precision Design System
 # ─────────────────────────────────────────────────────────────
-class BootstrapGUI:
-    """
-    Displays bootstrap progress in a styled GUI window.
-    All methods are safe to call from any thread; they use
-    root.after() to marshal updates to the Tk main thread.
-    """
-    SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    def __init__(self):
-        import sys
-        if sys.platform == "win32":
+try:
+    # pyrefly: ignore [missing-import]
+    from PySide6.QtWidgets import (
+        QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+        QProgressBar, QPlainTextEdit, QCheckBox, QFrame,
+    )
+    # pyrefly: ignore [missing-import]
+    from PySide6.QtCore import Qt, QObject, Signal, QTimer, Slot
+    # pyrefly: ignore [missing-import]
+    from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+    HAS_PYSIDE6_BOOTSTRAP = True
+except ImportError:
+    HAS_PYSIDE6_BOOTSTRAP = False
+
+
+class _BootstrapSignals(QObject if HAS_PYSIDE6_BOOTSTRAP else object):
+    """Thread-safe signal dispatcher from worker thread to Qt main loop."""
+    if HAS_PYSIDE6_BOOTSTRAP:
+        sig_log = Signal(str, str)
+        sig_status = Signal(str)
+        sig_progress = Signal(float)
+        sig_stop_spinner = Signal(str, bool)
+        sig_update_block = Signal(str, str)
+        sig_commit_block = Signal()
+        sig_clear_block = Signal()
+        sig_close = Signal()
+        sig_hide = Signal()
+        sig_call = Signal(object, tuple)
+
+
+if HAS_PYSIDE6_BOOTSTRAP:
+    class _BootstrapDialog(QDialog):
+        SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        def __init__(self, gui: "BootstrapGUI"):
+            super().__init__()
+            self._gui = gui
+            self._allow_close = False
+            self._live_block_start: Optional[int] = None
+            self._live_block_len: int = 0
+            self._live_block_type: Optional[str] = None
+            self.setWindowTitle("MCU Flasher by Naph — Setup")
+            self.setObjectName("BootstrapDialog")
+
+            # Fixed dimensions derived from user screen dimensions (~70% of usable display), strictly non-resizable
+            screen = QApplication.primaryScreen()
+            if screen:
+                avail = screen.availableGeometry()
+                sw, sh = avail.width(), avail.height()
+                sx, sy = avail.x(), avail.y()
+            else:
+                sw, sh = 1920, 1080
+                sx, sy = 0, 0
+
+            width = min(sw - 32, max(520, int(sw * 0.70)))
+            height = min(sh - 48, max(420, int(sh * 0.70)))
+            self.setFixedSize(width, height)
+            self.setSizeGripEnabled(False)
+            flags = self.windowFlags()
+            flags &= ~Qt.WindowType.WindowMaximizeButtonHint
+            flags |= Qt.WindowType.MSWindowsFixedSizeDialogHint
+            self.setWindowFlags(flags)
+
+            x = sx + max(0, (sw - width) // 2)
+            y = sy + max(0, (sh - height) // 2)
+            self.move(x, y)
+
+            # Window icon
             try:
-                import ctypes
-                gdi32 = ctypes.windll.gdi32
-                FR_PRIVATE = 0x10
-                fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat" / "static"
-                if not fonts_dir.exists():
-                    fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat"
-                if fonts_dir.exists():
-                    for ttf_file in fonts_dir.glob("*.ttf"):
-                        path_buf = ctypes.create_unicode_buffer(str(ttf_file))
-                        gdi32.AddFontResourceExW(path_buf, FR_PRIVATE, 0)
+                icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
+                if not icon_path.exists():
+                    icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
+                if icon_path.exists():
+                    self.setWindowIcon(QIcon(str(icon_path)))
             except Exception:
                 pass
-        import tkinter as tk
-        from tkinter import font as tkfont, ttk
 
-        self.root = tk.Tk()
-        self.root.title("MCU Uploader IDE by Naph — Setup")
-        
-        # Set window icon if available
-        try:
-            icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
-            if not icon_path.exists():
-                icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
-            if icon_path.exists():
-                self.root.iconbitmap(default=str(icon_path))
-                self.root.iconbitmap(str(icon_path))
+            # Initial 1-second topmost elevation
+            try:
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+                QTimer.singleShot(1000, self._unset_topmost)
+            except Exception:
+                pass
+
+            # Checkbox checkmark icons (dynamic multi-user discovery)
+            icons_dir = SCRIPT_DIR / "src" / "assets" / "icons"
+            if not (icons_dir / "checkbox_checked.svg").exists():
+                icons_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
+            icon_checked = (icons_dir / "checkbox_checked.svg").as_posix()
+            icon_checked_dim = (icons_dir / "checkbox_checked_disabled.svg").as_posix()
+
+            pal, mode = _resolve_bootstrap_theme()
+            self._theme_pal = pal
+            self._theme_mode = mode
+
+            bg_darkest  = pal["T_BG_DARKEST"]
+            bg_dark     = pal["T_BG_DARK"]
+            bg_mid      = pal["T_BG_MID"]
+            bg_light    = pal["T_BG_LIGHT"]
+            bg_hover    = pal["T_BG_HOVER"]
+            border      = pal["T_BORDER"]
+            border_lit  = pal.get("T_BORDER_LIT", pal["T_CYAN"])
+            text        = pal["T_TEXT"]
+            text_dim    = pal["T_TEXT_DIM"]
+            text_bright = pal["T_TEXT_BRIGHT"]
+            cyan        = pal["T_CYAN"]
+            green       = pal["T_GREEN"]
+            yellow      = pal["T_YELLOW"]
+            red         = pal["T_RED"]
+            magenta     = pal["T_MAGENTA"]
+
+            base_style = f"""
+                QDialog#BootstrapDialog {{
+                    background-color: {bg_dark};
+                    color: {text};
+                    font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+                }}
+                QLabel#titleLabel {{
+                    color: {cyan};
+                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
+                    font-size: 14px;
+                    font-weight: bold;
+                    letter-spacing: 0.5px;
+                }}
+                QLabel#subLabel {{
+                    color: {text_dim};
+                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
+                    font-size: 11px;
+                }}
+                QLabel#timerLabel {{
+                    color: {cyan};
+                    font-family: 'Consolas', monospace;
+                    font-size: 12px;
+                    font-weight: bold;
+                }}
+                QLabel#spinLabel {{
+                    color: {cyan};
+                    font-size: 13px;
+                    font-weight: bold;
+                }}
+                QLabel#statusLabel {{
+                    color: {text_bright};
+                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
+                    font-size: 12px;
+                    font-weight: 600;
+                }}
+                QLabel#pctLabel {{
+                    color: {cyan};
+                    font-size: 12px;
+                    font-weight: bold;
+                    font-family: 'Consolas', monospace;
+                }}
+                QProgressBar {{
+                    background-color: {bg_mid};
+                    border: 1px solid {border};
+                    border-radius: 2px;
+                    height: 6px;
+                    text-align: right;
+                }}
+                QProgressBar::chunk {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {cyan}, stop:1 {border_lit});
+                    border-radius: 2px;
+                }}
+                QPlainTextEdit#logEdit {{
+                    background-color: {bg_darkest};
+                    border: 1px solid {border};
+                    border-radius: 6px;
+                    color: {text};
+                    font-family: 'Consolas', 'Cascadia Code', monospace;
+                    font-size: 11px;
+                    padding: 8px;
+                }}
+                /* ── High-Visibility Modern Pill ScrollBars ────────── */
+                QScrollBar:vertical {{
+                    background: {bg_darkest};
+                    width: 13px;
+                    margin: 0px;
+                    border: none;
+                    border-left: 1px solid {border};
+                }}
+                QScrollBar::handle:vertical {{
+                    background: {border};
+                    min-height: 26px;
+                    border-radius: 4px;
+                    margin: 2px 2px 2px 2px;
+                }}
+                QScrollBar::handle:vertical:hover {{
+                    background: {cyan};
+                }}
+                QScrollBar::handle:vertical:pressed {{
+                    background: {border_lit};
+                }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                    height: 0px;
+                    background: none;
+                    border: none;
+                }}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                    background: none;
+                }}
+                QScrollBar:horizontal {{
+                    background: {bg_darkest};
+                    height: 13px;
+                    margin: 0px;
+                    border: none;
+                    border-top: 1px solid {border};
+                }}
+                QScrollBar::handle:horizontal {{
+                    background: {border};
+                    min-width: 26px;
+                    border-radius: 4px;
+                    margin: 2px 2px 2px 2px;
+                }}
+                QScrollBar::handle:horizontal:hover {{
+                    background: {cyan};
+                }}
+                QScrollBar::handle:horizontal:pressed {{
+                    background: {border_lit};
+                }}
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                    width: 0px;
+                    background: none;
+                    border: none;
+                }}
+                QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                    background: none;
+                }}
+                /* ── High-Visibility CheckBoxes with Vector Checkmark ─ */
+                QCheckBox {{
+                    background: transparent;
+                    color: {text};
+                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
+                    font-size: 11px;
+                    font-weight: 500;
+                    spacing: 8px;
+                }}
+                QCheckBox:hover {{
+                    color: {text_bright};
+                }}
+                QCheckBox:focus {{
+                    outline: none;
+                }}
+                QCheckBox::indicator {{
+                    width: 15px;
+                    height: 15px;
+                    border-radius: 4px;
+                    border: 1px solid {border};
+                    background-color: {bg_darkest};
+                }}
+                QCheckBox::indicator:hover {{
+                    border-color: {cyan};
+                    background-color: {bg_hover};
+                }}
+                QCheckBox::indicator:pressed {{
+                    background-color: {bg_mid};
+                    border-color: {border_lit};
+                }}
+                QCheckBox::indicator:checked {{
+                    background-color: {cyan};
+                    border: 1px solid {border_lit};
+                    image: url("ICON_CHECKED");
+                }}
+                QCheckBox::indicator:checked:hover {{
+                    background-color: {border_lit};
+                    border-color: {cyan};
+                    image: url("ICON_CHECKED");
+                }}
+                QCheckBox::indicator:checked:pressed {{
+                    background-color: {cyan};
+                    border-color: {border_lit};
+                    image: url("ICON_CHECKED");
+                }}
+                QCheckBox::indicator:disabled {{
+                    border-color: {border};
+                    background-color: {bg_dark};
+                }}
+                QCheckBox::indicator:checked:disabled {{
+                    background-color: {bg_mid};
+                    border-color: {border};
+                    image: url("ICON_CHECKED_DIM");
+                }}
+                QPushButton {{
+                    background-color: {bg_mid};
+                    color: {text_bright};
+                    border: 1px solid {border};
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
+                    font-weight: 600;
+                }}
+                QPushButton:hover {{
+                    background-color: {bg_hover};
+                    border: 1px solid {border_lit};
+                    color: {text_bright};
+                }}
+            """
+            self.setStyleSheet(
+                base_style.replace("ICON_CHECKED_DIM", icon_checked_dim).replace("ICON_CHECKED", icon_checked)
+            )
+
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(18, 14, 18, 0)
+            layout.setSpacing(8)
+
+            # ── Header row ────────────────────────────────────────────────────
+            header_layout = QHBoxLayout()
+            title_col = QVBoxLayout()
+            title_col.setSpacing(2)
+
+            self.title_lbl = QLabel("⚡  MCU Flasher by Naph", self)
+            self.title_lbl.setObjectName("titleLabel")
+            self.sub_lbl = QLabel("Setting up dependencies…", self)
+            self.sub_lbl.setObjectName("subLabel")
+            title_col.addWidget(self.title_lbl)
+            title_col.addWidget(self.sub_lbl)
+            header_layout.addLayout(title_col)
+
+            header_layout.addStretch()
+
+            self.timer_lbl = QLabel("⏱ 00:00", self)
+            self.timer_lbl.setObjectName("timerLabel")
+            header_layout.addWidget(self.timer_lbl)
+            layout.addLayout(header_layout)
+
+            # ── Divider line 1 ────────────────────────────────────────────────
+            div1 = QFrame(self)
+            div1.setStyleSheet(f"background-color: {border}; max-height: 1px; border: none;")
+            layout.addWidget(div1)
+
+            # ── Log edit ──────────────────────────────────────────────────────
+            self.log_edit = QPlainTextEdit(self)
+            self.log_edit.setObjectName("logEdit")
+            self.log_edit.setReadOnly(True)
+            self.log_edit.setMaximumBlockCount(4000)
+            self.log_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+            layout.addWidget(self.log_edit, stretch=1)
+
+            # ── Divider line 2 ────────────────────────────────────────────────
+            div2 = QFrame(self)
+            div2.setStyleSheet(f"background-color: {border}; max-height: 1px; border: none;")
+            layout.addWidget(div2)
+
+            # ── Status bar (spinner + status + checkboxes + percentage) ────────
+            status_row = QHBoxLayout()
+            status_row.setContentsMargins(0, 2, 0, 4)
+            status_row.setSpacing(10)
+
+            self.spin_lbl = QLabel("⠋", self)
+            self.spin_lbl.setObjectName("spinLabel")
+            status_row.addWidget(self.spin_lbl)
+
+            self.status_lbl = QLabel(gui._status_text, self)
+            self.status_lbl.setObjectName("statusLabel")
+            status_row.addWidget(self.status_lbl)
+
+            status_row.addStretch()
+
+            # Skip Updates checkbox
+            self.skip_cb = QCheckBox("Skip Updates", self)
+            self.skip_cb.setChecked(bool(gui._skip_updates))
+            self.skip_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.skip_cb.setToolTip("Skip online toolchain and platform update checks on launch")
+            self.skip_cb.toggled.connect(self._on_skip_toggled)
+            status_row.addWidget(self.skip_cb)
+
+            # Auto-Scroll checkbox (default checked)
+            self.auto_scroll_cb = QCheckBox("Auto-Scroll", self)
+            self.auto_scroll_cb.setChecked(True)
+            self.auto_scroll_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.auto_scroll_cb.setToolTip("Automatically keep the build log scrolled to the latest output")
+            status_row.addWidget(self.auto_scroll_cb)
+
+            # Percentage label
+            self.pct_lbl = QLabel("0%", self)
+            self.pct_lbl.setObjectName("pctLabel")
+            status_row.addWidget(self.pct_lbl)
+
+            layout.addLayout(status_row)
+
+            # ── Progress bar (at the very bottom, full width edge-to-edge) ───
+            self.prog_bar = QProgressBar(self)
+            self.prog_bar.setRange(0, 100)
+            self.prog_bar.setValue(0)
+            self.prog_bar.setTextVisible(False)
+            self.prog_bar.setFixedHeight(6)
+            layout.addWidget(self.prog_bar)
+
+            # Timers for elapsed timer and animated spinner
+            self._spin_idx = 0
+            self._spinner_timer = QTimer(self)
+            self._spinner_timer.timeout.connect(self._tick_spinner)
+            self._spinner_timer.start(90)
+
+            self._clock_timer = QTimer(self)
+            self._clock_timer.timeout.connect(self._tick_clock)
+            self._clock_timer.start(1000)
+
+            # Connect signals
+            if gui._signals:
+                gui._signals.sig_log.connect(self._on_log)
+                gui._signals.sig_status.connect(self._on_status)
+                gui._signals.sig_progress.connect(self._on_progress)
+                gui._signals.sig_stop_spinner.connect(self._on_stop_spinner)
+                gui._signals.sig_update_block.connect(self._on_update_block)
+                gui._signals.sig_commit_block.connect(self._on_commit_block)
+                gui._signals.sig_clear_block.connect(self._on_clear_block)
+                gui._signals.sig_close.connect(self._on_close)
+                gui._signals.sig_hide.connect(self.hide)
+                gui._signals.sig_call.connect(self._on_call)
+
+        def _unset_topmost(self):
+            try:
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+                self.show()
+            except Exception:
+                pass
+
+        def _tick_clock(self):
+            elapsed = int(time.time() - self._gui._start_time)
+            m, s = divmod(elapsed, 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                t_str = f"⏱ {h:02d}:{m:02d}:{s:02d}"
             else:
-                log_dir = SCRIPT_DIR / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                (log_dir / "bootstrap_icon.log").write_text(f"Icon file does not exist at: {icon_path}\n", encoding="utf-8")
-        except Exception as e:
-            import traceback
-            log_dir = SCRIPT_DIR / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            (log_dir / "bootstrap_icon.log").write_text(f"Error setting icon: {e}\n{traceback.format_exc()}\n", encoding="utf-8")
-        self.root.configure(bg=T_BG_DARKEST)
-        # Keep the setup window at its calculated size. Resizing it can expose
-        # incomplete progress rows and makes the bootstrap layout jump on
-        # smaller displays.
-        self.root.resizable(False, False)
+                t_str = f"⏱ {m:02d}:{s:02d}"
+            self.timer_lbl.setText(t_str)
 
-        # Centre on screen
-        self.root.update_idletasks()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        # Size the setup window from the current Tk screen dimensions instead
-        # of using a small fixed size.  Tk reports dimensions in the display's
-        # effective DPI/scaling coordinate space, so this remains about 70%
-        # of the usable screen on high-DPI and low-end displays alike.
-        width = min(sw - 32, max(520, int(sw * 0.70)))
-        height = min(sh - 48, max(420, int(sh * 0.70)))
-        self.root.minsize(min(720, width), min(480, height))
-        # Apply the requested size first, let Tk account for the native frame
-        # and DPI rounding, then center using the realized window dimensions.
-        # This keeps the title-bar-inclusive window mathematically centered.
-        self.root.geometry(f"{width}x{height}")
-        self.root.update_idletasks()
-        actual_width = max(1, self.root.winfo_width())
-        actual_height = max(1, self.root.winfo_height())
-        x = max(0, (sw - actual_width) // 2)
-        y = max(0, (sh - actual_height) // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        def _tick_spinner(self):
+            if getattr(self._gui, "_spinning", True):
+                self.spin_lbl.setText(_BootstrapDialog.SPINNER[self._spin_idx % len(_BootstrapDialog.SPINNER)])
+                self._spin_idx += 1
 
-        # Force window always on top for 1 second (1000ms) upon launch
-        try:
-            self.root.lift()
-            self.root.attributes("-topmost", True)
-            self.root.after(1000, self._unset_topmost)
-        except Exception:
-            pass
+        def _on_skip_toggled(self, checked: bool):
+            self._gui._skip_updates = checked
+            try:
+                c = load_bootstrap_config()
+                c["skip_updates"] = checked
+                save_bootstrap_config(c)
+            except Exception:
+                pass
 
-        # ── Header bar ──────────────────────────────────────
-        hdr = tk.Frame(self.root, bg=T_BG_DARK, pady=10, padx=16)
-        hdr.pack(fill=tk.X)
-        hdr_top = tk.Frame(hdr, bg=T_BG_DARK)
-        hdr_top.pack(fill=tk.X)
-
-        fnt_title = tkfont.Font(family="Montserrat", size=13, weight="bold")
-        fnt_sub   = tkfont.Font(family="Montserrat", size=9)
-        fnt_timer = tkfont.Font(family="Consolas", size=10, weight="bold")
-
-        tk.Label(hdr_top, text="⚡  MCU Uploader IDE by Naph", font=fnt_title,
-                 fg=T_CYAN, bg=T_BG_DARK).pack(side=tk.LEFT)
-        tk.Label(hdr, text="Setting up dependencies…", font=fnt_sub,
-                 fg=T_TEXT_DIM, bg=T_BG_DARK).pack(anchor=tk.W, pady=(3, 0))
-
-        # Top-right live elapsed timer
-        import time as _t_mod
-        self._start_time = _t_mod.time()
-        self._timer_var = tk.StringVar(value="⏱ 00:00")
-        tk.Label(hdr_top, textvariable=self._timer_var, font=fnt_timer,
-                 fg=T_CYAN, bg=T_BG_DARK).pack(side=tk.RIGHT, pady=(3, 0))
-
-        # ── Divider ─────────────────────────────────────────
-        tk.Frame(self.root, bg=T_BORDER, height=1).pack(fill=tk.X)
-
-        # ── Log area ────────────────────────────────────────
-        log_frame = tk.Frame(self.root, bg=T_BG_DARKEST)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
-
-        fnt_log = tkfont.Font(family="Consolas", size=9)
-
-        self.log = tk.Text(
-            log_frame,
-            font=fnt_log,
-            bg=T_BG_DARKEST,
-            fg=T_TEXT,
-            insertbackground=T_CYAN,
-            selectbackground=T_BG_HOVER,
-            selectforeground=T_TEXT_BRIGHT,
-            relief=tk.FLAT,
-            bd=0,
-            wrap=tk.WORD,
-            state=tk.DISABLED,
-            padx=14,
-            pady=10,
-        )
-        self.scrollbar = ttk.Scrollbar(
-            log_frame,
-            orient=tk.VERTICAL,
-            style="Vertical.TScrollbar",
-            command=self.log.yview,
-        )
-        self.log.configure(yscrollcommand=self.scrollbar.set)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Tag colour palette
-        self.log.tag_configure("section",  foreground=T_CYAN,    font=tkfont.Font(family="Consolas", size=9, weight="bold"))
-        self.log.tag_configure("ok",       foreground=T_GREEN)
-        self.log.tag_configure("warn",     foreground=T_YELLOW)
-        self.log.tag_configure("fail",     foreground=T_RED)
-        self.log.tag_configure("dim",      foreground=T_TEXT_DIM)
-        self.log.tag_configure("normal",   foreground=T_TEXT)
-        self.log.tag_configure("update",   foreground=T_MAGENTA)
-        self.log.tag_configure("pip_row",  foreground=T_CYAN,    font=tkfont.Font(family="Consolas", size=10))
-
-        # ── Divider ─────────────────────────────────────────
-        tk.Frame(self.root, bg=T_BORDER, height=1).pack(fill=tk.X)
-
-        # ── Status bar (spinner + text + auto-scroll toggle) ────────────────
-        sb = tk.Frame(self.root, bg=T_BG_DARK, pady=5, padx=14)
-        sb.pack(fill=tk.X)
-
-        fnt_status = tkfont.Font(family="Montserrat", size=9)
-
-        self._spin_var = tk.StringVar(value="⠋")
-        tk.Label(sb, textvariable=self._spin_var, font=fnt_status,
-                 fg=T_CYAN, bg=T_BG_DARK).pack(side=tk.LEFT)
-
-        self._status_var = tk.StringVar(value="Initialising…")
-        tk.Label(sb, textvariable=self._status_var, font=fnt_status,
-                 fg=T_TEXT_DIM, bg=T_BG_DARK).pack(side=tk.LEFT, padx=(6, 0))
-
-        # Auto-scroll checkbox — right-aligned in the status bar
-        self._auto_scroll_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            sb,
-            text="Auto-Scroll",
-            variable=self._auto_scroll_var,
-            font=fnt_status,
-            bg=T_BG_DARK,
-            fg=T_TEXT_DIM,
-            activebackground=T_BG_DARK,
-            activeforeground=T_TEXT,
-            selectcolor=T_BG_DARKEST,
-            relief=tk.FLAT,
-            bd=0,
-            cursor="hand2",
-        ).pack(side=tk.RIGHT)
-
-        # Skip updates checkbox (for offline mode)
-        cfg_init = load_bootstrap_config()
-        self._skip_updates_var = tk.BooleanVar(
-            value=cfg_init.get("skip_updates", DEFAULT_SKIP_UPDATES)
-        )
-
-        def _on_toggle_skip_updates():
-            c = load_bootstrap_config()
-            enabled = not self._skip_updates_var.get()
-            c["skip_updates"] = not enabled
-            if save_bootstrap_config(c):
-                self.log_dim(
-                    "Update checks enabled for this launch."
-                    if enabled
-                    else "Update checks disabled for this launch."
-                )
-            else:
-                self.log_warn(
-                    "Could not save the update preference; this launch will still use the checkbox setting."
-                )
-
-        tk.Checkbutton(
-            sb,
-            text="Skip Updates",
-            variable=self._skip_updates_var,
-            command=_on_toggle_skip_updates,
-            font=fnt_status,
-            bg=T_BG_DARK,
-            fg=T_TEXT_DIM,
-            activebackground=T_BG_DARK,
-            activeforeground=T_TEXT,
-            selectcolor=T_BG_DARKEST,
-            relief=tk.FLAT,
-            bd=0,
-            cursor="hand2",
-        ).pack(side=tk.RIGHT, padx=(0, 12))
-
-        # ── Progress bar (step progress + busy/marquee for downloads) ─
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-        style.configure(
-            "Bootstrap.Horizontal.TProgressbar",
-            troughcolor=T_BG_LIGHT,
-            background=T_CYAN,
-            bordercolor=T_BG_DARK,
-            lightcolor=T_CYAN,
-            darkcolor=T_CYAN,
-            thickness=9,
-        )
-        style.configure(
-            "Vertical.TScrollbar",
-            background=T_BG_MID,
-            troughcolor=T_BG_DARKEST,
-            bordercolor=T_BG_DARKEST,
-            arrowcolor=T_TEXT_DIM,
-            lightcolor=T_BG_MID,
-            darkcolor=T_BG_MID,
-        )
-        style.map(
-            "Vertical.TScrollbar",
-            background=[("active", T_BG_HOVER)]
-        )
-        self._progress = ttk.Progressbar(
-            self.root,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100,
-            style="Bootstrap.Horizontal.TProgressbar",
-        )
-        self._progress.pack(fill=tk.X, side=tk.BOTTOM)
-
-        # Total number of top-level "Checking X" steps in the setup flow.
-        self.TOTAL_STEPS = 9
-        self._step_index = 0
-        self._busy_generation: int = 0
-        self._current_step_pct: float = 0.0
-
-        self._spin_idx = 0
-        self._spinning = True
-        self._closed = False          # must be set before _tick_spinner reads it
-        self._tick_spinner()
-        self._tick_timer()
-
-        # Allow closing without killing the main process immediately
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        # The first geometry pass occurs before the native window is mapped.
-        # Recenter once Tk/Windows has created the real window so mixed-DPI
-        # scaling, title-bar borders, and the taskbar work area are included.
-        self.root.after_idle(self._center_bootstrap_window)
-
-    def _center_bootstrap_window(self):
-        """Center the mapped bootstrap window in its current monitor work area."""
-        try:
-            if getattr(self, "_closed", False):
+        def _insert_with_bar_styling(self, cursor: QTextCursor, text: str, default_fmt: QTextCharFormat, color: str = "#00e5ff"):
+            """Insert text with enlarged, bold glyph formatting for any progress bar characters."""
+            if "▰" not in text and "▱" not in text:
+                cursor.insertText(text, default_fmt)
                 return
-            if not self.root.winfo_viewable():
-                # Tk may run the idle callback just before Windows maps the
-                # top-level window. Retry after mapping instead of accepting
-                # a position based on an incomplete native rectangle.
-                self.root.after(50, self._center_bootstrap_window)
-                return
-            self.root.update_idletasks()
-            left = top = 0
-            right = self.root.winfo_screenwidth()
-            bottom = self.root.winfo_screenheight()
+            bar_fmt = QTextCharFormat()
+            bar_fmt.setForeground(QColor(color))
+            bar_fmt.setFontFamilies(["Segoe UI Symbol", "Segoe UI Variable Static Display", "Consolas", "monospace"])
+            bar_fmt.setFontPointSize(12.0)
+            bar_fmt.setFontWeight(QFont.Weight.Bold)
 
-            if sys.platform == "win32":
-                import ctypes
-                from ctypes import wintypes
-
-                class _Rect(ctypes.Structure):
-                    _fields_ = [
-                        ("left", wintypes.LONG),
-                        ("top", wintypes.LONG),
-                        ("right", wintypes.LONG),
-                        ("bottom", wintypes.LONG),
-                    ]
-
-                class _MonitorInfo(ctypes.Structure):
-                    _fields_ = [
-                        ("cbSize", wintypes.DWORD),
-                        ("rcMonitor", _Rect),
-                        ("rcWork", _Rect),
-                        ("dwFlags", wintypes.DWORD),
-                    ]
-
-                hwnd = wintypes.HWND(self.root.winfo_id())
-                monitor_from_window = ctypes.windll.user32.MonitorFromWindow
-                monitor_from_window.argtypes = [wintypes.HWND, wintypes.DWORD]
-                monitor_from_window.restype = wintypes.HANDLE
-                monitor = monitor_from_window(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
-                if monitor:
-                    monitor_info = _MonitorInfo()
-                    monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
-                    get_monitor_info = ctypes.windll.user32.GetMonitorInfoW
-                    get_monitor_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)]
-                    get_monitor_info.restype = wintypes.BOOL
-                    if get_monitor_info(monitor, ctypes.byref(monitor_info)):
-                        work = monitor_info.rcWork
-                        left, top = int(work.left), int(work.top)
-                        right, bottom = int(work.right), int(work.bottom)
-
-                window_rect = _Rect()
-                get_window_rect = ctypes.windll.user32.GetWindowRect
-                get_window_rect.argtypes = [wintypes.HWND, ctypes.POINTER(_Rect)]
-                get_window_rect.restype = wintypes.BOOL
-                if get_window_rect(hwnd, ctypes.byref(window_rect)):
-                    window_width = max(1, int(window_rect.right - window_rect.left))
-                    window_height = max(1, int(window_rect.bottom - window_rect.top))
+            for part in re.split(r"([▰▱]+)", text):
+                if not part:
+                    continue
+                if part[0] in ("▰", "▱"):
+                    cursor.insertText(part, bar_fmt)
                 else:
-                    window_width = max(1, self.root.winfo_width())
-                    window_height = max(1, self.root.winfo_height())
+                    cursor.insertText(part, default_fmt)
+
+        @Slot(str, str)
+        def _on_log(self, text: str, tag: str):
+            pal = getattr(self, "_theme_pal", _T_PALETTE)
+            green    = pal.get("T_GREEN", "#10b981")
+            yellow   = pal.get("T_YELLOW", "#f59e0b")
+            red      = pal.get("T_RED", "#ef4444")
+            cyan     = pal.get("T_CYAN", "#00e5ff")
+            text_dim = pal.get("T_TEXT_DIM", "#64748b")
+            magenta  = pal.get("T_MAGENTA", "#c084fc")
+            text_c   = pal.get("T_TEXT", "#cbd5e1")
+            color_map = {
+                "ok": green,
+                "warn": yellow,
+                "fail": red,
+                "section": cyan,
+                "dim": text_dim,
+                "update": magenta,
+                "normal": text_c,
+                "pip_row": cyan,
+            }
+            color = color_map.get(tag, text_c)
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            if tag in ("section", "ok", "fail"):
+                fmt.setFontWeight(QFont.Weight.Bold)
+            fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
+
+            doc = self.log_edit.document()
+            msg = text + "\n"
+
+            if (
+                self._live_block_start is not None
+                and self._live_block_len > 0
+                and self._live_block_start < doc.characterCount()
+            ):
+                cursor = QTextCursor(doc)
+                pos = min(self._live_block_start, max(0, doc.characterCount() - 1))
+                cursor.setPosition(pos)
+                self._insert_with_bar_styling(cursor, msg, fmt, color)
+                inserted = cursor.position() - pos
+                self._live_block_start = pos + inserted
             else:
-                window_width = max(1, self.root.winfo_width())
-                window_height = max(1, self.root.winfo_height())
+                cursor = QTextCursor(doc)
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                self._insert_with_bar_styling(cursor, msg, fmt, color)
 
-            work_width = max(1, right - left)
-            work_height = max(1, bottom - top)
-            x = left + max(0, (work_width - window_width) // 2)
-            y = top + max(0, (work_height - window_height) // 2)
-            self.root.geometry(f"+{x}+{y}")
-        except Exception:
-            # The initial geometry remains a safe fallback if a platform API
-            # is unavailable or the window is already closing.
-            pass
+            if self.auto_scroll_cb.isChecked():
+                sb = self.log_edit.verticalScrollBar()
+                sb.setValue(sb.maximum())
 
-    def _unset_topmost(self):
-        try:
-            if hasattr(self, "root") and self.root:
-                self.root.attributes("-topmost", False)
-        except Exception:
-            pass
-
-    # ── Thread-safe live PIP Table Block update ──────────────
-    def update_pip_table_block(self, table_text: str):
-        """Thread-safe live update of the multithreaded pip progress table block."""
-        def _do():
-            if self._closed:
+        @Slot(str, str)
+        def _on_update_block(self, block_type: str, table_text: str):
+            if not table_text.strip():
                 return
-            import tkinter as tk
-            self.log.configure(state="normal")
-            if "pip_table_start" in self.log.mark_names():
-                self.log.delete("pip_table_start", "pip_table_end")
+            doc = self.log_edit.document()
+
+            if self._live_block_type is not None and self._live_block_type != block_type:
+                self._live_block_start = None
+                self._live_block_len = 0
+            self._live_block_type = block_type
+
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#00e5ff"))
+            fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
+
+            cursor = QTextCursor(doc)
+            if (
+                self._live_block_start is not None
+                and self._live_block_len > 0
+                and self._live_block_start < doc.characterCount()
+            ):
+                cursor.setPosition(self._live_block_start)
+                end_pos = min(self._live_block_start + self._live_block_len, doc.characterCount() - 1)
+                cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
             else:
-                self.log.insert("end", "\n")
-                self.log.mark_set("pip_table_start", "end-1c")
-                self.log.mark_gravity("pip_table_start", tk.LEFT)
-                self.log.insert("end", "\n")
-                self.log.mark_set("pip_table_end", "end-1c")
-                self.log.mark_gravity("pip_table_end", tk.RIGHT)
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                self._live_block_start = cursor.position()
 
-            self.log.insert("pip_table_start", table_text + "\n", "pip_row")
-            self.log.configure(state="disabled")
-            if getattr(self, "_auto_scroll_var", None) and self._auto_scroll_var.get():
-                self.log.see("pip_table_end")
-        self.root.after(0, _do)
+            start_pos = cursor.position()
+            self._insert_with_bar_styling(cursor, table_text, fmt, "#00e5ff")
+            self._live_block_len = cursor.position() - start_pos
 
-    # ── Thread-safe live PlatformIO package progress row ──────
-    def update_platformio_progress_block(self, table_text: str):
-        """Replace one live PlatformIO package-progress block in-place.
+            if self.auto_scroll_cb.isChecked():
+                sb = self.log_edit.verticalScrollBar()
+                sb.setValue(sb.maximum())
 
-        PlatformIO redraws its own download/unpack percentages with carriage
-        returns.  Mirroring that behavior in the Tk log prevents stale 10%/40%
-        rows from remaining visible after the package has moved to another phase.
-        """
-        def _do():
-            if self._closed:
-                return
-            import tkinter as tk
-            self.log.configure(state="normal")
-            marks = self.log.mark_names()
-            if "platformio_progress_start" in marks and "platformio_progress_end" in marks:
-                self.log.delete("platformio_progress_start", "platformio_progress_end")
+        @Slot()
+        def _on_commit_block(self):
+            self._live_block_start = None
+            self._live_block_len = 0
+            self._live_block_type = None
+            doc = self.log_edit.document()
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText("\n")
+
+        @Slot()
+        def _on_clear_block(self):
+            if self._live_block_start is not None and self._live_block_len > 0:
+                doc = self.log_edit.document()
+                if self._live_block_start < doc.characterCount():
+                    cursor = QTextCursor(doc)
+                    cursor.setPosition(self._live_block_start)
+                    end_pos = min(self._live_block_start + self._live_block_len, doc.characterCount() - 1)
+                    cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
+                    cursor.removeSelectedText()
+            self._live_block_start = None
+            self._live_block_len = 0
+            self._live_block_type = None
+
+        @Slot(str)
+        def _on_status(self, text: str):
+            self.status_lbl.setText(text)
+
+        @Slot(float)
+        def _on_progress(self, val: float):
+            v = max(0, min(100, int(round(val))))
+            self.prog_bar.setValue(v)
+            self.pct_lbl.setText(f"{v}%")
+
+        @Slot(str, bool)
+        def _on_stop_spinner(self, done_text: str, ok: bool):
+            self._spinner_timer.stop()
+            self.spin_lbl.setText("✔" if ok else "✖")
+            self.spin_lbl.setStyleSheet("color: #10b981; font-size: 13px; font-weight: bold;" if ok else "color: #ef4444; font-size: 13px; font-weight: bold;")
+            self.status_lbl.setText(done_text)
+
+        @Slot(object, tuple)
+        def _on_call(self, func, args):
+            try:
+                func(*args)
+            except Exception as e:
+                _record_bootstrap_exception(f"Bootstrap callback error: {e}")
+
+        def closeEvent(self, event):
+            if getattr(self, "_allow_close", False) or getattr(self._gui, "_closed", False):
+                event.accept()
             else:
-                self.log.insert("end", "\n")
-                self.log.mark_set("platformio_progress_start", "end-1c")
-                self.log.mark_gravity("platformio_progress_start", tk.LEFT)
-                self.log.insert("end", "\n")
-                self.log.mark_set("platformio_progress_end", "end-1c")
-                self.log.mark_gravity("platformio_progress_end", tk.RIGHT)
+                event.ignore()
+                if sys.platform == "win32":
+                    try:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(
+                            int(self.winId()),
+                            "The setup process is running and cannot be closed.\n\n"
+                            "Please wait for it to complete.",
+                            "Setup in Progress",
+                            0x30,  # MB_ICONWARNING
+                        )
+                    except Exception:
+                        pass
 
-            self.log.insert("platformio_progress_start", table_text + "\n", "pip_row")
-            self.log.configure(state="disabled")
-            if getattr(self, "_auto_scroll_var", None) and self._auto_scroll_var.get():
-                self.log.see("platformio_progress_end")
-        self.root.after(0, _do)
+        @Slot()
+        def _on_close(self):
+            self._allow_close = True
+            self.close()
 
-    def clear_platformio_progress_block(self):
-        """Remove the transient PlatformIO progress row before final phase logging."""
-        def _do():
-            if self._closed:
-                return
-            self.log.configure(state="normal")
-            marks = self.log.mark_names()
-            if "platformio_progress_start" in marks and "platformio_progress_end" in marks:
-                self.log.delete("platformio_progress_start", "platformio_progress_end")
-                try:
-                    self.log.mark_unset("platformio_progress_start", "platformio_progress_end")
-                except Exception:
-                    pass
-            self.log.configure(state="disabled")
-        self.root.after(0, _do)
 
-    # ── Spinner ───────────────────────────────────────────────
-    def _tick_spinner(self):
-        if self._closed:
-            return
-        if self._spinning:
-            self._spin_var.set(self.SPINNER[self._spin_idx % len(self.SPINNER)])
-            self._spin_idx += 1
-        self.root.after(90, self._tick_spinner)
+class _BootstrapRootProxy:
+    """Thread-safe compatibility proxy for legacy gui.root calls."""
+    def __init__(self, gui: "BootstrapGUI"):
+        self._gui = gui
 
-    def _tick_timer(self):
-        if self._closed:
-            return
-        import time as _t_mod
-        elapsed = int(_t_mod.time() - self._start_time)
-        m, s = divmod(elapsed, 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            t_str = f"⏱ {h:02d}:{m:02d}:{s:02d}"
+    def after(self, delay_ms: int, func, *args):
+        if getattr(self._gui, "_signals", None):
+            if delay_ms <= 0:
+                self._gui._signals.sig_call.emit(func, args)
+            else:
+                def _delayed():
+                    time.sleep(float(delay_ms) / 1000.0)
+                    if getattr(self._gui, "_signals", None):
+                        self._gui._signals.sig_call.emit(func, args)
+                threading.Thread(target=_delayed, daemon=True).start()
         else:
-            t_str = f"⏱ {m:02d}:{s:02d}"
-        self._timer_var.set(t_str)
-        self.root.after(1000, self._tick_timer)
+            if delay_ms <= 0:
+                threading.Thread(target=func, args=args, daemon=True).start()
+            else:
+                t = threading.Timer(float(delay_ms) / 1000.0, func, args=args)
+                t.daemon = True
+                t.start()
 
-    def stop_spinner(self, done_text: str = "Done", ok: bool = True):
-        self._spinning = False
-        self._spin_var.set("✔" if ok else "✖")
-        self._status_var.set(done_text)
-        if ok:
-            self.set_step_progress(self.TOTAL_STEPS, self.TOTAL_STEPS)
+    def withdraw(self):
+        self._gui.hide()
 
-    # ── Progress bar ───────────────────────────────────────────
-    def _total_steps_safe(self) -> int:
-        return getattr(self, "TOTAL_STEPS", 14)
 
-    def _overall_progress_from_step_pct(self, step_pct: float) -> float:
-        """Map 0..100% inside the current setup step to one monotonic 0..100 bar."""
-        total = max(1, self._total_steps_safe())
-        step_index = max(1, min(getattr(self, "_step_index", 1), total))
-        step_fraction = max(0.0, min(100.0, float(step_pct))) / 100.0
-        return max(0.0, min(100.0, ((step_index - 1) + step_fraction) * 100.0 / total))
+class BootstrapGUI:
+    """
+    Displays bootstrap progress in a native PySide6 (Qt for Python) window.
+    Falls back gracefully to console output if PySide6 is not yet available.
+    All methods are safe to call from worker threads.
+    """
+    TOTAL_STEPS = 9
 
-    def set_step_progress(self, current: int, total: int):
-        """Set completed top-level setup steps on the single bottom progress bar."""
-        def _do():
-            if self._closed:
-                return
-            self._busy_generation = getattr(self, "_busy_generation", 0) + 1
-            self._progress.stop()
-            resolved_total = max(1, self._total_steps_safe())
-            value = max(0.0, min(100.0, float(current) * 100.0 / resolved_total))
-            self._progress.configure(mode="determinate", maximum=100)
-            self._progress["value"] = value
-            self._current_step_pct = 100.0 if current >= resolved_total else 0.0
-        self.root.after(0, _do)
+    def __init__(self):
+        self._start_time = time.time()
+        self._status_text = "Initialising…"
+        self._overall_progress = 0.0
+        self._step_index = 0
+        self._current_step_pct = 0.0
+        self._busy_generation = 0
+        self._closed = False
+        self._spinning = True
+        self._log_history: list[dict] = []
+        self._theme_mode = _BOOTSTRAP_THEME_MODE
 
-    def set_progress_percent(self, pct: int | float):
-        """Set progress inside the current setup step without resetting the whole bar."""
-        def _do():
-            if self._closed:
-                return
-            step_pct = max(0.0, min(100.0, float(pct)))
-            self._current_step_pct = step_pct
-            self._progress.stop()
-            self._progress.configure(mode="determinate", maximum=100)
-            self._progress["value"] = self._overall_progress_from_step_pct(step_pct)
-        self.root.after(0, _do)
+        cfg = load_bootstrap_config()
+        self._skip_updates = cfg.get("skip_updates", DEFAULT_SKIP_UPDATES)
 
-    def start_busy(self, start_pct: int | float | None = None, cap_pct: int | float = 92):
-        """Smoothly fill the current step while work is active.
+        self._signals = _BootstrapSignals() if HAS_PYSIDE6_BOOTSTRAP else None
+        self.root = _BootstrapRootProxy(self)
+        self._app: Optional[Any] = None
+        self._window: Optional[Any] = None
+        self._done_event = threading.Event()
 
-        This is a normal left-to-right determinate bar rather than a bouncing
-        marquee.  A caller may reserve a sub-range for one install operation.
-        """
-        def _do():
-            if self._closed:
-                return
+        if HAS_PYSIDE6_BOOTSTRAP:
+            app = QApplication.instance()
+            if app is None:
+                app = QApplication(sys.argv if sys.argv else [""])
+            try:
+                from PySide6.QtGui import QFontDatabase, QFont
+                fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat"
+                if fonts_dir.exists():
+                    for ttf in fonts_dir.rglob("*.ttf"):
+                        QFontDatabase.addApplicationFont(str(ttf.resolve()))
+                app_font = QFont("Montserrat", 10)
+                app_font.setStyleHint(QFont.StyleHint.SansSerif)
+                app.setFont(app_font)
+            except Exception:
+                pass
+            self._app = app
+            self._window = _BootstrapDialog(self)
+            self._window.show()
 
-            self._busy_generation = getattr(self, "_busy_generation", 0) + 1
-            generation = self._busy_generation
-            self._progress.stop()
-            self._progress.configure(mode="determinate", maximum=100)
-
-            current = float(getattr(self, "_current_step_pct", 0.0))
-            if start_pct is not None:
-                current = max(current, float(start_pct))
-            current = max(0.0, min(99.0, current))
-            cap = max(current + 0.5, min(99.0, float(cap_pct)))
-            self._current_step_pct = current
-
-            def _tick():
-                if self._closed or generation != getattr(self, "_busy_generation", 0):
-                    return
-                value = float(getattr(self, "_current_step_pct", current))
-                if value < cap:
-                    delta = max(0.20, min(1.20, (cap - value) * 0.08))
-                    value = min(cap, value + delta)
-                    self._current_step_pct = value
-                    self._progress["value"] = self._overall_progress_from_step_pct(value)
-                self.root.after(120, _tick)
-
-            _tick()
-
-        self.root.after(0, _do)
-
-    def stop_busy(self, restore_step: bool = True):
-        """Stop animation and leave the bar at its latest position."""
-        def _do():
-            if self._closed:
-                return
-            self._busy_generation = getattr(self, "_busy_generation", 0) + 1
-            self._progress.stop()
-            self._progress.configure(mode="determinate", maximum=100)
-        self.root.after(0, _do)
-
-    # ── Thread-safe log append ────────────────────────────────
     def _append(self, text: str, tag: str = "normal"):
         _record_bootstrap_log(tag.upper(), text)
-        def _do():
-            if self._closed:
-                return
-            self.log.configure(state="normal")
-            self.log.insert("end", text + "\n", tag)
-            self.log.configure(state="disabled")
-            if getattr(self, "_auto_scroll_var", None) and self._auto_scroll_var.get():
-                self.log.see("end")
-        self.root.after(0, _do)
+        item = {"text": text, "tag": tag}
+        self._log_history.append(item)
+        if len(self._log_history) > 2500:
+            self._log_history.pop(0)
+        if self._signals:
+            self._signals.sig_log.emit(text, tag)
+        else:
+            print(text)
 
     def set_status(self, text: str):
-        def _do():
-            if not self._closed:
-                self._status_var.set(text)
-        self.root.after(0, _do)
+        self._status_text = text
+        if self._signals:
+            self._signals.sig_status.emit(text)
 
-    # ── Public logging API ────────────────────────────────────
     def log_banner(self):
         self._append("=" * 56, "section")
-        self._append("  ⚡  MCU Uploader IDE by Naph — Bootstrap", "section")
+        self._append("  ⚡ MCU Flasher by Naph — Setup & Verification", "section")
         self._append("=" * 56, "section")
         self._append("")
 
     def log_section(self, title: str):
-        """A top-level step (e.g. 'Checking pyserial'). Advances the
-        overall step progress bar."""
         self._step_index += 1
         self._append(f"\n── {title} ──", "section")
         self.set_status(title)
         self.set_progress_percent(0)
 
     def log_subsection(self, title: str):
-        """A nested sub-step (e.g. 'Installing pyserial') — same styling
-        as log_section but doesn't advance the step counter, since several
-        of these can happen inside a single top-level step."""
         self._append(f"\n── {title} ──", "section")
         self.set_status(title)
 
     def log_pip_line(self, line: str):
-        """One line of raw pip output, shown dim so it doesn't compete
-        visually with our own ok/warn/fail lines."""
         self._append(f"    {line}", "dim")
 
     def log_status(self, msg: str):
@@ -1804,116 +1999,147 @@ class BootstrapGUI:
     def log_dim(self, msg: str):
         self._append(f"  – {msg}", "dim")
 
+    def update_pip_table_block(self, table_text: str):
+        if self._signals:
+            self._signals.sig_update_block.emit("pip", table_text)
+        elif table_text.strip():
+            self._append(table_text, "dim")
+
+    def commit_pip_table_block(self):
+        if self._signals:
+            self._signals.sig_commit_block.emit()
+
+    def update_platformio_progress_block(self, table_text: str):
+        if self._signals:
+            self._signals.sig_update_block.emit("pio", table_text)
+        elif table_text.strip():
+            self._append(table_text, "dim")
+
+    def clear_platformio_progress_block(self):
+        if self._signals:
+            self._signals.sig_clear_block.emit()
+
+    def stop_spinner(self, done_text: str = "Done", ok: bool = True):
+        self._spinning = False
+        if self._signals:
+            self._signals.sig_stop_spinner.emit(done_text, ok)
+        if ok:
+            self.set_step_progress(self.TOTAL_STEPS, self.TOTAL_STEPS)
+
+    def _total_steps_safe(self) -> int:
+        return getattr(self, "TOTAL_STEPS", 9)
+
+    def _overall_progress_from_step_pct(self, step_pct: float) -> float:
+        total = max(1, self._total_steps_safe())
+        step_index = max(1, min(self._step_index, total))
+        step_fraction = max(0.0, min(100.0, float(step_pct))) / 100.0
+        return max(0.0, min(100.0, ((step_index - 1) + step_fraction) * 100.0 / total))
+
+    def set_step_progress(self, current: int, total: int):
+        self._busy_generation += 1
+        resolved_total = max(1, self._total_steps_safe())
+        value = max(0.0, min(100.0, float(current) * 100.0 / resolved_total))
+        self._overall_progress = value
+        if self._signals:
+            self._signals.sig_progress.emit(value)
+
+    def set_progress_percent(self, pct: int | float):
+        step_pct = max(0.0, min(100.0, float(pct)))
+        self._current_step_pct = step_pct
+        value = self._overall_progress_from_step_pct(step_pct)
+        self._overall_progress = value
+        if self._signals:
+            self._signals.sig_progress.emit(value)
+
+    def start_busy(self, start_pct: int | float | None = None, cap_pct: int | float = 92):
+        self._busy_generation += 1
+        generation = self._busy_generation
+        current = float(self._current_step_pct)
+        if start_pct is not None:
+            current = max(current, float(start_pct))
+        current = max(0.0, min(99.0, current))
+        cap = max(current + 0.5, min(99.0, float(cap_pct)))
+        self._current_step_pct = current
+
+        def _tick():
+            if self._closed or generation != self._busy_generation:
+                return
+            value = float(self._current_step_pct)
+            if value < cap:
+                delta = max(0.20, min(1.20, (cap - value) * 0.08))
+                value = min(cap, value + delta)
+                self._current_step_pct = value
+                overall = self._overall_progress_from_step_pct(value)
+                self._overall_progress = overall
+                if self._signals:
+                    self._signals.sig_progress.emit(overall)
+                t = threading.Timer(0.12, _tick)
+                t.daemon = True
+                t.start()
+
+        _tick()
+
+    def stop_busy(self, restore_step: bool = True):
+        self._busy_generation += 1
+
     def ask_update(self, count: int) -> bool:
-        """
-        Show a modal Yes/No dialog asking whether to install updates.
-        Returns True if the user clicks Yes.
-        Must be called from the Tk main thread (or via after()).
-        """
-        import tkinter.messagebox as mb
-
-        def _ask() -> bool:
-            if self._closed:
-                return False
-            return mb.askyesno(
-                "Updates Available",
-                f"{count} update(s) are available.\n\nInstall them now?",
-                parent=self.root,
-            )
-
-        if threading.current_thread() is threading.main_thread():
-            return _ask()
-
-        # Update checks run in the bootstrap worker. Tk dialogs must run on
-        # the UI thread, so marshal the prompt and wait for the response.
-        completed = threading.Event()
-        answer = [False]
-
-        def _on_ui_thread():
+        if sys.platform == "win32":
             try:
-                answer[0] = _ask()
-            finally:
-                completed.set()
-
-        try:
-            self.root.after(0, _on_ui_thread)
-            completed.wait()
-        except Exception:
-            return False
-        return answer[0]
+                import ctypes
+                res = ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"{count} update(s) are available for MCU Flash components.\n\nWould you like to install them now?",
+                    "Updates Available",
+                    0x24,  # MB_YESNO | MB_ICONQUESTION
+                )
+                return res == 6  # IDYES
+            except Exception:
+                return False
+        return False
 
     def show_error(self, title: str, msg: str):
-        import tkinter.messagebox as mb
-        mb.showerror(title, msg, parent=self.root)
-
-    def _on_close(self):
-        # Prevent closing during setup — user must wait for completion
-        # or explicitly cancel via the Cancel button if provided
-        import tkinter.messagebox as mb
-        mb.showwarning(
-            "Setup in Progress",
-            "The setup process is running and cannot be closed.\n\n"
-            "Please wait for it to complete, or use the Cancel button if available.",
-            parent=self.root,
-        )
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, msg, title, 0x10)
+            except Exception:
+                pass
 
     def pump(self):
-        """Process pending Tk events without blocking."""
-        try:
-            self.root.update()
-        except Exception:
-            pass
+        if self._app:
+            self._app.processEvents()
 
     def mainloop_until_done(self):
-        """Run Tk event loop until destroy() is called."""
-        try:
-            self.root.mainloop()
-        except Exception:
-            pass
+        if self._app and self._window:
+            try:
+                self._app.exec()
+            except Exception as exc:
+                _record_bootstrap_exception(f"Bootstrap Qt mainloop error: {exc}")
+        else:
+            self._done_event.wait()
+
+    def hide(self):
+        if self._signals:
+            self._signals.sig_hide.emit()
 
     def close_after_delay(self, delay_s: float | None = None):
-        """
-        Schedule self.close() to run on the Tk main thread after a delay
-        so the user has a moment to read the final status line / see the
-        spinner land on ✔ before the window disappears.
-
-        delay_s=None falls back to BOOTSTRAP_CLOSE_DELAY_S. Pass 0 to
-        close immediately. Safe to call from any thread.
-        """
         if delay_s is None:
             delay_s = BOOTSTRAP_CLOSE_DELAY_S
-        delay_ms = max(0, int(float(delay_s) * 1000))
-
-        def _do():
-            self.close()
-
-        try:
-            self.root.after(delay_ms, _do)
-        except Exception:
-            # Tk is already gone (e.g. user clicked the X) — nothing to do.
-            pass
+        delay_s = max(0.0, float(delay_s))
+        t = threading.Timer(delay_s, self.close)
+        t.daemon = True
+        t.start()
 
     def close(self):
         if not self._closed:
             self._closed = True
             self._spinning = False
-            try:
-                self.root.withdraw()
-            except Exception:
-                pass
-            # Disable window protocol to prevent callback loops during destroy
-            try:
-                self.root.protocol("WM_DELETE_WINDOW", lambda: None)
-            except Exception:
-                pass
-            try:
-                self.root.quit()
-            except Exception:
-                pass
-            try:
-                self.root.destroy()
-            except Exception:
-                pass
+            self._done_event.set()
+            if self._signals:
+                self._signals.sig_close.emit()
+            if self._app:
+                QTimer.singleShot(50, self._app.quit)
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1923,10 +2149,10 @@ def banner():
     if _gui:
         _gui.log_banner()
     else:
-        _record_bootstrap_log("SECTION", "MCU Uploader IDE by Naph - Bootstrap")
+        _record_bootstrap_log("SECTION", "MCU Flasher by Naph - Bootstrap")
         os.system("")
         print(f"\n{CYAN}{BOLD}{'=' * 56}")
-        print(f"  ⚡  MCU Uploader IDE by Naph — Bootstrap")
+        print("  ⚡  MCU Flasher by Naph — Bootstrap")
         print(f"{'=' * 56}{RESET}\n")
 
 def status(msg: str, color: str = CYAN):
@@ -2235,93 +2461,30 @@ def check_pio_update() -> dict:
 
 
 def check_python_update() -> dict:
-    """Check if a newer version of Python is available on winget."""
+    """The private Python runtime in src/_python is strictly isolated and managed locally.
+    External system Python updates from winget or the web are denied.
+    """
     import sys
-    current_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    
-    if sys.platform != "win32" or not shutil.which("winget"):
-        return {"name": "python", "installed": current_ver, "latest": current_ver,
-                "update_available": False, "error": None}
-                
-    try:
-        # Run winget search silently
-        import subprocess as sp
-        res = sp.run(
-            ["winget", "search", "Python.Python"],
-            capture_output=True, text=True, timeout=20, shell=False,
-            creationflags=sp.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        )
-        if res.returncode == 0:
-            highest_minor = sys.version_info.minor
-            highest_id = None
-            for line in res.stdout.splitlines():
-                if "Python.Python.3." in line:
-                    parts = line.split()
-                    for part in parts:
-                        if part.startswith("Python.Python.3."):
-                            try:
-                                minor_ver = int(part.split(".")[-1])
-                                if minor_ver > highest_minor:
-                                    highest_minor = minor_ver
-                                    highest_id = part
-                            except Exception:
-                                pass
-            if highest_id:
-                latest_ver_str = f"3.{highest_minor}"
-                return {
-                    "name": "python",
-                    "installed": current_ver,
-                    "latest": latest_ver_str,
-                    "update_available": True,
-                    "error": None,
-                    "package_id": highest_id,
-                }
-    except FileNotFoundError:
-        return {"name": "python", "installed": current_ver, "latest": current_ver,
-                "update_available": False, "error": None}
-    except Exception as e:
-        return {"name": "python", "installed": current_ver, "latest": None,
-                "update_available": False, "error": f"check failed: {e}"}
-                
-    return {"name": "python", "installed": current_ver, "latest": current_ver,
-            "update_available": False, "error": None}
+    current_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    return {
+        "name": "python",
+        "installed": current_ver,
+        "latest": current_ver,
+        "update_available": False,
+        "error": None,
+    }
 
 
 def _install_python_update(package_id: str) -> bool:
-    """Install the newer Python package discovered through winget."""
-    if sys.platform != "win32" or not package_id:
-        return False
-    status(f"Installing {package_id} with Windows Package Manager...")
-    try:
-        result = subprocess.run(
-            [
-                "winget", "install", "--id", package_id, "--exact", "--scope", "user",
-                "--override", "/passive Include_tcltk=1 PrependPath=1 Include_test=0",
-                "--accept-package-agreements", "--accept-source-agreements",
-                "--disable-interactivity",
-            ],
-            capture_output=True, text=True, timeout=900,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        if result.returncode in (0, 2316632107, -1978335205):
-            ok(f"{package_id} is installed or already up to date.")
-            return True
-        detail = (result.stderr or result.stdout or "").strip().splitlines()
-        warn(f"winget could not install {package_id} (exit {result.returncode}).")
-        if detail:
-            warn(detail[-1])
-    except FileNotFoundError:
-        warn("winget is not available on this Windows installation.")
-    except subprocess.TimeoutExpired:
-        warn("Python installation timed out; it may still be running in the background.")
-    except Exception as exc:
-        warn(f"Could not install Python update: {exc}")
+    """External/system Python installations are strictly denied.
+    MCU Flasher exclusively uses the private runtime at src/_python.
+    """
     return False
 
 
 _UPDATE_CHECK_PACKAGES = [
     "python", "pip", "pyserial", "psutil", "pywebview",
-    "pywinpty", "websockets", "esptool", "platformio", "arduino-cli",
+    "pywinpty", "websockets", "esptool", "pyside6", "platformio", "arduino-cli",
 ]
 
 
@@ -2428,6 +2591,7 @@ def run_update_checks(auto_update: bool = False):
         ("pywinpty",   lambda: check_pip_package_update("pywinpty", "winpty")),
         ("websockets", lambda: check_pip_package_update("websockets")),
         ("esptool",    lambda: check_pip_package_update("esptool")),
+        ("pyside6",    lambda: check_pip_package_update("PySide6", "PySide6.QtWidgets")),
         ("platformio", lambda: check_pio_update()),
         ("arduino-cli",lambda: check_arduino_cli_update()),
     ]
@@ -2475,19 +2639,15 @@ def run_update_checks(auto_update: bool = False):
         import threading
         if threading.current_thread().name == "fast-path-update-check":
             try:
-                import tkinter as tk
-                import tkinter.messagebox as mb
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                ans = mb.askyesno(
-                    "Updates Available",
-                    f"{len(updates_found)} update(s) are available for MCU Flash GUI components.\n\n"
+                import ctypes
+                res = ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"{len(updates_found)} update(s) are available for MCU Flash components.\n\n"
                     "Would you like to install them now?",
-                    parent=root
+                    "Updates Available",
+                    0x24,  # MB_YESNO | MB_ICONQUESTION
                 )
-                answer = "y" if ans else "n"
-                root.destroy()
+                answer = "y" if res == 6 else "n"
             except Exception:
                 answer = "n"
         else:
@@ -2531,18 +2691,14 @@ def run_update_checks(auto_update: bool = False):
                 _release_bootstrap_slot()
                 
                 try:
-                    import tkinter as tk
-                    import tkinter.messagebox as mb
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    mb.showinfo(
-                        "Python Updated — Restarting",
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
                         f"Python has been updated from {r['installed']} to {r['latest']}.\n\n"
                         "The old environment was removed and the application will now restart automatically with the new Python version.",
-                        parent=root
+                        "Python Updated — Restarting",
+                        0x40,  # MB_ICONINFORMATION
                     )
-                    root.destroy()
                 except Exception:
                     pass
                 
@@ -2608,18 +2764,14 @@ def run_update_checks(auto_update: bool = False):
         import threading
         if threading.current_thread().name == "fast-path-update-check":
             try:
-                import tkinter as tk
-                import tkinter.messagebox as mb
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                mb.showinfo(
-                    "Updates Installed",
-                    "Updates for MCU Flash GUI components have been installed successfully.\n\n"
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    "Updates for MCU Flash components have been installed successfully.\n\n"
                     "Please restart the application to apply the updates.",
-                    parent=root
+                    "Updates Installed",
+                    0x40,  # MB_ICONINFORMATION
                 )
-                root.destroy()
             except Exception:
                 pass
     else:
@@ -2636,6 +2788,7 @@ def run_update_checks(auto_update: bool = False):
 def ensure_pip() -> bool:
     """Make sure pip is available in the current Python."""
     try:
+        # pyrefly: ignore [missing-import]
         import pip  # noqa: F401 — availability probe
         ok("pip already installed in target environment")
         return True
@@ -2657,31 +2810,10 @@ def ensure_pip() -> bool:
     section("Installing pip")
     status("pip not found in target environment, bootstrapping...")
 
-    # Fast path: copy pre-installed pip/setuptools from base Python into target venv site-packages
+    # Fast path: pre-seed packages (including pip/setuptools) from base Python into target venv site-packages
     try:
-        base_prefix = Path(getattr(sys, "base_prefix", sys.prefix))
-        exec_path = Path(sys.executable).resolve()
-        
-        if sys.platform == "win32":
-            base_site = base_prefix / "Lib" / "site-packages"
-            target_site = exec_path.parent.parent / "Lib" / "site-packages"
-        else:
-            base_site = base_prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-            target_site = exec_path.parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-
-        if base_site.is_dir() and target_site.is_dir() and base_site.resolve() != target_site.resolve():
-            status("Copying pip packages from base Python...")
-            for item in base_site.glob("*"):
-                name_lower = item.name.lower()
-                if any(k in name_lower for k in ("pip", "setuptools", "wheel", "distutils", "pkg_resources")):
-                    t = target_site / item.name
-                    if not t.exists():
-                        if item.is_dir():
-                            shutil.copytree(item, t, dirs_exist_ok=True)
-                        else:
-                            shutil.copy2(item, t)
-            
-            # Test if pip works now
+        if _preseed_venv_site_packages():
+            status("Pre-seeded dependencies from base Python...")
             res = subprocess.run(
                 [sys.executable, "-m", "pip", "--version"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -2821,13 +2953,10 @@ def ensure_pywin32() -> bool:
     if sys.platform != "win32":
         return True
 
-    try:
-        import win32gui  # noqa: F401
-        import win32con  # noqa: F401
+    if _check_import_pywin32():
+        _ensure_pywin32_system32_dlls()
         ok("pywin32 already installed")
         return True
-    except ImportError:
-        pass
 
     status("pywin32 not found, installing via pip...")
 
@@ -2835,6 +2964,7 @@ def ensure_pywin32() -> bool:
     try:
         if not _run_pip_install(["pywin32"]):
             raise RuntimeError("pip exited with a non-zero status")
+        _ensure_pywin32_system32_dlls()
         ok("pywin32 installed successfully")
         return True
     except Exception as e:
@@ -2890,23 +3020,131 @@ def ensure_pywebview() -> bool:
 
 # ── 2e. Ensure PyQt5 + QScintilla ─────────────────────────────
 # ── Multithreaded Parallel Pip Package Manager ────────────────
+def _get_target_venv_dir() -> Path:
+    """Return the resolved directory of the target virtual environment."""
+    if "VIRTUAL_ENV" in os.environ and os.environ["VIRTUAL_ENV"]:
+        candidate = Path(os.environ["VIRTUAL_ENV"]).resolve()
+        if candidate.is_dir():
+            return candidate
+    candidate_env = (SCRIPT_DIR / "env").resolve()
+    if candidate_env.is_dir():
+        return candidate_env
+    if sys.executable:
+        exe_p = Path(sys.executable).resolve()
+        if (exe_p.parent.parent / "pyvenv.cfg").is_file():
+            return exe_p.parent.parent
+    return (SCRIPT_DIR / "env").resolve()
+
+
+def _get_target_python() -> Path:
+    """Return the exact Python executable for the target environment."""
+    vroot = _get_target_venv_dir()
+    py = vroot / "Scripts" / "python.exe" if sys.platform == "win32" else vroot / "bin" / "python"
+    if py.is_file():
+        return py
+    return Path(sys.executable).resolve()
+
+
+def _ensure_pywin32_system32_dlls(target_venv: Optional[Path] = None) -> None:
+    """Ensure pywintypes*.dll and pythoncom*.dll are staged in Scripts and win32, and pywin32.pth exists."""
+    if sys.platform != "win32":
+        return
+    try:
+        vroot = target_venv or _get_target_venv_dir()
+        sp = vroot / "Lib" / "site-packages"
+        scripts_dir = vroot / "Scripts"
+        if not sp.is_dir() or not scripts_dir.is_dir():
+            return
+
+        sys32_dir = sp / "pywin32_system32"
+        if sys32_dir.is_dir():
+            for dll in sys32_dir.glob("*.dll"):
+                dest = scripts_dir / dll.name
+                if not dest.exists():
+                    try:
+                        shutil.copy2(dll, dest)
+                    except OSError:
+                        pass
+                w32_dest = sp / "win32" / dll.name
+                if (sp / "win32").is_dir() and not w32_dest.exists():
+                    try:
+                        shutil.copy2(dll, w32_dest)
+                    except OSError:
+                        pass
+
+        pth_file = sp / "pywin32.pth"
+        if not pth_file.exists() and (sp / "win32").is_dir():
+            try:
+                pth_content = "# .pth file for the PyWin32 extensions\nwin32\nwin32\\lib\npythonwin\nimport pywin32_bootstrap\n"
+                pth_file.write_text(pth_content, encoding="utf-8")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _preseed_venv_site_packages(venv_dir: Path) -> int:
+    """Pre-seed all available packages from base Python into target venv site-packages.
+    Returns the count of copied packages.
+    """
+    copied = 0
+    try:
+        base_prefix = Path(getattr(sys, "base_prefix", sys.prefix)).resolve()
+        private_src = (SCRIPT_DIR / "src" / "_python").resolve()
+        if private_src.is_dir() and (private_src / "Lib" / "site-packages").is_dir():
+            base_prefix = private_src
+
+        if sys.platform == "win32":
+            base_site = base_prefix / "Lib" / "site-packages"
+            venv_site = venv_dir / "Lib" / "site-packages"
+        else:
+            base_site = base_prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+            venv_site = venv_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+
+        if not base_site.is_dir() or not venv_site.is_dir():
+            return 0
+        if base_site.resolve() == venv_site.resolve():
+            return 0
+
+        for item in base_site.glob("*"):
+            if item.name == "__pycache__":
+                continue
+            target = venv_site / item.name
+            if not target.exists():
+                try:
+                    if item.is_dir():
+                        shutil.copytree(item, target, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, target)
+                    copied += 1
+                except Exception:
+                    pass
+
+        # Stage system32 DLLs and .pth for pywin32
+        _ensure_pywin32_system32_dlls(venv_dir)
+
+        # Pre-seed Scripts if available (e.g. pio.exe, esptool.exe)
+        base_scripts = base_prefix / "Scripts"
+        venv_scripts = venv_dir / "Scripts"
+        if sys.platform == "win32" and base_scripts.is_dir() and venv_scripts.is_dir():
+            for s_item in base_scripts.glob("*"):
+                s_target = venv_scripts / s_item.name
+                if not s_target.exists() and s_item.is_file():
+                    try:
+                        shutil.copy2(s_item, s_target)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return copied
+
+
 def _get_target_site_packages_dirs() -> list[str]:
     """Return the search paths strictly for the target environment.
     Never returns the host Python's site-packages when targeting a virtual environment."""
-    venv_root = None
-    if "VIRTUAL_ENV" in os.environ and os.environ["VIRTUAL_ENV"]:
-        venv_root = Path(os.environ["VIRTUAL_ENV"]).resolve()
-    elif sys.executable:
-        exe_p = Path(sys.executable).resolve()
-        if (exe_p.parent.parent / "pyvenv.cfg").is_file():
-            venv_root = exe_p.parent.parent
-    if not venv_root:
-        candidate_env = (SCRIPT_DIR / "env").resolve()
-        if candidate_env.is_dir():
-            venv_root = candidate_env
-
-    if venv_root and venv_root.is_dir():
-        sp = venv_root / "Lib" / "site-packages" if sys.platform == "win32" else venv_root / "lib" / "site-packages"
+    vroot = _get_target_venv_dir()
+    if vroot:
+        sp = vroot / "Lib" / "site-packages" if sys.platform == "win32" else vroot / "lib" / "site-packages"
         if sp.is_dir():
             dirs = [str(sp)]
             for sub in ("win32", "win32/lib"):
@@ -2915,7 +3153,7 @@ def _get_target_site_packages_dirs() -> list[str]:
                     dirs.append(str(sub_p))
             return dirs
         return []
-    return [p for p in sys.path if "site-packages" in p.lower()]
+    return []
 
 def _check_spec(import_name: str) -> bool:
     """Fast check if import_name is present strictly in the target environment."""
@@ -2944,21 +3182,19 @@ def _check_import_psutil() -> bool:
     return _check_spec("psutil")
 
 def _check_import_pywin32() -> bool:
-    """Verify pywin32 in a fresh interpreter so pywin32.pth is processed."""
+    """Verify pywin32 strictly in the target environment so pywin32.pth is processed."""
     if sys.platform != "win32":
         return True
-    try:
-        import win32gui, win32con  # noqa: F401 — availability probe
-        return True
-    except Exception:
-        pass
+    if not (_check_spec("win32gui") and _check_spec("win32con")):
+        return False
+    target_py = _get_target_python()
     try:
         result = subprocess.run(
-            [sys.executable, "-c", "import win32gui, win32con"],
+            [str(target_py), "-c", "import win32gui, win32con"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         return result.returncode == 0
     except Exception:
@@ -2968,25 +3204,14 @@ def _check_import_esptool() -> bool:
     return _check_spec("esptool")
 
 def _check_import_pywebview() -> bool:
-    """Verify pywebview can actually import in a fresh interpreter.
-
-    ``find_spec`` can report a package as installed even when one of its
-    startup dependencies is broken.  Monaco cannot use that half-installed
-    state, so Bootstrap verifies the real import before continuing.
-    """
+    """Verify pywebview can actually import in the target environment."""
     if not _check_spec("webview"):
         return False
-    try:
-        # pyrefly: ignore [missing-import]
-        import webview
-        if webview is not None:
-            return True
-    except Exception:
-        pass
+    target_py = _get_target_python()
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
-            [sys.executable, "-c", "import webview; assert webview is not None"],
+            [str(target_py), "-c", "import webview; assert webview is not None"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
@@ -3009,6 +3234,32 @@ def _check_import_pyqt5_qscintilla() -> bool:
 
 def _check_import_certifi() -> bool:
     return _check_spec("certifi")
+
+def _check_import_pyside6() -> bool:
+    """Verify PySide6 + PySide6-WebEngine are importable in the target environment.
+
+    ``find_spec`` can report a package as installed even when one of its
+    startup dependencies is broken.  Verify the real import in a fresh
+    subprocess to catch DLL-load failures on first install.
+    """
+    if not (_check_spec("PySide6.QtWidgets") and _check_spec("PySide6.QtWebEngineWidgets")):
+        return False
+    target_py = _get_target_python()
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        result = subprocess.run(
+            [
+                str(target_py), "-c",
+                "import PySide6.QtWidgets; import PySide6.QtWebEngineWidgets",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            creationflags=creationflags,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 def _check_import_platformio() -> bool:
     return find_pio() is not None
@@ -3075,6 +3326,15 @@ PIP_PACKAGES_SPEC = [
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
+        "critical": False,
+    },
+    {
+        "id": "pyside6",
+        "name": "PySide6",
+        "check": _check_import_pyside6,
+        # PySide6 bundles PySide6_Essentials, PySide6_Addons (including
+        # QtWebEngineWidgets and QtWebEngineCore), and shiboken6.
+        "pip_args": ["PySide6"],
         "critical": True,
     },
     {
@@ -3160,14 +3420,14 @@ def ensure_pip_packages_parallel(
         if not gui or getattr(gui, "_closed", False):
             return
         bar_cells = 50
-        divider = "  " + "─" * (bar_cells + 6)
+        divider = "  " + "─" * 104
         rows = [divider]
         for spec in active_specs:
             state = pkg_states[spec["id"]]
             pct = max(0, min(100, int(round(state["pct"]))))
             filled = int(pct / 100 * bar_cells)
             bar = "▰" * filled + "▱" * (bar_cells - filled)
-            rows.append(f"  {state['name']:<28}  {state['status']}")
+            rows.append(f"  {state['name']:<40}  {state['status']}")
             rows.append(f"  {bar}  {pct:3d}%")
             rows.append(divider)
         gui.update_pip_table_block("\n".join(rows))
@@ -3230,6 +3490,7 @@ def ensure_pip_packages_parallel(
         gui.set_status("Checking Python package dependencies...")
         gui.set_progress_percent(2)
 
+    _ensure_pywin32_system32_dlls()
     importlib.invalidate_caches()
 
     # Checks are read-only, so running these concurrently is safe.
@@ -3256,6 +3517,7 @@ def ensure_pip_packages_parallel(
 
     if not missing_specs:
         if gui:
+            gui.commit_pip_table_block()
             gui.set_progress_percent(100)
             gui.log_ok("All pip package dependencies are verified!")
         return True
@@ -3266,6 +3528,7 @@ def ensure_pip_packages_parallel(
         for s in missing_specs:
             _set_state(s["id"], status_text="✖ Offline (missing)", pct=0, done=True, ok_value=False)
         if gui:
+            gui.commit_pip_table_block()
             gui.log_fail(f"Internet connection is required to download missing Python dependencies: {missing_names}")
         warn(f"Cannot download missing Python dependencies ({missing_names}) while offline.")
         return False
@@ -3652,6 +3915,7 @@ def ensure_pip_packages_parallel(
             )
 
         # Verify all missing packages after the single transaction.
+        _ensure_pywin32_system32_dlls()
         remaining = []
         for spec in missing_specs:
             sid = spec["id"]
@@ -3692,6 +3956,7 @@ def ensure_pip_packages_parallel(
             )
 
             importlib.invalidate_caches()
+            _ensure_pywin32_system32_dlls()
             verified = repair_ok and _check(spec)
             if verified:
                 _set_state(sid, status_text="✔ Installed", pct=100, done=True, ok_value=True)
@@ -3702,6 +3967,7 @@ def ensure_pip_packages_parallel(
             _update_bottom_from_rows()
 
         # Final fresh checks catch transitive changes made during a repair.
+        _ensure_pywin32_system32_dlls()
         final_failed = []
         for spec in active_specs:
             verified = _check(spec)
@@ -3717,6 +3983,7 @@ def ensure_pip_packages_parallel(
         if final_failed:
             names = ", ".join(spec["name"] for spec in final_failed)
             if gui:
+                gui.commit_pip_table_block()
                 gui.log_fail(f"Required Python dependencies failed: {names}")
                 detail = next(
                     (failure_details.get(spec["id"]) for spec in final_failed if failure_details.get(spec["id"])),
@@ -3728,6 +3995,7 @@ def ensure_pip_packages_parallel(
 
         _sync_private_python_site_packages()
         if gui:
+            gui.commit_pip_table_block()
             gui.log_ok("All required pip package dependencies installed & verified!")
         return True
 
@@ -3740,7 +4008,7 @@ def ensure_pip_packages_parallel(
 
 
 def _sync_private_python_site_packages() -> None:
-    """Ensure src/_python has PyQt5 & QScintilla if the private runtime folder is present."""
+    """Ensure src/_python has PySide6 if the private runtime folder is present."""
     if sys.platform != "win32":
         return
     try:
@@ -3748,7 +4016,7 @@ def _sync_private_python_site_packages() -> None:
         if not private_py.is_file():
             return
         res = subprocess.run(
-            [str(private_py), "-c", "import PyQt5.QtWidgets, PyQt5.Qsci"],
+            [str(private_py), "-c", "import PySide6.QtWidgets"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -3756,7 +4024,7 @@ def _sync_private_python_site_packages() -> None:
         )
         if res.returncode != 0:
             subprocess.run(
-                [str(private_py), "-m", "pip", "install", "PyQt5", "QScintilla",
+                [str(private_py), "-m", "pip", "install", "PySide6",
                  "--prefer-binary", "--disable-pip-version-check", "--no-input"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -4009,7 +4277,9 @@ def _get_board_download_dir() -> Path:
     use, so bootstrap can see which board cores the user has downloaded via
     the Board Downloader. Mirrors mcu_flash_gui.py's _get_download_dir()."""
     default_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src"
-    settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
+    settings_file = SCRIPT_DIR / "index_json" / "arduino_browser_settings.json"
+    if not settings_file.exists():
+        settings_file = SCRIPT_DIR / "src" / "dbs" / "arduino_browser_settings.json"
     if not settings_file.exists():
         settings_file = SCRIPT_DIR / "arduino_browser_settings.json"
     settings = {}
@@ -6706,7 +6976,6 @@ def _download_file(
                         received = base_received
                         start_time = time.time()
                         last_update_time = 0.0
-                        last_data_time = time.time()
                         while True:
                             try:
                                 block = response.read(256 * 1024)
@@ -6720,7 +6989,6 @@ def _download_file(
                                 break
                             output.write(block)
                             received += len(block)
-                            last_data_time = time.time()
 
                             now = time.time()
                             if _gui and (now - last_update_time >= 0.15 or (total and received >= total)):
@@ -7800,14 +8068,250 @@ def ensure_cp210x() -> bool:
         return False
 
 
+# ── 6. CH34x (WCH) Driver ─────────────────────────────────────
+_CH34X_SENTINEL = SCRIPT_DIR / "logs" / ".ch34x_installed"
+
+
+def _ch34x_sentinel_valid() -> bool:
+    """Return True only if the sentinel file exists AND was written on this
+    same machine (checked via hostname stored inside the file)."""
+    try:
+        if not _CH34X_SENTINEL.exists():
+            return False
+        content = _CH34X_SENTINEL.read_text(encoding="utf-8", errors="replace")
+        for line in content.splitlines():
+            if line.startswith("machine:"):
+                return line.split(":", 1)[1].strip() == _get_machine_id()
+        return False
+    except Exception:
+        return False
+
+
+def _ch34x_driver_in_store() -> bool:
+    """Check if a CH34x driver package is staged in the Windows Driver Store.
+    The WCH installer stages the .inf into the store; the actual .sys
+    is only extracted into System32\\drivers when a matching device is
+    plugged in and the OS loads the driver."""
+    try:
+        windir = os.environ.get("SystemRoot", "C:\\Windows")
+        inf_dir = Path(windir) / "INF"
+        if inf_dir.is_dir():
+            for inf in inf_dir.glob("oem*.inf"):
+                try:
+                    text = inf.read_text(encoding="utf-8", errors="replace").lower()
+                    if "ch341ser" in text or "wch" in text:
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
+
+
+def check_ch34x_driver() -> bool:
+    """Check if the WCH CH34x USB-serial driver is installed, staged, or
+    was previously installed successfully by this bootstrap."""
+    if sys.platform != "win32":
+        return True
+
+    # Fast path: a previous bootstrap run on *this machine* confirmed the install
+    if _ch34x_sentinel_valid():
+        return True
+
+    try:
+        import winreg
+        # The WCH driver registers as CH341SER in the services registry
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\CH341SER")
+
+        # Check if the service is marked for deletion
+        try:
+            delete_flag, _ = winreg.QueryValueEx(key, "DeleteFlag")
+            if delete_flag == 1:
+                winreg.CloseKey(key)
+                return False
+        except FileNotFoundError:
+            pass
+
+        try:
+            driver_delete, _ = winreg.QueryValueEx(key, "DriverDelete")
+            if driver_delete == 1:
+                winreg.CloseKey(key)
+                return False
+        except FileNotFoundError:
+            pass
+
+        # Check if the driver binary file actually exists on disk
+        sys_file_exists = False
+        try:
+            image_path, _ = winreg.QueryValueEx(key, "ImagePath")
+            winreg.CloseKey(key)
+
+            if image_path:
+                resolved_path = image_path
+                if resolved_path.lower().startswith(r"\systemroot"):
+                    windir = os.environ.get("SystemRoot", "C:\\Windows")
+                    resolved_path = resolved_path.replace(r"\SystemRoot", windir).replace(r"\systemroot", windir)
+                elif resolved_path.lower().startswith("system32"):
+                    windir = os.environ.get("SystemRoot", "C:\\Windows")
+                    resolved_path = os.path.join(windir, resolved_path)
+
+                resolved_path = os.path.expandvars(resolved_path)
+                sys_file_exists = os.path.exists(resolved_path)
+        except Exception:
+            windir = os.environ.get("SystemRoot", "C:\\Windows")
+            default_sys_file = os.path.join(windir, "System32", "drivers", "ch341ser.sys")
+            sys_file_exists = os.path.exists(default_sys_file)
+
+        if sys_file_exists:
+            return True
+
+        # Registry key exists but .sys is missing — check Driver Store
+        if _ch34x_driver_in_store():
+            return True
+
+        return False
+    except FileNotFoundError:
+        pass
+
+    # Some WCH driver versions register under a different service name
+    try:
+        import winreg
+        for alt_svc in ("CH341S64", "CH343SER", "CH341SER_A64", "CH343SER_A64", "WCHseries"):
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SYSTEM\CurrentControlSet\Services\{alt_svc}")
+                winreg.CloseKey(key)
+                return True
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+
+    # Final fallback: check driver store even without a service key
+    if _ch34x_driver_in_store():
+        return True
+
+    return False
+
+
+def _ch34x_installer_available() -> bool:
+    """Return True if a valid CH34x installer EXE is bundled with this deployment."""
+    driver_dir = _find_installer_dir("CH34x")
+    if not driver_dir.is_dir():
+        return False
+    for name in ("CH341SER.EXE", "ch341ser.exe"):
+        if _is_valid_exe(driver_dir / name):
+            return True
+    return any(_is_valid_exe(p) for p in driver_dir.glob("*.exe"))
+
+
+def ensure_ch34x() -> bool:
+    """Make sure WCH CH34x USB-serial driver is installed.
+
+    Gracefully skips when the ``installers/CH34x/`` directory is absent from
+    this deployment (e.g. redistributed copy without the bundled installer).
+    """
+    if check_ch34x_driver():
+        ok("CH34x driver is already installed")
+        return True
+
+    # If the installer directory itself doesn't exist, we can't do anything —
+    # skip silently so bootstrap doesn't error on redistributed copies.
+    driver_dir = _find_installer_dir("CH34x")
+    if not driver_dir.is_dir():
+        status(
+            "CH34x installer directory not found in this deployment — skipping."
+            " (Place CH341SER.EXE in installers/CH34x/ to enable auto-install.)"
+        )
+        return True  # non-fatal: driver may already be installed system-wide
+
+    section("Installing CH34x (WCH) Driver")
+
+    # The official WCH installer is a single EXE that covers all CH34x chips
+    installer = driver_dir / "CH341SER.EXE"
+
+    if not _is_valid_exe(installer):
+        # Fall back to lowercase variant
+        installer = driver_dir / "ch341ser.exe"
+    if not _is_valid_exe(installer):
+        # Try any .exe in the directory
+        for exe_path in driver_dir.glob("*.exe"):
+            if _is_valid_exe(exe_path):
+                installer = exe_path
+                break
+
+    if not _is_valid_exe(installer):
+        warn(f"CH34x driver installer is missing or invalid in: {driver_dir}")
+        status("Download CH341SER.EXE from http://www.wch-ic.com/downloads/CH341SER_EXE.html")
+        status(f"and place it in: {driver_dir}")
+        return False
+
+    status("Launching CH34x driver installer (silent)...")
+    try:
+        exit_code = None
+        if sys.platform == "win32":
+            # WCH installer supports /s for silent mode
+            exit_code = _shell_execute_elevated_wait(str(installer), ["/s"])
+            # WCH installer typically returns 0 on success
+            if exit_code not in (0, 3010, None):
+                fail(f"CH34x installer exited with code {exit_code}.")
+                return False
+        else:
+            proc = subprocess.run([str(installer)], check=True)
+            exit_code = proc.returncode
+
+        # Write sentinel so future bootstrap runs skip the installer.
+        try:
+            _CH34X_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+            _CH34X_SENTINEL.write_text(
+                f"machine:{_get_machine_id()}\n"
+                f"CH34x driver installer completed successfully (exit code {exit_code}).\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+        if check_ch34x_driver():
+            ok("CH34x driver installed successfully")
+            return True
+        else:
+            ok("CH34x driver package staged successfully")
+            status("The driver will activate automatically when a CH34x device is connected.")
+            return True
+    except Exception as e:
+        fail(f"Failed to run CH34x driver installer: {e}")
+        return False
+
+
+def _ch34x_driver_status_message(
+    driver_available: bool,
+    bootstrap_is_elevated: bool,
+    direct_result: bool,
+    privileged_setup_ok: bool,
+) -> tuple[bool, str]:
+    """Describe the CH34x result so the bootstrap step always has output."""
+    if driver_available:
+        return True, "CH34x USB serial driver is installed or staged in the Windows Driver Store."
+    if bootstrap_is_elevated:
+        detail = (
+            "The bundled CH34x installer was run but Windows did not stage the driver."
+            if not direct_result
+            else "The bundled CH34x package was staged; Windows will activate it when a matching device is connected."
+        )
+    elif not privileged_setup_ok:
+        detail = "Administrator setup did not complete, so the bundled CH34x installer could not be run."
+    else:
+        detail = "The bundled CH34x installer completed but Windows has not reported the driver yet."
+    return False, f"CH34x driver is not yet available. {detail}"
+
+
 def _ensure_bundled_windows_installers(
     *, machine_only_arduino: bool = False
 ) -> dict[str, bool]:
     """Install every Windows prerequisite intentionally bundled with the app.
 
     This explicit allowlist covers the Windows components the application
-    actually depends on: WebView2, Arduino CLI, and the Silicon Labs CP210x
-    USB serial driver.
+    actually depends on: WebView2, Arduino CLI, Silicon Labs CP210x, and
+    WCH CH34x USB serial drivers.
     """
     if sys.platform != "win32":
         return {}
@@ -7821,6 +8325,7 @@ def _ensure_bundled_windows_installers(
             _install_arduino_cli_machine_only if machine_only_arduino else ensure_arduino_cli,
         ),
         ("cp210x", "CP210x USB serial driver", ensure_cp210x),
+        ("ch34x", "CH34x USB serial driver", ensure_ch34x),
     )
     for key, label, install in installers:
         try:
@@ -7903,54 +8408,103 @@ def is_any_opencode_process_running() -> bool:
     return False
 
 
+def _is_valid_pe_binary(path: Path | str) -> bool:
+    """Return True if path is a genuine Windows PE executable (starts with b'MZ' and >= 1KB)."""
+    try:
+        p = Path(path)
+        if not p.is_file() or p.stat().st_size < 1024:
+            return False
+        with p.open("rb") as f:
+            return f.read(2) == b"MZ"
+    except Exception:
+        return False
+
+
+def _heal_opencode_postinstall(candidate_dir: Path) -> bool:
+    """Run node postinstall.mjs if opencode-ai binary is a bash placeholder script."""
+    try:
+        postinstall = candidate_dir / "postinstall.mjs"
+        if not postinstall.is_file():
+            postinstall = candidate_dir.parent / "postinstall.mjs"
+        if not postinstall.is_file():
+            return False
+        node_exe = shutil.which("node") or shutil.which("node.exe")
+        if not node_exe:
+            return False
+        res = subprocess.run(
+            [node_exe, str(postinstall)],
+            cwd=str(postinstall.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+            creationflags=_hidden_subprocess_flags(),
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def check_opencode_cli() -> Optional[str]:
     """Check if opencode CLI executable is installed on system or npm path."""
     running_exe = find_running_opencode_exe()
     if running_exe:
-        return running_exe
+        if not running_exe.lower().endswith(".exe") or _is_valid_pe_binary(running_exe):
+            return running_exe
 
-    exe = shutil.which("opencode.exe") or shutil.which("opencode") or shutil.which("opencode.cmd")
-    if exe:
-        return exe
+    for exe_name in ("opencode.cmd", "opencode.exe", "opencode"):
+        found = shutil.which(exe_name)
+        if found:
+            if found.lower().endswith(".exe"):
+                if _is_valid_pe_binary(found):
+                    return found
+            elif Path(found).is_file():
+                return found
 
     if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            for candidate in [
-                Path(appdata) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(appdata) / "npm" / "opencode.exe",
-                Path(appdata) / "npm" / "opencode.cmd",
-                Path(appdata) / "npm" / "opencode",
-            ]:
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
+        candidates = []
+        for env_var in ("APPDATA", "LOCALAPPDATA", "USERPROFILE"):
+            base = os.environ.get(env_var, "")
+            if not base:
+                continue
+            p_base = Path(base)
+            if env_var == "APPDATA":
+                candidates.extend([
+                    p_base / "npm" / "opencode.cmd",
+                    p_base / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                    p_base / "npm" / "opencode.exe",
+                    p_base / "npm" / "opencode",
+                ])
+            elif env_var == "LOCALAPPDATA":
+                candidates.extend([
+                    p_base / "Programs" / "opencode" / "opencode.exe",
+                    p_base / "opencode" / "opencode.exe",
+                    p_base / "npm" / "opencode.cmd",
+                    p_base / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                ])
+            elif env_var == "USERPROFILE":
+                candidates.extend([
+                    p_base / "AppData" / "Roaming" / "npm" / "opencode.cmd",
+                    p_base / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
+                    p_base / "AppData" / "Roaming" / "npm" / "opencode.exe",
+                ])
 
-        local_app = os.environ.get("LOCALAPPDATA", "")
-        if local_app:
-            for candidate in [
-                Path(local_app) / "Programs" / "opencode" / "opencode.exe",
-                Path(local_app) / "opencode" / "opencode.exe",
-                Path(local_app) / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(local_app) / "npm" / "opencode.cmd",
-            ]:
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
-
-        user_prof = os.environ.get("USERPROFILE", "")
-        if user_prof:
-            for candidate in [
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.exe",
-                Path(user_prof) / "AppData" / "Roaming" / "npm" / "opencode.cmd",
-            ]:
-                if candidate.exists() and candidate.stat().st_size > 0:
-                    return str(candidate)
-
-        for candidate in [
-            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+        candidates.extend([
             Path(r"C:\Program Files\nodejs\opencode.cmd"),
-        ]:
-            if candidate.exists() and candidate.stat().st_size > 0:
+            Path(r"C:\Program Files\nodejs\node_modules\opencode-ai\bin\opencode.exe"),
+        ])
+
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            if candidate.suffix.lower() == ".exe":
+                if _is_valid_pe_binary(candidate):
+                    return str(candidate)
+                # If it's a bash placeholder script, try auto-healing via postinstall.mjs
+                if _heal_opencode_postinstall(candidate.parent):
+                    if _is_valid_pe_binary(candidate):
+                        return str(candidate)
+            elif candidate.stat().st_size > 0:
                 return str(candidate)
 
     return None
@@ -8292,8 +8846,12 @@ def ensure_opencode_cli() -> bool:
             if is_script and sys.platform == "win32":
                 sibling_exe = Path(path).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
                 if sibling_exe.is_file():
-                    test_target = str(sibling_exe)
-                    is_script = False
+                    if _is_valid_pe_binary(sibling_exe):
+                        test_target = str(sibling_exe)
+                        is_script = False
+                    elif _heal_opencode_postinstall(sibling_exe.parent) and _is_valid_pe_binary(sibling_exe):
+                        test_target = str(sibling_exe)
+                        is_script = False
             result = subprocess.run(
                 [test_target, "--version"],
                 stdin=subprocess.DEVNULL,
@@ -8595,7 +9153,7 @@ def _heal_private_python_runtime() -> bool:
         "Include_test=0",
         "Include_doc=0",
         "Include_launcher=0",
-        f"/log", str(log_path),
+        "/log", str(log_path),
     ]
 
     try:
@@ -8858,15 +9416,14 @@ _STARTUP_REQUIRED_PACKAGE_DIRS = ("serial",)
 
 def _startup_app_fingerprint() -> str:
     """Return a cheap fingerprint for files that define the launch contract."""
-    gui_target = (
-        SCRIPT_DIR / "main" / "mcu_flash_gui.py"
-        if (SCRIPT_DIR / "main" / "mcu_flash_gui.py").exists()
-        else SCRIPT_DIR / "mcu_flash_gui.py"
-    )
+    gui_target = SCRIPT_DIR / "mcu_flash_gui.py"
     tracked = (
         gui_target,
+        SCRIPT_DIR / "main" / "mcu_flash_gui.py",
+        SCRIPT_DIR / "main" / "web_bridge.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
+        SCRIPT_DIR / "src" / "modules" / "crash_detector.py",
     )
     rows = []
     for path in tracked:
@@ -8887,19 +9444,22 @@ def _startup_installation_identity() -> str:
 
 
 def _startup_site_packages_dir() -> Path | None:
-    """Resolve the current venv site-packages directory without importing it."""
+    """Resolve the current runtime or venv site-packages directory without importing it."""
     current = Path(sys.executable).resolve()
+    
+    # 1. Check current runtime directory (e.g. src/_python/Lib/site-packages)
+    runtime_site = current.parent / "Lib" / "site-packages"
+    if runtime_site.is_dir():
+        return runtime_site
+
+    # 2. Check candidate site-packages directories (env or private runtime)
     venv_dir = SCRIPT_DIR / "env"
-    try:
-        if venv_dir.resolve() not in current.parents:
-            return None
-    except Exception:
-        return None
     version = f"python{sys.version_info.major}.{sys.version_info.minor}"
     candidates = (
         venv_dir / "Lib" / "site-packages",
         venv_dir / "lib" / version / "site-packages",
         venv_dir / "lib" / "site-packages",
+        SCRIPT_DIR / "src" / "_python" / "Lib" / "site-packages",
     )
     for site in candidates:
         if site.is_dir():
@@ -8982,11 +9542,6 @@ def _write_startup_health_snapshot() -> bool:
         return False
 
 
-def _try_fast_normal_launch() -> bool:
-    """Bootstrap must never be skipped at all costs. Full verification runs on every launch."""
-    return False
-
-
 def _explicit_setup_requested() -> bool:
     """Return true when the caller intentionally requested repair/setup."""
     requested = {"--repair", "--setup", "--force-setup", "--force-repair"}
@@ -9017,10 +9572,22 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             project_index = sys.argv.index("--project")
             if project_index + 1 < len(sys.argv):
                 project_candidate = Path(sys.argv[project_index + 1]).resolve(strict=False)
-                if project_candidate.is_dir():
+                if project_candidate.exists():
                     gui_args.extend(["--project", str(project_candidate)])
         except Exception:
             pass
+
+    # Also forward any positional file or folder argument
+    for arg in sys.argv[1:]:
+        if not arg.startswith("-"):
+            try:
+                candidate = Path(arg).resolve(strict=False)
+                if candidate.exists() and str(candidate) not in gui_args:
+                    gui_args.append(str(candidate))
+                    break
+            except Exception:
+                pass
+
     if "--new-window" in sys.argv:
         gui_args.append("--new-window")
 
@@ -9031,21 +9598,16 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     log_fh = None
 
     if sys.platform == "win32":
-        # Prefer venv python (env/Scripts/pythonw.exe or python.exe) where all pip dependencies live
-        venv_dir = SCRIPT_DIR / "env"
-        venv_pythonw = venv_dir / "Scripts" / "pythonw.exe"
-        venv_python  = venv_dir / "Scripts" / "python.exe"
-
-        if venv_pythonw.exists():
-            python_exe = venv_pythonw
-        elif venv_python.exists():
-            python_exe = venv_python
+        # Strictly use private Python runtime from src/_python/ (no system Python)
+        private_pythonw = SCRIPT_DIR / "src" / "_python" / "pythonw.exe"
+        private_python  = SCRIPT_DIR / "src" / "_python" / "python.exe"
+        if private_pythonw.exists():
+            python_exe = private_pythonw
+        elif private_python.exists():
+            python_exe = private_python
         else:
-            python_exe = Path(sys.executable).parent / "pythonw.exe"
-            if not python_exe.exists():
-                python_exe = Path(sys.executable).parent / "python.exe"
-            if not python_exe.exists():
-                python_exe = Path(sys.executable)
+            from private_python_guard import get_private_python_exe
+            python_exe = get_private_python_exe(prefer_pythonw=True)
 
         # Try to find a non-locked log file name to support multiple concurrent windows
         for i in range(10):
@@ -9076,7 +9638,8 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
         )
 
         try:
-            proc = sp.Popen(
+            popen_func = getattr(sp, "_orig_popen", sp.Popen)
+            proc = popen_func(
                 [str(python_exe), str(GUI_SCRIPT), *gui_args],
                 cwd=str(SCRIPT_DIR),
                 env=launch_env,
@@ -9096,12 +9659,21 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             "PLATFORMIO_CORE_DIR", _get_safe_platformio_core_dir(SCRIPT_DIR)
         )
         proc = sp.Popen(
-            [sys.executable, str(GUI_SCRIPT), *gui_args],
+            [str(python_exe), str(GUI_SCRIPT), *gui_args],
             cwd=str(SCRIPT_DIR),
             env=launch_env,
         )
 
     return proc, gui_log
+
+
+def _try_fast_normal_launch() -> bool:
+    """Bootstrap verification is mandatory and must not be bypassed on initial startup.
+    Full verification runs on the initial launch before the main GUI opens.
+    Bootstrap bypass only applies when another main GUI window is already active
+    (second window launch via _is_main_gui_running).
+    """
+    return False
 
 
 def _regenerate_venv_console_scripts(venv_dir: Path, venv_python: Path) -> bool:
@@ -9332,6 +9904,10 @@ def _request_first_run_privileged_setup(gui: Optional[BootstrapGUI] = None) -> b
         not check_webview2_runtime()
         or find_arduino_cli() is None
         or not check_cp210x_driver()
+        # Only include CH34x in the elevation check when the installer is actually
+        # bundled with this deployment — avoids a UAC prompt on machines where the
+        # directory was not included but the driver is already installed system-wide.
+        or (not check_ch34x_driver() and _ch34x_installer_available())
         or _find_usable_npm_cmd() is None
     )
     if not needs_privileged_work:
@@ -9479,8 +10055,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
     When complete, posts a callback to the main thread to close the
     bootstrap window and launch the main GUI.
     """
-    global _gui
-
     try:
         def _log_worker_start():
             gui.log_banner()
@@ -9508,11 +10082,14 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         if sys.platform == "win32":
             gui.root.after(0, lambda: gui.log_section("Checking Python Runtime Environment"))
             heal_result = _heal_private_python_runtime()
-            if not heal_result:
-                gui.root.after(0, lambda: gui.log_warn(
-                    "Private Python runtime could not be healed. The app will "
-                    "attempt to continue with the current interpreter."
+            current_py_resolved = Path(sys.executable).resolve()
+            in_private_src = (SCRIPT_DIR / "src" / "_python").resolve() in current_py_resolved.parents or current_py_resolved == (SCRIPT_DIR / "src" / "_python" / "python.exe").resolve()
+            if not heal_result and not in_private_src:
+                gui.root.after(0, lambda: gui.log_fail(
+                    "Fatal Error: System Python installed on host PC is strictly denied. "
+                    "MCU Flasher requires the private runtime at src/_python/."
                 ))
+                return False
             if not ensure_python_system_environment():
                 gui.root.after(0, lambda: gui.log_warn("Could not permanently update System environment variables."))
 
@@ -9524,8 +10101,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             venv_python = venv_dir / "bin" / "python"
 
         current_python = Path(sys.executable).resolve()
-        target_python = venv_python.resolve() if venv_python.exists() else None
-
         is_in_venv = False
         venv_created_this_run = False
         try:
@@ -9540,6 +10115,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             if _activate_bootstrap_venv(venv_dir, venv_python):
                 gui.root.after(0, lambda: gui.log_ok("Existing env folder found; using it."))
                 is_in_venv = True
+                try:
+                    _preseed_venv_site_packages(venv_dir)
+                except Exception:
+                    pass
             else:
                 gui.root.after(0, lambda: gui.log_warn(
                     "Existing env could not be activated; it will be recreated."
@@ -9569,33 +10148,14 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 _venv.create(str(venv_dir), with_pip=False, clear=True,
                              symlinks=sys.platform != "win32")
 
-                # Pre-seed pip, setuptools, wheel instantly from base Python site-packages (~0.05s)
+                # Pre-seed all packages from base Python site-packages into target venv (~0.1s)
                 try:
-                    base_prefix = Path(getattr(sys, "base_prefix", sys.prefix))
-                    if sys.platform == "win32":
-                        base_site = base_prefix / "Lib" / "site-packages"
-                        venv_site = venv_dir / "Lib" / "site-packages"
-                    else:
-                        base_site = base_prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-                        venv_site = venv_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-
-                    if base_site.is_dir() and venv_site.is_dir():
-                        for item in base_site.glob("*"):
-                            name_lower = item.name.lower()
-                            if any(k in name_lower for k in ("pip", "setuptools", "wheel", "distutils", "pkg_resources")):
-                                target = venv_site / item.name
-                                if not target.exists():
-                                    if item.is_dir():
-                                        shutil.copytree(item, target, dirs_exist_ok=True)
-                                    else:
-                                        shutil.copy2(item, target)
-
+                    _preseed_venv_site_packages(venv_dir)
                 except Exception:
                     pass
 
                 gui.root.after(0, lambda: gui.log_ok("Virtual environment created."))
                 venv_created = True
-                venv_created_this_run = True
             except Exception as venv_error:
                 gui.root.after(0, lambda venv_error=venv_error: gui.log_warn(
                     f"Built-in venv setup failed ({venv_error}); trying the Python command fallback."
@@ -9621,7 +10181,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                         )
                         gui.root.after(0, lambda: gui.log_ok("Virtual environment created (subprocess fallback)."))
                         venv_created = True
-                        venv_created_this_run = True
+                        try:
+                            _preseed_venv_site_packages(venv_dir)
+                        except Exception:
+                            pass
                     except Exception:
                         gui.root.after(0, lambda: gui.log_fail("Could not create virtual environment."))
                         if not is_portable:
@@ -9688,7 +10251,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 if detail:
                     err_msg += f"Details: {detail}\n\n"
                 err_msg += "Setup cannot proceed. Please resolve the error and try again."
-                gui.show_error("MCU Uploader IDE by Naph — Setup Error", err_msg)
+                gui.show_error("MCU Flasher by Naph — Setup Error", err_msg)
                 gui.close_after_delay()
             gui.root.after(0, _on_gui)
 
@@ -9702,7 +10265,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             _fail_and_exit("Python Dependencies", "One or more required pip packages failed to install.")
             return
         gui.root.after(0, lambda: gui.log_ok(
-            "All core and code viewer dependencies (including PyQt5 & QScintilla) verified."
+            "All core and application dependencies verified."
         ))
 
         # ── Monaco runtime (required for the selected editor) ──────────
@@ -9831,16 +10394,23 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             if _write_startup_health_snapshot():
                 gui.log_ok("Warm-launch health snapshot saved.")
 
+            # Clear crash state now that bootstrap has verified / healed the environment
+            try:
+                from crash_detector import clear_crash_state
+                clear_crash_state(SCRIPT_DIR)
+            except Exception:
+                pass
+
             exe_path = SCRIPT_DIR / "MCU Flasher.exe"
             if not exe_path.exists() and not GUI_SCRIPT.exists():
                 gui.log_fail(f"Application target not found in {SCRIPT_DIR}")
                 gui.stop_spinner("GUI target missing", ok=False)
-                gui.show_error("MCU Uploader IDE by Naph — Error",
+                gui.show_error("MCU Flasher by Naph — Error",
                                f"Target application not found in:\n{SCRIPT_DIR}")
                 gui.close_after_delay()
                 return
 
-            gui.log_status("Launching MCU Uploader IDE by Naph…")
+            gui.log_status("Launching MCU Flasher by Naph…")
             gui.stop_spinner("Launching…", ok=True)
 
         gui.root.after(0, _finish)
@@ -9866,13 +10436,13 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         proc, gui_log = _spawn_main_gui()
 
         if proc is None:
-            _record_bootstrap_log("ERROR", "Could not start the MCU Uploader IDE process.")
+            _record_bootstrap_log("ERROR", "Could not start the MCU Flasher process.")
             try:
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(
                     0,
                     f"Target application not found in:\n{SCRIPT_DIR}",
-                    "MCU Uploader IDE by Naph — Error",
+                    "MCU Flasher by Naph — Error",
                     0x10,
                 )
             except Exception:
@@ -9902,7 +10472,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                     f"The GUI crashed immediately (code {exit_code}).\n\n"
                     + (crash_text[:600] if crash_text else "(no output captured)")
                     + f"\n\nLog: {gui_log}",
-                    "MCU Uploader IDE by Naph — Crash",
+                    "MCU Flasher by Naph — Crash",
                     0x10,
                 )
             except Exception:
@@ -9933,7 +10503,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             gui.log_fail(f"Detailed run log: {get_bootstrap_log_file()}")
             gui.stop_spinner("Error", ok=False)
             gui.show_error(
-                "MCU Uploader IDE by Naph — Error",
+                "MCU Flasher by Naph — Error",
                 f"Unexpected error:\n{exc}\n\nDetailed log:\n{get_bootstrap_log_file()}",
             )
             gui.close_after_delay()
@@ -10048,9 +10618,9 @@ def _notify_bootstrap_already_running():
         import ctypes
         ctypes.windll.user32.MessageBoxW(
             0,
-            "MCU Uploader IDE by Naph is already starting up in another window.\n\n"
+            "MCU Flasher by Naph is already starting up in another window.\n\n"
             "Please wait for it to finish loading before launching it again.",
-            "MCU Uploader IDE by Naph",
+            "MCU Flasher by Naph",
             0x40,  # MB_ICONINFORMATION
         )
     except Exception:
@@ -10058,23 +10628,67 @@ def _notify_bootstrap_already_running():
 
 
 def _is_main_gui_running() -> bool:
-    """Check (without claiming it) whether the Main GUI's single-instance
-    mutex is currently held by a live process. mcu_flash_gui.py claims
-    "Local\\MCUFlasherByNaph.MainGUI" via CreateMutexW as soon as it starts;
-    opening (rather than creating) that same name here lets bootstrap tell
-    the Main GUI is already up without racing it for ownership."""
-    if sys.platform != "win32":
-        return False
+    """Check whether any Main GUI window/process is currently running."""
+    # 1. Check instances registry in gui_config.json
     try:
-        import ctypes
-        SYNCHRONIZE = 0x00100000
-        handle = ctypes.windll.kernel32.OpenMutexW(SYNCHRONIZE, False, "Local\\MCUFlasherByNaph.MainGUI")
-        if not handle:
-            return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        from main.core.config import _load_raw_config, _get_alive_pid_create_times, _instance_is_alive
+        data = _load_raw_config()
+        alive = _get_alive_pid_create_times()
+        for pid, inst in data.get("instances", {}).items():
+            if _instance_is_alive(pid, inst, alive):
+                return True
     except Exception:
-        return False
+        pass
+
+    # 2. Direct process scan: check for any running Python process executing mcu_flash_gui.py
+    try:
+        import psutil
+        cur_pid = os.getpid()
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            if proc.info["pid"] == cur_pid:
+                continue
+            name = (proc.info.get("name") or "").lower()
+            if "python" not in name:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if any(Path(arg).name.lower() == "mcu_flash_gui.py" for arg in cmdline):
+                return True
+    except Exception:
+        pass
+
+    # 3. Direct Win32 window check: search for existing MCU Flasher top-level window owned by a Python process
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            found_hwnds = []
+            def _enum_cb(hwnd, lparam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buf, length + 1)
+                        title = buf.value.lower()
+                        if "mcu flasher" in title and "setup" not in title and "crash" not in title:
+                            pid = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                            if pid.value and pid.value != os.getpid():
+                                try:
+                                    import psutil
+                                    proc_name = (psutil.Process(pid.value).name() or "").lower()
+                                    if "python" in proc_name or "mcu_flasher" in proc_name:
+                                        found_hwnds.append(hwnd)
+                                except Exception:
+                                    pass
+                return True
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+            if found_hwnds:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _verify_storage_drive_type():
@@ -10088,7 +10702,7 @@ def _verify_storage_drive_type():
         drive_type = ctypes.windll.kernel32.GetDriveTypeW(str(drive_root))
         if drive_type == DRIVE_REMOVABLE:
             msg = (
-                f"MCU Uploader IDE by Naph cannot be run directly from a USB flash drive or removable disk ({drive_root}).\n\n"
+                f"MCU Flasher by Naph cannot be run directly from a USB flash drive or removable disk ({drive_root}).\n\n"
                 f"Current Path: {SCRIPT_DIR}\n\n"
                 "High-speed disk access (SSD/HDD) is required for toolchain compilation and workspace storage.\n\n"
                 "Please copy the entire MCU Flasher folder to an internal SSD or HDD drive (e.g. C:\\ or D:\\ drive) "
@@ -10098,7 +10712,7 @@ def _verify_storage_drive_type():
                 ctypes.windll.user32.MessageBoxW(
                     0,
                     msg,
-                    "MCU Uploader IDE by Naph — Storage Location Notice",
+                    "MCU Flasher by Naph — Storage Location Notice",
                     0x10,  # MB_ICONERROR
                 )
             except Exception:
@@ -10109,7 +10723,7 @@ def _verify_storage_drive_type():
 
 
 def main():
-    global _gui, _BOOTSTRAP_STARTUP_NOTE
+    global _gui
     if sys.platform != "win32":
         raise SystemExit("MCU Flasher setup requires Windows 10 or newer.")
     _record_bootstrap_log(
@@ -10119,25 +10733,73 @@ def main():
     )
     _verify_storage_drive_type()
 
-    # Existing main GUI owns the user-facing singleton.  Check this before any
-    # recovery/update work so a second launcher invocation stays cheap.
-    if _is_main_gui_running():
-        _record_bootstrap_log("FINISH", "Existing main GUI detected; bootstrap did not run setup.")
+    # Check if a specific sketch project was passed on the command line.
+    # If that sketch is already open in an existing window, focus that window and exit.
+    target_project_candidate = None
+    if "--project" in sys.argv:
         try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0,
-                "MCU Uploader IDE by Naph is already running.\n\n"
-                "Switch to the existing window instead of starting a new one.",
-                "MCU Uploader IDE by Naph",
-                0x40,
-            )
+            p_idx = sys.argv.index("--project")
+            if p_idx + 1 < len(sys.argv):
+                cand = Path(sys.argv[p_idx + 1]).resolve(strict=False)
+                if cand.exists():
+                    target_project_candidate = cand
         except Exception:
             pass
+    if target_project_candidate is None:
+        for arg in sys.argv[1:]:
+            if not arg.startswith("-"):
+                try:
+                    cand = Path(arg).resolve(strict=False)
+                    if cand.exists():
+                        target_project_candidate = cand
+                        break
+                except Exception:
+                    pass
+
+    if target_project_candidate:
+        try:
+            from main.core.config import find_project_window, focus_project_window
+            owner = find_project_window(target_project_candidate)
+            if owner:
+                _record_bootstrap_log(
+                    "PROJECT_COLLISION",
+                    f"Project '{target_project_candidate}' is already open in PID {owner.get('pid')}; focusing window.",
+                )
+                focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0))
+                try:
+                    import ctypes
+                    p_name = target_project_candidate.name
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        f"The sketch project '{p_name}' is already open in another window.\n\n"
+                        "Switched focus to the active window.",
+                        "MCU Flasher by Naph",
+                        0x40,
+                    )
+                except Exception:
+                    pass
+                return
+        except Exception as exc:
+            _record_bootstrap_log("WARN", f"Error checking project collision: {exc}")
+
+    # If another main GUI is already active and healthy, spawn a new window directly
+    # without running the setup/repair pipeline again.
+    if _is_main_gui_running() and not _explicit_setup_requested():
+        _record_bootstrap_log("FINISH", "Existing main GUI detected; spawning new window directly.")
+        _spawn_main_gui()
         return
 
-    # Bootstrap setup and verification is mandatory and must run on every launch.
-    _record_bootstrap_log("START", "Executing mandatory Bootstrap verification pipeline.")
+    # Fast path: on subsequent launches where the previous run was healthy,
+    # jump straight into the main GUI / Project Selector without showing Bootstrap.
+    # If the app crashed, or on the very first run, or if repair was requested,
+    # Bootstrap runs its verification and recovery pipeline.
+    if not _explicit_setup_requested():
+        if _try_fast_normal_launch():
+            _record_bootstrap_log("FINISH", "Main GUI opened via fast-path; bootstrap GUI bypassed.")
+            return
+
+    # Bootstrap setup and verification is running (first run, after crash, or repair requested).
+    _record_bootstrap_log("START", "Executing Bootstrap verification pipeline.")
 
     # Clean up the narrow class of orphaned update probes produced by older
     # releases before checking the normal GUI instance. This is best-effort
@@ -10156,7 +10818,7 @@ def main():
     gui = BootstrapGUI()
     _gui = gui
 
-    # Run setup on a background thread; Tk mainloop stays on main thread
+    # Run setup on a background thread; WebView2 event loop runs on main thread
     t = threading.Thread(target=_run_setup_in_thread, args=(gui,), daemon=True)
     t.start()
 
@@ -10212,22 +10874,15 @@ if __name__ == "__main__":
             pass
 
         message = (
-            "MCU Uploader IDE setup could not start.\n\n"
+            "MCU Flasher setup could not start.\n\n"
             f"{error_text[:1200]}\n\n"
             f"Full log: {crash_log}"
         )
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showerror("MCU Uploader IDE by Naph - Setup Error", message, parent=root)
-            root.destroy()
-        except Exception:
+        if sys.platform == "win32":
             try:
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(
-                    0, message, "MCU Uploader IDE by Naph - Setup Error", 0x10
+                    0, message, "MCU Flasher by Naph - Setup Error", 0x10
                 )
             except Exception:
                 pass

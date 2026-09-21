@@ -20,16 +20,15 @@
   - [3. Selecting Boards & COM Ports](#3-selecting-boards--com-ports)
   - [4. Compiling & Flashing Code](#4-compiling--flashing-code)
   - [5. Live Serial Monitor](#5-live-serial-monitor)
-  - [6. Dual Code Editor Modes (Monaco vs. Default)](#6-dual-code-editor-modes-monaco-vs-default)
+  - [6. Offline Monaco Code Editor](#6-offline-monaco-code-editor)
   - [7. Integrated Project Terminal (PowerShell ↔ CMD)](#7-integrated-project-terminal-powershell--cmd)
   - [8. OpenCode AI Assistant & Diff Glow](#8-opencode-ai-assistant--diff-glow)
   - [9. Soft Reset & Hard Reset Recovery Flashing](#9-soft-reset--hard-reset-recovery-flashing)
   - [10. Remote Network Shares (UNC Paths)](#10-remote-network-shares-unc-paths)
 - [🧭 Architectural Reference: What is What & Which is Which](#-architectural-reference-what-is-what--which-is-which)
   - [Root Entry Points & Launchers](#root-entry-points--launchers)
-  - [The `main/` Modular GUI Package](#the-main-modular-gui-package)
+  - [The Modern HTML Web UI & Python Backend Architecture](#the-modern-html-web-ui--python-backend-architecture)
   - [The `main/core/` Foundation Modules](#the-maincore-foundation-modules)
-  - [The `main/mixins/` Domain Mixins (358 Methods)](#the-mainmixins-domain-mixins-358-methods)
   - [The `src/` System Modules & Offline Assets](#the-src-system-modules--offline-assets)
   - [Caches, Installers & Templates](#caches-installers--templates)
 - [⚙️ Configuration](#️-configuration)
@@ -46,7 +45,7 @@
 | **🔌 Disconnect-Safe Uploads & Zero-Reset Connection** | Two-phase uploads tolerate unplugging, and passive serial connection with de-asserted DTR/RTS keeps running ESP32 firmware uninterrupted |
 | **📟 Advanced Serial Monitor** | Real-time terminal with ANSI color rendering, timestamps, baud rate control, and instant MCU reset |
 | **🎨 Modern Multi-Theme UI** | Dark Cyberpunk, Light Mode, and Solarized styling with Montserrat typography and responsive layout |
-| **✏️ Dual Code Editor** | Switchable between **Monaco Editor** (VS Code engine with C++ syntax highlighting, Go-To-Definition, hover cards) and lightweight **Tkinter Default** editor |
+| **✏️ Offline Monaco Code Editor** | **Monaco Editor** (VS Code engine with C++ syntax highlighting, Go-To-Definition, hover cards, intelligent auto-saving) |
 | **🤖 Dedicated AI Assistant** | Embedded OpenCode AI side panel with file-watcher, line-level diffing, and pulsating glowing diff highlights (green added, red removed) |
 | **💻 Multi-Session Project Terminal** | Embedded terminal powered by pywinpty + xterm.js with VS Code-style multi-terminal tabs, **PowerShell ↔ CMD** creation, and individual session controls |
 | **🌐 Remote & UNC Share Support** | Direct compilation & flashing of projects on network shares (`\\server\share`) with automated drive mapping and local SSD build acceleration |
@@ -94,55 +93,48 @@ Below is the complete, full architectural structure of the MCU Flasher ecosystem
 ```
 MCU Flasher by Naph/
 ├── MCU_Flasher.exe                   # Compiled native Windows launcher (from src/launcher.cs)
-├── mcu_flash_gui.py                 # Root forwarder script delegating to main.mcu_flash_gui
+├── mcu_flash_gui.py                 # Root application entry point
 ├── README.md                         # Comprehensive documentation, user guide & architecture
 │
-├── main/                             # Modular GUI core architecture (34k+ LOC across 41 files)
-│   ├── __init__.py                  # Public exports and package initializer
-│   ├── mcu_flash_gui.py             # Primary application assembly (MCUUploadGUI) & main()
-│   ├── dialogs.py                   # Modal dialogs (ProjectSelectorDialog, BoardSearchDialog)
-│   ├── widgets.py                   # UI widgets (ToolTip, CircularLoadingOverlay, _ShellTerminalBuffer, DPI)
-│   ├── editor_api.py                # Monaco JS ↔ Python bridge (EditorApi, MonacoAutosaveWorker, diffs)
+├── main/                             # Python backend & PySide6 Qt GUI architecture
+│   ├── __init__.py                  # Public exports (MCUWebBackendAPI, main)
+│   ├── mcu_flash_gui.py             # PySide6 desktop application bootstrap & runtime lifecycle
+│   ├── web_bridge.py                # Thread-safe Python backend engine & Qt signal bridge
 │   │
-│   ├── core/                        # Core foundations & system services
-│   │   ├── __init__.py              # Core package re-exports
-│   │   ├── constants.py             # Global constants, regexes, baud rates, headers & telemetry
-│   │   ├── theme.py                 # Theme class, color tokens, dark/light styling engine
-│   │   ├── config.py                # Config persistence (gui_config.json), PID multi-instance locks
-│   │   ├── file_utils.py            # Windows attributes (attrib +h), UNC path detection, AI backup store
-│   │   ├── toolchain.py             # PlatformIO & Arduino CLI discovery, junctions & CPU worker count
-│   │   ├── board_catalog.py         # 420+ board definitions, dynamic catalog loader, USB VID/PID map
-│   │   └── board_compat.py          # Board compatibility detection & GPIO pin conflict analyzer
+│   ├── qt/                          # Native PySide6 (Qt for Python) Desktop UI Panels
+│   │   ├── main_window.py           # MCUMainWindow root window with dock splitters
+│   │   ├── toolbar.py               # Action controls, board/port selectors, baud rate
+│   │   ├── editor_panel.py          # Monaco Editor panel (QWebEngineView)
+│   │   ├── console_panel.py         # Colorized build and upload console output
+│   │   ├── serial_panel.py          # Live serial monitor with baud selection & send bar
+│   │   ├── compat_panel.py          # Compatible boards viewer
+│   │   ├── terminal_panel.py        # Integrated project terminal
+│   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel
+│   │   ├── settings_dialog.py       # Application preferences & theme configuration
+│   │   ├── project_dialog.py        # New/Open project wizard dialog
+│   │   ├── download_dialog.py       # Board & toolchain package download manager
+│   │   ├── theme.py                 # Precision dark/light QSS stylesheet engine
+│   │   └── signals.py               # Shared thread-safe Qt signal bus
 │   │
-│   └── mixins/                      # 27 domain mixins composing MCUUploadGUI (586 methods total)
-│       ├── __init__.py              # Mixins package re-exports
-│       ├── init_startup_mixin.py    # App init, first-paint UI overlay/readiness & deferred background init
-│       ├── ui_layout_mixin.py       # Main UI builder, toolbar, responsive layout & button styling
-│       ├── console_serial_mixin.py  # Console output formatting, progress bars, serial pump
-│       ├── layout_panes_mixin.py    # Pane collapsing/expanding, editor detachment & floating window
-│       ├── async_tasks_mixin.py     # Thread-safe UI dispatch queue (_post_ui, _run_bg_task)
-│       ├── compat_devices_mixin.py  # Compatible devices tab, scanning, filtering & rendering
-│       ├── project_terminal_mixin.py# Embedded PowerShell/CMD terminal with ConPTY & xterm.js
-│       ├── hardware_port_mixin.py   # USB COM port enumeration, manual board resolution, baud rate controls
-│       ├── clean_build_mixin.py     # Allowlist-based build cache cleanup & stale path cleaner
-│       ├── build_actions_mixin.py   # Compile, Upload, Stop action handlers & monitor scheduling
-│       ├── project_actions_mixin.py # Project selection, sketch folder changer, file modifier dialog
-│       ├── compile_cache_mixin.py   # Source hashing, build metadata caching, skip-compile validation
-│       ├── library_headers_mixin.py # Header include scanning, Arduino library dependencies resolver
-│       ├── build_workspace_mixin.py # PlatformIO workspaces & remote UNC network drive mapping
-│       ├── soft_reset_template_mixin.py # Soft-reset templates, digest manifests & env mapping
-│       ├── platformio_ini_mixin.py  # Dynamic platformio.ini generation & source synchronization
-│       ├── compiler_pipeline_mixin.py # Full compilation workflow (_run_compile), source freezing
-│       ├── upload_pipeline_mixin.py # Flashing pipeline (_run_upload), chip feature probing
-│       ├── monitor_pipeline_mixin.py# Serial monitor reading loop (_run_monitor) & DTR/RTS reset
-│       ├── editor_modes_mixin.py    # Monaco & Default editor builders, WebView2 embedding
-│       ├── boards_catalog_mixin.py  # Board download manager, dynamic board reload & internet check
-│       ├── ai_assistant_mixin.py    # OpenCode AI side panel lifecycle, Win32 reparenting & diff glow
-│       ├── settings_dialog_mixin.py # Settings modal dialog & theme/editor mode switching
-│       ├── hard_reset_mixin.py      # Recovery image generation & esptool direct hard reset
-│       ├── soft_reset_mixin.py      # Fast soft reset flashing & COM port reconnect watcher
-│       ├── window_lifecycle_mixin.py# Window closure cleanup (_on_close) & mutex releasing
-│       └── syntax_checker_mixin.py  # Background C++ syntax checker thread & diagnostic tree updates
+│   └── core/                        # Core foundations & system services
+│       ├── __init__.py              # Core package re-exports
+│       ├── constants.py             # Global constants, regexes, baud rates, headers & telemetry
+│       ├── theme.py                 # Theme class, color tokens, dark/light styling engine
+│       ├── config.py                # Config persistence (gui_config.json), PID multi-instance locks
+│       ├── file_utils.py            # Windows attributes (attrib +h), UNC path detection, AI backup store
+│       ├── toolchain.py             # PlatformIO & Arduino CLI discovery, junctions & CPU worker count
+│       ├── board_catalog.py         # 460+ board definitions, dynamic catalog loader, USB VID/PID map
+│       └── board_compat.py          # Board compatibility detection & GPIO pin conflict analyzer
+│
+├── src/                              # Offline Monaco Editor, terminal engine & bootstrap modules
+│   ├── editor/                      # Offline Monaco Editor (C/C++ language server, syntax coloring)
+│   │   ├── index.html               # Monaco iframe host with pywebview/QWebChannel bridge polyfill
+│   │   └── bundle.js                # Self-contained offline Monaco code editor
+│   ├── assets/                      # Offline icons, fonts, xterm.js terminal engine
+│   └── modules/                     # Unattended bootstrap pipeline & installers
+│       ├── bootstrap.py             # Zero-config dependency installer & toolchain warm-up
+│       ├── launcher.py              # Single-instance process coordinator & Defender helper
+│       └── dedicated_AI.py          # Dedicated OpenCode AI assistant process controller
 │
 ├── cleaner/                          # Maintenance utility scripts
 │   ├── clean_pycache.bat            # Recursive __pycache__ cleaner
@@ -272,13 +264,11 @@ MCU Flasher by Naph/
   - **Send Bar**: Send text commands or newline-terminated strings to the MCU.
   - **Auto-Clear**: Configure automatic clearing on new compile or upload runs.
 
-### 6. Dual Code Editor Modes (Monaco vs. Default)
-- **Monaco Mode (VS Code Engine)**:
-  - Rich editor embedded via pywebview (WebView2).
-  - Features: Multi-tab editing, C++ autocomplete, F12 / Ctrl+Click Go-To-Definition, Ctrl+Hover documentation cards, and debounced auto-saving.
-- **Default Mode (Pure Tkinter)**:
-  - Ultra-lightweight native editor with syntax coloring, auto-indent, and bracket matching.
-- **Switching**: Open **`⚙️ Settings`** → **Editor Mode** → Select Monaco or Default.
+### 6. Offline Monaco Code Editor
+- **Monaco Editor (VS Code Engine)**:
+  - Rich editor embedded offline via pywebview (WebView2).
+  - Features: Multi-tab editing, C++ autocomplete, F12 / Ctrl+Click Go-To-Definition, Ctrl+Hover documentation cards, debounced auto-saving, and real-time syntax checking.
+  - Keyboard shortcuts: `Ctrl+R` to Compile, `Ctrl+U` to Upload, `Ctrl+S` to Save All, `Ctrl+` / `Ctrl-` to zoom.
 
 ### 7. Integrated Project Terminal (VS Code Style Multi-Session)
 - Click the **`💻 Project Terminal`** tab in the bottom notebook.
@@ -319,21 +309,20 @@ MCU Flasher by Naph/
 
 ---
 
-### The `main/` Modular GUI Package
+### The Native PySide6 (Qt for Python) Desktop Architecture
 
-- **`main/mcu_flash_gui.py`**: The primary assembly module. Defines `MCUUploadGUI` by inheriting from all 27 mixins and provides the `main()` entrypoint function.
-- **`main/dialogs.py`**: Contains modal dialog classes:
-  - `ProjectSelectorDialog`: Interactive project picker with recent project cards, folder browsing, and scaffolding.
-  - `BoardSearchDialog`: Fast live-search dialog filtering across all 420+ board definitions.
-- **`main/widgets.py`**: Standalone UI components:
-  - `ToolTip`: Hover tooltip bubble with dark-mode styling.
-  - `CircularLoadingOverlay`: Opaque, borderless animated first-paint cover that prevents child-widget relief artifacts while the visible UI is laid out.
-  - `_ShellTerminalBuffer`: Lightweight ANSI/VT terminal screen model for Windows PTY rendering.
-  - `center_toplevel`, `safe_reclaim_os_focus`, and DPI scaling helpers.
-- **`main/editor_api.py`**:
-  - `EditorApi`: Exposes Python methods to JavaScript via `window.pywebview.api` (file read/save, tab switching, syntax linting).
-  - `MonacoAutosaveWorker`: Background thread for debounced disk saving.
-  - `build_ai_line_diff`: Line-level LCS diff generator for AI code highlights.
+- **`mcu_flash_gui.py`**: Standalone native desktop launcher. Configures high-DPI scaling, taskbar grouping (`naph.mcuflasher.gui.v3`), minimum 4 CPU cores verification, single-instance mutex locking, and initializes the native PySide6 `QApplication`.
+- **`main/qt/`**: Modular PySide6 interface suite:
+  - **`main_window.py`**: Host window containing toolbar, resizable QSplitter panes, bottom dock tabs (Serial Monitor, Build Console, Terminal, Compatible Devices), and status bar.
+  - **`toolbar.py`**: Action controls (Compile, Flash, Clean, Soft/Hard Reset, Project, Settings), target board combobox, COM port selector, and baud rate selector.
+  - **`editor_panel.py`**: Embedded offline Monaco Code Editor hosted via `QWebEngineView` with real-time bidirectional Python-JS communication.
+  - **`console_panel.py`**: Colorized build output with regex ANSI parsing and autoscroll.
+  - **`serial_panel.py`**: Real-time serial monitor with line endings, baud rate selector, and quick command sender.
+  - **`terminal_panel.py`**: Embedded interactive xterm.js terminal engine.
+  - **`ai_panel.py`**: Collapsible OpenCode AI assistant side panel.
+  - **`settings_dialog.py` / `project_dialog.py` / `download_dialog.py`**: Native Qt modal dialogs.
+- **`main/web_bridge.py` (`MCUWebBackendAPI`)**: Thread-safe backend controller coordinating background compilations, COM port serial streaming, telemetry, board catalog search, and project operations via Qt signals (`main.qt.signals.signals`).
+- **`src/editor/index.html` & `bundle.js`**: Offline Monaco Editor engine embedded natively via `QWebEngineView` with full C/C++ syntax coloring and intelligent auto-save.
 
 ---
 
@@ -349,43 +338,9 @@ MCU Flasher by Naph/
 
 ---
 
-### The `main/mixins/` Domain Mixins (586 Methods)
-
-| Mixin File | Mixin Class | Responsibilities & Methods |
-| --- | --- | --- |
-| `init_startup_mixin.py` | `InitStartupMixin` | `__init__`, stable first-paint/full-startup overlay readiness, concurrent background subsystem initialization, sketch title marquee. |
-| `ui_layout_mixin.py` | `UILayoutMixin` | `_build_ui`, toolbar creation, paned window layout, theme restyling, responsive width calculations, button states. |
-| `console_serial_mixin.py` | `ConsoleSerialMixin` | Console output appending, progress bar formatting, persistent notification drawer, serial monitor display pump. |
-| `layout_panes_mixin.py` | `LayoutPanesMixin` | Collapsing/expanding editor and monitor panes, detached editor window lifecycle, placeholder views. |
-| `async_tasks_mixin.py` | `AsyncTasksMixin` | Thread-safe UI dispatch queue (`_post_ui`, `_run_bg_task`) routing background thread events to the Tkinter loop. |
-| `compat_devices_mixin.py` | `CompatDevicesMixin` | Compatible Devices tab, hardware compatibility scanning, background caching, and filter rendering. |
-| `project_terminal_mixin.py` | `ProjectTerminalMixin` | ConPTY terminal session management, PowerShell ↔ CMD live switcher, xterm.js embedding, keyboard shortcuts. |
-| `hardware_port_mixin.py` | `HardwarePortMixin` | USB COM port polling, auto-detecting boards by descriptor/VID:PID, baud rate and flashing speed controls. |
-| `clean_build_mixin.py` | `CleanBuildMixin` | Allowlist-based build cache cleanup, stale workspace deletion, clean & compile workflow. |
-| `build_actions_mixin.py` | `BuildActionsMixin` | Compile/Upload/Stop action handlers, serial monitor auto-resume scheduling. |
-| `project_actions_mixin.py` | `ProjectActionsMixin` | Folder change events, opening sketch in Windows Explorer, project selector integration, file modification dialog. |
-| `compile_cache_mixin.py` | `CompileCacheMixin` | Source file hashing, build metadata caching, skip-compile fingerprint validation. |
-| `library_headers_mixin.py` | `LibraryHeadersMixin` | C++ `#include` scanning, automatic Arduino library resolution, board variant verification. |
-| `build_workspace_mixin.py` | `BuildWorkspaceMixin` | Isolated per-board build folders (`.mcu_flasher_build_cache/boards/<key>/`), dynamic UNC drive mapping/unmapping. |
-| `soft_reset_template_mixin.py` | `SoftResetTemplateMixin` | Template digest verification, manifest writing, and reset environment configuration. |
-| `platformio_ini_mixin.py` | `PlatformioIniMixin` | Dynamic generation of `platformio.ini`, sketch entry point validation, and source synchronization. |
-| `compiler_pipeline_mixin.py` | `CompilerPipelineMixin` | Full compilation pipeline (`_run_compile`), source freezing, compiler output parsing, error classification. |
-| `upload_pipeline_mixin.py` | `UploadPipelineMixin` | Flashing pipeline (`_run_upload`), chip feature probing, disconnect-safe flashing guards. |
-| `monitor_pipeline_mixin.py` | `MonitorPipelineMixin` | Serial monitor reading loop (`_run_monitor`), DTR/RTS hardware reset pulse. |
-| `editor_modes_mixin.py` | `EditorModesMixin` | Monaco Editor pywebview embedding, Tkinter Default editor builder, hang watchdog, fallback handling. |
-| `boards_catalog_mixin.py` | `BoardsCatalogMixin` | Board download manager, dynamic board index reloading, internet availability checks. |
-| `ai_assistant_mixin.py` | `AIAssistantMixin` | OpenCode AI side panel lifecycle, Win32 reparenting, file watcher, and glowing diff highlight dispatch. |
-| `settings_dialog_mixin.py` | `SettingsDialogMixin` | Preferences modal (`_open_settings`), theme switcher, editor mode switching, process restart coordination. |
-| `hard_reset_mixin.py` | `HardResetMixin` | Hard reset binary generation, esptool direct flashing pipeline. |
-| `soft_reset_mixin.py` | `SoftResetMixin` | Soft reset flashing pipeline, ELF usage extraction, COM port reconnect watcher. |
-| `window_lifecycle_mixin.py` | `WindowLifecycleMixin` | Application shutdown cleanup (`_on_close`), mutex releasing, subprocess termination. |
-| `syntax_checker_mixin.py` | `SyntaxCheckerMixin` | Background C++ syntax checker thread, realtime diagnostics tree updates. |
-
----
-
 ### The `src/` System Modules & Offline Assets
 
-- **`src/modules/bootstrap.py`**: Windows runtime bootstrapper that self-heals Python, installs dependencies, downloads prebuilt PlatformIO core, and launches the GUI.
+- **`src/modules/bootstrap.py`**: Windows runtime bootstrapper with upscale HTML/Edge WebView2 window that self-heals Python, installs dependencies, downloads prebuilt PlatformIO core, and launches the GUI.
 - **`src/modules/launcher.py`**: Entry point launcher setting Windows `AppUserModelID` for taskbar grouping and single-instance locking.
 - **`src/modules/dedicated_AI.py`**: Controller managing OpenCode AI assistant sessions (HTTP server + WebSocket + pywinpty).
 - **`src/modules/project_terminal.py`**: Full-featured integrated project terminal subprocess with ConPTY backend.

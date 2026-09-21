@@ -116,10 +116,21 @@ internal static class MCUFlasherLauncher
                 wscriptPath = "wscript.exe"; // Fallback to PATH resolution
             }
 
+            // Forward command line arguments (e.g. --project or sketch file path)
+            string[] cmdArgs = Environment.GetCommandLineArgs();
+            string extraArgs = "";
+            if (cmdArgs != null && cmdArgs.Length > 1)
+            {
+                for (int i = 1; i < cmdArgs.Length; i++)
+                {
+                    extraArgs += " \"" + cmdArgs[i] + "\"";
+                }
+            }
+
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = wscriptPath,
-                Arguments = "\"" + vbsPath + "\"",
+                Arguments = "\"" + vbsPath + "\"" + extraArgs,
                 WorkingDirectory = appRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true,

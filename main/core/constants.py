@@ -28,32 +28,6 @@ def _startup_event(name: str) -> None:
         pass
 
 
-# ── Serial and Hardware Constants ──
-try:
-    import serial
-    import serial.tools.list_ports
-except ImportError:
-    serial = None
-
-# ── Database Storage CRUD Modules ──
-try:
-    from src.dbs import dbs_create, dbs_read, dbs_update, dbs_delete
-except Exception:
-    dbs_create = None
-    dbs_read = None
-    dbs_update = None
-    dbs_delete = None
-
-# ── Windows Win32 API Modules ──
-try:
-    import win32gui
-    import win32con
-    import win32process
-except ImportError:
-    win32gui = None
-    win32con = None
-    win32process = None
-
 UPLOAD_CONNECTION_ATTEMPTS = 10
 MCU_FLASH_PATCH_VERSION = "v25-ui-responsive-serial-pump-app-namespace"
 PROJECT_BUILD_CACHE_DIR = ".mcu_flasher_build_cache"
@@ -61,16 +35,44 @@ PROJECT_BUILD_CACHE_MARKER = ".mcu_flasher_cache_marker"
 AI_PROJECT_STORAGE_DIR = ".mcu_ai_edits"
 EDITOR_WINDOW_TITLE = "MCU Flasher — Embedded Code Editor (Closing this window will attach back to the MAIN window)"
 
-DEFAULT_SKETCH_DIR = SCRIPT_DIR
+DEFAULT_SKETCH_DIR = Path.home() / "Documents" / "example"
+
+
+def is_application_codebase_dir(path: Path | str | None) -> bool:
+    """Check if the given path is the MCU Flasher application root or its internal code directories."""
+    if not path:
+        return False
+    try:
+        p = Path(path).resolve()
+        app_root = SCRIPT_DIR.resolve()
+        if p == app_root:
+            return True
+        # Check for signature files of this application codebase
+        if (p / "src" / "modules" / "bootstrap.py").exists():
+            return True
+        if (p / "main" / "mcu_flash_gui.py").exists():
+            return True
+        if (p / "main" / "web_bridge.py").exists():
+            return True
+        # Check if p is an internal application system folder
+        for internal in ("main", "src", "installers", "direct", ".agents", ".github"):
+            internal_p = (app_root / internal).resolve()
+            if p == internal_p or internal_p in p.parents:
+                return True
+    except Exception:
+        pass
+    return False
 DEFAULT_BAUD = 115200
 DEFAULT_UPLOAD_SPEED = 460800
 ESP8266_MONITOR_BAUD = 115200
 ESP32_MONITOR_BAUD = 115200
 AVR_MONITOR_BAUD = 9600
+MAX_BAUD_RATE = 921600
 VALID_BAUD_RATES = {
     300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800,
-    38400, 57600, 74880, 115200, 230400, 460800, 512000, 921600
+    38400, 57600, 74880, 115200, 230400, 250000, 460800, 500000, 512000, 921600
 }
+
 
 
 def default_monitor_baud(
@@ -258,12 +260,14 @@ __all__ = [
     "board_reset_capabilities",
     "DEFAULT_BAUD",
     "DEFAULT_SKETCH_DIR",
+    "is_application_codebase_dir",
     "DEFAULT_UPLOAD_SPEED",
     "EDITOR_WINDOW_TITLE",
     "ESP32_MONITOR_BAUD",
     "ESP8266_MONITOR_BAUD",
     "KNOWN_WARNINGS",
     "MCU_FLASH_PATCH_VERSION",
+    "MAX_BAUD_RATE",
     "PROJECT_BUILD_CACHE_DIR",
     "PROJECT_BUILD_CACHE_MARKER",
     "SCRIPT_DIR",
@@ -274,13 +278,5 @@ __all__ = [
     "_STARTUP_MONOTONIC",
     "_VALID_NAME_RE",
     "_startup_event",
-    "dbs_create",
-    "dbs_read",
-    "dbs_update",
-    "dbs_delete",
-    "serial",
     "strip_ansi",
-    "win32con",
-    "win32gui",
-    "win32process",
 ]

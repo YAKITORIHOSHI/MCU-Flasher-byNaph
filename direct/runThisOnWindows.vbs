@@ -1,5 +1,5 @@
 ' ─────────────────────────────────────────────
-'  MCU Uploader IDE by Naph — Auto-Bootstrap Launcher
+'  MCU Flasher by Naph — Auto-Bootstrap Launcher
 '  Downloads Python if needed, installs deps,
 '  and launches the GUI — fully unattended.
 '
@@ -30,10 +30,10 @@ If fso.DriveExists(driveLetter) Then
     Set driveObj = fso.GetDrive(driveLetter)
     If Err.Number = 0 Then
         If driveObj.DriveType = 1 Then ' 1 = Removable media (USB flash drive / SD card)
-            MsgBox "MCU Uploader IDE by Naph cannot be run directly from a USB flash drive or removable disk (" & driveLetter & ")." & vbCrLf & vbCrLf & _
+            MsgBox "MCU Flasher by Naph cannot be run directly from a USB flash drive or removable disk (" & driveLetter & ")." & vbCrLf & vbCrLf & _
                    "High-speed disk access (SSD/HDD) is required for toolchain compilation and workspace storage." & vbCrLf & vbCrLf & _
                    "Please copy the entire MCU Flasher folder to an internal SSD or HDD (e.g. C:\ or D:\ drive) and launch it from there.", _
-                   vbCritical, "MCU Uploader IDE by Naph — Storage Location Notice"
+                   vbCritical, "MCU Flasher by Naph — Storage Location Notice"
             WScript.Quit 1
         End If
     End If
@@ -47,24 +47,23 @@ bootstrapFile = scriptDir & "src\modules\launcher.py"
 If Not fso.FileExists(bootstrapFile) Then
     MsgBox "launcher.py not found in:" & vbCrLf & scriptDir & "src\modules\" & vbCrLf & vbCrLf & _
            "Please make sure launcher.py is in the src\modules folder.", _
-           vbCritical, "MCU Uploader IDE by Naph"
+           vbCritical, "MCU Flasher by Naph"
     WScript.Quit 1
 End If
 
 
 ' ═════════════════════════════════════════════
-'  FIND SYSTEM PYTHON (to run bootstrap if needed)
+'  FIND PRIVATE RUNTIME — src\_python\python.exe ONLY
+'  No fallbacks. No system Python. No winget install.
+'  If the private runtime is missing, show a clear error and exit.
 ' ═════════════════════════════════════════════
-Dim hostPython, systemPython, result
+Dim hostPython, systemPython
 hostPython   = ""
 systemPython = ""
 
-' Check for portable python or env python paths
+' Resolve private Python path (relative to project root)
 Dim portablePython, envPython, envFolder
 portablePython = scriptDir & "src\_python\python.exe"
-If Not fso.FileExists(portablePython) Then
-    portablePython = scriptDir & "_python\python.exe"
-End If
 envFolder      = scriptDir & "env"
 envPython      = envFolder & "\Scripts\python.exe"
 
@@ -80,243 +79,58 @@ If fso.FileExists(forceRebuildFile) Then
     On Error GoTo 0
 End If
 
-' 1. Check existing project virtual environment (`env`) first
-If fso.FileExists(envPython) Then
-    ' Never execute a venv whose pyvenv.cfg points back to its own
-    ' env\Scripts\python.exe. That malformed state recursively launches the
-    ' interpreter and can create thousands of Python processes before the
-    ' application can repair itself. Skip it so the real host Python is found
-    ' below, then RepairVenvInPlace can rewrite the venv safely.
-    If Not VenvConfigNeedsRepair(envFolder) Then
-        If IsPythonExeValid(envPython) Then
-            hostPython = envPython
-        End If
-    End If
+' 1. Validate private Python runtime exists and is functional
+If Not fso.FileExists(portablePython) Then
+    MsgBox "MCU Flasher private Python runtime not found." & vbCrLf & vbCrLf & _
+           "Expected location:" & vbCrLf & _
+           "  " & portablePython & vbCrLf & vbCrLf & _
+           "The bundled Python runtime at src\_python\ is required to run MCU Flasher." & vbCrLf & _
+           "Please ensure the full project folder is intact (not missing src\_python\)." & vbCrLf & vbCrLf & _
+           "Do NOT install a system Python — this application uses its own isolated runtime.", _
+           vbCritical, "MCU Flasher by Naph — Runtime Missing"
+    WScript.Quit 1
 End If
 
-' 2. Check portable Python next
-If hostPython = "" And fso.FileExists(portablePython) Then
-    If IsPythonExeValid(portablePython) Then
-        hostPython = portablePython
-    End If
+If Not IsPythonExeValid(portablePython) Then
+    MsgBox "MCU Flasher private Python runtime is present but appears corrupt or incompatible." & vbCrLf & vbCrLf & _
+           "Affected file:" & vbCrLf & _
+           "  " & portablePython & vbCrLf & vbCrLf & _
+           "Please reinstall the MCU Flasher application to restore the bundled Python runtime.", _
+           vbCritical, "MCU Flasher by Naph — Runtime Invalid"
+    WScript.Quit 1
 End If
 
-' 3. Check registry for registered Python installation
-If hostPython = "" Then
-    hostPython = FindPythonFromRegistry()
-End If
-
-' 4. Dynamically scan known Python install directories
-If hostPython = "" Then
-    Dim localApp, progFiles, progFiles86
-    localApp   = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
-    progFiles  = shell.ExpandEnvironmentStrings("%ProgramFiles%")
-    progFiles86= shell.ExpandEnvironmentStrings("%ProgramFiles(x86)%")
-
-    Dim searchRoots, searchRoot
-    searchRoots = Array( _
-        localApp & "\Programs\Python", _
-        localApp & "\Python", _
-        progFiles, _
-        progFiles86 _
-    )
-
-    For Each searchRoot In searchRoots
-        If hostPython <> "" Then Exit For
-        If fso.FolderExists(searchRoot) Then
-            Dim folder, subfolders
-            Set subfolders = fso.GetFolder(searchRoot).SubFolders
-            Dim bestFolder, bestName
-            bestFolder = ""
-            bestName = ""
-            For Each folder In subfolders
-                Dim fName
-                fName = LCase(folder.Name)
-                If Left(fName, 6) = "python" Then
-                    Dim candidate
-                    candidate = folder.Path & "\python.exe"
-                    If IsPythonExeValid(candidate) Then
-                        If fName > bestName Then
-                            bestName = fName
-                            bestFolder = candidate
-                        End If
-                    End If
-                End If
-            Next
-            If bestFolder <> "" Then
-                hostPython = bestFolder
-            End If
-        End If
-    Next
-End If
-
-' 5. Fall back to `py` launcher via PATH (if valid and not a WindowsApps stub)
-If hostPython = "" Then
-    Dim resolvedPyLauncher
-    resolvedPyLauncher = ResolvePythonExePath("py")
-    If resolvedPyLauncher <> "" And resolvedPyLauncher <> "py" Then
-        If IsPythonExeValid(resolvedPyLauncher) Then
-            hostPython = resolvedPyLauncher
-        End If
-    End If
-End If
-
-' 6. Fall back to `python` command via PATH (if valid and not a WindowsApps stub)
-If hostPython = "" Then
-    Dim resolvedSysPython
-    resolvedSysPython = ResolvePythonExePath("python")
-    If resolvedSysPython <> "" And resolvedSysPython <> "python" Then
-        If IsPythonExeValid(resolvedSysPython) Then
-            hostPython = resolvedSysPython
-        End If
-    End If
-End If
-
-' 6. If no host Python found, install via winget
-If hostPython = "" Then
-    Dim wingetAvailable
-    wingetAvailable = -1
-    On Error Resume Next
-    wingetAvailable = shell.Run("cmd.exe /c where winget.exe >nul 2>nul", 0, True)
-    On Error GoTo 0
-    If wingetAvailable <> 0 Then
-        MsgBox "Python 3.8 or newer with Tkinter is required, and Windows Package Manager (winget) is not available on this PC." & vbCrLf & vbCrLf & _
-               "Install Python for the current user from python.org, include Tcl/Tk, then run this launcher again.", _
-               vbCritical, "MCU Uploader IDE by Naph"
-        WScript.Quit 1
-    End If
-
-    Dim pythonId
-    pythonId = GetLatestPythonId()
-
-    Dim msgResult
-    msgResult = MsgBox( _
-        "Python is not installed on this computer." & vbCrLf & vbCrLf & _
-        "MCU Uploader IDE by Naph can install Python automatically using Windows Package Manager (winget)." & vbCrLf & _
-        "Package to install: " & pythonId & vbCrLf & vbCrLf & _
-        "Click OK to install, or Cancel to exit.", _
-        vbOKCancel + vbInformation, "MCU Uploader IDE by Naph — Setup")
-
-    If msgResult = vbCancel Then
-        WScript.Quit 0
-    End If
-
-    Dim wingetCmd, dlResult
-    wingetCmd = "cmd.exe /c winget install --id " & pythonId & " --exact --scope user --override ""/passive Include_tcltk=1 PrependPath=1 Include_test=0"" --accept-package-agreements --accept-source-agreements"
-    
-    dlResult = shell.Run(wingetCmd, 1, True)
-
-    Dim attempt
-    For attempt = 1 To 60
-        hostPython = FindPythonFromRegistry()
-        localApp   = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
-        progFiles  = shell.ExpandEnvironmentStrings("%ProgramFiles%")
-        progFiles86= shell.ExpandEnvironmentStrings("%ProgramFiles(x86)%")
-
-        searchRoots = Array( _
-            localApp & "\Programs\Python", _
-            localApp & "\Python", _
-            progFiles, _
-            progFiles86 _
-        )
-
-        For Each searchRoot In searchRoots
-            If hostPython <> "" Then Exit For
-            If fso.FolderExists(searchRoot) Then
-                Set subfolders = fso.GetFolder(searchRoot).SubFolders
-                bestFolder = ""
-                bestName = ""
-                For Each folder In subfolders
-                    fName = LCase(folder.Name)
-                    If Left(fName, 6) = "python" Then
-                        candidate = folder.Path & "\python.exe"
-                        If IsPythonExeValid(candidate) Then
-                            If fName > bestName Then
-                                bestName = fName
-                                bestFolder = candidate
-                            End If
-                        End If
-                    End If
-                Next
-                If bestFolder <> "" Then
-                    hostPython = bestFolder
-                End If
-            End If
-        Next
-
-        If hostPython = "" Then
-            result = -1
-            On Error Resume Next
-            result = shell.Run("py -c ""import encodings""", 0, True)
-            On Error GoTo 0
-            If result = 0 Then hostPython = "py"
-        End If
-
-        If hostPython = "" Then
-            result = -1
-            On Error Resume Next
-            result = shell.Run("python -c ""import encodings""", 0, True)
-            On Error GoTo 0
-            If result = 0 Then hostPython = "python"
-        End If
-
-        If hostPython <> "" Then Exit For
-        WScript.Sleep 2000
-    Next
-
-    If hostPython = "" Then
-        MsgBox "Python installation via winget failed or could not be detected." & vbCrLf & vbCrLf & _
-               "Please install Python manually from https://www.python.org", _
-               vbCritical, "MCU Uploader IDE by Naph"
-        WScript.Quit 1
-    End If
-End If
-
-' Resolve command aliases ("py" / "python") to an absolute executable path if possible
-Dim resolvedHostPython
-resolvedHostPython = ResolvePythonExePath(hostPython)
+hostPython   = portablePython
+systemPython = portablePython
 
 ' ── Check and in-place repair existing virtual environment (`env`) ──
 If fso.FolderExists(envFolder) And fso.FileExists(envPython) Then
-    ' Never repair a venv with the venv interpreter itself. Doing that writes
-    ' a self-referential pyvenv.cfg and makes the next Python invocation
-    ' recursively spawn. Only a real host/portable Python may repair it.
-    If resolvedHostPython <> "" And LCase(resolvedHostPython) <> LCase(envPython) Then
-        RepairVenvInPlace envFolder, resolvedHostPython
-    End If
-    If IsPythonExeValid(envPython) Then
-        systemPython = envPython
-    Else
-        ' Environment could not be salvaged (e.g. incompatible Python major version) — recreate
-        QuarantineFolder envFolder
-        systemPython = hostPython
-    End If
-ElseIf fso.FolderExists(envFolder) Then
-    QuarantineFolder envFolder
-    systemPython = hostPython
-Else
-    systemPython = hostPython
+    RepairVenvInPlace envFolder, portablePython
 End If
 
 
 ' ═════════════════════════════════════════════
-'  LAUNCH — always via bootstrap
+'  LAUNCH — always via private Python runtime (src\_python)
 ' ═════════════════════════════════════════════
-' Bootstrap runs its own Tk GUI window, launched via pythonw.exe if available.
+' Strictly uses the bundled runtime at src\_python\ — never user PC Python.
 Dim launchPython, pythonwCandidate, runCmd
-launchPython = systemPython
+launchPython = portablePython
 
-If systemPython <> "" And systemPython <> "py" And systemPython <> "python" Then
-    pythonwCandidate = fso.GetParentFolderName(systemPython) & "\pythonw.exe"
-    If fso.FileExists(pythonwCandidate) Then
-        launchPython = pythonwCandidate
-    End If
+pythonwCandidate = scriptDir & "src\_python\pythonw.exe"
+If fso.FileExists(pythonwCandidate) Then
+    launchPython = pythonwCandidate
 End If
+
+Dim argIdx, allArgs
+allArgs = ""
+For argIdx = 0 To WScript.Arguments.Count - 1
+    allArgs = allArgs & " """ & WScript.Arguments(argIdx) & """"
+Next
 
 If InStr(launchPython, "\") > 0 Then
-    runCmd = """" & launchPython & """ """ & bootstrapFile & """ --hidden"
+    runCmd = """" & launchPython & """ """ & bootstrapFile & """ --hidden" & allArgs
 Else
-    runCmd = launchPython & " """ & bootstrapFile & """ --hidden"
+    runCmd = launchPython & " """ & bootstrapFile & """ --hidden" & allArgs
 End If
 
 On Error Resume Next
@@ -325,11 +139,11 @@ If Err.Number <> 0 Then
     Dim launchErr
     launchErr = Err.Description
     Err.Clear
-    MsgBox "MCU Uploader IDE could not start its setup program." & vbCrLf & vbCrLf & _
+    MsgBox "MCU Flasher could not start its setup program." & vbCrLf & vbCrLf & _
            "Python: " & launchPython & vbCrLf & _
            "Bootstrap: " & bootstrapFile & vbCrLf & vbCrLf & _
            "Details: " & launchErr, _
-           vbCritical, "MCU Uploader IDE by Naph"
+           vbCritical, "MCU Flasher by Naph"
 End If
 On Error GoTo 0
 
@@ -406,9 +220,9 @@ Function IsPythonExeValid(exePath)
     Dim runCmd, exitCode
     On Error Resume Next
     If InStr(LCase(exePath), "\env\") > 0 Then
-        runCmd = """" & exePath & """ -B -c ""import sys, encodings, pip, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -B -c ""import sys, encodings, pip; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     Else
-        runCmd = """" & exePath & """ -B -c ""import sys, encodings, tkinter; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -B -c ""import sys, encodings; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     End If
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number <> 0 Or exitCode <> 0 Then
@@ -498,28 +312,9 @@ Function IsPythonExeValid(exePath)
 End Function
 
 
-' ── Resolve command string ("py" or "python") to absolute executable path ──
+' ── Resolve command string to absolute executable path (never queries system Python) ──
 Function ResolvePythonExePath(pyCmd)
     ResolvePythonExePath = pyCmd
-    If pyCmd = "" Then Exit Function
-    If InStr(pyCmd, "\") > 0 Or InStr(pyCmd, "/") > 0 Then Exit Function
-
-    Dim tmpFile, cmd
-    tmpFile = shell.ExpandEnvironmentStrings("%TEMP%\py_exec_path.txt")
-    cmd = "cmd.exe /c " & pyCmd & " -c ""import sys; print(sys.executable)"" > """ & tmpFile & """"
-    On Error Resume Next
-    shell.Run cmd, 0, True
-    If Err.Number = 0 And fso.FileExists(tmpFile) Then
-        Dim ts, line
-        Set ts = fso.OpenTextFile(tmpFile, 1)
-        If Not ts.AtEndOfStream Then
-            line = Trim(ts.ReadLine)
-            If fso.FileExists(line) Then ResolvePythonExePath = line
-        End If
-        ts.Close
-        fso.DeleteFile tmpFile
-    End If
-    On Error GoTo 0
 End Function
 
 

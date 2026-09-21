@@ -137,14 +137,10 @@ def _strip_trailing_line_comment(text: str) -> str:
     return text
 
 
-def check_include_directive(line: str, line_no: int, file_path: Path):
+def check_include_directive(line: str, line_no: int, file_path: Path | str):
     """
     Validates a single '#include' line for a properly closed <...> or "..." target.
-    Returns an error dict if malformed, otherwise None.
-    Handles cases like:
-        #include <WiFiProv.h      -> missing closing '>'
-        #include "Test.h          -> missing closing '"'
-        #include WiFi.h           -> missing both delimiters
+    Returns an error dict with exact line and column ranges if malformed, otherwise None.
     """
     if not isinstance(file_path, Path):
         file_path = Path(file_path)
@@ -159,6 +155,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
             "file": file_path.name,
             "line": line_no,
             "col": len(line) + 1,
+            "endLine": line_no,
+            "endCol": len(line) + 2,
             "message": "Malformed #include directive: missing header name",
             "severity": "error"
         }
@@ -170,6 +168,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": len(line) + 1,
+                "endLine": line_no,
+                "endCol": len(line) + 2,
                 "message": f"#include directive is missing a closing '>': {remainder}",
                 "severity": "error"
             }
@@ -179,6 +179,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": match.start(1) + 2,
+                "endLine": line_no,
+                "endCol": match.start(1) + 3,
                 "message": "Malformed #include directive: empty header name between '<' and '>'",
                 "severity": "error"
             }
@@ -188,6 +190,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": match.start(1) + close_idx + 2,
+                "endLine": line_no,
+                "endCol": len(line) + 1,
                 "message": f"Unexpected characters after #include <{header_name}>: '{trailing}'",
                 "severity": "warning"
             }
@@ -200,7 +204,9 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": len(line) + 1,
-                "message": f"#include directive is missing a closing '\"': {remainder}",
+                "endLine": line_no,
+                "endCol": len(line) + 2,
+                "message": f'#include directive is missing a closing \'"\': {remainder}',
                 "severity": "error"
             }
         header_name = remainder[1:close_idx]
@@ -209,6 +215,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": match.start(1) + 2,
+                "endLine": line_no,
+                "endCol": match.start(1) + 3,
                 "message": "Malformed #include directive: empty header name between quotes",
                 "severity": "error"
             }
@@ -218,6 +226,8 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
                 "file": file_path.name,
                 "line": line_no,
                 "col": match.start(1) + close_idx + 2,
+                "endLine": line_no,
+                "endCol": len(line) + 1,
                 "message": f'Unexpected characters after #include "{header_name}": \'{trailing}\'',
                 "severity": "warning"
             }
@@ -227,20 +237,32 @@ def check_include_directive(line: str, line_no: int, file_path: Path):
         "file": file_path.name,
         "line": line_no,
         "col": match.start(1) + 1,
+        "endLine": line_no,
+        "endCol": len(line) + 1,
         "message": f"Malformed #include directive: expected <FileName.h> or \"FileName.h\", got '{remainder}'",
         "severity": "error"
     }
 
-def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[str] | None = None) -> list[dict]:
+
+def analyze_cpp_syntax(
+    code: str,
+    file_path: Path | str,
+    all_defined_functions: set[str] | None = None
+) -> list[dict]:
     """
-    Analyzes C++ code for syntax errors (brackets, semicolons, quotes, etc.) 
-    and checks if called global functions exist in all_defined_functions or standard APIs.
+    Analyzes C++/Arduino code for syntax errors:
+      - Bracket closure & balance ({}, (), []) with block/function context
+      - Missing closing parentheses before '{' in control conditions
+      - Missing colons after 'case', 'default', and class access specifiers
+      - Missing semicolons after statements, function calls, declarations,
+        assignments, do-while loops, and struct/class/enum definitions
+      - Preprocessor directives and multiline backslash continuations
+      - Raw string literals R"delim(...)delim" and escape sequences
     Utilizes in-memory RAM caching for instant 0.001 ms repeated lookups.
     """
     if not isinstance(file_path, Path):
         file_path = Path(file_path)
 
-    # In-memory RAM cache lookup
     file_name = file_path.name if hasattr(file_path, "name") else str(file_path)
     cache_key = (hash(code), len(code), file_name)
     with _CACHE_LOCK:
@@ -249,380 +271,526 @@ def analyze_cpp_syntax(code: str, file_path: Path, all_defined_functions: set[st
             return [dict(e) for e in cached]
 
     errors = []
-    if all_defined_functions is None:
-        all_defined_functions = set()
+    lines = code.splitlines()
 
-    # --- Pass 1: Parse brackets, braces, and literals ---
-    stack = []  # Elements: (char, line_no, col_no)
-    in_line_comment = False
+    # Pass 1: Scanner for literals, comments, raw strings, and bracket closure
+    stack = []
     in_block_comment = False
     in_string = False
     in_char = False
+    in_raw_string = False
+    raw_string_delim = ""
     string_start = (0, 0)
     char_start = (0, 0)
     block_comment_start = (0, 0)
 
-    lines = code.splitlines()
+    cleaned_lines = []
+    do_block_closed_lines = set()
 
     for line_idx, line in enumerate(lines):
         line_no = line_idx + 1
-        i = 0
         n = len(line)
-        in_line_comment = False  # resets at the end of the line
+        i = 0
+        clean_chars = []
+        in_line_comment = False
 
-        # '#include' targets (e.g. <WiFi.h> or "Test.h") are preprocessor tokens,
-        # not real string/char literals or bracket pairs - they're validated
-        # separately by check_include_directive(), so skip the generic scan here
-        # to avoid duplicate/misleading "unclosed string" or bracket errors.
-        if not in_block_comment and _INCLUDE_DIRECTIVE_RE.match(line):
+        # Fast skip for #include
+        if not in_block_comment and not in_raw_string and _INCLUDE_DIRECTIVE_RE.match(line):
+            inc_err = check_include_directive(line, line_no, file_path)
+            if inc_err:
+                errors.append(inc_err)
+            cleaned_lines.append("#include")
             continue
 
         while i < n:
             c = line[i]
 
             if in_block_comment:
-                if i + 1 < n and c == '*' and line[i+1] == '/':
+                clean_chars.append(' ')
+                if i + 1 < n and c == '*' and line[i + 1] == '/':
                     in_block_comment = False
+                    clean_chars.append(' ')
                     i += 2
+                else:
+                    i += 1
+                continue
+
+            if in_raw_string:
+                clean_chars.append(' ')
+                if c == ')' and line[i:i + len(raw_string_delim) + 2] == f"){raw_string_delim}\"":
+                    in_raw_string = False
+                    clean_chars.extend([' '] * (len(raw_string_delim) + 1))
+                    i += len(raw_string_delim) + 2
                 else:
                     i += 1
                 continue
 
             if in_line_comment:
-                break
+                clean_chars.append(' ')
+                i += 1
+                continue
 
             if in_string:
                 if c == '\\':
-                    i += 2  # skip escaped character
+                    clean_chars.append(' ')
+                    clean_chars.append(' ')
+                    i += 2
                 elif c == '"':
                     in_string = False
+                    clean_chars.append(' ')
                     i += 1
                 else:
+                    clean_chars.append(' ')
                     i += 1
                 continue
 
             if in_char:
                 if c == '\\':
+                    clean_chars.append(' ')
+                    clean_chars.append(' ')
                     i += 2
                 elif c == '\'':
                     in_char = False
+                    clean_chars.append(' ')
                     i += 1
                 else:
+                    clean_chars.append(' ')
                     i += 1
                 continue
 
-            # Check comment starts
-            if i + 1 < n and c == '/' and line[i+1] == '/':
+            # Check start of comment
+            if i + 1 < n and c == '/' and line[i + 1] == '/':
                 in_line_comment = True
-                break
-            if i + 1 < n and c == '/' and line[i+1] == '*':
+                clean_chars.append(' ')
+                clean_chars.append(' ')
+                i += 2
+                continue
+            if i + 1 < n and c == '/' and line[i + 1] == '*':
                 in_block_comment = True
                 block_comment_start = (line_no, i + 1)
+                clean_chars.append(' ')
+                clean_chars.append(' ')
                 i += 2
                 continue
 
-            # Check string start
+            # Check raw string: R"delim( ... )delim"
+            if c == 'R' and i + 1 < n and line[i + 1] == '"':
+                paren_pos = line.find('(', i + 2)
+                if paren_pos != -1 and paren_pos - i <= 18:
+                    raw_string_delim = line[i + 2:paren_pos]
+                    in_raw_string = True
+                    clean_chars.extend([' '] * (paren_pos - i + 1))
+                    i = paren_pos + 1
+                    continue
+
+            # Check string literal
             if c == '"':
                 in_string = True
                 string_start = (line_no, i + 1)
+                clean_chars.append(' ')
                 i += 1
                 continue
 
-            # Check char start
+            # Check char literal
             if c == '\'':
                 in_char = True
                 char_start = (line_no, i + 1)
+                clean_chars.append(' ')
                 i += 1
                 continue
 
-            # Track bracket balancing
+            # Check brackets
             if c in ('(', '{', '['):
-                stack.append((c, line_no, i + 1))
+                opener_context = ""
+                is_type_def = False
+                is_do_block = False
+
+                if c == '{':
+                    pre_text = line[:i].strip()
+                    if not pre_text and line_idx > 0:
+                        for prev_idx in range(line_idx - 1, max(-1, line_idx - 6), -1):
+                            prev_str = lines[prev_idx].split("//", 1)[0].strip()
+                            if prev_str:
+                                pre_text = prev_str
+                                break
+
+                    # Check for struct / class / enum / union
+                    if re.search(r'\b(struct|class|enum|union)\b', pre_text):
+                        is_type_def = True
+                        m_type = re.search(r'\b(struct|class|enum|union)\s+([A-Za-z_]\w*)?', pre_text)
+                        opener_context = m_type.group(0) if m_type else "type definition"
+                    elif re.search(r'\bdo\b', pre_text):
+                        is_do_block = True
+                        opener_context = "do-while loop"
+                    elif re.search(r'\b(if|else\s+if|for|while|switch|catch)\b', pre_text):
+                        m_ctrl = re.search(r'\b(if|else\s+if|for|while|switch|catch)\s*\([^)]*\)?', pre_text)
+                        opener_context = m_ctrl.group(0) if m_ctrl else "control block"
+                    elif re.search(r'\belse\b', pre_text):
+                        opener_context = "else block"
+                    else:
+                        m_fn = re.search(r'([A-Za-z_]\w*)\s*\([^)]*\)', pre_text)
+                        if m_fn:
+                            opener_context = f"function '{m_fn.group(1)}()'"
+                        else:
+                            opener_context = "block"
+
+                    # Check if an open parenthesis for if/while/for/switch is still unclosed!
+                    if stack and stack[-1][0] == '(':
+                        top_c, top_l, top_col, top_ctx, _, _ = stack[-1]
+                        if any(kw in top_ctx for kw in ('if', 'while', 'for', 'switch')):
+                            errors.append({
+                                "file": file_name,
+                                "line": line_no,
+                                "col": i + 1,
+                                "endLine": line_no,
+                                "endCol": i + 2,
+                                "message": f"Missing closing ')' before '{{' for {top_ctx} on line {top_l}",
+                                "severity": "error"
+                            })
+                            stack.pop()
+
+                elif c == '(':
+                    pre_text = line[:i].strip()
+                    m_ctrl = re.search(r'\b(if|else\s+if|for|while|switch|catch)\b', pre_text)
+                    if m_ctrl:
+                        opener_context = f"'{m_ctrl.group(1)}' condition"
+                    else:
+                        m_call = re.search(r'([A-Za-z_]\w*)\s*$', pre_text)
+                        opener_context = f"call to '{m_call.group(1)}()'" if m_call else "'('"
+
+                elif c == '[':
+                    opener_context = "array subscript / brackets"
+
+                stack.append((c, line_no, i + 1, opener_context, is_type_def, is_do_block))
+                clean_chars.append(c)
+                i += 1
+                continue
+
             elif c in (')', '}', ']'):
+                clean_chars.append(c)
                 if not stack:
-                    # For unmatched '}', try to give a better diagnostic:
-                    # look backwards for a function/block header missing its '{'
                     msg = f"Unmatched closing bracket '{c}'"
                     if c == '}':
-                        # Scan previous lines for a likely block opener context
-                        prev_ctx = []
-                        for prev in reversed(lines[:line_idx]):
-                            prev_s = prev.strip()
-                            if not prev_s or prev_s.startswith('//'):
-                                continue
-                            prev_ctx.append(prev_s[:120])
-                            if len(prev_ctx) >= 5:
-                                break
-                        if prev_ctx:
-                            # Check if any of the previous lines looks like a function/control header
-                            ctrl_kwds = ("void ", "int ", "float ", "double ", "char ", "string ",
-                                         "bool ", "if ", "for ", "while ", "switch ", "else",
-                                         "class ", "struct ", "union ", "namespace ")
-                            found_header = None
-                            for line_text in prev_ctx:
-                                low = line_text.lower()
-                                if any(low.startswith(k) for k in ctrl_kwds) and '(' in line_text and not low.endswith('{') and not low.endswith(';'):
-                                    found_header = line_text
-                                    break
-                            if found_header:
-                                msg = f"Missing '{{' after '{found_header.strip()[:60]}' on line {line_idx}"
-                            else:
-                                msg = f"Unmatched '}}' (possibly missing '{{' above line {line_idx})"
+                        msg = f"Unmatched closing brace '}}' on line {line_no} (extra '}}' or missing '{{' earlier)"
+                    elif c == ')':
+                        msg = f"Unmatched closing parenthesis ')' on line {line_no}"
+                    elif c == ']':
+                        msg = f"Unmatched closing square bracket ']' on line {line_no}"
                     errors.append({
-                        "file": file_path.name,
+                        "file": file_name,
                         "line": line_no,
                         "col": i + 1,
+                        "endLine": line_no,
+                        "endCol": i + 2,
                         "message": msg,
                         "severity": "error"
                     })
                 else:
-                    top_c, top_line, top_col = stack.pop()
+                    top_c, top_line, top_col, top_ctx, is_type_def, is_do_block = stack.pop()
                     expected = {')': '(', '}': '{', ']': '['}[c]
                     if top_c != expected:
                         errors.append({
-                            "file": file_path.name,
+                            "file": file_name,
                             "line": line_no,
                             "col": i + 1,
-                            "message": f"Mismatched bracket: expected '{c}' to match '{top_c}' on line {top_line}",
+                            "endLine": line_no,
+                            "endCol": i + 2,
+                            "message": f"Mismatched bracket: expected '{expected}' to close {top_ctx} on line {top_line}, but found '{c}'",
                             "severity": "error"
                         })
+                    else:
+                        if c == '}' and is_do_block:
+                            do_block_closed_lines.add(line_idx)
+
+                        # If this '}' closed a struct / class / enum / union, check for missing semicolon after it!
+                        if c == '}' and is_type_def:
+                            rest_of_line = line[i + 1:].split("//", 1)[0].strip()
+                            if not rest_of_line:
+                                next_line_idx = line_idx + 1
+                                while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                                    next_line_idx += 1
+                                if next_line_idx < len(lines):
+                                    next_str = lines[next_line_idx].split("//", 1)[0].strip()
+                                    if next_str and not next_str.startswith(';') and not next_str.startswith('}'):
+                                        errors.append({
+                                            "file": file_name,
+                                            "line": line_no,
+                                            "col": i + 1,
+                                            "endLine": line_no,
+                                            "endCol": i + 2,
+                                            "message": f"Missing semicolon ';' after {top_ctx} definition",
+                                            "severity": "error"
+                                        })
+                            elif not rest_of_line.startswith(';') and not rest_of_line.endswith(';') and not rest_of_line.endswith(','):
+                                errors.append({
+                                    "file": file_name,
+                                    "line": line_no,
+                                    "col": i + 1,
+                                    "endLine": line_no,
+                                    "endCol": i + 2,
+                                    "message": f"Missing semicolon ';' after {top_ctx} definition",
+                                    "severity": "error"
+                                })
+                i += 1
+                continue
+
+            clean_chars.append(c)
             i += 1
 
-        # End of line quotes check (unless continuation character \ exists)
         if in_string and not line.endswith('\\'):
             errors.append({
-                "file": file_path.name,
+                "file": file_name,
                 "line": string_start[0],
                 "col": string_start[1],
+                "endLine": string_start[0],
+                "endCol": string_start[1] + 1,
                 "message": "Unclosed string literal",
                 "severity": "error"
             })
             in_string = False
+
         if in_char and not line.endswith('\\'):
             errors.append({
-                "file": file_path.name,
+                "file": file_name,
                 "line": char_start[0],
                 "col": char_start[1],
+                "endLine": char_start[0],
+                "endCol": char_start[1] + 1,
                 "message": "Unclosed character literal",
                 "severity": "error"
             })
             in_char = False
 
+        cleaned_lines.append("".join(clean_chars))
+
     if in_block_comment:
         errors.append({
-            "file": file_path.name,
+            "file": file_name,
             "line": block_comment_start[0],
             "col": block_comment_start[1],
-            "message": "Unclosed block comment '/*' (missing '/')",
+            "endLine": block_comment_start[0],
+            "endCol": block_comment_start[1] + 2,
+            "message": "Unclosed block comment '/*' (missing '*/')",
             "severity": "error"
         })
+
+    # Unclosed brackets on stack
     while stack:
-        c, line_no, col = stack.pop()
-        msg = f"Unclosed open bracket '{c}'"
+        c, line_no, col, ctx, _, _ = stack.pop()
         if c == '{':
-            msg = f"Open brace '{{' on line {line_no} is never closed (missing '}}')"
+            msg = f"{ctx.capitalize()} opened on line {line_no} is never closed (missing '}}')"
+        elif c == '(':
+            msg = f"Parenthesis for {ctx} opened on line {line_no} is never closed (missing ')')"
+        else:
+            msg = f"Square bracket '[' on line {line_no} is never closed (missing ']')"
         errors.append({
-            "file": file_path.name,
+            "file": file_name,
             "line": line_no,
             "col": col,
+            "endLine": line_no,
+            "endCol": col + 1,
             "message": msg,
             "severity": "error"
         })
 
-    # --- Pass 2: Line-by-line checks (semicolons, function calls) ---
-    in_block_comment = False
-    paren_nesting = 0   # tracks ( and [ depth only — not { }
-    brace_depth = 0     # tracks { } block depth for context
-    for line_idx, line in enumerate(lines):
+    # Pass 2: Semicolon and Colon Validation
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+
+    _CONTINUATION_ENDS = (
+        "+", "-", "*", "/", "=", "&", "|", "^", "%", "?", ":", "<", ">",
+        "!", ",", "&&", "||", "->", "::", ".", "\\",
+        "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+        "<<", ">>", "<<=", ">>=",
+    )
+    _CONTINUATION_STARTS = (
+        "?", ":", "+", "-", "*", "/", "%", "&", "|", "^", "=",
+        "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+        "<<", ">>", "<<=", ">>=", "&&", "||", "->", "::",
+        "<", ">", ".",
+    )
+    _CONTROL_KEYWORDS = {
+        "if", "for", "while", "switch", "catch", "else", "do", "try"
+    }
+
+    expecting_do_while = False
+    in_preprocessor_continuation = False
+
+    for line_idx, clean_line in enumerate(cleaned_lines):
         line_no = line_idx + 1
-
-        # Strip comments and string contents for accurate line parsing
-        clean_line = ""
-        in_string_clean = False
-        in_char_clean = False
-        i = 0
-        n = len(line)
-        while i < n:
-            c = line[i]
-            if in_block_comment:
-                if i + 1 < n and c == '*' and line[i+1] == '/':
-                    in_block_comment = False
-                    i += 2
-                else:
-                    i += 1
-                continue
-            if i + 1 < n and c == '/' and line[i+1] == '/':
-                break  # line comment
-            if i + 1 < n and c == '/' and line[i+1] == '*':
-                in_block_comment = True
-                i += 2
-                continue
-            if in_string_clean:
-                if c == '\\':
-                    i += 2
-                elif c == '"':
-                    in_string_clean = False
-                    i += 1
-                else:
-                    i += 1
-                continue
-            if in_char_clean:
-                if c == '\\':
-                    i += 2
-                elif c == '\'':
-                    in_char_clean = False
-                    i += 1
-                else:
-                    i += 1
-                continue
-            if c == '"':
-                in_string_clean = True
-                clean_line += '""'
-                i += 1
-            elif c == '\'':
-                in_char_clean = True
-                clean_line += "''"
-                i += 1
-            else:
-                if c in ('(', '['):
-                    paren_nesting += 1
-                elif c in (')', ']'):
-                    paren_nesting = max(0, paren_nesting - 1)
-                elif c == '{':
-                    brace_depth += 1
-                elif c == '}':
-                    brace_depth = max(0, brace_depth - 1)
-                clean_line += c
-                i += 1
-
+        raw_line = lines[line_idx]
         stripped = clean_line.strip()
+        raw_stripped = raw_line.split("//", 1)[0].strip()
+
+        # Handle preprocessor directives and their backslash-continuations
+        if in_preprocessor_continuation:
+            if not raw_line.rstrip().endswith('\\'):
+                in_preprocessor_continuation = False
+            continue
+
+        if stripped.startswith("#"):
+            if raw_line.rstrip().endswith('\\'):
+                in_preprocessor_continuation = True
+            continue
+
         if not stripped:
             continue
 
-        # 0. #include directive validation (checked against the raw line, since
-        #    clean_line's string/quote stripping logic assumes well-formed quotes)
-        if stripped.startswith("#"):
-            include_error = check_include_directive(line, line_no, file_path)
-            if include_error:
-                errors.append(include_error)
+        # Check if previous lines closed a 'do' block
+        if line_idx in do_block_closed_lines or (line_idx > 0 and (line_idx - 1) in do_block_closed_lines):
+            expecting_do_while = True
+
+        # Check for missing colons:
+        # Case A: 'case <expr>' missing colon (check raw_stripped to preserve char literals like case 'A')
+        if re.match(r'^\s*case\s+[^:]+$', raw_stripped) and not any(raw_stripped.endswith(op) for op in _CONTINUATION_ENDS):
+            errors.append({
+                "file": file_name,
+                "line": line_no,
+                "col": len(raw_line),
+                "endLine": line_no,
+                "endCol": len(raw_line) + 1,
+                "message": "Missing colon ':' after 'case' label",
+                "severity": "error"
+            })
             continue
 
-        # 1. Missing Semicolon Check
-        _CONTINUATION_ENDS = (
-            "+", "-", "*", "/", "=", "&", "|", "^", "%", "?", ":", "<", ">",
-            "!", ",", "&&", "||", "->", "::",
-            # Comparison / assignment combos that often split across lines
-            "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-            "<<", ">>", "<<=", ">>=", "&&=", "||=",
-            ".",
-        )
-        _CONTINUATION_STARTS = (
-            "?", ":", "+", "-", "*", "/", "%", "&", "|", "^", "=",
-            "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-            "<<", ">>", "<<=", ">>=", "&&", "||", "->", "::",
-            "<", ">", ".", ",",
-            ")", "]", "}", ");", "],", "},",
-        )
-        _NON_STMT_ENDS = ("{", "}", ";", ",", "\\", ":")
-        # Note: ")" is NOT in _NON_STMT_ENDS because lines like
-        #   Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB);
-        # need semicolons just like any other statement.  Only
-        # function/method/control headers (whose next line is "{")
-        # are exempted further below.
-        _BLOCK_LIKE_STARTS = ("if", "else", "for", "while", "switch", "case", "default",
-                              "class", "struct", "enum", "namespace", "extern", "do",
-                              "try", "catch", "public:", "private:", "protected:",
-                              "void", "int", "float", "double", "char", "short", "long",
-                              "string", "auto", "uint8_t", "uint16_t", "uint32_t",
-                              "int8_t", "int16_t", "int32_t", "bool", "unsigned")
+        # Case B: 'default' missing colon
+        m_default = re.match(r'^\s*default\s*$', stripped)
+        if m_default:
+            errors.append({
+                "file": file_name,
+                "line": line_no,
+                "col": len(raw_line),
+                "endLine": line_no,
+                "endCol": len(raw_line) + 1,
+                "message": "Missing colon ':' after 'default' label",
+                "severity": "error"
+            })
+            continue
 
-        current_line_ends_continuation = (
-            stripped.endswith("\\")
-            or any(stripped.endswith(op) for op in _CONTINUATION_ENDS)
-        )
-        current_line_is_non_stmt_end = (
-            any(stripped.endswith(e) for e in _NON_STMT_ENDS)
-        )
-        current_line_is_block_like = (
-            any(stripped.startswith(k) for k in _BLOCK_LIKE_STARTS)
-            and "(" in stripped
-            and ")" in stripped
-        )
+        # Case C: 'public', 'private', 'protected' missing colon
+        m_access = re.match(r'^\s*(public|private|protected)\s*$', stripped)
+        if m_access:
+            errors.append({
+                "file": file_name,
+                "line": line_no,
+                "col": len(raw_line),
+                "endLine": line_no,
+                "endCol": len(raw_line) + 1,
+                "message": f"Missing colon ':' after '{m_access.group(1)}' access specifier",
+                "severity": "error"
+            })
+            continue
 
+        # Special: 'do ... while (...)' MUST have a semicolon after 'while (...)'!
+        m_do_while = re.search(r'\bwhile\s*\([^)]*\)\s*$', stripped)
+        if m_do_while and expecting_do_while and not stripped.endswith(';'):
+            expecting_do_while = False
+            errors.append({
+                "file": file_name,
+                "line": line_no,
+                "col": len(raw_line) + 1,
+                "endLine": line_no,
+                "endCol": len(raw_line) + 2,
+                "message": "Missing semicolon ';' after 'while' in do-while loop",
+                "severity": "error"
+            })
+            continue
+
+        if stripped.endswith(';'):
+            expecting_do_while = False
+
+        # Track parenthesis and bracket depths across lines
+        paren_depth += (stripped.count('(') - stripped.count(')'))
+        paren_depth = max(0, paren_depth)
+        bracket_depth += (stripped.count('[') - stripped.count(']'))
+        bracket_depth = max(0, bracket_depth)
+        brace_depth += (stripped.count('{') - stripped.count('}'))
+        brace_depth = max(0, brace_depth)
+
+        # Semicolon Check:
         if (
-            paren_nesting == 0
-            and not stripped.startswith("#")
-            and not stripped.startswith("//")
-            and not stripped.startswith("/*")
-            and not current_line_is_non_stmt_end
-            and not current_line_ends_continuation
-            and not current_line_is_block_like
+            stripped.endswith(';')
+            or stripped.endswith('{')
+            or stripped.endswith('}')
+            or stripped.endswith(':')
+            or stripped.endswith(',')
+            or stripped.endswith('\\')
         ):
-            # Check next line for block opener or continuation
-            next_is_open_brace = False
-            next_is_continuation = False
-            for j in range(line_idx + 1, len(lines)):
-                ns_raw = lines[j].strip()
-                if not ns_raw:
-                    continue
-                # Skip comment-only lines
-                if ns_raw.startswith("//"):
-                    continue
-                if ns_raw.startswith("/*"):
-                    if "*/" in ns_raw:
-                        after = ns_raw.split("*/", 1)[1].strip()
-                        if not after:
-                            continue
-                        ns_raw = after
-                    else:
-                        continue
+            continue
 
-                if ns_raw.startswith("{"):
-                    next_is_open_brace = True
-                elif any(ns_raw.startswith(op) for op in _CONTINUATION_STARTS):
-                    next_is_continuation = True
-                # Also check trailing comma before identifier on next line
-                elif (stripped.endswith(",")
-                      and re.match(r'^[a-zA-Z_][\w.]*\b', ns_raw)):
-                    next_is_continuation = True
-                break
+        # If inside unclosed parentheses or brackets, line continuation is normal
+        if paren_depth > 0 or bracket_depth > 0:
+            continue
 
-            if not next_is_open_brace and not next_is_continuation:
-                # Only warn when the line looks like a statement/assignment/call,
-                # not a bare label or preprocessor directive
-                tokens = stripped.split(None, 1)
-                first_token = tokens[0].lower() if tokens else ""
-                _STMT_KWDS = ("return", "break", "continue", "goto", "throw",
-                              "int", "float", "double", "char", "short", "long",
-                              "string", "auto", "uint8_t", "uint16_t", "uint32_t",
-                              "int8_t", "int16_t", "int32_t", "bool", "void",
-                              "serial", "digitalwrite", "digitalread", "analogwrite",
-                              "analogread", "pinmode", "delay")
-                looks_like_statement = (
-                    "=" in stripped
-                    or ("(" in stripped and ")" in stripped)
-                    or first_token in _STMT_KWDS
-                    or stripped.endswith(")")
-                )
-                if looks_like_statement:
-                    errors.append({
-                        "file": file_path.name,
-                        "line": line_no,
-                        "col": len(line) + 1,
-                        "message": "Potential missing semicolon ';'",
-                        "severity": "warning"
-                    })
+        # If ends with operator, line is continued on next line
+        if any(stripped.endswith(op) for op in _CONTINUATION_ENDS):
+            continue
 
-    res = sorted(errors, key=lambda x: x["line"])
+        # Check next line for continuation or block opener
+        next_is_open_brace = False
+        next_is_continuation = False
+        for next_idx in range(line_idx + 1, min(len(cleaned_lines), line_idx + 10)):
+            next_str = cleaned_lines[next_idx].strip()
+            if not next_str:
+                continue
+            if next_str.startswith('{'):
+                next_is_open_brace = True
+            elif any(next_str.startswith(op) for op in _CONTINUATION_STARTS):
+                next_is_continuation = True
+            break
+
+        if next_is_open_brace or next_is_continuation:
+            continue
+
+        # Check control statement headers
+        m_first = re.match(r'^[A-Za-z_]\w*', stripped)
+        first_token = m_first.group(0) if m_first else ""
+
+        if first_token in _CONTROL_KEYWORDS:
+            continue
+
+        # Check if line looks like a statement that requires a semicolon:
+        is_stmt = False
+        stmt_reason = "statement"
+
+        if first_token in ("return", "break", "continue", "goto", "throw"):
+            is_stmt = True
+            stmt_reason = f"'{first_token}' statement"
+        elif "=" in stripped:
+            is_stmt = True
+            stmt_reason = "assignment"
+        elif stripped.endswith(')'):
+            is_stmt = True
+            stmt_reason = "function call / statement"
+        elif re.match(r'^(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?\s+)+[A-Za-z_]\w*(?:\s*\[[^\]]*\])?$', stripped):
+            is_stmt = True
+            stmt_reason = "declaration"
+
+        if is_stmt:
+            errors.append({
+                "file": file_name,
+                "line": line_no,
+                "col": len(raw_line) + 1,
+                "endLine": line_no,
+                "endCol": len(raw_line) + 2,
+                "message": f"Missing semicolon ';' after {stmt_reason}",
+                "severity": "warning"
+            })
+
+    errors.sort(key=lambda x: (x["line"], x["col"]))
     with _CACHE_LOCK:
         if len(_SYNTAX_CODE_CACHE) >= _MAX_CACHE_ENTRIES:
             _SYNTAX_CODE_CACHE.clear()
-        _SYNTAX_CODE_CACHE[cache_key] = res
-    return res
+        _SYNTAX_CODE_CACHE[cache_key] = errors
+    return errors
+
 
 def extract_project_functions(sketch_dir: Path) -> set[str]:
     """Mock project functions extractor (no longer needed, returns empty set)."""
     return set()
+
 
 def analyze_file_syntax(
     file_path: Path | str,

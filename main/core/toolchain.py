@@ -7,17 +7,13 @@ from __future__ import annotations
 
 import sys
 import os
-import shutil
 import subprocess
 import threading
-import ctypes
 from pathlib import Path
 from typing import Any
 
-from main.core.constants import *
-from main.core.theme import *
-from main.core.config import *
-from main.core.file_utils import *
+from main.core.constants import SCRIPT_DIR
+from main.core.file_utils import hide_hidden_attribute, unhide_hidden_attribute
 
 _bootstrap_module: Any = None
 _dedicated_ai_module: Any = None
@@ -703,8 +699,8 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     Compiler processes are memory-heavy, so CPU count alone is not a safe
     multiplier. Reserve one logical CPU on low-end/midrange systems or two on systems
     with 8+ logical CPUs for Tk/WebView/serial handling, then cap workers by
-    currently available RAM (~400-450 MB per compiler job).
-    When ample RAM (>4GB) is available, scale workers up to full CPU capacity.
+    currently available RAM (~300-350 MB per compiler job).
+    When ample RAM (>=4GB free) is available, scale workers up to full CPU capacity.
     """
     cpus = max(1, int(total_cpus or os.cpu_count() or 2))
     memory_gb = _available_memory_gb() if available_gb is None else available_gb
@@ -716,9 +712,11 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
             memory_budget = 1
         elif memory_gb < 2.0:
             memory_budget = max(1, min(2, int((memory_gb - 0.25) / 0.45)))
-        else:
-            # Ample RAM available (>2GB free): scale workers up to available memory
+        elif memory_gb < 4.0:
             memory_budget = max(1, int((memory_gb - 0.5) / 0.35))
+        else:
+            # Ample RAM available (>=4GB free): aggressively scale workers with low per-job floor
+            memory_budget = max(1, int((memory_gb - 0.5) / 0.28))
         cpu_budget = min(cpu_budget, memory_budget)
 
     normalized = str(mode or "HIGH").upper()
@@ -727,8 +725,18 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     if normalized == "MEDIUM":
         return max(1, min(cpu_budget, max(2, (cpus + 1) // 2)))
     if normalized in ("ULTRA", "MAX", "MAXIMUM"):
-        return max(1, min(cpu_budget, cpus, 16))
+        return max(1, min(cpu_budget, cpus, 32))
+    if memory_gb is not None and memory_gb >= 4.0:
+        return max(1, min(cpu_budget, cpus, 24))
     return max(1, min(cpu_budget, cpus, 12))
+
+
+def get_optimal_compiler_jobs(mode: str = "HIGH") -> int:
+    """Dynamically determine the best compiler concurrency using real-time available RAM."""
+    current_avail_gb = _available_memory_gb()
+    effective_mode = "MAX" if (current_avail_gb is not None and current_avail_gb >= 4.0) else mode
+    return _resource_safe_worker_count(effective_mode, available_gb=current_avail_gb)
+
 
 _max_cpu_jobs = str(_resource_safe_worker_count("HIGH"))
 
@@ -852,7 +860,6 @@ def ensure_platformio() -> list[str] | None:
 def find_arduino_cli_executable() -> str | None:
     """Locate the arduino-cli executable."""
     import shutil
-    from pathlib import Path
 
     # Check cached path file first
     script_dir = SCRIPT_DIR
@@ -937,6 +944,7 @@ __all__ = [
     "ensure_platformio_penv_with_hook",
     "find_arduino_cli_executable",
     "find_pio_executable",
+    "get_optimal_compiler_jobs",
     "is_opencode_installed",
     "webview"
 ]
