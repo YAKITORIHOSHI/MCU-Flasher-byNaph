@@ -379,19 +379,27 @@ class PrimaryToolbar(QToolBar):
         min_left_space = pad_left + left_w + spacing + 8
         min_right_space = pad_left + right_w + spacing + 8
 
+        avail_for_spacer = tb_w - (pad_left + left_w + center_w + right_w + 32)
+        if avail_for_spacer <= 8:
+            self.sp_left.setFixedWidth(8)
+            self.sp_right.setFixedWidth(8)
+            return
+
         if target_center_x >= min_left_space and (target_center_x + center_w) <= (tb_w - min_right_space):
             # Perfect mathematical center
             sp_left_w = int(target_center_x - pad_left - left_w - spacing)
+            sp_left_w = min(sp_left_w, max(8, avail_for_spacer))
             self.sp_left.setFixedWidth(max(8, sp_left_w))
         elif (target_center_x + center_w) > (tb_w - min_right_space) and (tb_w - min_right_space - center_w) >= min_left_space:
             # Optimal shift near center without pushing right items
             start_x = tb_w - min_right_space - center_w
             sp_left_w = int(start_x - pad_left - left_w - spacing)
+            sp_left_w = min(sp_left_w, max(8, avail_for_spacer))
             self.sp_left.setFixedWidth(max(8, sp_left_w))
         else:
             # Narrow window: allow sp_left to shrink
             self.sp_left.setMinimumWidth(8)
-            self.sp_left.setMaximumWidth(16777215)
+            self.sp_left.setMaximumWidth(max(8, avail_for_spacer))
 
         # sp_right flexibly absorbs remaining space to push right_container flush right
         self.sp_right.setMinimumWidth(8)
@@ -409,16 +417,18 @@ class PrimaryToolbar(QToolBar):
     def _do_compile(self) -> None:
         if self._backend and not self._backend.is_busy:
             mw = self.window()
-            if hasattr(mw, "_editor_panel"):
-                mw._editor_panel.trigger_save_all()
-            self._backend.compile_sketch()
+            if hasattr(mw, "_editor_panel") and mw._editor_panel:
+                mw._editor_panel.trigger_save_all(callback=self._backend.compile_sketch)
+            else:
+                self._backend.compile_sketch()
 
     def _do_upload(self) -> None:
         if self._backend and not self._backend.is_busy:
             mw = self.window()
-            if hasattr(mw, "_editor_panel"):
-                mw._editor_panel.trigger_save_all()
-            self._backend.upload_sketch()
+            if hasattr(mw, "_editor_panel") and mw._editor_panel:
+                mw._editor_panel.trigger_save_all(callback=self._backend.upload_sketch)
+            else:
+                self._backend.upload_sketch()
 
     def _do_stop(self) -> None:
         if self._backend:
@@ -662,6 +672,13 @@ class PrimaryToolbar(QToolBar):
                     self.logo.setText("⚡ MCU Flasher")
                 else:
                     self.logo.setText("⚡ MCU Flasher by Naph")
+            elif width < 1250:
+                self.lbl_sketch.setVisible(True)
+                self.btn_download.setText("⬇ Download")
+                self.btn_download.setToolTip("Download boards and libraries")
+                self.btn_download.setMinimumWidth(0)
+                self.btn_download.setMaximumWidth(16777215)
+                self.logo.setText("⚡ MCU Flasher by Naph")
             else:
                 self.lbl_sketch.setVisible(True)
                 self.btn_download.setText("⬇ Download Boards/Libraries")
@@ -1259,10 +1276,8 @@ class ControlsBar(QWidget):
         can_skip = self._backend.check_can_skip_compile() if getattr(self._backend, "current_board", "") else False
         self.cb_skip_compile.setEnabled(can_skip)
         self.cb_skip_compile.setChecked(can_skip)
-        if can_skip:
-            self._backend.set_skip_compile(True)
-        else:
-            self._backend.set_skip_compile(False)
+        if self._backend:
+            self._backend.set_skip_compile(can_skip)
 
     def _open_board_search_dialog(self) -> None:
         """Open the BoardSearchDialog modal matching the stable release."""
@@ -1523,18 +1538,16 @@ class ControlsBar(QWidget):
             can_skip = self._backend.check_can_skip_compile(board) if self._backend else False
             self.cb_skip_compile.setEnabled(can_skip)
             self.cb_skip_compile.setChecked(can_skip)
-            if can_skip and self._backend:
-                self._backend.set_skip_compile(True)
+            if self._backend:
+                self._backend.set_skip_compile(can_skip)
             self._update_action_button_states_on_controls()
 
     @Slot(bool)
     def on_skip_compile_availability(self, available: bool) -> None:
         self.cb_skip_compile.setEnabled(available)
-        if available:
-            if getattr(self._backend, "skip_compile", False):
-                self.cb_skip_compile.setChecked(True)
-        else:
-            self.cb_skip_compile.setChecked(False)
+        self.cb_skip_compile.setChecked(available)
+        if self._backend:
+            self._backend.set_skip_compile(available)
 
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:
@@ -1548,8 +1561,8 @@ class ControlsBar(QWidget):
         can_skip = self._backend.check_can_skip_compile()
         self.cb_skip_compile.setEnabled(can_skip)
         self.cb_skip_compile.setChecked(can_skip)
-        if can_skip:
-            self._backend.set_skip_compile(True)
+        if self._backend:
+            self._backend.set_skip_compile(can_skip)
         self._update_action_button_states_on_controls()
 
     def sync_timestamp(self, enabled: bool) -> None:

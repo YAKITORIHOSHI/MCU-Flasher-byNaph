@@ -380,6 +380,25 @@ def set_clear_serial_on_upload(enabled: bool):
         pass
 
 
+def get_reset_on_baud_change() -> bool:
+    """Return whether to reset the MCU via DTR/RTS when the Serial Monitor baud rate changes."""
+    try:
+        data = _load_raw_config()
+        return bool(data.get("shared", {}).get("reset_on_baud_change", False))
+    except Exception:
+        return False
+
+
+def set_reset_on_baud_change(enabled: bool):
+    """Persist the preference to reset the MCU via DTR/RTS when baud rate changes."""
+    try:
+        data = _load_raw_config()
+        data.setdefault("shared", {})["reset_on_baud_change"] = bool(enabled)
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
 def get_clear_build_console_on_action() -> bool:
     """Return whether Clear Screen on Action for Build Console is enabled (defaults to True)."""
     try:
@@ -882,6 +901,7 @@ __all__ = [
     "get_periodic_reload_settings",
     "get_project_remembered_board",
     "get_remembered_board_for_port",
+    "get_reset_on_baud_change",
     "get_theme_mode",
     "get_theme_settings",
     "load_gui_config",
@@ -901,5 +921,6 @@ __all__ = [
     "set_monaco_boot_pending",
     "set_periodic_reload_settings",
     "set_project_remembered_board",
+    "set_reset_on_baud_change",
     "set_theme_mode"
 ]

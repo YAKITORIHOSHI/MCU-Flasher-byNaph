@@ -12,7 +12,10 @@ from __future__ import annotations
 import sys
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QCursor

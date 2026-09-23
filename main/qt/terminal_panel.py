@@ -134,6 +134,7 @@ class TerminalPanel(QWidget):
 
         self._build_ui()
         self._update_buttons_state()
+        self._apply_panel_theme(self._current_theme)
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -141,7 +142,8 @@ class TerminalPanel(QWidget):
         main_layout.setSpacing(0)
 
         # ── Header Bar ────────────────────────────────────────────────────────
-        header = QFrame()
+        self._header = QFrame()
+        header = self._header
         header.setObjectName("terminal-header")
         header.setFixedHeight(34)
         header.setStyleSheet("QFrame#terminal-header { background: #151922; border-bottom: 1px solid #1c2333; }")
@@ -318,11 +320,13 @@ class TerminalPanel(QWidget):
         el.setAlignment(Qt.AlignmentFlag.AlignCenter)
         el.setSpacing(10)
 
-        lbl_no_term = QLabel("No active terminal sessions")
+        self._lbl_no_term = QLabel("No active terminal sessions")
+        lbl_no_term = self._lbl_no_term
         lbl_no_term.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 600;")
         el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        btn_new_empty = QPushButton("+ Open Terminal Session")
+        self._btn_new_empty = QPushButton("+ Open Terminal Session")
+        btn_new_empty = self._btn_new_empty
         btn_new_empty.setObjectName("btn-terminal-open")
         btn_new_empty.setFixedWidth(180)
         btn_new_empty.setFixedHeight(28)
@@ -838,7 +842,10 @@ class TerminalPanel(QWidget):
     def _on_tab_revealed(self) -> None:
         """Called when bottom dock notebook switches onto this tab."""
         self.ensure_started()
-        self.refresh_terminal()
+        if len(self._sessions_meta) == 0:
+            self.add_session("pwsh")
+        else:
+            self.refresh_terminal()
 
     def _on_tab_hidden(self) -> None:
         """Called when bottom dock notebook switches away from this tab."""
@@ -915,9 +922,109 @@ class TerminalPanel(QWidget):
             "brightWhite": "#ffffff",
         }
 
+    def _apply_panel_theme(self, theme_mode: str) -> None:
+        from main.qt.theme import get_palette
+        pal = get_palette(theme_mode)
+        bg_mid = pal.get("BG_MID", "#161d27")
+        bg_dark = pal.get("BG_DARK", "#10151c")
+        bg_darkest = pal.get("BG_DARKEST", "#0a0e14")
+        bg_hover = pal.get("BG_HOVER", "#243040")
+        border = pal.get("BORDER", "#2a3545")
+        border_lit = pal.get("BORDER_LIT", "#00d2ff")
+        cyan = pal.get("CYAN", "#00d2ff")
+        text = pal.get("TEXT", "#e0e6ed")
+        text_dim = pal.get("TEXT_DIM", "#8fa1b3")
+        text_bright = pal.get("TEXT_BRIGHT", "#ffffff")
+
+        if hasattr(self, "_header") and self._header:
+            self._header.setStyleSheet(f"QFrame#terminal-header {{ background: {bg_mid}; border-bottom: 1px solid {border}; }}")
+        if hasattr(self, "_title_lbl") and self._title_lbl:
+            self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;")
+
+        if hasattr(self, "_btn_new") and self._btn_new:
+            self._btn_new.setStyleSheet(f"""
+                QPushButton#btn-terminal-new {{
+                    background: {bg_dark}; color: {cyan}; font-size: 11px; font-weight: 600;
+                    border: 1px solid {border}; border-radius: 3px; padding: 2px 8px;
+                }}
+                QPushButton#btn-terminal-new:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {cyan}; }}
+            """)
+            menu = self._btn_new.menu()
+            if menu:
+                menu.setStyleSheet(f"""
+                    QMenu {{
+                        background: {bg_mid}; color: {text}; border: 1px solid {border};
+                        font-size: 11px; padding: 4px;
+                    }}
+                    QMenu::item {{ padding: 4px 16px; border-radius: 2px; }}
+                    QMenu::item:selected {{ background: {bg_hover}; color: {cyan}; }}
+                """)
+
+        if hasattr(self, "_tab_bar") and self._tab_bar:
+            self._tab_bar.setStyleSheet(f"""
+                QTabBar {{ background: transparent; border: none; }}
+                QTabBar::tab {{
+                    background: {bg_dark}; color: {text_dim}; border: 1px solid {border};
+                    border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+                    margin-right: 4px; min-height: 18px;
+                }}
+                QTabBar::tab:selected {{
+                    background: {bg_mid}; color: {cyan}; border: 1px solid {cyan};
+                }}
+                QTabBar::tab:hover:!selected {{
+                    background: {bg_hover}; color: {text_bright};
+                }}
+                QTabBar::close-button {{
+                    subcontrol-position: right; margin-left: 5px;
+                }}
+                QTabBar::close-button:hover {{
+                    background: #e74c3c; border-radius: 2px;
+                }}
+            """)
+
+        btn_act_style = f"""
+            QPushButton:enabled {{
+                background: {bg_dark}; color: {text}; font-size: 11px; font-weight: 600;
+                border: 1px solid {border}; border-radius: 3px; padding: 2px 8px;
+            }}
+            QPushButton:enabled:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {border_lit}; }}
+            QPushButton:disabled {{
+                background: {bg_darkest}; color: {text_dim}; font-size: 11px;
+                border: 1px solid {border}; border-radius: 3px; padding: 2px 8px;
+            }}
+        """
+        if hasattr(self, "_btn_restart") and self._btn_restart:
+            self._btn_restart.setStyleSheet(btn_act_style)
+        if hasattr(self, "_btn_clear") and self._btn_clear:
+            self._btn_clear.setStyleSheet(btn_act_style)
+        if hasattr(self, "_btn_popout") and self._btn_popout:
+            self._btn_popout.setStyleSheet(f"""
+                QPushButton {{
+                    background: {bg_dark}; color: {text}; font-size: 12px; font-weight: 700;
+                    border: 1px solid {border}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: {bg_hover}; color: {cyan}; border-color: {cyan}; }}
+            """)
+
+        if hasattr(self, "_loader_card") and self._loader_card:
+            self._loader_card.setStyleSheet(f"QFrame {{ background: {bg_darkest}; border: none; }}")
+        if hasattr(self, "_empty_card") and self._empty_card:
+            self._empty_card.setStyleSheet(f"QFrame {{ background: {bg_darkest}; border: none; }}")
+        if hasattr(self, "_embed_container") and self._embed_container:
+            self._embed_container.setStyleSheet(f"background: {bg_darkest};")
+        if hasattr(self, "_btn_new_empty") and self._btn_new_empty:
+            self._btn_new_empty.setStyleSheet(f"""
+                QPushButton#btn-terminal-open {{
+                    background: {bg_dark}; color: {cyan}; font-size: 12px; font-weight: 600;
+                    border: 1px solid {border}; border-radius: 4px; padding: 4px 12px;
+                }}
+                QPushButton#btn-terminal-open:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {cyan}; }}
+            """)
+
     def apply_theme(self, theme_name: str) -> None:
         """Update xterm.js theme and Qt container styles on theme change."""
         self._current_theme = theme_name
+        self._apply_panel_theme(theme_name)
         payload = self._build_terminal_theme_payload(theme_name)
         self._send_control("theme", extra={"theme": payload})
 

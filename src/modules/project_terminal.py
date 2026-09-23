@@ -99,7 +99,7 @@ def _resolve_terminal_theme() -> dict:
 
     if theme == "light":
         return make_theme(
-            "#eef2f5", "#24292f", "#0969da", "#e1e4e8",
+            "#f6f8fa", "#24292f", "#0969da", "#b6d4fe",
             {
                 "black": "#57606a", "red": "#cf222e", "green": "#1a7f37",
                 "yellow": "#9a6700", "blue": "#0969da", "magenta": "#8250df",
@@ -124,7 +124,7 @@ def _resolve_terminal_theme() -> dict:
             },
         )
     return make_theme(
-        "#10151c", "#e0e6ed", "#00d2ff", "#243040",
+        "#0a0e14", "#e0e6ed", "#00d2ff", "#1c3a5e",
         {
             "black": "#8fa1b3", "red": "#f05050", "green": "#5ccc6e",
             "yellow": "#e8b83a", "blue": "#61afef", "magenta": "#c678dd",
@@ -150,7 +150,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
             background: var(--terminal-bg); color: var(--terminal-fg);
-            font-family: Consolas, "Courier New", monospace; font-size: 14px;
+            font-family: 'Cascadia Code', Consolas, "Courier New", monospace; font-size: 13px;
             overflow: hidden; box-sizing: border-box;
         }
         #terminal-root {
@@ -163,7 +163,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
         .terminal-host.active { display: block; }
         .xterm {
-            padding: 2px 4px !important;
+            padding: 8px 12px !important;
             height: 100% !important;
             box-sizing: border-box;
         }
@@ -174,7 +174,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         .xterm-screen {
             background: var(--terminal-bg) !important;
         }
-        ::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
+        ::-webkit-scrollbar { width: 7px; height: 7px; }
+        ::-webkit-scrollbar-track { background: var(--terminal-bg); }
+        ::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.35); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.65); }
     </style>
     <link rel="stylesheet" href="/assets/xterm/xterm.css" />
     <script src="/assets/xterm/xterm.js" onerror="window.xtermErr=true"></script>
@@ -182,9 +185,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
     <div id="terminal-root">
-        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
+        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.6; font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
             <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px; color: __THEME_FG__;">No Terminal Session Open</div>
-            <div>Click <b>[▾]</b> in the top toolbar to open a new PowerShell or Command Prompt terminal.</div>
+            <div>Click <b>+ New Terminal ▾</b> in the terminal header to open a PowerShell or Command Prompt session.</div>
         </div>
     </div>
     <script>
@@ -272,12 +275,16 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 const term = new Terminal({
                     cursorBlink: true,
-                    cursorStyle: "block",
-                    fontSize: 14,
-                    fontFamily: 'Consolas, "Courier New", monospace',
-                    scrollback: 5000,
+                    cursorStyle: "bar",
+                    cursorWidth: 2,
+                    fontSize: 13,
+                    lineHeight: 1.25,
+                    fontFamily: "'Cascadia Code', 'Segoe UI Mono', Consolas, 'Courier New', monospace",
+                    scrollback: 10000,
                     overviewRulerWidth: 0,
-                    theme: Object.assign({}, currentTheme)
+                    theme: Object.assign({}, currentTheme),
+                    allowTransparency: true,
+                    rightClickSelectsWord: true,
                 });
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
@@ -478,10 +485,59 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             };
         }
 
+        document.addEventListener("contextmenu", event => {
+            const term = terminals[activeShell];
+            if (!term) return;
+            event.preventDefault();
+            if (term.hasSelection()) {
+                const val = term.getSelection();
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(val).catch(() => {});
+                }
+                term.clearSelection();
+            } else {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    navigator.clipboard.readText().then(text => {
+                        if (text && socket && socket.readyState === WebSocket.OPEN) {
+                            const val = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+                            socket.send(JSON.stringify({ type: "input", shell: activeShell, data: val }));
+                        }
+                    }).catch(() => {});
+                }
+            }
+        });
+
         document.addEventListener("keydown", event => {
             const term = terminals[activeShell];
-            if (!term || !event.ctrlKey) return;
-            if (event.key.toLowerCase() === "c" && term.hasSelection()) {
+            if (!term) return;
+            // Ctrl+Shift+C -> Copy
+            if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "c") {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (term.hasSelection()) {
+                    const value = term.getSelection();
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(value).catch(() => {});
+                    }
+                }
+                return;
+            }
+            // Ctrl+Shift+V -> Paste
+            if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v") {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    navigator.clipboard.readText().then(text => {
+                        if (text && socket && socket.readyState === WebSocket.OPEN) {
+                            const val = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+                            socket.send(JSON.stringify({ type: "input", shell: activeShell, data: val }));
+                        }
+                    }).catch(() => {});
+                }
+                return;
+            }
+            // Ctrl+C with selection -> Copy
+            if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 const value = term.getSelection();
@@ -543,6 +599,61 @@ def _native_shell_executable(kind: str) -> str | None:
         if path.exists():
             return str(path)
     return "powershell.exe"
+
+
+def _build_terminal_env(target_dir: str) -> dict[str, str]:
+    env = os.environ.copy()
+
+    # Prepend project-bundled Python and toolchain paths
+    extra_paths: list[str] = []
+
+    # 1. Private Python and Scripts
+    private_py = SCRIPT_DIR / "src" / "_python"
+    private_py_scripts = private_py / "Scripts"
+    if private_py_scripts.is_dir():
+        extra_paths.append(str(private_py_scripts.resolve()))
+    if private_py.is_dir():
+        extra_paths.append(str(private_py.resolve()))
+
+    # 2. Virtualenv Scripts (where pio.exe and installed packages live)
+    env_scripts = SCRIPT_DIR / "env" / "Scripts"
+    if env_scripts.is_dir():
+        extra_paths.append(str(env_scripts.resolve()))
+
+    # 3. PlatformIO Core penv Scripts
+    for pio_penv in [
+        SCRIPT_DIR / "src" / ".platformio-mcu-gui" / "penv" / "Scripts",
+        Path("C:/.platformio-mcu-gui/penv/Scripts"),
+        Path("C:/.mcuflasher-app/.platformio-mcu-gui/penv/Scripts"),
+    ]:
+        if pio_penv.is_dir():
+            extra_paths.append(str(pio_penv.resolve()))
+
+    # 4. Arduino CLI & Git
+    for candidate in [
+        SCRIPT_DIR / "installers" / "arduino-cli",
+        SCRIPT_DIR / "bin",
+        Path(r"C:\Program Files\Git\cmd"),
+        Path(r"C:\Program Files\Git\bin"),
+        Path(r"C:\Program Files (x86)\Git\cmd"),
+    ]:
+        if candidate.is_dir():
+            extra_paths.append(str(candidate.resolve()))
+
+    curr_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join(extra_paths + ([curr_path] if curr_path else []))
+
+    # Point PLATFORMIO_CORE_DIR to project-local core
+    local_pio_core = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
+    if local_pio_core.is_dir():
+        env["PLATFORMIO_CORE_DIR"] = str(local_pio_core.resolve())
+
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+
+    return env
 
 
 def _shell_cd_command(kind: str, target: str) -> str:
@@ -737,7 +848,8 @@ class ProjectTerminalServer:
         pty = None
         ready_candidate = None
         try:
-            pty = PtyProcess.spawn(argv, cwd=self.target_dir, dimensions=(30, 120))
+            shell_env = _build_terminal_env(self.target_dir)
+            pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
             with session.lock:
                 session.pty = pty
             probe = ""
@@ -749,6 +861,8 @@ class ProjectTerminalServer:
                 if data:
                     if not is_current():
                         break
+                    if ready_candidate is None:
+                        ready_candidate = time.monotonic()
                     text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
                     session.append_history(text)
                     self.broadcast({"type": "output", "shell": sid, "data": text})

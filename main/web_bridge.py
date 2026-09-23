@@ -54,6 +54,7 @@ from main.core.config import (
     _load_raw_config, _save_raw_config,
     find_project_window, focus_project_window, set_active_sketch_dir,
     get_project_remembered_board, set_project_remembered_board,
+    get_reset_on_baud_change, set_reset_on_baud_change,
 )
 from main.core.file_utils import (
     get_sketch_files_fast, ensure_file_writable, get_project_build_cache_root,
@@ -245,6 +246,7 @@ class MCUWebBackendAPI:
         self.timestamp_enabled: bool = bool(config.get("timestamp_enabled", False))
         self.clear_console_on_action: bool = bool(config.get("clear_console_on_action", True))
         self.clear_serial_on_action: bool = bool(config.get("clear_serial_on_action", False))
+        self.reset_on_baud_change: bool = bool(get_reset_on_baud_change())
         try:
             raw_baud = int(config.get("baud_rate", 115200))
             self.current_baud = min(raw_baud, MAX_BAUD_RATE)
@@ -278,6 +280,12 @@ class MCUWebBackendAPI:
         self.serial_running = False
         self.serial_paused = False
         self._serial_lock = threading.Lock()
+        # Debounce token: incremented each time a reconnect is requested.
+        # Only the call whose token matches the latest wins; stale callers abort early.
+        self._serial_reconnect_token: int = 0
+        # Track the last (port, baud) for which a "connected" banner was printed.
+        # Prevents duplicate banners when multiple rapid reconnects land on the same pair.
+        self._last_serial_connection_key: Optional[tuple] = None
 
         # Telemetry worker (started via start_services() once UI is ready)
         # Use threading.Event so stop requests wake the sleeping loop immediately.
@@ -612,6 +620,13 @@ class MCUWebBackendAPI:
     def mark_modified(self, file_path: str, is_modified: bool = True):
         """Track dirty state of files."""
         self.modified_files[str(file_path)] = bool(is_modified)
+        if is_modified:
+            try:
+                _sketch_ram_cache.invalidate(Path(file_path))
+            except Exception:
+                pass
+            self.skip_compile = False
+            self.emit("skip_compile:availability", False)
 
     def set_active_file(self, file_path: str):
         """Set the active file path."""
@@ -1029,28 +1044,49 @@ class MCUWebBackendAPI:
         except Exception:
             return False
 
-    def check_can_skip_compile(self, board_name: str | None = None) -> bool:
-        """Check whether a precompiled firmware binary exists and source code has not changed."""
-        if not self.sketch_dir_path:
-            return False
+    def _needs_recompile(self, board_name: str | None = None) -> tuple[bool, str]:
+        """Check whether the active sketch needs recompilation for the target board.
+        Matches LATEST-WORKING-MCU- FLASHER contract:
+        Returns (recompile_needed: bool, reason: str).
+        """
         target_board = board_name or self.current_board
         if not target_board:
-            return False
+            return True, "no board selected"
+        if not self.sketch_dir_path:
+            return True, "no sketch folder loaded"
+
         try:
+            # 1. Check if firmware binary exists on disk
             bin_file = self._find_cached_firmware_binary(target_board)
             if bin_file is None:
-                return False
+                return True, "no firmware binary found for this board (build folder may have been cleaned)"
 
-            if not getattr(self, "_last_source_hash", "") or target_board != getattr(self, "_last_compiled_board", ""):
+            # 2. Check if cache exists and board matches
+            board_matches = (target_board == getattr(self, "_last_compiled_board", ""))
+            if not getattr(self, "_last_source_hash", "") or not board_matches:
                 self._load_compile_cache(target_board)
 
-            if not getattr(self, "_last_source_hash", "") or target_board != getattr(self, "_last_compiled_board", ""):
-                return False
+            cached_hash = getattr(self, "_last_source_hash", "")
+            if not cached_hash or target_board != getattr(self, "_last_compiled_board", ""):
+                return True, "no previous compile for this board"
 
+            # 3. Check for any dirty/unsaved buffers in Monaco
+            if any(self.modified_files.values()):
+                return True, "unsaved modifications in editor"
+
+            # 4. Hash actual source files on disk
             current_hash = self._hash_sources(target_board)
-            return current_hash == self._last_source_hash
-        except Exception:
-            return False
+            if current_hash != cached_hash:
+                return True, "source files have changed since this board was last compiled"
+
+            return False, "sources unchanged"
+        except Exception as e:
+            return True, f"cache check error: {e}"
+
+    def check_can_skip_compile(self, board_name: str | None = None) -> bool:
+        """Check whether a precompiled firmware binary exists and source code has not changed."""
+        needs_recomp, _ = self._needs_recompile(board_name)
+        return not needs_recomp
 
     def update_skip_compile_availability(self) -> None:
         """Evaluate whether skip compile is possible and notify the UI."""
@@ -1061,16 +1097,15 @@ class MCUWebBackendAPI:
 
     def check_can_skip_compile_for_upload(self, board_name: str | None = None) -> bool:
         """Synchronously check whether upload can skip compilation and flash directly."""
-        if not self.sketch_dir_path:
+        # Only skip compilation if user explicitly checked Skip Compile
+        if not getattr(self, "skip_compile", False):
             return False
-        target_board = board_name or self.current_board
-        if not target_board:
-            return False
-        try:
-            bin_file = self._find_cached_firmware_binary(target_board)
-            if bin_file is None:
-                return False
 
+        target_board = board_name or self.current_board
+        if not target_board or not self.sketch_dir_path:
+            return False
+
+        try:
             binfo = self._resolve_board_info(target_board)
             platform = str(binfo.get("platform", "")).lower()
             if platform in ("espressif32", "espressif8266"):
@@ -1078,22 +1113,10 @@ class MCUWebBackendAPI:
                     self.sketch_dir_path, target_board, platform
                 )
                 if fast_bins is None:
-                    # Auxiliary binaries (bootloader/partitions) or sources missing
                     return False
 
-            if not getattr(self, "_last_source_hash", "") or target_board != getattr(self, "_last_compiled_board", ""):
-                self._load_compile_cache(target_board)
-
-            board_matches = (target_board == getattr(self, "_last_compiled_board", ""))
-            if not board_matches:
-                return False
-
-            skip_comp = bool(getattr(self, "skip_compile", False))
-            if skip_comp:
-                return True
-
-            current_hash = self._hash_sources()
-            return current_hash == getattr(self, "_last_source_hash", "")
+            needs_recomp, _ = self._needs_recompile(target_board)
+            return not needs_recomp
         except Exception:
             return False
 
@@ -1908,7 +1931,8 @@ class MCUWebBackendAPI:
 
     def on_editor_content_change(self):
         """Callback invoked by the Monaco Editor iframe on buffer content changes."""
-        pass
+        self.skip_compile = False
+        self.emit("skip_compile:availability", False)
 
     def open_project(self, folder_path: str, active_file: Optional[str] = None) -> dict[str, Any]:
         """Open and switch to an existing sketch directory or code file."""
@@ -2280,8 +2304,18 @@ class MCUWebBackendAPI:
         save_gui_config(cfg)
 
         if not self.is_busy:
+            self._serial_reconnect_token += 1
+            token = self._serial_reconnect_token
+
+            def _switch_port_worker():
+                # Debounce: coalesce rapid port/baud changes within 200ms
+                time.sleep(0.2)
+                if self._serial_reconnect_token != token:
+                    return
+                self._start_serial_monitor()
+
             threading.Thread(
-                target=self._start_serial_monitor, name="MCU_SwitchPort", daemon=True
+                target=_switch_port_worker, name="MCU_SwitchPort", daemon=True
             ).start()
 
     def select_board(self, board_name: str):
@@ -2301,8 +2335,6 @@ class MCUWebBackendAPI:
             except Exception:
                 pass
         self._load_compile_cache(board_name)
-        can_skip = self.check_can_skip_compile(board_name)
-        self.skip_compile = bool(can_skip)
         self.emit("board:selected", {"board_name": board_name})
         self.update_skip_compile_availability()
 
@@ -2327,16 +2359,43 @@ class MCUWebBackendAPI:
                     break
         return results
 
+    def set_reset_on_baud_change(self, enabled: bool) -> None:
+        """Update whether MCU resets via DTR/RTS when baud rate changes."""
+        self.reset_on_baud_change = bool(enabled)
+
     def set_baud_rate(self, baud: int):
         """Change serial communication baud rate, capped at MAX_BAUD_RATE (921600)."""
-        self.current_baud = min(int(baud), MAX_BAUD_RATE)
+        new_baud = min(int(baud), MAX_BAUD_RATE)
+        old_baud = getattr(self, "current_baud", 115200)
+        baud_changed = (old_baud != new_baud)
+        self.current_baud = new_baud
         cfg = load_gui_config()
         cfg["baud_rate"] = self.current_baud
         save_gui_config(cfg)
 
+        # If the baud rate did not change and the connection is active, avoid reconnect spam
+        if not baud_changed and self.serial_running and self._serial_conn and self._serial_conn.is_open:
+            return
+
         if not self.is_busy:
+            should_reset = baud_changed and getattr(self, "reset_on_baud_change", False)
+
+            # Bump the debounce token so any pending _switch_baud_worker aborts
+            self._serial_reconnect_token += 1
+            token = self._serial_reconnect_token
+
+            def _switch_baud_worker():
+                # Debounce: wait 200ms then check if a newer request superseded this one
+                time.sleep(0.2)
+                if self._serial_reconnect_token != token:
+                    return  # A more-recent baud/port change will handle reconnect
+                self._start_serial_monitor()
+                if should_reset:
+                    time.sleep(0.15)
+                    self.pulse_dtr_reset()
+
             threading.Thread(
-                target=self._start_serial_monitor, name="MCU_SwitchBaud", daemon=True
+                target=_switch_baud_worker, name="MCU_SwitchBaud", daemon=True
             ).start()
 
     # ──────────────────────────────────────────────────────────
@@ -2381,11 +2440,17 @@ class MCUWebBackendAPI:
                     "port": self.current_port,
                     "baud": self.current_baud,
                 })
-                self.emit("serial:log", {
-                    "text": f"--- Serial Monitor connected to {self.current_port} @ {self.current_baud} baud ---",
-                    "tag": "info",
-                    "newline": True,
-                })
+                # Only log the "connected" banner when the (port, baud) pair actually changes.
+                # This deduplications the banner when multiple rapid reconnects land on the
+                # same pair (e.g. board-default baud + sketch-detected baud both == 115200).
+                connection_key = (self.current_port, self.current_baud)
+                if connection_key != getattr(self, "_last_serial_connection_key", None):
+                    self._last_serial_connection_key = connection_key
+                    self.emit("serial:log", {
+                        "text": f"--- Serial Monitor connected to {self.current_port} @ {self.current_baud} baud ---",
+                        "tag": "info",
+                        "newline": True,
+                    })
             except Exception as e:
                 self.serial_running = False
                 self.emit("serial:status", {
@@ -2448,6 +2513,73 @@ class MCUWebBackendAPI:
                 "port": self.current_port,
                 "baud": self.current_baud,
             })
+
+    def pulse_dtr_reset(self) -> None:
+        """Issue a brief, silent reset pulse on the live serial connection.
+
+        This reboots the MCU immediately after an upload completes, so the
+        sketch starts running and boot logs appear in the Serial Monitor without
+        requiring any user action.  The pulse is completely silent — no console
+        messages, no busy-flag changes, no phase transitions.
+
+        Safe to call at any time: silently no-ops if the serial port is not
+        open or if a destructive operation (upload / flash / reset) is active.
+        """
+        def _pulse():
+            # Don't interfere with an ongoing operation.
+            if getattr(self, "is_busy", False):
+                return
+
+            # Wait up to 2.0s for the serial monitor to finish connecting if it was just restarted
+            conn = None
+            for _ in range(20):
+                if getattr(self, "is_busy", False):
+                    return
+                with self._serial_lock:
+                    if self._serial_conn and self._serial_conn.is_open:
+                        conn = self._serial_conn
+                        break
+                time.sleep(0.1)
+
+            if conn is None:
+                return
+
+            try:
+                binfo = self._resolve_board_info(getattr(self, "current_board", ""))
+                platform = str(binfo.get("platform", "")).lower()
+                is_uno = ("avr" in platform)
+                is_arm = platform in ("ststm32", "raspberrypi", "ch32v", "samd")
+
+                if is_uno:
+                    conn.rts = False
+                    conn.dtr = False
+                    time.sleep(0.05)
+                    conn.dtr = True
+                    time.sleep(0.10)
+                    conn.dtr = False
+                    time.sleep(0.05)
+                elif is_arm:
+                    conn.dtr = False
+                    conn.rts = False
+                    time.sleep(0.05)
+                    conn.dtr = True
+                    time.sleep(0.05)
+                    conn.dtr = False
+                    time.sleep(0.05)
+                else:
+                    # ESP32 / ESP8266 auto-reset transistor circuit:
+                    # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
+                    # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
+                    conn.dtr = False
+                    conn.rts = True
+                    time.sleep(0.15)
+                    conn.rts = False
+                    conn.dtr = False
+                    time.sleep(0.05)
+            except Exception:
+                pass  # Port may have been closed or disconnected mid-pulse; ignore silently.
+
+        threading.Thread(target=_pulse, name="MCU_SilentDTR", daemon=True).start()
 
     def serial_send(self, text: str, line_ending: str = "both"):
         """Transmit text command to the connected microcontroller."""
@@ -2816,9 +2948,6 @@ class MCUWebBackendAPI:
                     "building" in low or
                     "checking size" in low or
                     "retrieving maximum" in low or
-                    "creating" in low or
-                    "created" in low or
-                    "successfully created" in low or
                     "took" in low or
                     low.startswith("platform:") or
                     low.startswith("hardware:") or
@@ -3005,26 +3134,6 @@ class MCUWebBackendAPI:
                         else:
                             _prog_text = "  ⚙ Building..."
                             _prog_tag = "info"
-                    elif "creating" in low or ("created" in low and "successfully" not in low):
-                        match = re.search(r'(?:creating|created)\s+(.+)$', line_clean, re.IGNORECASE)
-                        if match:
-                            raw_item = match.group(1).strip().strip('"\'')
-                            if "/" in raw_item or "\\" in raw_item:
-                                item_name = Path(raw_item).name
-                                _prog_text = f"  ⚙ Creating {item_name}..."
-                            else:
-                                _prog_text = f"  ⚙ {line_clean.strip()}"
-                        else:
-                            _prog_text = f"  ⚙ {line_clean.strip()}"
-                        _prog_tag = "info"
-                    elif "successfully created" in low:
-                        match = re.search(r'successfully\s+created\s+(.+)$', line_clean, re.IGNORECASE)
-                        if match:
-                            target_img = match.group(1).strip().rstrip(".")
-                            _prog_text = f"  ✔ Successfully created {target_img}."
-                        else:
-                            _prog_text = f"  ✔ {line_clean.strip()}"
-                        _prog_tag = "success"
 
                     if _prog_text and _prog_text != _last_progress_text[0]:
                         _ensure_post_deps_divider()
@@ -3113,6 +3222,9 @@ class MCUWebBackendAPI:
                     pt_file = target_env_dir / "partitions.bin"
                     if fw_file.exists():
                         fw_kb = round(fw_file.stat().st_size / 1024, 1)
+                        binfo = self._resolve_board_info(self.current_board)
+                        chip_label = str(binfo.get("board", "")).upper() or self.current_board
+                        self.emit("console:log", {"text": f"  ✔ Successfully created {chip_label} image ({fw_file.name})", "tag": "success", "newline": True})
                         self.emit("console:log", {"text": f"  📦 Binary artifact: {fw_file.name} ({fw_kb} KB) ready for upload", "tag": "success", "newline": True})
                     if bl_file.exists() and pt_file.exists():
                         self.emit("console:log", {"text": "  📦 Bootloader & partitions verified OK", "tag": "dim", "newline": True})
@@ -3694,44 +3806,66 @@ class MCUWebBackendAPI:
 
         return False
 
-    def _is_port_present(self, port: str | None) -> bool:
+    def _is_port_present(self, port: str | None = None) -> bool:
         """Check if the given COM port is currently enumerated by the operating system."""
-        if not port:
-            return False
-        target = str(port).strip().upper()
+        target = str(port or getattr(self, "current_port", "") or "").strip().upper()
         if not target:
             return False
+        match = re.match(r"(COM\d+|/dev/\S+)", target)
+        dev_target = match.group(1) if match else target
         try:
             for candidate in serial.tools.list_ports.comports():
-                if str(candidate.device or "").upper() == target:
+                c_dev = str(candidate.device or "").strip().upper()
+                if c_dev == target or c_dev == dev_target:
                     return True
             return False
         except Exception:
             return True
 
-    def _is_native_usb_port(self) -> bool:
-        """Detect if the current board/port uses a native USB-CDC / OTG connection."""
-        board_name = str(self.current_board or "")
-        board_info = dict(self._resolve_board_info(board_name) or {})
-        port = str(self.current_port or "")
-        port_label = port
+    def _is_native_usb_port(self, port: str | None = None) -> bool:
+        """Detect if the specified or current port uses a native USB-CDC / OTG connection.
+        Genuine Espressif native USB controllers use VID 0x303A. External USB-to-UART bridge
+        chips (CH34x, CP210x, FTDI) use standard DTR/RTS auto-reset circuits and must NEVER
+        be configured with 'usb-reset'.
+        """
+        target_str = str(port or getattr(self, "current_port", "") or "").strip().upper()
+        if not target_str:
+            return False
+        match = re.match(r"(COM\d+|/dev/\S+)", target_str)
+        target_dev = match.group(1) if match else target_str
+
         try:
             for p in serial.tools.list_ports.comports():
-                if str(p.device or "").upper() == port.upper():
-                    port_label = f"{p.device} - {p.description}"
-                    break
+                dev_str = str(p.device or "").strip().upper()
+                if dev_str == target_dev or dev_str == target_str:
+                    # 1. Espressif native USB silicon always uses VID 0x303A (12346 decimal)
+                    # (e.g. ESP32-S3 USB Serial/JTAG PID 0x1001, USB OTG PID 0x1002, ESP32-S2 PID 0x0002)
+                    vid = getattr(p, "vid", None)
+                    desc = (str(getattr(p, "description", "") or "") + " " + str(getattr(p, "hwid", "") or "")).lower()
+                    if vid == 0x303A or "vid_303a" in desc or "vid:303a" in desc or "vid:pid=303a" in desc:
+                        return True
+
+                    # 2. Known external USB-to-UART bridge manufacturers:
+                    # 0x1A86: WCH (CH340, CH341, CH342, CH343, CH9102)
+                    # 0x10C4: Silicon Labs (CP2101..CP2108)
+                    # 0x0403: FTDI
+                    # 0x067B: Prolific (PL2303)
+                    # 0x2341, 0x2A03: Arduino / Atmel
+                    if vid in (0x1A86, 0x10C4, 0x0403, 0x067B, 0x2341, 0x2A03):
+                        return False
+
+                    uart_keywords = ("ch340", "ch341", "ch342", "ch343", "ch910", "cp210", "silicon labs", "ftdi", "wch", "prolific", "pl2303", "uart")
+                    if any(k in desc for k in uart_keywords):
+                        return False
+
+                    native_keywords = ("esp32-s3", "esp32s3", "esp32-s2", "jtag", "usb bridge", "otg", "native", "cdc", "usb debug")
+                    if any(k in desc for k in native_keywords):
+                        return True
+                    return False
         except Exception:
             pass
-        low_label = port_label.lower()
-        native_keywords = ("esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug")
-        uart_keywords = ("ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch")
-        has_native = any(k in low_label for k in native_keywords)
-        has_uart = any(k in low_label for k in uart_keywords)
-        p_board = board_info.get("board", "")
-        return bool(
-            (has_native and not has_uart)
-            or ((is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart)
-        )
+
+        return False
 
     def _wait_for_port_reconnect(self, port: str, timeout: float = 10.0) -> bool:
         """Wait up to timeout seconds for a disconnected COM port to reappear."""
@@ -3934,6 +4068,10 @@ class MCUWebBackendAPI:
             "connection timed out", "timed out after", "not responding",
             "no more data to read from the serial port",
             "a device attached to the system is not functioning",
+            "write timeout", "serial exception", "serialexception",
+            "cannot configure port", "clearcommerror", "setcommstate",
+            "getcommstate", "timeout", "serial timeout", "failed to write",
+            "fatal error occurred", "fatal error",
         )
 
         chip_info: dict[str, str] = {}
@@ -4231,14 +4369,18 @@ class MCUWebBackendAPI:
                     and verified_images >= expected_image_count
                 )
 
+                cli_syntax_error = any(
+                    err_token in joined for err_token in (
+                        "unrecognized arguments", "invalid choice",
+                        "usage: esptool", "no such option",
+                    )
+                )
+
                 is_conn_failure = (
                     rc != 0
                     and not attempt_connected
                     and not completed_images
-                    and (
-                        timed_out
-                        or any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES)
-                    )
+                    and not cli_syntax_error
                 )
 
                 if is_conn_failure:
@@ -4254,6 +4396,8 @@ class MCUWebBackendAPI:
                                 "no more data to read from the serial port",
                                 "a device attached to the system is not functioning",
                                 "could not open port", "port is busy",
+                                "cannot configure port", "write timeout",
+                                "permissionerror", "serial exception",
                             )
                         )
                         if port_reenumerating and not self._is_port_present(port):
@@ -4261,13 +4405,13 @@ class MCUWebBackendAPI:
                                 error_message = (
                                     f"MCU disconnected during upload ({port} is no longer available)"
                                 )
-                                self._last_fast_upload_failure_kind = "flash"
+                                self._last_fast_upload_failure_kind = "connection"
                                 self._record_fast_upload_diagnostic(
                                     port, attempt_cmd, return_code=rc,
                                     output_lines=output_lines, error=error_message,
                                 )
                                 return False, error_message, _connect_retry_count + 1
-                        time.sleep(0.75 if port_reenumerating else 0.25)
+                        time.sleep(0.75 if port_reenumerating else 0.4)
                         continue
                     connection_poll_count[0] = _MAX_CONNECT_RETRIES
 
@@ -4332,11 +4476,41 @@ class MCUWebBackendAPI:
                     self._last_fast_upload_failure_kind = ""
                     return True, "", _connect_retry_count + 1
 
-                detail = next(
-                    (line.strip() for line in reversed(output_lines)
-                     if line.strip() and not line.lower().startswith("hint:")),
-                    "esptool exited with a non-zero status",
-                )
+                detail = ""
+                # First pass: find explicit ERROR: / fatal error / Exception lines
+                for line in output_lines:
+                    s = line.strip()
+                    low = s.lower()
+                    if low.startswith("error:") or "fatal error" in low or "exception" in low:
+                        clean = re.sub(r"^(?:ERROR:\s*)?(?:A fatal error occurred:\s*)?", "", s, flags=re.IGNORECASE).strip()
+                        if clean and not clean.lower().startswith("note:"):
+                            detail = clean
+                            break
+                if not detail:
+                    # Second pass: reverse search skipping non-informative URLs/headers
+                    for line in reversed(output_lines):
+                        s = line.strip()
+                        low = s.lower()
+                        if not s:
+                            continue
+                        if (low.startswith("hint:")
+                                or low.startswith("note:")
+                                or "troubleshooting" in low
+                                or low.startswith("for troubleshooting steps")
+                                or low.startswith("connecting")
+                                or low.startswith("serial port")
+                                or low.startswith("esptool v")
+                                or low.startswith("chip is")
+                                or low.startswith("features:")
+                                or low.startswith("crystal is")
+                                or low.startswith("mac:")
+                                or low.startswith("http://")
+                                or low.startswith("https://")):
+                            continue
+                        detail = s
+                        break
+                if not detail:
+                    detail = "esptool exited with a non-zero status"
                 detail = detail[:300]
                 if timed_out:
                     error_message = f"esptool connection timed out after {_WATCHDOG_SECS}s"
@@ -4347,6 +4521,8 @@ class MCUWebBackendAPI:
                     self._last_fast_upload_failure_kind = "connection"
                 elif attempt_connected or completed_images:
                     self._last_fast_upload_failure_kind = "flash"
+                elif not cli_syntax_error:
+                    self._last_fast_upload_failure_kind = "connection"
                 else:
                     self._last_fast_upload_failure_kind = "tool"
 
@@ -4441,19 +4617,10 @@ class MCUWebBackendAPI:
                         detected_symlinks.append(f"symlink://{item.as_posix()}")
                         break
 
+        detected_symlinks.sort()
         lib_deps_str = ""
         if detected_symlinks:
             lib_deps_str = "lib_deps =\n" + "\n".join(f"    {s}" for s in detected_symlinks) + "\n"
-            self.emit("console:log", {
-                "text": f"  📝 Adding dependencies: {', '.join(detected_symlinks)}",
-                "tag": "warning",
-                "newline": True
-            })
-            self.emit("console:log", {
-                "text": "  Rebuilding lib_deps in platformio.ini...",
-                "tag": "info",
-                "newline": True
-            })
 
         safe_monitor_baud = min(self.current_baud, MAX_BAUD_RATE)
         ini_content = (
@@ -4471,9 +4638,51 @@ class MCUWebBackendAPI:
             f"{lib_deps_str}"
         )
         ini_file = cache_root / "platformio.ini"
+        old_content = ""
+        if ini_file.is_file():
+            try:
+                old_content = ini_file.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                old_content = ""
+
+        # Normalize line endings and whitespace to compare content accurately
+        def _norm_ini(text: str) -> str:
+            return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").strip().splitlines())
+
+        # If platformio.ini already exists and has identical contents, DO NOT rewrite it!
+        # Touching platformio.ini updates its modification timestamp (mtime), which causes
+        # PlatformIO/SCons to invalidate all pre-compiled library and framework objects
+        # (.o and .a files) and forces a full re-compilation of all 40+ dependency files.
+        if old_content and _norm_ini(old_content) == _norm_ini(ini_content):
+            return
+
+        old_symlinks = set(re.findall(r"symlink://[^\r\n]+", old_content))
+        new_symlinks = set(detected_symlinks)
+        added_symlinks = new_symlinks - old_symlinks
+        if added_symlinks:
+            self.emit("console:log", {
+                "text": f"  📝 Adding dependencies: {', '.join(sorted(added_symlinks))}",
+                "tag": "warning",
+                "newline": True
+            })
+            self.emit("console:log", {
+                "text": "  Rebuilding lib_deps in platformio.ini...",
+                "tag": "info",
+                "newline": True
+            })
+        elif not old_content and detected_symlinks:
+            self.emit("console:log", {
+                "text": f"  📝 Adding dependencies: {', '.join(detected_symlinks)}",
+                "tag": "warning",
+                "newline": True
+            })
+
+        ensure_file_writable(ini_file)
         ini_file.write_text(ini_content, encoding="utf-8")
 
-        if "upload_protocol = esptool" in ini_content or platform in ("espressif32", "espressif8266"):
+        if ("upload_protocol = esptool" in ini_content and "upload_protocol = esptool" not in old_content) or (
+            old_content and f"platform = {platform}" not in old_content
+        ):
             self.emit("console:log", {
                 "text": "  📝 Serial upload protocol updated; PlatformIO will reconcile the selected board incrementally.",
                 "tag": "info",
@@ -4550,30 +4759,6 @@ class MCUWebBackendAPI:
         if configured_jobs is not None and str(configured_jobs).isdigit() and int(configured_jobs) > 0:
             return int(configured_jobs)
         return get_optimal_compiler_jobs()
-
-    def _is_native_usb_port(self) -> bool:
-        port_label = str(getattr(self, "current_port", "") or "")
-        board_name = str(getattr(self, "current_board", "") or "")
-        binfo = self._resolve_board_info(board_name)
-        low_label = port_label.lower()
-        native_keywords = ("esp32-s3", "esp32s3", "jtag", "usb bridge", "otg", "native", "usb serial device", "usb serial", "cdc", "usb debug")
-        uart_keywords = ("ch340", "ch341", "ch342", "ch343", "cp210", "silicon labs", "ftdi", "wch")
-        has_native = any(k in low_label for k in native_keywords)
-        has_uart = any(k in low_label for k in uart_keywords)
-        p_board = str(binfo.get("board", ""))
-        return bool(
-            (has_native and not has_uart)
-            or ((is_s3_board(p_board) or "s3" in board_name.lower()) and not has_uart)
-        )
-
-    def _is_port_present(self, port: str | None = None) -> bool:
-        target = port or self.current_port
-        if not target:
-            return False
-        available = [p.device.upper() for p in serial.tools.list_ports.comports()]
-        match = re.match(r"(COM\d+|/dev/\S+)", str(target).upper())
-        dev = match.group(1) if match else str(target).upper()
-        return dev in available
 
     _board_cache_key_memo: dict[str, str] = {}
 
@@ -4755,7 +4940,7 @@ class MCUWebBackendAPI:
             or "node" in board_name.lower()
         )
         is_s3 = is_s3_board(board_id)
-        is_native = bool(is_s3 and self._is_native_usb_port())
+        is_native = bool(is_s3 and self._is_native_usb_port(getattr(self, "current_port", None)))
         flash_size, has_psram = normalized_board_memory_options(info)
         memory_type = normalized_board_memory_type(info)
         flash_mode = normalized_board_flash_mode(info)
@@ -5055,7 +5240,7 @@ class MCUWebBackendAPI:
         self.emit("console:log", {"text": f"  🔄 Triggering hardware reset on {port}...", "tag": "info", "newline": True})
         try:
             # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
-            if not is_uno and (self._is_native_usb_port() or platform in ("raspberrypi", "samd")):
+            if not is_uno and (self._is_native_usb_port(port) or platform in ("raspberrypi", "samd")):
                 try:
                     with serial.Serial(port, baudrate=1200, timeout=0.1) as c1200:
                         c1200.dtr = False
@@ -5204,23 +5389,40 @@ class MCUWebBackendAPI:
                     })
                     break
 
-        if not can_skip:
-            skip_comp = getattr(self, "skip_compile", False)
-            board_matches = (self.current_board == getattr(self, "_last_compiled_board", ""))
-            can_skip = cached_binary_exists and (
-                (skip_comp and board_matches)
-                or (board_matches and current_hash == getattr(self, "_last_source_hash", ""))
-            )
-        if can_skip:
+        # ── Smart compile check (upload path) matching LATEST-WORKING-MCU- FLASHER ──
+        need_compile = True
+        skip_comp = bool(getattr(self, "skip_compile", False))
+        bin_file = self._find_cached_firmware_binary(self.current_board)
+        has_prior_build = (bin_file is not None)
+
+        if skip_comp and has_prior_build:
+            recompile_needed, reason = self._needs_recompile(self.current_board)
+            if not recompile_needed:
+                need_compile = False
+                self.emit("console:log", {
+                    "text": "  ✔ Sources unchanged — skipping recompile",
+                    "tag": "success",
+                    "newline": True,
+                })
+            else:
+                self.emit("console:log", {
+                    "text": f"  🔄 Recompile needed ({reason})",
+                    "tag": "warning",
+                    "newline": True,
+                })
+        elif not skip_comp:
+            pass
+
+        if not need_compile:
             cfg = load_gui_config()
             if cfg.get("clear_console_on_action", True):
                 self.emit("console:clear", None)
             if cfg.get("clear_serial_on_action", False):
                 self.emit("serial:clear", None)
             self.emit("console:log", {
-                "text": "⚡ Source unchanged & binary cached — skipping compile, proceeding directly to upload...",
+                "text": "⚡ Sources unchanged & binary cached — proceeding directly to upload...",
                 "tag": "info",
-                "newline": True
+                "newline": True,
             })
         else:
             t_watch = threading.Thread(target=_detach_watchdog, daemon=True)
@@ -5393,7 +5595,7 @@ class MCUWebBackendAPI:
                 )
 
             if fast_bins is not None:
-                if (is_s3_board(str(binfo.get("board", ""))) or "s3" in board_name.lower()) and self._is_native_usb_port():
+                if (is_s3_board(str(binfo.get("board", ""))) or "s3" in board_name.lower()) and self._is_native_usb_port(port):
                     fast_bins["before"] = "usb-reset"
                 self.emit("console:log", {"text": "  ⚡ Fast upload: polling the bootloader now…", "tag": "info", "newline": True})
                 self.emit("console:log", {"text": f"  ⚙ Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
@@ -5445,6 +5647,12 @@ class MCUWebBackendAPI:
                             "tag": "success",
                             "newline": True,
                         })
+                        if any(token in str(fast_error).lower() for token in ("not functioning", "write timeout", "cannot configure port", "permissionerror")):
+                            self.emit("console:log", {
+                                "text": "  💡 USB driver stalled (Windows error 31): Please unplug your board's USB cable, plug it back in, and retry.",
+                                "tag": "warning",
+                                "newline": True,
+                            })
                         platform_str = str(binfo.get("platform", "")).lower()
                         if platform_str == "espressif8266":
                             self.emit("console:log", {"text": "  💡 ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.", "tag": "info", "newline": True})
@@ -6900,6 +7108,10 @@ class MCUWebBackendAPI:
                         "device not found", "permissionerror", "access is denied",
                         "port is busy", "could not open port", "permission denied",
                         "connection timed out", "timed out after", "not responding",
+                        "no more data to read from the serial port",
+                        "a device attached to the system is not functioning",
+                        "write timeout", "serial exception", "cannot configure port",
+                        "clearcommerror", "setcommstate", "getcommstate",
                     )
                     self.emit("console:log", {"text": f"  Executing soft reset upload on {port}...", "tag": "info", "newline": True})
 

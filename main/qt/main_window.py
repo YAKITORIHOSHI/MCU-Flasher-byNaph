@@ -371,17 +371,24 @@ class MCUMainWindow(QMainWindow):
         central_layout.setSpacing(0)
 
         # ── Horizontal splitter: main area | AI side panel ────────────────────
+        from main.core.config import _load_raw_config
+        try:
+            _cfg = _load_raw_config()
+            g_accel = _cfg.get("shared", {}).get("graphics_acceleration", "ON") == "ON"
+        except Exception:
+            g_accel = True
+
         self._h_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._h_splitter.setHandleWidth(6)
         self._h_splitter.setChildrenCollapsible(False)
-        self._h_splitter.setOpaqueResize(True)
+        self._h_splitter.setOpaqueResize(g_accel)
         central_layout.addWidget(self._h_splitter, stretch=1)
 
         # ── Main vertical splitter: Editor | Bottom tabs ──────────────────────
         self._v_splitter = QSplitter(Qt.Orientation.Vertical)
         self._v_splitter.setHandleWidth(6)
         self._v_splitter.setChildrenCollapsible(False)
-        self._v_splitter.setOpaqueResize(True)
+        self._v_splitter.setOpaqueResize(g_accel)
         self._h_splitter.addWidget(self._v_splitter)
 
         # ── Top Editor Area (Host for Docked Editor or Detached Placeholder) ──
@@ -593,6 +600,19 @@ class MCUMainWindow(QMainWindow):
         sig_bus.file_reload_requested.connect(self._shortcut_reload_file)
         sig_bus.modify_files_requested.connect(self._open_modify_files_dialog)
 
+        # Settings and theme signals
+        sig_bus.theme_changed.connect(self._on_theme_changed)
+        if hasattr(sig_bus, "graphics_accel_changed"):
+            sig_bus.graphics_accel_changed.connect(self._on_graphics_accel_changed)
+
+    @Slot(bool)
+    def _on_graphics_accel_changed(self, enabled: bool) -> None:
+        """Update live splitter resize behavior dynamically."""
+        if hasattr(self, "_h_splitter") and self._h_splitter:
+            self._h_splitter.setOpaqueResize(enabled)
+        if hasattr(self, "_v_splitter") and self._v_splitter:
+            self._v_splitter.setOpaqueResize(enabled)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Slots
     # ─────────────────────────────────────────────────────────────────────────
@@ -671,28 +691,44 @@ class MCUMainWindow(QMainWindow):
                 phase in ("reset", "resetting", "hard_reset", "soft_reset")
                 or op in ("reset", "hard_reset", "soft_reset")
             )
-            is_build_or_flash = (
-                phase in ("compile", "upload", "flash", "flashing")
-                or op in ("compile", "upload", "flash")
+            is_compile_phase = (
+                phase in ("compile", "compiling")
+                or (op == "compile" and phase not in ("flash", "flashing", "upload"))
+            )
+            is_upload_or_flash = (
+                (phase in ("flash", "flashing", "upload") or (op in ("upload", "flash") and phase != "compile"))
+                and not is_compile_phase
             )
 
             # Switch to Build Console when a build/upload or reset starts
-            if is_build_or_flash or is_reset:
+            if is_compile_phase or is_upload_or_flash or is_reset:
                 if not self._monitors_pane_visible:
                     self.toggle_monitors_pane()
-                self._bottom_tabs.setCurrentWidget(self._console_container)
+                if not getattr(self, "_active_operation_started", False) or is_upload_or_flash or is_reset:
+                    self._bottom_tabs.setCurrentWidget(self._console_container)
+                    self._active_operation_started = True
 
-            # Disable Serial Monitor during flash or reset
-            if is_reset or phase in ("flash", "flashing", "upload") or op in ("flash", "upload", "reset", "hard_reset", "soft_reset"):
-                serial_idx = self._bottom_tabs.indexOf(self._serial_panel)
+            # Phase-aware Serial Monitor tab accessibility:
+            # During compile or compile-phase, the Serial Monitor tab MUST remain active and accessible.
+            # It should ONLY be disabled during actual uploading/flashing write operations or hardware resets.
+            serial_idx = self._bottom_tabs.indexOf(self._serial_panel)
+            if is_upload_or_flash or is_reset:
+                if self._bottom_tabs.currentWidget() == self._serial_panel:
+                    self._bottom_tabs.setCurrentWidget(self._console_container)
                 if serial_idx >= 0:
                     self._bottom_tabs.setTabEnabled(serial_idx, False)
                 if hasattr(self, "_serial_panel") and self._serial_panel:
                     self._serial_panel.setEnabled(False)
+            elif is_compile_phase:
+                if serial_idx >= 0:
+                    self._bottom_tabs.setTabEnabled(serial_idx, True)
+                if hasattr(self, "_serial_panel") and self._serial_panel:
+                    self._serial_panel.setEnabled(True)
         else:
             self._status_label.setText("Ready")
             self._progress_bar.setVisible(False)
             self._progress_bar.setRange(0, 0)
+            self._active_operation_started = False
 
             # Re-enable Serial Monitor tab and panel
             serial_idx = self._bottom_tabs.indexOf(self._serial_panel)
@@ -708,6 +744,12 @@ class MCUMainWindow(QMainWindow):
             if prev_op in ("upload", "flash", "hard_reset", "soft_reset", "reset") and is_success:
                 QTimer.singleShot(500, self._focus_serial_monitor)
 
+            # After an upload/flash, once the Serial Monitor tab is focused, issue
+            # a silent DTR pulse to reboot the MCU so its boot logs and sketch
+            # output appear immediately — no manual Reset button press needed.
+            if prev_op in ("upload", "flash") and is_success:
+                QTimer.singleShot(700, self._post_upload_dtr_pulse)
+
     def _focus_serial_monitor(self) -> None:
         """Switch bottom tab to Serial Monitor and set focus (e.g. after upload completes)."""
         if getattr(self, "_active_operation", None) is not None:
@@ -717,6 +759,21 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setCurrentWidget(self._serial_panel)
         if hasattr(self._serial_panel, "setFocus"):
             self._serial_panel.setFocus()
+
+    def _post_upload_dtr_pulse(self) -> None:
+        """Issue a silent DTR reset pulse after an upload so the MCU starts immediately.
+
+        Only fires when:
+        - No new operation has started since the upload completed (rapid-action guard).
+        - The Serial Monitor tab is currently the visible bottom tab.
+        - The backend serial connection is open.
+        """
+        if getattr(self, "_active_operation", None) is not None:
+            return  # A new operation started during the 700ms delay — abort.
+        if self._bottom_tabs.currentWidget() is not self._serial_panel:
+            return  # User navigated away — skip the pulse.
+        if self._backend:
+            self._backend.pulse_dtr_reset()
 
     @Slot(dict)
     def _on_console_progress(self, payload: dict) -> None:
@@ -827,13 +884,17 @@ class MCUMainWindow(QMainWindow):
 
     def _shortcut_compile(self) -> None:
         if self._backend and not self._backend.is_busy:
-            self._editor_panel.trigger_save_all()
-            self._backend.compile_sketch()
+            if hasattr(self, "_editor_panel") and self._editor_panel:
+                self._editor_panel.trigger_save_all(callback=self._backend.compile_sketch)
+            else:
+                self._backend.compile_sketch()
 
     def _shortcut_upload(self) -> None:
         if self._backend and not self._backend.is_busy:
-            self._editor_panel.trigger_save_all()
-            self._backend.upload_sketch()
+            if hasattr(self, "_editor_panel") and self._editor_panel:
+                self._editor_panel.trigger_save_all(callback=self._backend.upload_sketch)
+            else:
+                self._backend.upload_sketch()
 
     def _shortcut_save(self) -> None:
         self._trigger_temporary_action("Saving", 700)
@@ -1119,6 +1180,7 @@ class MCUMainWindow(QMainWindow):
                     "tag": "info",
                     "newline": True,
                 })
+            self._backend.update_skip_compile_availability()
 
             # Load active file into Monaco after a short delay to let Qt initialize
             QTimer.singleShot(800, self._load_initial_file)
@@ -1188,48 +1250,108 @@ class MCUMainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # ── Read current backend operation state ─────────────────────────
+        phase = getattr(self._backend, "_current_op_phase", None) if self._backend else None
+        op    = getattr(self._backend, "active_operation",   None) if self._backend else None
+        kind  = getattr(self._backend, "_active_reset_kind", None) if self._backend else None
+
+        # Destructive phases that must NEVER be interrupted.
+        # "compiling" alone (pure compile, not the compile step of an upload)
+        # is NOT in this set — it's safe to cancel.
+        DESTRUCTIVE_PHASES = {"flashing", "writing", "erasing", "resetting", "cleaning"}
+        DESTRUCTIVE_OPS    = {"flash", "reset", "clean"}
+
+        # ── Framework / toolchain downloads (flagged by bootstrap module) ─
         if getattr(self._backend, "_framework_download_active", False):
             QMessageBox.warning(
                 self,
-                "Framework Download in Progress",
-                "A critical framework/tool download is currently in progress. "
-                "Closing the application now may corrupt your PlatformIO core installation.\n\n"
-                "Please wait for the download to finish."
+                "Cannot Close — Download In Progress",
+                "A critical toolchain / framework download is currently running.\n\n"
+                "Closing the app now may corrupt the PlatformIO core installation.\n"
+                "Please wait for the download to complete before exiting.",
             )
             event.ignore()
             return
 
         if self._backend and self._backend.is_busy:
             proc = getattr(self._backend, "_active_process", None)
-            phase = getattr(self._backend, "_current_op_phase", None)
-            kind = getattr(self._backend, "_active_reset_kind", None)
-            op = getattr(self._backend, "active_operation", None)
 
-            # Auto-recover: if no process is actually running and not in flash/reset, clear stale busy flag
-            if (proc is None or proc.poll() is not None) and op not in ("flash", "reset") and phase not in ("flashing", "writing", "resetting", "erasing"):
+            # ── Safe stale-busy auto-recovery ────────────────────────────
+            # Exclude op == "upload": the upload flow transitions internally from
+            # compile → flash; the compile process may have exited while flash
+            # hasn't launched yet, so we must NOT clear busy in that window.
+            stale = (
+                (proc is None or proc.poll() is not None)
+                and op not in DESTRUCTIVE_OPS
+                and op != "upload"
+                and phase not in DESTRUCTIVE_PHASES
+            )
+            if stale:
                 self._backend.is_busy = False
+                # Fall through to normal clean exit below.
+
             else:
-                # Allow closing if we are currently ONLY in the compilation phase!
-                if phase == "compiling" and op != "flash":
+                # ── Compile-only: cancellable, allow exit ────────────────
+                if phase == "compiling" and op == "compile":
                     try:
                         self._backend.stop_operation()
                     except Exception:
                         pass
-                    # Proceed to normal exit below
+                    # Fall through to normal clean exit.
+
                 else:
-                    if kind == "hard":
-                        msg = ("A Hard Reset (bootloader burn) is in progress.\n\n"
-                               "Interrupting this can permanently brick the board. "
-                               "Please wait for it to finish.")
-                    elif kind == "soft":
-                        msg = ("A Soft Reset (flash rewrite) is in progress.\n\n"
-                               "Interrupting this can leave the board in a broken state. "
-                               "Please wait for it to finish.")
+                    # ── Destructive operation — block the close ──────────
+                    if op == "upload" and phase == "compiling":
+                        msg = (
+                            "Upload In Progress — Compiling Firmware\n\n"
+                            "The application is compiling firmware and is about to write it to "
+                            "your MCU.\nInterrupting this process now may corrupt the board "
+                            "firmware.\n\n"
+                            "Please wait for the upload to complete."
+                        )
+                    elif phase in ("flashing", "writing"):
+                        msg = (
+                            "Firmware is actively being written to the MCU memory.\n\n"
+                            "Closing the app mid-write can leave your board in a corrupted, "
+                            "unbootable state.\n\n"
+                            "Please wait for the upload to finish."
+                        )
+                    elif phase == "erasing":
+                        msg = (
+                            "The MCU flash memory is being erased.\n\n"
+                            "Interrupting an erase operation can brick the board.\n\n"
+                            "Please wait for the erase to finish."
+                        )
+                    elif phase == "resetting":
+                        if kind == "hard":
+                            msg = (
+                                "A hardware reset / bootloader sequence is in progress.\n\n"
+                                "Interrupting this can leave the board stuck in bootloader mode "
+                                "and may require a manual power cycle.\n\n"
+                                "Please wait for the reset to complete."
+                            )
+                        else:
+                            msg = (
+                                "A firmware rewrite / soft reset is in progress.\n\n"
+                                "Interrupting this can leave the board in a broken state.\n\n"
+                                "Please wait for the reset to complete."
+                            )
+                    elif phase == "cleaning":
+                        msg = (
+                            "The build cache is being cleaned.\n\n"
+                            "Interrupting a cache clean mid-operation may corrupt cached build "
+                            "objects, forcing a full rebuild on next compile.\n\n"
+                            "Please wait for the clean to finish."
+                        )
                     else:
-                        msg = ("A Flash Upload is currently writing to the MCU memory.\n\n"
-                               "Interrupting this direct flash write can leave your board corrupted. "
-                               "Please wait for the upload to complete.")
-                    QMessageBox.warning(self, "Flash Upload / Reset in Progress", msg)
+                        msg = (
+                            "A critical operation is currently running.\n\n"
+                            "Closing the app now may leave your MCU or build environment in "
+                            "an inconsistent state.\n\n"
+                            "Please wait for the operation to complete."
+                        )
+
+                    QMessageBox.warning(self, "Cannot Close — Operation In Progress", msg)
                     event.ignore()
                     return
 

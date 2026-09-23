@@ -346,12 +346,18 @@ class ConsolePanel(QPlainTextEdit):
         self._timestamp_enabled: bool = bool(cfg.get("timestamp_enabled", False))
         self._entries: list[dict] = []
 
+        from main.core.config import get_hide_build_console_warnings
+        self._hide_warnings: bool = bool(get_hide_build_console_warnings())
+
         # In-RAM batch queue and 25ms (~40 FPS) flush timer to eliminate UI stutter during parallel compiles
         self._queue: deque[tuple[str, str, bool, str | None, str]] = deque()
         self._flush_timer = QTimer(self)
         self._flush_timer.setInterval(25)
         self._flush_timer.timeout.connect(self._flush_queue)
         self._flush_timer.start()
+
+    def set_hide_warnings(self, enabled: bool) -> None:
+        self._hide_warnings = bool(enabled)
 
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
@@ -470,8 +476,10 @@ class ConsolePanel(QPlainTextEdit):
     @Slot(dict)
     def append_log(self, payload: dict) -> None:
         """Enqueue one log entry from the console:log signal payload for buffered RAM flush."""
+        tag: str = payload.get("tag", "normal")
+        if getattr(self, "_hide_warnings", False) and tag == "warning":
+            return
         text: str  = payload.get("text", "")
-        tag: str   = payload.get("tag", "normal")
         newline: bool = payload.get("newline", True)
         replace_pattern: str | None = payload.get("replace_pattern")
         ts: str = payload.get("timestamp") or time.strftime("[%H:%M:%S]")
@@ -503,6 +511,8 @@ class ConsolePanel(QPlainTextEdit):
         ts_fmt.setForeground(QColor(_TAG_COLORS.get("timestamp", "#6b7280")))
 
         for text, tag, newline, replace_pattern, ts in items:
+            if getattr(self, "_hide_warnings", False) and tag == "warning":
+                continue
             color_hex = _TAG_COLORS.get(tag, _DEFAULT_COLOR)
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(color_hex))
@@ -617,6 +627,8 @@ class ConsolePanelContainer(QWidget):
             sig_bus.font_size_changed.connect(self.console.set_font_size)
         if hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
+        if hasattr(sig_bus, "hide_warnings_changed"):
+            sig_bus.hide_warnings_changed.connect(self.console.set_hide_warnings)
 
     def apply_theme(self, theme_name: str) -> None:
         self.console.apply_theme(theme_name)

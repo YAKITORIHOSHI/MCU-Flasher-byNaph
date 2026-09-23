@@ -8,7 +8,10 @@ Operates directly on the current sketch folder and refreshes the editor on succe
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (

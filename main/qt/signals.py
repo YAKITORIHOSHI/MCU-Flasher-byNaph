@@ -92,6 +92,7 @@ class MCUSignals(QObject):
     skip_compile_availability_changed = Signal(bool)
     clear_on_action_changed = Signal(bool)
     clear_serial_on_action_changed = Signal(bool)
+    reset_on_baud_changed = Signal(bool)
 
     # ── Toolbar Action Signals ───────────────────────────────────────────────
     # Request editor to reload current file from disk
@@ -102,6 +103,9 @@ class MCUSignals(QObject):
     # ── Display / Settings Signals ───────────────────────────────────────────
     font_size_changed = Signal(int)
     theme_changed = Signal(str)
+    hide_warnings_changed = Signal(bool)
+    autosave_settings_changed = Signal(bool, int)
+    graphics_accel_changed = Signal(bool)
 
 
 # Module-level singleton — import and use directly:

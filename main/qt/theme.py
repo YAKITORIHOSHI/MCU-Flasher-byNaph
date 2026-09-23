@@ -636,6 +636,15 @@ QLineEdit:focus {{
 }}
 
 /* ── TabWidget ───────────────────────────────────────────────────────────── */
+QTabWidget {{
+    background-color: {bg_dark};
+}}
+
+QTabBar {{
+    background-color: {bg_dark};
+    border: none;
+}}
+
 QTabWidget::pane {{
     background-color: {bg_darkest};
     border: none;

@@ -731,10 +731,20 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     return max(1, min(cpu_budget, cpus, 12))
 
 
-def get_optimal_compiler_jobs(mode: str = "HIGH") -> int:
-    """Dynamically determine the best compiler concurrency using real-time available RAM."""
+def get_optimal_compiler_jobs(mode: str | None = None) -> int:
+    """Dynamically determine the best compiler concurrency using real-time available RAM and user settings."""
+    if not mode:
+        try:
+            from main.core.config import _load_raw_config
+            mode = _load_raw_config().get("shared", {}).get("cpu_multithreading", "HIGH")
+        except Exception:
+            mode = "HIGH"
     current_avail_gb = _available_memory_gb()
-    effective_mode = "MAX" if (current_avail_gb is not None and current_avail_gb >= 4.0) else mode
+    norm_mode = str(mode or "HIGH").upper()
+    if norm_mode in ("LOW", "MEDIUM"):
+        effective_mode = norm_mode
+    else:
+        effective_mode = "MAX" if (current_avail_gb is not None and current_avail_gb >= 4.0) else "HIGH"
     return _resource_safe_worker_count(effective_mode, available_gb=current_avail_gb)
 
 

@@ -15,8 +15,11 @@ Provides structured multi-section configuration:
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QCursor
@@ -34,6 +37,7 @@ from main.core.config import (
     get_monitor_font_size, get_hide_build_console_warnings, set_hide_build_console_warnings,
     get_editor_mode, set_editor_mode,
     get_autosave_settings, set_autosave_settings,
+    get_reset_on_baud_change, set_reset_on_baud_change,
 )
 from main.core.toolchain import _resource_safe_worker_count, _system_reserved_cpu_count
 from main.qt.signals import signals
@@ -57,7 +61,7 @@ class SettingsDialog(QDialog):
         avail_h = avail.height() if avail else 720
 
         target_w = min(600, max(520, int(avail_w * 0.85)))
-        target_h = min(680, max(460, int(avail_h * 0.88)))
+        target_h = min(740, max(520, int(avail_h * 0.88)))
         target_w = min(target_w, avail_w)
         target_h = min(target_h, avail_h)
 
@@ -95,7 +99,19 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Ensure dialog always starts scrolled to top so Performance Settings is visible
+        if hasattr(self, "scroll") and self.scroll.verticalScrollBar():
+            self.scroll.verticalScrollBar().setValue(0)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(0) if hasattr(self, "scroll") and self.scroll.verticalScrollBar() else None)
+        if hasattr(self, "btn_save"):
+            self.btn_save.setFocus()
+
     def _apply_dialog_theme(self, mode: str) -> None:
+        from main.qt.theme import get_palette
+        pal = get_palette(mode)
         if mode == "light":
             bg = "#f5f6f8"
             fg = "#2e3440"
@@ -108,10 +124,11 @@ class SettingsDialog(QDialog):
             group_title = "#5e81ac"
             combo_bg = "#f0f4f8"
             combo_fg = "#2e3440"
-            combo_border = "#d8dee9"
-            chk_bg = "#f0f4f8"
-            chk_checked_bg = "#d8dee9"
-            chk_checked_hover = "#b48ead"
+            combo_border = "#c4cdd9"
+            chk_bg = "#ffffff"
+            chk_border = "#9aaec7"
+            chk_checked_bg = "#2563eb"
+            chk_checked_hover = "#1d4ed8"
         elif mode == "solarized_dark":
             bg = "#002b36"
             fg = "#93a1a1"
@@ -126,8 +143,9 @@ class SettingsDialog(QDialog):
             combo_fg = "#93a1a1"
             combo_border = "#586e75"
             chk_bg = "#002b36"
-            chk_checked_bg = "#073642"
-            chk_checked_hover = "#2aa198"
+            chk_border = "#586e75"
+            chk_checked_bg = "#2aa198"
+            chk_checked_hover = "#20827b"
         else:
             bg = "#0c0d10"
             fg = "#cdd6f4"
@@ -141,9 +159,10 @@ class SettingsDialog(QDialog):
             combo_bg = "#1c2333"
             combo_fg = "#e8eaf6"
             combo_border = "#2d3748"
-            chk_bg = "#1c2333"
-            chk_checked_bg = "#2a5f58"
-            chk_checked_hover = "#36776e"
+            chk_bg = "#12161f"
+            chk_border = "#4a5d78"
+            chk_checked_bg = "#2a7566"
+            chk_checked_hover = "#348f7d"
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -214,13 +233,13 @@ class SettingsDialog(QDialog):
             QCheckBox {{
                 color: {fg};
                 font-size: 11px;
-                spacing: 6px;
+                spacing: 8px;
             }}
             QCheckBox::indicator {{
-                width: 15px;
-                height: 15px;
+                width: 16px;
+                height: 16px;
                 border-radius: 3px;
-                border: 1px solid {combo_border};
+                border: 1px solid {chk_border};
                 background: {chk_bg};
             }}
             QCheckBox::indicator:hover {{
@@ -239,6 +258,7 @@ class SettingsDialog(QDialog):
             QCheckBox::indicator:disabled {{
                 background: {group_bg};
                 border-color: {combo_border};
+                opacity: 0.5;
             }}
             QCheckBox::indicator:checked:disabled {{
                 background: {combo_bg};
@@ -247,8 +267,23 @@ class SettingsDialog(QDialog):
             }}
         """)
 
-        from main.qt.theme import get_palette
-        pal = get_palette(mode)
+        if hasattr(self, "btn_reset"):
+            self.btn_reset.setStyleSheet(f"""
+                QPushButton {{
+                    background: {pal.get('BG_MID', '#2d3748')};
+                    color: {pal.get('TEXT_MUTED', '#a0aec0')};
+                    font-size: 11px;
+                    font-weight: 600;
+                    border-radius: 4px;
+                    border: 1px solid {pal.get('BORDER', '#2d3748')};
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{
+                    background: {pal.get('BTN_STOP', '#6e2020')};
+                    color: #ffffff;
+                    border-color: #e74c3c;
+                }}
+            """)
         if hasattr(self, "btn_cancel"):
             self.btn_cancel.setStyleSheet(f"""
                 QPushButton {{
@@ -306,9 +341,9 @@ class SettingsDialog(QDialog):
         outer_layout.setSpacing(10)
 
         # Scroll container
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         container = QWidget()
         container.setStyleSheet("background: transparent;")
@@ -495,7 +530,26 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(autosave_box)
 
-        # ── 5. Startup ───────────────────────────────────────────────────────
+        # ── 5. Serial Monitor ────────────────────────────────────────────────
+        serial_box = QGroupBox("Serial Monitor")
+        sm_v = QVBoxLayout(serial_box)
+        sm_v.setSpacing(8)
+
+        self.cb_reset_on_baud = QCheckBox("Reset MCU via DTR/RTS on baud rate change")
+        self.cb_reset_on_baud.setChecked(get_reset_on_baud_change())
+        sm_v.addWidget(self.cb_reset_on_baud)
+
+        reset_baud_note = QLabel(
+            "Automatically triggers a hardware reset pulse (DTR/RTS) when changing the Serial Monitor baud rate, "
+            "rebooting the microcontroller so setup() runs at the newly selected speed."
+        )
+        reset_baud_note.setProperty("role", "dim")
+        reset_baud_note.setWordWrap(True)
+        sm_v.addWidget(reset_baud_note)
+
+        layout.addWidget(serial_box)
+
+        # ── 6. Startup ───────────────────────────────────────────────────────
         startup_box = QGroupBox("Startup")
         sv = QVBoxLayout(startup_box)
         startup_lbl = QLabel("Bootstrap runs before the main app on every launch.")
@@ -503,7 +557,7 @@ class SettingsDialog(QDialog):
         sv.addWidget(startup_lbl)
         layout.addWidget(startup_box)
 
-        # ── 6. Hardware Reset Operations ─────────────────────────────────────
+        # ── 7. Hardware Reset Operations ─────────────────────────────────────
         reset_box = QGroupBox("Hardware Reset Operations")
         rv = QVBoxLayout(reset_box)
         rv.setSpacing(10)
@@ -611,11 +665,18 @@ class SettingsDialog(QDialog):
         layout.addWidget(reset_box)
 
         # Finish scroll setup
-        scroll.setWidget(container)
-        outer_layout.addWidget(scroll, stretch=1)
+        self.scroll.setWidget(container)
+        outer_layout.addWidget(self.scroll, stretch=1)
 
-        # ── Dialog Action Buttons (Save / Cancel) ─────────────────────────────
+        # ── Dialog Action Buttons (Reset Defaults / Cancel / Save) ───────────
         act_row = QHBoxLayout()
+
+        self.btn_reset = QPushButton("Reset Defaults")
+        self.btn_reset.setFixedHeight(30)
+        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reset.clicked.connect(self._reset_defaults)
+        act_row.addWidget(self.btn_reset)
+
         act_row.addStretch()
 
         self.btn_cancel = QPushButton("Cancel")
@@ -634,6 +695,38 @@ class SettingsDialog(QDialog):
         outer_layout.addLayout(act_row)
 
     # ── Slots & Logic ────────────────────────────────────────────────────────
+    def _reset_defaults(self) -> None:
+        """Reset all configuration values to their factory defaults."""
+        ret = QMessageBox.question(
+            self,
+            "Reset All Settings",
+            "Are you sure you want to restore all settings to their default values?\n\n"
+            "This will reset CPU Multithreading, Graphics Acceleration, Font Size, Console Warnings, Theme, Auto-Save, and Serial Monitor options to factory defaults.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        # Restore UI controls
+        self.cpu_combo.setCurrentText(self._high_val)
+        self.cb_g_accel.setChecked(True)
+        idx_11 = self.font_combo.findData(11)
+        if idx_11 >= 0:
+            self.font_combo.setCurrentIndex(idx_11)
+        self.cb_hide_warnings.setChecked(False)
+
+        self.cb_theme_system.setChecked(False)
+        self.theme_combo.setEnabled(True)
+        self.theme_combo.setCurrentText("Default (Dark Cyberpunk)")
+
+        self.editor_combo.setCurrentText(self._ed_default_label)
+        self.cb_autosave.setChecked(False)
+        self.autosave_spin.setValue(1500)
+        self.cb_reset_on_baud.setChecked(False)
+
+        # Apply and save
+        self._save_and_apply()
     def _on_theme_combo_changed(self, index: int) -> None:
         if self.theme_combo.isEnabled():
             chosen = self._theme_map.get(self.theme_combo.currentText(), "default")
@@ -813,6 +906,15 @@ class SettingsDialog(QDialog):
         data["shared"]["autosave_enabled"] = as_enabled
         data["shared"]["autosave_delay_ms"] = as_delay
 
+        # 8. Serial Monitor (Reset on Baud Change)
+        reset_on_baud = self.cb_reset_on_baud.isChecked()
+        set_reset_on_baud_change(reset_on_baud)
+        data["shared"]["reset_on_baud_change"] = reset_on_baud
+        if self._backend and hasattr(self._backend, "set_reset_on_baud_change"):
+            self._backend.set_reset_on_baud_change(reset_on_baud)
+        if hasattr(signals, "reset_on_baud_changed"):
+            signals.reset_on_baud_changed.emit(reset_on_baud)
+
         # Save to disk
         _save_raw_config(data)
 
@@ -820,6 +922,7 @@ class SettingsDialog(QDialog):
         theme_str = f"System Default ({active_theme.replace('_', ' ').title()})" if follow_sys else active_theme.replace('_', ' ').title()
         autosave_str = f"ON ({as_delay} ms)" if as_enabled else "OFF"
         warn_str = "Hidden" if hide_warn else "Visible"
+        reset_baud_str = "Enabled" if reset_on_baud else "Disabled"
 
         notif_msg = (
             f"• CPU Multithreading: {cpu_key}\n"
@@ -827,7 +930,8 @@ class SettingsDialog(QDialog):
             f"• Editor & Monitor Font: {new_font_size} pt\n"
             f"• Console Warnings: {warn_str}\n"
             f"• Theme Mode: {theme_str}\n"
-            f"• Auto-Save: {autosave_str}"
+            f"• Auto-Save: {autosave_str}\n"
+            f"• Reset on Baud Change: {reset_baud_str}"
         )
         try:
             from src.dbs import dbs_create
@@ -849,5 +953,17 @@ class SettingsDialog(QDialog):
         # Apply font size and theme live to child panels
         signals.font_size_changed.emit(new_font_size)
         signals.theme_changed.emit(active_theme)
+
+        # Apply hide warnings live to Build Console
+        if hasattr(signals, "hide_warnings_changed"):
+            signals.hide_warnings_changed.emit(hide_warn)
+
+        # Apply autosave settings live to Monaco Editor
+        if hasattr(signals, "autosave_settings_changed"):
+            signals.autosave_settings_changed.emit(as_enabled, as_delay)
+
+        # Apply graphics acceleration live to splitters
+        if hasattr(signals, "graphics_accel_changed"):
+            signals.graphics_accel_changed.emit(g_accel == "ON")
 
         self.accept()

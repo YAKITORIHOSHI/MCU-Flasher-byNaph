@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import QObject, QUrl, Slot, Signal, QTimer
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
@@ -164,6 +168,16 @@ class EditorBridgeAPI(QObject):
         """Monaco reports a file became dirty or clean."""
         if self._backend:
             self._backend.mark_modified(file_path, is_modified)
+            if is_modified:
+                try:
+                    from main.qt.signals import signals as sig_bus
+                    if hasattr(sig_bus, "skip_compile_availability_changed"):
+                        sig_bus.skip_compile_availability_changed.emit(False)
+                except Exception:
+                    pass
+                p = self.parent()
+                if p and hasattr(p, "_schedule_autosave"):
+                    p._schedule_autosave()
 
     @Slot(str, result="QVariant")
     def run_action(self, action_name: str) -> dict:
@@ -175,7 +189,11 @@ class EditorBridgeAPI(QObject):
     @Slot()
     def on_editor_content_change(self) -> None:
         """Fires on keystroke in Monaco."""
-        pass
+        if self._backend:
+            self._backend.on_editor_content_change()
+        p = self.parent()
+        if p and hasattr(p, "_schedule_autosave"):
+            p._schedule_autosave()
 
     @Slot(str, result=bool)
     def has_pending_ai_edit(self, path: str) -> bool:
@@ -229,6 +247,13 @@ class MonacoEditorPanel(QWidget):
         self._backend = backend
         self._project_root = project_root
         self._editor_html = project_root / "src" / "editor" / "index.html"
+
+        from main.core.config import get_autosave_settings
+        self._autosave_enabled, self._autosave_delay = get_autosave_settings()
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.timeout.connect(self._on_autosave_timeout)
+
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -380,10 +405,19 @@ class MonacoEditorPanel(QWidget):
             "if (typeof window.saveActiveFile === 'function') { window.saveActiveFile(); }"
         )
 
-    def trigger_save_all(self) -> None:
-        self._view.page().runJavaScript(
-            "if (typeof window.saveAllFiles === 'function') { window.saveAllFiles(); }"
+    def trigger_save_all(self, callback: Optional[Callable[[], None]] = None) -> None:
+        js = (
+            "(async () => {"
+            "  if (typeof window.saveAllFilesSafe === 'function') { await window.saveAllFilesSafe(); }"
+            "  else if (typeof window.saveAllFiles === 'function') { await window.saveAllFiles(); }"
+            "  if (typeof window.saveActiveFile === 'function') { await window.saveActiveFile(); }"
+            "  return true;"
+            "})()"
         )
+        if callback:
+            self._view.page().runJavaScript(js, lambda _: callback())
+        else:
+            self._view.page().runJavaScript(js)
 
     def trigger_reload(self) -> None:
         """Reload the currently active file from disk into the editor."""
@@ -410,6 +444,27 @@ class MonacoEditorPanel(QWidget):
             except Exception:
                 pass
 
+    def _schedule_autosave(self) -> None:
+        """Debounce auto-save when user edits text in Monaco."""
+        if not getattr(self, "_autosave_enabled", False):
+            return
+        delay = getattr(self, "_autosave_delay", 1500)
+        if hasattr(self, "_autosave_timer"):
+            self._autosave_timer.start(delay)
+
+    def _on_autosave_timeout(self) -> None:
+        """Trigger background file save on debounce expiration."""
+        if getattr(self, "_autosave_enabled", False):
+            self.trigger_save_all()
+
+    @Slot(bool, int)
+    def _on_autosave_settings_changed(self, enabled: bool, delay_ms: int) -> None:
+        """Update auto-save state dynamically without restart."""
+        self._autosave_enabled = enabled
+        self._autosave_delay = max(200, delay_ms)
+        if not enabled and hasattr(self, "_autosave_timer"):
+            self._autosave_timer.stop()
+
     def connect_signals(self, sig_bus) -> None:
         """Connect to global Qt signal bus."""
         sig_bus.editor_load_file.connect(self.open_file)
@@ -421,6 +476,8 @@ class MonacoEditorPanel(QWidget):
             sig_bus.font_size_changed.connect(self.set_font_size)
         if hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.set_theme)
+        if hasattr(sig_bus, "autosave_settings_changed"):
+            sig_bus.autosave_settings_changed.connect(self._on_autosave_settings_changed)
 
     @Slot(list)
     def set_markers(self, diagnostics: list) -> None:

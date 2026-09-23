@@ -1051,7 +1051,13 @@
         const button = event.target.closest('button[data-action]');
         if (!button || button.disabled || !window.pywebview || !window.pywebview.api) return;
         try {
-          await window.pywebview.api.run_action(button.dataset.action);
+          const action = button.dataset.action;
+          if (action === 'compile' || action === 'upload') {
+            if (typeof window.saveAllFilesSafe === 'function') {
+              await window.saveAllFilesSafe();
+            }
+          }
+          await window.pywebview.api.run_action(action);
         } catch (e) {
           console.error("Detached action error:", e);
         }
@@ -1197,19 +1203,37 @@
           if (key === 'r') {
             e.preventDefault();
             e.stopPropagation();
-            if (window.pywebview && window.pywebview.api) {
-              window.pywebview.api.run_action('compile');
+            const doRun = () => {
+              if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.run_action('compile');
+              }
+            };
+            if (typeof window.saveAllFilesSafe === 'function') {
+              window.saveAllFilesSafe().then(doRun).catch(doRun);
+            } else {
+              doRun();
             }
           } else if (key === 'u') {
             e.preventDefault();
             e.stopPropagation();
-            if (window.pywebview && window.pywebview.api) {
-              window.pywebview.api.run_action('upload');
+            const doRun = () => {
+              if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.run_action('upload');
+              }
+            };
+            if (typeof window.saveAllFilesSafe === 'function') {
+              window.saveAllFilesSafe().then(doRun).catch(doRun);
+            } else {
+              doRun();
             }
           } else if (key === 's') {
             e.preventDefault();
             e.stopPropagation();
-            if (window.pywebview && window.pywebview.api) {
+            if (typeof window.saveAllFilesSafe === 'function') {
+              window.saveAllFilesSafe();
+            } else if (typeof window.saveAllFiles === 'function') {
+              window.saveAllFiles();
+            } else if (window.pywebview && window.pywebview.api && window.pywebview.api.save_all_files) {
               window.pywebview.api.save_all_files();
             }
           }
@@ -1217,6 +1241,24 @@
       }
       window.addEventListener('keydown', handleEditorShortcuts, true);
       document.addEventListener('keydown', handleEditorShortcuts, true);
+
+      window.saveAllFilesSafe = async function () {
+        if (typeof window.saveAllFiles === 'function') {
+          try {
+            await window.saveAllFiles();
+          } catch (e) {
+            console.error("saveAllFiles error:", e);
+          }
+        }
+        if (typeof window.saveActiveFile === 'function') {
+          try {
+            await window.saveActiveFile();
+          } catch (e) {
+            console.error("saveActiveFile error:", e);
+          }
+        }
+        return true;
+      };
 
       window.setEditorMarkers = function (errorsJsonStr) {
         if (!window.editorInstance) return;
