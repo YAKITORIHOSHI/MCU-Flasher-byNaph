@@ -14,9 +14,14 @@ _ROOT = Path(__file__).resolve().parent
 _MAIN_DIR = _ROOT / "main"
 _MODULES_DIR = _ROOT / "src" / "modules"
 
+_ENV_SITE = _ROOT / "env" / "Lib" / "site-packages"
+
 for _p in (_ROOT, _MAIN_DIR, _MODULES_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
+
+if _ENV_SITE.is_dir() and str(_ENV_SITE) not in sys.path:
+    sys.path.insert(0, str(_ENV_SITE))
 
 # Strict enforcement: NEVER run with system/desktop Python
 from src.modules.private_python_guard import enforce_private_python

@@ -19,9 +19,14 @@ _project_root = _this_file.parent.parent if _this_file.parent.name == "main" els
 _modules_path = _project_root / "src" / "modules"
 _main_path    = _project_root / "main"
 
+_env_site     = _project_root / "env" / "Lib" / "site-packages"
+
 for _p in (_project_root, _modules_path, _main_path):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
+
+if _env_site.is_dir() and str(_env_site) not in sys.path:
+    sys.path.insert(0, str(_env_site))
 
 # Strict enforcement: NEVER run under desktop/system Python
 from src.modules.private_python_guard import enforce_private_python

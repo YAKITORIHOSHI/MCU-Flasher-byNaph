@@ -39,12 +39,20 @@ _PROJECT_ROOT = find_project_root()
 PRIVATE_PYTHON_DIR = _PROJECT_ROOT / "src" / "_python"
 
 
+ENV_PYTHON_DIR = _PROJECT_ROOT / "env"
+
+
 def is_running_private_python() -> bool:
-    """Return True iff current sys.executable is inside src/_python."""
+    """Return True iff current sys.executable is inside src/_python or the project venv (env/)."""
     try:
         current_exe = Path(sys.executable).resolve()
         private_dir = PRIVATE_PYTHON_DIR.resolve()
-        return private_dir in current_exe.parents or current_exe == (private_dir / "python.exe") or current_exe == (private_dir / "pythonw.exe")
+        if private_dir in current_exe.parents or current_exe == (private_dir / "python.exe") or current_exe == (private_dir / "pythonw.exe"):
+            return True
+        env_dir = ENV_PYTHON_DIR.resolve()
+        if env_dir in current_exe.parents or current_exe == (env_dir / "Scripts" / "python.exe") or current_exe == (env_dir / "Scripts" / "pythonw.exe"):
+            return True
+        return False
     except Exception:
         return False
 

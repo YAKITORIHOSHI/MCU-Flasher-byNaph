@@ -3139,6 +3139,39 @@ def _preseed_venv_site_packages(venv_dir: Path) -> int:
     return copied
 
 
+def _sync_venv_to_base_python(venv_dir: Path) -> int:
+    """Synchronize all packages from venv site-packages back into base Python (src/_python).
+    Ensures the base runtime always stays complete, robust, and self-contained."""
+    copied = 0
+    try:
+        private_src = (SCRIPT_DIR / "src" / "_python").resolve()
+        if not private_src.is_dir():
+            return 0
+        venv_site = venv_dir / "Lib" / "site-packages"
+        base_site = private_src / "Lib" / "site-packages"
+        if not venv_site.is_dir():
+            return 0
+        if base_site.resolve() == venv_site.resolve():
+            return 0
+        base_site.mkdir(parents=True, exist_ok=True)
+        for item in venv_site.glob("*"):
+            if item.name == "__pycache__":
+                continue
+            target = base_site / item.name
+            if not target.exists():
+                try:
+                    if item.is_dir():
+                        shutil.copytree(item, target, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, target)
+                    copied += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return copied
+
+
 def _get_target_site_packages_dirs() -> list[str]:
     """Return the search paths strictly for the target environment.
     Never returns the host Python's site-packages when targeting a virtual environment."""
@@ -9598,12 +9631,19 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     log_fh = None
 
     if sys.platform == "win32":
-        # Strictly use private Python runtime from src/_python/ (no system Python)
+        # Check venv python first (env/Scripts/pythonw.exe), then fallback to private runtime (src/_python/)
+        venv_pythonw    = SCRIPT_DIR / "env" / "Scripts" / "pythonw.exe"
+        venv_python     = SCRIPT_DIR / "env" / "Scripts" / "python.exe"
         private_pythonw = SCRIPT_DIR / "src" / "_python" / "pythonw.exe"
         private_python  = SCRIPT_DIR / "src" / "_python" / "python.exe"
-        if private_pythonw.exists():
+
+        if venv_pythonw.is_file():
+            python_exe = venv_pythonw
+        elif venv_python.is_file():
+            python_exe = venv_python
+        elif private_pythonw.is_file():
             python_exe = private_pythonw
-        elif private_python.exists():
+        elif private_python.is_file():
             python_exe = private_python
         else:
             from private_python_guard import get_private_python_exe
@@ -9636,6 +9676,17 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
         launch_env["PLATFORMIO_CORE_DIR"] = os.environ.get(
             "PLATFORMIO_CORE_DIR", _get_safe_platformio_core_dir(SCRIPT_DIR)
         )
+        # Ensure env/ site-packages and scripts are explicitly on the child environment
+        venv_dir = SCRIPT_DIR / "env"
+        venv_site = venv_dir / "Lib" / "site-packages"
+        venv_scripts = venv_dir / "Scripts"
+        if venv_site.is_dir():
+            cur_pypath = launch_env.get("PYTHONPATH", "")
+            launch_env["PYTHONPATH"] = (str(venv_site) + os.pathsep + cur_pypath).strip(os.pathsep)
+        if venv_scripts.is_dir():
+            cur_path = launch_env.get("PATH", "")
+            launch_env["PATH"] = str(venv_scripts) + os.pathsep + cur_path
+            launch_env["VIRTUAL_ENV"] = str(venv_dir)
 
         try:
             popen_func = getattr(sp, "_orig_popen", sp.Popen)
@@ -10267,6 +10318,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         gui.root.after(0, lambda: gui.log_ok(
             "All core and application dependencies verified."
         ))
+        try:
+            _sync_venv_to_base_python(venv_dir)
+        except Exception:
+            pass
 
         # ── Monaco runtime (required for the selected editor) ──────────
         gui.root.after(0, lambda: gui.log_section("Checking Microsoft Edge WebView2 Runtime"))
