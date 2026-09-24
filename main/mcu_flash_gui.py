@@ -230,6 +230,13 @@ def main() -> int:
         # ── Create backend ────────────────────────────────────────────────────
         api = MCUWebBackendAPI()
 
+        # Enforce codebase internal metadata hiding on startup
+        try:
+            from main.core.file_utils import hide_internal_project_metadata
+            hide_internal_project_metadata(SCRIPT_DIR)
+        except Exception:
+            pass
+
         # ── Handle project command-line argument or startup selector ──────────
         proj_arg: Optional[str] = None
         if "--project" in sys.argv:

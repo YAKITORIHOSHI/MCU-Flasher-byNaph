@@ -592,11 +592,20 @@ class TerminalServer:
                     return
                 ready_marker_written[0] = True
                 try:
-                    sig = Path(target_dir) / ".ai_ready_signal"
+                    cache_dir = Path(target_dir) / ".mcu_flasher_build_cache"
+                    if cache_dir.is_dir():
+                        sig = cache_dir / ".ai_ready_signal"
+                    else:
+                        sig = Path(target_dir) / ".ai_ready_signal"
                     sig.write_text(
                         json.dumps({"time": time.time(), "reason": reason}),
                         encoding="utf-8",
                     )
+                    try:
+                        from main.core.file_utils import hide_hidden_attribute
+                        hide_hidden_attribute(sig)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -734,6 +743,11 @@ class TerminalServer:
                 current_pty.close()
             except Exception:
                 pass
+        try:
+            (Path(self.target_dir) / ".ai_ready_signal").unlink(missing_ok=True)
+            (Path(self.target_dir) / ".mcu_flasher_build_cache" / ".ai_ready_signal").unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def find_free_pair(start_port=8765):
@@ -889,6 +903,7 @@ def run_standalone_ai(target_directory=None):
     # racing the main GUI's loading overlay.
     try:
         (Path(target_dir) / ".ai_ready_signal").unlink(missing_ok=True)
+        (Path(target_dir) / ".mcu_flasher_build_cache" / ".ai_ready_signal").unlink(missing_ok=True)
     except Exception:
         pass
     port = find_free_pair(8765)

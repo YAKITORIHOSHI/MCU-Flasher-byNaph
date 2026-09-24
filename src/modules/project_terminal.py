@@ -150,7 +150,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
             background: var(--terminal-bg); color: var(--terminal-fg);
-            font-family: 'Cascadia Code', Consolas, "Courier New", monospace; font-size: 13px;
+            font-family: Consolas, "Courier New", monospace; font-size: 14px;
             overflow: hidden; box-sizing: border-box;
         }
         #terminal-root {
@@ -163,7 +163,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
         .terminal-host.active { display: block; }
         .xterm {
-            padding: 8px 12px !important;
+            padding: 2px 4px !important;
             height: 100% !important;
             box-sizing: border-box;
         }
@@ -174,10 +174,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         .xterm-screen {
             background: var(--terminal-bg) !important;
         }
-        ::-webkit-scrollbar { width: 7px; height: 7px; }
-        ::-webkit-scrollbar-track { background: var(--terminal-bg); }
-        ::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.35); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.65); }
+        ::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
     </style>
     <link rel="stylesheet" href="/assets/xterm/xterm.css" />
     <script src="/assets/xterm/xterm.js" onerror="window.xtermErr=true"></script>
@@ -279,9 +276,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 const term = new Terminal({
                     cursorBlink: true,
                     cursorStyle: "block",
-                    fontSize: 13,
-                    lineHeight: 1.25,
-                    fontFamily: "'Cascadia Code', 'Segoe UI Mono', Consolas, 'Courier New', monospace",
+                    fontSize: 14,
+                    lineHeight: 1.2,
+                    fontFamily: 'Consolas, "Courier New", monospace',
                     scrollback: 10000,
                     overviewRulerWidth: 0,
                     theme: Object.assign({}, currentTheme),
@@ -787,12 +784,7 @@ class ProjectTerminalServer:
         self.clients_lock = threading.RLock()
         self.window = None
 
-        # Pre-initialize default PowerShell session
-        default_sid = "pwsh_1"
-        self.session_counter = 1
-        default_session = ShellSession(self, default_sid, "pwsh", "PowerShell")
-        self.sessions[default_sid] = default_session
-        self.active_shell = default_sid
+
 
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
@@ -912,12 +904,6 @@ class ProjectTerminalServer:
 
             with session.lock:
                 session.pty = pty
-
-            if kind == "pwsh":
-                escaped = str(self.target_dir).replace("'", "''")
-                pty.write(f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Set-Location -LiteralPath '{escaped}'\r\n")
-            else:
-                pty.write(f'chcp 65001 >nul && cd /d "{self.target_dir}"\r\n')
 
             probe = ""
             while is_current():
@@ -1202,9 +1188,7 @@ class ProjectTerminalServer:
             raise RuntimeError("websockets is unavailable")
         self.loop = asyncio.get_running_loop()
 
-        # Start initial pre-configured session so ConPTY is immediately running and prompt ready
-        if self.active_shell and self.active_shell in self.sessions:
-            self._start_session(self.active_shell)
+
 
         async with websockets.serve(self.websocket_handler, "127.0.0.1", self.port + 1, max_size=2**22):
             self._write_port_file()

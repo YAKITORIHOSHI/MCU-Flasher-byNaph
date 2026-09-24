@@ -146,3 +146,7 @@ old-*
 /skills-lock.json
 /.mcu_flasher_project_hardware.json
 /arduino_browser_settings.json
+/.opencodeignore
+/AGENTS.md
+/.ai_ready_signal
+

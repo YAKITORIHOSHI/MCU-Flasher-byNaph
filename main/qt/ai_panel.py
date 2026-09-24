@@ -262,34 +262,21 @@ class AIPanel(QWidget):
             return False
 
     def _sync_project_hardware_state(self, custom_dir: Optional[str] = None) -> None:
-        """Write current target board and port metadata to .mcu_flasher_project_hardware.json."""
+        """Sync active target hardware state to .mcu_flasher_build_cache/project_state.json and purge root files."""
         try:
             target_path = custom_dir if custom_dir else self._get_sketch_dir()
             sketch_dir = Path(target_path)
             if not sketch_dir.is_dir():
                 return
-            board = getattr(self._backend, "current_board", "")
-            port = getattr(self._backend, "current_port", "")
-            baud = getattr(self._backend, "current_baud", 115200)
-            binfo = {}
-            if self._backend and hasattr(self._backend, "_resolve_board_info"):
-                binfo = self._backend._resolve_board_info(board)
-            state = {
-                "project_dir": str(sketch_dir),
-                "board_name": board,
-                "platform": binfo.get("platform", "unknown"),
-                "board_id": binfo.get("board", "unknown"),
-                "com_port": port,
-                "baud_rate": baud,
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            if (sketch_dir / "index_json").is_dir():
-                hw_file = sketch_dir / "index_json" / ".mcu_flasher_project_hardware.json"
-            elif (_project_root / "index_json").is_dir() and sketch_dir == _project_root:
-                hw_file = _project_root / "index_json" / ".mcu_flasher_project_hardware.json"
-            else:
-                hw_file = sketch_dir / ".mcu_flasher_project_hardware.json"
-            hw_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            # Remove any misplaced hardware state files from root or index_json
+            try:
+                (sketch_dir / ".mcu_flasher_project_hardware.json").unlink(missing_ok=True)
+                (sketch_dir / "index_json" / ".mcu_flasher_project_hardware.json").unlink(missing_ok=True)
+                (_project_root / "index_json" / ".mcu_flasher_project_hardware.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+            if self._backend and hasattr(self._backend, "_sync_project_hardware_state"):
+                self._backend._sync_project_hardware_state(target_path)
         except Exception:
             pass
 
@@ -329,6 +316,7 @@ class AIPanel(QWidget):
         # Remove any stale ready signal from previous session
         try:
             (Path(target_dir) / ".ai_ready_signal").unlink(missing_ok=True)
+            (Path(target_dir) / ".mcu_flasher_build_cache" / ".ai_ready_signal").unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -458,12 +446,20 @@ class AIPanel(QWidget):
             return
 
         target_dir = Path(self._get_sketch_dir()).resolve()
-        ready_sig = target_dir / ".ai_ready_signal"
+        cache_sig = target_dir / ".mcu_flasher_build_cache" / ".ai_ready_signal"
+        root_sig = target_dir / ".ai_ready_signal"
 
         # Ready if .ai_ready_signal exists, or after safety fallback timeout (~12s = 120 attempts @ 100ms)
-        is_ready = ready_sig.exists() or (self._ready_poll_attempts >= 120)
+        is_ready = cache_sig.exists() or root_sig.exists() or (self._ready_poll_attempts >= 120)
 
         if is_ready:
+            # Immediately unlink the ready signal so it never lingers or appears in Explorer
+            try:
+                cache_sig.unlink(missing_ok=True)
+                root_sig.unlink(missing_ok=True)
+            except Exception:
+                pass
+
             self._ready_poll_timer.stop()
             self._spin_timer.stop()
             self._is_ready = True
@@ -610,6 +606,7 @@ class AIPanel(QWidget):
         target_dir = str(Path(new_project_dir if new_project_dir else self._get_sketch_dir()).resolve())
         try:
             (Path(target_dir) / ".ai_ready_signal").unlink(missing_ok=True)
+            (Path(target_dir) / ".mcu_flasher_build_cache" / ".ai_ready_signal").unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -650,6 +647,13 @@ class AIPanel(QWidget):
                 except Exception:
                     pass
             self._proc = None
+
+        target_dir = Path(self._get_sketch_dir()).resolve()
+        try:
+            (target_dir / ".ai_ready_signal").unlink(missing_ok=True)
+            (target_dir / ".mcu_flasher_build_cache" / ".ai_ready_signal").unlink(missing_ok=True)
+        except Exception:
+            pass
 
         try:
             from src.modules.dedicated_AI import close_active_opencode

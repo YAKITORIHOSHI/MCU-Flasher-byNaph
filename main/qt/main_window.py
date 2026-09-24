@@ -1200,6 +1200,17 @@ class MCUMainWindow(QMainWindow):
 
             self._backend.update_skip_compile_availability()
 
+            # Enforce project file hygiene and initial hardware state sync
+            try:
+                from main.core.file_utils import hide_internal_project_metadata, SCRIPT_DIR
+                hide_internal_project_metadata(SCRIPT_DIR)
+                if self._backend.sketch_dir_path:
+                    hide_internal_project_metadata(self._backend.sketch_dir_path)
+                if hasattr(self._backend, "_sync_project_hardware_state"):
+                    self._backend._sync_project_hardware_state()
+            except Exception:
+                pass
+
             # Load active file into Monaco after a short delay to let Qt initialize
             QTimer.singleShot(800, self._load_initial_file)
 

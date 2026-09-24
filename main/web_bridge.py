@@ -59,6 +59,7 @@ from main.core.config import (
 from main.core.file_utils import (
     get_sketch_files_fast, ensure_file_writable, get_project_build_cache_root,
     ensure_hidden_read_first_md, hide_generated_directory, hide_hidden_attribute,
+    hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
 )
@@ -298,6 +299,7 @@ class MCUWebBackendAPI:
         self._last_known_ports: list[dict[str, str]] = []
 
         # Restore project compile state & remembered board for active sketch
+        self._last_synced_hardware_payload: Optional[tuple] = None
         self._restore_project_compile_state()
 
     def start_services(self) -> None:
@@ -315,6 +317,7 @@ class MCUWebBackendAPI:
             )
             self._port_monitor_thread.start()
         self._init_hardware()
+        self._sync_project_hardware_state()
 
     def stop_services(self) -> None:
         """Signal all persistent background workers to stop and wait for them to exit.
@@ -503,6 +506,7 @@ class MCUWebBackendAPI:
                                     "port": "",
                                     "baud": self.current_baud,
                                 })
+                                self._sync_project_hardware_state()
             except Exception:
                 pass  # never crash the monitor; back-off handled by wait below
 
@@ -2024,6 +2028,12 @@ class MCUWebBackendAPI:
         add_recent_project(str(p))
         set_active_sketch_dir(str(p), hwnd=getattr(self, "_hwnd", 0))
 
+        # Enforce file hiding and cleanup immediately upon opening sketch
+        try:
+            hide_internal_project_metadata(p)
+        except Exception:
+            pass
+
         # Update config
         cfg = load_gui_config()
         cfg["last_sketch_dir"] = str(p)
@@ -2062,6 +2072,7 @@ class MCUWebBackendAPI:
         self._restore_project_compile_state()
         self.update_skip_compile_availability()
         self._load_compat_cache()
+        self._sync_project_hardware_state(p)
         return {"success": True, "project": payload}
 
     def open_project_picker(self) -> str:
@@ -2328,12 +2339,126 @@ class MCUWebBackendAPI:
         self.emit("ports:updated", ports)
         return ports
 
+    def _extract_port_device(self, text: str) -> str:
+        """Extract COM device (e.g. 'COM4') from port label or raw string."""
+        if not text:
+            return ""
+        match = re.match(r"(COM\d+|/dev/\S+)", str(text).strip())
+        return match.group(1) if match else str(text).strip().split()[0]
+
+    def _sync_project_hardware_state(self, target_dir: Optional[str | Path] = None) -> None:
+        """Write current target board, port, and serial settings to
+        <sketch_dir>/.mcu_flasher_build_cache/project_state.json so AI assistants (OpenCode & Antigravity)
+        can instantly know the active MCU architecture, pinouts, and COM connection in real-time.
+        """
+        sketch_dir = Path(target_dir) if target_dir else getattr(self, "sketch_dir_path", None)
+        if not sketch_dir or not Path(sketch_dir).is_dir():
+            return
+
+        try:
+            cache_dir = get_project_build_cache_root(sketch_dir)
+
+            port_label = getattr(self, "current_port", "") or ""
+            port_device = self._extract_port_device(port_label) or ""
+
+            # Filter generic motherboard Communications Port (COM1) so it is not mistaken for an attached MCU
+            if port_device.upper() == "COM1":
+                lbl = (port_label or "").lower()
+                mcu_kws = ["cp210", "ch34", "ch91", "ftdi", "esp32", "silicon labs", "wch", "jtag", "usb bridge", "arduino", "mcu"]
+                if "communications port" in lbl or not any(kw in lbl for kw in mcu_kws):
+                    port_device = ""
+                    port_label = ""
+
+            board_name = (getattr(self, "current_board", "") or "").strip()
+            mcu_connected = bool(port_device)
+            board_selected = bool(board_name)
+
+            if board_selected and mcu_connected:
+                status_summary = f"Ready: {board_name} on {port_device}."
+            elif board_selected and not mcu_connected:
+                status_summary = f"{board_name} selected in GUI (No microcontroller connected on COM port)."
+            elif not board_selected and mcu_connected:
+                status_summary = f"Microcontroller connected on {port_device}, but no board selected in GUI."
+            else:
+                status_summary = "No board selected in GUI and no microcontroller connected."
+
+            board_info = self._resolve_board_info(board_name) if board_selected else {}
+
+            baud_val = getattr(self, "current_baud", 115200)
+            upload_spd_val = getattr(self, "_active_upload_speed", "460800") or "460800"
+
+            state_payload = (
+                Path(sketch_dir).name,
+                str(Path(sketch_dir).resolve(strict=False)),
+                status_summary,
+                tuple(sorted((k, str(v)) for k, v in {
+                    "board_selected": board_selected,
+                    "mcu_connected": mcu_connected,
+                    "board_name": board_name if board_selected else None,
+                    "platform": (board_info.get("platform", "") if board_selected else "") or None,
+                    "framework": (board_info.get("framework", "arduino") if board_selected else "") or None,
+                    "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
+                    "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
+                    "port": port_device if mcu_connected else None,
+                    "port_label": port_label if mcu_connected else None,
+                    "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
+                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "flash_mb": board_info.get("flash_mb") if board_selected else None,
+                    "has_psram": board_info.get("has_psram", False) if board_selected else False,
+                }.items())),
+            )
+
+            if getattr(self, "_last_synced_hardware_payload", None) == state_payload:
+                return
+            self._last_synced_hardware_payload = state_payload
+
+            state_data = {
+                "project_name": Path(sketch_dir).name,
+                "project_path": str(Path(sketch_dir).resolve(strict=False)),
+                "status_summary": status_summary,
+                "hardware": {
+                    "board_selected": board_selected,
+                    "mcu_connected": mcu_connected,
+                    "board_name": board_name if board_selected else None,
+                    "platform": (board_info.get("platform", "") if board_selected else "") or None,
+                    "framework": (board_info.get("framework", "arduino") if board_selected else "") or None,
+                    "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
+                    "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
+                    "port": port_device if mcu_connected else None,
+                    "port_label": port_label if mcu_connected else None,
+                    "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
+                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "flash_mb": board_info.get("flash_mb") if board_selected else None,
+                    "has_psram": board_info.get("has_psram", False) if board_selected else False,
+                },
+                "last_updated": datetime.now().isoformat(timespec="seconds"),
+            }
+
+            state_file = cache_dir / "project_state.json"
+            payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
+
+            def _write_state_bg():
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    hide_generated_directory(cache_dir)
+                    ensure_file_writable(state_file)
+                    state_file.write_text(payload_text, encoding="utf-8")
+                    ensure_hidden_read_first_md(sketch_dir)
+                    hide_internal_project_metadata(sketch_dir)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_write_state_bg, name="MCU_SyncHardwareState", daemon=True).start()
+        except Exception:
+            pass
+
     def select_port(self, port: str):
         """Select COM port and update serial monitor."""
         self.current_port = port
         cfg = load_gui_config()
         cfg["selected_port"] = port
         save_gui_config(cfg)
+        self._sync_project_hardware_state()
 
         if not self.is_busy:
             self._serial_reconnect_token += 1
@@ -2369,6 +2494,7 @@ class MCUWebBackendAPI:
         self._load_compile_cache(board_name)
         self.emit("board:selected", {"board_name": board_name})
         self.update_skip_compile_availability()
+        self._sync_project_hardware_state()
 
     def get_recent_boards(self) -> list[str]:
         """Return recently selected MCU boards (max 5)."""
@@ -2404,6 +2530,7 @@ class MCUWebBackendAPI:
         cfg = load_gui_config()
         cfg["baud_rate"] = self.current_baud
         save_gui_config(cfg)
+        self._sync_project_hardware_state()
 
         # If the baud rate did not change and the connection is active, avoid reconnect spam
         if not baud_changed and self.serial_running and self._serial_conn and self._serial_conn.is_open:
@@ -7407,6 +7534,8 @@ class MCUWebBackendAPI:
                 (sketch / ".mcu_ai_edits", "legacy AI edit backups"),
                 (sketch / "MCU-FLASHER-SRC", "legacy generated source cache"),
                 (sketch / ".ai_edit_signal", "generated editor signal"),
+                (sketch / ".mcu_flasher_project_hardware.json", "legacy hardware metadata"),
+                (sketch / ".ai_ready_signal", "stale AI ready signal"),
                 (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
                 (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
                 (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
@@ -7436,7 +7565,7 @@ class MCUWebBackendAPI:
 
             # Recreate AGENTS.md / AI project state
             try:
-                ensure_hidden_read_first_md(self.sketch_dir_path)
+                self._sync_project_hardware_state(self.sketch_dir_path)
             except Exception:
                 pass
 
