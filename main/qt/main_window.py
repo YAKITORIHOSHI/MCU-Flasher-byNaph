@@ -745,10 +745,10 @@ class MCUMainWindow(QMainWindow):
             if prev_op in ("upload", "flash", "hard_reset", "soft_reset", "reset") and is_success:
                 QTimer.singleShot(500, self._focus_serial_monitor)
 
-            # After an upload/flash, once the Serial Monitor tab is focused, issue
+            # After an upload/flash or soft reset, once the Serial Monitor tab is focused, issue
             # a silent DTR pulse to reboot the MCU so its boot logs and sketch
             # output appear immediately — no manual Reset button press needed.
-            if prev_op in ("upload", "flash") and is_success:
+            if prev_op in ("upload", "flash", "soft_reset") and is_success:
                 QTimer.singleShot(700, self._post_upload_dtr_pulse)
 
     def _focus_serial_monitor(self) -> None:

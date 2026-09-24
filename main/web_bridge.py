@@ -2551,12 +2551,14 @@ class MCUWebBackendAPI:
 
         This reboots the MCU immediately after an upload completes, so the
         sketch starts running and boot logs appear in the Serial Monitor without
-        requiring any user action.  The pulse is completely silent — no console
-        messages, no busy-flag changes, no phase transitions.
-
         Safe to call at any time: silently no-ops if the serial port is not
         open or if a destructive operation (upload / flash / reset) is active.
         """
+        now = time.monotonic()
+        if now - getattr(self, "_last_dtr_pulse_time", 0.0) < 0.6:
+            return
+        self._last_dtr_pulse_time = now
+
         def _pulse():
             # Don't interfere with an ongoing operation.
             if getattr(self, "is_busy", False):
@@ -5378,7 +5380,7 @@ class MCUWebBackendAPI:
         b_name = board_name or self.current_board or ""
         b_info = board_info or self._resolve_board_info(b_name)
         platform = str(b_info.get("platform", "")).lower()
-        is_uno = (platform == "atmelavr")
+        is_uno = ("avr" in platform)
         self.emit("console:log", {"text": f"  🔄 Triggering hardware reset on {port}...", "tag": "info", "newline": True})
         try:
             # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
@@ -7360,6 +7362,9 @@ class MCUWebBackendAPI:
                 if ok or was_monitoring:
                     time.sleep(0.5)
                     self._start_serial_monitor()
+                    if ok:
+                        time.sleep(0.15)
+                        self.pulse_dtr_reset()
 
         threading.Thread(target=_worker, name="MCU_SoftReset", daemon=True).start()
 
