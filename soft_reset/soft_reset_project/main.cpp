@@ -4,5 +4,4 @@ void setup() {
   Serial.println(">>> ----- <<<");
 }
 
-void loop() {
-}
+void loop() {}

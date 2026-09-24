@@ -257,6 +257,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             Object.keys(hosts).forEach(k => {
                 if (hosts[k]) hosts[k].classList.toggle("active", k === activeShell);
             });
+            if (terminals[activeShell]) {
+                try { terminals[activeShell].focus(); } catch (e) {}
+            }
             scheduleFit();
             [30, 80, 150, 300, 600].forEach(ms => setTimeout(scheduleFit, ms));
         }
@@ -275,8 +278,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 const term = new Terminal({
                     cursorBlink: true,
-                    cursorStyle: "bar",
-                    cursorWidth: 2,
+                    cursorStyle: "block",
                     fontSize: 13,
                     lineHeight: 1.25,
                     fontFamily: "'Cascadia Code', 'Segoe UI Mono', Consolas, 'Courier New', monospace",
@@ -284,6 +286,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     overviewRulerWidth: 0,
                     theme: Object.assign({}, currentTheme),
                     allowTransparency: true,
+                    convertEol: true,
                     rightClickSelectsWord: true,
                 });
                 const fit = new FitAddon.FitAddon();
@@ -291,6 +294,8 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 term.open(host);
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
+
+                try { term.focus(); } catch (e) {}
 
                 if (typeof ResizeObserver !== "undefined") {
                     try {
@@ -302,6 +307,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 }
 
                 term.onData(data => {
+                    if (data && (data.startsWith("\x1b[?") || data.startsWith("\x1b[>"))) {
+                        return;
+                    }
                     if (data && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
                         socket.send(JSON.stringify({ type: "input", shell: kind, data: data }));
                     }
@@ -389,7 +397,22 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         window.addEventListener("resize", scheduleFit);
-        window.addEventListener("focus", scheduleFit);
+        window.addEventListener("focus", () => {
+            scheduleFit();
+            if (activeShell && terminals[activeShell]) {
+                try { terminals[activeShell].focus(); } catch (e) {}
+            }
+        });
+        document.addEventListener("click", () => {
+            if (activeShell && terminals[activeShell]) {
+                try { terminals[activeShell].focus(); } catch (e) {}
+            }
+        });
+        window.focusTerminal = function() {
+            if (activeShell && terminals[activeShell]) {
+                try { terminals[activeShell].focus(); } catch (e) {}
+            }
+        };
         document.addEventListener("visibilitychange", () => {
             if (!document.hidden) scheduleFit();
         });
@@ -629,13 +652,31 @@ def _build_terminal_env(target_dir: str) -> dict[str, str]:
         if pio_penv.is_dir():
             extra_paths.append(str(pio_penv.resolve()))
 
-    # 4. Arduino CLI & Git
+    # 4. Global npm directory (where opencode and npm CLI coding tools live)
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        npm_dir = Path(appdata) / "npm"
+        if npm_dir.is_dir():
+            extra_paths.append(str(npm_dir.resolve()))
+
+    # 5. LocalAppData Programs (Git, Python, Node, etc.)
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        for prog in [
+            Path(localappdata) / "Programs" / "Git" / "cmd",
+            Path(localappdata) / "Programs" / "Git" / "bin",
+        ]:
+            if prog.is_dir():
+                extra_paths.append(str(prog.resolve()))
+
+    # 6. Arduino CLI, Git, Node, and system tools
     for candidate in [
         SCRIPT_DIR / "installers" / "arduino-cli",
         SCRIPT_DIR / "bin",
-        Path(r"C:\Program Files\Git\cmd"),
-        Path(r"C:\Program Files\Git\bin"),
-        Path(r"C:\Program Files (x86)\Git\cmd"),
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "cmd",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Git" / "cmd",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
     ]:
         if candidate.is_dir():
             extra_paths.append(str(candidate.resolve()))
@@ -746,6 +787,13 @@ class ProjectTerminalServer:
         self.clients_lock = threading.RLock()
         self.window = None
 
+        # Pre-initialize default PowerShell session
+        default_sid = "pwsh_1"
+        self.session_counter = 1
+        default_session = ShellSession(self, default_sid, "pwsh", "PowerShell")
+        self.sessions[default_sid] = default_session
+        self.active_shell = default_sid
+
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
             return
@@ -849,9 +897,28 @@ class ProjectTerminalServer:
         ready_candidate = None
         try:
             shell_env = _build_terminal_env(self.target_dir)
-            pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
+            try:
+                pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
+            except Exception as spawn_exc:
+                if kind == "pwsh":
+                    cmd_exe = _native_shell_executable("cmd")
+                    if cmd_exe:
+                        argv = [cmd_exe, "/D"]
+                        pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
+                    else:
+                        raise spawn_exc
+                else:
+                    raise spawn_exc
+
             with session.lock:
                 session.pty = pty
+
+            if kind == "pwsh":
+                escaped = str(self.target_dir).replace("'", "''")
+                pty.write(f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Set-Location -LiteralPath '{escaped}'\r\n")
+            else:
+                pty.write(f'chcp 65001 >nul && cd /d "{self.target_dir}"\r\n')
+
             probe = ""
             while is_current():
                 try:
@@ -903,8 +970,13 @@ class ProjectTerminalServer:
         title = str(message.get("title", ""))
 
         if action == "new":
+            if shell_id and shell_id in self.sessions:
+                self.active_shell = shell_id
+                self._start_session(shell_id)
+                self.broadcast({"type": "activate", "shell": shell_id})
+                return {"success": True, "shell": shell_id, "title": self.sessions[shell_id].title}
             self.session_counter += 1
-            new_id = shell_id if shell_id and shell_id not in self.sessions else f"{kind}_{self.session_counter}"
+            new_id = shell_id if shell_id else f"{kind}_{self.session_counter}"
             new_title = title or kind
             session = ShellSession(self, new_id, kind, new_title)
             self.sessions[new_id] = session
@@ -1019,6 +1091,9 @@ class ProjectTerminalServer:
                     input_data = str(message.get("data", ""))
                     if not input_data:
                         continue
+                    input_data = sanitize_terminal_input(input_data)
+                    if not input_data:
+                        continue
                     with session.lock:
                         pty = session.pty if session.running else None
                     if pty:
@@ -1126,6 +1201,11 @@ class ProjectTerminalServer:
         if websockets is None:
             raise RuntimeError("websockets is unavailable")
         self.loop = asyncio.get_running_loop()
+
+        # Start initial pre-configured session so ConPTY is immediately running and prompt ready
+        if self.active_shell and self.active_shell in self.sessions:
+            self._start_session(self.active_shell)
+
         async with websockets.serve(self.websocket_handler, "127.0.0.1", self.port + 1, max_size=2**22):
             self._write_port_file()
             await asyncio.Future()
@@ -1222,11 +1302,12 @@ def run_standalone_project_terminal(target_directory: str, initial_cwd: str, por
         window = webview.create_window(
             title=WINDOW_TITLE,
             url=f"http://127.0.0.1:{port}",
-            width=900,
-            height=520,
+            x=-32000,
+            y=-32000,
+            width=920,
+            height=540,
             min_size=(320, 180),
             resizable=True,
-            hidden=True,
             focus=False,
             background_color=terminal_theme["bg"],
         )

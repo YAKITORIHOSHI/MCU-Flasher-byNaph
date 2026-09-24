@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QToolBar, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox,
     QSizePolicy, QFrame, QStyleOptionComboBox, QStylePainter, QStyle,
-    QMessageBox,
+    QMessageBox, QApplication,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +213,7 @@ class PrimaryToolbar(QToolBar):
         self.setFloatable(False)
         self.setIconSize(__import__("PySide6.QtCore", fromlist=["QSize"]).QSize(16, 16))
         self.setObjectName("primary-toolbar")
+        self._current_sketch_path: str = ""
         self._setup_widgets()
 
     def _setup_widgets(self) -> None:
@@ -469,7 +470,24 @@ class PrimaryToolbar(QToolBar):
         elif hasattr(mw, "_editor_panel"):
             mw._editor_panel.trigger_reload()
 
+    def _is_busy(self) -> bool:
+        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+            return True
+        mw = self.window()
+        if mw and getattr(mw, "_active_operation", None) is not None:
+            return True
+        return False
+
     def _do_modify(self) -> None:
+        if self._is_busy():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.window(),
+                "Action in Progress",
+                "Modifying project files is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         mw = self.window()
         if hasattr(mw, "_open_modify_files_dialog"):
             mw._open_modify_files_dialog()
@@ -494,11 +512,29 @@ class PrimaryToolbar(QToolBar):
 
     def _on_sketch_label_click(self, event) -> None:
         if event.button() == Qt.MouseButton.RightButton:
+            if self._is_busy():
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self.window(),
+                    "Action in Progress",
+                    "Changing project is not allowed while an action is in progress.\n\n"
+                    "Please wait for the current action to finish or stop it first.",
+                )
+                return
             self._on_new_project()
         elif self._backend:
             self._backend.open_in_explorer()
 
     def _on_new_project(self) -> None:
+        if self._is_busy():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.window(),
+                "Action in Progress",
+                "Changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         from main.qt.project_dialog import ProjectDialog
         dlg = ProjectDialog(self._backend, parent=self.window())
         dlg.exec()
@@ -508,12 +544,16 @@ class PrimaryToolbar(QToolBar):
         launch_download_manager(parent=self.window())
 
     def update_sketch_label(self, path: str) -> None:
+        self._current_sketch_path = path
         p = Path(path)
         text = p.name if p.name else path
         if len(text) > 40:
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
-        self.lbl_sketch.setToolTip(path)
+        if self._is_busy():
+            self.lbl_sketch.setToolTip("Current sketch folder (changing project is not allowed during actions)")
+        else:
+            self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: change project" if path else "Current sketch folder — left-click: open in Explorer • right-click: change project")
         self._balance_spacers()
 
     @Slot(dict)
@@ -537,6 +577,16 @@ class PrimaryToolbar(QToolBar):
             self.btn_upload.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_clean.setEnabled(False)
             self.btn_clean.setCursor(Qt.CursorShape.ArrowCursor)
+            self.btn_modify.setEnabled(False)
+            self.btn_modify.setCursor(Qt.CursorShape.ArrowCursor)
+            self.btn_project.setEnabled(False)
+            self.btn_project.setCursor(Qt.CursorShape.ArrowCursor)
+            self.btn_project.setToolTip("Changing project is not allowed while an action is in progress")
+            self.lbl_sketch_icon.setEnabled(False)
+            self.lbl_sketch_icon.setCursor(Qt.CursorShape.ArrowCursor)
+            self.lbl_sketch_icon.setToolTip("Changing project is not allowed while an action is in progress")
+            if hasattr(self, "lbl_sketch"):
+                self.lbl_sketch.setToolTip("Current sketch folder (changing project is not allowed during actions)")
 
             # STOP button: enabled during compile and build.
             # DISABLED during flash/reset (direct flash write — brick risk) and generic fallback.
@@ -585,6 +635,20 @@ class PrimaryToolbar(QToolBar):
             self.btn_stop.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_clean.setEnabled(True)
             self.btn_clean.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_modify.setEnabled(True)
+            self.btn_modify.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_project.setEnabled(True)
+            self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_project.setToolTip("Open or Create Project (Ctrl+O)")
+            self.lbl_sketch_icon.setEnabled(True)
+            self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.lbl_sketch_icon.setToolTip("Click to select or create a project")
+            if hasattr(self, "lbl_sketch"):
+                cur_path = getattr(self, "_current_sketch_path", "")
+                if cur_path:
+                    self.lbl_sketch.setToolTip(f"{cur_path} — left-click: open in Explorer • right-click: change project")
+                else:
+                    self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: change project")
             # Delegate to action button gating (board/port awareness)
             self._update_action_button_states()
 
@@ -1156,7 +1220,7 @@ class ControlsBar(QWidget):
         self.upload_speed_combo = QComboBox()
         self.upload_speed_combo.addItems([str(s) for s in UPLOAD_SPEEDS])
         self.upload_speed_combo.setCurrentText(str(DEFAULT_UPLOAD_SPEED))
-        self.upload_speed_combo.setFixedWidth(80)
+        self.upload_speed_combo.setFixedWidth(self._get_adaptive_upload_speed_width())
         self.upload_speed_combo.setToolTip("Upload baud rate for flashing firmware")
         self.upload_speed_combo.currentTextChanged.connect(self._on_upload_speed_changed)
         spd_group.addWidget(self.lbl_spd)
@@ -1255,6 +1319,8 @@ class ControlsBar(QWidget):
 
         # Board always starts empty / unconfigured on launch (per user requirement)
         self.board_selector.set_board("")
+        if self._backend:
+            self._backend.current_board = ""
 
         # Populate port dropdown but don't auto-select
         self._refresh_ports()
@@ -1329,7 +1395,11 @@ class ControlsBar(QWidget):
             self.upload_speed_combo.setEnabled(False)
         elif fam in {"espressif32", "espressif8266"}:
             self.upload_speed_combo.setEnabled(True)
-            self.upload_speed_combo.setCurrentText("460800")
+            pref_spd = str(getattr(self._backend, "upload_speed", "") or "460800") if self._backend else "460800"
+            if self.upload_speed_combo.findText(pref_spd) >= 0:
+                self.upload_speed_combo.setCurrentText(pref_spd)
+            else:
+                self.upload_speed_combo.setCurrentText("460800")
         else:
             self.upload_speed_combo.setEnabled(True)
             self.upload_speed_combo.setCurrentText(str(DEFAULT_UPLOAD_SPEED))
@@ -1590,6 +1660,39 @@ class ControlsBar(QWidget):
             self.port_combo.update()
         self.update()
 
+    def _get_adaptive_upload_speed_width(self, width: int | None = None) -> int:
+        """Calculate responsive width for upload speed combobox considering screen dimension, font metrics, and DPI scale."""
+        w = width if width is not None else getattr(self, "_current_width", self.width())
+        try:
+            fm = self.upload_speed_combo.fontMetrics()
+            text_w = max(fm.horizontalAdvance(str(s)) for s in UPLOAD_SPEEDS)
+        except Exception:
+            text_w = 48
+
+        if w >= 1500:
+            extra = 58
+            floor = 104
+        elif w >= 1200:
+            extra = 50
+            floor = 96
+        elif w >= 950:
+            extra = 44
+            floor = 90
+        else:
+            extra = 38
+            floor = 84
+
+        dpi_scale = 1.0
+        try:
+            screen = self.screen() or (QApplication.primaryScreen() if QApplication.instance() else None)
+            if screen:
+                dpi_scale = max(1.0, screen.logicalDotsPerInch() / 96.0)
+        except Exception:
+            dpi_scale = 1.0
+
+        computed = int((text_w + extra) * min(1.25, max(1.0, dpi_scale ** 0.5)))
+        return max(floor, computed)
+
     def update_adaptive_sizing(self) -> None:
         """Refresh adaptive sizing when screen resolution or DPI scaling changes."""
         if hasattr(self, "board_selector") and hasattr(self.board_selector, "_get_adaptive_width"):
@@ -1597,6 +1700,8 @@ class ControlsBar(QWidget):
             self.board_selector.setMinimumWidth(max(160, int(adaptive_w * 0.85)))
             self.board_selector.setMaximumWidth(max(360, int(adaptive_w * 1.5)))
             self.board_selector.updateGeometry()
+        if hasattr(self, "upload_speed_combo") and hasattr(self, "_get_adaptive_upload_speed_width"):
+            self.upload_speed_combo.setFixedWidth(self._get_adaptive_upload_speed_width())
 
     def is_compact(self) -> bool:
         return getattr(self, "_is_compact", False)
@@ -1624,6 +1729,10 @@ class ControlsBar(QWidget):
             if hasattr(self, "_opt_popup") and self._opt_popup and self._opt_popup.isVisible():
                 self._opt_popup.close()
                 self._opt_popup = None
+
+        # Upload speed combo responsive width
+        if hasattr(self, "upload_speed_combo") and hasattr(self, "_get_adaptive_upload_speed_width"):
+            self.upload_speed_combo.setFixedWidth(self._get_adaptive_upload_speed_width(width))
 
         # Checkboxes & SPD label adaptation
         if width < 1100:

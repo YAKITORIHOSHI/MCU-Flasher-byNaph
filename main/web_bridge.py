@@ -924,7 +924,11 @@ class MCUWebBackendAPI:
 
                 bin_file = self._find_cached_firmware_binary(restored_board)
                 if bin_file is not None and cached_hash:
+                    self._load_compile_cache(restored_board)
                     return True
+            else:
+                self._last_compiled_board = ""
+                self._last_source_hash = ""
 
             return False
         except Exception:
@@ -1830,6 +1834,8 @@ class MCUWebBackendAPI:
 
     def add_project_file(self, filename: str) -> dict[str, Any]:
         """Create a new source/header file in the sketch folder."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            return {"success": False, "error": "Modifying project files is not allowed while an action is in progress."}
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         clean_name = filename.strip()
@@ -1864,6 +1870,8 @@ class MCUWebBackendAPI:
 
     def rename_project_file(self, old_name: str, new_name: str) -> dict[str, Any]:
         """Rename a file in the sketch folder."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            return {"success": False, "error": "Modifying project files is not allowed while an action is in progress."}
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         old_file = self.sketch_dir_path / old_name.strip()
@@ -1883,6 +1891,8 @@ class MCUWebBackendAPI:
 
     def delete_project_file(self, filename: str) -> dict[str, Any]:
         """Permanently delete a file from the sketch folder."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            return {"success": False, "error": "Modifying project files is not allowed while an action is in progress."}
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         target = self.sketch_dir_path / filename.strip()
@@ -1936,6 +1946,17 @@ class MCUWebBackendAPI:
 
     def open_project(self, folder_path: str, active_file: Optional[str] = None) -> dict[str, Any]:
         """Open and switch to an existing sketch directory or code file."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            self.emit("notification", {
+                "title": "Action in Progress",
+                "message": "Changing project is not allowed while an action is in progress.",
+                "type": "warning",
+            })
+            return {
+                "success": False,
+                "error": "Changing project is not allowed while an action is in progress.",
+            }
+
         target = Path(folder_path).resolve()
         if target.is_file():
             active_file = str(target)
@@ -2039,14 +2060,14 @@ class MCUWebBackendAPI:
             "type": "info",
         })
         self._restore_project_compile_state()
-        if self.current_board:
-            self.emit("board:selected", {"board_name": self.current_board})
         self.update_skip_compile_availability()
         self._load_compat_cache()
         return {"success": True, "project": payload}
 
     def open_project_picker(self) -> str:
         """Open native folder browser dialog."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            return ""
         if self._window and hasattr(self._window, "create_file_dialog"):
             try:
                 res = self._window.create_file_dialog(
@@ -2136,6 +2157,17 @@ class MCUWebBackendAPI:
         template_type: str = "standard",
     ) -> dict[str, Any]:
         """Create a new sketch folder with full scaffold (matching old ProjectSelectorDialog)."""
+        if self.is_busy or getattr(self, "active_operation", None) is not None:
+            self.emit("notification", {
+                "title": "Action in Progress",
+                "message": "Creating or changing project is not allowed while an action is in progress.",
+                "type": "warning",
+            })
+            return {
+                "success": False,
+                "error": "Creating or changing project is not allowed while an action is in progress.",
+            }
+
         clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.strip()) or "NewSketch"
         target_dir = Path(parent_dir).resolve() / clean_name
         if is_application_codebase_dir(parent_dir) or is_application_codebase_dir(target_dir):
@@ -2618,7 +2650,7 @@ class MCUWebBackendAPI:
             self.emit("serial:clear", None)
 
         if not self.current_board:
-            self._load_compile_cache()
+            self._restore_project_compile_state()
             if self.current_board:
                 self.emit("board:selected", {"board_name": self.current_board})
         if not self.current_board:
@@ -2626,9 +2658,55 @@ class MCUWebBackendAPI:
             self.emit("notification", {"title": "Compile Failed", "message": "No board selected.", "type": "warning"})
             return
 
+        self.is_busy = True
+        self._stop_requested = False
+        self.active_operation = "compile"
+        self._current_op_phase = "compiling"
+        self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True, "op": "compile"})
+        self.emit("window:closable", {"closable": True})
+
         threading.Thread(
             target=self._compile_worker, args=(False,), name="MCU_Compile", daemon=True
         ).start()
+
+    @staticmethod
+    def _convert_sketch_inos_to_cpp(primary_ino: Path, ino_files: list[Path]) -> str:
+        """Convert Arduino .ino sketch files into a unified .cpp unit with Arduino.h and prototypes."""
+        main_name = primary_ino.name
+        c = None
+        try:
+            from platformio.builder.tools.pioino import InoToCPPConverter
+
+            class _DummyEnv:
+                pass
+
+            c = InoToCPPConverter(_DummyEnv())
+            c._main_ino = main_name
+        except Exception:
+            c = None
+
+        SETUP_LOOP_RE = re.compile(r"\bvoid\s+(?:setup|loop)\s*\(", re.MULTILINE | re.IGNORECASE)
+        main_lines = []
+        other_lines = []
+        for f in ino_files:
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            f_label = f.name.replace("\\", "/")
+            cur_block = [f'#line 1 "{f_label}"', content]
+            if f == primary_ino or SETUP_LOOP_RE.search(content):
+                main_lines = cur_block + main_lines
+            else:
+                other_lines.extend(cur_block)
+
+        merged_body = "\n".join(["#include <Arduino.h>"] + main_lines + other_lines)
+        if c is not None:
+            try:
+                return c.append_prototypes(merged_body)
+            except Exception:
+                pass
+        return merged_body
 
     def _compile_worker(self, is_upload: bool = False, is_clean_retry: bool = False) -> bool:
         """Core compile worker executing PlatformIO."""
@@ -2727,7 +2805,10 @@ class MCUWebBackendAPI:
             if not sketch_files and not effective_sketch_dir.is_dir():
                 raise OSError(f"Could not read sketch directory '{effective_sketch_dir}'")
 
-            for name, src_path in sketch_files.items():
+            ino_files = {name: path for name, path in sketch_files.items() if path.suffix.lower() == ".ino"}
+            non_ino_files = {name: path for name, path in sketch_files.items() if path.suffix.lower() != ".ino"}
+
+            for name, src_path in non_ino_files.items():
                 dst_path = src_dir / name
                 should_replace = True
                 if dst_path.is_file():
@@ -2741,16 +2822,59 @@ class MCUWebBackendAPI:
                 if should_replace:
                     shutil.copy2(src_path, dst_path)
 
-            # Preserve PlatformIO's generated <sketch>.ino.cpp for unchanged .ino files!
-            generated_ino_cpp = {
-                f.name + ".cpp" for f in sketch_files.values() if f.suffix.lower() == ".ino"
-            }
-            allowed_names = set(sketch_files) | generated_ino_cpp
+            target_ino_cpp_names: set[str] = set()
+            if ino_files:
+                sketch_dir_name = effective_sketch_dir.name.lower()
+                primary_ino = None
+                for p in ino_files.values():
+                    if p.stem.lower() == sketch_dir_name:
+                        primary_ino = p
+                        break
+                if not primary_ino:
+                    SETUP_LOOP_RE = re.compile(r'\bvoid\s+(?:setup|loop)\s*\(', re.MULTILINE | re.IGNORECASE)
+                    for p in ino_files.values():
+                        try:
+                            if SETUP_LOOP_RE.search(p.read_text(encoding="utf-8", errors="replace")):
+                                primary_ino = p
+                                break
+                        except Exception:
+                            pass
+                if not primary_ino:
+                    primary_ino = sorted(ino_files.values(), key=lambda p: p.name)[0]
+
+                target_ino_cpp_name = f"{primary_ino.name}.cpp"
+                target_ino_cpp_names.add(target_ino_cpp_name)
+                dst_ino_cpp = src_dir / target_ino_cpp_name
+
+                converted_code = self._convert_sketch_inos_to_cpp(primary_ino, sorted(ino_files.values(), key=lambda p: p.name))
+                should_replace_ino = True
+                if dst_ino_cpp.is_file():
+                    try:
+                        old_code = dst_ino_cpp.read_text(encoding="utf-8", errors="replace")
+                        if old_code == converted_code:
+                            should_replace_ino = False
+                    except Exception:
+                        should_replace_ino = True
+
+                if should_replace_ino:
+                    ensure_file_writable(dst_ino_cpp)
+                    dst_ino_cpp.write_text(converted_code, encoding="utf-8")
+
+                # Remove any raw .ino files from src_dir so PlatformIO doesn't delete the .cpp file at exit
+                for existing_ino in list(src_dir.glob("*.ino")):
+                    try:
+                        ensure_file_writable(existing_ino)
+                        existing_ino.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+            allowed_names = set(non_ino_files.keys()) | target_ino_cpp_names
 
             # Remove stale entries that no longer have a source file
             for dst_path in list(src_dir.iterdir()):
                 if dst_path.name not in allowed_names:
                     try:
+                        ensure_file_writable(dst_path)
                         dst_path.unlink()
                     except OSError:
                         pass
@@ -3957,22 +4081,31 @@ class MCUWebBackendAPI:
             return None
 
         # Check sketch source modification times against binary timestamp.
-        # Skipped when we know a fresh compile just completed (skip_mtime_check=True).
+        # Skipped when we know a fresh compile just completed (skip_mtime_check=True),
+        # or when source hash matches the cached compiled hash.
         if not skip_mtime_check:
-            try:
-                bin_mtime = firmware_bin.stat().st_mtime
-                source_candidates = (
-                    list(project_dir.glob("src/**/*")) +
-                    list(project_dir.glob("*.cpp")) +
-                    list(project_dir.glob("*.ino")) +
-                    list(project_dir.glob("*.h")) +
-                    list(project_dir.glob("*.hpp"))
-                )
-                for sc in source_candidates:
-                    if sc.is_file() and sc.stat().st_mtime > bin_mtime:
-                        return None  # source was modified after compilation -> recompile needed
-            except Exception:
-                pass
+            cached_hash = getattr(self, "_last_source_hash", "")
+            curr_hash = ""
+            if cached_hash:
+                try:
+                    curr_hash = self._hash_sources(board_name)
+                except Exception:
+                    curr_hash = ""
+            if not (cached_hash and curr_hash == cached_hash):
+                try:
+                    bin_mtime = firmware_bin.stat().st_mtime
+                    source_candidates = (
+                        list(project_dir.glob("src/**/*")) +
+                        list(project_dir.glob("*.cpp")) +
+                        list(project_dir.glob("*.ino")) +
+                        list(project_dir.glob("*.h")) +
+                        list(project_dir.glob("*.hpp"))
+                    )
+                    for sc in source_candidates:
+                        if sc.is_file() and sc.stat().st_mtime > bin_mtime:
+                            return None  # source was modified after compilation -> recompile needed
+                except Exception:
+                    pass
 
         if p_platform == "espressif8266":
             # ESP8266 Arduino core produces a single merged image flashed at 0x0
@@ -4645,9 +4778,18 @@ class MCUWebBackendAPI:
             except Exception:
                 old_content = ""
 
-        # Normalize line endings and whitespace to compare content accurately
+        # Normalize line endings and whitespace to compare content accurately.
+        # Ignore upload_speed and monitor_speed line differences so that changing
+        # baud rates or upload speeds in the UI toolbar does NOT touch platformio.ini's
+        # mtime and does NOT invalidate PlatformIO/SCons compiled C++ objects.
         def _norm_ini(text: str) -> str:
-            return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").strip().splitlines())
+            lines = []
+            for line in text.replace("\r\n", "\n").strip().splitlines():
+                stripped = line.strip()
+                if stripped.startswith("upload_speed") or stripped.startswith("monitor_speed"):
+                    continue
+                lines.append(line.rstrip())
+            return "\n".join(lines)
 
         # If platformio.ini already exists and has identical contents, DO NOT rewrite it!
         # Touching platformio.ini updates its modification timestamp (mtime), which causes

@@ -44,9 +44,11 @@ from PySide6.QtWidgets import (
 try:
     import win32con
     import win32gui
+    import win32process
 except ImportError:
     win32gui = None
     win32con = None
+    win32process = None
 
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
@@ -109,9 +111,15 @@ class TerminalPanel(QWidget):
         self._original_style: Optional[int] = None
         self._original_ex_style: Optional[int] = None
 
-        self._sessions_meta: dict[str, dict] = {}
-        self._active_session_id: Optional[str] = None
-        self._session_counter = 0
+        self._sessions_meta: dict[str, dict] = {
+            "pwsh_1": {
+                "id": "pwsh_1",
+                "kind": "pwsh",
+                "title": "PowerShell",
+            }
+        }
+        self._active_session_id: Optional[str] = "pwsh_1"
+        self._session_counter = 1
         self._pending_controls: list[tuple[str, Optional[str], Optional[dict]]] = []
 
         self._current_theme = "default"
@@ -214,6 +222,9 @@ class TerminalPanel(QWidget):
             }
         """)
         hl.addWidget(self._tab_bar)
+        init_idx = self._tab_bar.addTab("★ PowerShell")
+        self._tab_bar.setTabData(init_idx, "pwsh_1")
+        self._tab_bar.setCurrentIndex(0)
 
         hl.addStretch()
 
@@ -343,7 +354,7 @@ class TerminalPanel(QWidget):
 
         self._stack.addWidget(self._empty_card)
 
-        self._stack.setCurrentWidget(self._empty_card)
+        self._stack.setCurrentWidget(self._loader_card)
         main_layout.addWidget(self._stack, stretch=1)
 
     def resizeEvent(self, event) -> None:
@@ -495,6 +506,22 @@ class TerminalPanel(QWidget):
         self._ready_attempts = 0
         self._ready_poll_timer.start()
 
+    def _show_all_children(self, hwnd: int, show: bool = True) -> None:
+        """Ensure all child controls in WebView2 window hierarchy are shown or hidden."""
+        if win32gui is None or not hwnd:
+            return
+        cmd = win32con.SW_SHOW if show else win32con.SW_HIDE
+        def _enum(c_hwnd, _):
+            try:
+                win32gui.ShowWindow(c_hwnd, cmd)
+            except Exception:
+                pass
+            return True
+        try:
+            win32gui.EnumChildWindows(hwnd, _enum, None)
+        except Exception:
+            pass
+
     def _embed_terminal_hwnd(self, hwnd: int) -> None:
         """Reparent the native pywebview window into the Qt container."""
         if win32gui is None or win32con is None:
@@ -535,11 +562,13 @@ class TerminalPanel(QWidget):
             self._is_embedded = True
 
             if not self._is_ready:
+                self._show_all_children(hwnd, False)
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
                 self._resize_embedded_terminal(show=False)
                 self._stack.setCurrentWidget(self._loader_card)
             else:
                 should_show = self.isVisible()
+                self._show_all_children(hwnd, should_show)
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW if should_show else win32con.SW_HIDE)
                 self._resize_embedded_terminal(show=should_show)
                 if len(self._sessions_meta) > 0:
@@ -734,25 +763,51 @@ class TerminalPanel(QWidget):
     # ── Geometry & Sizing ────────────────────────────────────────────────────
     def focus_terminal(self) -> None:
         """Focus the embedded native terminal window so keyboard input flows to ConPTY."""
-        if self._term_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._term_hwnd)):
-            try:
-                hwnd = int(self._term_hwnd)
-                win32gui.SetFocus(hwnd)
-                def _find_leaf(c_hwnd, acc):
-                    acc.append(c_hwnd)
-                    return True
-                leaves = []
-                win32gui.EnumChildWindows(hwnd, _find_leaf, leaves)
-                for c in reversed(leaves):
-                    cname = win32gui.GetClassName(c)
-                    if "Chrome_RenderWidgetHostHWND" in cname or "Chrome_WidgetWin" in cname or "WindowsForms" in cname:
+        if not self._term_hwnd or win32gui is None or win32con is None:
+            return
+        if not win32gui.IsWindow(int(self._term_hwnd)):
+            return
+        try:
+            hwnd = int(self._term_hwnd)
+            cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+            target_tid, _ = win32process.GetWindowThreadProcessId(hwnd) if win32process else (0, 0)
+            if target_tid and target_tid != cur_tid:
+                ctypes.windll.user32.AttachThreadInput(cur_tid, target_tid, True)
+                try:
+                    ctypes.windll.user32.SetFocus(hwnd)
+                    ctypes.windll.user32.SetActiveWindow(hwnd)
+                finally:
+                    ctypes.windll.user32.AttachThreadInput(cur_tid, target_tid, False)
+            else:
+                try:
+                    win32gui.SetFocus(hwnd)
+                except Exception:
+                    pass
+
+            def _find_leaf(c_hwnd, acc):
+                acc.append(c_hwnd)
+                return True
+            leaves = []
+            win32gui.EnumChildWindows(hwnd, _find_leaf, leaves)
+            for c in reversed(leaves):
+                cname = win32gui.GetClassName(c)
+                if "Chrome_RenderWidgetHostHWND" in cname or "Chrome_WidgetWin" in cname:
+                    c_tid, _ = win32process.GetWindowThreadProcessId(c) if win32process else (0, 0)
+                    if c_tid and c_tid != cur_tid:
+                        ctypes.windll.user32.AttachThreadInput(cur_tid, c_tid, True)
+                        try:
+                            ctypes.windll.user32.SetFocus(c)
+                            ctypes.windll.user32.SetActiveWindow(c)
+                        finally:
+                            ctypes.windll.user32.AttachThreadInput(cur_tid, c_tid, False)
+                    else:
                         try:
                             win32gui.SetFocus(c)
-                            break
                         except Exception:
                             pass
-            except Exception:
-                pass
+                    break
+        except Exception:
+            pass
 
     def refresh_terminal(self) -> None:
         """Self-refresh the terminal view, geometry, and xterm layout."""
@@ -764,6 +819,7 @@ class TerminalPanel(QWidget):
             self._stack.setCurrentWidget(self._embed_container)
             if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
                 win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
+                self._show_all_children(int(self._term_hwnd), True)
                 self._resize_embedded_terminal(show=True)
                 QTimer.singleShot(30, lambda: self._resize_embedded_terminal(show=True))
                 QTimer.singleShot(100, lambda: self._resize_embedded_terminal(show=True))
@@ -773,6 +829,7 @@ class TerminalPanel(QWidget):
             self._stack.setCurrentWidget(self._empty_card)
             if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
                 try:
+                    self._show_all_children(int(self._term_hwnd), False)
                     win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
                 except Exception:
                     pass
@@ -799,15 +856,20 @@ class TerminalPanel(QWidget):
             flags = win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER
             if should_show:
                 flags |= win32con.SWP_SHOWWINDOW
+                win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
+                self._show_all_children(int(self._term_hwnd), True)
             else:
                 flags |= win32con.SWP_NOACTIVATE
+                win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
+                self._show_all_children(int(self._term_hwnd), False)
 
             hwnd = int(self._term_hwnd)
             win32gui.SetWindowPos(hwnd, 0, 0, 0, w, h, flags)
 
             def _enum_child(c_hwnd, _):
                 try:
-                    win32gui.SetWindowPos(c_hwnd, 0, 0, 0, w, h, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                    c_flags = win32con.SWP_NOZORDER | (win32con.SWP_SHOWWINDOW if should_show else win32con.SWP_HIDEWINDOW)
+                    win32gui.SetWindowPos(c_hwnd, 0, 0, 0, w, h, c_flags)
                 except Exception:
                     pass
                 return True
@@ -832,6 +894,7 @@ class TerminalPanel(QWidget):
         super().hideEvent(event)
         if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
             try:
+                self._show_all_children(int(self._term_hwnd), False)
                 ctypes.windll.user32.ShowWindowAsync(int(self._term_hwnd), int(win32con.SW_HIDE))
             except Exception:
                 try:
@@ -846,11 +909,13 @@ class TerminalPanel(QWidget):
             self.add_session("pwsh")
         else:
             self.refresh_terminal()
+            QTimer.singleShot(100, self.focus_terminal)
 
     def _on_tab_hidden(self) -> None:
         """Called when bottom dock notebook switches away from this tab."""
         if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
             try:
+                self._show_all_children(int(self._term_hwnd), False)
                 ctypes.windll.user32.ShowWindowAsync(int(self._term_hwnd), int(win32con.SW_HIDE))
             except Exception:
                 try:
@@ -876,6 +941,8 @@ class TerminalPanel(QWidget):
             orig_ex = self._original_ex_style or 0
             win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_STYLE, orig_style)
             win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_EXSTYLE, orig_ex)
+            self._show_all_children(int(self._term_hwnd), True)
+            win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
             win32gui.SetWindowPos(
                 int(self._term_hwnd), 0, 120, 120, 920, 560,
                 win32con.SWP_FRAMECHANGED | win32con.SWP_SHOWWINDOW,
@@ -1050,16 +1117,25 @@ class TerminalPanel(QWidget):
         self._is_embedded = False
         self._is_ready = False
         self._term_hwnd = None
-        self._sessions_meta.clear()
+        self._sessions_meta = {
+            "pwsh_1": {
+                "id": "pwsh_1",
+                "kind": "pwsh",
+                "title": "PowerShell",
+            }
+        }
+        self._session_counter = 1
+        self._active_session_id = "pwsh_1"
         self._tab_bar.blockSignals(True)
         while self._tab_bar.count() > 0:
             self._tab_bar.removeTab(0)
+        idx = self._tab_bar.addTab("★ PowerShell")
+        self._tab_bar.setTabData(idx, "pwsh_1")
+        self._tab_bar.setCurrentIndex(0)
         self._tab_bar.blockSignals(False)
-        self._active_session_id = None
         self._update_buttons_state()
         if self.isVisible():
             self.ensure_started()
-            self.add_session("pwsh")
 
     # ── Cleanup & Shutdown ───────────────────────────────────────────────────
     def _stop_shell(self) -> None:

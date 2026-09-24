@@ -114,6 +114,25 @@ class ProjectDialog(QDialog):
             self._open_path_edit.setText(self._start_dir)
             self._update_existing_preview(self._start_dir)
 
+    def _is_busy(self) -> bool:
+        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+            return True
+        p = self.parent()
+        if p and getattr(p, "_active_operation", None) is not None:
+            return True
+        return False
+
+    def exec(self) -> int:
+        if self._is_busy():
+            QMessageBox.warning(
+                self.parent() if isinstance(self.parent(), QWidget) else None,
+                "Action in Progress",
+                "Changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return QDialog.DialogCode.Rejected
+        return super().exec()
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         # Ensure centered on active screen work area on initial show
@@ -716,6 +735,16 @@ class ProjectDialog(QDialog):
             self._new_parent_edit.setText(folder)
 
     def _open_existing(self) -> None:
+        if self._is_busy():
+            self._existing_status.setStyleSheet("color: #e74c3c;")
+            self._existing_status.setText("✖ Changing project is not allowed while an action is in progress.")
+            QMessageBox.warning(
+                self,
+                "Action in Progress",
+                "Changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         path = self._open_path_edit.text().strip()
         if not path:
             self._existing_status.setStyleSheet("color: #e74c3c;")
@@ -766,6 +795,16 @@ class ProjectDialog(QDialog):
             self.setEnabled(True)
 
     def _create_project(self) -> None:
+        if self._is_busy():
+            self._new_status.setStyleSheet("color: #e74c3c;")
+            self._new_status.setText("✖ Creating or changing project is not allowed while an action is in progress.")
+            QMessageBox.warning(
+                self,
+                "Action in Progress",
+                "Creating or changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         name = self._new_name_edit.text().strip()
         parent = self._new_parent_edit.text().strip()
         if not name or not parent:
@@ -869,6 +908,15 @@ class ProjectDialog(QDialog):
             self._recent_preview_lbl.setText(f"Path: {path}\n(No source files found)")
 
     def _open_selected_recent(self, item: QListWidgetItem | None = None) -> None:
+        if self._is_busy():
+            self._recent_preview_lbl.setText("✖ Changing project is not allowed while an action is in progress.")
+            QMessageBox.warning(
+                self,
+                "Action in Progress",
+                "Changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         if item is None:
             item = self._recent_list.currentItem()
         if not item:

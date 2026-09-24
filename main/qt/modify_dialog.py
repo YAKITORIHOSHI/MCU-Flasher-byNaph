@@ -46,6 +46,25 @@ class ModifyFilesDialog(QDialog):
         except Exception:
             pass
 
+    def _is_busy(self) -> bool:
+        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+            return True
+        p = self.parent()
+        if p and getattr(p, "_active_operation", None) is not None:
+            return True
+        return False
+
+    def exec(self) -> int:
+        if self._is_busy():
+            QMessageBox.warning(
+                self.parent() if isinstance(self.parent(), QWidget) else None,
+                "Action in Progress",
+                "Modifying project files is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return QDialog.DialogCode.Rejected
+        return super().exec()
+
     def _apply_dialog_theme(self, theme_mode: str | None = None) -> None:
         """Apply active theme palette across all ModifyFilesDialog components."""
         if not theme_mode:
@@ -361,6 +380,10 @@ class ModifyFilesDialog(QDialog):
     def _on_add_file(self) -> None:
         if not self._backend:
             return
+        if self._is_busy():
+            self._add_status.setStyleSheet("color: #e74c3c;")
+            self._add_status.setText("✖ Modifying files is not allowed while an action is in progress.")
+            return
         raw = self._add_name_edit.text().strip()
         if not raw:
             self._add_status.setStyleSheet("color: #e74c3c;")
@@ -386,6 +409,10 @@ class ModifyFilesDialog(QDialog):
     def _on_rename_file(self) -> None:
         if not self._backend:
             return
+        if self._is_busy():
+            self._rename_status.setStyleSheet("color: #e74c3c;")
+            self._rename_status.setText("✖ Modifying files is not allowed while an action is in progress.")
+            return
         old_name = self._rename_combo.currentText().strip()
         new_name = self._rename_edit.text().strip()
         if not old_name:
@@ -409,6 +436,10 @@ class ModifyFilesDialog(QDialog):
 
     def _on_delete_file(self) -> None:
         if not self._backend:
+            return
+        if self._is_busy():
+            self._delete_status.setStyleSheet("color: #e74c3c;")
+            self._delete_status.setText("✖ Modifying files is not allowed while an action is in progress.")
             return
         target = self._delete_combo.currentText().strip()
         if not target:

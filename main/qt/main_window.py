@@ -78,7 +78,6 @@ class MCUMainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._restore_geometry()
-        self._on_startup()
 
         if self._backend and hasattr(self._backend, "start_services"):
             self._backend.start_services()
@@ -307,6 +306,8 @@ class MCUMainWindow(QMainWindow):
                     self.setGeometry(new_x, new_y, new_w, new_h)
             if hasattr(self, "_controls_bar") and hasattr(self._controls_bar, "update_adaptive_sizing"):
                 self._controls_bar.update_adaptive_sizing()
+            if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "update_adaptive_sizing"):
+                self._serial_panel.update_adaptive_sizing()
             self._apply_responsive_layout(self.width())
             if hasattr(self, "_ai_panel") and self._ai_panel:
                 QTimer.singleShot(100, self._ai_panel._resize_embedded_ai)
@@ -904,13 +905,38 @@ class MCUMainWindow(QMainWindow):
         self._trigger_temporary_action("Saving All", 800)
         self._editor_panel.trigger_save_all()
 
+    def _is_busy(self) -> bool:
+        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+            return True
+        if getattr(self, "_active_operation", None) is not None:
+            return True
+        return False
+
     def _shortcut_open_project(self) -> None:
+        if self._is_busy():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Action in Progress",
+                "Changing project is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         from main.qt.project_dialog import ProjectDialog
         dlg = ProjectDialog(self._backend, parent=self)
         dlg.exec()
 
     def _open_modify_files_dialog(self) -> None:
         """Open the Modify Project Files dialog."""
+        if self._is_busy():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Action in Progress",
+                "Modifying project files is not allowed while an action is in progress.\n\n"
+                "Please wait for the current action to finish or stop it first.",
+            )
+            return
         from main.qt.modify_dialog import ModifyFilesDialog
         dlg = ModifyFilesDialog(self._backend, parent=self)
         dlg.exec()
@@ -1172,14 +1198,6 @@ class MCUMainWindow(QMainWindow):
             if name:
                 self.setWindowTitle(f"⚡ MCU Flasher by Naph — {name}")
 
-            # Notify user if project was precompiled and cached binary is ready
-            board = self._backend.current_board
-            if board and self._backend.check_can_skip_compile():
-                self._backend.emit("console:log", {
-                    "text": f"⚡ Project precompiled for {board} — binary cached & ready (upload can skip compile).",
-                    "tag": "info",
-                    "newline": True,
-                })
             self._backend.update_skip_compile_availability()
 
             # Load active file into Monaco after a short delay to let Qt initialize

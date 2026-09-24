@@ -24,6 +24,7 @@ from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
+    QApplication,
 )
 
 _TAG_COLORS: dict[str, str] = {
@@ -400,16 +401,28 @@ class SerialPanel(QWidget):
         div2.setStyleSheet("color: #2a5f58;")
         h.addWidget(div2)
 
-        # Baud rate label + combo
+        # Baud rate container (label + combo)
+        self.baud_container = QWidget()
+        self.baud_container.setObjectName("serial-baud-container")
+        self.baud_container.setStyleSheet("background: transparent;")
+        b_layout = QHBoxLayout(self.baud_container)
+        b_layout.setContentsMargins(0, 0, 0, 0)
+        b_layout.setSpacing(6)
+
         self._lbl_baud = QLabel("BAUD RATE")
-        h.addWidget(self._lbl_baud)
+        self._lbl_baud.setStyleSheet("font-size: 11px; font-weight: 600; background: transparent;")
+        b_layout.addWidget(self._lbl_baud)
+
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(_BAUD_RATES)
         self.baud_combo.setCurrentText("115200")
-        self.baud_combo.setFixedWidth(90)
+        self.baud_combo.setFixedWidth(self._get_adaptive_baud_width())
         self.baud_combo.setToolTip("Serial monitor baud rate")
         self.baud_combo.currentTextChanged.connect(self._on_baud_changed)
-        h.addWidget(self.baud_combo)
+        b_layout.addWidget(self.baud_combo)
+
+        self._baud_container = self.baud_container
+        h.addWidget(self.baud_container)
 
         # Copy button
         self.btn_copy = QPushButton("⧉ Copy")
@@ -483,9 +496,52 @@ class SerialPanel(QWidget):
         super().resizeEvent(event)
         self.set_responsive_width(event.size().width())
 
+    def _get_adaptive_baud_width(self, width: int | None = None) -> int:
+        """Calculate responsive width for baud combo considering screen dimension, font metrics, and DPI scale."""
+        w = width if width is not None else getattr(self, "_current_responsive_width", self.width())
+        try:
+            fm = self.baud_combo.fontMetrics()
+            text_w = max(fm.horizontalAdvance(b) for b in _BAUD_RATES)
+        except Exception:
+            text_w = 48
+
+        # Screen dimension tiering: ensure plenty of room for 6-digit baud rates
+        if w >= 1500:
+            extra_padding = 74
+            floor_width = 118
+        elif w >= 1200:
+            extra_padding = 66
+            floor_width = 110
+        elif w >= 950:
+            extra_padding = 56
+            floor_width = 100
+        elif w >= 800:
+            extra_padding = 48
+            floor_width = 92
+        else:
+            extra_padding = 40
+            floor_width = 86
+
+        dpi_scale = 1.0
+        try:
+            screen = self.screen() or (QApplication.primaryScreen() if QApplication.instance() else None)
+            if screen:
+                dpi_scale = max(1.0, screen.logicalDotsPerInch() / 96.0)
+        except Exception:
+            dpi_scale = 1.0
+
+        computed = int((text_w + extra_padding) * min(1.3, max(1.0, dpi_scale ** 0.5)))
+        return max(floor_width, computed)
+
+    def update_adaptive_sizing(self) -> None:
+        """Refresh adaptive sizing when screen resolution or DPI scaling changes."""
+        w = getattr(self, "_current_responsive_width", self.width())
+        self.set_responsive_width(w)
+
     def set_responsive_width(self, width: int) -> None:
         """Dynamically adapt header controls, checkboxes, and labels based on width."""
         self._current_responsive_width = width
+        baud_w = self._get_adaptive_baud_width(width)
         if width >= 1100:
             self._is_ultra_compact = False
             self._title_lbl.setText("📡 SERIAL MONITOR")
@@ -497,7 +553,7 @@ class SerialPanel(QWidget):
             if hasattr(self, "_lbl_baud"):
                 self._lbl_baud.setVisible(True)
                 self._lbl_baud.setText("BAUD RATE")
-            self.baud_combo.setFixedWidth(90)
+            self.baud_combo.setFixedWidth(baud_w)
             self.btn_copy.setText("⧉ Copy")
             self.btn_clear.setText("🗑 Clear")
             if hasattr(self, "_header_layout"):
@@ -514,7 +570,7 @@ class SerialPanel(QWidget):
             if hasattr(self, "_lbl_baud"):
                 self._lbl_baud.setVisible(True)
                 self._lbl_baud.setText("BAUD")
-            self.baud_combo.setFixedWidth(84)
+            self.baud_combo.setFixedWidth(baud_w)
             self.btn_copy.setText("⧉ Copy")
             self.btn_clear.setText("🗑 Clear")
             if hasattr(self, "_header_layout"):
@@ -530,7 +586,7 @@ class SerialPanel(QWidget):
             self.cb_ansi_clear.setText("ANSI")
             if hasattr(self, "_lbl_baud"):
                 self._lbl_baud.setVisible(False)
-            self.baud_combo.setFixedWidth(78)
+            self.baud_combo.setFixedWidth(baud_w)
             self.btn_copy.setText("⧉")
             self.btn_clear.setText("🗑")
             if hasattr(self, "_header_layout"):

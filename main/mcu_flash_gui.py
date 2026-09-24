@@ -313,8 +313,7 @@ def main() -> int:
         window = window_holder.get("window")
         if window is None:
             window = MCUMainWindow(backend=api)
-        else:
-            window._on_startup()
+        window._on_startup()
 
         window.show()
         window.raise_()
