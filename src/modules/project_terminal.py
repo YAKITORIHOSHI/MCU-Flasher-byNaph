@@ -99,7 +99,7 @@ def _resolve_terminal_theme() -> dict:
 
     if theme == "light":
         return make_theme(
-            "#f6f8fa", "#24292f", "#0969da", "#b6d4fe",
+            "#eef2f5", "#24292f", "#0969da", "#e1e4e8",
             {
                 "black": "#57606a", "red": "#cf222e", "green": "#1a7f37",
                 "yellow": "#9a6700", "blue": "#0969da", "magenta": "#8250df",
@@ -124,7 +124,7 @@ def _resolve_terminal_theme() -> dict:
             },
         )
     return make_theme(
-        "#0a0e14", "#e0e6ed", "#00d2ff", "#1c3a5e",
+        "#10151c", "#e0e6ed", "#00d2ff", "#243040",
         {
             "black": "#8fa1b3", "red": "#f05050", "green": "#5ccc6e",
             "yellow": "#e8b83a", "blue": "#61afef", "magenta": "#c678dd",
@@ -182,9 +182,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
     <div id="terminal-root">
-        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.6; font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
+        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
             <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px; color: __THEME_FG__;">No Terminal Session Open</div>
-            <div>Click <b>+ New Terminal ▾</b> in the terminal header to open a PowerShell or Command Prompt session.</div>
+            <div>Click <b>[▾]</b> in the top toolbar to open a new PowerShell or Command Prompt terminal.</div>
         </div>
     </div>
     <script>
@@ -229,6 +229,18 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
         applyTheme(currentTheme);
 
+        function sanitizeTerminalInput(data) {
+            if (!data || typeof data !== "string") return "";
+            return data
+                .replace(/\x1b\[\?[0-9;]*c/g, "")
+                .replace(/\x1b\[>[0-9;]*c/g, "")
+                .replace(/\x1b\[\?[0-9;]*\$y/g, "")
+                .replace(/\x1b\[[0-9;]*\$y/g, "")
+                .replace(/\x1b\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
+                .replace(/\x1bP>\|[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
+                .replace(/\x1b\[>[0-9;]*q/g, "");
+        }
+
         function getOrCreateHost(id) {
             let host = hosts[id] || document.getElementById("term-" + id);
             if (!host) {
@@ -254,11 +266,21 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             Object.keys(hosts).forEach(k => {
                 if (hosts[k]) hosts[k].classList.toggle("active", k === activeShell);
             });
-            if (terminals[activeShell]) {
-                try { terminals[activeShell].focus(); } catch (e) {}
-            }
-            scheduleFit();
-            [30, 80, 150, 300, 600].forEach(ms => setTimeout(scheduleFit, ms));
+            window.requestAnimationFrame(() => {
+                const host = hosts[activeShell];
+                if (host && host.offsetWidth > 40 && host.offsetHeight > 40) {
+                    if (fitAddons[activeShell]) {
+                        try { fitAddons[activeShell].fit(); } catch (e) {}
+                    }
+                    if (terminals[activeShell]) {
+                        try {
+                            terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
+                            terminals[activeShell].focus();
+                        } catch (e) {}
+                    }
+                    sendResize(activeShell);
+                }
+            });
         }
 
         function makeTerminal(kind) {
@@ -269,46 +291,24 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             }
             try {
                 const host = getOrCreateHost(kind);
-                if (activeShell === kind) {
-                    host.classList.add("active");
-                    if (emptyState) emptyState.style.display = "none";
-                }
                 const term = new Terminal({
                     cursorBlink: true,
                     cursorStyle: "block",
                     fontSize: 14,
-                    lineHeight: 1.2,
                     fontFamily: 'Consolas, "Courier New", monospace',
-                    scrollback: 10000,
+                    scrollback: 5000,
                     overviewRulerWidth: 0,
-                    theme: Object.assign({}, currentTheme),
-                    allowTransparency: true,
-                    convertEol: true,
-                    rightClickSelectsWord: true,
+                    theme: Object.assign({}, currentTheme)
                 });
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
                 term.open(host);
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
-
-                try { term.focus(); } catch (e) {}
-
-                if (typeof ResizeObserver !== "undefined") {
-                    try {
-                        const hostObserver = new ResizeObserver(() => {
-                            if (activeShell === kind) scheduleFit();
-                        });
-                        hostObserver.observe(host);
-                    } catch (e) {}
-                }
-
                 term.onData(data => {
-                    if (data && (data.startsWith("\x1b[?") || data.startsWith("\x1b[>"))) {
-                        return;
-                    }
-                    if (data && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
-                        socket.send(JSON.stringify({ type: "input", shell: kind, data: data }));
+                    const clean = sanitizeTerminalInput(data);
+                    if (clean && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
+                        socket.send(JSON.stringify({ type: "input", shell: kind, data: clean }));
                     }
                 });
                 return true;
@@ -355,75 +355,22 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             }
         }
 
-        let fitDebounceTimer = null;
-        let fitRetryCount = 0;
         function fitAll() {
             if (!activeShell) return;
             const host = hosts[activeShell];
-            if (!host || host.offsetWidth <= 20 || host.offsetHeight <= 20) {
-                if (fitRetryCount < 30) {
-                    fitRetryCount++;
-                    setTimeout(fitAll, 50);
-                }
-                return;
-            }
-            fitRetryCount = 0;
+            if (!host || host.offsetWidth <= 50 || host.offsetHeight <= 50) return;
             if (fitAddons[activeShell]) {
                 try { fitAddons[activeShell].fit(); } catch (e) {}
             }
             if (terminals[activeShell]) {
-                try {
-                    terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
-                    if (terminals[activeShell].cols <= 10) {
-                        setTimeout(() => {
-                            try { fitAddons[activeShell].fit(); } catch (e) {}
-                            try { terminals[activeShell].refresh(0, terminals[activeShell].rows - 1); } catch (e) {}
-                        }, 50);
-                    }
-                } catch (e) {}
+                try { terminals[activeShell].refresh(0, terminals[activeShell].rows - 1); } catch (e) {}
             }
             sendResize(activeShell);
         }
 
-        function scheduleFit() {
-            fitRetryCount = 0;
-            fitAll();
+        window.addEventListener("resize", () => {
             window.requestAnimationFrame(fitAll);
-            if (fitDebounceTimer) clearTimeout(fitDebounceTimer);
-            fitDebounceTimer = setTimeout(fitAll, 60);
-        }
-
-        window.addEventListener("resize", scheduleFit);
-        window.addEventListener("focus", () => {
-            scheduleFit();
-            if (activeShell && terminals[activeShell]) {
-                try { terminals[activeShell].focus(); } catch (e) {}
-            }
         });
-        document.addEventListener("click", () => {
-            if (activeShell && terminals[activeShell]) {
-                try { terminals[activeShell].focus(); } catch (e) {}
-            }
-        });
-        window.focusTerminal = function() {
-            if (activeShell && terminals[activeShell]) {
-                try { terminals[activeShell].focus(); } catch (e) {}
-            }
-        };
-        document.addEventListener("visibilitychange", () => {
-            if (!document.hidden) scheduleFit();
-        });
-
-        if (typeof ResizeObserver !== "undefined") {
-            try {
-                const resizeObserver = new ResizeObserver(() => {
-                    scheduleFit();
-                });
-                resizeObserver.observe(document.documentElement);
-                resizeObserver.observe(document.body);
-                if (root) resizeObserver.observe(root);
-            } catch (e) {}
-        }
 
         if (window.xtermErr) {
             enableFallback();
@@ -435,8 +382,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 
         if (socket) {
             socket.onopen = () => {
-                scheduleFit();
-                [50, 150, 350, 700].forEach(ms => setTimeout(scheduleFit, ms));
+                fitAll();
                 socket.send(JSON.stringify({ type: "client_ready", xterm: !fallback }));
             };
             socket.onmessage = event => {
@@ -446,11 +392,6 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     if (activeShell && terminals[activeShell]) terminals[activeShell].write(event.data);
                     return;
                 }
-                if (message.type === "fit" || message.type === "resize") {
-                    scheduleFit();
-                    [50, 150, 300].forEach(ms => setTimeout(scheduleFit, ms));
-                    return;
-                }
                 if (message.type === "theme") {
                     applyTheme(message.theme);
                     return;
@@ -458,7 +399,6 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 if (message.type === "create") {
                     makeTerminal(message.shell);
                     setActiveShell(message.shell);
-                    scheduleFit();
                     return;
                 }
                 if (message.type === "destroy") {
@@ -490,12 +430,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 if (message.type === "output") {
                     makeTerminal(message.shell);
                     const term = terminals[message.shell];
-                    if (term) {
-                        term.write(message.data || "");
-                        if (activeShell === message.shell && (term.cols <= 10 || term.rows <= 3)) {
-                            scheduleFit();
-                        }
-                    }
+                    if (term) term.write(message.data || "");
                     return;
                 }
             };
@@ -505,59 +440,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             };
         }
 
-        document.addEventListener("contextmenu", event => {
-            const term = terminals[activeShell];
-            if (!term) return;
-            event.preventDefault();
-            if (term.hasSelection()) {
-                const val = term.getSelection();
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(val).catch(() => {});
-                }
-                term.clearSelection();
-            } else {
-                if (navigator.clipboard && navigator.clipboard.readText) {
-                    navigator.clipboard.readText().then(text => {
-                        if (text && socket && socket.readyState === WebSocket.OPEN) {
-                            const val = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
-                            socket.send(JSON.stringify({ type: "input", shell: activeShell, data: val }));
-                        }
-                    }).catch(() => {});
-                }
-            }
-        });
-
         document.addEventListener("keydown", event => {
             const term = terminals[activeShell];
-            if (!term) return;
-            // Ctrl+Shift+C -> Copy
-            if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "c") {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                if (term.hasSelection()) {
-                    const value = term.getSelection();
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(value).catch(() => {});
-                    }
-                }
-                return;
-            }
-            // Ctrl+Shift+V -> Paste
-            if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v") {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                if (navigator.clipboard && navigator.clipboard.readText) {
-                    navigator.clipboard.readText().then(text => {
-                        if (text && socket && socket.readyState === WebSocket.OPEN) {
-                            const val = text.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
-                            socket.send(JSON.stringify({ type: "input", shell: activeShell, data: val }));
-                        }
-                    }).catch(() => {});
-                }
-                return;
-            }
-            // Ctrl+C with selection -> Copy
-            if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
+            if (!term || !event.ctrlKey) return;
+            if (event.key.toLowerCase() === "c" && term.hasSelection()) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 const value = term.getSelection();
@@ -619,79 +505,6 @@ def _native_shell_executable(kind: str) -> str | None:
         if path.exists():
             return str(path)
     return "powershell.exe"
-
-
-def _build_terminal_env(target_dir: str) -> dict[str, str]:
-    env = os.environ.copy()
-
-    # Prepend project-bundled Python and toolchain paths
-    extra_paths: list[str] = []
-
-    # 1. Private Python and Scripts
-    private_py = SCRIPT_DIR / "src" / "_python"
-    private_py_scripts = private_py / "Scripts"
-    if private_py_scripts.is_dir():
-        extra_paths.append(str(private_py_scripts.resolve()))
-    if private_py.is_dir():
-        extra_paths.append(str(private_py.resolve()))
-
-    # 2. Virtualenv Scripts (where pio.exe and installed packages live)
-    env_scripts = SCRIPT_DIR / "env" / "Scripts"
-    if env_scripts.is_dir():
-        extra_paths.append(str(env_scripts.resolve()))
-
-    # 3. PlatformIO Core penv Scripts
-    for pio_penv in [
-        SCRIPT_DIR / "src" / ".platformio-mcu-gui" / "penv" / "Scripts",
-        Path("C:/.platformio-mcu-gui/penv/Scripts"),
-        Path("C:/.mcuflasher-app/.platformio-mcu-gui/penv/Scripts"),
-    ]:
-        if pio_penv.is_dir():
-            extra_paths.append(str(pio_penv.resolve()))
-
-    # 4. Global npm directory (where opencode and npm CLI coding tools live)
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        npm_dir = Path(appdata) / "npm"
-        if npm_dir.is_dir():
-            extra_paths.append(str(npm_dir.resolve()))
-
-    # 5. LocalAppData Programs (Git, Python, Node, etc.)
-    localappdata = os.environ.get("LOCALAPPDATA")
-    if localappdata:
-        for prog in [
-            Path(localappdata) / "Programs" / "Git" / "cmd",
-            Path(localappdata) / "Programs" / "Git" / "bin",
-        ]:
-            if prog.is_dir():
-                extra_paths.append(str(prog.resolve()))
-
-    # 6. Arduino CLI, Git, Node, and system tools
-    for candidate in [
-        SCRIPT_DIR / "installers" / "arduino-cli",
-        SCRIPT_DIR / "bin",
-        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "cmd",
-        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin",
-        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Git" / "cmd",
-        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
-    ]:
-        if candidate.is_dir():
-            extra_paths.append(str(candidate.resolve()))
-
-    curr_path = env.get("PATH", "")
-    env["PATH"] = os.pathsep.join(extra_paths + ([curr_path] if curr_path else []))
-
-    # Point PLATFORMIO_CORE_DIR to project-local core
-    local_pio_core = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
-    if local_pio_core.is_dir():
-        env["PLATFORMIO_CORE_DIR"] = str(local_pio_core.resolve())
-
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["TERM"] = "xterm-256color"
-    env["COLORTERM"] = "truecolor"
-
-    return env
 
 
 def _shell_cd_command(kind: str, target: str) -> str:
@@ -782,9 +595,6 @@ class ProjectTerminalServer:
         self.session_counter = 0
         self.clients = set()
         self.clients_lock = threading.RLock()
-        self.window = None
-
-
 
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
@@ -888,23 +698,9 @@ class ProjectTerminalServer:
         pty = None
         ready_candidate = None
         try:
-            shell_env = _build_terminal_env(self.target_dir)
-            try:
-                pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
-            except Exception as spawn_exc:
-                if kind == "pwsh":
-                    cmd_exe = _native_shell_executable("cmd")
-                    if cmd_exe:
-                        argv = [cmd_exe, "/D"]
-                        pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
-                    else:
-                        raise spawn_exc
-                else:
-                    raise spawn_exc
-
+            pty = PtyProcess.spawn(argv, cwd=self.target_dir, dimensions=(30, 120))
             with session.lock:
                 session.pty = pty
-
             probe = ""
             while is_current():
                 try:
@@ -914,12 +710,15 @@ class ProjectTerminalServer:
                 if data:
                     if not is_current():
                         break
-                    if ready_candidate is None:
-                        ready_candidate = time.monotonic()
                     text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
                     session.append_history(text)
                     self.broadcast({"type": "output", "shell": sid, "data": text})
                     probe = (probe + text)[-8000:]
+                    if '\x1b[c' in text:
+                        try:
+                            pty.write('\x1b[?1;2c')
+                        except Exception:
+                            pass
                     if not session.ready and (
                         re_prompt(kind, probe)
                         or (ready_candidate and time.monotonic() - ready_candidate >= 0.75)
@@ -950,19 +749,13 @@ class ProjectTerminalServer:
 
     def control(self, message: dict) -> dict:
         action = str(message.get("action", "")).lower()
-        raw_shell = message.get("shell") or message.get("session_id") or self.active_shell
-        shell_id = str(raw_shell) if raw_shell and str(raw_shell) != "None" else ""
+        shell_id = str(message.get("shell", message.get("session_id", self.active_shell)))
         kind = str(message.get("kind", "pwsh")).lower()
         title = str(message.get("title", ""))
 
         if action == "new":
-            if shell_id and shell_id in self.sessions:
-                self.active_shell = shell_id
-                self._start_session(shell_id)
-                self.broadcast({"type": "activate", "shell": shell_id})
-                return {"success": True, "shell": shell_id, "title": self.sessions[shell_id].title}
             self.session_counter += 1
-            new_id = shell_id if shell_id else f"{kind}_{self.session_counter}"
+            new_id = shell_id if shell_id and shell_id not in self.sessions else f"{kind}_{self.session_counter}"
             new_title = title or kind
             session = ShellSession(self, new_id, kind, new_title)
             self.sessions[new_id] = session
@@ -1035,24 +828,17 @@ class ProjectTerminalServer:
                 return {"success": True, "shell": shell_id}
             return {"success": False, "error": "Unknown shell"}
 
-        if action in ("resize", "fit"):
-            self.broadcast({"type": "fit"})
-            return {"success": True}
-
         return {"success": False, "error": "Unknown action"}
 
     async def websocket_handler(self, websocket):
         with self.clients_lock:
             self.clients.add(websocket)
         try:
-            for sid, session in list(self.sessions.items()):
-                await self._send(websocket, {"type": "create", "shell": sid, "kind": session.kind})
-            if self.active_shell:
-                await self._send(websocket, {"type": "activate", "shell": self.active_shell})
-            for sid, session in list(self.sessions.items()):
+            await self._send(websocket, {"type": "activate", "shell": self.active_shell})
+            for kind, session in self.sessions.items():
                 history = session.history_text()
                 if history:
-                    await self._send(websocket, {"type": "output", "shell": sid, "data": history})
+                    await self._send(websocket, {"type": "output", "shell": kind, "data": history})
             async for raw in websocket:
                 try:
                     message = json.loads(raw)
@@ -1074,17 +860,14 @@ class ProjectTerminalServer:
                     session = self.sessions.get(kind)
                     if not session:
                         continue
-                    input_data = str(message.get("data", ""))
-                    if not input_data:
-                        continue
-                    input_data = sanitize_terminal_input(input_data)
-                    if not input_data:
+                    clean_data = sanitize_terminal_input(message.get("data", ""))
+                    if not clean_data:
                         continue
                     with session.lock:
                         pty = session.pty if session.running else None
                     if pty:
                         try:
-                            pty.write(input_data)
+                            pty.write(clean_data)
                         except Exception:
                             pass
                     continue
@@ -1187,9 +970,6 @@ class ProjectTerminalServer:
         if websockets is None:
             raise RuntimeError("websockets is unavailable")
         self.loop = asyncio.get_running_loop()
-
-
-
         async with websockets.serve(self.websocket_handler, "127.0.0.1", self.port + 1, max_size=2**22):
             self._write_port_file()
             await asyncio.Future()
@@ -1283,19 +1063,16 @@ def run_standalone_project_terminal(target_directory: str, initial_cwd: str, por
     _apply_window_icon()
     try:
         terminal_theme = _resolve_terminal_theme()
-        window = webview.create_window(
+        webview.create_window(
             title=WINDOW_TITLE,
             url=f"http://127.0.0.1:{port}",
-            x=-32000,
-            y=-32000,
-            width=920,
-            height=540,
+            width=900,
+            height=520,
             min_size=(320, 180),
-            resizable=True,
+            hidden=True,
             focus=False,
             background_color=terminal_theme["bg"],
         )
-        server.window = window
         webview.start(debug=False)
     finally:
         server.stop()

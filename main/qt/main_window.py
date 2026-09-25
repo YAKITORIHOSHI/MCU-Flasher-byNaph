@@ -878,6 +878,8 @@ class MCUMainWindow(QMainWindow):
                 self._editor_panel.open_file(active)
         if hasattr(self, "_ai_panel") and getattr(self._ai_panel, "_is_active", False):
             self._ai_panel.reset_for_project(path)
+        if hasattr(self, "_terminal_panel") and getattr(self._terminal_panel, "_is_active", False):
+            self._terminal_panel.reset_for_project(path)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Keyboard shortcut handlers

@@ -205,17 +205,17 @@ class TerminalPanel(QWidget):
 
         hl.addStretch()
 
-        # ── Right Toolbar Controls ([•] [⌧ Clear] [🗑 Kill] [⛶ Full] [↗]) ─────
+        # ── Right Toolbar Controls ([•] [⌧ Clear] [🗑 Kill] [⛶ Full]) ─────────
         # Status dot indicator
         self._status_dot = QLabel("●")
         self._status_dot.setObjectName("terminal-status-dot")
-        self._status_dot.setFixedSize(20, 20)
+        self._status_dot.setFixedSize(14, 20)
         self._status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_dot.setToolTip("Project Terminal: No active sessions")
+        self._status_dot.setToolTip("Project Terminal: Ready")
         self._status_dot.setStyleSheet("""
             QLabel#terminal-status-dot {
-                background: #10151c; border: 1px solid #1c2636; border-radius: 3px;
-                color: #64748b; font-size: 9px;
+                background: transparent; border: none;
+                color: #4ec994; font-size: 10px; margin-right: 2px;
             }
         """)
         hl.addWidget(self._status_dot)
@@ -276,27 +276,11 @@ class TerminalPanel(QWidget):
                 border: 1px solid #1c2636; border-radius: 3px; padding: 2px 8px;
             }
             QPushButton#btn-terminal-fullscreen:hover {
-                background: #1c2636; color: #56cfbf; border-color: #56cfbf;
+                background: #1c2636; color: #00d2ff; border-color: #00d2ff;
             }
         """)
         self._btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         hl.addWidget(self._btn_fullscreen)
-
-        # ↗ Pop-out (Detach / Reattach) button
-        self._btn_popout = QPushButton("↗")
-        self._btn_popout.setObjectName("btn-terminal-popout")
-        self._btn_popout.setToolTip("Open in external window")
-        self._btn_popout.setFixedSize(22, 22)
-        self._btn_popout.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_popout.setStyleSheet("""
-            QPushButton#btn-terminal-popout {
-                background: #10151c; color: #8fa1b3; font-size: 12px; font-weight: 700;
-                border: 1px solid #1c2636; border-radius: 3px;
-            }
-            QPushButton#btn-terminal-popout:hover { background: #1c2636; color: #56cfbf; border-color: #56cfbf; }
-        """)
-        self._btn_popout.clicked.connect(self._popout_terminal)
-        hl.addWidget(self._btn_popout)
 
         main_layout.addWidget(header)
 
@@ -387,7 +371,7 @@ class TerminalPanel(QWidget):
         main_layout.addWidget(self._stack, stretch=1)
 
     def _show_add_menu(self, pos=None) -> None:
-        """Dropdown menu to choose between PowerShell and Command Prompt."""
+        """Dropdown menu to choose between Command Prompt and PowerShell."""
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -396,12 +380,12 @@ class TerminalPanel(QWidget):
                 font-family: Consolas, 'Segoe UI', monospace;
             }
             QMenu::item { padding: 6px 18px; border-radius: 3px; }
-            QMenu::item:selected { background: #1c2636; color: #56cfbf; }
+            QMenu::item:selected { background: #1c2636; color: #00d2ff; }
         """)
-        act_p = menu.addAction("PowerShell (pwsh)")
-        act_p.triggered.connect(lambda: self.add_session("pwsh"))
         act_c = menu.addAction("Command Prompt (cmd)")
         act_c.triggered.connect(lambda: self.add_session("cmd"))
+        act_p = menu.addAction("PowerShell (pwsh)")
+        act_p.triggered.connect(lambda: self.add_session("pwsh"))
 
         btn_rect = self._btn_add_tab.rect()
         popup_pos = self._btn_add_tab.mapToGlobal(btn_rect.bottomLeft())
@@ -500,7 +484,7 @@ class TerminalPanel(QWidget):
         self._ready_attempts = 0
         self._stack.setCurrentWidget(self._loader_card)
         self._status_dot.setStyleSheet(
-            "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #f1c40f; font-size: 9px; }"
+            "QLabel#terminal-status-dot { background: transparent; border: none; color: #f1c40f; font-size: 10px; margin-right: 2px; }"
         )
         self._status_dot.setToolTip("Project Terminal: Initializing ConPTY engine…")
         self._load_title.setText("Initializing Project Terminal…")
@@ -528,7 +512,7 @@ class TerminalPanel(QWidget):
         except Exception as e:
             self._spin_timer.stop()
             self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #e74c3c; font-size: 9px; }"
+                "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
             )
             self._status_dot.setToolTip("Project Terminal: Startup error")
             self._load_title.setText("Terminal Startup Error")
@@ -557,7 +541,7 @@ class TerminalPanel(QWidget):
                 self._embed_poll_timer.stop()
                 self._spin_timer.stop()
                 self._status_dot.setStyleSheet(
-                    "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #e74c3c; font-size: 9px; }"
+                    "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
                 )
                 self._status_dot.setToolTip("Project Terminal: Connection timed out")
                 self._load_title.setText("Connection Timed Out")
@@ -629,10 +613,9 @@ class TerminalPanel(QWidget):
                 else:
                     self._stack.setCurrentWidget(self._empty_card)
                 self._status_dot.setStyleSheet(
-                    "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #4ec994; font-size: 9px; }"
+                    "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
                 )
-                self._btn_popout.setText("↗")
-                self._btn_popout.setToolTip("Open in external window")
+                self._status_dot.setToolTip("Project Terminal: Ready")
         except Exception as e:
             print(f"[MCU Flasher] Error embedding Project Terminal window: {e}")
 
@@ -644,8 +627,9 @@ class TerminalPanel(QWidget):
             self._ready_poll_timer.stop()
             self._spin_timer.stop()
             self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #e74c3c; font-size: 9px; }"
+                "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
             )
+            self._status_dot.setToolTip("Project Terminal: Exited")
             self._load_title.setText("Terminal Exited")
             self._load_sub.setText("The terminal subprocess terminated unexpectedly.")
             return
@@ -679,21 +663,20 @@ class TerminalPanel(QWidget):
                 self._stack.setCurrentWidget(self._empty_card)
 
             self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #4ec994; font-size: 9px; }"
+                "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
             )
-            self._btn_popout.setText("↗")
+            self._status_dot.setToolTip("Project Terminal: Ready")
             self._update_buttons_state()
 
     # ── Session Management ───────────────────────────────────────────────────
-    def add_session(self, kind: str = "pwsh") -> None:
-        """Create and append a new terminal session (PowerShell or Command Prompt)."""
+    def add_session(self, kind: str = "cmd") -> None:
+        """Create and append a new terminal session (Command Prompt or PowerShell)."""
         self.ensure_started()
         self._session_counter += 1
         num = self._session_counter
         session_id = f"{kind}_{num}"
-        title = "pwsh" if kind == "pwsh" else "cmd"
-        if num > 1:
-            title = f"{title} {num}"
+        existing_of_kind = [m for m in self._sessions_meta.values() if m.get("kind") == kind]
+        title = kind if len(existing_of_kind) == 0 else f"{kind} {len(existing_of_kind) + 1}"
 
         self._sessions_meta[session_id] = {
             "id": session_id,
@@ -717,8 +700,9 @@ class TerminalPanel(QWidget):
             self._stack.setCurrentWidget(self._loader_card)
 
         self._status_dot.setStyleSheet(
-            "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #4ec994; font-size: 9px; }"
+            "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
         )
+        self._status_dot.setToolTip(f"Project Terminal: Running ({title})")
         self._update_buttons_state()
 
     def _on_tab_changed(self, index: int) -> None:
@@ -753,7 +737,7 @@ class TerminalPanel(QWidget):
                 except Exception:
                     pass
             self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #64748b; font-size: 9px; }"
+                "QLabel#terminal-status-dot { background: transparent; border: none; color: #64748b; font-size: 10px; margin-right: 2px; }"
             )
             self._status_dot.setToolTip("Project Terminal: No active sessions")
         else:
@@ -896,8 +880,7 @@ class TerminalPanel(QWidget):
     def _resize_embedded_terminal(self, show: Optional[bool] = None) -> None:
         """
         Resize the embedded Win32 window to match the Qt container.
-        Crucially resizes ONLY the top-level embedded HWND without EnumChildWindows,
-        allowing WebView2/Chromium DirectComposition to manage its own swap chains.
+        Synchronizes both top-level and child HWNDs (DirectComposition / Chromium WebView2).
         """
         if not self._term_hwnd or not self._is_embedded or win32gui is None or win32con is None:
             return
@@ -931,6 +914,18 @@ class TerminalPanel(QWidget):
 
             win32gui.SetWindowPos(hwnd, 0, 0, 0, w, h, flags)
 
+            def _enum_child(c_hwnd, _):
+                try:
+                    win32gui.SetWindowPos(c_hwnd, 0, 0, 0, w, h, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                except Exception:
+                    pass
+                return True
+
+            try:
+                win32gui.EnumChildWindows(hwnd, _enum_child, None)
+            except Exception:
+                pass
+
             # Notify the terminal server over IPC to trigger xterm fit
             if self._port and self._is_ready and should_show:
                 self._send_control("fit")
@@ -939,12 +934,11 @@ class TerminalPanel(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if len(self._sessions_meta) > 0:
+        if len(self._sessions_meta) == 0:
+            self.add_session("cmd")
+        else:
             self.ensure_started()
             self.refresh_terminal()
-        else:
-            self._stack.setCurrentWidget(self._empty_card)
-            self._update_buttons_state()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
@@ -959,13 +953,12 @@ class TerminalPanel(QWidget):
 
     def _on_tab_revealed(self) -> None:
         """Called when bottom dock notebook switches onto this tab."""
-        if len(self._sessions_meta) > 0:
+        if len(self._sessions_meta) == 0:
+            self.add_session("cmd")
+        else:
             self.ensure_started()
             self.refresh_terminal()
             QTimer.singleShot(100, self.focus_terminal)
-        else:
-            self._stack.setCurrentWidget(self._empty_card)
-            self._update_buttons_state()
 
     def _on_tab_hidden(self) -> None:
         """Called when bottom dock notebook switches away from this tab."""
@@ -977,42 +970,6 @@ class TerminalPanel(QWidget):
                     win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
                 except Exception:
                     pass
-
-    # ── Pop-out (Detach & Reattach) ──────────────────────────────────────────
-    def _popout_terminal(self) -> None:
-        if not self._term_hwnd or win32gui is None or not win32gui.IsWindow(int(self._term_hwnd)):
-            if not self._is_active:
-                self._start_terminal()
-            return
-
-        if self._is_embedded:
-            # Detach to desktop
-            self._is_embedded = False
-            win32gui.SetParent(int(self._term_hwnd), 0)
-            orig_style = self._original_style or (
-                win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_THICKFRAME |
-                win32con.WS_MINIMIZEBOX | win32con.WS_MAXIMIZEBOX | win32con.WS_SYSMENU
-            )
-            orig_ex = self._original_ex_style or 0
-            win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_STYLE, orig_style)
-            win32gui.SetWindowLong(int(self._term_hwnd), win32con.GWL_EXSTYLE, orig_ex)
-            win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
-            win32gui.SetWindowPos(
-                int(self._term_hwnd), 0, 120, 120, 920, 560,
-                win32con.SWP_FRAMECHANGED | win32con.SWP_SHOWWINDOW,
-            )
-            self._load_title.setText("Project Terminal (Detached)")
-            self._load_sub.setText("The terminal is running in a separate window.")
-            self._stack.setCurrentWidget(self._loader_card)
-            self._btn_popout.setText("↙")
-            self._btn_popout.setToolTip("Reattach Terminal to panel")
-            self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: #10151c; border: 1px solid #1c2636; border-radius: 3px; color: #5ca4f0; font-size: 9px; }"
-            )
-            self._status_dot.setToolTip("Project Terminal: Detached")
-        else:
-            # Reattach into panel
-            self._embed_terminal_hwnd(self._term_hwnd)
 
     # ── Theme & Font Configuration ───────────────────────────────────────────
     def _build_terminal_theme_payload(self, theme_mode: str) -> dict:
@@ -1116,14 +1073,6 @@ class TerminalPanel(QWidget):
                 }}
                 QPushButton#btn-terminal-fullscreen:hover {{ background: {bg_hover}; color: {cyan}; border-color: {cyan}; }}
             """)
-        if hasattr(self, "_btn_popout") and self._btn_popout:
-            self._btn_popout.setStyleSheet(f"""
-                QPushButton#btn-terminal-popout {{
-                    background: {bg_dark}; color: {text_dim}; font-size: 12px; font-weight: 700;
-                    border: 1px solid {border}; border-radius: 3px;
-                }}
-                QPushButton#btn-terminal-popout:hover {{ background: {bg_hover}; color: {cyan}; border-color: {cyan}; }}
-            """)
 
         if hasattr(self, "_loader_card") and self._loader_card:
             self._loader_card.setStyleSheet(f"QFrame {{ background: {bg_darkest}; border: none; }}")
@@ -1169,14 +1118,15 @@ class TerminalPanel(QWidget):
 
     # ── Project Realignment ──────────────────────────────────────────────────
     def reset_for_project(self, new_project_dir: str) -> None:
-        """Reset terminal state on project change without auto-launching."""
+        """Reset terminal state on project change."""
+        was_visible = self.isVisible()
         if self._is_active:
             self._stop_shell()
         self._is_active = False
         self._is_embedded = False
         self._is_ready = False
         self._term_hwnd = None
-        self._sessions_meta = {}
+        self._sessions_meta.clear()
         self._session_counter = 0
         self._active_session_id = None
         self._tab_bar.blockSignals(True)
@@ -1185,6 +1135,8 @@ class TerminalPanel(QWidget):
         self._tab_bar.blockSignals(False)
         self._stack.setCurrentWidget(self._empty_card)
         self._update_buttons_state()
+        if was_visible:
+            self.add_session("cmd")
 
     # ── Cleanup & Shutdown ───────────────────────────────────────────────────
     def _stop_shell(self) -> None:
