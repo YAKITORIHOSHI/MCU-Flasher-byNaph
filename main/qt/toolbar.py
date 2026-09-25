@@ -1172,8 +1172,8 @@ class ControlsBar(QWidget):
 
         self.board_selector = MarqueeBoardSelector(self)
         adaptive_w = self.board_selector._get_adaptive_width()
-        self.board_selector.setMinimumWidth(max(160, int(adaptive_w * 0.85)))
-        self.board_selector.setMaximumWidth(max(360, int(adaptive_w * 1.5)))
+        self.board_selector.setMinimumWidth(max(180, int(adaptive_w * 0.95)))
+        self.board_selector.setMaximumWidth(max(400, int(adaptive_w * 1.6)))
         self.board_selector.clicked.connect(self._open_board_search_dialog)
 
         self.btn_search_board = QPushButton("🔍")

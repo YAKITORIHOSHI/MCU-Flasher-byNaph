@@ -62,10 +62,12 @@ from main.core.file_utils import (
     hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
+    retry_transient_file_operation,
 )
 from main.core.toolchain import (
     find_pio_executable, ensure_platformio, _refresh_platformio_core_environment,
     get_optimal_compiler_jobs, _max_cpu_jobs,
+    board_toolchain_ready, prepare_platformio_board_toolchain,
 )
 from main.core.board_catalog import (
     SUPPORTED_BOARDS, _enrich_chip_features, _parse_esptool_write_progress,
@@ -669,8 +671,10 @@ class MCUWebBackendAPI:
         try:
             p = Path(file_path).resolve()
             ensure_file_writable(p)
-            with open(p, "w", encoding="utf-8", newline="") as f:
-                f.write(content)
+            def _write():
+                with open(p, "w", encoding="utf-8", newline="") as f:
+                    f.write(content)
+            retry_transient_file_operation(_write, attempts=6, delay=0.08)
             _sketch_ram_cache.set_content(p, content)
             self.modified_files[str(p)] = False
             self.update_skip_compile_availability()
@@ -2983,6 +2987,38 @@ class MCUWebBackendAPI:
                 self.is_busy = False
                 self.emit("operation:phase", {"phase": "idle", "is_busy": False})
                 return False
+
+            # If board toolchain is not yet downloaded or verified, prepare it on-demand
+            binfo = self._resolve_board_info(self.current_board)
+            platform_name = str(binfo.get("platform", "")).strip()
+            board_id = str(binfo.get("board", "")).strip()
+            framework = str(binfo.get("framework", "arduino")).strip() or "arduino"
+            if platform_name and board_id:
+                try:
+                    if not board_toolchain_ready(core_dir, platform_name, board_id, framework):
+                        self.emit("console:log", {
+                            "text": f"  ⬇ Preparing toolchain for {self.current_board} ({platform_name}:{board_id})...",
+                            "tag": "info",
+                            "newline": True,
+                        })
+                        def _on_pio_line(line):
+                            self.emit("console:log", {"text": f"    {line}", "tag": "dim", "newline": True})
+                        def _on_pio_status(st):
+                            self.emit("console:log", {"text": f"  ℹ {st}", "tag": "info", "newline": True})
+                        prepare_platformio_board_toolchain(
+                            platform=platform_name,
+                            board_id=board_id,
+                            framework=framework,
+                            label=self.current_board,
+                            on_line=_on_pio_line,
+                            on_status=_on_pio_status,
+                        )
+                except Exception as _toolchain_err:
+                    self.emit("console:log", {
+                        "text": f"  ⚠ Toolchain readiness check: {_toolchain_err}",
+                        "tag": "dim",
+                        "newline": True,
+                    })
 
             # Pre-create build directories to avoid SCons dbm/dblite FileNotFoundError
             (cache_root / ".pio" / "build" / "mcu_env").mkdir(parents=True, exist_ok=True)
@@ -5916,7 +5952,9 @@ class MCUWebBackendAPI:
         upload_start = time.time()
         binfo = self._resolve_board_info(self.current_board)
         board_name = self.current_board or ""
-        is_avr = str(binfo.get("platform", "")).lower() == "atmelavr"
+        platform_str = str(binfo.get("platform", "")).lower()
+        is_avr = platform_str == "atmelavr"
+        is_esp = platform_str in ("espressif32", "espressif8266")
         upload_speed = str(getattr(self, "upload_speed", None)
                           or load_gui_config().get("upload_speed", DEFAULT_UPLOAD_SPEED))
 
@@ -5937,7 +5975,7 @@ class MCUWebBackendAPI:
         try:
             # ── Fast direct ESP upload check ──────────────────────────────
             fast_bins = None
-            if not is_avr and str(binfo.get("platform", "")).lower() in ("espressif32", "espressif8266"):
+            if is_esp:
                 fast_bins = self._locate_soft_reset_fast_binaries(
                     self.sketch_dir_path,
                     board_name,
@@ -6029,7 +6067,7 @@ class MCUWebBackendAPI:
 
             _connect_retry = [1]
             probed_ok = False
-            if not is_avr:
+            if is_esp:
                 try:
                     probed_ok = bool(self._probe_chip_info(port))
                 except Exception:
@@ -6114,7 +6152,7 @@ class MCUWebBackendAPI:
 
             def _buffered_append(text: str, tag: str = "dim"):
                 """Buffer pre-connection metadata so it only prints after connection succeeds."""
-                if is_avr or _chip_info_shown[0] or _connected_bar_flipped[0]:
+                if not is_esp or _chip_info_shown[0] or _connected_bar_flipped[0]:
                     self.emit("console:log", {"text": text, "tag": tag, "newline": True})
                 else:
                     if not any(t == text for t, _ in _pending_pre_box):
@@ -6148,7 +6186,7 @@ class MCUWebBackendAPI:
 
             def _flip_to_connected_bar():
                 """Re-render the last progress line as a green '✔ Connected' bar."""
-                if not is_avr and not _connected_bar_flipped[0]:
+                if is_esp and not _connected_bar_flipped[0]:
                     _connected_bar_flipped[0] = True
                     _current_phase[0] = "Connected"
                     self._append_connecting_progress(
@@ -6163,7 +6201,7 @@ class MCUWebBackendAPI:
 
             def _flip_to_failed_bar():
                 """Re-render the last progress line as a red '🔌 Connecting [...] | FAILED' bar."""
-                if not is_avr and not _connected_bar_flipped[0] and not _connect_failed_flipped[0]:
+                if is_esp and not _connected_bar_flipped[0] and not _connect_failed_flipped[0]:
                     _connect_failed_flipped[0] = True
                     self._append_connecting_progress(
                         _connect_retry[0], _MAX_CONNECT_RETRIES, failed=True
@@ -6255,7 +6293,7 @@ class MCUWebBackendAPI:
                     continue
 
                 # ── Chip-info capture from esptool ──────────────────
-                if not is_avr:
+                if is_esp:
                     m = re.search(r'chip (?:is|type)\s*:?\s+(.+)$', line_clean, re.IGNORECASE)
                     if m:
                         _chip_info["Chip Model"] = m.group(1).strip()
@@ -6273,7 +6311,7 @@ class MCUWebBackendAPI:
                         _chip_info["Flash Size"] = m.group(1).strip()
 
                 # ── Multi-partition upload progress parsing ─────────
-                if not is_avr and self._consume_esptool_upload_progress(
+                if is_esp and self._consume_esptool_upload_progress(
                     _fallback_upload_state, line_clean,
                     before_progress=_flip_to_connected_bar,
                     phase_callback=lambda ph: _current_phase.__setitem__(0, ph)
@@ -6477,7 +6515,7 @@ class MCUWebBackendAPI:
 
             if rc == 0:
                 # Show chip-info box if not shown yet (e.g. AVR boards or unprobed chips)
-                if not is_avr and not _chip_info_shown[0]:
+                if is_esp and not _chip_info_shown[0]:
                     _maybe_show_chip_info_box(force=True)
 
                 self.emit("console:log", {"text": "", "newline": True})
@@ -6514,7 +6552,7 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "", "newline": True})
 
                 # Check if it was a connection failure
-                if not is_avr and not _connected_bar_flipped[0]:
+                if is_esp and not _connected_bar_flipped[0]:
                     _flip_to_failed_bar()
                     self.emit("console:log", {
                         "text": "  ✔ Safe state: Existing firmware on your MCU was NOT erased or modified.",

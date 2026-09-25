@@ -4300,10 +4300,70 @@ def find_pio() -> list[str] | None:
     return None
 
 
+def ensure_platformio_scons(
+    pio: list[str] | None = None,
+    pio_core_dir: str | Path | None = None,
+    *,
+    gui: "BootstrapGUI | None" = None,
+) -> bool:
+    """Ensure PlatformIO's tool-scons package is present in packages/tool-scons.
+
+    SCons is PlatformIO's core build system engine. Seeding or verifying it
+    during bootstrap prevents unexpected 'Tool Manager: Installing platformio/tool-scons'
+    downloads from popping up in the GUI console when compiling sketches.
+    """
+    if not pio_core_dir:
+        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(_get_safe_platformio_core_dir(SCRIPT_DIR))
+    core_path = Path(pio_core_dir)
+    scons_manifest = core_path / "packages" / "tool-scons" / "package.json"
+    if scons_manifest.is_file():
+        return True
+
+    if not pio:
+        pio = find_pio()
+    if not pio:
+        return False
+
+    status("Ensuring PlatformIO SCons build engine is installed...")
+    if gui:
+        try:
+            gui.set_status("Installing PlatformIO SCons build engine...")
+        except Exception:
+            pass
+
+    env = os.environ.copy()
+    env["PLATFORMIO_CORE_DIR"] = str(core_path)
+    env["PLATFORMIO_NO_TELEMETRY"] = "1"
+    env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        cmd = list(pio) + ["pkg", "install", "-g", "-t", "platformio/tool-scons"]
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+            creationflags=_cf,
+        )
+        if scons_manifest.is_file() or proc.returncode == 0:
+            ok("PlatformIO SCons build engine is ready.")
+            return True
+        warn(f"PlatformIO SCons install warning: {proc.stderr or proc.stdout}")
+        return scons_manifest.is_file()
+    except Exception as exc:
+        warn(f"Could not verify PlatformIO SCons package: {exc}")
+        return False
+
+
 def ensure_platformio() -> bool:
     pio = find_pio()
     if pio:
         ok("PlatformIO Core is already installed")
+        ensure_platformio_scons(pio)
         return True
 
     status("PlatformIO not found, installing via pip...")
@@ -4311,6 +4371,7 @@ def ensure_platformio() -> bool:
 
     if _run_pip_install(["platformio"], timeout=300):
         ok("PlatformIO Core installed successfully")
+        ensure_platformio_scons()
         return True
     else:
         fail("Failed to install PlatformIO Core")
@@ -5036,6 +5097,11 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
     if not packages_root.is_dir() or not _installed_package_dir_names(pio_core_dir):
         return False
 
+    # SCons is mandatory for PlatformIO compiles across all platforms
+    scons_manifest = target_core / "packages" / "tool-scons" / "package.json"
+    if not scons_manifest.is_file():
+        return False
+
     # Readiness is certified by a successful tiny first-use PlatformIO build
     # and a version-bound package snapshot marker. Optional platform.json
     # packages are deliberately not treated as mandatory.
@@ -5053,6 +5119,9 @@ def board_toolchain_ready(
     covered every variant in the platform.
     """
     if not platform or not board_id:
+        return False
+    scons_manifest = Path(pio_core_dir) / "packages" / "tool-scons" / "package.json"
+    if not scons_manifest.is_file():
         return False
     marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
     if marker.is_file():
@@ -5764,6 +5833,7 @@ def ensure_board_toolchains() -> bool:
     pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR)
     os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
     status(f"Shared PlatformIO package store: {pio_core_dir}")
+    ensure_platformio_scons(pio, pio_core_dir)
 
     platforms_to_prepare: list[tuple[str, str, str]] = []
     already_ready_labels: list[str] = []
@@ -5931,6 +6001,7 @@ def prepare_platformio_board_toolchain(
             _get_safe_platformio_core_dir(SCRIPT_DIR)
         )
         os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
+        ensure_platformio_scons(pio, pio_core_dir)
         if board_toolchain_ready(pio_core_dir, platform, board_id, framework):
             if callable(on_status):
                 try:

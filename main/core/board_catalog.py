@@ -553,6 +553,10 @@ def _fallback_platform_from_mcu(mcu: str) -> str:
         return "atmelsam"
     if value.startswith("nrf"):
         return "nordicnrf52"
+    if value.startswith("teensy") or "imxrt" in value:
+        return "teensy"
+    if value.startswith("ch32v") or value.startswith("ch5"):
+        return "ch32v"
     return ""
 
 
@@ -562,6 +566,7 @@ def _fallback_board_id_for_platform(
     """Derive a sensible default PlatformIO board identifier when no local manifest is installed yet."""
     aid = str(arduino_id or "").strip().lower()
     dname = str(display_name or "").strip().lower()
+    mcu_norm = _normalize_board_identity(mcu)
 
     if platform == "espressif8266":
         if aid == "generic" or "generic" in dname:
@@ -572,11 +577,51 @@ def _fallback_board_id_for_platform(
     if platform == "espressif32":
         if aid in ("esp32", "esp32dev", "nodemcu-32s", "esp32-s2-saola-1", "esp32-s3-devkitc-1", "esp32-c3-devkitm-1"):
             return aid
+        if "s3" in mcu_norm or "s3" in aid or "s3" in dname:
+            return "esp32-s3-devkitc-1"
+        if "s2" in mcu_norm or "s2" in aid or "s2" in dname:
+            return "esp32-s2-saola-1"
+        if "c3" in mcu_norm or "c3" in aid or "c3" in dname:
+            return "esp32-c3-devkitm-1"
+        if "c6" in mcu_norm or "c6" in aid or "c6" in dname:
+            return "esp32-c6-devkitc-1"
         return aid or "esp32dev"
     if platform == "atmelavr":
         if aid in ("uno", "nano", "megaatmega2560", "leonardo", "pro16mhzatmega328", "promicro"):
             return aid
+        if "328" in mcu_norm or "uno" in dname:
+            return "uno"
+        if "2560" in mcu_norm or "mega" in dname:
+            return "megaatmega2560"
+        if "32u4" in mcu_norm or "leonardo" in dname:
+            return "leonardo"
         return aid or "uno"
+    if platform == "ststm32":
+        if "f103c8" in aid or "f103c8" in mcu_norm or "bluepill" in dname:
+            return "bluepill_f103c8"
+        if "f411" in aid or "f411" in mcu_norm or "blackpill" in dname:
+            return "blackpill_f411ce"
+        if "f401" in aid or "f401" in mcu_norm:
+            return "nucleo_f401re"
+        return aid or "genericSTM32F103C8"
+    if platform == "raspberrypi":
+        if "pico2" in aid or "rp2350" in mcu_norm:
+            return "pico2"
+        return "pico"
+    if platform == "atmelsam":
+        if "mkr" in aid or "mkr" in dname:
+            return "mkrzero"
+        if "samd21" in mcu_norm or "zero" in aid or "zero" in dname:
+            return "zero"
+        return aid or "zero"
+    if platform == "nordicnrf52":
+        return aid or "nrf52840_dk_adafruit"
+    if platform == "teensy":
+        if "41" in aid or "41" in dname or "41" in mcu_norm:
+            return "teensy41"
+        if "40" in aid or "40" in dname or "40" in mcu_norm:
+            return "teensy40"
+        return aid or "teensy31"
     return aid or "generic"
 
 
@@ -690,6 +735,60 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         if m:
             entry["flash_mb"] = float(m.group(1))
         boards[display_name] = entry
+
+    # ── Register native PlatformIO board manifests from installed platforms ───
+    for pio_board in catalog:
+        b_id = str(pio_board.get("id") or "").strip()
+        b_platform = str(pio_board.get("platform") or "").strip()
+        b_name = str(pio_board.get("name") or b_id).strip()
+        if not b_id or not b_platform:
+            continue
+
+        # Skip if this board id for this platform is already registered
+        if any(
+            isinstance(v, dict)
+            and str(v.get("board", "")).lower() == b_id.lower()
+            and str(v.get("platform", "")).lower() == b_platform.lower()
+            for v in boards.values()
+        ):
+            continue
+
+        disp_name = b_name
+        if disp_name in used_names:
+            disp_name = f"{b_name} ({b_id})"
+            if disp_name in used_names:
+                disp_name = f"{b_name} [{b_platform}:{b_id}]"
+        used_names.add(disp_name)
+
+        frameworks = set(pio_board.get("frameworks") or [])
+        framework = "arduino" if ("arduino" in frameworks or not frameworks) else sorted(frameworks)[0]
+
+        entry = {
+            "platform": b_platform,
+            "board": b_id,
+            "framework": framework,
+            "pio_resolved": True,
+            "pio_match_score": 100.0,
+            "pio_match_reasons": ["platformio-native-manifest"],
+            "arduino_board_id": b_id,
+            "arduino_variant": "",
+            "arduino_build_board": "",
+            "mcu": str(pio_board.get("mcu") or "").lower(),
+            "pio_name": b_name,
+            "pio_vendor": str(pio_board.get("vendor") or ""),
+            "pio_manifest": str(pio_board.get("manifest") or ""),
+            "flash_mb": None,
+            "has_psram": bool(pio_board.get("has_psram")),
+            "memory_type": str(pio_board.get("memory_type") or "") or None,
+            "flash_mode": str(pio_board.get("flash_mode") or "") or None,
+            "source_core": "platformio-installed",
+        }
+        flash_raw = str(pio_board.get("flash_size") or "")
+        m = re.match(r"(\d+(?:\.\d+)?)\s*MB", flash_raw, re.IGNORECASE)
+        if m:
+            entry["flash_mb"] = float(m.group(1))
+        boards[disp_name] = entry
+
     _save_board_catalog_cache(boards)
     return boards
 

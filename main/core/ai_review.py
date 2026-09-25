@@ -33,6 +33,7 @@ from main.core.file_utils import (
     ensure_file_writable,
     get_ai_review_state_file,
     AIEditBackupStore,
+    retry_transient_file_operation,
 )
 
 def build_ai_line_diff(before_content: str, after_content: str) -> dict:
@@ -158,7 +159,8 @@ class AIReviewManager:
                 stream.write(str(content))
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, target)
+            ensure_file_writable(target)
+            retry_transient_file_operation(lambda: os.replace(temp_path, target))
         except Exception:
             try:
                 os.close(fd)
@@ -232,7 +234,8 @@ class AIReviewManager:
                 json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_path, target)
+            ensure_file_writable(target)
+            retry_transient_file_operation(lambda: os.replace(temp_path, target))
         except Exception:
             try:
                 os.close(fd)
@@ -786,10 +789,13 @@ class AIEditWatcher(QObject):
                             "before": "",
                             "before_exists": False,
                             "first_seen": now,
+                            "last_change_time": now,
                             "last_mtime": mtime,
                         }
                     else:
-                        self._pending_settle[key]["last_mtime"] = mtime
+                        if abs(mtime - self._pending_settle[key].get("last_mtime", 0.0)) > 0.0001:
+                            self._pending_settle[key]["last_mtime"] = mtime
+                            self._pending_settle[key]["last_change_time"] = now
                 elif abs(mtime - old_mtime) > 0.001:
                     # File modified
                     if key not in self._pending_settle:
@@ -798,19 +804,25 @@ class AIEditWatcher(QObject):
                             "before": self._baseline_contents.get(key, ""),
                             "before_exists": True,
                             "first_seen": now,
+                            "last_change_time": now,
                             "last_mtime": mtime,
                         }
                     else:
-                        self._pending_settle[key]["last_mtime"] = mtime
+                        if abs(mtime - self._pending_settle[key].get("last_mtime", 0.0)) > 0.0001:
+                            self._pending_settle[key]["last_mtime"] = mtime
+                            self._pending_settle[key]["last_change_time"] = now
 
-            # 3. Process settled edits (debounce: mtime stable for >= 250ms)
+            # 3. Process settled edits (debounce: mtime quiescent for >= 350ms)
             to_emit = []
             for key, pending in list(self._pending_settle.items()):
-                if now - pending["first_seen"] >= 0.25:
+                last_change = pending.get("last_change_time", pending.get("first_seen", now))
+                if now - last_change >= 0.35:
                     p = Path(pending["path"])
                     if p.is_file():
                         try:
-                            after_content = p.read_text(encoding="utf-8", errors="replace")
+                            def _read():
+                                return p.read_text(encoding="utf-8", errors="replace")
+                            after_content = retry_transient_file_operation(_read, attempts=3, delay=0.05)
                             mtime = p.stat().st_mtime
                         except Exception:
                             continue

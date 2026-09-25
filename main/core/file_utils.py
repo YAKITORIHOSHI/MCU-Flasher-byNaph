@@ -938,7 +938,8 @@ class AIEditBackupStore:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary_name, target)
+            ensure_file_writable(target)
+            retry_transient_file_operation(lambda: os.replace(temporary_name, target))
         except Exception:
             try:
                 os.close(file_descriptor)

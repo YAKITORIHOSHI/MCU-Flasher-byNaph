@@ -575,6 +575,9 @@ class MonacoEditorPanel(QWidget):
     def _on_autosave_timeout(self) -> None:
         """Trigger background file save on debounce expiration."""
         if getattr(self, "_autosave_enabled", False):
+            if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+                if self._backend.ai_review_manager.has_any_pending_ai_edits():
+                    return
             self.trigger_save_all()
 
     @Slot(bool, int)

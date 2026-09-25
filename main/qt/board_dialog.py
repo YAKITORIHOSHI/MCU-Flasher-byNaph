@@ -469,8 +469,8 @@ class BoardListItemDelegate(QStyledItemDelegate):
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         is_header = index.data(Qt.ItemDataRole.UserRole + 1) == "header"
         if is_header:
-            return QSize(option.rect.width(), 26)
-        return QSize(option.rect.width(), 44)
+            return QSize(0, 26)
+        return QSize(0, 48)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
@@ -523,8 +523,8 @@ class BoardListItemDelegate(QStyledItemDelegate):
         is_recent = bool(index.data(Qt.ItemDataRole.UserRole + 4))
 
         # Title line
-        left_margin = rect.left() + 12
-        title_y = rect.top() + 18
+        left_margin = rect.left() + 14
+        title_y = rect.top() + 19
 
         title_font = QFont("Segoe UI", 10, QFont.Weight.Bold if is_selected else QFont.Weight.DemiBold)
         painter.setFont(title_font)
@@ -545,31 +545,34 @@ class BoardListItemDelegate(QStyledItemDelegate):
         badge_h = 18
 
         max_title_w = rect.width() - (left_margin - rect.left()) - badge_w - 20
-        elided_title = QFontMetrics(title_font).elidedText(name, Qt.TextElideMode.ElideRight, max_title_w)
+        elided_title = QFontMetrics(title_font).elidedText(name, Qt.TextElideMode.ElideRight, max(10, max_title_w))
         painter.drawText(left_margin, title_y, elided_title)
 
         # Subtitle line
         sub_font = QFont("Consolas", 8)
         painter.setFont(sub_font)
         painter.setPen(cyan_col if is_selected else text_dim)
-        sub_y = rect.top() + 34
-        max_sub_w = rect.width() - 24
-        elided_sub = QFontMetrics(sub_font).elidedText(sub_info, Qt.TextElideMode.ElideRight, max_sub_w)
-        painter.drawText(rect.left() + 12, sub_y, elided_sub)
+        sub_y = rect.top() + 37
+        max_sub_w = rect.width() - 28
+        elided_sub = QFontMetrics(sub_font).elidedText(sub_info, Qt.TextElideMode.ElideRight, max(10, max_sub_w))
+        painter.drawText(rect.left() + 14, sub_y, elided_sub)
 
         # Draw Pill Badge on top-right
-        badge_rect = QRect(rect.right() - badge_w - 12, rect.top() + 6, badge_w, badge_h)
+        badge_rect = QRect(rect.right() - badge_w - 14, rect.top() + 7, badge_w, badge_h)
 
         fam_colors: dict[str, tuple[int, int, int]] = {
             "ESP32": (0, 210, 255),       # cyan
             "ESP32-S3": (0, 230, 180),    # teal
             "ESP32-C3": (52, 152, 219),   # blue
             "ESP32-S2": (155, 89, 182),   # purple
+            "ESP32-C6": (46, 204, 113),   # emerald
             "ESP32-CAM": (230, 126, 34),  # orange
             "ESP8266": (165, 105, 189),   # purple
             "AVR": (243, 156, 18),        # amber/orange
             "RP2040": (46, 204, 113),     # green
             "STM32": (41, 128, 185),      # dark blue
+            "SAMD": (231, 76, 60),        # coral/red
+            "TEENSY": (26, 188, 156),     # turquoise
         }
         rgb = fam_colors.get(family, (120, 140, 160))
         badge_bg = QColor(rgb[0], rgb[1], rgb[2], 40 if not is_selected else 70)
@@ -638,8 +641,10 @@ class BoardSearchDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("🔍 Search & Select MCU Board")
         self.setModal(True)
-        self.resize(620, 530)
-        self.setMinimumSize(540, 460)
+        # Fixed width and height with ample room for long board names and hardware details
+        self.setFixedSize(860, 580)
+        self.setSizeGripEnabled(False)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowMaximizeButtonHint)
 
         self.on_select_callback = on_select_callback
         if board_list is not None:
@@ -809,6 +814,9 @@ class BoardSearchDialog(QDialog):
         search_layout.addWidget(self.lbl_search)
 
         self.listbox = QListWidget()
+        self.listbox.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.listbox.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.listbox.setHorizontalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self._delegate = BoardListItemDelegate(self.listbox)
         self.listbox.setItemDelegate(self._delegate)
 
@@ -833,6 +841,7 @@ class BoardSearchDialog(QDialog):
             ("AVR", "AVR"),
             ("ESP8266", "ESP8266"),
             ("RP2040", "RP2040"),
+            ("STM32", "STM32"),
             ("RECENT", "★ Recent"),
         ]
         self._chip_group = QButtonGroup(self)
