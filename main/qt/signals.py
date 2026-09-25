@@ -107,6 +107,10 @@ class MCUSignals(QObject):
     autosave_settings_changed = Signal(bool, int)
     graphics_accel_changed = Signal(bool)
 
+    # ── AI Review Signals ────────────────────────────────────────────────────
+    ai_review_requested = Signal(str)
+    ai_review_resolved = Signal(str)
+
 
 # Module-level singleton — import and use directly:
 #   from main.qt.signals import signals

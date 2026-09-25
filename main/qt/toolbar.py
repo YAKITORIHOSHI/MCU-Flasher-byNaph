@@ -613,15 +613,15 @@ class PrimaryToolbar(QToolBar):
                     self.btn_upload.setText("⚡ Upload")
             elif phase in ("flash", "flashing", "upload") or op in ("upload", "flash"):
                 self.btn_compile.setText("⚙ Compile")
-                self.btn_upload.setText("⡿ Uploading...")
+                self.btn_upload.setText("⚡ Uploading...")
             elif phase in ("reset", "resetting", "hard_reset", "soft_reset") or op in ("reset", "hard_reset", "soft_reset"):
                 self.btn_compile.setText("⚙ Compile")
                 if op == "hard_reset" or phase == "hard_reset":
-                    self.btn_upload.setText("⡿ Hard Resetting...")
+                    self.btn_upload.setText("⚡ Hard Resetting...")
                 elif op == "soft_reset" or phase == "soft_reset":
-                    self.btn_upload.setText("⡿ Soft Resetting...")
+                    self.btn_upload.setText("⚡ Soft Resetting...")
                 else:
-                    self.btn_upload.setText("⡿ Resetting...")
+                    self.btn_upload.setText("⚡ Resetting...")
             elif phase in ("clean", "cleaning") or op == "clean":
                 self.btn_compile.setText("⚙ Compile")
                 self.btn_upload.setText("⚡ Upload")

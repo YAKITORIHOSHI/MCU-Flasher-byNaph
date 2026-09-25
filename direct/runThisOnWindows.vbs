@@ -79,25 +79,36 @@ If fso.FileExists(forceRebuildFile) Then
     On Error GoTo 0
 End If
 
-' 1. Validate private Python runtime exists and is functional
-If Not fso.FileExists(portablePython) Then
-    MsgBox "MCU Flasher private Python runtime not found." & vbCrLf & vbCrLf & _
-           "Expected location:" & vbCrLf & _
-           "  " & portablePython & vbCrLf & vbCrLf & _
-           "The bundled Python runtime at src\_python\ is required to run MCU Flasher." & vbCrLf & _
-           "Please ensure the full project folder is intact (not missing src\_python\)." & vbCrLf & vbCrLf & _
-           "Do NOT install a system Python — this application uses its own isolated runtime.", _
-           vbCritical, "MCU Flasher by Naph — Runtime Missing"
-    WScript.Quit 1
-End If
-
-If Not IsPythonExeValid(portablePython) Then
-    MsgBox "MCU Flasher private Python runtime is present but appears corrupt or incompatible." & vbCrLf & vbCrLf & _
-           "Affected file:" & vbCrLf & _
-           "  " & portablePython & vbCrLf & vbCrLf & _
-           "Please reinstall the MCU Flasher application to restore the bundled Python runtime.", _
-           vbCritical, "MCU Flasher by Naph — Runtime Invalid"
-    WScript.Quit 1
+' 1. Validate private Python runtime exists and is functional; auto-heal if missing or broken
+If (Not fso.FileExists(portablePython)) Or (Not IsPythonExeValid(portablePython)) Then
+    If AutoHealPrivatePython(scriptDir) Then
+        If Not IsPythonExeValid(portablePython) Then
+            MsgBox "MCU Flasher attempted to auto-heal the private Python runtime, but verification failed." & vbCrLf & vbCrLf & _
+                   "Affected file:" & vbCrLf & _
+                   "  " & portablePython & vbCrLf & vbCrLf & _
+                   "Please reinstall the MCU Flasher application to restore the bundled Python runtime.", _
+                   vbCritical, "MCU Flasher by Naph — Runtime Invalid"
+            WScript.Quit 1
+        End If
+    Else
+        If Not fso.FileExists(portablePython) Then
+            MsgBox "MCU Flasher private Python runtime not found and could not be auto-healed." & vbCrLf & vbCrLf & _
+                   "Expected location:" & vbCrLf & _
+                   "  " & portablePython & vbCrLf & vbCrLf & _
+                   "The bundled Python runtime at src\_python\ is required to run MCU Flasher." & vbCrLf & _
+                   "Please ensure the full project folder is intact (not missing src\_python\)." & vbCrLf & vbCrLf & _
+                   "Do NOT install a system Python — this application uses its own isolated runtime.", _
+                   vbCritical, "MCU Flasher by Naph — Runtime Missing"
+            WScript.Quit 1
+        Else
+            MsgBox "MCU Flasher private Python runtime appears corrupt or incompatible." & vbCrLf & vbCrLf & _
+                   "Affected file:" & vbCrLf & _
+                   "  " & portablePython & vbCrLf & vbCrLf & _
+                   "Please reinstall the MCU Flasher application to restore the bundled Python runtime.", _
+                   vbCritical, "MCU Flasher by Naph — Runtime Invalid"
+            WScript.Quit 1
+        End If
+    End If
 End If
 
 hostPython   = portablePython
@@ -491,3 +502,59 @@ Sub QuarantineFolder(folderPath)
     Next
     On Error GoTo 0
 End Sub
+
+
+' ── Auto-heal private Python runtime from bundled offline installer ──
+Function AutoHealPrivatePython(rootDir)
+    AutoHealPrivatePython = False
+    Dim handsoffCandidates, hDir, candidate, installerExe, f, subF, targetDir, logDir, logFile, runCmd, exitCode
+    handsoffCandidates = Array( _
+        rootDir & "installers\.handsoff", _
+        fso.GetParentFolderName(rootDir) & "\installers\.handsoff" _
+    )
+
+    installerExe = ""
+    For Each hDir In handsoffCandidates
+        If fso.FolderExists(hDir) Then
+            Set subF = fso.GetFolder(hDir)
+            For Each f In subF.Files
+                If LCase(fso.GetExtensionName(f.Name)) = "exe" And InStr(LCase(f.Name), "python-") = 1 Then
+                    installerExe = f.Path
+                    Exit For
+                End If
+            Next
+            If installerExe <> "" Then Exit For
+        End If
+    Next
+
+    If installerExe = "" Then Exit Function
+
+    targetDir = rootDir & "src\_python"
+    logDir = rootDir & "logs"
+    If Not fso.FolderExists(logDir) Then
+        On Error Resume Next
+        fso.CreateFolder logDir
+        On Error GoTo 0
+    End If
+    logFile = logDir & "\python_heal_vbs.log"
+
+    ' Remove hidden attribute and clean target directory if partially broken
+    If fso.FolderExists(targetDir) Then
+        On Error Resume Next
+        shell.Run "attrib -h """ & targetDir & """", 0, True
+        fso.DeleteFolder targetDir, True
+        On Error GoTo 0
+    End If
+
+    runCmd = """" & installerExe & """ /quiet TargetDir=""" & targetDir & """ InstallAllUsers=0 PrependPath=0 Include_test=0 Include_doc=0 Include_launcher=0 /log """ & logFile & """"
+    On Error Resume Next
+    exitCode = shell.Run(runCmd, 0, True)
+    If Err.Number = 0 And exitCode = 0 Then
+        shell.Run "attrib +h """ & targetDir & """", 0, True
+        If fso.FileExists(targetDir & "\python.exe") Then
+            AutoHealPrivatePython = True
+        End If
+    End If
+    On Error GoTo 0
+End Function
+

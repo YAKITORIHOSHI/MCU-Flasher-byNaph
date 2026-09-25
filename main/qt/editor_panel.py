@@ -23,18 +23,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
+# pyrefly: ignore [missing-import]
 from PySide6.QtCore import QObject, QUrl, Slot, Signal, QTimer
+# pyrefly: ignore [missing-import]
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
+# pyrefly: ignore [missing-import]
 from PySide6.QtWebEngineWidgets import QWebEngineView
+# pyrefly: ignore [missing-import]
 from PySide6.QtWebChannel import QWebChannel
+# pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import QWidget, QVBoxLayout
-
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QWebChannel JS bootstrap
@@ -101,7 +104,10 @@ class EditorBridgeAPI(QObject):
                 QTimer.singleShot(600, lambda: sig_bus.console_progress.emit({"action": "Completed"}))
             except Exception:
                 pass
-            return self._backend.save_file(file_path, content)
+            res = self._backend.save_file(file_path, content)
+            if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                self._backend.ai_watcher.note_user_save(file_path, content)
+            return res
         return {"success": False, "error": "No backend"}
 
     @Slot(result="QVariant")
@@ -114,7 +120,11 @@ class EditorBridgeAPI(QObject):
                 QTimer.singleShot(700, lambda: sig_bus.console_progress.emit({"action": "Completed"}))
             except Exception:
                 pass
-            return self._backend.save_all_files()
+            res = self._backend.save_all_files()
+            if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                for fp in getattr(self._backend, "modified_files", {}):
+                    self._backend.ai_watcher.note_user_save(fp)
+            return res
         return {"success": True}
 
     @Slot("QVariant", result="QVariant")
@@ -195,33 +205,122 @@ class EditorBridgeAPI(QObject):
         if p and hasattr(p, "_schedule_autosave"):
             p._schedule_autosave()
 
-    @Slot(str, result=bool)
-    def has_pending_ai_edit(self, path: str) -> bool:
+    # ── AI Review & Diff Bridge Methods ───────────────────────────────────
+
+    @Slot("QVariant", result="QVariant")
+    def consume_ai_edit_snapshot(self, path: Any) -> dict:
+        """Fetch active AI review snapshot for Monaco diff decorations and review bar."""
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            return self._backend.ai_review_manager.consume_ai_edit_snapshot(str(path or ""))
+        return {}
+
+    @Slot("QVariant", result=bool)
+    def has_pending_ai_edit(self, path: Any) -> bool:
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            return self._backend.ai_review_manager.has_pending_ai_edit(str(path or ""))
         return False
 
-    @Slot(str, result="QVariant")
-    def get_pending_ai_review(self, path: str) -> dict | None:
-        return None
+    @Slot("QVariant", result="QVariant")
+    def get_pending_ai_review(self, path: Any) -> dict:
+        return self.consume_ai_edit_snapshot(path)
 
-    @Slot(str, result="QVariant")
-    def accept_pending_ai_edit(self, path: str) -> dict:
-        return {"success": True}
+    @Slot(result="QVariant")
+    def get_ai_edit_reviews(self) -> list:
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            return self._backend.ai_review_manager.get_ai_edit_reviews()
+        return []
 
-    @Slot(str, result="QVariant")
-    def reject_pending_ai_edit(self, path: str) -> dict:
-        return {"success": True}
+    @Slot("QVariant", result="QVariant")
+    @Slot("QVariant", "QVariant", result="QVariant")
+    def accept_ai_edit(self, path: Any, revision: Any = "") -> dict:
+        """User clicked Accept on the AI review bar."""
+        p_str = str(path or "")
+        rev_str = str(revision or "") if revision is not None else ""
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            res = self._backend.ai_review_manager.accept_ai_edit(p_str, rev_str)
+            if res.get("success"):
+                if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                    self._backend.ai_watcher.note_user_save(p_str, res.get("appliedContent"))
+                try:
+                    from main.qt.signals import signals as sig_bus
+                    sig_bus.ai_review_resolved.emit(p_str)
+                except Exception:
+                    pass
+                file_name = Path(p_str).name
+                self._backend.emit("notification", {
+                    "title": "AI Edit Accepted",
+                    "message": f"Applied changes to {file_name}",
+                    "type": "success",
+                })
+            return res
+        return {"success": False, "error": "No backend"}
+
+    @Slot("QVariant", result="QVariant")
+    @Slot("QVariant", "QVariant", result="QVariant")
+    def reject_ai_edit(self, path: Any, revision: Any = "") -> dict:
+        """User clicked Reject / Decline on the AI review bar."""
+        p_str = str(path or "")
+        rev_str = str(revision or "") if revision is not None else ""
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            res = self._backend.ai_review_manager.reject_ai_edit(p_str, rev_str)
+            if res.get("success"):
+                if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                    self._backend.ai_watcher.note_user_save(p_str, res.get("appliedContent"))
+                try:
+                    from main.qt.signals import signals as sig_bus
+                    sig_bus.ai_review_resolved.emit(p_str)
+                except Exception:
+                    pass
+                file_name = Path(p_str).name
+                self._backend.emit("notification", {
+                    "title": "AI Edit Rejected",
+                    "message": f"Restored original {file_name}",
+                    "type": "warning",
+                })
+            return res
+        return {"success": False, "error": "No backend"}
+
+    @Slot("QVariant", result="QVariant")
+    def accept_pending_ai_edit(self, path: Any) -> dict:
+        return self.accept_ai_edit(path, "")
+
+    @Slot("QVariant", result="QVariant")
+    def reject_pending_ai_edit(self, path: Any) -> dict:
+        return self.reject_ai_edit(path, "")
 
     @Slot(result="QVariant")
     def get_ai_history_state(self) -> dict:
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            return self._backend.ai_review_manager.get_ai_history_state()
         return {"canUndo": False, "canRedo": False}
 
     @Slot(result="QVariant")
+    @Slot("QVariant", result="QVariant")
+    def undo_ai_edit_decision(self, force: Any = False) -> dict:
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            res = self._backend.ai_review_manager.undo_ai_edit_decision(bool(force))
+            if res.get("success") and res.get("path") and hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                self._backend.ai_watcher.note_user_save(res["path"], res.get("appliedContent"))
+            return res
+        return {"success": False, "error": "No backend"}
+
+    @Slot(result="QVariant")
+    @Slot("QVariant", result="QVariant")
+    def redo_ai_edit_decision(self, force: Any = False) -> dict:
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            res = self._backend.ai_review_manager.redo_ai_edit_decision(bool(force))
+            if res.get("success") and res.get("path") and hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
+                self._backend.ai_watcher.note_user_save(res["path"], res.get("appliedContent"))
+            return res
+        return {"success": False, "error": "No backend"}
+
+    @Slot(result="QVariant")
     def undo_ai_decision(self) -> dict:
-        return {"success": False}
+        return self.undo_ai_edit_decision(False)
 
     @Slot(result="QVariant")
     def redo_ai_decision(self) -> dict:
-        return {"success": False}
+        return self.redo_ai_edit_decision(False)
 
     # ── Called FROM Python → Monaco (via signals) ─────────────────────────
 
@@ -290,6 +389,7 @@ class MonacoEditorPanel(QWidget):
         try:
             from main.core.config import get_theme_mode
             from main.qt.theme import get_palette
+            # pyrefly: ignore [missing-import]
             from PySide6.QtGui import QColor
             pal = get_palette(get_theme_mode())
             bg_col = pal.get("BG_DARK", "#002b36")
@@ -341,6 +441,25 @@ class MonacoEditorPanel(QWidget):
         if self._backend and self._backend.active_file_path:
             self.open_file(self._backend.active_file_path)
 
+        # Check if there is an active pending review to present in editor
+        if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
+            reviews = self._backend.ai_review_manager.get_ai_edit_reviews()
+            if reviews:
+                QTimer.singleShot(700, lambda: self.trigger_ai_review(reviews[0].get("path", "")))
+
+    @Slot(str)
+    def trigger_ai_review(self, file_path: str) -> None:
+        """Trigger Monaco to reload the active file with diff highlights and show the review banner."""
+        if not file_path:
+            return
+        path_json = json.dumps(str(file_path))
+        js = (
+            f"if (typeof window.reloadActiveFileWithDiff === 'function') {{"
+            f"  window.reloadActiveFileWithDiff({path_json});"
+            f"}}"
+        )
+        self._view.page().runJavaScript(js)
+
     def open_file(self, file_path: str) -> None:
         """Activate the file tab in Monaco, or reload project if not present."""
         if not file_path:
@@ -374,6 +493,7 @@ class MonacoEditorPanel(QWidget):
         """Change the Monaco editor colour theme."""
         try:
             from main.qt.theme import get_palette
+            # pyrefly: ignore [missing-import]
             from PySide6.QtGui import QColor
             pal = get_palette(theme_name)
             bg_col = pal.get("BG_DARK", "#002b36")
@@ -478,6 +598,8 @@ class MonacoEditorPanel(QWidget):
             sig_bus.theme_changed.connect(self.set_theme)
         if hasattr(sig_bus, "autosave_settings_changed"):
             sig_bus.autosave_settings_changed.connect(self._on_autosave_settings_changed)
+        if hasattr(sig_bus, "ai_review_requested"):
+            sig_bus.ai_review_requested.connect(self.trigger_ai_review)
 
     @Slot(list)
     def set_markers(self, diagnostics: list) -> None:

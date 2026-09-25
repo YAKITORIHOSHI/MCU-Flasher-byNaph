@@ -302,6 +302,57 @@ class MCUWebBackendAPI:
         self._last_synced_hardware_payload: Optional[tuple] = None
         self._restore_project_compile_state()
 
+        # AI Review Engine & Filesystem Watcher
+        from main.core.ai_review import AIReviewManager, AIEditWatcher
+        self.ai_review_manager = AIReviewManager(self.sketch_dir_path)
+        self.ai_watcher = AIEditWatcher(self.sketch_dir_path, self.ai_review_manager)
+        self.ai_watcher.ai_edit_detected.connect(self._on_ai_edit_detected)
+
+    def _on_ai_edit_detected(
+        self,
+        path: str,
+        before: str,
+        after: str,
+        before_exists: bool,
+        after_exists: bool,
+    ) -> None:
+        """Handle AI edit or external change detected by AIEditWatcher."""
+        file_name = Path(path).name
+        # Emit Qt signal to editor to reload active file with diff
+        sig_bus = self._get_qt_signals()
+        if sig_bus and hasattr(sig_bus, "ai_review_requested"):
+            sig_bus.ai_review_requested.emit(path)
+        # Also post system notification
+        self.emit("notification", {
+            "title": "AI Edit Detected",
+            "message": f"AI edit detected: {file_name}. Review changes in editor.",
+            "type": "info",
+        })
+
+    def _block_if_pending_ai_edits(self, action_name: str) -> bool:
+        """Check if unreviewed AI edits exist. If so, pause action and prompt review."""
+        if not hasattr(self, "ai_review_manager") or not self.ai_review_manager:
+            return False
+        if not self.ai_review_manager.has_any_pending_ai_edits():
+            return False
+        reviews = self.ai_review_manager.get_ai_edit_reviews()
+        count = len(reviews)
+        noun = "edit" if count == 1 else "edits"
+        self.emit("console:log", {
+            "text": f"⚠ {action_name} paused: please review and accept/decline {count} pending AI {noun} first.",
+            "tag": "warning",
+            "newline": True,
+        })
+        self.emit("notification", {
+            "title": "AI Review Required",
+            "message": f"{action_name} paused: please review {count} pending AI {noun} first.",
+            "type": "warning",
+        })
+        sig_bus = self._get_qt_signals()
+        if reviews and sig_bus and hasattr(sig_bus, "ai_review_requested"):
+            sig_bus.ai_review_requested.emit(reviews[0].get("path", ""))
+        return True
+
     def start_services(self) -> None:
         """Start background telemetry and hardware monitoring after the UI is ready."""
         if self._telemetry_thread is None or not self._telemetry_thread.is_alive():
@@ -336,6 +387,16 @@ class MCUWebBackendAPI:
         ):
             if t is not None and t.is_alive():
                 t.join(timeout=2.0)
+        if hasattr(self, "ai_watcher") and self.ai_watcher:
+            try:
+                self.ai_watcher._timer.stop()
+            except Exception:
+                pass
+        if hasattr(self, "ai_review_manager") and self.ai_review_manager:
+            try:
+                self.ai_review_manager.shutdown()
+            except Exception:
+                pass
 
     def _get_qt_signals(self) -> Optional[Any]:
         """Return the Qt signal bus."""
@@ -613,6 +674,8 @@ class MCUWebBackendAPI:
             _sketch_ram_cache.set_content(p, content)
             self.modified_files[str(p)] = False
             self.update_skip_compile_availability()
+            if hasattr(self, "ai_watcher") and self.ai_watcher:
+                self.ai_watcher.note_user_save(p, content)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2073,6 +2136,18 @@ class MCUWebBackendAPI:
         self.update_skip_compile_availability()
         self._load_compat_cache()
         self._sync_project_hardware_state(p)
+
+        # Bind AI review manager and watcher to the new sketch project
+        if hasattr(self, "ai_review_manager") and self.ai_review_manager:
+            self.ai_review_manager.bind_project(p)
+        if hasattr(self, "ai_watcher") and self.ai_watcher:
+            self.ai_watcher.bind_project(p)
+            reviews = self.ai_review_manager.get_ai_edit_reviews()
+            if reviews:
+                sig_bus = self._get_qt_signals()
+                if sig_bus and hasattr(sig_bus, "ai_review_requested"):
+                    sig_bus.ai_review_requested.emit(reviews[0].get("path", ""))
+
         return {"success": True, "project": payload}
 
     def open_project_picker(self) -> str:
@@ -2770,6 +2845,9 @@ class MCUWebBackendAPI:
     def compile_sketch(self):
         """Run sketch compilation on a background thread."""
         if self.is_busy:
+            return
+
+        if self._block_if_pending_ai_edits("Compile"):
             return
 
         cfg = load_gui_config()
@@ -4971,6 +5049,9 @@ class MCUWebBackendAPI:
     def upload_sketch(self):
         """Compile and upload firmware to the target microcontroller."""
         if self.is_busy:
+            return
+
+        if self._block_if_pending_ai_edits("Upload"):
             return
 
         cfg = load_gui_config()

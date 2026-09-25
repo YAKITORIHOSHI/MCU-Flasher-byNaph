@@ -1261,7 +1261,21 @@ try:
     from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
     HAS_PYSIDE6_BOOTSTRAP = True
 except ImportError:
-    HAS_PYSIDE6_BOOTSTRAP = False
+    _env_site_packages = SCRIPT_DIR / "env" / "Lib" / "site-packages"
+    if _env_site_packages.is_dir() and str(_env_site_packages) not in sys.path:
+        sys.path.append(str(_env_site_packages))
+        try:
+            from PySide6.QtWidgets import (
+                QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                QProgressBar, QPlainTextEdit, QCheckBox, QFrame,
+            )
+            from PySide6.QtCore import Qt, QObject, Signal, QTimer, Slot
+            from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+            HAS_PYSIDE6_BOOTSTRAP = True
+        except ImportError:
+            HAS_PYSIDE6_BOOTSTRAP = False
+    else:
+        HAS_PYSIDE6_BOOTSTRAP = False
 
 
 class _BootstrapSignals(QObject if HAS_PYSIDE6_BOOTSTRAP else object):
