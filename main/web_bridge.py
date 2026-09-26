@@ -68,6 +68,7 @@ from main.core.toolchain import (
     find_pio_executable, ensure_platformio, _refresh_platformio_core_environment,
     get_optimal_compiler_jobs, _max_cpu_jobs,
     board_toolchain_ready, prepare_platformio_board_toolchain,
+    ensure_scons_ready,
 )
 from main.core.board_catalog import (
     SUPPORTED_BOARDS, _enrich_chip_features, _parse_esptool_write_progress,
@@ -3161,6 +3162,9 @@ class MCUWebBackendAPI:
             # Configure high-performance SCons and PlatformIO environment variables matching LATEST-WORKING-MCU- FLASHER
             launch_env = os.environ.copy()
             core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
+            # Pre-verify SCons build engine so PlatformIO doesn't
+            # re-download it mid-compile (avoids scary console noise).
+            ensure_scons_ready(core_dir)
             launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
             launch_env["PLATFORMIO_CACHE_DIR"] = str(core_dir / ".cache")
             launch_env["PLATFORMIO_GLOBALLIB_DIR"] = str(core_dir / "lib")

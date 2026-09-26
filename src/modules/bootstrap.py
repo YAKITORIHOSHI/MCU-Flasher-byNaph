@@ -3675,6 +3675,7 @@ def ensure_pip_packages_parallel(
             else:
                 _set_state(sid, status_text="⬇ Downloading...", pct=5)
                 _update_bottom_from_rows()
+                status(f"Downloading {spec['name']} ({', '.join(spec['pip_args'])})...")
 
             output_lines = []
             phase_events = 0
@@ -3735,16 +3736,21 @@ def ensure_pip_packages_parallel(
                             if low.startswith("collecting "):
                                 phase_events += 1
                                 _set_state(sid, status_text="⚙ Resolving...", pct=min(28, 10 + phase_events * 2))
+                                dim(f"{spec['name']}: {line.strip()}")
                             elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
                                 phase_events += 1
                                 _set_state(sid, status_text="⚙ Reading metadata...", pct=min(38, 24 + phase_events * 2))
+                                dim(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("downloading ") or low.startswith("using cached "):
                                 phase_events += 1
                                 _set_state(sid, status_text="⬇ Downloading...", pct=min(68, 34 + phase_events * 3))
+                                dim(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("saved "):
                                 _set_state(sid, status_text="⬇ Saving packages...", pct=70)
+                                dim(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("successfully downloaded"):
                                 _set_state(sid, status_text="✔ Downloaded", pct=75)
+                                ok(f"Downloaded {spec['name']} successfully.")
                             _update_bottom_from_rows()
                     except _queue.Empty:
                         pass
@@ -3787,6 +3793,7 @@ def ensure_pip_packages_parallel(
                 if return_code == 0:
                     _set_state(sid, status_text="✔ Downloaded", pct=75)
                     _update_bottom_from_rows()
+                    ok(f"Downloaded {spec['name']} successfully.")
                     return sid, True, worker_dir, ""
 
                 # Download failed on this attempt — store detail for potential retry.
@@ -3890,17 +3897,23 @@ def ensure_pip_packages_parallel(
 
         _set_all(missing_specs, "⚙ Installing...", 80)
         _update_bottom_from_rows()
+        pkg_names_str = ", ".join(s["name"] for s in missing_specs)
+        status(f"Installing {len(missing_specs)} Python dependencies via pip ({pkg_names_str})...")
         if gui:
-            gui.set_status("Installing prepared Python dependencies in one safe pip transaction...")
+            gui.set_status(f"Installing Python dependencies ({pkg_names_str})...")
 
         def _install_line_callback(line: str):
             low = line.strip().lower()
             if low.startswith("installing collected packages:"):
                 _set_all(missing_specs, "⚙ Installing...", 86)
+                status(line.strip())
             elif low.startswith("successfully installed"):
-                # pip reports all successfully installed distributions on one
-                # line; move rows to verification without exposing the raw text.
                 _set_all(missing_specs, "⚙ Verifying...", 95)
+                ok(line.strip())
+            elif any(low.startswith(p) for p in ("running setup.py", "building wheel", "created wheel", "installing")):
+                dim(f"  {line.strip()}")
+            elif low.startswith("collecting ") or low.startswith("downloading "):
+                dim(f"  {line.strip()}")
             _update_bottom_from_rows()
 
         # Use the prepared wheelhouse as a fast local source, but keep the
@@ -3969,9 +3982,11 @@ def ensure_pip_packages_parallel(
             verified = _check(spec)
             if verified:
                 _set_state(sid, status_text="✔ Installed", pct=100, done=True, ok_value=True)
+                ok(f"{spec['name']} installed and verified.")
             else:
                 remaining.append(spec)
                 _set_state(sid, status_text="⚙ Repairing...", pct=95, done=False, ok_value=False)
+                warn(f"{spec['name']} verification failed; will repair individually.")
         _update_bottom_from_rows()
 
         # Targeted repair is intentionally serial.  It is used only when the
@@ -3979,6 +3994,7 @@ def ensure_pip_packages_parallel(
         # post-install/import issue remains (notably pywin32 on Windows).
         for spec in remaining:
             sid = spec["id"]
+            status(f"Repairing {spec['name']} via pip...")
             if gui:
                 gui.set_status(f"Repairing {spec['name']}...")
 
@@ -4007,10 +4023,12 @@ def ensure_pip_packages_parallel(
             verified = repair_ok and _check(spec)
             if verified:
                 _set_state(sid, status_text="✔ Installed", pct=100, done=True, ok_value=True)
+                ok(f"{spec['name']} repaired and verified.")
             else:
                 if _LAST_PIP_ERROR:
                     failure_details[sid] = _LAST_PIP_ERROR
                 _set_state(sid, status_text="✖ Install Failed", pct=100, done=True, ok_value=False)
+                fail(f"Failed to verify {spec['name']} after repair.")
             _update_bottom_from_rows()
 
         # Final fresh checks catch transitive changes made during a repair.
@@ -4315,16 +4333,25 @@ def ensure_platformio_scons(
     if not pio_core_dir:
         pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(_get_safe_platformio_core_dir(SCRIPT_DIR))
     core_path = Path(pio_core_dir)
+    os.environ["PLATFORMIO_CORE_DIR"] = str(core_path)
+
     scons_manifest = core_path / "packages" / "tool-scons" / "package.json"
-    if scons_manifest.is_file():
-        return True
+    scons_piopm = core_path / "packages" / "tool-scons" / ".piopm"
+    if scons_manifest.is_file() and scons_piopm.is_file():
+        try:
+            data = json.loads(scons_piopm.read_text(encoding="utf-8"))
+            spec = data.get("spec", {})
+            if spec.get("owner") == "platformio" and str(data.get("version", "")).startswith("4."):
+                return True
+        except Exception:
+            pass
 
     if not pio:
         pio = find_pio()
     if not pio:
         return False
 
-    status("Ensuring PlatformIO SCons build engine is installed...")
+    status("Ensuring PlatformIO SCons build engine is installed (tool-scons@~4.41101.0)...")
     if gui:
         try:
             gui.set_status("Installing PlatformIO SCons build engine...")
@@ -4338,7 +4365,7 @@ def ensure_platformio_scons(
     env["PYTHONUNBUFFERED"] = "1"
     _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        cmd = list(pio) + ["pkg", "install", "-g", "-t", "platformio/tool-scons"]
+        cmd = list(pio) + ["pkg", "install", "-g", "-t", "platformio/tool-scons@~4.41101.0"]
         proc = subprocess.run(
             cmd,
             env=env,
@@ -4349,21 +4376,23 @@ def ensure_platformio_scons(
             timeout=180,
             creationflags=_cf,
         )
-        if scons_manifest.is_file() or proc.returncode == 0:
+        if (scons_manifest.is_file() and scons_piopm.is_file()) or proc.returncode == 0:
             ok("PlatformIO SCons build engine is ready.")
             return True
         warn(f"PlatformIO SCons install warning: {proc.stderr or proc.stdout}")
-        return scons_manifest.is_file()
+        return scons_manifest.is_file() and scons_piopm.is_file()
     except Exception as exc:
         warn(f"Could not verify PlatformIO SCons package: {exc}")
         return False
 
 
-def ensure_platformio() -> bool:
+def ensure_platformio(gui: Optional["BootstrapGUI"] = None) -> bool:
+    safe_core = str(_get_safe_platformio_core_dir(SCRIPT_DIR))
+    os.environ["PLATFORMIO_CORE_DIR"] = safe_core
     pio = find_pio()
     if pio:
         ok("PlatformIO Core is already installed")
-        ensure_platformio_scons(pio)
+        ensure_platformio_scons(pio, safe_core, gui=gui)
         return True
 
     status("PlatformIO not found, installing via pip...")
@@ -4371,7 +4400,7 @@ def ensure_platformio() -> bool:
 
     if _run_pip_install(["platformio"], timeout=300):
         ok("PlatformIO Core installed successfully")
-        ensure_platformio_scons()
+        ensure_platformio_scons(find_pio(), safe_core, gui=gui)
         return True
     else:
         fail("Failed to install PlatformIO Core")
@@ -5099,7 +5128,8 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
 
     # SCons is mandatory for PlatformIO compiles across all platforms
     scons_manifest = target_core / "packages" / "tool-scons" / "package.json"
-    if not scons_manifest.is_file():
+    scons_piopm = target_core / "packages" / "tool-scons" / ".piopm"
+    if not scons_manifest.is_file() or not scons_piopm.is_file():
         return False
 
     # Readiness is certified by a successful tiny first-use PlatformIO build
@@ -5121,7 +5151,8 @@ def board_toolchain_ready(
     if not platform or not board_id:
         return False
     scons_manifest = Path(pio_core_dir) / "packages" / "tool-scons" / "package.json"
-    if not scons_manifest.is_file():
+    scons_piopm = Path(pio_core_dir) / "packages" / "tool-scons" / ".piopm"
+    if not scons_manifest.is_file() or not scons_piopm.is_file():
         return False
     marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
     if marker.is_file():
@@ -5833,7 +5864,7 @@ def ensure_board_toolchains() -> bool:
     pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR)
     os.environ["PLATFORMIO_CORE_DIR"] = pio_core_dir
     status(f"Shared PlatformIO package store: {pio_core_dir}")
-    ensure_platformio_scons(pio, pio_core_dir)
+    ensure_platformio_scons(pio, pio_core_dir, gui=_gui)
 
     platforms_to_prepare: list[tuple[str, str, str]] = []
     already_ready_labels: list[str] = []
@@ -7345,6 +7376,13 @@ def _run_pip_install(
                         line_callback(line)
                     except Exception:
                         pass
+                else:
+                    low = line.strip().lower()
+                    if low:
+                        if low.startswith("installing collected packages:") or low.startswith("successfully installed"):
+                            status(line.strip())
+                        elif any(low.startswith(p) for p in ("collecting ", "downloading ", "using cached ", "running setup.py", "building wheel")):
+                            dim(f"  {line.strip()}")
             except _queue.Empty:
                 pass
 
@@ -10444,7 +10482,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             ))
 
         # Check PlatformIO
-        if not ensure_platformio():
+        if not ensure_platformio(gui):
             _fail_and_exit("PlatformIO Core", "Failed to install PlatformIO Core.")
             return
 

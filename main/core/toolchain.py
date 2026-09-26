@@ -102,6 +102,40 @@ def prepare_platformio_board_toolchain(
     except Exception:
         return False
 
+def ensure_scons_ready(core_dir: str | Path | None = None) -> bool:
+    """Pre-verify PlatformIO's tool-scons package before launching a build.
+
+    PlatformIO's ``pio run`` re-downloads tool-scons if its internal package
+    resolution can't satisfy the ``~4.41101.0`` requirement.  Calling this
+    *before* the build subprocess starts guarantees scons is present and
+    avoids mid-compile "Preparing required core framework" console noise.
+    """
+    import json
+
+    if core_dir is None:
+        core_dir = os.environ.get("PLATFORMIO_CORE_DIR", "")
+    if not core_dir:
+        return False
+    manifest = Path(core_dir) / "packages" / "tool-scons" / "package.json"
+    piopm = Path(core_dir) / "packages" / "tool-scons" / ".piopm"
+    if manifest.is_file() and piopm.is_file():
+        try:
+            data = json.loads(piopm.read_text(encoding="utf-8"))
+            if data.get("spec", {}).get("owner") == "platformio" and str(data.get("version", "")).startswith("4."):
+                return True
+        except Exception:
+            pass
+    # Package is missing or incomplete — install via bootstrap
+    b = _get_bootstrap()
+    if b is None:
+        return False
+    try:
+        pio = find_pio_executable()
+        return bool(b.ensure_platformio_scons(pio, str(core_dir)))
+    except Exception:
+        return False
+
+
 def _load_dedicated_ai() -> Any:
     """Load the optional AI integration only when the user needs it."""
     global _dedicated_ai_module
