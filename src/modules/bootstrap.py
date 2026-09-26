@@ -1053,6 +1053,31 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
         core_ready = _platformio_core_is_populated(SCRIPT_DIR)
         if not core_ready:
             raise RuntimeError("Extracted PlatformIO core failed readiness verification")
+
+        # Immediately guarantee tool-scons has valid .piopm metadata so PlatformIO
+        # Core recognizes SCons as installed on the very first compile.
+        try:
+            scons_manifest = pio_dir / "packages" / "tool-scons" / "package.json"
+            scons_piopm = pio_dir / "packages" / "tool-scons" / ".piopm"
+            if scons_manifest.is_file() and not scons_piopm.is_file():
+                manifest_data = json.loads(scons_manifest.read_text(encoding="utf-8"))
+                version = str(manifest_data.get("version", "4.41101.0")).strip()
+                piopm_data = {
+                    "type": "tool",
+                    "name": "tool-scons",
+                    "version": version,
+                    "spec": {
+                        "owner": "platformio",
+                        "id": 8192,
+                        "name": "tool-scons",
+                        "requirements": None,
+                        "uri": None,
+                    },
+                }
+                scons_piopm.write_text(json.dumps(piopm_data), encoding="utf-8")
+        except Exception:
+            pass
+
         if gui:
             gui.clear_platformio_progress_block()
             gui.set_progress_percent(100)
@@ -2809,8 +2834,9 @@ def ensure_pip() -> bool:
     except Exception:
         pass
     try:
+        target_py = _get_target_python()
         res = subprocess.run(
-            [sys.executable, "-m", "pip", "--version"],
+            [str(target_py), "-m", "pip", "--version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
@@ -2828,8 +2854,9 @@ def ensure_pip() -> bool:
     try:
         if _preseed_venv_site_packages():
             status("Pre-seeded dependencies from base Python...")
+            target_py = _get_target_python()
             res = subprocess.run(
-                [sys.executable, "-m", "pip", "--version"],
+                [str(target_py), "-m", "pip", "--version"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=5,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
@@ -3540,6 +3567,7 @@ def ensure_pip_packages_parallel(
     _ensure_pywin32_system32_dlls()
     importlib.invalidate_caches()
 
+    status(f"Verifying {len(active_specs)} Python dependencies...")
     # Checks are read-only, so running these concurrently is safe.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(active_specs))) as executor:
         installed_flags = list(executor.map(_check, active_specs))
@@ -3551,11 +3579,13 @@ def ensure_pip_packages_parallel(
                 pkg_states[spec["id"]]["pct"] = 100
                 pkg_states[spec["id"]]["done"] = True
                 pkg_states[spec["id"]]["ok"] = True
+                dim(f"{spec['name']}: verified (installed)")
             else:
                 pkg_states[spec["id"]]["status"] = "⏳ Waiting..."
                 pkg_states[spec["id"]]["pct"] = 0
                 pkg_states[spec["id"]]["done"] = False
                 pkg_states[spec["id"]]["ok"] = False
+                status(f"{spec['name']}: not installed, will download and install.")
 
     # Render table immediately reflecting true state (no animating loading for packages already installed!)
     _render_table()
@@ -3567,6 +3597,7 @@ def ensure_pip_packages_parallel(
             gui.commit_pip_table_block()
             gui.set_progress_percent(100)
             gui.log_ok("All pip package dependencies are verified!")
+        ok("All pip package dependencies are verified!")
         return True
 
     # Fast offline termination: cannot download missing pip packages without internet
@@ -3615,8 +3646,9 @@ def ensure_pip_packages_parallel(
 
         max_attempts = _DOWNLOAD_MAX_RETRIES + 1
 
+        target_py = _get_target_python()
         cmd = [
-            sys.executable,
+            str(target_py),
             "-m",
             "pip",
             "download",
@@ -3736,18 +3768,18 @@ def ensure_pip_packages_parallel(
                             if low.startswith("collecting "):
                                 phase_events += 1
                                 _set_state(sid, status_text="⚙ Resolving...", pct=min(28, 10 + phase_events * 2))
-                                dim(f"{spec['name']}: {line.strip()}")
+                                status(f"{spec['name']}: {line.strip()}")
                             elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
                                 phase_events += 1
                                 _set_state(sid, status_text="⚙ Reading metadata...", pct=min(38, 24 + phase_events * 2))
-                                dim(f"{spec['name']}: {line.strip()}")
+                                status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("downloading ") or low.startswith("using cached "):
                                 phase_events += 1
                                 _set_state(sid, status_text="⬇ Downloading...", pct=min(68, 34 + phase_events * 3))
-                                dim(f"{spec['name']}: {line.strip()}")
+                                status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("saved "):
                                 _set_state(sid, status_text="⬇ Saving packages...", pct=70)
-                                dim(f"{spec['name']}: {line.strip()}")
+                                status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("successfully downloaded"):
                                 _set_state(sid, status_text="✔ Downloaded", pct=75)
                                 ok(f"Downloaded {spec['name']} successfully.")
@@ -3911,9 +3943,9 @@ def ensure_pip_packages_parallel(
                 _set_all(missing_specs, "⚙ Verifying...", 95)
                 ok(line.strip())
             elif any(low.startswith(p) for p in ("running setup.py", "building wheel", "created wheel", "installing")):
-                dim(f"  {line.strip()}")
+                status(f"  {line.strip()}")
             elif low.startswith("collecting ") or low.startswith("downloading "):
-                dim(f"  {line.strip()}")
+                status(f"  {line.strip()}")
             _update_bottom_from_rows()
 
         # Use the prepared wheelhouse as a fast local source, but keep the
@@ -4334,6 +4366,32 @@ def ensure_platformio_scons(
         pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(_get_safe_platformio_core_dir(SCRIPT_DIR))
     core_path = Path(pio_core_dir)
     os.environ["PLATFORMIO_CORE_DIR"] = str(core_path)
+
+    # Ensure .piopm is seeded directly if package.json is present on disk
+    real_packages = SCRIPT_DIR / "src" / ".platformio-mcu-gui" / "packages"
+    for base in [core_path / "packages", real_packages]:
+        s_pkg = base / "tool-scons"
+        s_m = s_pkg / "package.json"
+        s_p = s_pkg / ".piopm"
+        if s_m.is_file() and not s_p.is_file():
+            try:
+                m_data = json.loads(s_m.read_text(encoding="utf-8"))
+                ver = str(m_data.get("version", "4.41101.0")).strip()
+                p_data = {
+                    "type": "tool",
+                    "name": "tool-scons",
+                    "version": ver,
+                    "spec": {
+                        "owner": "platformio",
+                        "id": 8192,
+                        "name": "tool-scons",
+                        "requirements": None,
+                        "uri": None,
+                    },
+                }
+                s_p.write_text(json.dumps(p_data), encoding="utf-8")
+            except Exception:
+                pass
 
     scons_manifest = core_path / "packages" / "tool-scons" / "package.json"
     scons_piopm = core_path / "packages" / "tool-scons" / ".piopm"
@@ -7298,8 +7356,9 @@ def _run_pip_install(
         busy_cap = progress_end if progress_end is not None else 92
         _gui.start_busy(progress_start, busy_cap)
 
+    target_py = _get_target_python()
     cmd = [
-        sys.executable,
+        str(target_py),
         "-m",
         "pip",
         "install",
@@ -7382,7 +7441,7 @@ def _run_pip_install(
                         if low.startswith("installing collected packages:") or low.startswith("successfully installed"):
                             status(line.strip())
                         elif any(low.startswith(p) for p in ("collecting ", "downloading ", "using cached ", "running setup.py", "building wheel")):
-                            dim(f"  {line.strip()}")
+                            status(f"  {line.strip()}")
             except _queue.Empty:
                 pass
 

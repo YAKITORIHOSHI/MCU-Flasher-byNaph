@@ -118,13 +118,34 @@ def ensure_scons_ready(core_dir: str | Path | None = None) -> bool:
         return False
     manifest = Path(core_dir) / "packages" / "tool-scons" / "package.json"
     piopm = Path(core_dir) / "packages" / "tool-scons" / ".piopm"
-    if manifest.is_file() and piopm.is_file():
-        try:
-            data = json.loads(piopm.read_text(encoding="utf-8"))
-            if data.get("spec", {}).get("owner") == "platformio" and str(data.get("version", "")).startswith("4."):
+    if manifest.is_file():
+        if not piopm.is_file():
+            try:
+                manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+                version = str(manifest_data.get("version", "4.41101.0")).strip()
+                piopm_data = {
+                    "type": "tool",
+                    "name": "tool-scons",
+                    "version": version,
+                    "spec": {
+                        "owner": "platformio",
+                        "id": 8192,
+                        "name": "tool-scons",
+                        "requirements": None,
+                        "uri": None,
+                    },
+                }
+                piopm.write_text(json.dumps(piopm_data), encoding="utf-8")
                 return True
-        except Exception:
-            pass
+            except Exception:
+                pass
+        else:
+            try:
+                data = json.loads(piopm.read_text(encoding="utf-8"))
+                if data.get("spec", {}).get("owner") == "platformio" and str(data.get("version", "")).startswith("4."):
+                    return True
+            except Exception:
+                pass
     # Package is missing or incomplete — install via bootstrap
     b = _get_bootstrap()
     if b is None:

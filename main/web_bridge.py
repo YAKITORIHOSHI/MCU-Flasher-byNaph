@@ -3400,10 +3400,12 @@ class MCUWebBackendAPI:
                         _first_divider_printed[0] = True
                         self.emit("console:log", {"text": "  ──────────────────────────────────────────────────", "tag": "purple_dim", "newline": True})
                 elif "tool manager:" in low or "platform manager:" in low or "tool-manager:" in low or "platform-manager:" in low:
-                    manager_kind = "Toolchain/Tool" if ("tool" in low) else "Platform/Framework"
                     item = re.sub(r'^(?:tool|platform)[\s-]manager:\s*', '', line_clean, flags=re.IGNORECASE).strip()
                     item = re.sub(r'^(?:installing|downloading|unpacking)\s+', '', item, flags=re.IGNORECASE).strip()
                     item = re.split(r'\s+has been installed!?$', item, flags=re.IGNORECASE)[0].strip()
+                    if "tool-scons" in item.lower() or "tool-scons" in low:
+                        continue  # SCons is the internal build engine — never expose as a user-facing toolchain check
+                    manager_kind = "Toolchain/Tool" if ("tool" in low) else "Platform/Framework"
                     _current_framework_item[0] = item
                     if "installing" in low:
                         if item not in _framework_logged_installs:
@@ -3453,7 +3455,7 @@ class MCUWebBackendAPI:
                         filled = int(pct / 100 * 30)
                         bar = "▰" * filled + "▱" * (30 - filled)
                         act_name = "Downloading" if "downloading" in low else "Unpacking"
-                        item = _current_framework_item[0] or "platformio/tool-scons @ ~4.41101.0"
+                        item = _current_framework_item[0] or "core framework package"
                         item_label = item if len(item) <= 44 else item[:41] + "..."
                         icon = "✔ " if pct >= 100 else "  "
                         progress_text = f"  {icon}{act_name:<11} [{item_label}]  {bar}  {pct:3d}%"
