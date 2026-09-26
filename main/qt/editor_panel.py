@@ -370,6 +370,7 @@ class MonacoEditorPanel(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)
 
         # Utilize high-performance in-memory cache for Monaco bundle, workers, and web assets
         profile = self._view.page().profile()
@@ -634,6 +635,29 @@ class MonacoEditorPanel(QWidget):
             f"}}"
         )
         self._view.page().runJavaScript(js)
+
+    def force_layout(self) -> None:
+        """Force Monaco to instantly recalculate geometry and repaint."""
+        js = (
+            "if (typeof window.forceEditorLayout === 'function') {"
+            "  window.forceEditorLayout();"
+            "} else if (window.editorInstance && typeof window.editorInstance.layout === 'function') {"
+            "  window.editorInstance.layout();"
+            "}"
+        )
+        self._view.page().runJavaScript(js)
+        if hasattr(self._view, "update"):
+            self._view.update()
+
+    def showEvent(self, event) -> None:
+        """Instantly wake up Monaco and recalculate layout upon unhide/show."""
+        super().showEvent(event)
+        self._view.show()
+        self.force_layout()
+        QTimer.singleShot(16, self.force_layout)
+        QTimer.singleShot(60, self.force_layout)
+        if self._backend and self._backend.active_file_path:
+            self.open_file(self._backend.active_file_path)
 
     @property
     def bridge(self) -> EditorBridgeAPI:

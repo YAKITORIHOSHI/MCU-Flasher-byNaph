@@ -1033,6 +1033,37 @@
         new MutationObserver(dedupeProjectTabs).observe(projectTabBar, { childList: true });
       }
 
+      // ── Instant Unhide & Resize Observers ──────────────────────────────────
+      // When the editor container is unhidden, docked/undocked, or resized,
+      // trigger Monaco layout immediately so there is zero render throttling or latency.
+      window.forceEditorLayout = function () {
+        if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
+          window.editorInstance.layout();
+        }
+      };
+
+      const editorContainerElem = document.getElementById('editor-container') || document.getElementById('monaco-anchor');
+      if (window.ResizeObserver && editorContainerElem) {
+        const ro = new ResizeObserver(() => {
+          if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
+            window.editorInstance.layout();
+          }
+        });
+        ro.observe(editorContainerElem);
+      }
+
+      window.addEventListener('resize', () => {
+        if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
+          window.editorInstance.layout();
+        }
+      }, { passive: true });
+
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && window.editorInstance && typeof window.editorInstance.layout === 'function') {
+          window.editorInstance.layout();
+        }
+      });
+
       const bar = document.getElementById('detached-action-bar');
       window.setDetachedActionBar = function (visible) {
         bar.classList.toggle('visible', !!visible);

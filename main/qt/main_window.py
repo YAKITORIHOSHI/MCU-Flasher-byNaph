@@ -199,6 +199,9 @@ class MCUMainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_responsive_layout(event.size().width())
+        if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
+            if hasattr(self._editor_panel, "force_layout"):
+                self._editor_panel.force_layout()
         if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():
             self._terminal_panel._resize_embedded_terminal()
             QTimer.singleShot(50, self._terminal_panel._resize_embedded_terminal)
@@ -212,6 +215,11 @@ class MCUMainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self._apply_responsive_layout(self.width())
+            if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
+                if hasattr(self._editor_panel, "force_layout"):
+                    self._editor_panel.force_layout()
+                    QTimer.singleShot(30, self._editor_panel.force_layout)
+                    QTimer.singleShot(100, self._editor_panel.force_layout)
             if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():
                 QTimer.singleShot(30, self._terminal_panel._resize_embedded_terminal)
                 QTimer.singleShot(100, self._terminal_panel._resize_embedded_terminal)
@@ -1042,7 +1050,11 @@ class MCUMainWindow(QMainWindow):
             if editor_visible:
                 self._editor_panel.setVisible(True)
                 self._editor_panel.show()
-                if hasattr(self._editor_panel, "_view") and self._editor_panel._view:
+                if hasattr(self._editor_panel, "force_layout"):
+                    self._editor_panel.force_layout()
+                    QTimer.singleShot(20, self._editor_panel.force_layout)
+                    QTimer.singleShot(80, self._editor_panel.force_layout)
+                elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
                     self._editor_panel._view.update()
 
             v_total = max(500, self.centralWidget().height())
@@ -1177,9 +1189,13 @@ class MCUMainWindow(QMainWindow):
             # Synchronize layout back to docked
             self._sync_ai_and_editor_layout()
 
-            # Ensure Chromium paints immediately
+            # Ensure Chromium paints immediately and triggers instant layout
             self._editor_panel.show()
-            if hasattr(self._editor_panel, "_view") and self._editor_panel._view:
+            if hasattr(self._editor_panel, "force_layout"):
+                self._editor_panel.force_layout()
+                QTimer.singleShot(20, self._editor_panel.force_layout)
+                QTimer.singleShot(80, self._editor_panel.force_layout)
+            elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
                 self._editor_panel._view.update()
 
             self._on_notification({"type": "info", "message": "✓ Code editor re-attached to main window."})
@@ -1213,8 +1229,10 @@ class MCUMainWindow(QMainWindow):
             except Exception:
                 pass
 
-            # Load active file into Monaco after a short delay to let Qt initialize
-            QTimer.singleShot(800, self._load_initial_file)
+            # Load active file into Monaco immediately without sluggish delay
+            self._load_initial_file()
+            QTimer.singleShot(50, self._load_initial_file)
+            QTimer.singleShot(150, self._load_initial_file)
 
     def _load_initial_file(self) -> None:
         if self._backend and self._backend.active_file_path:

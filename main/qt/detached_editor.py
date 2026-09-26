@@ -56,6 +56,18 @@ class DetachedEditorWindow(QMainWindow):
         except Exception:
             pass
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        cw = self.centralWidget()
+        if cw and hasattr(cw, "force_layout"):
+            cw.force_layout()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        cw = self.centralWidget()
+        if cw and hasattr(cw, "force_layout"):
+            cw.force_layout()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """Closing the detached window automatically re-attaches the editor to the main window."""
         self.closing.emit()

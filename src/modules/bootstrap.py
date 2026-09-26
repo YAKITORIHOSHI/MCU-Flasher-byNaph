@@ -9870,6 +9870,20 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             launch_env["PATH"] = str(venv_scripts) + os.pathsep + cur_path
             launch_env["VIRTUAL_ENV"] = str(venv_dir)
 
+        # Disable Chromium WebEngine background throttling on hidden/occluded/pre-warmed views
+        _existing_flags = launch_env.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+        _no_throttle_flags = [
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features=CalculateNativeWinOcclusion",
+        ]
+        _merged_flags = _existing_flags
+        for _f in _no_throttle_flags:
+            if _f not in _merged_flags:
+                _merged_flags = f"{_merged_flags} {_f}".strip()
+        launch_env["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
+
         try:
             popen_func = getattr(sp, "_orig_popen", sp.Popen)
             proc = popen_func(

@@ -71,6 +71,20 @@ except ImportError:
         def mark_session_clean_exit(pid: int | None = None) -> None: pass
         def record_crash_event(*args: Any, **kwargs: Any) -> None: pass
 
+# ── Disable Chromium WebEngine background throttling on hidden/occluded/pre-warmed views ──
+_existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+_no_throttle_flags = [
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=CalculateNativeWinOcclusion",
+]
+_merged_flags = _existing_flags
+for _f in _no_throttle_flags:
+    if _f not in _merged_flags:
+        _merged_flags = f"{_merged_flags} {_f}".strip()
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
+
 # ── PySide6 GUI Components ───────────────────────────────────────────────────
 try:
     # pyrefly: ignore [missing-import]
