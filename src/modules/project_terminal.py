@@ -15,6 +15,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import socket
 import sys
 import threading
@@ -499,12 +500,161 @@ def _native_shell_executable(kind: str) -> str | None:
             if path.exists():
                 return str(path)
         return os.environ.get("COMSPEC") or "cmd.exe"
+
+    # For pwsh: check for modern PowerShell 7 first
+    pwsh_candidates: list[str | None] = [
+        shutil.which("pwsh.exe"),
+        shutil.which("pwsh"),
+    ]
+    prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if prog_files:
+        pwsh_candidates.append(str(Path(prog_files) / "PowerShell" / "7" / "pwsh.exe"))
+        pwsh_candidates.append(str(Path(prog_files) / "PowerShell" / "7-preview" / "pwsh.exe"))
+    if local_app_data:
+        pwsh_candidates.append(str(Path(local_app_data) / "Microsoft" / "PowerShell" / "pwsh.exe"))
+
+    for cand in pwsh_candidates:
+        if cand and os.path.isfile(cand):
+            return str(Path(cand).resolve())
+
+    # Fallback to Windows PowerShell 5.1
     root = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
     if root:
         path = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
         if path.exists():
             return str(path)
     return "powershell.exe"
+
+
+def _build_terminal_env(target_dir: str) -> dict[str, str]:
+    env = os.environ.copy()
+
+    # Query registry PATH for system-wide and user environments dynamically
+    reg_paths: list[str] = []
+    try:
+        import winreg
+        for root_key, subkey in [
+            (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+            (winreg.HKEY_CURRENT_USER, r"Environment"),
+        ]:
+            try:
+                with winreg.OpenKey(root_key, subkey) as k:
+                    val, _ = winreg.QueryValueEx(k, "Path")
+                    if val and isinstance(val, str):
+                        reg_paths.extend(val.split(";"))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    appdata = os.environ.get("APPDATA", "")
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    userprofile = os.environ.get("USERPROFILE", "") or str(Path.home())
+    prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    prog_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    sys_drive = os.environ.get("SystemDrive", "C:")
+
+    discovered_dirs: list[Path | None] = [
+        # NPM global packages (opencode, claude-code, etc.)
+        Path(appdata) / "npm" if appdata else None,
+        Path(localappdata) / "npm" if localappdata else None,
+
+        # Antigravity CLI (agy)
+        Path(localappdata) / "agy" / "bin" if localappdata else None,
+        Path(userprofile) / ".antigravity" / "bin" if userprofile else None,
+
+        # Claude Code, OpenCode & pipx / user Python CLIs
+        Path(userprofile) / ".local" / "bin" if userprofile else None,
+        Path(userprofile) / ".opencode" / "bin" if userprofile else None,
+        Path(appdata) / "Python" / f"Python{sys.version_info.major}{sys.version_info.minor}" / "Scripts" if appdata else None,
+
+        # Node.js
+        Path(prog_files) / "nodejs" if prog_files else None,
+        Path(prog_files_x86) / "nodejs" if prog_files_x86 else None,
+
+        # Modern PowerShell 7
+        Path(prog_files) / "PowerShell" / "7" if prog_files else None,
+        Path(prog_files) / "PowerShell" / "7-preview" if prog_files else None,
+        Path(localappdata) / "Microsoft" / "PowerShell" if localappdata else None,
+
+        # Ollama, GitHub CLI
+        Path(localappdata) / "Programs" / "Ollama" if localappdata else None,
+        Path(prog_files) / "Ollama" if prog_files else None,
+        Path(prog_files) / "GitHub CLI" if prog_files else None,
+        Path(localappdata) / "Programs" / "GitHub CLI" if localappdata else None,
+
+        # Git
+        Path(prog_files) / "Git" / "cmd" if prog_files else None,
+        Path(prog_files) / "Git" / "bin" if prog_files else None,
+        Path(prog_files_x86) / "Git" / "cmd" if prog_files_x86 else None,
+        Path(localappdata) / "Programs" / "Git" / "cmd" if localappdata else None,
+
+        # MCU Flasher local python & toolchains
+        SCRIPT_DIR / "src" / "_python" / "Scripts",
+        SCRIPT_DIR / "src" / "_python",
+        SCRIPT_DIR / "env" / "Scripts",
+        SCRIPT_DIR / "src" / ".platformio-mcu-gui" / "penv" / "Scripts",
+        Path(f"{sys_drive}/.platformio-mcu-gui/penv/Scripts"),
+        Path(f"{sys_drive}/.mcuflasher-app/.platformio-mcu-gui/penv/Scripts"),
+        Path(userprofile) / ".platformio" / "penv" / "Scripts" if userprofile else None,
+        SCRIPT_DIR / "installers" / "arduino-cli",
+        SCRIPT_DIR / "bin",
+    ]
+
+    extra_paths: list[str] = []
+    # Add valid discovered directories
+    for d in discovered_dirs:
+        if d and d.is_dir():
+            extra_paths.append(str(d.resolve()))
+
+    # Add valid registry paths (expanding any environment variables in registry)
+    for p in reg_paths:
+        p_clean = os.path.expandvars(p).strip().strip('"')
+        if p_clean and Path(p_clean).is_dir():
+            extra_paths.append(str(Path(p_clean).resolve()))
+
+    # Add existing PATH entries
+    existing_paths = [
+        p.strip().strip('"')
+        for p in env.get("PATH", "").split(os.pathsep)
+        if p.strip()
+    ]
+
+    final_paths: list[str] = []
+    seen: set[str] = set()
+    for p in extra_paths + existing_paths:
+        norm = os.path.normcase(os.path.normpath(p))
+        if norm and norm not in seen and os.path.isdir(p):
+            seen.add(norm)
+            final_paths.append(p)
+
+    env["PATH"] = os.pathsep.join(final_paths)
+
+    # Ensure PATHEXT includes all executable extensions
+    pathext = env.get("PATHEXT", "")
+    required_exts = [".COM", ".EXE", ".BAT", ".CMD", ".VBS", ".VBE", ".JS", ".JSE", ".WSF", ".WSH", ".MSC", ".CPL", ".PS1"]
+    current_exts = [e.upper() for e in pathext.split(";") if e]
+    for ext in required_exts:
+        if ext not in current_exts:
+            current_exts.append(ext)
+    env["PATHEXT"] = ";".join(current_exts)
+
+    # Point PLATFORMIO_CORE_DIR to project-local core if available
+    local_pio_core = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
+    if local_pio_core.is_dir():
+        env["PLATFORMIO_CORE_DIR"] = str(local_pio_core.resolve())
+
+    # Terminal capabilities & truecolor support for AI CLIs (Ink, React, Chalk, TrueColor)
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+    env["FORCE_COLOR"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    if "LANG" not in env or not env["LANG"]:
+        env["LANG"] = "en_US.UTF-8"
+
+    return env
 
 
 def _shell_cd_command(kind: str, target: str) -> str:
@@ -694,11 +844,24 @@ class ProjectTerminalServer:
             self.broadcast({"type": "status", "shell": sid, "running": False, "ready": False})
             return
 
-        argv = [executable, "-NoLogo", "-NoProfile", "-NoExit"] if kind == "pwsh" else [executable, "/D"]
+        argv = [executable, "-NoLogo", "-ExecutionPolicy", "Bypass", "-NoExit"] if kind == "pwsh" else [executable, "/D"]
         pty = None
         ready_candidate = None
         try:
-            pty = PtyProcess.spawn(argv, cwd=self.target_dir, dimensions=(30, 120))
+            shell_env = _build_terminal_env(self.target_dir)
+            try:
+                pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
+            except Exception as spawn_exc:
+                if kind == "pwsh":
+                    cmd_exe = _native_shell_executable("cmd")
+                    if cmd_exe:
+                        argv = [cmd_exe, "/D"]
+                        pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
+                    else:
+                        raise spawn_exc
+                else:
+                    raise spawn_exc
+
             with session.lock:
                 session.pty = pty
             probe = ""
@@ -710,6 +873,8 @@ class ProjectTerminalServer:
                 if data:
                     if not is_current():
                         break
+                    if ready_candidate is None:
+                        ready_candidate = time.monotonic()
                     text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
                     session.append_history(text)
                     self.broadcast({"type": "output", "shell": sid, "data": text})
@@ -834,11 +999,14 @@ class ProjectTerminalServer:
         with self.clients_lock:
             self.clients.add(websocket)
         try:
-            await self._send(websocket, {"type": "activate", "shell": self.active_shell})
-            for kind, session in self.sessions.items():
+            for sid, session in list(self.sessions.items()):
+                await self._send(websocket, {"type": "create", "shell": sid, "kind": session.kind})
+            if self.active_shell:
+                await self._send(websocket, {"type": "activate", "shell": self.active_shell})
+            for sid, session in list(self.sessions.items()):
                 history = session.history_text()
                 if history:
-                    await self._send(websocket, {"type": "output", "shell": kind, "data": history})
+                    await self._send(websocket, {"type": "output", "shell": sid, "data": history})
             async for raw in websocket:
                 try:
                     message = json.loads(raw)
