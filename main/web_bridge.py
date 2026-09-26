@@ -480,6 +480,7 @@ class MCUWebBackendAPI:
                     level=data.get("type", "info"),
                     title=data.get("title", "Notification"),
                     message=data.get("message", ""),
+                    details=data.get("details", {}),
                 )
             except Exception:
                 pass
@@ -7639,75 +7640,104 @@ class MCUWebBackendAPI:
             self.emit("console:clear", None)
 
         self.emit("console:log", {"text": "🧹 Cleaning build cache...", "tag": "header", "newline": True})
-        try:
+
+        def _worker():
             sketch = self.sketch_dir_path
-            targets = [
-                (get_project_build_cache_root(sketch, create=False), "MCU Flasher project build cache"),
-                (sketch / ".pio", "all cached board workspaces"),
-                (sketch / "src", "generated build sources"),
-                (sketch / "platformio.ini", "generated PlatformIO configuration"),
-                (sketch / "build_artifacts", "board-specific binary archives"),
-                (sketch / ".build_artifacts", "legacy binary archives"),
-                (sketch / "compiled_builds", "legacy compiled binaries"),
-                (sketch / ".mcu_gui_cache.json", "legacy compile metadata"),
-                (get_project_build_cache_root(sketch, create=False) / ".mcu_gui_cache.json", "compile metadata"),
-                (get_project_build_cache_root(sketch, create=False) / "compile_cache.json", "compile cache"),
-                (get_project_build_cache_root(sketch, create=False) / ".mcu_flash_syntax_errors.json", "syntax metadata"),
-                (sketch / ".mcu_flash_syntax_errors.json", "legacy syntax metadata"),
-                (sketch / ".mcu_gui_compat_cache.json", "legacy compatible-devices metadata"),
-                (sketch / ".mcu_flash_tab_order.json", "legacy editor tab order"),
-                (sketch / ".mcu_ai_edits", "legacy AI edit backups"),
-                (sketch / "MCU-FLASHER-SRC", "legacy generated source cache"),
-                (sketch / ".ai_edit_signal", "generated editor signal"),
-                (sketch / ".mcu_flasher_project_hardware.json", "legacy hardware metadata"),
-                (sketch / ".ai_ready_signal", "stale AI ready signal"),
-                (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
-                (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
-                (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
-                (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / ".pio", "Arduino shared legacy cache"),
-            ]
-            remote_root = self._remote_workspace_root(sketch)
-            if remote_root is not None:
-                targets.append((remote_root, "remote project local build workspace"))
-            removed = []
-            for target, label in targets:
-                if target.exists():
-                    try:
-                        if target.is_dir():
-                            robust_rmtree(target)
-                        else:
-                            target.unlink(missing_ok=True)
-                        removed.append(label)
-                    except Exception:
-                        pass
-
-            # Invalidate all in-memory caches and reset compile tracking
-            self._last_source_hash = ""
-            self._last_compiled_board = ""
-            self.skip_compile = False
-            self.emit("skip_compile:availability", False)
-            _sketch_ram_cache.invalidate()
-
-            # Recreate AGENTS.md / AI project state
+            sketch_name = sketch.name if sketch else "Project"
             try:
-                self._sync_project_hardware_state(self.sketch_dir_path)
-            except Exception:
-                pass
+                targets = [
+                    (get_project_build_cache_root(sketch, create=False), "MCU Flasher project build cache"),
+                    (sketch / ".pio", "all cached board workspaces"),
+                    (sketch / "src", "generated build sources"),
+                    (sketch / "platformio.ini", "generated PlatformIO configuration"),
+                    (sketch / "build_artifacts", "board-specific binary archives"),
+                    (sketch / ".build_artifacts", "legacy binary archives"),
+                    (sketch / "compiled_builds", "legacy compiled binaries"),
+                    (sketch / ".mcu_gui_cache.json", "legacy compile metadata"),
+                    (get_project_build_cache_root(sketch, create=False) / ".mcu_gui_cache.json", "compile metadata"),
+                    (get_project_build_cache_root(sketch, create=False) / "compile_cache.json", "compile cache"),
+                    (get_project_build_cache_root(sketch, create=False) / ".mcu_flash_syntax_errors.json", "syntax metadata"),
+                    (sketch / ".mcu_flash_syntax_errors.json", "legacy syntax metadata"),
+                    (sketch / ".mcu_gui_compat_cache.json", "legacy compatible-devices metadata"),
+                    (sketch / ".mcu_flash_tab_order.json", "legacy editor tab order"),
+                    (sketch / ".mcu_ai_edits", "legacy AI edit backups"),
+                    (sketch / "MCU-FLASHER-SRC", "legacy generated source cache"),
+                    (sketch / ".ai_edit_signal", "generated editor signal"),
+                    (sketch / ".mcu_flasher_project_hardware.json", "legacy hardware metadata"),
+                    (sketch / ".ai_ready_signal", "stale AI ready signal"),
+                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
+                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
+                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
+                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / ".pio", "Arduino shared legacy cache"),
+                ]
+                remote_root = self._remote_workspace_root(sketch)
+                if remote_root is not None:
+                    targets.append((remote_root, "remote project local build workspace"))
+                removed = []
+                for target, label in targets:
+                    if target.exists():
+                        try:
+                            if target.is_dir():
+                                robust_rmtree(target)
+                            else:
+                                target.unlink(missing_ok=True)
+                            removed.append(label)
+                        except Exception:
+                            pass
 
-            if removed:
-                self.emit("console:log", {"text": f"✔ Clean completed successfully: removed {len(removed)} cached items.", "tag": "success", "newline": True})
-            else:
-                self.emit("console:log", {"text": "✔ Project is already clean. Ready to rebuild from scratch.", "tag": "success", "newline": True})
-            self.emit("console:log", {"text": "  Ready. Compile or Upload to rebuild from scratch.", "tag": "dim", "newline": True})
-        except Exception as e:
-            self.emit("console:log", {"text": f"✖ Clean error: {e}", "tag": "error", "newline": True})
-        finally:
-            self.is_busy = False
-            self.active_operation = None
-            self._current_op_phase = None
-            self.emit("operation:phase", {"phase": "idle", "is_busy": False})
-            self.emit("window:closable", {"closable": True})
-            self.emit("console:progress", {"action": "Completed"})
+                # Invalidate all in-memory caches and reset compile tracking
+                self._last_source_hash = ""
+                self._last_compiled_board = ""
+                self.skip_compile = False
+                self.emit("skip_compile:availability", False)
+                _sketch_ram_cache.invalidate()
+
+                # Recreate AGENTS.md / AI project state
+                try:
+                    self._sync_project_hardware_state(self.sketch_dir_path)
+                except Exception:
+                    pass
+
+                if removed:
+                    clean_msg = f"Clean completed successfully: removed {len(removed)} cached items."
+                    self.emit("console:log", {"text": f"✔ {clean_msg}", "tag": "success", "newline": True})
+                    self.emit("notification", {
+                        "title": "Clean Complete",
+                        "message": f"Build cache cleaned for '{sketch_name}': removed {len(removed)} cached items.",
+                        "type": "success",
+                        "category": "system",
+                        "details": {"sketch": str(sketch), "removed_count": len(removed), "removed_items": removed},
+                    })
+                else:
+                    clean_msg = "Project is already clean. Ready to rebuild from scratch."
+                    self.emit("console:log", {"text": f"✔ {clean_msg}", "tag": "success", "newline": True})
+                    self.emit("notification", {
+                        "title": "Clean Complete",
+                        "message": f"Build cache for '{sketch_name}' is already clean. Ready to rebuild from scratch.",
+                        "type": "info",
+                        "category": "system",
+                        "details": {"sketch": str(sketch), "removed_count": 0},
+                    })
+                self.emit("console:log", {"text": "  Ready. Compile or Upload to rebuild from scratch.", "tag": "dim", "newline": True})
+            except Exception as e:
+                err_msg = f"Clean error: {e}"
+                self.emit("console:log", {"text": f"✖ {err_msg}", "tag": "error", "newline": True})
+                self.emit("notification", {
+                    "title": "Clean Failed",
+                    "message": f"Clean error for '{sketch_name}': {e}",
+                    "type": "error",
+                    "category": "system",
+                    "details": {"sketch": str(sketch), "error": str(e)},
+                })
+            finally:
+                self.is_busy = False
+                self.active_operation = None
+                self._current_op_phase = None
+                self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+                self.emit("window:closable", {"closable": True})
+                self.emit("console:progress", {"action": "Completed"})
+
+        threading.Thread(target=_worker, name="MCU_CleanCache", daemon=True).start()
 
     def stop_operation(self):
         """Cancel the currently running compilation or building phase safely."""
