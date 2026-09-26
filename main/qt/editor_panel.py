@@ -638,6 +638,11 @@ class MonacoEditorPanel(QWidget):
 
     def force_layout(self) -> None:
         """Force Monaco to instantly recalculate geometry and repaint."""
+        if not hasattr(self, "_view") or not self._view:
+            return
+        page = self._view.page()
+        if not page:
+            return
         js = (
             "if (typeof window.forceEditorLayout === 'function') {"
             "  window.forceEditorLayout();"
@@ -645,14 +650,15 @@ class MonacoEditorPanel(QWidget):
             "  window.editorInstance.layout();"
             "}"
         )
-        self._view.page().runJavaScript(js)
+        page.runJavaScript(js)
         if hasattr(self._view, "update"):
             self._view.update()
 
     def showEvent(self, event) -> None:
         """Instantly wake up Monaco and recalculate layout upon unhide/show."""
         super().showEvent(event)
-        self._view.show()
+        if hasattr(self, "_view") and self._view:
+            self._view.show()
         self.force_layout()
         QTimer.singleShot(16, self.force_layout)
         QTimer.singleShot(60, self.force_layout)
