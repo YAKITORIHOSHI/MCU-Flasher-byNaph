@@ -190,12 +190,7 @@ class AIPanel(QWidget):
 
         # 1. Loading View (Active while launching, attaching, or realigning)
         self._loader_card = QFrame()
-        self._loader_card.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #101622, stop:1 #0c0f16);
-                border: none;
-            }
-        """)
+        self._loader_card.setStyleSheet("QFrame { background: #0c0d10; border: none; }")
         lv = QVBoxLayout(self._loader_card)
         lv.setContentsMargins(20, 40, 20, 40)
         lv.setSpacing(14)
@@ -227,29 +222,6 @@ class AIPanel(QWidget):
         self._stack.setCurrentWidget(self._loader_card)
         main_layout.addWidget(self._stack, stretch=1)
 
-    def _set_status_badge(self, text: str, state: str = "init") -> None:
-        """Update status badge text and styling to match the glassmorphic theme."""
-        palette = {
-            "init": ("#f1c40f", "rgba(241, 196, 15, 0.14)", "rgba(241, 196, 15, 0.35)"),
-            "active": ("#00ffc4", "rgba(0, 255, 196, 0.14)", "rgba(0, 255, 196, 0.35)"),
-            "detached": ("#00d2ff", "rgba(0, 210, 255, 0.14)", "rgba(0, 210, 255, 0.35)"),
-            "stopped": ("#ff5c7c", "rgba(255, 92, 124, 0.14)", "rgba(255, 92, 124, 0.35)"),
-        }
-        color, bg, border = palette.get(state, palette["init"])
-        self._status_badge.setText(text)
-        self._status_badge.setStyleSheet(f"""
-            QLabel {{
-                color: {color};
-                background: {bg};
-                border: 1px solid {border};
-                border-radius: 9px;
-                padding: 1px 7px;
-                font-size: 10px;
-                font-weight: 700;
-                font-family: 'Montserrat', 'Segoe UI', sans-serif;
-            }}
-        """)
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.set_responsive_width(event.size().width())
@@ -258,11 +230,11 @@ class AIPanel(QWidget):
     def set_responsive_width(self, width: int) -> None:
         if hasattr(self, "_title_lbl") and self._title_lbl:
             if width >= 340:
-                self._title_lbl.setText("⚡ OPENCODE AI ASSISTANT")
+                self._title_lbl.setText("🤖 OPENCODE AI ASSISTANT")
             elif width >= 270:
-                self._title_lbl.setText("⚡ AI Assistant")
+                self._title_lbl.setText("🤖 AI Assistant")
             else:
-                self._title_lbl.setText("⚡ AI")
+                self._title_lbl.setText("🤖 AI")
 
     def _tick_spinner(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
@@ -393,7 +365,8 @@ class AIPanel(QWidget):
         self._ready_poll_timer.stop()
         self._ready_poll_attempts = 0
         self._stack.setCurrentWidget(self._loader_card)
-        self._set_status_badge("● Initializing…", "init")
+        self._status_badge.setText("● Initializing…")
+        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
         self._load_title.setText("Initializing OpenCode AI Assistant…")
         self._load_sub.setText("Preparing ConPTY terminal & project environment…")
         self._spin_timer.start()
@@ -491,7 +464,8 @@ class AIPanel(QWidget):
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 self._resize_embedded_ai(show=True)
                 self._stack.setCurrentWidget(self._embed_container)
-                self._set_status_badge("● Active", "active")
+                self._status_badge.setText("● Active")
+                self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
                 self._btn_popout.setText("↗")
                 self._btn_popout.setToolTip("Open in external window")
         except Exception as e:
@@ -505,7 +479,8 @@ class AIPanel(QWidget):
         if self._proc and self._proc.poll() is not None:
             self._ready_poll_timer.stop()
             self._spin_timer.stop()
-            self._set_status_badge("● Stopped", "stopped")
+            self._status_badge.setText("● Stopped")
+            self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
             self._load_title.setText("AI Assistant Exited")
             self._load_sub.setText("The OpenCode process terminated unexpectedly.")
             return
@@ -534,7 +509,8 @@ class AIPanel(QWidget):
                 self._resize_embedded_ai(show=True)
 
             self._stack.setCurrentWidget(self._embed_container)
-            self._set_status_badge("● Active", "active")
+            self._status_badge.setText("● Active")
+            self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
             self._btn_popout.setText("↗")
             self._btn_popout.setToolTip("Open in external window")
 
@@ -611,7 +587,8 @@ class AIPanel(QWidget):
             self._stack.setCurrentWidget(self._loader_card)
             self._btn_popout.setText("↙")
             self._btn_popout.setToolTip("Reattach AI Assistant to side panel")
-            self._set_status_badge("● Detached", "detached")
+            self._status_badge.setText("● Detached")
+            self._status_badge.setStyleSheet("color: #5ca4f0; font-size: 11px; font-weight: 600;")
         else:
             # Reattach into panel
             self._embed_ai_hwnd(self._ai_hwnd)
@@ -655,7 +632,8 @@ class AIPanel(QWidget):
 
         # Show loader view while realigning
         self._stack.setCurrentWidget(self._loader_card)
-        self._set_status_badge("● Realigning…", "init")
+        self._status_badge.setText("● Realigning…")
+        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
         self._load_title.setText("Realigning AI to New Project…")
         proj_name = Path(new_project_dir).name if new_project_dir else "Project"
         self._load_sub.setText(f"Switching AI workspace to {proj_name}…")
