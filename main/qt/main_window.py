@@ -186,13 +186,16 @@ class MCUMainWindow(QMainWindow):
         self._update_minimum_window_size()
         self._apply_responsive_layout(self.width())
 
+        self.raise_()
+        self.activateWindow()
         if sys.platform == "win32":
             try:
-                import ctypes
+                from main.core.config import focus_project_window
                 hwnd = int(self.winId())
                 if hwnd:
-                    ctypes.windll.user32.ShowWindow(hwnd, 1)  # SW_SHOWNORMAL = 1
-                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    focus_project_window(hwnd)
+                    QTimer.singleShot(50, lambda: focus_project_window(hwnd))
+                    QTimer.singleShot(200, lambda: focus_project_window(hwnd))
             except Exception:
                 pass
 

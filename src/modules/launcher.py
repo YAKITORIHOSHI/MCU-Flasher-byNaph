@@ -17,6 +17,7 @@ if sys.platform == "win32":
             getattr(sys.stderr, "reconfigure")(encoding="utf-8")
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("naph.mcuflasher.gui.v3")
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)
     except Exception:
         pass
 

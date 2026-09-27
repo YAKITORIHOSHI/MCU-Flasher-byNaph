@@ -1245,7 +1245,7 @@
         if (delta === 0) {
           monacoFontSize = 13;
         } else {
-          monacoFontSize = Math.max(8, Math.min(36, monacoFontSize + delta));
+          monacoFontSize = Math.max(6, Math.min(48, monacoFontSize + delta));
         }
         try {
           window.editorInstance.updateOptions({ fontSize: monacoFontSize });
@@ -3744,7 +3744,7 @@
       window.setEditorFontSize = function (sz) {
         if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
           try {
-            const num = Math.max(8, Math.min(36, Number(sz)));
+            const num = Math.max(6, Math.min(48, Number(sz)));
             monacoFontSize = num;
             window.editorInstance.updateOptions({ fontSize: num });
             if (typeof window.editorInstance.layout === 'function') {

@@ -19,7 +19,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Slot, Qt
+from PySide6.QtCore import QTimer, Slot, Qt, QEvent
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
@@ -68,6 +68,15 @@ class SerialOutputView(QPlainTextEdit):
         from main.core.config import get_theme_mode
         self.apply_theme(get_theme_mode())
         self._autoscroll = True
+        self._scrollbar_held = False
+        self._user_scrolled_up = False
+
+        sb = self.verticalScrollBar()
+        sb.sliderPressed.connect(self._on_slider_pressed)
+        sb.sliderReleased.connect(self._on_slider_released)
+        sb.actionTriggered.connect(self._on_action_triggered)
+        sb.installEventFilter(self)
+
         self._paused = False
         self._ansi_clear_enabled = True
         from main.core.config import load_gui_config
@@ -81,6 +90,45 @@ class SerialOutputView(QPlainTextEdit):
         self._flush_timer.setInterval(30)
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
+
+    def _on_slider_pressed(self) -> None:
+        self._scrollbar_held = True
+
+    def _on_slider_released(self) -> None:
+        self._scrollbar_held = False
+        self._update_user_scrolled_state()
+
+    def _on_action_triggered(self, _action: int) -> None:
+        self._update_user_scrolled_state()
+
+    def _update_user_scrolled_state(self) -> None:
+        sb = self.verticalScrollBar()
+        if sb.maximum() - sb.value() <= 3:
+            self._user_scrolled_up = False
+        else:
+            self._user_scrolled_up = True
+
+    def _is_scroll_held(self) -> bool:
+        sb = self.verticalScrollBar()
+        if sb.isSliderDown():
+            return True
+        if getattr(self, "_scrollbar_held", False):
+            return True
+        return False
+
+    def eventFilter(self, obj, event):
+        if obj == self.verticalScrollBar():
+            etype = event.type()
+            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._scrollbar_held = True
+            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                self._scrollbar_held = False
+                self._update_user_scrolled_state()
+        return super().eventFilter(obj, event)
+
+    def wheelEvent(self, event):
+        super().wheelEvent(event)
+        self._update_user_scrolled_state()
 
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
@@ -107,6 +155,10 @@ class SerialOutputView(QPlainTextEdit):
 
     def set_autoscroll(self, enabled: bool) -> None:
         self._autoscroll = enabled
+        if enabled:
+            self._user_scrolled_up = False
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
@@ -199,7 +251,7 @@ class SerialOutputView(QPlainTextEdit):
 
         cursor.endEditBlock()
 
-        if self._autoscroll or was_at_bottom:
+        if (self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up) or was_at_bottom:
             self.setTextCursor(cursor)
             sb.setValue(sb.maximum())
         else:
@@ -296,7 +348,7 @@ class SerialOutputView(QPlainTextEdit):
                 cursor.insertText(text_chunk, fmt)
         finally:
             cursor.endEditBlock()
-        if self._autoscroll:
+        if self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up:
             self.setTextCursor(cursor)
             now = time.monotonic()
             if now - self._last_autoscroll >= 0.06:
@@ -309,6 +361,8 @@ class SerialOutputView(QPlainTextEdit):
     @Slot()
     def clear(self) -> None:
         self._queue.clear()
+        self._user_scrolled_up = False
+        self._scrollbar_held = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
         super().clear()

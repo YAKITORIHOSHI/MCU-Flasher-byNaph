@@ -3338,6 +3338,12 @@ def _check_import_pyside6() -> bool:
 def _check_import_platformio() -> bool:
     return find_pio() is not None
 
+def _check_import_requests() -> bool:
+    return _check_spec("requests")
+
+def _check_import_filetype() -> bool:
+    return _check_spec("filetype")
+
 PIP_PACKAGES_SPEC = [
     {
         "id": "pyserial",
@@ -3396,11 +3402,25 @@ PIP_PACKAGES_SPEC = [
         "critical": True,
     },
     {
+        "id": "requests",
+        "name": "requests",
+        "check": _check_import_requests,
+        "pip_args": ["requests"],
+        "critical": True,
+    },
+    {
+        "id": "filetype",
+        "name": "filetype",
+        "check": _check_import_filetype,
+        "pip_args": ["filetype"],
+        "critical": True,
+    },
+    {
         "id": "pyqt5_qscintilla",
         "name": "PyQt5 / QScintilla",
         "check": _check_import_pyqt5_qscintilla,
         "pip_args": ["PyQt5", "QScintilla"],
-        "critical": False,
+        "critical": True,
     },
     {
         "id": "pyside6",
@@ -3453,9 +3473,9 @@ def ensure_pip_packages_parallel(
     resolver output is hidden unless an operation fails.
 
     ``package_ids`` is reserved for feature-triggered installs (for example,
-    the optional QScintilla viewer).  The normal call installs only specs
-    marked ``critical``; ``include_optional`` is available to an explicit
-    setup/repair flow that intentionally wants every feature dependency.
+    the QScintilla viewer check).  The normal call installs every critical spec.
+    ``include_optional`` is kept for backward compatibility but is a no-op since
+    all specs are now marked ``critical``.
     """
     import concurrent.futures
     import tempfile
@@ -4105,7 +4125,7 @@ def ensure_pip_packages_parallel(
 
 
 def _sync_private_python_site_packages() -> None:
-    """Ensure src/_python has PySide6 if the private runtime folder is present."""
+    """Ensure src/_python has PySide6, PyQt5, and QScintilla if the private runtime folder is present."""
     if sys.platform != "win32":
         return
     try:
@@ -4113,7 +4133,7 @@ def _sync_private_python_site_packages() -> None:
         if not private_py.is_file():
             return
         res = subprocess.run(
-            [str(private_py), "-c", "import PySide6.QtWidgets"],
+            [str(private_py), "-c", "import PySide6.QtWidgets; import PyQt5.QtWidgets; import PyQt5.Qsci"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -4121,7 +4141,7 @@ def _sync_private_python_site_packages() -> None:
         )
         if res.returncode != 0:
             subprocess.run(
-                [str(private_py), "-m", "pip", "install", "PySide6",
+                [str(private_py), "-m", "pip", "install", "PySide6", "PyQt5", "QScintilla",
                  "--prefer-binary", "--disable-pip-version-check", "--no-input"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -4132,7 +4152,11 @@ def _sync_private_python_site_packages() -> None:
         pass
 
 
-_OPTIONAL_PIP_FEATURE_PACKAGE_IDS: dict[str, set[str]] = {
+# Feature-triggered package groups — these are all critical packages; this
+# mapping just provides a convenient name→spec lookup for callers that want
+# to verify/reinstall a specific feature subset without running the full
+# bootstrap again (e.g. the QScintilla viewer check in arduino_lib_req).
+_FEATURE_PACKAGE_IDS: dict[str, set[str]] = {
     "qscintilla_viewer": {"pyqt5_qscintilla"},
 }
 
@@ -4141,13 +4165,14 @@ def ensure_optional_pip_feature(
     feature: str,
     gui: Optional[BootstrapGUI] = None,
 ) -> bool:
-    """Install one optional feature's packages on first use.
+    """Verify and, if needed, install all packages for a named feature group.
 
-    Optional feature dependencies intentionally do not participate in the
-    normal bootstrap.  Callers should invoke this only after the user has
-    selected the feature (for example, opening a QScintilla example viewer).
+    All feature dependencies are treated as critical and are normally already
+    installed by the main bootstrap.  This function acts as a safety net for
+    the rare case where a package is missing at runtime (e.g. corrupted env),
+    triggering the same parallel install pipeline used during initial setup.
     """
-    package_ids = _OPTIONAL_PIP_FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
+    package_ids = _FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
     if not package_ids:
         return False
     return ensure_pip_packages_parallel(gui, package_ids=package_ids)
@@ -10022,6 +10047,13 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
                 # so the main GUI is a fully independent top-level process.
                 creationflags=sp.DETACHED_PROCESS,
             )
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.AllowSetForegroundWindow(proc.pid)
+                    ctypes.windll.user32.AllowSetForegroundWindow(-1)
+                except Exception:
+                    pass
         finally:
             log_fh.close()
     else:

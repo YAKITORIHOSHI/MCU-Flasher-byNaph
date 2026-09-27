@@ -17,7 +17,7 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QCursor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
@@ -145,13 +145,20 @@ class ProjectDialog(QDialog):
                 y = avail.y() + max(0, (avail.height() - self.height()) // 2)
                 self.move(x, y)
 
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, "_open_btn") and self._open_btn.isEnabled():
+            self._open_btn.setFocus()
+        elif hasattr(self, "_open_path_edit"):
+            self._open_path_edit.setFocus()
         if sys.platform == "win32":
             try:
-                import ctypes
+                from main.core.config import focus_project_window
                 hwnd = int(self.winId())
                 if hwnd:
-                    ctypes.windll.user32.ShowWindow(hwnd, 1)  # SW_SHOWNORMAL = 1
-                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    focus_project_window(hwnd)
+                    QTimer.singleShot(50, lambda: focus_project_window(hwnd))
+                    QTimer.singleShot(200, lambda: focus_project_window(hwnd))
             except Exception:
                 pass
 

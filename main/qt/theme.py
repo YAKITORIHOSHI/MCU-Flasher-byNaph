@@ -718,7 +718,7 @@ QScrollBar::handle:vertical:hover {{
     background: {cyan};
 }}
 QScrollBar::handle:vertical:pressed {{
-    background: {cyan_dim};
+    background: {cyan};
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
@@ -746,7 +746,7 @@ QScrollBar::handle:horizontal:hover {{
     background: {cyan};
 }}
 QScrollBar::handle:horizontal:pressed {{
-    background: {cyan_dim};
+    background: {cyan};
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0px;

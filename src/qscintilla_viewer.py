@@ -86,26 +86,38 @@ THEME = {
 
 
 class AdaptiveTabBar(QTabBar):
-    """Keep filename tabs inside the available bar width.
+    """Adaptive tab bar that fits filenames without aggressive elision.
 
-    Long sample filenames remain identifiable through middle elision while
-    their complete paths stay available in the tab tooltip. The bar still
-    scrolls when there are more tabs than can reasonably fit on screen.
+    Tabs use their natural width up to a generous per-tab ceiling so that
+    full filenames are always readable. Middle-elision only kicks in when
+    the bar truly runs out of room. The bar still scrolls when more tabs
+    are open than can reasonably fit on screen.
     """
+
+    # Minimum width per tab — enough to show even very short names clearly.
+    _MIN_TAB_WIDTH = 140
+    # Maximum width per tab — prevents a single long filename from eating
+    # the entire bar when only one or two tabs are open.
+    _MAX_TAB_WIDTH = 340
 
     def tabSizeHint(self, index):
         hint = super().tabSizeHint(index)
         count = max(1, self.count())
         available = self.width()
         if available <= 0:
-            available = 1000
+            available = 1200
 
-        # Give every tab a useful minimum, but share the visible width when
-        # several long sample names are open. QTabBar then applies the
-        # configured middle-elision mode instead of painting text out of bounds.
+        # How wide can each tab be if we share the bar equally?
         gap = max(0, count - 1) * 3
-        width_per_tab = max(92, min(260, (available - gap) // count))
-        return QSize(min(hint.width(), width_per_tab), hint.height())
+        per_tab_share = max(self._MIN_TAB_WIDTH, (available - gap) // count)
+
+        # Honour the natural hint (full filename) but cap at _MAX_TAB_WIDTH
+        # so extremely long names don't crowd out other tabs.
+        desired = min(max(hint.width(), self._MIN_TAB_WIDTH), self._MAX_TAB_WIDTH)
+
+        # When many tabs are open and the share is tight, compress evenly.
+        final_width = min(desired, per_tab_share)
+        return QSize(final_width, hint.height())
 
     def resizeEvent(self, a0):
         super().resizeEvent(a0)
@@ -271,7 +283,7 @@ class MainWindow(QMainWindow):
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
                 min-height: 28px;
-                min-width: 80px;
+                min-width: 120px;
                 padding: 4px 10px 6px 10px;
                 margin-right: 3px;
                 font-family: "Montserrat Medium", "Montserrat", "Segoe UI", -apple-system, sans-serif;

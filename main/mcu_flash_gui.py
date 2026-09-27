@@ -247,6 +247,11 @@ def main() -> int:
         app.setApplicationName("MCU Flasher by Naph")
         app.setOrganizationName("Naph")
         app.setApplicationVersion("3.0")
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)
+            except Exception:
+                pass
 
         # ── Fonts & Global Stylesheet ─────────────────────────────────────────
         from main.core.config import get_theme_mode
@@ -331,10 +336,27 @@ def main() -> int:
                     hwnd = int(dlg.winId())
                     if hwnd:
                         set_instance_hwnd(hwnd)
-                        ctypes.windll.user32.ShowWindow(hwnd, 1)  # SW_SHOWNORMAL
-                        ctypes.windll.user32.SetForegroundWindow(hwnd)
+                        focus_project_window(hwnd)
                 except Exception:
                     pass
+
+            def _assert_dlg_foreground():
+                if not dlg.isHidden():
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    if sys.platform == "win32":
+                        try:
+                            hwnd = int(dlg.winId())
+                            if hwnd:
+                                focus_project_window(hwnd)
+                        except Exception:
+                            pass
+
+            if QTimer is not None:
+                QTimer.singleShot(0, _assert_dlg_foreground)
+                QTimer.singleShot(50, _assert_dlg_foreground)
+                QTimer.singleShot(150, _assert_dlg_foreground)
+                QTimer.singleShot(350, _assert_dlg_foreground)
 
             def _prewarm_main_window():
                 if window_holder["window"] is None and not dlg.isHidden():
@@ -342,12 +364,14 @@ def main() -> int:
                         win = MCUMainWindow(backend=api)
                         win.hide()
                         window_holder["window"] = win
+                        if not dlg.isHidden():
+                            _assert_dlg_foreground()
                     except Exception:
                         pass
 
-            # Pre-warm MCUMainWindow in background during idle time while user views dialog
+            # Pre-warm MCUMainWindow in background during idle time after dialog is established
             if QTimer is not None:
-                QTimer.singleShot(120, _prewarm_main_window)
+                QTimer.singleShot(600, _prewarm_main_window)
 
             if dlg.exec() != QDialog.DialogCode.Accepted or not api.sketch_dir_path:
                 # User cancelled project selection -> clean exit
@@ -376,10 +400,27 @@ def main() -> int:
                     api._hwnd = hwnd
                     if api.sketch_dir_path:
                         set_active_sketch_dir(str(api.sketch_dir_path), hwnd=hwnd)
-                    ctypes.windll.user32.ShowWindow(hwnd, 1)  # SW_SHOWNORMAL
-                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    focus_project_window(hwnd)
             except Exception:
                 pass
+
+        def _assert_main_foreground():
+            if window.isVisible():
+                window.raise_()
+                window.activateWindow()
+                if sys.platform == "win32":
+                    try:
+                        hwnd = int(window.winId())
+                        if hwnd:
+                            focus_project_window(hwnd)
+                    except Exception:
+                        pass
+
+        if QTimer is not None:
+            QTimer.singleShot(0, _assert_main_foreground)
+            QTimer.singleShot(50, _assert_main_foreground)
+            QTimer.singleShot(150, _assert_main_foreground)
+            QTimer.singleShot(350, _assert_main_foreground)
 
         # ── Event loop ────────────────────────────────────────────────────────
         ret = app.exec()

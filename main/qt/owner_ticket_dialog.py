@@ -48,6 +48,7 @@ _assets_dir = _project_root / "src" / "assets"
 _mcu_icon_path = _assets_dir / "mcu_icon.ico"
 _eye_icon_path = _assets_dir / "icons" / "eye.svg"
 _eye_slash_icon_path = _assets_dir / "icons" / "eye_slash.svg"
+_chevron_icon_path = (_assets_dir / "icons" / "chevron_down.svg").as_posix()
 
 
 class TicketCard(QFrame):
@@ -344,7 +345,21 @@ class TicketCard(QFrame):
 
 
 class EditTicketDialog(QDialog):
-    """Frosted Glass Modal for Editing Defect Report Details."""
+    """Refined Authentic Glassmorphic Modal for Editing Defect Report Details."""
+
+    SEVERITY_COLORS = {
+        "Critical": ("#ff4d4f", "rgba(255, 77, 79, 0.16)", "#ff4d4f"),
+        "High":     ("#fa8c16", "rgba(250, 140, 22, 0.16)", "#fa8c16"),
+        "Medium":   ("#faad14", "rgba(250, 173, 20, 0.16)", "#faad14"),
+        "Low":      ("#38bdf8", "rgba(56, 189, 248, 0.16)", "#38bdf8"),
+    }
+
+    STATUS_COLORS = {
+        "Open":        ("#00e5ff", "rgba(0, 229, 255, 0.12)", "#00e5ff"),
+        "In Progress": ("#faad14", "rgba(250, 173, 20, 0.12)", "#faad14"),
+        "Resolved":    ("#10b981", "rgba(16, 185, 129, 0.16)", "#10b981"),
+        "Closed":      ("#94a3b8", "rgba(148, 163, 184, 0.12)", "#94a3b8"),
+    }
 
     def __init__(self, ticket: Dict[str, Any], service: OwnerTicketService, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -361,13 +376,13 @@ class EditTicketDialog(QDialog):
                 pass
 
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
-        self.resize(620, 520)
-        self.setMinimumSize(560, 460)
+        self.resize(650, 540)
+        self.setMinimumSize(580, 480)
 
         self._build_ui()
 
     def paintEvent(self, event) -> None:
-        """Paint dynamic ambient glassmorphic light mesh behind translucent surfaces."""
+        """Paint rich multi-layered ambient glassmorphic mesh lighting behind translucent cards."""
         try:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -375,21 +390,29 @@ class EditTicketDialog(QDialog):
             w, h = self.width(), self.height()
 
             # Base deep obsidian background
-            painter.fillRect(0, 0, w, h, QColor("#06090f"))
+            painter.fillRect(0, 0, w, h, QColor("#060911"))
 
-            # Ambient Light Orb 1 (Top-Right Electric Cyan Glow)
-            g1 = QRadialGradient(QPointF(w * 0.85, h * 0.12), w * 0.50)
-            g1.setColorAt(0.0, QColor(0, 210, 255, 30))
-            g1.setColorAt(0.50, QColor(0, 130, 210, 10))
-            g1.setColorAt(1.0, QColor(6, 9, 15, 0))
+            # Ambient Light Orb 1 (Top-Right Electric Cyan Bloom)
+            g1 = QRadialGradient(QPointF(w * 0.88, h * 0.10), w * 0.55)
+            g1.setColorAt(0.0, QColor(0, 220, 255, 48))
+            g1.setColorAt(0.40, QColor(0, 140, 230, 18))
+            g1.setColorAt(0.75, QColor(2, 60, 130, 5))
+            g1.setColorAt(1.0, QColor(6, 9, 17, 0))
             painter.fillRect(0, 0, w, h, QBrush(g1))
 
-            # Ambient Light Orb 2 (Bottom-Left Deep Indigo Glow)
-            g2 = QRadialGradient(QPointF(w * 0.15, h * 0.88), w * 0.50)
-            g2.setColorAt(0.0, QColor(99, 102, 241, 24))
-            g2.setColorAt(0.50, QColor(49, 46, 129, 8))
-            g2.setColorAt(1.0, QColor(6, 9, 15, 0))
+            # Ambient Light Orb 2 (Bottom-Left Deep Indigo / Royal Violet Glow)
+            g2 = QRadialGradient(QPointF(w * 0.10, h * 0.90), w * 0.55)
+            g2.setColorAt(0.0, QColor(99, 102, 241, 40))
+            g2.setColorAt(0.45, QColor(67, 56, 202, 14))
+            g2.setColorAt(1.0, QColor(6, 9, 17, 0))
             painter.fillRect(0, 0, w, h, QBrush(g2))
+
+            # Ambient Light Orb 3 (Center subtle cyan luminous reflection)
+            g3 = QRadialGradient(QPointF(w * 0.50, h * 0.35), w * 0.45)
+            g3.setColorAt(0.0, QColor(0, 229, 255, 14))
+            g3.setColorAt(0.60, QColor(14, 165, 233, 4))
+            g3.setColorAt(1.0, QColor(6, 9, 17, 0))
+            painter.fillRect(0, 0, w, h, QBrush(g3))
         except Exception:
             super().paintEvent(event)
 
@@ -411,38 +434,15 @@ class EditTicketDialog(QDialog):
     def _build_ui(self) -> None:
         self.setStyleSheet("""
             QDialog#edit-ticket-dialog {
-                background: #06090f;
+                background: #060911;
                 color: #e2e8f0;
-                font-family: 'Segoe UI', sans-serif;
+                font-family: 'Segoe UI', 'Montserrat', sans-serif;
             }
             QLabel {
                 color: #e2e8f0;
                 background: transparent;
                 border: none;
-            }
-            QLineEdit, QComboBox, QTextEdit {
-                background-color: rgba(14, 21, 35, 0.70);
-                border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
-                padding: 8px 12px;
-                color: #ffffff;
-                font-size: 12px;
-            }
-            QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
-                border-color: #00e5ff;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 20px;
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #0c121d;
-                color: #e2e8f0;
-                selection-background-color: #1a2538;
-                border: 1px solid rgba(0, 210, 255, 0.3);
-                border-radius: 6px;
+                padding: 0px;
             }
         """)
 
@@ -450,78 +450,169 @@ class EditTicketDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
-        # ── Header ───────────────────────────────────────────────────────────
+        # ── Header Bar ───────────────────────────────────────────────────────
         header_lay = QHBoxLayout()
-        header_lay.setSpacing(10)
+        header_lay.setSpacing(12)
 
-        title_lbl = QLabel("✎  Edit Defect Report")
-        title_lbl.setStyleSheet("color: #00e5ff; font-size: 16px; font-weight: 800; letter-spacing: -0.2px;")
-        header_lay.addWidget(title_lbl)
+        # Frosted Emblem Badge
+        emblem = QFrame()
+        emblem.setObjectName("header-emblem")
+        emblem.setFixedSize(42, 42)
+        emblem.setStyleSheet("""
+            QFrame#header-emblem {
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+                    stop:0 rgba(0, 229, 255, 0.26),
+                    stop:0.75 rgba(0, 140, 220, 0.08),
+                    stop:1 transparent);
+                border: 1px solid rgba(0, 229, 255, 0.38);
+                border-top: 1px solid rgba(255, 255, 255, 0.50);
+                border-radius: 21px;
+            }
+        """)
+        e_lay = QVBoxLayout(emblem)
+        e_lay.setContentsMargins(0, 0, 0, 0)
+        e_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if _mcu_icon_path.exists():
+            try:
+                pix = QIcon(str(_mcu_icon_path)).pixmap(24, 24)
+                icon_lbl.setPixmap(pix)
+            except Exception:
+                icon_lbl.setText("✎")
+                icon_lbl.setStyleSheet("font-size: 16px; color: #00e5ff;")
+        else:
+            icon_lbl.setText("✎")
+            icon_lbl.setStyleSheet("font-size: 16px; color: #00e5ff;")
+        e_lay.addWidget(icon_lbl)
+        header_lay.addWidget(emblem)
+
+        # Title & Subtitle
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        title_lbl = QLabel("Edit Defect Report")
+        title_lbl.setStyleSheet("color: #ffffff; font-size: 16.5px; font-weight: 800; letter-spacing: -0.2px;")
+        title_box.addWidget(title_lbl)
+
+        sub_lbl = QLabel("Update report parameters, classification, and investigation notes")
+        sub_lbl.setStyleSheet("color: #8fa1b3; font-size: 11px;")
+        title_box.addWidget(sub_lbl)
+        header_lay.addLayout(title_box)
 
         header_lay.addStretch(1)
 
-        t_id = self._ticket_id or "tkt_unknown"
-        id_badge = QLabel(f"ID: {t_id}")
-        id_badge.setStyleSheet("""
-            color: #64748b;
-            font-size: 11px;
-            font-family: 'Consolas', monospace;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 6px;
-            padding: 3px 8px;
-        """)
-        header_lay.addWidget(id_badge)
-        layout.addLayout(header_lay)
+        # Right Meta Group: Ticket ID & Created Timestamp
+        meta_right = QVBoxLayout()
+        meta_right.setSpacing(3)
+        meta_right.setAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Meta info row: created & updated
+        t_id = self._ticket_id or "tkt_unknown"
+        id_badge = QLabel(f"● ID: {t_id}")
+        id_badge.setStyleSheet("""
+            color: #7dd3fc;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: 'Consolas', monospace;
+            background: rgba(0, 210, 255, 0.08);
+            border: 1px solid rgba(0, 210, 255, 0.24);
+            border-top: 1px solid rgba(255, 255, 255, 0.20);
+            border-radius: 7px;
+            padding: 4px 10px;
+        """)
+        meta_right.addWidget(id_badge, alignment=Qt.AlignmentFlag.AlignRight)
+
         created = self.ticket.get("created_at", "")
         updated = self.ticket.get("updated_at", "")
         meta_str = f"Created: {created}" if created else ""
         if updated and updated != created:
-            meta_str += f"  •  Last modified: {updated}"
+            meta_str += "  •  (edited)"
         if meta_str:
             meta_lbl = QLabel(meta_str)
-            meta_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-family: 'Consolas', monospace;")
-            layout.addWidget(meta_lbl)
+            meta_lbl.setStyleSheet("color: #64748b; font-size: 10.5px; font-family: 'Consolas', monospace;")
+            meta_right.addWidget(meta_lbl, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # ── Form Card ────────────────────────────────────────────────────────
-        form_frame = QFrame()
-        form_frame.setStyleSheet("""
-            QFrame {
-                background-color: rgba(14, 21, 35, 0.50);
+        header_lay.addLayout(meta_right)
+        layout.addLayout(header_lay)
+
+        # ── Central Frosted Glass Card ───────────────────────────────────────
+        self.form_frame = QFrame()
+        self.form_frame.setObjectName("edit-glass-card")
+        self.form_frame.setStyleSheet("""
+            QFrame#edit-glass-card {
+                background-color: rgba(14, 22, 36, 0.65);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-top: 1px solid rgba(255, 255, 255, 0.16);
-                border-radius: 12px;
+                border-top: 1px solid rgba(255, 255, 255, 0.24);
+                border-left: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 16px;
+            }
+            QLabel {
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
         """)
-        fl = QVBoxLayout(form_frame)
-        fl.setContentsMargins(18, 16, 18, 16)
-        fl.setSpacing(12)
 
-        # Field: Title
+        # Soft card elevation drop shadow
+        card_shadow = QGraphicsDropShadowEffect(self.form_frame)
+        card_shadow.setBlurRadius(36)
+        card_shadow.setColor(QColor(0, 0, 0, 140))
+        card_shadow.setOffset(0, 8)
+        self.form_frame.setGraphicsEffect(card_shadow)
+
+        fl = QVBoxLayout(self.form_frame)
+        fl.setContentsMargins(20, 18, 20, 18)
+        fl.setSpacing(14)
+
+        # Field 1: Title
+        sec_title = QVBoxLayout()
+        sec_title.setSpacing(5)
         lbl_t = QLabel("DEFECT TITLE")
-        lbl_t.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
-        fl.addWidget(lbl_t)
+        lbl_t.setStyleSheet("color: #7dd3fc; font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px;")
+        sec_title.addWidget(lbl_t)
 
         self.txt_title = QLineEdit()
+        self.txt_title.setObjectName("glass-title-input")
         self.txt_title.setText(self.ticket.get("title", ""))
-        self.txt_title.setPlaceholderText("Brief concise summary of the issue...")
+        self.txt_title.setPlaceholderText("Brief concise summary of the defect...")
+        self.txt_title.setStyleSheet("""
+            QLineEdit#glass-title-input {
+                background-color: rgba(9, 14, 24, 0.68);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-top: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 10px;
+                padding: 9px 14px;
+                font-size: 13px;
+                color: #f8fafc;
+                selection-background-color: #00d2ff;
+                selection-color: #05070a;
+            }
+            QLineEdit#glass-title-input:hover {
+                border-color: rgba(0, 210, 255, 0.40);
+                background-color: rgba(12, 19, 32, 0.82);
+            }
+            QLineEdit#glass-title-input:focus {
+                border: 1px solid #00e5ff;
+                background-color: rgba(14, 24, 42, 0.95);
+            }
+        """)
         self.txt_title.returnPressed.connect(lambda: self.txt_desc.setFocus())
-        fl.addWidget(self.txt_title)
+        sec_title.addWidget(self.txt_title)
+        fl.addLayout(sec_title)
 
-        # Field: Grid of Category, Severity, Status
+        # Field 2: Grid of Category, Severity, Status
         r_meta = QHBoxLayout()
         r_meta.setSpacing(12)
 
-        # Category
+        # Category Column
         col_cat = QVBoxLayout()
-        col_cat.setSpacing(4)
+        col_cat.setSpacing(5)
         lbl_c = QLabel("CATEGORY")
-        lbl_c.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        lbl_c.setStyleSheet("color: #7dd3fc; font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px;")
         col_cat.addWidget(lbl_c)
 
         self.cb_category = QComboBox()
+        self.cb_category.setObjectName("glass-combo-cat")
         categories = [
             "GUI / Interface",
             "Monaco Code Editor",
@@ -536,116 +627,350 @@ class EditTicketDialog(QDialog):
             categories.append(cur_cat)
         self.cb_category.addItems(categories)
         self.cb_category.setCurrentText(cur_cat)
+        self.cb_category.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cb_category.setStyleSheet(f"""
+            QComboBox {{
+                background-color: rgba(9, 14, 24, 0.68);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-top: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 9px;
+                padding: 7px 28px 7px 12px;
+                color: #f1f5f9;
+                font-size: 12px;
+                font-weight: 600;
+                min-height: 18px;
+            }}
+            QComboBox:hover {{
+                border-color: rgba(0, 210, 255, 0.40);
+                background-color: rgba(12, 19, 32, 0.82);
+            }}
+            QComboBox:focus {{
+                border-color: #00e5ff;
+                background-color: rgba(14, 24, 42, 0.95);
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                image: url("{_chevron_icon_path}");
+                width: 12px;
+                height: 12px;
+                margin-right: 6px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #0c121d;
+                color: #e2e8f0;
+                selection-background-color: rgba(0, 210, 255, 0.22);
+                selection-color: #00e5ff;
+                border: 1px solid rgba(0, 210, 255, 0.35);
+                border-radius: 8px;
+                padding: 4px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 10px;
+                border-radius: 5px;
+                min-height: 20px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: rgba(0, 210, 255, 0.15);
+                color: #00e5ff;
+            }}
+        """)
         col_cat.addWidget(self.cb_category)
         r_meta.addLayout(col_cat, stretch=4)
 
-        # Severity
+        # Severity Column
         col_sev = QVBoxLayout()
-        col_sev.setSpacing(4)
+        col_sev.setSpacing(5)
         lbl_s = QLabel("SEVERITY")
-        lbl_s.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        lbl_s.setStyleSheet("color: #7dd3fc; font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px;")
         col_sev.addWidget(lbl_s)
 
         self.cb_severity = QComboBox()
+        self.cb_severity.setObjectName("glass-combo-sev")
         self.cb_severity.addItems(["Critical", "High", "Medium", "Low"])
         cur_sev = self.ticket.get("severity", "Medium")
         self.cb_severity.setCurrentText(cur_sev)
+        self.cb_severity.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_severity_style(cur_sev)
+        self.cb_severity.currentTextChanged.connect(self._update_severity_style)
         col_sev.addWidget(self.cb_severity)
         r_meta.addLayout(col_sev, stretch=3)
 
-        # Status
+        # Status Column
         col_st = QVBoxLayout()
-        col_st.setSpacing(4)
+        col_st.setSpacing(5)
         lbl_st = QLabel("STATUS")
-        lbl_st.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        lbl_st.setStyleSheet("color: #7dd3fc; font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px;")
         col_st.addWidget(lbl_st)
 
         self.cb_status = QComboBox()
+        self.cb_status.setObjectName("glass-combo-status")
         self.cb_status.addItems(["Open", "In Progress", "Resolved", "Closed"])
         cur_st = self.ticket.get("status", "Open")
         self.cb_status.setCurrentText(cur_st)
+        self.cb_status.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_status_style(cur_st)
+        self.cb_status.currentTextChanged.connect(self._update_status_style)
         col_st.addWidget(self.cb_status)
         r_meta.addLayout(col_st, stretch=3)
 
         fl.addLayout(r_meta)
 
-        # Field: Description
+        # Field 3: Description
+        sec_desc = QVBoxLayout()
+        sec_desc.setSpacing(5)
         lbl_d = QLabel("DESCRIPTION & NOTES")
-        lbl_d.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
-        fl.addWidget(lbl_d)
+        lbl_d.setStyleSheet("color: #7dd3fc; font-size: 10.5px; font-weight: 700; letter-spacing: 0.7px;")
+        sec_desc.addWidget(lbl_d)
 
         self.txt_desc = QTextEdit()
+        self.txt_desc.setObjectName("glass-desc-edit")
         self.txt_desc.setPlainText(self.ticket.get("description", ""))
         self.txt_desc.setPlaceholderText("Detailed notes, steps to reproduce, observations, or resolution details...")
         self.txt_desc.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(9, 14, 22, 0.75);
+            QTextEdit#glass-desc-edit {
+                background-color: rgba(9, 14, 24, 0.72);
                 border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
-                padding: 8px 12px;
-                color: #ffffff;
-                font-size: 12px;
-                font-family: 'Consolas', 'Segoe UI', monospace;
+                border-top: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 10px;
+                padding: 10px 14px;
+                color: #f1f5f9;
+                font-size: 12.5px;
+                font-family: 'Consolas', 'Cascadia Code', monospace;
+                line-height: 1.5;
+                selection-background-color: #00d2ff;
+                selection-color: #05070a;
             }
-            QTextEdit:focus {
-                border-color: #00e5ff;
+            QTextEdit#glass-desc-edit:hover {
+                border-color: rgba(0, 210, 255, 0.35);
+                background-color: rgba(12, 19, 32, 0.82);
+            }
+            QTextEdit#glass-desc-edit:focus {
+                border: 1px solid #00e5ff;
+                background-color: rgba(14, 24, 42, 0.95);
+            }
+            QScrollBar:vertical {
+                background: rgba(6, 9, 15, 0.40);
+                width: 7px;
+                border: none;
+                border-radius: 3px;
+                margin: 4px 2px 4px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(0, 210, 255, 0.25);
+                border-radius: 3px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #00d2ff;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
-        fl.addWidget(self.txt_desc, stretch=1)
+        sec_desc.addWidget(self.txt_desc, stretch=1)
+        fl.addLayout(sec_desc, stretch=1)
 
-        layout.addWidget(form_frame, stretch=1)
+        layout.addWidget(self.form_frame, stretch=1)
 
         # ── Bottom Action Row ────────────────────────────────────────────────
         bot_lay = QHBoxLayout()
-        bot_lay.setSpacing(10)
+        bot_lay.setSpacing(12)
 
-        hint_lbl = QLabel("Tip: Press Ctrl+Enter to save")
-        hint_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
+        # Styled Keyboard Shortcut Hint
+        hint_lbl = QLabel(
+            '<span style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); '
+            'border-bottom: 2px solid rgba(255,255,255,0.28); '
+            'border-radius: 4px; padding: 2px 7px; color: #f1f5f9; font-family: Consolas, monospace; '
+            'font-size: 11px; font-weight: bold;">Ctrl</span> '
+            '<span style="color: #64748b; font-size: 11px; margin: 0 1px;">+</span> '
+            '<span style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); '
+            'border-bottom: 2px solid rgba(255,255,255,0.28); '
+            'border-radius: 4px; padding: 2px 7px; color: #f1f5f9; font-family: Consolas, monospace; '
+            'font-size: 11px; font-weight: bold;">Enter</span> '
+            '<span style="color: #64748b; font-size: 11.5px; margin-left: 6px;">to save quickly</span>'
+        )
+        hint_lbl.setTextFormat(Qt.TextFormat.RichText)
         bot_lay.addWidget(hint_lbl)
 
         bot_lay.addStretch(1)
 
         btn_cancel = QPushButton("Cancel")
-        btn_cancel.setFixedHeight(34)
+        btn_cancel.setObjectName("btn-glass-cancel")
+        btn_cancel.setFixedHeight(36)
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_cancel.setStyleSheet("""
-            QPushButton {
+            QPushButton#btn-glass-cancel {
                 background: rgba(255, 255, 255, 0.05);
                 color: #94a3b8;
                 border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
-                padding: 0 16px;
-                font-size: 12px;
+                border-top: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 9px;
+                padding: 0 20px;
+                font-size: 12.5px;
+                font-weight: 600;
             }
-            QPushButton:hover {
+            QPushButton#btn-glass-cancel:hover {
                 color: #ffffff;
                 background: rgba(255, 255, 255, 0.10);
+                border-color: rgba(255, 255, 255, 0.22);
+            }
+            QPushButton#btn-glass-cancel:pressed {
+                background: rgba(255, 255, 255, 0.04);
             }
         """)
         btn_cancel.clicked.connect(self.reject)
         bot_lay.addWidget(btn_cancel)
 
         btn_save = QPushButton("💾  Save Changes")
-        btn_save.setFixedHeight(34)
+        btn_save.setObjectName("btn-glass-save")
+        btn_save.setFixedHeight(36)
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0088cc, stop:1 #00e5ff);
+            QPushButton#btn-glass-save {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0088cc, stop:0.5 #00b4d8, stop:1 #00e5ff);
                 color: #040810;
                 font-weight: 800;
-                font-size: 12.5px;
+                font-size: 13px;
+                letter-spacing: 0.3px;
                 border: none;
-                border-radius: 8px;
-                padding: 0 18px;
+                border-top: 1px solid rgba(255, 255, 255, 0.40);
+                border-radius: 9px;
+                padding: 0 22px;
             }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #009ce8, stop:1 #4de9ff);
+            QPushButton#btn-glass-save:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #009ce8, stop:0.5 #1ed2f7, stop:1 #4de9ff);
+            }
+            QPushButton#btn-glass-save:pressed {
+                background: #0077aa;
             }
         """)
+
+        # Soft glowing button aura
+        save_shadow = QGraphicsDropShadowEffect(btn_save)
+        save_shadow.setBlurRadius(20)
+        save_shadow.setColor(QColor(0, 229, 255, 60))
+        save_shadow.setOffset(0, 3)
+        btn_save.setGraphicsEffect(save_shadow)
+
         btn_save.clicked.connect(self._do_save)
         bot_lay.addWidget(btn_save)
 
         layout.addLayout(bot_lay)
+
+    def _update_severity_style(self, sev: str) -> None:
+        try:
+            fg, bg, bd = self.SEVERITY_COLORS.get(sev, ("#38bdf8", "rgba(56, 189, 248, 0.16)", "#38bdf8"))
+            self.cb_severity.setStyleSheet(f"""
+                QComboBox {{
+                    background-color: {bg};
+                    border: 1px solid {bd};
+                    border-top: 1px solid rgba(255, 255, 255, 0.24);
+                    border-radius: 9px;
+                    padding: 7px 28px 7px 12px;
+                    color: {fg};
+                    font-size: 12px;
+                    font-weight: 700;
+                    min-height: 18px;
+                }}
+                QComboBox:hover {{
+                    border-color: #00e5ff;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 24px;
+                    border: none;
+                    background: transparent;
+                }}
+                QComboBox::down-arrow {{
+                    image: url("{_chevron_icon_path}");
+                    width: 12px;
+                    height: 12px;
+                    margin-right: 6px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #0c121d;
+                    color: #e2e8f0;
+                    selection-background-color: rgba(0, 210, 255, 0.22);
+                    selection-color: #00e5ff;
+                    border: 1px solid rgba(0, 210, 255, 0.35);
+                    border-radius: 8px;
+                    padding: 4px;
+                    outline: none;
+                }}
+                QComboBox QAbstractItemView::item {{
+                    padding: 6px 10px;
+                    border-radius: 5px;
+                    min-height: 20px;
+                }}
+                QComboBox QAbstractItemView::item:hover {{
+                    background-color: rgba(0, 210, 255, 0.15);
+                    color: #00e5ff;
+                }}
+            """)
+        except Exception:
+            pass
+
+    def _update_status_style(self, status: str) -> None:
+        try:
+            fg, bg, bd = self.STATUS_COLORS.get(status, ("#00e5ff", "rgba(0, 229, 255, 0.12)", "#00e5ff"))
+            self.cb_status.setStyleSheet(f"""
+                QComboBox {{
+                    background-color: {bg};
+                    border: 1px solid {bd};
+                    border-top: 1px solid rgba(255, 255, 255, 0.24);
+                    border-radius: 9px;
+                    padding: 7px 28px 7px 12px;
+                    color: {fg};
+                    font-size: 12px;
+                    font-weight: 700;
+                    min-height: 18px;
+                }}
+                QComboBox:hover {{
+                    border-color: #00e5ff;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 24px;
+                    border: none;
+                    background: transparent;
+                }}
+                QComboBox::down-arrow {{
+                    image: url("{_chevron_icon_path}");
+                    width: 12px;
+                    height: 12px;
+                    margin-right: 6px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #0c121d;
+                    color: #e2e8f0;
+                    selection-background-color: rgba(0, 210, 255, 0.22);
+                    selection-color: #00e5ff;
+                    border: 1px solid rgba(0, 210, 255, 0.35);
+                    border-radius: 8px;
+                    padding: 4px;
+                    outline: none;
+                }}
+                QComboBox QAbstractItemView::item {{
+                    padding: 6px 10px;
+                    border-radius: 5px;
+                    min-height: 20px;
+                }}
+                QComboBox QAbstractItemView::item:hover {{
+                    background-color: rgba(0, 210, 255, 0.15);
+                    color: #00e5ff;
+                }}
+            """)
+        except Exception:
+            pass
 
     def _do_save(self) -> None:
         title = self.txt_title.text().strip()

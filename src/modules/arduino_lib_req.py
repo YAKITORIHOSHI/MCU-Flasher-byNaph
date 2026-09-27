@@ -588,8 +588,11 @@ class CircularLoadingOverlay(tk.Frame):
 
 
 def _find_code_viewer_python() -> Optional[str]:
-    """Find a Python executable from the private src/_python runtime that has PyQt5 and QScintilla available."""
+    """Find a Python executable that has PyQt5 and QScintilla available."""
     candidates = [
+        Path(sys.executable),
+        Path(SCRIPT_DIR) / "env" / "Scripts" / "pythonw.exe",
+        Path(SCRIPT_DIR) / "env" / "Scripts" / "python.exe",
         Path(SCRIPT_DIR) / "src" / "_python" / "pythonw.exe",
         Path(SCRIPT_DIR) / "src" / "_python" / "python.exe",
     ]
@@ -615,25 +618,23 @@ def _find_code_viewer_python() -> Optional[str]:
 
 
 def _open_fallback_editor(file_path: str, parent=None, reason: Optional[str] = None) -> bool:
-    """Open sketch file in the default system editor or Notepad as graceful fallback."""
+    """Open sketch file in Notepad as graceful fallback without triggering external Arduino IDE."""
     if not file_path or not os.path.exists(file_path):
         return False
     try:
         if sys.platform == "win32":
-            os.startfile(file_path)
+            subprocess.Popen(["notepad.exe", file_path])
             return True
         else:
             subprocess.Popen(["xdg-open", file_path])
             return True
     except Exception:
+        pass
+    if parent and reason:
         try:
-            if sys.platform == "win32":
-                subprocess.Popen(["notepad.exe", file_path])
-                return True
+            messagebox.showerror("Code Viewer", f"{reason}\n\nFile: {file_path}", parent=parent)
         except Exception:
             pass
-    if parent and reason:
-        messagebox.showerror("Code Viewer", f"{reason}\n\nFile: {file_path}", parent=parent)
     return False
 
 
@@ -647,6 +648,18 @@ def _qscintilla_available() -> bool:
             return True
     except Exception:
         pass
+    # Also check env site-packages if present
+    env_sp = Path(SCRIPT_DIR) / "env" / "Lib" / "site-packages"
+    if env_sp.is_dir() and str(env_sp) not in sys.path:
+        sys.path.append(str(env_sp))
+        try:
+            if (
+                importlib.util.find_spec("PyQt5.QtWidgets") is not None
+                and importlib.util.find_spec("PyQt5.Qsci") is not None
+            ):
+                return True
+        except Exception:
+            pass
     return _find_code_viewer_python() is not None
 
 

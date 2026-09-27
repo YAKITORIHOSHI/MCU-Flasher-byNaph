@@ -313,12 +313,24 @@ def set_periodic_reload_settings(enabled: bool, interval_s: int):
 
 
 def get_monitor_font_size() -> int:
-    """Return the shared Build/Serial/Syntax display size (12pt by default)."""
+    """Return the shared Build/Serial/Syntax/Editor display size (12pt by default)."""
     try:
         size = int(_load_raw_config().get("shared", {}).get("monitor_font_size", 12))
     except Exception:
         size = 12
-    return max(8, min(24, size))
+    return max(6, min(48, size))
+
+
+def set_monitor_font_size(size: int) -> None:
+    """Save the shared Build/Serial/Syntax/Editor display size to persistent config."""
+    try:
+        sz = max(6, min(48, int(size)))
+        data = _load_raw_config()
+        shared = data.setdefault("shared", {})
+        shared["monitor_font_size"] = sz
+        _save_raw_config(data)
+    except Exception:
+        pass
 
 
 def get_monaco_boot_pending() -> bool:
@@ -764,10 +776,12 @@ def find_project_window(path, exclude_self: bool = False) -> dict | None:
 
 
 def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
-    """Restore and bring the specified window to the foreground.
+    """Restore and bring the specified window to the foreground with active focus.
 
     If hwnd is 0 or invalid, attempts to resolve the top-level visible window
-    belonging to pid. Uses Win32 AttachThreadInput to bypass foreground lock.
+    belonging to pid. Uses Win32 AttachThreadInput, HWND_TOPMOST Z-stack elevation,
+    and AllowSetForegroundWindow to guarantee the window is brought in front of all
+    other desktop windows and gains keyboard input focus.
     """
     if sys.platform != "win32":
         return False
@@ -801,6 +815,13 @@ def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
         if not target_hwnd or not user32.IsWindow(target_hwnd):
             return False
 
+        # Allow foreground activation
+        try:
+            user32.AllowSetForegroundWindow(-1)
+            user32.LockSetForegroundWindow(2)  # LSFW_UNLOCK = 2
+        except Exception:
+            pass
+
         SW_RESTORE = 9
         SW_SHOWNORMAL = 1
         if user32.IsIconic(target_hwnd):
@@ -808,16 +829,60 @@ def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
         else:
             user32.ShowWindow(target_hwnd, SW_SHOWNORMAL)
 
-        user32.BringWindowToTop(target_hwnd)
-        user32.SetForegroundWindow(target_hwnd)
-
-        # AttachThreadInput trick to guarantee foreground lock transfer
+        # AttachThreadInput trick to guarantee foreground lock transfer from current foreground thread
         cur_thread = kernel32.GetCurrentThreadId()
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
         tgt_thread = user32.GetWindowThreadProcessId(target_hwnd, None)
-        if cur_thread != tgt_thread:
-            user32.AttachThreadInput(cur_thread, tgt_thread, True)
+
+        attached_fg = False
+        attached_tgt = False
+        if fg_thread and fg_thread != cur_thread:
+            try:
+                attached_fg = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+            except Exception:
+                attached_fg = False
+
+        if tgt_thread and tgt_thread != cur_thread:
+            try:
+                attached_tgt = bool(user32.AttachThreadInput(cur_thread, tgt_thread, True))
+            except Exception:
+                attached_tgt = False
+
+        try:
+            # Force DWM Z-order elevation above all desktop windows:
+            # 1. Elevate to TOPMOST
+            # 2. Re-assert NOTOPMOST so it doesn't get stuck permanently on top
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+
+            user32.SetWindowPos(target_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            user32.SetWindowPos(target_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+
+            user32.BringWindowToTop(target_hwnd)
             user32.SetForegroundWindow(target_hwnd)
-            user32.AttachThreadInput(cur_thread, tgt_thread, False)
+            user32.SetActiveWindow(target_hwnd)
+            user32.SetFocus(target_hwnd)
+
+            if hasattr(user32, "SwitchToThisWindow"):
+                try:
+                    user32.SwitchToThisWindow(target_hwnd, True)
+                except Exception:
+                    pass
+        finally:
+            if attached_fg:
+                try:
+                    user32.AttachThreadInput(cur_thread, fg_thread, False)
+                except Exception:
+                    pass
+            if attached_tgt:
+                try:
+                    user32.AttachThreadInput(cur_thread, tgt_thread, False)
+                except Exception:
+                    pass
 
         return True
     except Exception:

@@ -156,7 +156,7 @@ class EditorBridgeAPI(QObject):
     def save_font_size(self, size: int) -> dict:
         """Monaco reports font size change from Ctrl + +/- shortcuts."""
         try:
-            sz = max(8, min(36, int(size)))
+            sz = max(6, min(48, int(size)))
             from main.core.config import set_monitor_font_size
             set_monitor_font_size(sz)
             from main.qt.signals import signals as sig_bus
@@ -565,16 +565,20 @@ class MonacoEditorPanel(QWidget):
 
     def _step_font_size(self, delta: int) -> None:
         """Step editor font size and notify JS and settings."""
-        try:
-            from main.core.config import get_monitor_font_size, set_monitor_font_size
-            current = int(get_monitor_font_size())
-        except Exception:
-            current = 13
+        current = getattr(self, "_current_font_size", None)
+        if current is None:
+            try:
+                from main.core.config import get_monitor_font_size
+                current = int(get_monitor_font_size())
+            except Exception:
+                current = 13
         if delta == 0:
             new_sz = 13
         else:
-            new_sz = max(8, min(36, current + delta))
+            new_sz = max(6, min(48, current + delta))
+        self._current_font_size = new_sz
         try:
+            from main.core.config import set_monitor_font_size
             set_monitor_font_size(new_sz)
             from main.qt.signals import signals as sig_bus
             if hasattr(sig_bus, "font_size_changed"):
@@ -588,13 +592,14 @@ class MonacoEditorPanel(QWidget):
             modifiers = event.modifiers()
             if modifiers & Qt.KeyboardModifier.ControlModifier:
                 key = event.key()
-                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                text = event.text()
+                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or text in ("+", "="):
                     self._step_font_size(1)
                     return True
-                elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or text in ("-", "_"):
                     self._step_font_size(-1)
                     return True
-                elif key == Qt.Key.Key_0:
+                elif key == Qt.Key.Key_0 or text == "0":
                     self._step_font_size(0)
                     return True
         elif event.type() == QEvent.Type.Wheel:
@@ -608,9 +613,10 @@ class MonacoEditorPanel(QWidget):
     def set_font_size(self, size: int) -> None:
         """Update Monaco editor font size."""
         try:
-            sz = max(8, min(36, int(size)))
+            sz = max(6, min(48, int(size)))
         except (ValueError, TypeError):
-            sz = 12
+            sz = 13
+        self._current_font_size = sz
         js = (
             f"if (typeof window.setEditorFontSize === 'function') {{ "
             f"  window.setEditorFontSize({sz}); "
