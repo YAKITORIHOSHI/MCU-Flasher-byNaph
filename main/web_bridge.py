@@ -2773,6 +2773,7 @@ class MCUWebBackendAPI:
 
     def _stop_serial_monitor(self):
         """Stop and close the serial monitor before upload/flash."""
+        old_thread = None
         with self._serial_lock:
             self.serial_running = False
             if self._serial_conn:
@@ -2783,12 +2784,19 @@ class MCUWebBackendAPI:
                 except Exception:
                     pass
                 self._serial_conn = None
+            old_thread = getattr(self, "_serial_thread", None)
+            self._serial_thread = None
             self.emit("serial:status", {
                 "connected": False,
                 "state": "disconnected",
                 "port": self.current_port,
                 "baud": self.current_baud,
             })
+        if old_thread and old_thread.is_alive() and old_thread != threading.current_thread():
+            try:
+                old_thread.join(timeout=0.5)
+            except Exception:
+                pass
 
     def pulse_dtr_reset(self) -> None:
         """Issue a brief, silent reset pulse on the live serial connection.
@@ -5563,8 +5571,8 @@ class MCUWebBackendAPI:
         jobs = self._get_jobs()
         cmd = pio_path + ["run", "-e", "mcu_flash", "-j", str(jobs)]
         self.emit("console:log", {
-            "text": "  🔧 First Hard/Soft Reset for this board — building its persistent recovery cache…",
-            "tag": "warning",
+            "text": f"  🔧 First Hard/Soft Reset for {board_name} — preparing exact-board recovery binaries…",
+            "tag": "info",
             "newline": True,
         })
         output_lines: list[str] = []
@@ -5602,11 +5610,15 @@ class MCUWebBackendAPI:
                         continue
                     output_lines.append(line)
                     low = line.lower()
-                    if any(token in low for token in (
-                        "compiling", "linking", "building", "creating", "created", "error", "warning", "success", "took"
+                    # Suppress internal PlatformIO banners that confuse users
+                    if any(kw in low for kw in (
+                        "building in release mode", "took ", "====", "processing mcu_flash",
+                        "if you like platformio", "star it on github", "follow us on linkedin",
+                        "looking for ", "check our library registry", "verbose mode can be enabled"
                     )):
-                        tag = "error" if "error" in low else ("warning" if "warning" in low else "info")
-                        self.emit("console:log", {"text": f"  {line}", "tag": tag, "newline": True})
+                        continue
+                    if any(token in low for token in ("error", "fatal", "failed")):
+                        self.emit("console:log", {"text": f"  {line}", "tag": "error", "newline": True})
             proc.wait()
             self._active_process = None
             if proc.returncode != 0:
@@ -5625,7 +5637,7 @@ class MCUWebBackendAPI:
 
         images, error = self._locate_hard_reset_recovery_images(board_name, board_info)
         if images:
-            self.emit("console:log", {"text": "  ✔ Exact-board reset cache built and saved for future use.", "tag": "success", "newline": True})
+            self.emit("console:log", {"text": "  ✔ Exact-board recovery binaries ready and saved.", "tag": "success", "newline": True})
         return images, error
 
     def _emit_boot_connection_progress(self, step: int = 0, *, connected: bool = False, failed: bool = False, cancelled: bool = False):
@@ -7076,28 +7088,41 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": f"  Bootloader : {bootloader_bin.name}", "tag": "dim", "newline": True})
                     self.emit("console:log", {"text": f"  Partitions : {partitions_bin.name}", "tag": "dim", "newline": True})
                     self.emit("console:log", {"text": f"  boot_app0  : {boot_app0_bin.name}", "tag": "dim", "newline": True})
-                    self.emit("console:log", {"text": "  User App   : ERASED (clean recovery state)", "tag": "warning", "newline": True})
-                    self.emit("console:log", {"text": "  ⚠ Press and HOLD the BOOT button now.", "tag": "warning", "newline": True})
+                    firmware_bin = image_set.get("firmware")
+                    if firmware_bin and Path(firmware_bin).is_file():
+                        self.emit("console:log", {"text": f"  Recovery App: {Path(firmware_bin).name} (clean recovery sketch)", "tag": "dim", "newline": True})
+                    else:
+                        firmware_bin = None
+
+                    is_native = bool(self._is_native_usb_port(port))
+                    before_reset = "usb-reset" if is_native else "default-reset"
+                    if is_native:
+                        self.emit("console:log", {"text": "  ⚡ Native USB detected — using usb-reset strategy.", "tag": "dim", "newline": True})
+                    else:
+                        self.emit("console:log", {"text": "  💡 Hold BOOT button now if your board requires manual download mode.", "tag": "info", "newline": True})
                     self._emit_boot_connection_progress(0)
 
                     target_mcu, bootloader_addr = self._esptool_target(board_name, binfo)
                     target_mcu = target_mcu or "esp32"
+                    baud_rate = getattr(self, "upload_speed", "460800") or "460800"
                     burn_cmd = self._get_esptool_cmd() + [
                         "--chip", target_mcu,
                         "--port", port,
-                        "--baud", "115200",
-                        "--before", "default-reset",
+                        "--baud", str(baud_rate),
+                        "--before", before_reset,
                         "--after", "no-reset",
                         "--connect-attempts", "30",
-                        "write_flash",
+                        "write-flash",
                         "--erase-all",
-                        "--flash_mode", "keep",
-                        "--flash_freq", "keep",
-                        "--flash_size", "detect",
+                        "--flash-mode", "keep",
+                        "--flash-freq", "keep",
+                        "--flash-size", "detect",
                         bootloader_addr, str(bootloader_bin),
                         "0x8000", str(partitions_bin),
                         "0xe000", str(boot_app0_bin),
                     ]
+                    if firmware_bin:
+                        burn_cmd.extend(["0x10000", str(firmware_bin)])
 
                     launch_env = os.environ.copy()
                     recovery_cfg_path = self._write_esptool_connect_config(
@@ -7233,10 +7258,12 @@ class MCUWebBackendAPI:
                         return
 
                     self.emit("console:log", {"text": "  ✔ Flash erased and clean bootloader/partition table written successfully.", "tag": "success", "newline": True})
-                    self.emit("console:log", {"text": "  ℹ The board is in a clean, blank recovery state. Use Upload to install your sketch.", "tag": "info", "newline": True})
+                    if firmware_bin:
+                        self.emit("console:log", {"text": "  ✔ Clean recovery firmware restored (bootloop prevented).", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  ℹ The board is in a clean, working recovery state. Use Upload to install your sketch.", "tag": "info", "newline": True})
                     time.sleep(0.75)
                     self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and bootloader restored.", "type": "success"})
+                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and recovery firmware restored.", "type": "success"})
                     hard_reset_success = True
                 else:
                     self._trigger_actual_board_reset(port, board_name, binfo)
