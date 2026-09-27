@@ -214,14 +214,22 @@ class PrimaryToolbar(QToolBar):
         self.setIconSize(__import__("PySide6.QtCore", fromlist=["QSize"]).QSize(16, 16))
         self.setObjectName("primary-toolbar")
         self._current_sketch_path: str = ""
+        self._logo_click_count: int = 0
+        self._logo_click_timer = QTimer(self)
+        self._logo_click_timer.setSingleShot(True)
+        self._logo_click_timer.timeout.connect(self._on_logo_click_timeout)
+        self._owner_dialog: QWidget | None = None
         self._setup_widgets()
 
     def _setup_widgets(self) -> None:
-        # ── 1. Left: Logo / Title ───────────────────────────────────────────
+        # ── 1. Left: Logo / Title (Stealth trigger: exactly 5 clicks opens owner portal) ──
         self.logo = QLabel("⚡ MCU Flasher by Naph")
         self.logo.setStyleSheet(
             "color: #56cfbf; font-size: 15px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
         )
+        self.logo.setCursor(Qt.CursorShape.ArrowCursor)
+        self.logo.mousePressEvent = self._on_logo_mouse_press
+        self.logo.mouseDoubleClickEvent = self._on_logo_mouse_press
         self.addWidget(self.logo)
 
         # ── 2. Left Expanding Spacer ────────────────────────────────────────
@@ -330,7 +338,7 @@ class PrimaryToolbar(QToolBar):
 
         # Sketch path label
         self.lbl_sketch_icon = QLabel("📁")
-        self.lbl_sketch_icon.setStyleSheet("color: #56cfbf; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; cursor: hand; background: transparent;")
+        self.lbl_sketch_icon.setStyleSheet("color: #56cfbf; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;")
         self.lbl_sketch_icon.setToolTip("Click to select or create a project")
         self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sketch_icon.mousePressEvent = lambda e: self._on_new_project()
@@ -525,6 +533,59 @@ class PrimaryToolbar(QToolBar):
         elif self._backend:
             self._backend.open_in_explorer()
 
+    def _on_logo_mouse_press(self, event) -> None:
+        """Secret easter-egg click detector for owner defect portal.
+
+        Must be completely stealthy — standard arrow cursor, no hover style,
+        and opens ONLY when clicked exactly 5 times. If clicked 6 times or
+        fewer than 5 times within the debounce window, it resets and does not open.
+        """
+        try:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._logo_click_count += 1
+                # 450ms debounce window after each click to detect exact sequence of clicks
+                self._logo_click_timer.start(450)
+                event.accept()
+            else:
+                QLabel.mousePressEvent(self.logo, event)
+        except Exception:
+            pass
+
+    def _on_logo_click_timeout(self) -> None:
+        """Evaluates click count once user ceases clicking."""
+        try:
+            count = self._logo_click_count
+            self._logo_click_count = 0
+            if count == 5:
+                self._open_owner_ticket_dialog()
+        except Exception:
+            self._logo_click_count = 0
+
+    def _open_owner_ticket_dialog(self) -> None:
+        """Launch or foreground the private owner defect portal if internet is online.
+
+        Strict stealth requirement: If internet is not available, do not proceed
+        or display anything so the secret portal remains 100% invisible.
+        """
+        try:
+            from main.core.owner_tickets import is_internet_available
+            # Check internet connectivity first. If offline, silently abort without displaying anything!
+            if not is_internet_available(timeout=0.6):
+                return
+
+            from main.qt.owner_ticket_dialog import OwnerTicketDialog
+            parent_window = self.window() if self.window() else self
+            if self._owner_dialog is None or not self._owner_dialog.isVisible():
+                self._owner_dialog = OwnerTicketDialog(backend=self._backend, parent=parent_window)
+                self._owner_dialog.show()
+                self._owner_dialog.raise_()
+                self._owner_dialog.activateWindow()
+            else:
+                self._owner_dialog.raise_()
+                self._owner_dialog.activateWindow()
+        except Exception:
+            pass
+
     def _on_new_project(self) -> None:
         if self._is_busy():
             from PySide6.QtWidgets import QMessageBox
@@ -687,7 +748,7 @@ class PrimaryToolbar(QToolBar):
             )
         if hasattr(self, "lbl_sketch_icon"):
             self.lbl_sketch_icon.setStyleSheet(
-                f"color: {Theme.CYAN}; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; cursor: hand; background: transparent;"
+                f"color: {Theme.CYAN}; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;"
             )
         if hasattr(self, "lbl_sketch"):
             self.lbl_sketch.setStyleSheet(
@@ -854,22 +915,45 @@ class MarqueeComboBox(QComboBox):
         self._timer = QTimer(self)
         self._timer.setInterval(40)  # ~25 FPS
         self._timer.timeout.connect(self._step)
-        self._timer.start()
+        # Demand-driven: timer starts only when text overflows width
 
         self.currentIndexChanged.connect(self._on_index_changed)
         view = self.view()
         if view:
             view.setTextElideMode(Qt.TextElideMode.ElideNone)
 
+    def _check_marquee_needed(self) -> bool:
+        if not self.isVisible() or self._is_popup_open or not self.isEnabled():
+            return False
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, opt,
+            QStyle.SubControl.SC_ComboBoxEditField, self
+        )
+        avail = max(10, rect.width() - 8)
+        fm = opt.fontMetrics
+        text = opt.currentText or (self.placeholderText() if self.currentIndex() < 0 else "")
+        if not text:
+            return False
+        return fm.horizontalAdvance(text) > avail
+
     def _on_index_changed(self) -> None:
         self._offset = 0
         self._dir = 1
         self._pause = 30
         self.update()
+        if self._check_marquee_needed():
+            if not self._timer.isActive():
+                self._timer.start()
+        elif self._timer.isActive():
+            self._timer.stop()
 
     def showPopup(self) -> None:
         self._is_popup_open = True
         self._offset = 0
+        if self._timer.isActive():
+            self._timer.stop()
         view = self.view()
         if view:
             view.setTextElideMode(Qt.TextElideMode.ElideNone)
@@ -889,6 +973,9 @@ class MarqueeComboBox(QComboBox):
         self._dir = 1
         self._pause = 30
         super().hidePopup()
+        if self._check_marquee_needed():
+            if not self._timer.isActive():
+                self._timer.start()
 
     def sizeHint(self) -> QSize:
         sh = super().sizeHint()
@@ -909,6 +996,21 @@ class MarqueeComboBox(QComboBox):
         self._dir = 1
         self._pause = 30
         super().resizeEvent(event)
+        if self._check_marquee_needed():
+            if not self._timer.isActive():
+                self._timer.start()
+        elif self._timer.isActive():
+            self._timer.stop()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._check_marquee_needed() and not self._timer.isActive():
+            self._timer.start()
+
+    def hideEvent(self, event) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+        super().hideEvent(event)
 
     def _step(self) -> None:
         if self._is_popup_open or not self.isEnabled():
@@ -930,6 +1032,8 @@ class MarqueeComboBox(QComboBox):
             if self._offset != 0:
                 self._offset = 0
                 self.update()
+            if self._timer.isActive():
+                self._timer.stop()
             return
 
         if self._pause > 0:
@@ -1007,7 +1111,15 @@ class MarqueeBoardSelector(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(40)
         self._timer.timeout.connect(self._step)
-        self._timer.start()
+        # Demand-driven: timer starts only when text overflows button width
+
+    def _check_marquee_needed(self) -> bool:
+        if not self.isVisible() or not self.isEnabled() or not self._text:
+            return False
+        fm = self.fontMetrics()
+        text_w = fm.horizontalAdvance(self._text)
+        avail = max(10, self.width() - 16)
+        return text_w > avail
 
     def set_board(self, name: str) -> None:
         self._text = name or ""
@@ -1015,6 +1127,11 @@ class MarqueeBoardSelector(QWidget):
         self._dir = 1
         self._pause = 30
         self.update()
+        if self._check_marquee_needed():
+            if not self._timer.isActive():
+                self._timer.start()
+        elif self._timer.isActive():
+            self._timer.stop()
 
     def setText(self, name: str) -> None:
         self.set_board(name)
@@ -1069,6 +1186,26 @@ class MarqueeBoardSelector(QWidget):
     def minimumSizeHint(self) -> QSize:
         return QSize(max(150, int(self._get_adaptive_width() * 0.85)), 28)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._check_marquee_needed():
+            if not self._timer.isActive():
+                self._timer.start()
+        elif self._timer.isActive():
+            self._timer.stop()
+            self._offset = 0
+            self.update()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._check_marquee_needed() and not self._timer.isActive():
+            self._timer.start()
+
+    def hideEvent(self, event) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+        super().hideEvent(event)
+
     def _step(self) -> None:
         if not self.isEnabled() or not self._text:
             return
@@ -1080,6 +1217,8 @@ class MarqueeBoardSelector(QWidget):
             if self._offset != 0:
                 self._offset = 0
                 self.update()
+            if self._timer.isActive():
+                self._timer.stop()
             return
 
         if self._pause > 0:

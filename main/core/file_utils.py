@@ -180,6 +180,45 @@ def _migrate_legacy_project_generated_files(project_dir) -> Path:
     return cache
 
 
+import functools
+
+@functools.lru_cache(maxsize=16)
+def is_drive_hdd(path: str | Path | None = None) -> bool:
+    """Return True if the target drive is a mechanical hard drive (HDD) incurring seek penalty.
+
+    Queries Windows StorageDeviceSeekPenaltyProperty via DeviceIoControl.
+    Results are cached in memory for sub-microsecond subsequent queries.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        p = Path(path).resolve() if path else Path.cwd().resolve()
+        drive = p.drive or "C:"
+        drive_path = r"\\.\\" + drive.rstrip("\\")
+        import ctypes
+        from ctypes import wintypes
+        import struct
+
+        h = ctypes.windll.kernel32.CreateFileW(
+            drive_path, 0, 3, None, 3, 0, None
+        )
+        if h == -1 or h == 0xFFFFFFFF:
+            return False
+        query = struct.pack("II", 7, 0)
+        out_buf = ctypes.create_string_buffer(12)
+        bytes_returned = wintypes.DWORD()
+        res = ctypes.windll.kernel32.DeviceIoControl(
+            h, 0x002D1400, query, len(query),
+            out_buf, len(out_buf), ctypes.byref(bytes_returned), None
+        )
+        ctypes.windll.kernel32.CloseHandle(h)
+        if res:
+            return bool(out_buf.raw[8])
+    except Exception:
+        pass
+    return False
+
+
 def _set_windows_file_attributes(path: Path, attributes: int,
                                  attempts: int = 6) -> bool:
     """Apply Windows attributes with a short retry for scanner interference."""
@@ -1773,6 +1812,7 @@ __all__ = [
     "hide_hidden_attribute",
     "hide_internal_project_metadata",
     "is_application_codebase_dir",
+    "is_drive_hdd",
     "is_nonfatal_pio_clean_report",
     "is_ntfs_path",
     "is_transient_file_lock_error",

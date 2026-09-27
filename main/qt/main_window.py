@@ -1218,16 +1218,21 @@ class MCUMainWindow(QMainWindow):
 
             self._backend.update_skip_compile_availability()
 
-            # Enforce project file hygiene and initial hardware state sync
-            try:
-                from main.core.file_utils import hide_internal_project_metadata, SCRIPT_DIR
-                hide_internal_project_metadata(SCRIPT_DIR)
-                if self._backend.sketch_dir_path:
-                    hide_internal_project_metadata(self._backend.sketch_dir_path)
-                if hasattr(self._backend, "_sync_project_hardware_state"):
-                    self._backend._sync_project_hardware_state()
-            except Exception:
-                pass
+            # Enforce project file hygiene and initial hardware state sync in background worker
+            # to prevent mechanical HDD seek stalls from blocking the GUI thread during window show
+            def _bg_startup_hygiene():
+                try:
+                    from main.core.file_utils import hide_internal_project_metadata, SCRIPT_DIR
+                    hide_internal_project_metadata(SCRIPT_DIR)
+                    if self._backend and self._backend.sketch_dir_path:
+                        hide_internal_project_metadata(self._backend.sketch_dir_path)
+                    if hasattr(self._backend, "_sync_project_hardware_state"):
+                        self._backend._sync_project_hardware_state()
+                except Exception:
+                    pass
+
+            import threading
+            threading.Thread(target=_bg_startup_hygiene, name="MCU_StartupHygiene", daemon=True).start()
 
             # Load active file into Monaco immediately without sluggish delay
             self._load_initial_file()

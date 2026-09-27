@@ -83,6 +83,30 @@ _merged_flags = _existing_flags
 for _f in _no_throttle_flags:
     if _f not in _merged_flags:
         _merged_flags = f"{_merged_flags} {_f}".strip()
+
+# Dynamic low-end / HDD hardware optimization flags for Chromium WebEngine
+try:
+    import psutil
+    from main.core.file_utils import is_drive_hdd
+    _mem_total = psutil.virtual_memory().total
+    _cpu_count = os.cpu_count() or 2
+    _is_low_end = (_mem_total < 5.5 * 1024 ** 3) or (_cpu_count <= 2) or is_drive_hdd()
+except Exception:
+    _is_low_end = False
+
+if _is_low_end:
+    _low_end_flags = [
+        "--enable-low-end-device-mode",
+        "--disable-gpu-watchdog",
+        "--num-raster-threads=1",
+        "--disable-gpu-shader-disk-cache",
+        "--disk-cache-size=1",
+        "--disable-component-update",
+    ]
+    for _f in _low_end_flags:
+        if _f not in _merged_flags:
+            _merged_flags = f"{_merged_flags} {_f}".strip()
+
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
 
 # ── PySide6 GUI Components ───────────────────────────────────────────────────

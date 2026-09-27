@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QObject, QUrl, Slot, Signal, QTimer
+from PySide6.QtCore import QObject, QUrl, Slot, Signal, QTimer, QEvent, Qt
 # pyrefly: ignore [missing-import]
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
 # pyrefly: ignore [missing-import]
@@ -151,6 +151,20 @@ class EditorBridgeAPI(QObject):
             return int(get_monitor_font_size())
         except Exception:
             return 12
+
+    @Slot(int, result="QVariant")
+    def save_font_size(self, size: int) -> dict:
+        """Monaco reports font size change from Ctrl + +/- shortcuts."""
+        try:
+            sz = max(8, min(36, int(size)))
+            from main.core.config import set_monitor_font_size
+            set_monitor_font_size(sz)
+            from main.qt.signals import signals as sig_bus
+            if hasattr(sig_bus, "font_size_changed"):
+                sig_bus.font_size_changed.emit(sz)
+            return {"success": True, "size": sz}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @Slot(result=str)
     def get_project_dir(self) -> str:
@@ -369,13 +383,42 @@ class MonacoEditorPanel(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+
+        # On budget/low-end systems, disable hardware 2D canvas to prevent D3D11 device crashes & leaks
+        is_low_end = False
+        try:
+            import os
+            import psutil
+            mem_tot = psutil.virtual_memory().total
+            cpus = os.cpu_count() or 2
+            is_low_end = (mem_tot < 5.5 * 1024 ** 3) or (cpus <= 2)
+        except Exception:
+            pass
+
+        settings.setAttribute(
+            QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
+            not is_low_end
+        )
         settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)
 
-        # Utilize high-performance in-memory cache for Monaco bundle, workers, and web assets
+        # Utilize lightweight in-memory cache for Monaco offline assets (16 MB saves ~112MB RAM)
         profile = self._view.page().profile()
         profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
-        profile.setHttpCacheMaximumSize(128 * 1024 * 1024)  # 128 MB RAM cache
+        profile.setHttpCacheMaximumSize(16 * 1024 * 1024)
+
+        # Lock WebEngine page zoom factor to 1.0 (prevent Chromium zoom accelerator from corrupting flexbox layout)
+        page = self._view.page()
+        if hasattr(page, "zoomFactorChanged"):
+            page.zoomFactorChanged.connect(self._on_zoom_factor_changed)
+
+        if hasattr(self._view, "renderProcessTerminated"):
+            self._view.renderProcessTerminated.connect(self._on_render_process_terminated)
+
+        # Intercept Ctrl + / Ctrl - / Ctrl 0 / Ctrl Wheel before Chromium zoom accelerator
+        self._view.installEventFilter(self)
+        focus_proxy = self._view.focusProxy()
+        if focus_proxy:
+            focus_proxy.installEventFilter(self)
 
         # ── QWebChannel ─────────────────────────────────────────────────────
         self._channel = QWebChannel(self._view.page())
@@ -421,6 +464,10 @@ class MonacoEditorPanel(QWidget):
     def _on_load_finished(self, ok: bool) -> None:
         if not ok:
             return
+        focus_proxy = self._view.focusProxy()
+        if focus_proxy:
+            focus_proxy.installEventFilter(self)
+
         # Ensure QWebChannel and project loading runs in JS
         self._view.page().runJavaScript(_WEBCHANNEL_INIT_JS)
 
@@ -506,10 +553,62 @@ class MonacoEditorPanel(QWidget):
         js = f"if (typeof window.setEditorTheme === 'function') {{ window.setEditorTheme({theme_json}); }}"
         self._view.page().runJavaScript(js)
 
+    def _on_zoom_factor_changed(self, factor: float) -> None:
+        """Lock web page zoom factor to 1.0 so Monaco font size changes don't zoom the outer page."""
+        if abs(factor - 1.0) > 0.01:
+            self._view.setZoomFactor(1.0)
+            self.force_layout()
+
+    def _on_render_process_terminated(self, termination_status: Any, exit_code: int) -> None:
+        """Auto-recover if WebEngine renderer process ever terminates under memory pressure."""
+        QTimer.singleShot(200, self._load_editor)
+
+    def _step_font_size(self, delta: int) -> None:
+        """Step editor font size and notify JS and settings."""
+        try:
+            from main.core.config import get_monitor_font_size, set_monitor_font_size
+            current = int(get_monitor_font_size())
+        except Exception:
+            current = 13
+        if delta == 0:
+            new_sz = 13
+        else:
+            new_sz = max(8, min(36, current + delta))
+        try:
+            set_monitor_font_size(new_sz)
+            from main.qt.signals import signals as sig_bus
+            if hasattr(sig_bus, "font_size_changed"):
+                sig_bus.font_size_changed.emit(new_sz)
+        except Exception:
+            pass
+        self.set_font_size(new_sz)
+
+    def eventFilter(self, watched: QObject, event: Any) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            modifiers = event.modifiers()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                key = event.key()
+                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                    self._step_font_size(1)
+                    return True
+                elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                    self._step_font_size(-1)
+                    return True
+                elif key == Qt.Key.Key_0:
+                    self._step_font_size(0)
+                    return True
+        elif event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                delta = 1 if event.angleDelta().y() > 0 else -1
+                self._step_font_size(delta)
+                return True
+
+        return super().eventFilter(watched, event)
+
     def set_font_size(self, size: int) -> None:
         """Update Monaco editor font size."""
         try:
-            sz = int(size)
+            sz = max(8, min(36, int(size)))
         except (ValueError, TypeError):
             sz = 12
         js = (
@@ -517,9 +616,11 @@ class MonacoEditorPanel(QWidget):
             f"  window.setEditorFontSize({sz}); "
             f"}} else if (window.editorInstance) {{ "
             f"  window.editorInstance.updateOptions({{ fontSize: {sz} }}); "
+            f"  if (typeof window.editorInstance.layout === 'function') window.editorInstance.layout(); "
             f"}}"
         )
         self._view.page().runJavaScript(js)
+        QTimer.singleShot(40, self.force_layout)
 
     def trigger_save(self) -> None:
         self._view.page().runJavaScript(

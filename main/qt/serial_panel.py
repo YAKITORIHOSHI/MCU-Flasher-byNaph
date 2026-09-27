@@ -80,7 +80,7 @@ class SerialOutputView(QPlainTextEdit):
         self._flush_timer = QTimer(self)
         self._flush_timer.setInterval(30)
         self._flush_timer.timeout.connect(self._flush_queue)
-        self._flush_timer.start()
+        # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
@@ -209,13 +209,25 @@ class SerialOutputView(QPlainTextEdit):
     def append_log(self, payload: dict) -> None:
         if self._paused:
             return
-        text: str = payload.get("text", "")
         tag: str  = payload.get("tag", "normal")
+        lines = payload.get("lines")
+        if lines and isinstance(lines, list):
+            for l in lines:
+                self._queue.append((str(l), tag, True))
+            if not self._flush_timer.isActive():
+                self._flush_timer.start()
+            return
+
+        text: str = payload.get("text", "")
         newline: bool = payload.get("newline", True)
         self._queue.append((text, tag, newline))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
 
     def _flush_queue(self) -> None:
         if not self._queue:
+            if self._flush_timer.isActive():
+                self._flush_timer.stop()
             return
 
         # Drain up to 1000 items per flush tick to prevent backlog freeze
@@ -291,9 +303,14 @@ class SerialOutputView(QPlainTextEdit):
                 self._last_autoscroll = now
                 self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
+        if not self._queue and self._flush_timer.isActive():
+            self._flush_timer.stop()
+
     @Slot()
     def clear(self) -> None:
         self._queue.clear()
+        if self._flush_timer.isActive():
+            self._flush_timer.stop()
         super().clear()
 
 

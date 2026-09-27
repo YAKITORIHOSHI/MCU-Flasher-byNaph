@@ -305,9 +305,14 @@
     }
 
     #editor-container {
-      flex: 1;
+      flex: 1 1 0%;
+      min-height: 0 !important;
+      min-width: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
       position: relative;
       background: var(--bg-darkest);
+      overflow: hidden;
     }
 
     #monaco-anchor {
@@ -316,6 +321,11 @@
       left: 0;
       right: 0;
       bottom: 0;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      min-width: 0 !important;
+      overflow: hidden;
     }
 
     .monaco-editor .decorationsOverviewRuler {
@@ -1042,14 +1052,16 @@
         }
       };
 
-      const editorContainerElem = document.getElementById('editor-container') || document.getElementById('monaco-anchor');
-      if (window.ResizeObserver && editorContainerElem) {
+      const editorContainerElem = document.getElementById('editor-container');
+      const monacoAnchorElem = document.getElementById('monaco-anchor');
+      if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => {
           if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
             window.editorInstance.layout();
           }
         });
-        ro.observe(editorContainerElem);
+        if (editorContainerElem) ro.observe(editorContainerElem);
+        if (monacoAnchorElem) ro.observe(monacoAnchorElem);
       }
 
       window.addEventListener('resize', () => {
@@ -1203,30 +1215,78 @@
     })();
 
     (function () {
-      let monacoFontSize = 14;
-      function handleZoom(e) {
-        if (e.ctrlKey || e.metaKey) {
-          if (e.key === '=' || e.key === '+' || e.keyCode === 187 || e.keyCode === 107) {
-            e.preventDefault();
-            e.stopPropagation();
-            zoomMonaco(1);
-          } else if (e.key === '-' || e.keyCode === 189 || e.keyCode === 109) {
-            e.preventDefault();
-            e.stopPropagation();
-            zoomMonaco(-1);
-          }
+      let monacoFontSize = 13;
+
+      function triggerMonacoLayout() {
+        if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
+          window.editorInstance.layout();
         }
+        if (window.requestAnimationFrame) {
+          window.requestAnimationFrame(() => {
+            if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
+              window.editorInstance.layout();
+            }
+          });
+        }
+      }
+
+      function syncFontSizeToBridge(sz) {
+        try {
+          if (window.editorBridge && typeof window.editorBridge.save_font_size === 'function') {
+            window.editorBridge.save_font_size(sz);
+          } else if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_font_size === 'function') {
+            window.pywebview.api.save_font_size(sz);
+          }
+        } catch (_) {}
       }
 
       function zoomMonaco(delta) {
-        if (window.editorInstance) {
-          monacoFontSize = Math.max(6, Math.min(40, monacoFontSize + delta));
+        if (!window.editorInstance) return;
+        if (delta === 0) {
+          monacoFontSize = 13;
+        } else {
+          monacoFontSize = Math.max(8, Math.min(36, monacoFontSize + delta));
+        }
+        try {
           window.editorInstance.updateOptions({ fontSize: monacoFontSize });
+        } catch (_) {}
+        triggerMonacoLayout();
+        syncFontSizeToBridge(monacoFontSize);
+      }
+
+      function handleZoom(e) {
+        if (!e.ctrlKey && !e.metaKey) return;
+        const key = e.key;
+        const code = e.code || '';
+        const isPlus = key === '+' || key === '=' || code === 'Equal' || code === 'NumpadAdd' || e.keyCode === 187 || e.keyCode === 107;
+        const isMinus = key === '-' || key === '_' || code === 'Minus' || code === 'NumpadSubtract' || e.keyCode === 189 || e.keyCode === 109;
+        const isZero = key === '0' || code === 'Digit0' || code === 'Numpad0' || e.keyCode === 48 || e.keyCode === 96;
+
+        if (isPlus) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          zoomMonaco(1);
+        } else if (isMinus) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          zoomMonaco(-1);
+        } else if (isZero) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          zoomMonaco(0);
         }
       }
 
-      window.addEventListener('keydown', handleZoom, true);
-      document.addEventListener('keydown', handleZoom, true);
+      function handleWheelZoom(e) {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const delta = e.deltaY < 0 ? 1 : -1;
+        zoomMonaco(delta);
+      }
+
+      window.addEventListener('keydown', handleZoom, { capture: true });
+      window.addEventListener('wheel', handleWheelZoom, { capture: true, passive: false });
 
       function handleEditorShortcuts(e) {
         if (e.ctrlKey || e.metaKey) {
@@ -3684,7 +3744,12 @@
       window.setEditorFontSize = function (sz) {
         if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
           try {
-            window.editorInstance.updateOptions({ fontSize: Number(sz) });
+            const num = Math.max(8, Math.min(36, Number(sz)));
+            monacoFontSize = num;
+            window.editorInstance.updateOptions({ fontSize: num });
+            if (typeof window.editorInstance.layout === 'function') {
+              window.editorInstance.layout();
+            }
           } catch (e) {}
         }
       };

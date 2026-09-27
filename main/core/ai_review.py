@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional, Any, Callable
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, QFileSystemWatcher
 
 from main.core.file_utils import (
     ensure_file_writable,
@@ -682,14 +682,30 @@ class AIEditWatcher(QObject):
         self._last_signal_mtime: float = 0.0
         self._lock = threading.Lock()
 
-        # Qt Timer: runs every 250ms on Qt main thread, completely non-blocking
+        # Adaptive Qt Timer: 2000ms when idle to protect mechanical HDDs from seek thrashing;
+        # speeds up to 250ms dynamically only when edits are in-flight settling.
+        self._idle_interval = 2000
+        self._settle_interval = 250
         self._timer = QTimer(self)
-        self._timer.setInterval(250)
+        self._timer.setInterval(self._idle_interval)
         self._timer.timeout.connect(self._poll_step)
+
+        # OS-level filesystem watcher (Windows ReadDirectoryChangesW): zero-overhead event notification
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_watcher.directoryChanged.connect(self._on_fs_changed)
+        self._fs_watcher.fileChanged.connect(self._on_fs_changed)
 
         if self.project_dir and self.project_dir.is_dir():
             self._rebuild_baseline()
+            try:
+                self._fs_watcher.addPath(str(self.project_dir))
+            except Exception:
+                pass
             self._timer.start()
+
+    def _on_fs_changed(self, path: str) -> None:
+        """OS kernel notified that directory or file changed: wake up poll immediately."""
+        self._poll_step()
 
     def bind_project(self, project_dir: str | Path) -> None:
         """Switch watcher target when project folder changes."""
@@ -701,8 +717,15 @@ class AIEditWatcher(QObject):
             self._pending_settle.clear()
             self._last_signal_mtime = 0.0
 
+            if self._fs_watcher.directories():
+                self._fs_watcher.removePaths(self._fs_watcher.directories())
+
             if self.project_dir and self.project_dir.is_dir():
                 self._rebuild_baseline()
+                try:
+                    self._fs_watcher.addPath(str(self.project_dir))
+                except Exception:
+                    pass
                 if not self._timer.isActive():
                     self._timer.start()
             else:
@@ -842,3 +865,12 @@ class AIEditWatcher(QObject):
             )
             if res and res != "cancelled":
                 self.ai_edit_detected.emit(fp, before_c, after_c, b_exists, a_exists)
+
+        # 5. Adaptive timer interval: if there are pending files debouncing, tick fast (250ms).
+        # When all files have settled, relax interval to 2000ms to eliminate HDD head thrashing.
+        if self._pending_settle:
+            if self._timer.interval() != self._settle_interval:
+                self._timer.setInterval(self._settle_interval)
+        else:
+            if self._timer.interval() != self._idle_interval:
+                self._timer.setInterval(self._idle_interval)

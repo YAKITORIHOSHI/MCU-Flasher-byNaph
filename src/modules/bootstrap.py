@@ -3567,7 +3567,6 @@ def ensure_pip_packages_parallel(
     _ensure_pywin32_system32_dlls()
     importlib.invalidate_caches()
 
-    status(f"Verifying {len(active_specs)} Python dependencies...")
     # Checks are read-only, so running these concurrently is safe.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(active_specs))) as executor:
         installed_flags = list(executor.map(_check, active_specs))
@@ -3579,7 +3578,6 @@ def ensure_pip_packages_parallel(
                 pkg_states[spec["id"]]["pct"] = 100
                 pkg_states[spec["id"]]["done"] = True
                 pkg_states[spec["id"]]["ok"] = True
-                dim(f"{spec['name']}: verified (installed)")
             else:
                 pkg_states[spec["id"]]["status"] = "⏳ Waiting..."
                 pkg_states[spec["id"]]["pct"] = 0
@@ -3587,18 +3585,20 @@ def ensure_pip_packages_parallel(
                 pkg_states[spec["id"]]["ok"] = False
                 status(f"{spec['name']}: not installed, will download and install.")
 
-    # Render table immediately reflecting true state (no animating loading for packages already installed!)
-    _render_table()
-
     missing_specs = [spec for spec, installed in zip(active_specs, installed_flags) if not installed]
 
     if not missing_specs:
+        # All packages already present — skip the progress table entirely
+        # since there is nothing to download or install.
         if gui:
-            gui.commit_pip_table_block()
             gui.set_progress_percent(100)
-            gui.log_ok("All pip package dependencies are verified!")
         ok("All pip package dependencies are verified!")
         return True
+
+    # Render the progress table only when there are packages to install,
+    # so it shows meaningful download/install activity rather than a wall
+    # of instant 100 % bars for already-installed packages.
+    _render_table()
 
     # Fast offline termination: cannot download missing pip packages without internet
     if not _is_network_reachable(timeout=2.0):
@@ -5190,6 +5190,12 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
     if not scons_manifest.is_file() or not scons_piopm.is_file():
         return False
 
+    # Upload tools (e.g. tool-avrdude for AVR) must be present so uploads never pause to download tools
+    if platform in ("atmelavr", "atmelmegaavr"):
+        avrdude_dir = target_core / "packages" / "tool-avrdude"
+        if not avrdude_dir.is_dir() or (not (avrdude_dir / "package.json").is_file() and not (avrdude_dir / ".piopm").is_file()):
+            return False
+
     # Readiness is certified by a successful tiny first-use PlatformIO build
     # and a version-bound package snapshot marker. Optional platform.json
     # packages are deliberately not treated as mandatory.
@@ -5212,6 +5218,10 @@ def board_toolchain_ready(
     scons_piopm = Path(pio_core_dir) / "packages" / "tool-scons" / ".piopm"
     if not scons_manifest.is_file() or not scons_piopm.is_file():
         return False
+    if platform in ("atmelavr", "atmelmegaavr"):
+        avrdude_dir = Path(pio_core_dir) / "packages" / "tool-avrdude"
+        if not avrdude_dir.is_dir() or (not (avrdude_dir / "package.json").is_file() and not (avrdude_dir / ".piopm").is_file()):
+            return False
     marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
     if marker.is_file():
         try:
@@ -5895,6 +5905,103 @@ def _log_platformio_first_install_warning(label: str, size_hint: str) -> None:
     else:
         warn(msg)
 
+
+_PLATFORM_UPLOAD_PACKAGES: dict[str, list[tuple[str, str]]] = {
+    "atmelavr": [("tool-avrdude", "platformio/tool-avrdude@~1.60300.0")],
+    "atmelmegaavr": [("tool-avrdude", "platformio/tool-avrdude@~1.60300.0")],
+    "espressif32": [("tool-esptoolpy", "platformio/tool-esptoolpy@~2.41100.0")],
+    "espressif8266": [("tool-esptoolpy", "platformio/tool-esptoolpy@~1.30000.0")],
+}
+
+
+def _get_platform_upload_specs(pio_core_dir: str, platform: str) -> list[tuple[str, str]]:
+    """Return list of (pkg_name, install_spec) for upload tools required by platform."""
+    specs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    manifest = _platform_manifest_path(pio_core_dir, platform)
+    if manifest and manifest.is_file():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            packages = data.get("packages", {})
+            if isinstance(packages, dict):
+                for pkg_name, pkg_meta in packages.items():
+                    if isinstance(pkg_meta, dict) and pkg_meta.get("type") == "uploader":
+                        # For AVR platforms, tool-avrdude is the primary serial uploader; skip alternate uploaders like micronucleus
+                        if platform in ("atmelavr", "atmelmegaavr") and pkg_name != "tool-avrdude":
+                            continue
+                        if pkg_meta.get("optional") and pkg_name not in ("tool-avrdude", "tool-esptoolpy"):
+                            continue
+                        owner = str(pkg_meta.get("owner") or "platformio").strip()
+                        ver = str(pkg_meta.get("version") or "").strip()
+                        spec = f"{owner}/{pkg_name}@{ver}" if ver else f"{owner}/{pkg_name}"
+                        specs.append((pkg_name, spec))
+                        seen.add(pkg_name)
+        except Exception:
+            pass
+
+    for pkg_name, default_spec in _PLATFORM_UPLOAD_PACKAGES.get(platform, []):
+        if pkg_name not in seen:
+            specs.append((pkg_name, default_spec))
+            seen.add(pkg_name)
+    return specs
+
+
+def _ensure_platform_upload_tools(
+    pio: list[str],
+    pio_core_dir: str,
+    platform: str,
+    env: dict,
+    label: str | None = None,
+    stage: str | None = None,
+    on_download_start=None,
+    on_line=None,
+    on_status=None,
+    on_progress=None,
+    cancel_requested=None,
+    on_process=None,
+) -> bool:
+    """Ensure upload tools required by the platform (e.g. tool-avrdude for atmelavr)
+    are installed in PLATFORMIO_CORE_DIR so uploads never download tools on-the-fly."""
+    display = label or _PLATFORM_INFO.get(platform, (platform, ""))[0]
+    specs = _get_platform_upload_specs(pio_core_dir, platform)
+    if not specs:
+        return True
+
+    packages_root = Path(pio_core_dir) / "packages"
+    all_ok = True
+    for pkg_name, spec in specs:
+        pkg_dir = packages_root / pkg_name
+        if pkg_dir.is_dir() and ((pkg_dir / "package.json").is_file() or (pkg_dir / ".piopm").is_file()):
+            continue
+
+        if callable(on_status):
+            try:
+                on_status(f"{display}: Installing upload tool ({pkg_name})...")
+            except Exception:
+                pass
+
+        cmd = list(pio) + ["pkg", "install", "-g", "-t", spec]
+        ok = _stream_platformio_setup(
+            cmd,
+            env,
+            label=display,
+            stage=stage or f"Installing upload tool {pkg_name}",
+            progress_start=85,
+            progress_end=100,
+            timeout=600,
+            on_download_start=on_download_start,
+            on_line=on_line,
+            on_status=on_status,
+            on_progress=on_progress,
+            cancel_requested=cancel_requested,
+            on_process=on_process,
+        )
+        if not ok:
+            all_ok = False
+            warn(f"{display}: Failed to pre-install upload tool {spec}.")
+    return all_ok
+
+
 def ensure_board_toolchains() -> bool:
     """Prepare PlatformIO packages exactly the way the main app's first Compile does.
 
@@ -6016,6 +6123,12 @@ def ensure_board_toolchains() -> bool:
             )
             all_ok = False
             continue
+
+        # Ensure upload tools (e.g. tool-avrdude for atmelavr) are pre-installed
+        _ensure_platform_upload_tools(
+            pio, pio_core_dir, platform, env, label=label,
+            on_download_start=_warn_once,
+        )
 
         _PIO_PLATFORM_LIST_CACHE.clear()
         try:
@@ -6242,6 +6355,17 @@ def prepare_platformio_board_toolchain(
                     break
             if not build_ok:
                 return False
+
+            # Ensure upload tools (e.g. tool-avrdude for atmelavr) are ready
+            _ensure_platform_upload_tools(
+                pio, pio_core_dir, platform, env, label=display,
+                on_download_start=_announce_download,
+                on_line=on_line,
+                on_status=on_status,
+                on_progress=on_progress,
+                cancel_requested=cancel_requested,
+                on_process=on_process,
+            )
 
             try:
                 _write_board_toolchain_marker(pio_core_dir, platform, board_id, framework)

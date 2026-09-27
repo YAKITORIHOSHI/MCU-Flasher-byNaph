@@ -354,7 +354,7 @@ class ConsolePanel(QPlainTextEdit):
         self._flush_timer = QTimer(self)
         self._flush_timer.setInterval(25)
         self._flush_timer.timeout.connect(self._flush_queue)
-        self._flush_timer.start()
+        # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
     def set_hide_warnings(self, enabled: bool) -> None:
         self._hide_warnings = bool(enabled)
@@ -488,9 +488,13 @@ class ConsolePanel(QPlainTextEdit):
             ts = m.group(1)
             text = m.group(2)
         self._queue.append((text, tag, newline, replace_pattern, ts))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
 
     def _flush_queue(self) -> None:
         if not self._queue:
+            if self._flush_timer.isActive():
+                self._flush_timer.stop()
             return
 
         # Drain up to 800 items per tick
@@ -573,6 +577,9 @@ class ConsolePanel(QPlainTextEdit):
             self.setTextCursor(cursor)
             self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
+        if not self._queue and self._flush_timer.isActive():
+            self._flush_timer.stop()
+
     @Slot(dict)
     def update_progress(self, payload: dict) -> None:
         """Handle console:progress signals (reserved for status bar integration)."""
@@ -583,6 +590,8 @@ class ConsolePanel(QPlainTextEdit):
         """Clear all console content and in-RAM queue."""
         self._entries.clear()
         self._queue.clear()
+        if self._flush_timer.isActive():
+            self._flush_timer.stop()
         super().clear()
 
 

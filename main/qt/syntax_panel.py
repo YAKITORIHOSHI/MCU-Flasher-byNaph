@@ -53,9 +53,19 @@ class SyntaxPanel(QWidget):
         from main.core.config import get_theme_mode
         self.apply_theme(get_theme_mode())
 
-        # Background periodic syntax checking timer (every 4 seconds when idle)
+        # Background periodic syntax checking timer (every 4 seconds when idle, 8s on low-end)
+        is_low_end = False
+        try:
+            import os
+            import psutil
+            mem_tot = psutil.virtual_memory().total
+            cpus = os.cpu_count() or 2
+            is_low_end = (mem_tot < 5.5 * 1024 ** 3) or (cpus <= 2)
+        except Exception:
+            pass
+
         self._bg_timer = QTimer(self)
-        self._bg_timer.setInterval(4000)
+        self._bg_timer.setInterval(8000 if is_low_end else 4000)
         self._bg_timer.timeout.connect(self._on_bg_timer_tick)
         self._bg_timer.start()
 
@@ -384,14 +394,18 @@ class SyntaxPanel(QWidget):
 
         current_mtimes: Dict[str, tuple[int, int]] = {}
         files = []
-        for ext in ("*.ino", "*.cpp", "*.c", "*.h", "*.hpp"):
-            for f in proj_dir.glob(ext):
-                try:
-                    st = f.stat()
-                    current_mtimes[str(f)] = (st.st_mtime_ns, st.st_size)
-                    files.append(f)
-                except Exception:
-                    pass
+        valid_exts = {".ino", ".cpp", ".c", ".h", ".hpp"}
+        try:
+            for p in proj_dir.iterdir():
+                if p.is_file() and p.suffix.lower() in valid_exts and not p.name.startswith("."):
+                    try:
+                        st = p.stat()
+                        current_mtimes[str(p)] = (st.st_mtime_ns, st.st_size)
+                        files.append(p)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         if not files:
             return

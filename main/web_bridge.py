@@ -2717,9 +2717,16 @@ class MCUWebBackendAPI:
                     if b"\n" in buf or len(buf) > 1024:
                         lines = buf.split(b"\n")
                         buf = lines[-1]
-                        for line in lines[:-1]:
-                            text = line.decode("utf-8", errors="replace").rstrip("\r")
-                            self.emit("serial:log", {"text": text, "newline": True})
+                        decoded_batch = [
+                            l.decode("utf-8", errors="replace").rstrip("\r")
+                            for l in lines[:-1]
+                        ]
+                        if len(decoded_batch) > 1:
+                            for chunk_start in range(0, len(decoded_batch), 40):
+                                chunk = decoded_batch[chunk_start:chunk_start + 40]
+                                self.emit("serial:log", {"lines": chunk, "newline": True})
+                        elif len(decoded_batch) == 1:
+                            self.emit("serial:log", {"text": decoded_batch[0], "newline": True})
                 except Exception:
                     break
             self.serial_running = False
@@ -6125,11 +6132,23 @@ class MCUWebBackendAPI:
             launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
             launch_env["SCONSFLAGS"] = f"-j{jobs}"
 
-            # Synchronize esptool connect behavior via cache_root and env vars
-            esptool_cfg_path = self._write_esptool_connect_config(cache_root, _MAX_CONNECT_RETRIES)
-            if esptool_cfg_path:
-                launch_env["ESPTOOL_CFGFILE"] = esptool_cfg_path
-            launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = str(_MAX_CONNECT_RETRIES)
+            # Synchronize esptool connect behavior via cache_root and env vars (ESP only)
+            if is_esp:
+                esptool_cfg_path = self._write_esptool_connect_config(cache_root, _MAX_CONNECT_RETRIES)
+                if esptool_cfg_path:
+                    launch_env["ESPTOOL_CFGFILE"] = esptool_cfg_path
+                launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = str(_MAX_CONNECT_RETRIES)
+
+            if is_avr:
+                # Ensure tool-avrdude upload tool is ready before invoking PlatformIO upload
+                core_pkg_dir = Path(str(core_dir)) / "packages" / "tool-avrdude"
+                if not core_pkg_dir.is_dir() or (not (core_pkg_dir / "package.json").is_file() and not (core_pkg_dir / ".piopm").is_file()):
+                    try:
+                        from bootstrap import prepare_platformio_board_toolchain
+                        self.emit("console:log", {"text": "  ⚙ Ensuring AVR upload tool (tool-avrdude)...", "tag": "info", "newline": True})
+                        prepare_platformio_board_toolchain("atmelavr", binfo.get("board", "uno") or "uno", "arduino")
+                    except Exception:
+                        pass
 
             self._active_process = subprocess.Popen(
                 cmd,
@@ -6591,6 +6610,12 @@ class MCUWebBackendAPI:
                             "newline": True,
                         })
                     self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
+                elif is_avr:
+                    self.emit("console:log", {
+                        "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
+                        "tag": "info",
+                        "newline": True,
+                    })
                 elif _chip_stopped_responding[0]:
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {
@@ -7496,8 +7521,10 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": f"  ✖ {err_msg}", "tag": "error", "newline": True})
 
                 else:
-                    # Non-ESP (e.g. AVR/Arduino UNO): run PlatformIO upload with connection retry loop
-                    _MAX_CONNECT_RETRIES = 10
+                    # Non-ESP (e.g. AVR/Arduino UNO): run PlatformIO upload
+                    is_avr_target = (p_platform == "atmelavr" or "avr" in str(p_platform).lower())
+                    # Arduino UNO/AVR has only a physical RESET button (no BOOT mode) — never loop 10 retries
+                    _MAX_CONNECT_RETRIES = 1 if is_avr_target else 10
                     _connect_retry_count = 0
                     _CONNECT_FAIL_SIGNATURES = (
                         "wrong boot mode", "failed to connect",
@@ -7569,7 +7596,7 @@ class MCUWebBackendAPI:
                         joined = " ".join(line.rstrip().lower() for line in output_lines)
                         is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
 
-                        if is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
+                        if not is_avr_target and is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
                             if not self._is_port_present(port):
                                 if not self._wait_for_port_reconnect(port):
                                     err_msg = f"MCU disconnected during soft reset ({port} is no longer available)"
@@ -7584,6 +7611,12 @@ class MCUWebBackendAPI:
                         ok = (rc == 0)
                         if not ok:
                             err_msg = f"Upload failed with exit code {rc}"
+                            if is_avr_target:
+                                self.emit("console:log", {
+                                    "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
+                                    "tag": "info",
+                                    "newline": True,
+                                })
                         break
 
                 if ok:

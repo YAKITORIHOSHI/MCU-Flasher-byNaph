@@ -774,6 +774,16 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
             memory_budget = max(1, int((memory_gb - 0.5) / 0.28))
         cpu_budget = min(cpu_budget, memory_budget)
 
+    # HDD Seek Penalty Optimization: If running on a mechanical spinning hard drive,
+    # excessive parallel compiler workers cause severe head thrashing and disk queue saturation.
+    # Cap compiler workers to max 2 on HDDs to ensure sequential I/O.
+    try:
+        from main.core.file_utils import is_drive_hdd
+        if is_drive_hdd():
+            cpu_budget = min(cpu_budget, 2)
+    except Exception:
+        pass
+
     normalized = str(mode or "HIGH").upper()
     if normalized == "LOW":
         return max(1, min(max(1, cpus // 2), cpu_budget))

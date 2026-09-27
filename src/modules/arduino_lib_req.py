@@ -805,11 +805,25 @@ def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
 
 
 def _open_code_viewer(file_path, all_paths=None, parent=None):
-    """Open the code viewer or default system editor for library files."""
+    """Open the QScintilla code viewer.
+    Installed library sample files are viewable through the dedicated viewer.
+
+    If QScintilla is not yet installed, a one-time background install is
+    triggered with a progress dialog, and the viewer opens once installed.
+    """
     if _qscintilla_available():
         _launch_code_viewer(file_path, all_paths, parent=parent)
         return
-    _open_fallback_editor(file_path, parent=parent)
+
+    # QScintilla not available — install it on first use in a background thread
+    # so the Tk event loop stays responsive during the pip download.
+    install_thread = threading.Thread(
+        target=_install_qscintilla_on_demand,
+        args=(file_path, all_paths, parent),
+        daemon=True,
+        name="QScintillaInstall",
+    )
+    install_thread.start()
 
 
 def _load_settings() -> dict:
