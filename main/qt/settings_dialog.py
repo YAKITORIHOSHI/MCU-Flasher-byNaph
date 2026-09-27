@@ -811,12 +811,17 @@ class SettingsDialog(QDialog):
                 "Continue with the full flash erase?"
             )
         else:
-            title = "Hard Reset Confirmation"
-            msg = (
-                f"Are you sure you want to perform a Hard Reset on port '{port}'?\n\n"
-                "This operation will reset the microcontroller hardware to restore clean startup state.\n\n"
-                "Continue?"
+            # Unsupported board — do not present a misleading confirmation.
+            # The button should already be disabled, but guard here as a safety net.
+            QMessageBox.warning(
+                self,
+                "Hard Reset Not Supported",
+                f"Hard Reset (flash erase) is not supported for board '{bname}' "
+                f"(platform: '{plat}').\n\n"
+                "Only ESP32 and ESP8266 boards support Hard Reset.\n"
+                "For other boards, use Upload to push a new sketch.",
             )
+            return
 
         ret = QMessageBox.question(
             self,

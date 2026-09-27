@@ -5680,7 +5680,7 @@ class MCUWebBackendAPI:
         b_info = board_info or self._resolve_board_info(b_name)
         platform = str(b_info.get("platform", "")).lower()
         is_uno = ("avr" in platform)
-        self.emit("console:log", {"text": f"  🔄 Triggering hardware reset on {port}...", "tag": "info", "newline": True})
+        self.emit("console:log", {"text": f"  🔄 Rebooting board on {port}...", "tag": "info", "newline": True})
         try:
             # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
             if not is_uno and (self._is_native_usb_port(port) or platform in ("raspberrypi", "samd")):
@@ -6743,7 +6743,7 @@ class MCUWebBackendAPI:
                 is_s3_or_cdc = "s3" in board_id or platform in ("raspberrypi", "samd")
 
                 self.emit("serial:log", {
-                    "text": f"--- ↺ Triggering hardware reset on {self.current_port}... ---",
+                    "text": f"--- ↺ Triggering pin reset (DTR/RTS) on {self.current_port}... ---",
                     "tag": "info",
                     "newline": True,
                 })
@@ -6779,7 +6779,7 @@ class MCUWebBackendAPI:
                             time.sleep(0.05)
 
                         self.emit("serial:log", {
-                            "text": "--- ✔ Hardware reset pulse completed successfully ---",
+                            "text": "--- ✔ Pin reset (DTR/RTS) completed successfully ---",
                             "tag": "success",
                             "newline": True,
                         })
@@ -6839,7 +6839,7 @@ class MCUWebBackendAPI:
                             time.sleep(0.05)
 
                     self.emit("serial:log", {
-                        "text": "--- ✔ Hardware reset pulse completed successfully ---",
+                        "text": "--- ✔ Pin reset (DTR/RTS) completed successfully ---",
                         "tag": "success",
                         "newline": True,
                     })
@@ -7062,38 +7062,7 @@ class MCUWebBackendAPI:
                     return
 
                 elif reset_strategy == "esp32_recovery":
-                    self.emit("console:progress", {"action": "Preparing recovery"})
-                    image_set, recovery_err = self._locate_hard_reset_recovery_images(board_name, binfo)
-                    if not image_set:
-                        image_set, recovery_err = self._build_hard_reset_recovery_images(board_name, binfo)
-                    if not image_set:
-                        self.emit("console:log", {"text": f"  ✖ Hard Reset failed: {recovery_err}", "tag": "error", "newline": True})
-                        return
-
-                    bootloader_bin = Path(image_set["bootloader"])
-                    partitions_bin = Path(image_set["partitions"])
-                    boot_app0_bin = self._locate_esp32_boot_app0()
-                    if boot_app0_bin is None:
-                        self.emit("console:log", {"text": "  ✖ Could not locate boot_app0.bin in Arduino ESP32 framework.", "tag": "error", "newline": True})
-                        return
-
-                    if bootloader_bin.stat().st_size < 4096:
-                        self.emit("console:log", {"text": "  ✖ bootloader.bin is truncated. Flash aborted.", "tag": "error", "newline": True})
-                        return
-                    if partitions_bin.stat().st_size < 0xC00:
-                        self.emit("console:log", {"text": "  ✖ partitions.bin is invalid. Flash aborted.", "tag": "error", "newline": True})
-                        return
-
-                    self.emit("console:log", {"text": f"  ⚡ Using dedicated {image_set.get('source_label', 'recovery build')}.", "tag": "info", "newline": True})
-                    self.emit("console:log", {"text": f"  Bootloader : {bootloader_bin.name}", "tag": "dim", "newline": True})
-                    self.emit("console:log", {"text": f"  Partitions : {partitions_bin.name}", "tag": "dim", "newline": True})
-                    self.emit("console:log", {"text": f"  boot_app0  : {boot_app0_bin.name}", "tag": "dim", "newline": True})
-                    firmware_bin = image_set.get("firmware")
-                    if firmware_bin and Path(firmware_bin).is_file():
-                        self.emit("console:log", {"text": f"  Recovery App: {Path(firmware_bin).name} (clean recovery sketch)", "tag": "dim", "newline": True})
-                    else:
-                        firmware_bin = None
-
+                    self.emit("console:progress", {"action": "Connecting to ESP32"})
                     is_native = bool(self._is_native_usb_port(port))
                     before_reset = "usb-reset" if is_native else "default-reset"
                     if is_native:
@@ -7102,40 +7071,33 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": "  💡 Hold BOOT button now if your board requires manual download mode.", "tag": "info", "newline": True})
                     self._emit_boot_connection_progress(0)
 
-                    target_mcu, bootloader_addr = self._esptool_target(board_name, binfo)
+                    target_mcu, _ = self._esptool_target(board_name, binfo)
                     target_mcu = target_mcu or "esp32"
                     baud_rate = getattr(self, "upload_speed", "460800") or "460800"
-                    burn_cmd = self._get_esptool_cmd() + [
+                    erase_cmd = self._get_esptool_cmd() + [
                         "--chip", target_mcu,
                         "--port", port,
                         "--baud", str(baud_rate),
                         "--before", before_reset,
-                        "--after", "no-reset",
+                        "--after", "hard_reset",
                         "--connect-attempts", "30",
-                        "write-flash",
-                        "--erase-all",
-                        "--flash-mode", "keep",
-                        "--flash-freq", "keep",
-                        "--flash-size", "detect",
-                        bootloader_addr, str(bootloader_bin),
-                        "0x8000", str(partitions_bin),
-                        "0xe000", str(boot_app0_bin),
+                        "erase_flash",
                     ]
-                    if firmware_bin:
-                        burn_cmd.extend(["0x10000", str(firmware_bin)])
 
                     launch_env = os.environ.copy()
-                    recovery_cfg_path = self._write_esptool_connect_config(
+                    erase_cfg_path = self._write_esptool_connect_config(
                         get_project_build_cache_root(self.sketch_dir_path), 30
                     )
-                    if recovery_cfg_path:
-                        launch_env["ESPTOOL_CFGFILE"] = recovery_cfg_path
+                    if erase_cfg_path:
+                        launch_env["ESPTOOL_CFGFILE"] = erase_cfg_path
                     proc = subprocess.Popen(
-                        burn_cmd,
+                        erase_cmd,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
-                        text=False,
-                        bufsize=0,
+                        text=True,
+                        bufsize=1,
+                        encoding="utf-8",
+                        errors="replace",
                         env=launch_env,
                         creationflags=(
                             (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
@@ -7143,132 +7105,87 @@ class MCUWebBackendAPI:
                     )
                     self._active_process = proc
 
-                    import codecs
-                    import queue as _queue
-                    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-                    line_buffer = ""
+                    connected = False
                     connection_step = 0
-                    connected_to_chip = False
-                    _byte_queue: _queue.Queue = _queue.Queue()
-
-                    def _byte_reader():
-                        try:
-                            while proc and proc.stdout:
-                                raw = proc.stdout.read(1)
-                                if not raw:
-                                    break
-                                _byte_queue.put(raw)
-                        except Exception:
-                            pass
-                        finally:
-                            _byte_queue.put(None)
-
-                    t_reader = threading.Thread(target=_byte_reader, daemon=True)
-                    t_reader.start()
-
                     erase_started = False
                     erase_completed = False
                     erase_ticks = 0
 
-                    def _handle_line(stripped: str):
-                        nonlocal erase_started, erase_completed, connection_step, connected_to_chip
-                        stripped = stripped.strip()
-                        if not stripped:
+                    def _handle_line(line: str):
+                        nonlocal connected, erase_started, erase_completed, connection_step
+                        line = line.strip()
+                        if not line:
                             return
-                        low = stripped.lower()
+                        low = line.lower()
                         if low.startswith("connecting"):
-                            connection_step = max(connection_step, stripped.count("."))
+                            connection_step = max(connection_step, line.count("."))
                             self._emit_boot_connection_progress(connection_step)
                             return
                         if "connected to " in low or "uploading stub" in low or "stub flasher running" in low:
-                            if not connected_to_chip:
-                                connected_to_chip = True
+                            if not connected:
+                                connected = True
                                 self._emit_boot_connection_progress(connection_step, connected=True)
                                 self.emit("console:log", {"text": "  ✔ ESP32 connected — release the BOOT button now.", "tag": "success", "newline": True})
                         if "erasing flash" in low or "chip erase" in low:
                             erase_started = True
                             self.emit("console:progress", {"action": "Erasing flash"})
-                            self.emit("console:log", {"text": "  🔥 Erasing entire flash memory (this may take 30-60s)...", "tag": "warning", "newline": True})
+                            self.emit("console:log", {"text": "  🔥 Erasing entire flash memory (this may take a while)...", "tag": "warning", "newline": True})
                         elif "erased successfully" in low:
                             erase_completed = True
                             self.emit("console:log", {"text": "  ✔ Flash memory erased successfully.", "tag": "success", "newline": True})
-                        elif "writing at" in low:
-                            parsed = _parse_esptool_write_progress(stripped)
-                            if parsed:
-                                pct = float(parsed.get("percent", 0.0))
-                                bar_width = 30
-                                filled = int(pct / 100.0 * bar_width)
-                                bar = "▰" * filled + "▱" * max(0, bar_width - filled)
-                                icon = "✔" if pct >= 100.0 else "⚙"
-                                progress_text = f"  {icon} Writing Bootloader [ {bar} ]"
-                                self.emit("console:log", {
-                                    "text": progress_text,
-                                    "tag": "success" if pct >= 100.0 else "info",
-                                    "replace_pattern": r"(?:Writing Bootloader)\s*\[",
-                                    "newline": True
-                                })
-                                self.emit("console:progress", {"action": "Writing recovery bootloader"})
-                                return
-                        elif any(token in low for token in ("error", "failed", "fatal")):
-                            self.emit("console:log", {"text": f"  ✖ {stripped}", "tag": "error", "newline": True})
+                        elif "hard resetting" in low or "hard reset" in low:
+                            self.emit("console:log", {"text": "  🔄 Hard resetting via RTS pin...", "tag": "info", "newline": True})
+                        elif any(k in low for k in ("error", "failed", "fatal")):
+                            self.emit("console:log", {"text": f"  ✖ {line}", "tag": "error", "newline": True})
                         else:
-                            self.emit("console:log", {"text": f"  {stripped}", "tag": "info", "newline": True})
+                            self.emit("console:log", {"text": f"  {line}", "tag": "info", "newline": True})
 
-                    while True:
-                        if self._stop_requested:
-                            try:
-                                proc.kill()
-                            except Exception:
-                                pass
-                            break
-                        try:
-                            raw = _byte_queue.get(timeout=0.25)
-                        except _queue.Empty:
-                            if erase_started and not erase_completed:
-                                erase_ticks += 1
-                                dots = "." * ((erase_ticks % 3) + 1)
-                                self.emit("console:progress", {"action": f"Erasing entire flash{dots}"})
-                            continue
-
-                        if raw is None:
-                            break
-
-                        decoded = decoder.decode(raw)
-                        for char in decoded:
-                            if char in "\r\n":
-                                if line_buffer:
-                                    _handle_line(line_buffer)
-                                    line_buffer = ""
-                                continue
-                            line_buffer += char
-                            if line_buffer.lower().startswith("connecting") and char == ".":
-                                connection_step += 1
-                                self._emit_boot_connection_progress(connection_step)
-
-                    t_reader.join(timeout=2)
-                    if line_buffer:
-                        _handle_line(line_buffer)
+                    if proc.stdout:
+                        for raw_line in iter(proc.stdout.readline, ""):
+                            if self._stop_requested:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                                break
+                            _handle_line(raw_line)
 
                     proc.wait()
                     self._active_process = None
                     if proc.returncode != 0:
-                        if not connected_to_chip:
+                        if not connected:
                             self._emit_boot_connection_progress(connection_step, failed=True)
-                        self.emit("console:log", {"text": f"  ✖ Hard Reset burn failed with code {proc.returncode}.", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  ✖ Hard Reset failed with code {proc.returncode}.", "tag": "error", "newline": True})
                         return
 
-                    self.emit("console:log", {"text": "  ✔ Flash erased and clean bootloader/partition table written successfully.", "tag": "success", "newline": True})
-                    if firmware_bin:
-                        self.emit("console:log", {"text": "  ✔ Clean recovery firmware restored (bootloop prevented).", "tag": "success", "newline": True})
-                    self.emit("console:log", {"text": "  ℹ The board is in a clean, working recovery state. Use Upload to install your sketch.", "tag": "info", "newline": True})
-                    time.sleep(0.75)
-                    self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and recovery firmware restored.", "type": "success"})
+                    self.emit("console:log", {"text": "  ✔ ESP32 flash erased completely.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  ℹ Flash is now blank. Board shows 'invalid header: 0xffffffff' on boot — this is expected.", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "  ℹ Use Upload to install your sketch.", "tag": "info", "newline": True})
+                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 flash fully erased. Use Upload to install a sketch.", "type": "success"})
                     hard_reset_success = True
                 else:
-                    self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("notification", {"title": "Hard Reset Complete", "message": "Reset pulse sent to MCU.", "type": "success"})
-                    hard_reset_success = True
+                    # No hard reset strategy for this board — do NOT silently
+                    # fall back to a plain pin toggle and claim "Hard Reset Complete".
+                    # That cheats the user. Fail loudly so they know nothing was wiped.
+                    self.emit("console:log", {
+                        "text": (
+                            f"  ✖ Hard Reset is not supported for board '{board_name}' "
+                            f"(platform: '{plat}'). No flash was erased or modified."
+                        ),
+                        "tag": "error",
+                        "newline": True,
+                    })
+                    self.emit("console:log", {
+                        "text": "  ℹ Hard Reset requires an ESP32/ESP8266 or AVR board. For other boards, use Upload to push a new sketch.",
+                        "tag": "info",
+                        "newline": True,
+                    })
+                    self.emit("notification", {
+                        "title": "Hard Reset Not Supported",
+                        "message": f"Board '{board_name}' does not support Hard Reset (flash erase). No changes were made.",
+                        "type": "warning",
+                    })
+                    # hard_reset_success stays False — no cheat
 
             except Exception as e:
                 self.emit("console:log", {"text": f"✖ Hard Reset error: {e}", "tag": "error", "newline": True})
