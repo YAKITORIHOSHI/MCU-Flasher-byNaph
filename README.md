@@ -85,6 +85,11 @@ python mcu_flash_gui.py
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
 6. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition.
 
+> [!IMPORTANT]
+> **Python Requirement (Git Source vs. Release Package)**:
+> - **Pulling from Git (Source)**: Pulling and running directly from this repository requires **Python (3.10+) installed on your machine** so the initial launch scripts (`launcher.py`, `runThisOnWindows.vbs`) can run and auto-bootstrap the private runtime.
+> - **Release Package (`MCU_Flasher.exe`)**: Pre-built standalone release packages are completely self-contained — **no Python installation is required** on the machine.
+
 > [!NOTE]
 > **Storage Requirement**: Initial installation requires approximately **6GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
 
@@ -436,7 +441,7 @@ Application settings are persisted in `src/gui_config.json`:
 - **Operating System**: Windows 10 or Windows 11
 - **Hardware**: Minimum **4 logical CPU cores/threads** (enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
-- **Python**: Python 3.10+ (managed via private runtime at `src/_python/`)
+- **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
 - **Version Control**: Git with Git LFS (`git lfs install`)
 
 ### Verification & Syntax Checking
