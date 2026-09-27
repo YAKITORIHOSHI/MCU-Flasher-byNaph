@@ -649,6 +649,7 @@ class SettingsDialog(QDialog):
 
         has_board = bool(board_name and binfo)
         has_port = bool(self._backend and getattr(self._backend, "current_port", ""))
+        can_hard = bool(reset_caps.get("hard_reset_ui"))
         if not has_board or not has_port:
             self.btn_hard_reset.setEnabled(False)
             self.btn_hard_reset.setCursor(Qt.CursorShape.ArrowCursor)
@@ -657,10 +658,19 @@ class SettingsDialog(QDialog):
             warn_lbl = QLabel("⚠ Please select an MCU board and COM port in the main toolbar to use Hardware Reset.")
             warn_lbl.setStyleSheet("color: #f1c40f; font-size: 10px; font-style: italic;")
             rv.addWidget(warn_lbl)
-        elif not can_soft:
-            self.btn_soft_reset.setEnabled(False)
-            self.btn_soft_reset.setCursor(Qt.CursorShape.ArrowCursor)
-            self.btn_soft_reset.setText("Soft Reset unavailable (Arduino framework required)")
+        else:
+            if not can_hard:
+                self.btn_hard_reset.setEnabled(False)
+                self.btn_hard_reset.setCursor(Qt.CursorShape.ArrowCursor)
+                self.btn_hard_reset.setToolTip(
+                    f"Hard Reset (bootloader flash) is not supported for {board_name or 'this board'}.\n"
+                    "Only ESP32 and ESP8266 boards support this operation."
+                )
+                self.btn_hard_reset.setText("⚡ Hard Reset (Not Supported)")
+            if not can_soft:
+                self.btn_soft_reset.setEnabled(False)
+                self.btn_soft_reset.setCursor(Qt.CursorShape.ArrowCursor)
+                self.btn_soft_reset.setText("Soft Reset unavailable (Arduino framework required)")
 
         layout.addWidget(reset_box)
 
