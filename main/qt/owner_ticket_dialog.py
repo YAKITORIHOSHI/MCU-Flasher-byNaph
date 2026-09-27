@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QGraphicsDropShadowEffect,
+    QMenu,
 )
 
 from main.core.owner_tickets import OwnerTicketService, is_internet_available
@@ -54,6 +55,7 @@ class TicketCard(QFrame):
 
     status_changed = Signal(str, str)  # (ticket_id, new_status)
     deleted = Signal(str)             # (ticket_id)
+    edit_requested = Signal(dict)     # (ticket_data)
 
     SEVERITY_COLORS = {
         "Critical": ("#ff4d4f", "rgba(255, 77, 79, 0.16)", "#ff4d4f"),
@@ -149,9 +151,37 @@ class TicketCard(QFrame):
 
         # Date Label
         created = self.ticket.get("created_at", "")
-        date_lbl = QLabel(created)
+        updated = self.ticket.get("updated_at", "")
+        if updated and updated != created:
+            date_lbl = QLabel(f"{created}  (edited)")
+            date_lbl.setToolTip(f"Created: {created}\nLast modified: {updated}")
+        else:
+            date_lbl = QLabel(created)
+            date_lbl.setToolTip(f"Created: {created}")
         date_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-family: 'Consolas', monospace;")
         header.addWidget(date_lbl)
+
+        # Edit Action
+        btn_edit = QPushButton("✎")
+        btn_edit.setToolTip("Edit defect ticket (Title, Category, Severity, Status, Notes)")
+        btn_edit.setFixedSize(26, 26)
+        btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_edit.setStyleSheet("""
+            QPushButton {
+                color: #8fa1b3;
+                background: transparent;
+                border: none;
+                border-radius: 13px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                color: #00e5ff;
+                background: rgba(0, 229, 255, 0.20);
+            }
+        """)
+        btn_edit.clicked.connect(self._on_edit)
+        header.addWidget(btn_edit)
 
         # Delete Action
         btn_del = QPushButton("✕")
@@ -267,6 +297,384 @@ class TicketCard(QFrame):
                 self.deleted.emit(self._ticket_id)
         except Exception:
             pass
+
+    def _on_edit(self) -> None:
+        try:
+            self.edit_requested.emit(self.ticket)
+        except Exception:
+            pass
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        try:
+            self._on_edit()
+            event.accept()
+        except Exception:
+            super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        try:
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #0c121d;
+                    color: #e2e8f0;
+                    border: 1px solid rgba(0, 210, 255, 0.35);
+                    border-radius: 8px;
+                    padding: 4px;
+                }
+                QMenu::item {
+                    padding: 6px 18px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                }
+                QMenu::item:selected {
+                    background-color: rgba(0, 210, 255, 0.20);
+                    color: #00e5ff;
+                }
+            """)
+            act_edit = menu.addAction("✎  Edit Ticket...")
+            act_del = menu.addAction("✕  Delete Ticket")
+            chosen = menu.exec(event.globalPos())
+            if chosen == act_edit:
+                self._on_edit()
+            elif chosen == act_del:
+                self._on_delete()
+        except Exception:
+            pass
+
+
+class EditTicketDialog(QDialog):
+    """Frosted Glass Modal for Editing Defect Report Details."""
+
+    def __init__(self, ticket: Dict[str, Any], service: OwnerTicketService, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.ticket = ticket
+        self.service = service
+        self._ticket_id = ticket.get("id", "")
+
+        self.setObjectName("edit-ticket-dialog")
+        self.setWindowTitle("⚡ MCU Flasher — Edit Defect Report")
+        if _mcu_icon_path.exists():
+            try:
+                self.setWindowIcon(QIcon(str(_mcu_icon_path)))
+            except Exception:
+                pass
+
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        self.resize(620, 520)
+        self.setMinimumSize(560, 460)
+
+        self._build_ui()
+
+    def paintEvent(self, event) -> None:
+        """Paint dynamic ambient glassmorphic light mesh behind translucent surfaces."""
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            w, h = self.width(), self.height()
+
+            # Base deep obsidian background
+            painter.fillRect(0, 0, w, h, QColor("#06090f"))
+
+            # Ambient Light Orb 1 (Top-Right Electric Cyan Glow)
+            g1 = QRadialGradient(QPointF(w * 0.85, h * 0.12), w * 0.50)
+            g1.setColorAt(0.0, QColor(0, 210, 255, 30))
+            g1.setColorAt(0.50, QColor(0, 130, 210, 10))
+            g1.setColorAt(1.0, QColor(6, 9, 15, 0))
+            painter.fillRect(0, 0, w, h, QBrush(g1))
+
+            # Ambient Light Orb 2 (Bottom-Left Deep Indigo Glow)
+            g2 = QRadialGradient(QPointF(w * 0.15, h * 0.88), w * 0.50)
+            g2.setColorAt(0.0, QColor(99, 102, 241, 24))
+            g2.setColorAt(0.50, QColor(49, 46, 129, 8))
+            g2.setColorAt(1.0, QColor(6, 9, 15, 0))
+            painter.fillRect(0, 0, w, h, QBrush(g2))
+        except Exception:
+            super().paintEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        try:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self._do_save()
+                    event.accept()
+                    return
+            elif event.key() == Qt.Key.Key_Escape:
+                self.reject()
+                event.accept()
+                return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
+
+    def _build_ui(self) -> None:
+        self.setStyleSheet("""
+            QDialog#edit-ticket-dialog {
+                background: #06090f;
+                color: #e2e8f0;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QLabel {
+                color: #e2e8f0;
+                background: transparent;
+                border: none;
+            }
+            QLineEdit, QComboBox, QTextEdit {
+                background-color: rgba(14, 21, 35, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
+                padding: 8px 12px;
+                color: #ffffff;
+                font-size: 12px;
+            }
+            QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
+                border-color: #00e5ff;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #0c121d;
+                color: #e2e8f0;
+                selection-background-color: #1a2538;
+                border: 1px solid rgba(0, 210, 255, 0.3);
+                border-radius: 6px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        # ── Header ───────────────────────────────────────────────────────────
+        header_lay = QHBoxLayout()
+        header_lay.setSpacing(10)
+
+        title_lbl = QLabel("✎  Edit Defect Report")
+        title_lbl.setStyleSheet("color: #00e5ff; font-size: 16px; font-weight: 800; letter-spacing: -0.2px;")
+        header_lay.addWidget(title_lbl)
+
+        header_lay.addStretch(1)
+
+        t_id = self._ticket_id or "tkt_unknown"
+        id_badge = QLabel(f"ID: {t_id}")
+        id_badge.setStyleSheet("""
+            color: #64748b;
+            font-size: 11px;
+            font-family: 'Consolas', monospace;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            padding: 3px 8px;
+        """)
+        header_lay.addWidget(id_badge)
+        layout.addLayout(header_lay)
+
+        # Meta info row: created & updated
+        created = self.ticket.get("created_at", "")
+        updated = self.ticket.get("updated_at", "")
+        meta_str = f"Created: {created}" if created else ""
+        if updated and updated != created:
+            meta_str += f"  •  Last modified: {updated}"
+        if meta_str:
+            meta_lbl = QLabel(meta_str)
+            meta_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-family: 'Consolas', monospace;")
+            layout.addWidget(meta_lbl)
+
+        # ── Form Card ────────────────────────────────────────────────────────
+        form_frame = QFrame()
+        form_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(14, 21, 35, 0.50);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 1px solid rgba(255, 255, 255, 0.16);
+                border-radius: 12px;
+            }
+        """)
+        fl = QVBoxLayout(form_frame)
+        fl.setContentsMargins(18, 16, 18, 16)
+        fl.setSpacing(12)
+
+        # Field: Title
+        lbl_t = QLabel("DEFECT TITLE")
+        lbl_t.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        fl.addWidget(lbl_t)
+
+        self.txt_title = QLineEdit()
+        self.txt_title.setText(self.ticket.get("title", ""))
+        self.txt_title.setPlaceholderText("Brief concise summary of the issue...")
+        self.txt_title.returnPressed.connect(lambda: self.txt_desc.setFocus())
+        fl.addWidget(self.txt_title)
+
+        # Field: Grid of Category, Severity, Status
+        r_meta = QHBoxLayout()
+        r_meta.setSpacing(12)
+
+        # Category
+        col_cat = QVBoxLayout()
+        col_cat.setSpacing(4)
+        lbl_c = QLabel("CATEGORY")
+        lbl_c.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        col_cat.addWidget(lbl_c)
+
+        self.cb_category = QComboBox()
+        categories = [
+            "GUI / Interface",
+            "Monaco Code Editor",
+            "Serial Monitor",
+            "PlatformIO / Toolchain",
+            "Hardware & COM Port",
+            "Low-End & HDD",
+            "General Defect",
+        ]
+        cur_cat = self.ticket.get("category", "General Defect")
+        if cur_cat and cur_cat not in categories:
+            categories.append(cur_cat)
+        self.cb_category.addItems(categories)
+        self.cb_category.setCurrentText(cur_cat)
+        col_cat.addWidget(self.cb_category)
+        r_meta.addLayout(col_cat, stretch=4)
+
+        # Severity
+        col_sev = QVBoxLayout()
+        col_sev.setSpacing(4)
+        lbl_s = QLabel("SEVERITY")
+        lbl_s.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        col_sev.addWidget(lbl_s)
+
+        self.cb_severity = QComboBox()
+        self.cb_severity.addItems(["Critical", "High", "Medium", "Low"])
+        cur_sev = self.ticket.get("severity", "Medium")
+        self.cb_severity.setCurrentText(cur_sev)
+        col_sev.addWidget(self.cb_severity)
+        r_meta.addLayout(col_sev, stretch=3)
+
+        # Status
+        col_st = QVBoxLayout()
+        col_st.setSpacing(4)
+        lbl_st = QLabel("STATUS")
+        lbl_st.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        col_st.addWidget(lbl_st)
+
+        self.cb_status = QComboBox()
+        self.cb_status.addItems(["Open", "In Progress", "Resolved", "Closed"])
+        cur_st = self.ticket.get("status", "Open")
+        self.cb_status.setCurrentText(cur_st)
+        col_st.addWidget(self.cb_status)
+        r_meta.addLayout(col_st, stretch=3)
+
+        fl.addLayout(r_meta)
+
+        # Field: Description
+        lbl_d = QLabel("DESCRIPTION & NOTES")
+        lbl_d.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;")
+        fl.addWidget(lbl_d)
+
+        self.txt_desc = QTextEdit()
+        self.txt_desc.setPlainText(self.ticket.get("description", ""))
+        self.txt_desc.setPlaceholderText("Detailed notes, steps to reproduce, observations, or resolution details...")
+        self.txt_desc.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(9, 14, 22, 0.75);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
+                padding: 8px 12px;
+                color: #ffffff;
+                font-size: 12px;
+                font-family: 'Consolas', 'Segoe UI', monospace;
+            }
+            QTextEdit:focus {
+                border-color: #00e5ff;
+            }
+        """)
+        fl.addWidget(self.txt_desc, stretch=1)
+
+        layout.addWidget(form_frame, stretch=1)
+
+        # ── Bottom Action Row ────────────────────────────────────────────────
+        bot_lay = QHBoxLayout()
+        bot_lay.setSpacing(10)
+
+        hint_lbl = QLabel("Tip: Press Ctrl+Enter to save")
+        hint_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
+        bot_lay.addWidget(hint_lbl)
+
+        bot_lay.addStretch(1)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setFixedHeight(34)
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #94a3b8;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
+                padding: 0 16px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background: rgba(255, 255, 255, 0.10);
+            }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        bot_lay.addWidget(btn_cancel)
+
+        btn_save = QPushButton("💾  Save Changes")
+        btn_save.setFixedHeight(34)
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0088cc, stop:1 #00e5ff);
+                color: #040810;
+                font-weight: 800;
+                font-size: 12.5px;
+                border: none;
+                border-radius: 8px;
+                padding: 0 18px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #009ce8, stop:1 #4de9ff);
+            }
+        """)
+        btn_save.clicked.connect(self._do_save)
+        bot_lay.addWidget(btn_save)
+
+        layout.addLayout(bot_lay)
+
+    def _do_save(self) -> None:
+        title = self.txt_title.text().strip()
+        if not title:
+            QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
+            self.txt_title.setFocus()
+            return
+
+        cat = self.cb_category.currentText()
+        sev = self.cb_severity.currentText()
+        st = self.cb_status.currentText()
+        desc = self.txt_desc.toPlainText().strip()
+
+        updates = {
+            "title": title,
+            "category": cat,
+            "severity": sev,
+            "status": st,
+            "description": desc,
+        }
+
+        try:
+            ok = self.service.update_ticket(self._ticket_id, updates)
+            if ok:
+                self.accept()
+            else:
+                QMessageBox.critical(self, "Save Error", "Failed to update defect report in database.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"An error occurred while updating the ticket:\n{e}")
 
 
 class OwnerTicketDialog(QDialog):
@@ -1237,7 +1645,16 @@ class OwnerTicketDialog(QDialog):
                 card = TicketCard(t, parent=self.cards_container)
                 card.status_changed.connect(self._on_ticket_status_changed)
                 card.deleted.connect(self._on_ticket_deleted)
+                card.edit_requested.connect(self._open_edit_ticket_modal)
                 self.cards_layout.insertWidget(idx, card)
+        except Exception:
+            pass
+
+    def _open_edit_ticket_modal(self, ticket: Dict[str, Any]) -> None:
+        try:
+            dlg = EditTicketDialog(ticket=ticket, service=self.service, parent=self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                self._refresh_tickets_list()
         except Exception:
             pass
 
