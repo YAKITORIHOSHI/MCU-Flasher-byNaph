@@ -336,6 +336,11 @@ class EditorBridgeAPI(QObject):
     def redo_ai_decision(self) -> dict:
         return self.redo_ai_edit_decision(False)
 
+    @Slot(result=bool)
+    def unlock_editor(self) -> bool:
+        """Force-unlock the Monaco editor (readOnly=false) and clear all AI lock flags."""
+        return True  # Handled client-side by window.unlockEditorNow()
+
     # ── Called FROM Python → Monaco (via signals) ─────────────────────────
 
     def load_file_in_editor(self, file_path: str, content: str) -> None:
@@ -711,6 +716,15 @@ class MonacoEditorPanel(QWidget):
             sig_bus.autosave_settings_changed.connect(self._on_autosave_settings_changed)
         if hasattr(sig_bus, "ai_review_requested"):
             sig_bus.ai_review_requested.connect(self.trigger_ai_review)
+        if hasattr(sig_bus, "ai_review_resolved"):
+            sig_bus.ai_review_resolved.connect(self._on_ai_review_resolved)
+
+    @Slot(str)
+    def _on_ai_review_resolved(self, _path: str) -> None:
+        """After accept/reject, guarantee the editor is writable (safety flush)."""
+        self._view.page().runJavaScript(
+            "if (typeof window.unlockEditorNow === 'function') { window.unlockEditorNow(); }"
+        )
 
     @Slot(list)
     def set_markers(self, diagnostics: list) -> None:

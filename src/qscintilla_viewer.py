@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         fonts_static = os.path.join(src_dir, "fonts", "Montserrat", "static")
         if os.path.isdir(fonts_static):
             try:
+                # pyrefly: ignore [missing-import]
                 from PyQt5.QtGui import QFontDatabase
                 for f_name in ("Montserrat-Regular.ttf", "Montserrat-Medium.ttf", "Montserrat-SemiBold.ttf"):
                     f_path = os.path.join(fonts_static, f_name)
@@ -235,6 +236,7 @@ class MainWindow(QMainWindow):
             font_path = os.path.join(src_dir, "fonts", "Montserrat", "Montserrat-VariableFont_wght.ttf")
             if os.path.exists(font_path):
                 try:
+                    # pyrefly: ignore [missing-import]
                     from PyQt5.QtGui import QFontDatabase
                     QFontDatabase.addApplicationFont(font_path)
                 except Exception:

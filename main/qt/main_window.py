@@ -71,6 +71,7 @@ class MCUMainWindow(QMainWindow):
         self._monitors_pane_visible = True
         self._editor_detached = False
         self._is_attaching_editor = False
+        self._editor_pane_visible_before_detach = True
         self._detached_window = None
         self._active_operation: str | None = None
 
@@ -475,6 +476,10 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setCurrentIndex(0)
         self._bottom_tabs.currentChanged.connect(self._on_bottom_tab_changed)
 
+        # Pin tab-bar cursor to Arrow — prevents IBeam bleed-through from child widgets
+        # (QWebEngineView, QPlainTextEdit) propagating their text-edit cursor upward.
+        self._bottom_tabs.tabBar().setCursor(Qt.CursorShape.ArrowCursor)
+
         def _on_v_splitter_moved(pos: int, index: int) -> None:
             if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():
                 self._terminal_panel._resize_embedded_terminal()
@@ -556,6 +561,7 @@ class MCUMainWindow(QMainWindow):
 
     def _build_status_bar(self) -> None:
         sb = QStatusBar()
+        sb.setSizeGripEnabled(False)
         self.setStatusBar(sb)
         sb.setFixedHeight(24)
 
@@ -1033,7 +1039,9 @@ class MCUMainWindow(QMainWindow):
 
             if hasattr(self, "_controls_bar"):
                 self._controls_bar.set_editor_detached(True)
+                # Editor is in its own window — hide/show toggle has no meaning.
                 self._controls_bar.set_editor_visible(False)
+                self._controls_bar.btn_toggle_editor.setEnabled(False)
                 self._controls_bar.set_monitors_visible(True)
                 self._controls_bar.set_ai_panel_visible(ai_visible)
 
@@ -1084,6 +1092,8 @@ class MCUMainWindow(QMainWindow):
 
             if hasattr(self, "_controls_bar"):
                 self._controls_bar.set_editor_detached(False)
+                # Re-enable Hide/Show Editor toggle when back in docked mode.
+                self._controls_bar.btn_toggle_editor.setEnabled(True)
                 self._controls_bar.set_editor_visible(editor_visible)
                 self._controls_bar.set_monitors_visible(monitors_visible)
                 self._controls_bar.set_ai_panel_visible(ai_visible)
@@ -1144,17 +1154,32 @@ class MCUMainWindow(QMainWindow):
         if self._editor_detached:
             return
         self._editor_detached = True
+        # Remember the user's editor visibility choice so re-attaching restores
+        # it exactly (hidden stays hidden, shown stays shown).
+        self._editor_pane_visible_before_detach = self._editor_pane_visible
+        # Mark the embedded pane as "not visible" so the toolbar shows
+        # "Show Editor" and so that reattaching restores the correct state.
+        self._editor_pane_visible = False
 
         from main.qt.detached_editor import DetachedEditorWindow
         if self._detached_window is None:
             self._detached_window = DetachedEditorWindow(self)
             self._detached_window.closing.connect(self.attach_editor)
 
-        # Center detached window over main window
+        # Center detached window over main window, clamped to the screen work
+        # area so it never overflows small displays or hidden taskbars
         geo = self.geometry()
         w, h = 1000, 700
-        x = max(0, geo.x() + (geo.width() - w) // 2)
-        y = max(0, geo.y() + (geo.height() - h) // 2)
+        screen = self._get_active_screen()
+        avail = screen.availableGeometry() if screen else None
+        if avail:
+            w = min(w, avail.width())
+            h = min(h, avail.height())
+            x = max(avail.left(), min(geo.x() + (geo.width() - w) // 2, avail.right() - w))
+            y = max(avail.top(), min(geo.y() + (geo.height() - h) // 2, avail.bottom() - h))
+        else:
+            x = max(0, geo.x() + (geo.width() - w) // 2)
+            y = max(0, geo.y() + (geo.height() - h) // 2)
         self._detached_window.setGeometry(x, y, w, h)
 
         # Reparent editor to detached window and ALWAYS ensure it is visible
@@ -1177,17 +1202,25 @@ class MCUMainWindow(QMainWindow):
         try:
             self._editor_detached = False
 
-            # Clear detached window central widget before reparenting
+            # Take (NOT delete) the editor panel out of the detached window
+            # before reparenting.  setCentralWidget(QWidget()) would queue a
+            # deleteLater() on the editor panel and destroy it — the editor
+            # would be gone for good instead of re-attaching.
             if self._detached_window is not None:
-                self._detached_window.setCentralWidget(QWidget())
+                if self._detached_window.centralWidget() is self._editor_panel:
+                    self._detached_window.takeCentralWidget()
                 self._detached_window.hide()
 
             # Place editor back inside _editor_area
             self._editor_area.addWidget(self._editor_panel)
             self._editor_area.setCurrentWidget(self._editor_panel)
 
-            # Ensure editor pane is marked visible
-            self._editor_pane_visible = True
+            # Restore the editor pane visibility the user had before detaching:
+            # if the editor was hidden when popped out, it stays hidden after
+            # re-attach so the docked container doesn't eat space.
+            self._editor_pane_visible = getattr(
+                self, "_editor_pane_visible_before_detach", True
+            )
 
             # Synchronize layout back to docked
             self._sync_ai_and_editor_layout()
@@ -1201,7 +1234,10 @@ class MCUMainWindow(QMainWindow):
             elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
                 self._editor_panel._view.update()
 
-            self._on_notification({"type": "info", "message": "✓ Code editor re-attached to main window."})
+            if self._editor_pane_visible:
+                self._on_notification({"type": "info", "message": "✓ Code editor re-attached to main window."})
+            else:
+                self._on_notification({"type": "info", "message": "✓ Code editor re-attached (pane hidden — use Show Editor)."})
         finally:
             self._is_attaching_editor = False
 
@@ -1440,6 +1476,12 @@ class MCUMainWindow(QMainWindow):
                 pass
         if getattr(self, "_detached_window", None) is not None and self._detached_window.isVisible():
             try:
+                # App is shutting down — drop the floating window without
+                # re-attaching (closeEvent would otherwise emit closing → attach).
+                try:
+                    self._detached_window.closing.disconnect(self.attach_editor)
+                except (TypeError, RuntimeError):
+                    pass
                 self._detached_window.hide()
                 self._detached_window.close()
             except Exception:

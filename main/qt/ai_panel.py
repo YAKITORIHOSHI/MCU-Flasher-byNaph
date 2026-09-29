@@ -38,6 +38,7 @@ from main.core.config import _load_raw_config, _save_raw_config
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
 _SPIN_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_DETACHED_ICON = "☁"  # Simple icon used by the static detached placeholder card
 
 
 class _AIEmbedContainer(QWidget):
@@ -89,6 +90,14 @@ class AIPanel(QWidget):
         self._ready_poll_timer.timeout.connect(self._poll_for_ai_readiness)
         self._ready_poll_attempts = 0
 
+        # Watchdog: polls the detached OS window every 500ms.
+        # When the user closes the floating window via the OS titlebar X button,
+        # the HWND becomes invalid.  This timer detects that and auto-restarts
+        # the AI session so the panel recovers cleanly instead of staying broken.
+        self._detached_watchdog = QTimer(self)
+        self._detached_watchdog.setInterval(500)
+        self._detached_watchdog.timeout.connect(self._check_detached_window)
+
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -139,18 +148,21 @@ class AIPanel(QWidget):
 
         hl.addStretch()
 
-        self._btn_popout = QPushButton("↗")
-        self._btn_popout.setToolTip("Open in external window")
-        self._btn_popout.setFixedSize(24, 24)
+        self._btn_popout = QPushButton("Pop Out")
+        self._btn_popout.setToolTip("Open AI Assistant in external window")
+        self._btn_popout.setFixedHeight(24)
+        self._btn_popout.setContentsMargins(6, 0, 6, 0)
         self._btn_popout.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_popout.setStyleSheet("""
             QPushButton {
                 background: rgba(255, 255, 255, 0.06);
                 color: #8fa1b3;
-                font-size: 12px;
+                font-size: 10px;
                 font-weight: 700;
                 border-radius: 5px;
                 border: 1px solid rgba(255, 255, 255, 0.08);
+                padding: 0 7px;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
                 background: rgba(0, 210, 255, 0.18);
@@ -215,7 +227,41 @@ class AIPanel(QWidget):
 
         self._stack.addWidget(self._loader_card)
 
-        # 2. Native Embedding Container View
+        # 2. Detached Placeholder Card (static, no animation — shown when AI is popped out)
+        self._detached_card = QFrame()
+        self._detached_card.setStyleSheet("QFrame { background: #0c0d10; border: none; }")
+        dv = QVBoxLayout(self._detached_card)
+        dv.setContentsMargins(24, 40, 24, 40)
+        dv.setSpacing(14)
+        dv.addStretch()
+
+        _det_icon = QLabel(_DETACHED_ICON)
+        _det_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _det_icon.setStyleSheet("font-size: 36px; color: #5ca4f0;")
+        dv.addWidget(_det_icon)
+
+        self._det_title = QLabel("OpenCode AI Assistant (Detached)")
+        self._det_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._det_title.setWordWrap(True)
+        self._det_title.setStyleSheet(
+            "color: #5ca4f0; font-size: 13px; font-weight: 700;"
+            "font-family: 'Montserrat', 'Segoe UI', sans-serif;"
+        )
+        dv.addWidget(self._det_title)
+
+        self._det_sub = QLabel("The AI terminal is running in a separate window.")
+        self._det_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._det_sub.setWordWrap(True)
+        self._det_sub.setStyleSheet(
+            "color: #64748b; font-size: 11px;"
+            "font-family: 'Montserrat', 'Segoe UI', sans-serif;"
+        )
+        dv.addWidget(self._det_sub)
+
+        dv.addStretch()
+        self._stack.addWidget(self._detached_card)
+
+        # 3. Native Embedding Container View
         self._embed_container = _AIEmbedContainer(self)
         self._stack.addWidget(self._embed_container)
 
@@ -241,7 +287,21 @@ class AIPanel(QWidget):
         self._spin_lbl.setText(_SPIN_CHARS[self._spin_idx])
 
     def _on_close_clicked(self) -> None:
-        """Hide the AI side panel without stopping the background process."""
+        """Handle the panel ✕ button.
+
+        • Embedded / loading: hide the side panel normally.
+        • Detached with a live floating window: reattach.
+        • Detached but the OS window was already closed (dead HWND): restart AI.
+        """
+        if self._is_active and not self._is_embedded:
+            if self._ai_hwnd and win32gui and win32gui.IsWindow(int(self._ai_hwnd)):
+                # Floating window is alive — reattach it
+                self._popout_ai()
+                return
+            else:
+                # OS window was closed externally — clean up and restart
+                self._restart_after_detached_close()
+                return
         mw = self.window()
         if mw and hasattr(mw, "toggle_ai_panel"):
             mw.toggle_ai_panel(False)
@@ -466,8 +526,8 @@ class AIPanel(QWidget):
                 self._stack.setCurrentWidget(self._embed_container)
                 self._status_badge.setText("● Active")
                 self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
-                self._btn_popout.setText("↗")
-                self._btn_popout.setToolTip("Open in external window")
+                self._btn_popout.setText("Pop Out")
+                self._btn_popout.setToolTip("Open AI Assistant in external window")
         except Exception as e:
             print(f"[MCU Flasher] Error embedding AI window: {e}")
 
@@ -511,8 +571,8 @@ class AIPanel(QWidget):
             self._stack.setCurrentWidget(self._embed_container)
             self._status_badge.setText("● Active")
             self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
-            self._btn_popout.setText("↗")
-            self._btn_popout.setToolTip("Open in external window")
+            self._btn_popout.setText("Pop Out")
+            self._btn_popout.setToolTip("Open AI Assistant in external window")
 
             # Deferred resize passes for smooth layout sync
             QTimer.singleShot(60, lambda: self._resize_embedded_ai(show=True))
@@ -568,8 +628,10 @@ class AIPanel(QWidget):
             return
 
         if self._is_embedded:
-            # Detach to desktop
+            # Detach to desktop — stop any spinner and show the static detached card
             self._is_embedded = False
+            self._spin_timer.stop()
+
             win32gui.SetParent(int(self._ai_hwnd), 0)
             orig_style = self._original_ai_style or (
                 win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_THICKFRAME |
@@ -582,29 +644,91 @@ class AIPanel(QWidget):
                 int(self._ai_hwnd), 0, 100, 100, 1040, 680,
                 win32con.SWP_FRAMECHANGED | win32con.SWP_SHOWWINDOW
             )
-            self._load_title.setText("OpenCode AI Assistant (Detached)")
-            self._load_sub.setText("The AI terminal is running in a separate window.")
-            self._stack.setCurrentWidget(self._loader_card)
-            self._btn_popout.setText("↙")
+
+            # Show the static detached placeholder — no spinner, no animation
+            self._stack.setCurrentWidget(self._detached_card)
+            self._btn_popout.setText("Reattach")
             self._btn_popout.setToolTip("Reattach AI Assistant to side panel")
             self._status_badge.setText("● Detached")
             self._status_badge.setStyleSheet("color: #5ca4f0; font-size: 11px; font-weight: 600;")
+            # Start watchdog to detect if the OS window gets closed externally
+            self._detached_watchdog.start()
         else:
-            # Reattach into panel
+            # Reattach into panel — stop watchdog and restore Pop Out button label
+            self._detached_watchdog.stop()
+            self._btn_popout.setText("Pop Out")
+            self._btn_popout.setToolTip("Open AI Assistant in external window")
             self._embed_ai_hwnd(self._ai_hwnd)
+
+    # ── Detached Window Watchdog ──────────────────────────────────────
+    def _check_detached_window(self) -> None:
+        """Watchdog tick — fires every 500ms while the AI is detached.
+
+        If the floating OS window has been closed (e.g. via the window's own
+        X button), IsWindow returns False.  At that point we stop the watchdog
+        and restart the AI session so the panel recovers automatically.
+        """
+        if not self._is_active or self._is_embedded:
+            self._detached_watchdog.stop()
+            return
+        if not self._ai_hwnd:
+            return
+        if win32gui is None:
+            self._detached_watchdog.stop()
+            return
+        try:
+            still_alive = win32gui.IsWindow(int(self._ai_hwnd))
+        except Exception:
+            still_alive = False
+        if not still_alive:
+            self._detached_watchdog.stop()
+            self._restart_after_detached_close()
+
+    def _restart_after_detached_close(self) -> None:
+        """Called when the detached OS window is closed externally.
+
+        Cleans up the dead HWND reference, resets state flags, and relaunches
+        the AI session so the panel shows the loading spinner automatically.
+        """
+        self._detached_watchdog.stop()
+        self._embed_poll_timer.stop()
+        self._ready_poll_timer.stop()
+        self._spin_timer.stop()
+        self._is_ready = False
+        self._ai_hwnd = None
+        self._is_embedded = False
+        self._is_active = False
+        self._proc = None  # Subprocess already dead (window was closed)
+
+        # Reset header buttons
+        self._btn_popout.setText("Pop Out")
+        self._btn_popout.setToolTip("Open AI Assistant in external window")
+
+        # Show the loading card and restart automatically
+        self._stack.setCurrentWidget(self._loader_card)
+        self._status_badge.setText("● Reconnecting…")
+        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
+        self._load_title.setText("Reconnecting AI Assistant…")
+        self._load_sub.setText("The floating window was closed. Restarting session…")
+        self._spin_timer.start()
+        # Brief delay so the loader card is visible before the new process spawns
+        QTimer.singleShot(600, self._start_ai)
 
     # ── Project Realignment ──────────────────────────────────────────────────
     def reset_for_project(self, new_project_dir: str) -> None:
         """
         Restart OpenCode AI Assistant so the new sketch directory becomes its session root.
         Only called when the user actually switches projects.
+        Handles both the embedded state and the detached (floating window) state.
         """
         if not self._is_active:
             return
 
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()
+        self._spin_timer.stop()
         self._is_ready = False
+
         if self._proc:
             try:
                 self._proc.terminate()
@@ -622,20 +746,32 @@ class AIPanel(QWidget):
         except Exception:
             pass
 
-        if self._ai_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._ai_hwnd)):
+        # Hide and discard any existing AI window — embedded OR floating/detached
+        if self._ai_hwnd and win32gui and win32con:
             try:
-                win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_HIDE)
+                if win32gui.IsWindow(int(self._ai_hwnd)):
+                    if not self._is_embedded:
+                        # Was detached — reparent back to desktop before hiding
+                        try:
+                            win32gui.SetParent(int(self._ai_hwnd), 0)
+                        except Exception:
+                            pass
+                    win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_HIDE)
             except Exception:
                 pass
         self._ai_hwnd = None
         self._is_embedded = False
 
-        # Show loader view while realigning
+        # Reset header buttons to defaults ready for the new session
+        self._btn_popout.setText("Pop Out")
+        self._btn_popout.setToolTip("Open AI Assistant in external window")
+
+        # Show loader while the new session spins up
         self._stack.setCurrentWidget(self._loader_card)
         self._status_badge.setText("● Realigning…")
         self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
-        self._load_title.setText("Realigning AI to New Project…")
         proj_name = Path(new_project_dir).name if new_project_dir else "Project"
+        self._load_title.setText("Realigning AI to New Project…")
         self._load_sub.setText(f"Switching AI workspace to {proj_name}…")
         self._spin_timer.start()
 
@@ -675,6 +811,7 @@ class AIPanel(QWidget):
         """Terminate the AI subprocess on application exit."""
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()
+        self._detached_watchdog.stop()
         self._spin_timer.stop()
         self._is_ready = False
         if self._proc:

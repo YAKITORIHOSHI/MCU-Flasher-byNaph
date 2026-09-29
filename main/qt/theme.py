@@ -931,4 +931,20 @@ QHeaderView::section {{
     font-size: 11px;
     font-weight: 600;
 }}
+
+/* ── StatusBar & SizeGrip ─────────────────────────────────────────────────── */
+QStatusBar {{
+    background-color: {bg_dark};
+    color: {text};
+    border-top: 1px solid {border};
+}}
+QStatusBar::item {{
+    border: none;
+}}
+QSizeGrip {{
+    width: 0px;
+    height: 0px;
+    image: none;
+    background: transparent;
+}}
 """

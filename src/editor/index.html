@@ -55,6 +55,16 @@
       --hover-type: #e5c07b;
       --hover-param: #98c379;
       --hover-link: #00d2ff;
+      /* AI diff highlight colors — matched to Theme.GREEN / Theme.RED / Theme.BLUE */
+      --diff-add-rgb: 92, 204, 110;
+      --diff-add-solid: #5ccc6e;
+      --diff-add-text: #aff5b4;
+      --diff-remove-rgb: 240, 80, 80;
+      --diff-remove-solid: #f05050;
+      --diff-remove-text: #ffdcd7;
+      --diff-modify-rgb: 97, 175, 239;
+      --diff-modify-solid: #61afef;
+      --diff-modify-text: #dbeeff;
     }
 
     body.theme-light {
@@ -76,6 +86,16 @@
       --hover-type: #953800;
       --hover-param: #0550ae;
       --hover-link: #0969da;
+      /* AI diff highlight colors — matched to light Theme.GREEN / Theme.RED / Theme.BLUE */
+      --diff-add-rgb: 26, 127, 55;
+      --diff-add-solid: #1a7f37;
+      --diff-add-text: #116329;
+      --diff-remove-rgb: 207, 34, 46;
+      --diff-remove-solid: #cf222e;
+      --diff-remove-text: #a40e26;
+      --diff-modify-rgb: 9, 105, 218;
+      --diff-modify-solid: #0969da;
+      --diff-modify-text: #0550ae;
     }
 
     body.theme-solarized-dark {
@@ -97,6 +117,16 @@
       --hover-type: #b58900;
       --hover-param: #2aa198;
       --hover-link: #268bd2;
+      /* AI diff highlight colors — matched to solarized Theme.GREEN / Theme.RED / Theme.BLUE */
+      --diff-add-rgb: 133, 153, 0;
+      --diff-add-solid: #859900;
+      --diff-add-text: #b8c22e;
+      --diff-remove-rgb: 220, 50, 47;
+      --diff-remove-solid: #dc322f;
+      --diff-remove-text: #f4756e;
+      --diff-modify-rgb: 38, 139, 210;
+      --diff-modify-solid: #268bd2;
+      --diff-modify-text: #7ec8f4;
     }
 
     html,
@@ -593,55 +623,55 @@
       animation: lineFlashTarget 1.2s ease-out forwards;
     }
 
-    /* AI Edits Glow & Diff Highlighting Styles */
+    /* AI Edits Glow & Diff Highlighting Styles — all colors driven by CSS theme variables */
     .monaco-editor .ai-edit-added-line,
     .ai-edit-added-line {
-      background-color: rgba(46, 160, 67, 0.42) !important;
-      border-left: 5px solid #3fb950 !important;
-      box-shadow: inset 0 0 12px rgba(46, 160, 67, 0.50) !important;
+      background-color: rgba(var(--diff-add-rgb), 0.38) !important;
+      border-left: 5px solid var(--diff-add-solid) !important;
+      box-shadow: inset 0 0 12px rgba(var(--diff-add-rgb), 0.44) !important;
       animation: greenGlowPulse 0.9s ease-in-out infinite alternate !important;
     }
 
     .monaco-editor .ai-edit-removed-line,
     .ai-edit-removed-line {
-      background-color: rgba(248, 81, 73, 0.42) !important;
-      border-left: 5px solid #f85149 !important;
-      box-shadow: inset 0 0 12px rgba(248, 81, 73, 0.50) !important;
+      background-color: rgba(var(--diff-remove-rgb), 0.38) !important;
+      border-left: 5px solid var(--diff-remove-solid) !important;
+      box-shadow: inset 0 0 12px rgba(var(--diff-remove-rgb), 0.44) !important;
       animation: redGlowPulse 0.9s ease-in-out infinite alternate !important;
     }
 
     .monaco-editor .ai-edit-modified-line,
     .ai-edit-modified-line {
-      background-color: rgba(56, 139, 253, 0.36) !important;
-      border-left: 5px solid #58a6ff !important;
-      box-shadow: inset 0 0 12px rgba(56, 139, 253, 0.48) !important;
+      background-color: rgba(var(--diff-modify-rgb), 0.32) !important;
+      border-left: 5px solid var(--diff-modify-solid) !important;
+      box-shadow: inset 0 0 12px rgba(var(--diff-modify-rgb), 0.42) !important;
       animation: blueGlowPulse 0.9s ease-in-out infinite alternate !important;
     }
 
     .monaco-editor .ai-edit-added-inline,
     .ai-edit-added-inline {
-      background-color: rgba(46, 160, 67, 0.45) !important;
-      color: #aff5b4 !important;
+      background-color: rgba(var(--diff-add-rgb), 0.40) !important;
+      color: var(--diff-add-text) !important;
       border-radius: 3px !important;
     }
 
     .monaco-editor .ai-edit-removed-inline,
     .ai-edit-removed-inline {
-      background-color: rgba(248, 81, 73, 0.45) !important;
-      color: #ffdcd7 !important;
+      background-color: rgba(var(--diff-remove-rgb), 0.40) !important;
+      color: var(--diff-remove-text) !important;
       border-radius: 3px !important;
     }
 
     .monaco-editor .ai-edit-modified-inline,
     .ai-edit-modified-inline {
-      background-color: rgba(56, 139, 253, 0.45) !important;
-      color: #dbeeff !important;
+      background-color: rgba(var(--diff-modify-rgb), 0.40) !important;
+      color: var(--diff-modify-text) !important;
       border-radius: 3px !important;
     }
 
     .ai-edit-added-gutter::before {
       content: '+';
-      color: #3fb950;
+      color: var(--diff-add-solid);
       font-weight: bold;
       font-size: 14px;
       margin-left: 3px;
@@ -649,7 +679,7 @@
 
     .ai-edit-removed-gutter::before {
       content: '-';
-      color: #f85149;
+      color: var(--diff-remove-solid);
       font-weight: bold;
       font-size: 14px;
       margin-left: 3px;
@@ -657,7 +687,7 @@
 
     .ai-edit-modified-gutter::before {
       content: '~';
-      color: #58a6ff;
+      color: var(--diff-modify-solid);
       font-weight: bold;
       font-size: 14px;
       margin-left: 3px;
@@ -665,37 +695,34 @@
 
     @keyframes greenGlowPulse {
       0% {
-        background-color: rgba(46, 160, 67, 0.20) !important;
-        box-shadow: inset 0 0 6px rgba(46, 160, 67, 0.25) !important;
+        background-color: rgba(var(--diff-add-rgb), 0.16) !important;
+        box-shadow: inset 0 0 6px rgba(var(--diff-add-rgb), 0.22) !important;
       }
-
       100% {
-        background-color: rgba(46, 160, 67, 0.40) !important;
-        box-shadow: inset 0 0 18px rgba(46, 160, 67, 0.65) !important;
+        background-color: rgba(var(--diff-add-rgb), 0.42) !important;
+        box-shadow: inset 0 0 18px rgba(var(--diff-add-rgb), 0.60) !important;
       }
     }
 
     @keyframes redGlowPulse {
       0% {
-        background-color: rgba(248, 81, 73, 0.20) !important;
-        box-shadow: inset 0 0 6px rgba(248, 81, 73, 0.25) !important;
+        background-color: rgba(var(--diff-remove-rgb), 0.16) !important;
+        box-shadow: inset 0 0 6px rgba(var(--diff-remove-rgb), 0.22) !important;
       }
-
       100% {
-        background-color: rgba(248, 81, 73, 0.40) !important;
-        box-shadow: inset 0 0 18px rgba(248, 81, 73, 0.65) !important;
+        background-color: rgba(var(--diff-remove-rgb), 0.42) !important;
+        box-shadow: inset 0 0 18px rgba(var(--diff-remove-rgb), 0.60) !important;
       }
     }
 
     @keyframes blueGlowPulse {
       0% {
-        background-color: rgba(56, 139, 253, 0.22) !important;
-        box-shadow: inset 0 0 6px rgba(56, 139, 253, 0.28) !important;
+        background-color: rgba(var(--diff-modify-rgb), 0.18) !important;
+        box-shadow: inset 0 0 6px rgba(var(--diff-modify-rgb), 0.24) !important;
       }
-
       100% {
-        background-color: rgba(56, 139, 253, 0.46) !important;
-        box-shadow: inset 0 0 18px rgba(56, 139, 253, 0.68) !important;
+        background-color: rgba(var(--diff-modify-rgb), 0.42) !important;
+        box-shadow: inset 0 0 18px rgba(var(--diff-modify-rgb), 0.62) !important;
       }
     }
 
@@ -799,25 +826,25 @@
     }
 
     #ai-diff-banner .diff-badge-add {
-      background: linear-gradient(135deg, rgba(46, 160, 67, 0.16) 0%, rgba(35, 134, 54, 0.26) 100%);
-      color: #4ec994;
-      border: 1px solid rgba(78, 201, 148, 0.38);
+      background: linear-gradient(135deg, rgba(var(--diff-add-rgb), 0.14) 0%, rgba(var(--diff-add-rgb), 0.24) 100%);
+      color: var(--diff-add-solid);
+      border: 1px solid rgba(var(--diff-add-rgb), 0.38);
       padding: 3px 10px;
       border-radius: 9999px;
       font-weight: 700;
       font-size: 11px;
-      box-shadow: inset 0 0 8px rgba(78, 201, 148, 0.14), 0 2px 6px rgba(0, 0, 0, 0.25);
+      box-shadow: inset 0 0 8px rgba(var(--diff-add-rgb), 0.12), 0 2px 6px rgba(0, 0, 0, 0.25);
     }
 
     #ai-diff-banner .diff-badge-remove {
-      background: linear-gradient(135deg, rgba(231, 76, 60, 0.16) 0%, rgba(219, 53, 69, 0.26) 100%);
-      color: #ff7b72;
-      border: 1px solid rgba(248, 81, 73, 0.38);
+      background: linear-gradient(135deg, rgba(var(--diff-remove-rgb), 0.14) 0%, rgba(var(--diff-remove-rgb), 0.24) 100%);
+      color: var(--diff-remove-solid);
+      border: 1px solid rgba(var(--diff-remove-rgb), 0.38);
       padding: 3px 10px;
       border-radius: 9999px;
       font-weight: 700;
       font-size: 11px;
-      box-shadow: inset 0 0 8px rgba(248, 81, 73, 0.14), 0 2px 6px rgba(0, 0, 0, 0.25);
+      box-shadow: inset 0 0 8px rgba(var(--diff-remove-rgb), 0.12), 0 2px 6px rgba(0, 0, 0, 0.25);
     }
 
     #ai-diff-banner .diff-badge-modify {
@@ -1921,11 +1948,7 @@
         if (expected && normalizePath(activeEditorPath()) !== expected) {
           throw new Error('The target editor tab is not active.');
         }
-        let editorWasReadOnly = false;
-        if (window.editorInstance && typeof monaco !== 'undefined' && monaco.editor.EditorOption) {
-          editorWasReadOnly = !!window.editorInstance.getOption(
-            monaco.editor.EditorOption.readOnly
-          );
+        if (window.editorInstance) {
           window.editorInstance.updateOptions({ readOnly: true });
         }
         window._applyingAiReviewModelUpdate = true;
@@ -1939,8 +1962,10 @@
         } finally {
           tabInteractionLocked = false;
           window._applyingAiReviewModelUpdate = false;
+          // Always restore to writable: this function is only called in AI-review
+          // context; the review banner itself controls whether editing is blocked.
           if (window.editorInstance) {
-            window.editorInstance.updateOptions({ readOnly: editorWasReadOnly });
+            window.editorInstance.updateOptions({ readOnly: false });
           }
         }
       }
@@ -2211,6 +2236,13 @@
           console.error('reloadActiveFileWithDiff error:', error);
           if (currentReview) showReviewBanner(currentReview, `Review error: ${error}`);
         } finally {
+          // Safety-net: guarantee readOnly and locked flags are always cleared,
+          // even if reloadThroughBundle threw or an intermediate await exited early.
+          tabInteractionLocked = false;
+          window._applyingAiReviewModelUpdate = false;
+          if (window.editorInstance) {
+            window.editorInstance.updateOptions({ readOnly: false });
+          }
           if (reviewIsCurrent(snapshot, generation) && !resolvingReview) {
             setReviewButtonsDisabled(false);
           }
@@ -2457,7 +2489,24 @@
           sessionStorage.removeItem('pending_ai_review_path');
           sessionStorage.removeItem('ai_review_reload_attempted');
         } catch (error) { }
+        // Always guarantee the editor is writable after a project reset
+        tabInteractionLocked = false;
+        window._applyingAiReviewModelUpdate = false;
+        if (window.editorInstance) {
+          window.editorInstance.updateOptions({ readOnly: false });
+        }
         setTimeout(resumePendingReview, 300);
+      };
+
+      // Emergency unlock callable from Python via runJavaScript('window.unlockEditorNow()')
+      // Use this when the editor gets stuck in read-only after any operation.
+      window.unlockEditorNow = function () {
+        tabInteractionLocked = false;
+        window._applyingAiReviewModelUpdate = false;
+        if (window.editorInstance) {
+          window.editorInstance.updateOptions({ readOnly: false });
+          window.editorInstance.focus();
+        }
       };
 
       async function resumePendingReview() {

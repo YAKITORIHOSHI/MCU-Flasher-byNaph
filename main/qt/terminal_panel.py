@@ -183,6 +183,8 @@ class TerminalPanel(QWidget):
                 background: #e74c3c; border-radius: 2px;
             }
         """)
+        # Pin to Arrow — prevents IBeam bleed-through from the xterm WebView child
+        self._tab_bar.setCursor(Qt.CursorShape.ArrowCursor)
         hl.addWidget(self._tab_bar)
 
         # ── + New Terminal dropdown button right next to tabs ────────────────

@@ -918,11 +918,43 @@ class MCUWebBackendAPI:
         if not target_board:
             return None
         try:
-            build_dir = self._board_build_dir(target_board)
-            for fname in ("firmware.bin", "firmware.hex", "firmware.elf"):
-                p = build_dir / fname
-                if p.is_file() and p.stat().st_size >= 1024:
-                    return p
+            cache_root = self._effective_cache_root(self.sketch_dir_path)
+            candidate_dirs: list[Path] = []
+
+            # 1. Board-isolated workspace
+            try:
+                candidate_dirs.append(self._board_build_dir(target_board))
+            except Exception:
+                pass
+
+            # 2. Primary flat build directory (<cache_root>/.pio/build/mcu_env)
+            # Only valid if the last build in this workspace was indeed for target_board
+            last_board = getattr(self, "_last_compiled_board", "")
+            if not last_board:
+                cache_file = cache_root / ".mcu_gui_cache.json"
+                if not cache_file.is_file():
+                    cache_file = cache_root / "compile_cache.json"
+                if cache_file.is_file():
+                    try:
+                        cdata = json.loads(cache_file.read_text(encoding="utf-8"))
+                        if isinstance(cdata, dict):
+                            last_board = cdata.get("last_board") or ""
+                    except Exception:
+                        pass
+
+            if not last_board or last_board == target_board:
+                candidate_dirs.append(cache_root / ".pio" / "build" / "mcu_env")
+                try:
+                    candidate_dirs.append(cache_root / ".pio" / "build" / self._pio_env_name(target_board))
+                except Exception:
+                    pass
+
+            for bdir in candidate_dirs:
+                if bdir and bdir.is_dir():
+                    for fname in ("firmware.bin", "firmware.hex", "firmware.elf"):
+                        p = bdir / fname
+                        if p.is_file() and p.stat().st_size >= 1024:
+                            return p
         except Exception:
             pass
         return None
@@ -1162,34 +1194,66 @@ class MCUWebBackendAPI:
         return not needs_recomp
 
     def update_skip_compile_availability(self) -> None:
-        """Evaluate whether skip compile is possible and notify the UI."""
-        def _bg():
+        """Evaluate whether skip compile is possible and notify the UI.
+
+        Uses a monotonic generation counter so that results from stale
+        background threads (which may finish out-of-order on slow HDD/eMMC
+        devices) are silently discarded rather than overwriting the latest
+        correct value.  This prevents the skip-compile checkbox from
+        flickering back to False after a successful compile on low-end PCs.
+        """
+        if not hasattr(self, "_skip_compile_check_gen"):
+            self._skip_compile_check_gen: int = 0
+        self._skip_compile_check_gen += 1
+        my_gen = self._skip_compile_check_gen
+
+        def _bg() -> None:
             available = self.check_can_skip_compile()
-            self.emit("skip_compile:availability", available)
+            # Discard this result if a newer check has already been dispatched
+            if getattr(self, "_skip_compile_check_gen", my_gen) == my_gen:
+                self.emit("skip_compile:availability", available)
+
         threading.Thread(target=_bg, name="MCU_SkipCompileCheck", daemon=True).start()
 
     def check_can_skip_compile_for_upload(self, board_name: str | None = None) -> bool:
-        """Synchronously check whether upload can skip compilation and flash directly."""
-        # Only skip compilation if user explicitly checked Skip Compile
-        if not getattr(self, "skip_compile", False):
-            return False
+        """Synchronously check whether upload can skip compilation and flash directly.
 
+        Auto-skips recompile whenever:
+          • A prior firmware binary exists for this board, AND
+          • Source files have not changed since the last compile.
+
+        If the user explicitly checked "Skip Compile", the binary is also
+        reused even when the source-hash check cannot be performed (i.e.
+        the cache is missing), as long as a firmware binary file exists.
+        """
         target_board = board_name or self.current_board
         if not target_board or not self.sketch_dir_path:
             return False
 
         try:
+            # If no firmware binary at all → must compile
+            if not self._has_prior_build(target_board):
+                return False
+
+            # For ESP platforms, also verify the fast-upload binaries exist
             binfo = self._resolve_board_info(target_board)
             platform = str(binfo.get("platform", "")).lower()
             if platform in ("espressif32", "espressif8266"):
                 fast_bins = self._locate_soft_reset_fast_binaries(
-                    self.sketch_dir_path, target_board, platform
+                    self.sketch_dir_path, target_board, platform,
+                    skip_mtime_check=bool(getattr(self, "skip_compile", False))
                 )
                 if fast_bins is None:
-                    return False
+                    # Fast bins missing → fall back to compile unless user force-skips
+                    return bool(getattr(self, "skip_compile", False))
 
+            # Sources unchanged → safe to skip
             needs_recomp, _ = self._needs_recompile(target_board)
-            return not needs_recomp
+            if not needs_recomp:
+                return True
+
+            # Sources changed (or cache missing) → only skip if user explicitly checked
+            return bool(getattr(self, "skip_compile", False))
         except Exception:
             return False
 
@@ -1318,16 +1382,42 @@ class MCUWebBackendAPI:
         )
 
     def _has_prior_build(self, board_name: str | None = None) -> bool:
-        """Return True only if a compiled firmware binary exists for the SPECIFIED
-        board in its own isolated workspace.  Cross-board binaries are never
-        considered — flashing one board's firmware to another would be catastrophic.
+        """Return True only if a compiled firmware binary exists for the target board.
+
+        Checks the actual flat build output path that _compile_worker writes to:
+            <cache_root>/.pio/build/mcu_env/firmware.*
+
+        Also falls back to the board-isolated workspace path for legacy cache
+        compatibility.  Cross-board binaries are never accepted — using the wrong
+        board's firmware would invoke the wrong upload tool and could brick the MCU.
         """
         try:
-            build_dir = self._board_build_dir(board_name)
-            return build_dir.is_dir() and any(
-                (build_dir / fname).is_file()
+            if not self.sketch_dir_path:
+                return False
+            target = board_name or self.current_board or ""
+            cache_root = self._effective_cache_root(self.sketch_dir_path)
+
+            # Primary location: where _compile_worker actually writes via platformio.ini [env:mcu_env]
+            primary_build = cache_root / ".pio" / "build" / "mcu_env"
+            if primary_build.is_dir() and any(
+                (primary_build / fname).is_file()
                 for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
-            )
+            ):
+                return True
+
+            # Fallback: board-isolated workspace (used by direct esptool upload path)
+            if target:
+                try:
+                    isolated_dir = self._board_build_dir(target)
+                    if isolated_dir.is_dir() and any(
+                        (isolated_dir / fname).is_file()
+                        for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
+                    ):
+                        return True
+                except Exception:
+                    pass
+
+            return False
         except Exception:
             return False
 
@@ -1568,6 +1658,7 @@ class MCUWebBackendAPI:
         """Connect to the chip via esptool and print hardware info to the build console."""
         esp = None
         try:
+            # pyrefly: ignore [missing-import]
             import esptool
 
             if not hasattr(esptool, "get_default_connected_device"):
@@ -1625,6 +1716,7 @@ class MCUWebBackendAPI:
             try:
                 flash_str = "N/A"
                 try:
+                    # pyrefly: ignore [missing-import]
                     from esptool.cmds import detect_flash_size, attach_flash
                     attach_flash(esp_device)
                     detected = detect_flash_size(esp_device)
@@ -1635,6 +1727,7 @@ class MCUWebBackendAPI:
 
                 if flash_str == "N/A":
                     try:
+                        # pyrefly: ignore [missing-import]
                         from esptool.cmds import DETECTED_FLASH_SIZES
                         raw = esp_device.flash_id()
                         if isinstance(raw, int):
@@ -2932,6 +3025,7 @@ class MCUWebBackendAPI:
         main_name = primary_ino.name
         c = None
         try:
+            # pyrefly: ignore [missing-import]
             from platformio.builder.tools.pioino import InoToCPPConverter
 
             class _DummyEnv:
@@ -2991,9 +3085,9 @@ class MCUWebBackendAPI:
         self.emit("console:log", {"text": f"  Store  : {core_dir}", "tag": "dim", "newline": True})
         self.emit("console:log", {"text": "", "newline": True})
 
-        if is_upload and not getattr(self, "skip_compile", False):
+        if is_upload:
             self.emit("console:log", {
-                "text": "  🔄 Skip Compile is unchecked — compiling firmware before upload.",
+                "text": "  🔄 Sources changed or no prior build — compiling firmware before upload.",
                 "tag": "info",
                 "newline": True
             })
@@ -3009,7 +3103,13 @@ class MCUWebBackendAPI:
         if is_remote:
             self.emit("console:log", {"text": f"  🌐 Workspace: Local fast storage ({cache_root.name})", "tag": "info", "newline": True})
 
-        is_fresh_board = not (cache_root / ".pio").exists()
+        # Check the actual env build directory — not just the .pio root — so the
+        # "Incremental build" message is only shown when compiled objects really exist.
+        _env_build_dir = cache_root / ".pio" / "build" / "mcu_env"
+        is_fresh_board = not _env_build_dir.is_dir() or not any(
+            (_env_build_dir / fname).is_file()
+            for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
+        )
         if is_fresh_board:
             self.emit("console:log", {
                 "text": "  🔧 First build for this board — creating its isolated workspace.",
@@ -3104,7 +3204,15 @@ class MCUWebBackendAPI:
                     try:
                         src_stat = src_path.stat()
                         dst_stat = dst_path.stat()
-                        if src_stat.st_size == dst_stat.st_size:
+                        # Fast path: size + mtime_ns match means file is unchanged.
+                        # This avoids reading file contents entirely on slow HDD/eMMC
+                        # storage (e.g. dual-core Celeron with 5400 RPM drive).
+                        # shutil.copy2 propagates mtime so subsequent compiles benefit.
+                        if (src_stat.st_size == dst_stat.st_size
+                                and src_stat.st_mtime_ns == dst_stat.st_mtime_ns):
+                            should_replace = False
+                        elif src_stat.st_size == dst_stat.st_size:
+                            # Same size but different mtime — read bytes to be certain
                             should_replace = src_path.read_bytes() != dst_path.read_bytes()
                     except OSError:
                         should_replace = True
@@ -4508,8 +4616,7 @@ class MCUWebBackendAPI:
         upload_started = time.perf_counter()
         self._last_fast_upload_failure_kind = ""
         connection_poll_count = [max(1, min(_MAX_CONNECT_RETRIES, start_attempt))]
-        baud_recovery_used = False
-        recovery_baud: str | None = None
+        flash_retry_used = False
 
         def _set_fast_phase(name: str):
             if callable(phase_callback):
@@ -4659,6 +4766,7 @@ class MCUWebBackendAPI:
 
         self._append_connecting_progress(start_attempt, _MAX_CONNECT_RETRIES)
 
+        flash_retry_used = False  # True after the first post-connect retry at the chosen baud
         while True:
             output_lines = []
             upload_progress_state = self._new_upload_progress_state(fast_bins)
@@ -4674,12 +4782,6 @@ class MCUWebBackendAPI:
                     time.sleep(0.75)
 
                 attempt_cmd = list(write_cmd)
-                if recovery_baud:
-                    try:
-                        baud_idx = attempt_cmd.index("--baud") + 1
-                        attempt_cmd[baud_idx] = recovery_baud
-                    except (ValueError, IndexError):
-                        pass
 
                 creationflags = (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                 proc = subprocess.Popen(
@@ -4842,14 +4944,20 @@ class MCUWebBackendAPI:
                         continue
                     connection_poll_count[0] = _MAX_CONNECT_RETRIES
 
+                # Retry at user's chosen speed: if upload failed after connecting
+                # (during stub baud switch or mid-flash write), retry once at the
+                # same selected speed — never silently downgrade baud.
+                writing_started = (
+                    bool(completed_images)
+                    or bool(upload_progress_state.get("started"))
+                )
                 post_connect_transport_failure = (
                     rc != 0
                     and attempt_connected
                     and not all_images_verified
                 )
                 if (rc != 0 and attempt_connected
-                        and not baud_recovery_used
-                        and str(fast_bins.get("upload_speed") or "460800") != "115200"
+                        and not flash_retry_used
                         and post_connect_transport_failure
                         and not getattr(self, "_stop_requested", False)):
                     if not self._is_port_present(port):
@@ -4863,14 +4971,58 @@ class MCUWebBackendAPI:
                                 output_lines=output_lines, error=error_message,
                             )
                             return False, error_message, _connect_retry_count + 1
-                    baud_recovery_used = True
-                    recovery_baud = "115200"
+
+                    chosen_speed = str(fast_bins.get("upload_speed") or "460800")
+                    flash_retry_used = True
+
+                    # If a stage was actively writing when it dropped, mark it as stalled.
+                    if writing_started:
+                        _stages_list = upload_progress_state.get("stages") or []
+                        _n = len(_stages_list)
+                        _active_idx = int(upload_progress_state.get("active_index", 0))
+                        if 0 <= _active_idx < _n:
+                            _rlabel = _stages_list[_active_idx].get("label") or "Firmware"
+                            _stage_str = f"[{_active_idx + 1}/{_n}] " if _n > 1 else ""
+                            _pct = float(upload_progress_state.get("last_percent") or 0.0)
+                            _bar_w = 30
+                            _fld = int(_pct / 100.0 * _bar_w)
+                            _sbar = "▰" * _fld + "▱" * max(0, _bar_w - _fld)
+                            self.emit("console:log", {
+                                "text": f"  ✖ Flashing {_stage_str}{_rlabel} [ {_sbar} ] | {_pct:5.1f}% (stalled)",
+                                "tag": "warning",
+                                "replace_pattern": rf"Flashing\s+{re.escape(_stage_str + _rlabel)}\s*\[",
+                                "newline": True,
+                            })
+                        self.emit("console:log", {
+                            "text": f"  ⚠ Serial data stalled at {chosen_speed} baud.",
+                            "tag": "warning",
+                            "newline": True,
+                        })
+                    else:
+                        self.emit("console:log", {
+                            "text": f"  ⚠ Upload failed at {chosen_speed} baud — device did not respond.",
+                            "tag": "warning",
+                            "newline": True,
+                        })
+
                     self.emit("console:log", {
-                        "text": "  ⚠ Serial data stopped during high-speed flash; retrying once at 115200 baud…",
-                        "tag": "warning",
+                        "text": f"  🔄 Retrying at {chosen_speed} baud (your selected upload speed)…",
+                        "tag": "info",
                         "newline": True,
                     })
-                    time.sleep(0.35)
+                    self.emit("console:log", {
+                        "text": "  💡 Hold the 'BOOT' button now if your board requires manual download mode.",
+                        "tag": "info",
+                        "replace_pattern": r"💡\s*Hold BOOT now.*",
+                        "newline": True,
+                    })
+
+                    # Give the bootloader a moment, then retry with a fresh connection budget.
+                    _connect_retry_count = 0
+                    connection_poll_count[0] = 1
+                    connected_bar_flipped = False
+                    self._append_connecting_progress(1, _MAX_CONNECT_RETRIES)
+                    time.sleep(1.0)
                     continue
 
                 ok = (rc == 0)
@@ -5832,29 +5984,32 @@ class MCUWebBackendAPI:
                     })
                     break
 
-        # ── Smart compile check (upload path) matching LATEST-WORKING-MCU- FLASHER ──
+        # ── Smart compile check: auto-skip when binary is cached and sources unchanged ──
         need_compile = True
-        skip_comp = bool(getattr(self, "skip_compile", False))
+        skip_reason_msg: str | None = None  # message to show after console clear
+        skip_comp = bool(getattr(self, "skip_compile", False)) or bool(can_skip)
         bin_file = self._find_cached_firmware_binary(self.current_board)
-        has_prior_build = (bin_file is not None)
+        has_prior_build = (bin_file is not None) or self._has_prior_build(self.current_board)
 
-        if skip_comp and has_prior_build:
+        if has_prior_build:
             recompile_needed, reason = self._needs_recompile(self.current_board)
             if not recompile_needed:
+                # Sources unchanged → always safe to skip recompile
                 need_compile = False
-                self.emit("console:log", {
-                    "text": "  ✔ Sources unchanged — skipping recompile",
-                    "tag": "success",
-                    "newline": True,
-                })
+                skip_reason_msg = "  ✔ Sources unchanged — skipping recompile (using cached firmware)"
+            elif skip_comp:
+                # User explicitly checked "Skip Compile" (or can_skip is True) → honour it even with changed sources
+                need_compile = False
+                skip_reason_msg = f"  ⚡ Skip Compile is checked — reusing cached firmware (sources changed: {reason})"
             else:
                 self.emit("console:log", {
-                    "text": f"  🔄 Recompile needed ({reason})",
+                    "text": f"  🔄 Recompile needed: {reason}",
                     "tag": "warning",
                     "newline": True,
                 })
-        elif not skip_comp:
-            pass
+        elif skip_comp and self._has_prior_build(self.current_board):
+            need_compile = False
+            skip_reason_msg = "  ⚡ Skip Compile is checked — reusing cached firmware"
 
         if not need_compile:
             cfg = load_gui_config()
@@ -5862,11 +6017,12 @@ class MCUWebBackendAPI:
                 self.emit("console:clear", None)
             if cfg.get("clear_serial_on_action", False):
                 self.emit("serial:clear", None)
-            self.emit("console:log", {
-                "text": "⚡ Sources unchanged & binary cached — proceeding directly to upload...",
-                "tag": "info",
-                "newline": True,
-            })
+            if skip_reason_msg:
+                self.emit("console:log", {
+                    "text": skip_reason_msg,
+                    "tag": "success",
+                    "newline": True,
+                })
         else:
             t_watch = threading.Thread(target=_detach_watchdog, daemon=True)
             t_watch.start()
@@ -6037,6 +6193,7 @@ class MCUWebBackendAPI:
                     str(binfo.get("platform", "")).lower(),
                     env_name="mcu_env",
                     upload_speed=upload_speed,
+                    skip_mtime_check=bool(skip_comp or can_skip),
                 )
 
             if fast_bins is not None:
@@ -6110,6 +6267,12 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
                     else:
                         self.emit("console:log", {"text": f"  ✖ Fast upload failed: {fast_error}", "tag": "error", "newline": True})
+                        if str(upload_speed) in ("921600", "512000"):
+                            self.emit("console:log", {
+                                "text": f"  💡 High upload speed ({upload_speed} baud) may exceed hardware limits for this USB bridge or cable. Try selecting 460800 or 115200 baud in the toolbar.",
+                                "tag": "warning",
+                                "newline": True,
+                            })
                     self.emit("console:log", {"text": f"  ✖ Upload FAILED after {upload_duration}s", "tag": "error", "newline": True})
                     self.emit("console:log", {
                         "text": "  ℹ Compiled output and board caches were preserved; upload failures do not require Clean.",
@@ -6185,6 +6348,7 @@ class MCUWebBackendAPI:
                 core_pkg_dir = Path(str(core_dir)) / "packages" / "tool-avrdude"
                 if not core_pkg_dir.is_dir() or (not (core_pkg_dir / "package.json").is_file() and not (core_pkg_dir / ".piopm").is_file()):
                     try:
+                        # pyrefly: ignore [missing-import]
                         from bootstrap import prepare_platformio_board_toolchain
                         self.emit("console:log", {"text": "  ⚙ Ensuring AVR upload tool (tool-avrdude)...", "tag": "info", "newline": True})
                         prepare_platformio_board_toolchain("atmelavr", binfo.get("board", "uno") or "uno", "arduino")

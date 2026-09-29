@@ -1673,6 +1673,8 @@ class ControlsBar(QWidget):
 
     def set_editor_visible(self, visible: bool) -> None:
         self.btn_toggle_editor.setText("Hide Editor" if visible else "Show Editor")
+        # Detach/Attach stays enabled regardless of editor pane visibility —
+        # a hidden editor can still be popped out into its own window.
 
     def set_monitors_visible(self, visible: bool) -> None:
         self.btn_toggle_monitors.setText("Hide Monitors" if visible else "Show Monitors")
