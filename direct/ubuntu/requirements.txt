@@ -1,0 +1,9 @@
+# Native Ubuntu runtime; excludes Windows DLLs, pywin32, pywinpty and WebView2.
+PySide6>=6.7,<7
+pyserial>=3.5,<4
+psutil>=5.9,<8
+platformio>=6.1,<7
+ptyprocess>=0.7,<1
+requests>=2.31,<3
+PyQt5>=5.15,<6
+QScintilla>=2.14,<3

@@ -10,11 +10,13 @@ import time
 import json
 import re
 import threading
+from functools import wraps
 from pathlib import Path
 
 
 from main.core.constants import is_application_codebase_dir, SCRIPT_DIR
 from main.core.theme import Theme, get_theme_mode, get_theme_settings
+from main.core.config_store import ConfigSnapshot, config_lock, merge_changes
 
 LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
 GUI_CONFIG_FILE = LOCAL_GUI_CONFIG if (SCRIPT_DIR / "src").exists() else (Path.home() / ".mcu_gui_config.json")
@@ -35,10 +37,7 @@ import os as _os
 _INSTANCE_ID = str(_os.getpid())
 del _os
 
-# The normal launcher is deliberately single-window.  A named OS mutex is
-# crash-safe (Windows releases it when a process dies) and avoids relying on
-# a writable config file during the bootstrap/relaunch race.  --new-window is
-# the explicit opt-in used when a user really wants an independent task.
+# Each sketch runs in its own process; shared reset caches retain an OS lock.
 _GUI_INSTANCE_MUTEX = None
 _RESET_CACHE_MUTEX_NAME = "Local\\MCUFlasherByNaph.ResetCache"
 
@@ -130,18 +129,26 @@ def _release_gui_instance() -> bool:
 
 _CONFIG_MEM_CACHE: dict = {}
 _CONFIG_MEM_MTIME: float = 0.0
+_CONFIG_MEM_SIGNATURE = None
 
-def _load_raw_config() -> dict:
-    global _CONFIG_MEM_CACHE, _CONFIG_MEM_MTIME
+def _load_raw_config(fresh=False) -> dict:
+    global _CONFIG_MEM_CACHE, _CONFIG_MEM_MTIME, _CONFIG_MEM_SIGNATURE
     now = time.time()
-    if _CONFIG_MEM_CACHE and (now - _CONFIG_MEM_MTIME < 2.0):
-        return _CONFIG_MEM_CACHE
+    user_config = Path.home() / ".mcu_gui_config.json"
+    signature = []
+    for target in (user_config, LOCAL_GUI_CONFIG):
+        try:
+            stat = target.stat()
+            signature.append((str(target), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            signature.append((str(target), None, None))
+    if not fresh and _CONFIG_MEM_SIGNATURE == signature:
+        return ConfigSnapshot(_CONFIG_MEM_CACHE)
     # Both locations are retained for compatibility with portable copies and
     # older installs.  The per-user file is authoritative whenever it is
     # valid: an app-local file can be copied from another device or rewritten
     # by an older Bootstrap pass and otherwise hide the user's editor choice.
     candidates = []
-    user_config = Path.home() / ".mcu_gui_config.json"
     for target in (user_config, LOCAL_GUI_CONFIG):
         try:
             if target.exists() and target.stat().st_size > 0:
@@ -153,13 +160,32 @@ def _load_raw_config() -> dict:
     if candidates:
         _CONFIG_MEM_CACHE = max(candidates, key=lambda item: (item[0], item[1]))[2]
         _CONFIG_MEM_MTIME = now
-        return _CONFIG_MEM_CACHE
+        _CONFIG_MEM_SIGNATURE = signature
+        return ConfigSnapshot(_CONFIG_MEM_CACHE)
     _CONFIG_MEM_CACHE = {}
     _CONFIG_MEM_MTIME = now
-    return {}
+    _CONFIG_MEM_SIGNATURE = signature
+    return ConfigSnapshot({})
 
 
 def _save_raw_config(data: dict):
+    """Merge a snapshot under an OS lock so concurrent windows retain state."""
+    try:
+        with config_lock(Path.home() / ".mcu_gui_config.json"):
+            current = _load_raw_config(fresh=True)
+            original = getattr(data, "original", None)
+            merged = merge_changes(current, original, data) if original is not None else data
+            saved = _write_raw_config(merged)
+            if saved and isinstance(data, ConfigSnapshot):
+                data.clear()
+                data.update(merged)
+                data.original = ConfigSnapshot(merged).original
+            return saved
+    except OSError:
+        return False
+
+
+def _write_raw_config(data: dict):
     """Replace configuration atomically and report persistence failures."""
     import os
     import tempfile
@@ -196,9 +222,19 @@ def _save_raw_config(data: dict):
     # successful portable write: the loader will prefer the per-user file.
     saved = saved and (user_saved or not user_authoritative)
     if saved:
-        _CONFIG_MEM_CACHE = data.copy()
+        _CONFIG_MEM_CACHE = ConfigSnapshot(data).original
         _CONFIG_MEM_MTIME = time.time()
     return saved
+
+
+def _config_transaction(function):
+    """Serialize list updates which cannot be merged as independent keys."""
+    @wraps(function)
+    def transaction(*args, **kwargs):
+        with config_lock(Path.home() / ".mcu_gui_config.json"):
+            _load_raw_config(fresh=True)
+            return function(*args, **kwargs)
+    return transaction
 
 
 def _own_create_time():
@@ -247,10 +283,18 @@ def _instance_is_alive(pid: str, inst: dict, alive: "dict[str, float] | None") -
     because its old PID number got handed to a different process."""
     if alive is None:
         return True  # psutil unavailable — assume alive rather than falsely evict
-    if pid not in alive:
-        return False
     stored_ct = inst.get("create_time")
     proc_ct = alive.get(pid)
+    if pid not in alive:
+        # A project window may have started after the cached process inventory.
+        # Verify that PID directly before treating its project/port as free.
+        try:
+            import psutil
+            proc_ct = psutil.Process(int(pid)).create_time()
+        except (psutil.NoSuchProcess, ValueError):
+            return False
+        except psutil.AccessDenied:
+            return True
     if proc_ct is None:
         return True  # couldn't read the live process's create_time (e.g. permissions) —
                       # can't disprove it, so don't evict on uncertain grounds
@@ -539,13 +583,19 @@ def load_gui_config() -> dict:
     # Migrate old flat format {"last_sketch_dir": "..."} → new nested format
     if "instances" not in data:
         old_dir = data.get("last_sketch_dir", "")
-        data = {"instances": {}, "shared": {}}
+        data.clear()
+        data.update({"instances": {}, "shared": {}})
         if old_dir:
             data["instances"][_INSTANCE_ID] = {"last_sketch_dir": old_dir}
             data["shared"] = {"last_sketch_dir": old_dir}
         _save_raw_config(data)
     
     # Initialize the current PID's config block using fallback from shared or other active configs
+    existing = data.get("instances", {}).get(_INSTANCE_ID)
+    created = _own_create_time()
+    if existing and created is not None and existing.get("create_time") is not None:
+        if abs(created - existing["create_time"]) >= 2:
+            del data["instances"][_INSTANCE_ID]
     if _INSTANCE_ID not in data.get("instances", {}):
         if "instances" not in data:
             data["instances"] = {}
@@ -577,7 +627,7 @@ def load_gui_config() -> dict:
     res = data["instances"].get(_INSTANCE_ID, {})
     if res.get("last_sketch_dir") and is_application_codebase_dir(res.get("last_sketch_dir")):
         res["last_sketch_dir"] = ""
-    return res
+    return ConfigSnapshot(res)
 
 
 def save_gui_config(config: dict):
@@ -587,8 +637,11 @@ def save_gui_config(config: dict):
 
     data = _load_raw_config()
     if "instances" not in data:
-        data = {"instances": {}, "shared": {}}
-    data["instances"][_INSTANCE_ID] = config
+        data["instances"] = {}
+        data.setdefault("shared", {})
+    original = getattr(config, "original", None)
+    data["instances"][_INSTANCE_ID] = (merge_changes(data["instances"].get(_INSTANCE_ID, {}), original, config)
+                                       if original is not None else config)
     
     # Also update the shared config so new instances can inherit it
     if "shared" not in data:
@@ -609,7 +662,7 @@ def save_gui_config(config: dict):
                 k: v for k, v in data["instances"].items()
                 if k == _INSTANCE_ID or _instance_is_alive(k, v, alive)
             }
-    _save_raw_config(data)
+    return _save_raw_config(data)
 
 
 def get_project_remembered_board(project_dir: str) -> str:
@@ -662,6 +715,7 @@ def load_recent_projects() -> list[str]:
     return valid_recent
 
 
+@_config_transaction
 def add_recent_project(path: str):
     """Add a project folder path to the recent list (max 10 folders),
     bumping it to the top of the list if it already exists."""
@@ -694,6 +748,7 @@ def load_recent_boards() -> list[str]:
     return [str(b).strip() for b in recent if b and isinstance(b, str)][:5]
 
 
+@_config_transaction
 def add_recent_board(board_name: str) -> list[str]:
     """Add a board name to the recent list (max 5 boards),
     bumping it to the top of the list if it already exists."""
@@ -764,6 +819,20 @@ def get_occupied_ports() -> set[str]:
     return occupied
 
 
+def claim_serial_port(port: str) -> bool:
+    """Reserve a selection before connecting; two windows cannot claim one port."""
+    try:
+        with config_lock(Path.home() / ".mcu_gui_config.json"):
+            _load_raw_config(fresh=True)
+            if port and port_occupied_owner(port):
+                return False
+            cfg = load_gui_config()
+            cfg["selected_port"] = port or ""
+            return save_gui_config(cfg)
+    except OSError:
+        return False
+
+
 def get_occupied_folders() -> dict[str, str]:
     """Retrieve project folders currently active in other live instances.
 
@@ -817,7 +886,7 @@ def find_project_window(path, exclude_self: bool = False) -> dict | None:
     except Exception:
         resolved = str(path)
 
-    data = _load_raw_config()
+    data = _load_raw_config(fresh=True)
     alive = _get_alive_pid_create_times()
     resolved_l = resolved.lower() if sys.platform == "win32" else resolved
 
@@ -852,6 +921,16 @@ def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
     other desktop windows and gains keyboard input focus.
     """
     if sys.platform != "win32":
+        if sys.platform.startswith("linux") and pid:
+            try:
+                from PySide6.QtNetwork import QLocalSocket
+                socket = QLocalSocket()
+                socket.connectToServer(f"mcu-flasher-project-{pid}")
+                connected = socket.waitForConnected(250)
+                socket.disconnectFromServer()
+                return connected
+            except (ImportError, RuntimeError):
+                pass
         return False
     try:
         import ctypes
@@ -958,18 +1037,37 @@ def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
 
 
 def set_active_sketch_dir(folder_path: str, hwnd: int = 0):
-    """Set the currently active sketch directory for this instance and update hwnd."""
-    cfg = load_gui_config()
+    """Claim a project atomically; never let two windows edit the same sketch."""
     if folder_path:
         try:
             cand = Path(folder_path).resolve()
             folder_path = str(cand.parent if cand.is_file() else cand)
         except Exception:
             folder_path = str(folder_path)
-    cfg["active_sketch_dir"] = folder_path or ""
-    if hwnd:
-        cfg["hwnd"] = int(hwnd)
-    save_gui_config(cfg)
+    try:
+        with config_lock(Path.home() / ".mcu_gui_config.json"):
+            if folder_path and find_project_window(folder_path, exclude_self=True):
+                return False
+            cfg = load_gui_config()
+            cfg["active_sketch_dir"] = folder_path or ""
+            if hwnd:
+                cfg["hwnd"] = int(hwnd)
+            return save_gui_config(cfg)
+    except OSError:
+        return False
+
+
+def get_open_projects() -> list[dict]:
+    """List live project windows, including this one, for the project picker."""
+    data = _load_raw_config(fresh=True)
+    alive = _get_alive_pid_create_times()
+    projects = []
+    for pid, inst in data.get("instances", {}).items():
+        folder = inst.get("active_sketch_dir")
+        if folder and pid.isdigit() and _instance_is_alive(pid, inst, alive):
+            projects.append({"pid": int(pid), "hwnd": int(inst.get("hwnd", 0) or 0),
+                             "folder": folder, "current": pid == _INSTANCE_ID})
+    return sorted(projects, key=lambda item: (not item["current"], item["folder"].lower()))
 
 
 def set_instance_hwnd(hwnd: int):
@@ -1017,6 +1115,7 @@ __all__ = [
     "add_recent_board",
     "add_recent_project",
     "clean_instance_config",
+    "claim_serial_port",
     "clear_active_sketch_dir",
     "find_project_window",
     "focus_project_window",
@@ -1031,6 +1130,7 @@ __all__ = [
     "get_monitor_font_size",
     "get_occupied_folders",
     "get_occupied_ports",
+    "get_open_projects",
     "get_periodic_reload_settings",
     "get_project_remembered_board",
     "get_remembered_board_for_port",

@@ -4234,10 +4234,11 @@ def ensure_optional_pip_feature(
     """Verify and, if needed, install all packages for a named feature group.
 
     All feature dependencies are treated as critical and are normally already
-    installed by the main bootstrap.  This function acts as a safety net for
-    the rare case where a package is missing at runtime (e.g. corrupted env),
-    triggering the same parallel install pipeline used during initial setup.
+    installed by bootstrap. Offline workspace callers receive False and must
+    request a separate bootstrap repair instead of installing at runtime.
     """
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        return False
     package_ids = _FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
     if not package_ids:
         return False
@@ -5296,10 +5297,10 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
 def board_toolchain_ready(
     pio_core_dir: str, platform: str, board_id: str, framework: str = "arduino"
 ) -> bool:
-    """Check whether a board was proven usable by a real PlatformIO build.
+    """Check board/framework package readiness (Arduino includes a build probe).
 
-    The full-family bootstrap marker is accepted first.  Main-app, on-demand
-    installs additionally record a board-specific marker so a newly added
+    The full-family bootstrap marker is accepted first. Bootstrap-specific
+    preparation additionally records a board-specific marker so a newly added
     board/platform can be prepared without pretending that one board build
     covered every variant in the platform.
     """
@@ -5337,7 +5338,7 @@ def board_toolchain_ready(
     # If the full platform family has been certified and installed by bootstrap,
     # all toolchain packages for this platform are ready.
     try:
-        if _platform_already_installed(pio_core_dir, platform):
+        if framework.lower() == "arduino" and _platform_already_installed(pio_core_dir, platform):
             return True
     except Exception:
         pass
@@ -6256,14 +6257,16 @@ def prepare_platformio_board_toolchain(
     cancel_requested=None,
     on_process=None,
 ) -> bool:
-    """Install and prove one board environment on demand from the main app.
+    """Install and prove one board environment during bootstrap only.
 
     This deliberately shares the bootstrap PlatformIO command runner and the
     app-owned ``PLATFORMIO_CORE_DIR``.  The platform install is idempotent;
-    the temporary compile is what makes framework/toolchain readiness real for
-    the selected board, including packages that PlatformIO resolves only after
-    it has inspected that board's manifest.
+    Arduino gets a temporary compile probe. Other frameworks resolve their
+    declared packages without inventing Arduino entry points; the user's real
+    project compile validates their startup/linker requirements.
     """
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        raise RuntimeError("Board package installation is bootstrap-only; the workspace cannot prepare packages")
     platform = str(platform or "").strip()
     board_id = str(board_id or "").strip()
     framework = str(framework or "arduino").strip() or "arduino"
@@ -6406,10 +6409,14 @@ def prepare_platformio_board_toolchain(
             )
             source_dir = temporary_root / "src"
             source_dir.mkdir(parents=True, exist_ok=True)
-            (source_dir / "main.cpp").write_text(
-                "#include <Arduino.h>\nvoid setup(){}\nvoid loop(){}\n",
-                encoding="utf-8",
-            )
+            arduino_probe = "arduino" in {part.strip().lower() for part in framework.split(",")}
+            if arduino_probe:
+                (source_dir / "main.cpp").write_text(
+                    "#include <Arduino.h>\nvoid setup(){}\nvoid loop(){}\n",
+                    encoding="utf-8",
+                )
+            prepare_command = ["run", "-e", env_name] if arduino_probe else ["pkg", "install", "-e", env_name]
+            prepare_stage = "First-use compile validation" if arduino_probe else "Framework/toolchain package resolution"
 
             if callable(on_status):
                 try:
@@ -6427,11 +6434,11 @@ def prepare_platformio_board_toolchain(
                     except Exception:
                         pass
                 build_ok = _stream_platformio_setup(
-                    list(pio) + ["run", "-e", env_name],
+                    list(pio) + prepare_command,
                     env,
                     cwd=temporary_root,
                     label=display,
-                    stage=f"First-use compile validation for {board_id}",
+                    stage=f"{prepare_stage} for {board_id}",
                     progress_start=30,
                     progress_end=100,
                     timeout=_PLATFORMIO_SETUP_TIMEOUT_S,
@@ -9853,6 +9860,10 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "web_bridge.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
+        SCRIPT_DIR / "src" / "modules" / "offline_bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "offline_runtime.py",
+        SCRIPT_DIR / "src" / "modules" / "offline_platformio.py",
+        SCRIPT_DIR / "direct" / "offline-packages.json",
         SCRIPT_DIR / "src" / "modules" / "crash_detector.py",
     )
     rows = []
@@ -9951,6 +9962,9 @@ def _read_startup_health_snapshot() -> dict | None:
         core_dir = str(data.get("platformio_core_dir") or "").strip()
         if core_dir and not Path(core_dir).exists():
             return None
+        from src.modules.offline_bootstrap import ready
+        if not core_dir or not ready(core_dir):
+            return None
         return data
     except (OSError, ValueError, TypeError):
         return None
@@ -9993,7 +10007,7 @@ def _write_startup_health_snapshot() -> bool:
 
 def _explicit_setup_requested() -> bool:
     """Return true when the caller intentionally requested repair/setup."""
-    requested = {"--repair", "--setup", "--force-setup", "--force-repair", "--reinstall"}
+    requested = {"--repair", "--setup", "--force-setup", "--force-repair", "--reinstall", "--plan"}
     if any(str(arg).lower() in requested for arg in sys.argv[1:]):
         return True
     return (SCRIPT_DIR / ".force_rebuild").exists()
@@ -10027,7 +10041,9 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             pass
 
     # Also forward any positional file or folder argument
-    for arg in sys.argv[1:]:
+    for index, arg in enumerate(sys.argv[1:], start=1):
+        if sys.argv[index - 1] == "--plan":
+            continue
         if not arg.startswith("-"):
             try:
                 candidate = Path(arg).resolve(strict=False)
@@ -10539,6 +10555,33 @@ def _activate_bootstrap_venv(venv_dir: Path, venv_python: Path) -> bool:
 
 
 
+def _stream_offline_setup_output(gui, process):
+    """Bound pending Qt callbacks and progress text before GUI delivery."""
+    from collections import deque
+    pending = deque(maxlen=64)
+    lock = threading.Lock()
+    scheduled = False
+
+    def flush():
+        nonlocal scheduled
+        with lock:
+            batch = tuple(pending)
+            pending.clear()
+            scheduled = False
+        for text in batch:
+            gui.log_dim(text)
+
+    for line in process.stdout:
+        _record_bootstrap_log("OFFLINE", line.rstrip())
+        text = line.rstrip()[:3000]
+        with lock:
+            pending.append(text)
+            enqueue = not scheduled
+            scheduled = True
+        if enqueue:
+            gui.root.after(0, flush)
+
+
 def _run_setup_in_thread(gui: BootstrapGUI):
     """
     Runs all dependency checks on a background thread so the Tk event loop
@@ -10819,14 +10862,26 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             )
             return
 
-        # Pre-install PlatformIO frameworks/toolchains (ESP32 + AVR + downloaded boards).
-        # Runs serially because all PlatformIO package operations share one core directory.
-        if not ensure_board_toolchains():
-            _fail_and_exit(
-                "PlatformIO Board Toolchains",
-                "One or more required board toolchains could not be prepared.",
-            )
-            return
+        # All downloads belong to bootstrap. Prepare every declared package
+        # variant in the configured board packs before launching the workspace.
+        from src.modules.offline_bootstrap import clean_bootstrap_environment, ready, requested_plan
+        offline_core = Path(os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR))
+        offline_plan, offline_plan_path = requested_plan()
+        if not ready(offline_core, offline_plan if offline_plan_path else None):
+            command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),
+                       "--core", str(offline_core)]
+            if offline_plan_path:
+                command += ["--plan", str(offline_plan_path)]
+            gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))
+            bootstrap_env = clean_bootstrap_environment()
+            bootstrap_env["PYTHONUNBUFFERED"] = "1"
+            process = subprocess.Popen(command, env=bootstrap_env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+            _stream_offline_setup_output(gui, process)
+            if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
+                _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
+                return
 
         # ── Arduino-CLI ──────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))
@@ -11242,7 +11297,9 @@ def main():
         except Exception:
             pass
     if target_project_candidate is None:
-        for arg in sys.argv[1:]:
+        for index, arg in enumerate(sys.argv[1:], start=1):
+            if sys.argv[index - 1] == "--plan":
+                continue
             if not arg.startswith("-"):
                 try:
                     cand = Path(arg).resolve(strict=False)
@@ -11280,7 +11337,7 @@ def main():
 
     # If another main GUI is already active and healthy, spawn a new window directly
     # without running the setup/repair pipeline again.
-    if _is_main_gui_running() and not _explicit_setup_requested():
+    if _is_main_gui_running() and not _explicit_setup_requested() and _read_startup_health_snapshot() is not None:
         _record_bootstrap_log("FINISH", "Existing main GUI detected; spawning new window directly.")
         _spawn_main_gui()
         return

@@ -90,7 +90,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 AI_STARTUP_PATCH_VERSION = "v22-readiness-no-fallback"
 ENV_DIR = SCRIPT_DIR / "env"
 ENV_SITE_PACKAGES = ENV_DIR / "Lib" / "site-packages"
-if ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
+if sys.platform == "win32" and ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(ENV_SITE_PACKAGES))
 
 try:
@@ -103,23 +103,13 @@ try:
     # pyrefly: ignore [missing-import]
     import websockets
 except ImportError:
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets"])
-        # pyrefly: ignore [missing-import]
-        import websockets
-    except Exception:
-        websockets = None
+    websockets = None
 
 try:
     # pyrefly: ignore [missing-import]
     import webview
 except ImportError:
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview"])
-        # pyrefly: ignore [missing-import]
-        import webview
-    except Exception:
-        webview = None
+    webview = None
 
 
 def _is_valid_pe_binary(path: Path | str) -> bool:
@@ -332,9 +322,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             height: 0px !important;
         }
     </style>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js" onerror="window.xtermErr=true"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js" onerror="window.xtermErr=true"></script>
+    <link rel="stylesheet" href="/xterm/xterm.css" />
+    <script src="/xterm/xterm.js" onerror="window.xtermErr=true"></script>
+    <script src="/xterm/xterm-addon-fit.js" onerror="window.xtermErr=true"></script>
 </head>
 <body>
     <div id="terminal-container"></div>
@@ -712,6 +702,17 @@ class TerminalServer:
                     self.send_header('Content-type', 'text/html')
                     self.end_headers()
                     self.wfile.write(get_ai_html().encode('utf-8'))
+                elif self.path in ('/xterm/xterm.css', '/xterm/xterm.js', '/xterm/xterm-addon-fit.js'):
+                    asset = SCRIPT_DIR / 'src/assets/xterm' / self.path.rsplit('/', 1)[1]
+                    try:
+                        data = asset.read_bytes()
+                    except OSError:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/css' if asset.suffix == '.css' else 'application/javascript')
+                    self.end_headers()
+                    self.wfile.write(data)
                 else:
                     self.send_error(404)
 

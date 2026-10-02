@@ -3,7 +3,16 @@
 The desktop detects Windows, Ubuntu, and other Linux distributions. Windows
 continues to use the bundled runtime and Windows launchers. Linux uses a native
 virtual environment; copied Windows executables and package stores are never
-used for native Linux builds.
+used for native Linux builds. Ubuntu launch/setup files are in `direct/ubuntu/`;
+Windows launch files are in `direct/windows/`. The shared GUI selects only one
+host implementation through `main/core/toolchain.py`:
+
+| File | Responsibility |
+| --- | --- |
+| `main/platforms/ubuntu.py` | Native PlatformIO, Linux package paths and POSIX build/upload processes |
+| `main/platforms/windows.py` | Windows executable discovery, guarded package commands and short-path aliases |
+| `main/core/build_resources.py` | Shared CPU, RAM and storage budgets |
+| `direct/ubuntu/requirements.txt` | Native Linux dependencies, without Windows terminal/WebView packages |
 
 ## Install on Ubuntu
 
@@ -28,22 +37,29 @@ for other distributions or missing system libraries.
 From the project directory:
 
 ```bash
-python3 direct/setup_ubuntu.py
-bash direct/runThisOnUbuntu.sh
+python3 direct/ubuntu/setup.py
+bash direct/ubuntu/run.sh
 # Optionally open an existing sketch:
-bash direct/runThisOnUbuntu.sh --project "/home/you/Arduino/MySketch"
+bash direct/ubuntu/run.sh --project "/home/you/Arduino/MySketch"
+# Open another sketch in an independent window:
+bash direct/ubuntu/run.sh --project "/home/you/Arduino/AnotherSketch" --new-window
+# Repair runtime dependencies explicitly:
+bash direct/ubuntu/run.sh --repair
 ```
 
-Setup creates `.venv-linux`, installs bounded major dependency versions, and
-checks imports. Rerun setup to repair missing dependencies. It preserves the
+Setup creates `.venv-linux`, installs bounded major dependency versions, checks
+imports and prepares all configured offline board/framework/tool/library packs.
+Rerun setup to repair missing dependencies. It preserves the
 environment and never installs pip packages into system Python. Run the GUI as
 your desktop account; do not disable Chromium's sandbox or run it through sudo.
-Keep the local offline `src/editor` assets when copying the application.
+Keep the local offline `src/editor` assets when copying the application. The old
+`direct/setup_ubuntu.py`, `runThisOnUbuntu.sh` and `requirements-ubuntu.txt`
+paths forward to the Ubuntu files for compatibility.
 
 ## Boards, frameworks, and native uploads
 
-Open the board picker and click **Refresh boards** to query PlatformIO's
-[canonical board catalog](https://docs.platformio.org/en/stable/core/userguide/cmd_boards.html).
+Open the board picker and click **Refresh boards** to rescan locally prepared
+definitions. Bootstrap saves PlatformIO's canonical catalog before offline use.
 Installed manifests and the local catalog cache remain usable offline. Select
 the exact model and one of its declared frameworks. An Arduino `.ino` project
 requires Arduino; other frameworks require suitable C/C++ sources and libraries.
@@ -52,7 +68,19 @@ explanation instead of substituting another board.
 
 Linux builds and uploads use native PlatformIO packages under
 `${XDG_DATA_HOME:-$HOME/.local/share}/mcu-flasher/platformio/<architecture>`.
-The first build may download packages. The default upload transport belongs to
+Build preparation replaces inherited Windows package/cache/interpreter hints
+with native Linux locations; it never trusts a copied Windows readiness marker.
+The main app and its build/upload/reset subprocesses prohibit downloads. Missing
+packages report the bootstrap command. Edit `direct/offline-packages.json` to
+add a custom platform or a registry library specification, then run setup while
+online. The default plan includes all major families, their declared framework
+and upload/debug package variants, and Servo, ESP32Servo and ArduinoJson.
+An arbitrary sketch may need additional libraries in that plan. Initial setup
+can take substantial time and storage; subsequent launches need no network
+probe. To use a separate plan, run `python3 direct/ubuntu/setup.py --plan "/path/to/plan.json"`.
+Setup certifies readiness only after every preparation step succeeds; deleting
+a prepared package or changing the default plan requires setup again.
+The default upload transport belongs to
 the board's PlatformIO definition; serial boards require a selected port,
 while USB/debug programmers can use their native transport. Additional custom
 platforms, programmers, and unusual board options still need the appropriate
@@ -124,6 +152,12 @@ paths. Errors remain visible; broad try/catch blocks do not prove recovery.
 ## Verification and current limits
 
 ```bash
+.venv-linux/bin/python -B direct/verify_platforms.py
+.venv-linux/bin/python -B direct/verify_offline.py
+.venv-linux/bin/python -B direct/verify_target_resolution.py
+.venv-linux/bin/python -B direct/verify_board_families.py
+.venv-linux/bin/python -B direct/verify_board_search.py
+.venv-linux/bin/python -B direct/verify_projects.py
 .venv-linux/bin/python -B direct/verify_runtime.py \
   --render-dir temp/audit/glass-redesign
 .venv-linux/bin/python -B direct/verify_performance.py
@@ -144,6 +178,17 @@ streams, serial Clear, latest-revision parsing, GUI-thread completion and local
 warm-launch health helpers with temporary fixtures. The Windows bootstrap fast
 path is Windows-only; Ubuntu continues using its native virtual environment.
 `.github/workflows/compatibility.yml` runs that verifier on Windows and Ubuntu.
+The platform verifier checks isolated host selection, import order, native
+package paths, setup/launch arguments and build/upload process options. It
+parses Bash scripts without launching; the native Windows Script Host check
+skips on Ubuntu. Setup and hardware calls are mocked.
+
+The Ubuntu CI job additionally provisions native AVR packages under `temp/`,
+then uses copied packages to compile Uno, Nano and Mega through the application's
+Compile button. To run that optional integration locally with already installed
+native packages, use `.venv-linux/bin/python -B direct/verify_target_resolution.py
+--compile-installed-avr`. An explicit `--avr-core /path/to/native/store` is also
+accepted. The probe refuses missing packages and performs no install or upload.
 The controls verifier uses native Tk package-browser fixtures and isolated Qt
 setup classes to check Actions, Settings, reset guards and all three palettes.
 It never runs setup installation or writes live preferences. Use a desktop or

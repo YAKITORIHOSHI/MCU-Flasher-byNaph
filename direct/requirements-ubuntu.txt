@@ -1,7 +1,2 @@
-# Native runtime: never install Windows-only pywin32, pywinpty or WebView2 here.
-PySide6>=6.7,<7
-pyserial>=3.5,<4
-psutil>=5.9,<8
-platformio>=6.1,<7
-ptyprocess>=0.7,<1
-requests>=2.31,<3
+# Compatible requirement-file path.
+-r ubuntu/requirements.txt

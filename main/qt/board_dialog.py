@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import re
 import difflib
+import threading
+from collections import OrderedDict
 from typing import Callable, Optional, Sequence
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import Qt, QRect, QRectF, QSize, QModelIndex, QTimer
+from PySide6.QtCore import (Qt, QRect, QRectF, QSize, QModelIndex, QTimer,
+                           QAbstractListModel, QObject, Signal, Slot)
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import (
     QColor,
@@ -35,8 +38,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
+    QListView,
     QPushButton,
     QFrame,
     QStyledItemDelegate,
@@ -126,7 +128,11 @@ class BoardSearchIndex:
         self.boards = boards_dict
         self.recent_boards = set(recent_boards or [])
         self.index: list[dict] = []
+        self._query_cache = OrderedDict()
+        self._query_lock = threading.Lock()
         self._build_index()
+        self.by_name = {item["name"]: item for item in self.index}
+        self._vocabulary = frozenset(token for item in self.index for token in item["name_tokens"])
 
     def _build_index(self) -> None:
         flagships = {
@@ -267,6 +273,11 @@ class BoardSearchIndex:
             if family == "ESP32" and sub_family in ("S3", "C3", "S2", "C6", "CAM"):
                 display_family = f"ESP32-{sub_family}"
 
+            from main.core.target_profile import target_problem
+            problem = target_problem(info)
+            if problem:
+                sub_info = "Definition required • " + sub_info
+
             self.index.append({
                 "name": name,
                 "name_lower": name_lower,
@@ -289,6 +300,7 @@ class BoardSearchIndex:
                 "all_tokens": all_searchable_tokens,
                 "is_flagship": is_flagship,
                 "is_recent": name in self.recent_boards,
+                "problem": problem,
             })
 
     def search(self, query: str, category_filter: str = "ALL") -> list[str]:
@@ -300,16 +312,26 @@ class BoardSearchIndex:
             q_tokens = [clean_q]
 
         category = (category_filter or "ALL").upper()
+        cache_key = (raw_q, category)
+        with self._query_lock:
+            cached = self._query_cache.get(cache_key)
+            if cached is not None:
+                self._query_cache.move_to_end(cache_key)
+                return list(cached)
 
         results: list[tuple[str, int, int]] = []
+        candidates = []
         for item in self.index:
             # Apply category chip filter if set
             if category == "RECENT":
                 if not item["is_recent"]:
                     continue
+
             elif category != "ALL":
                 if item["family"] != category:
                     continue
+
+            candidates.append(item)
 
             if not raw_q:
                 # When query is empty, keep natural ordering (recent boards boosted)
@@ -320,9 +342,32 @@ class BoardSearchIndex:
             if score > 0:
                 results.append((item["name"], score, len(item["name"])))
 
+        # Typo matching is a fallback. Compare each distinct word once, with
+        # cheap length/character bounds before computing edit similarity.
+        if not results and len(q_tokens) == 1 and len(clean_q) >= 4:
+            fuzzy_tokens = {}
+            for word in self._vocabulary:
+                if 2 * min(len(word), len(clean_q)) / (len(word) + len(clean_q)) < 0.8:
+                    continue
+                matcher = difflib.SequenceMatcher(None, clean_q, word)
+                if matcher.quick_ratio() >= 0.8:
+                    similarity = matcher.ratio()
+                    if similarity >= 0.8:
+                        fuzzy_tokens[word] = similarity
+            for item in candidates:
+                similarity = max((fuzzy_tokens.get(word, 0) for word in item["name_tokens"]), default=0)
+                if similarity:
+                    score = int(3000 * similarity) + (800 if item["is_recent"] else 0)
+                    results.append((item["name"], score, len(item["name"])))
+
         # Sort descending by score, then shortest name, then alphabet
         results.sort(key=lambda x: (-x[1], x[2], x[0].lower()))
-        return [r[0] for r in results]
+        names = tuple(r[0] for r in results)
+        with self._query_lock:
+            self._query_cache[cache_key] = names
+            if len(self._query_cache) > 32:
+                self._query_cache.popitem(last=False)
+        return list(names)
 
     def _score_item(self, item: dict, raw_q: str, clean_q: str, q_tokens: list[str]) -> int:
         name_lower = item["name_lower"]
@@ -361,7 +406,7 @@ class BoardSearchIndex:
         name_matched_tokens = 0
 
         for token in q_tokens:
-            clean_tok = _normalize_text(token)
+            clean_tok = token  # Query tokens are already lowercase alphanumeric.
             tok_score = 0
 
             # Display name match
@@ -403,18 +448,7 @@ class BoardSearchIndex:
             elif matched_tokens / len(q_tokens) >= 0.7 and len(q_tokens) >= 3:
                 score += int(1000 * (matched_tokens / len(q_tokens)))
             else:
-                # Single-token fallback: check fuzzy typo match
-                if len(q_tokens) == 1 and len(clean_q) >= 4:
-                    if clean_q in clean_name or clean_name.startswith(clean_q):
-                        score += 2000
-                    else:
-                        best_sim = max([difflib.SequenceMatcher(None, clean_q, w).ratio() for w in item["name_tokens"]] or [0])
-                        if best_sim >= 0.8:
-                            score += int(3000 * best_sim)
-                        else:
-                            return 0
-                else:
-                    return 0
+                return 0
 
         # Sub-variant alignment: prefer generic when not searching for sub-family
         has_sub_in_query = any(t in ("s3", "c3", "s2", "c6", "cam") for t in q_tokens)
@@ -454,6 +488,127 @@ class BoardSearchIndex:
         return max(score, 1)
 
 
+_INDEX_CACHE = OrderedDict()
+_INDEX_CACHE_LOCK = threading.Lock()
+
+
+class _BoardSearchWorker(QObject):
+    """One active search and one latest pending request; completion is queued."""
+
+    completed = Signal(object)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._condition = threading.Condition()
+        self._pending = None
+        self._closed = False
+        self._thread = None
+
+    def submit(self, request):
+        with self._condition:
+            if self._closed:
+                return
+            self._pending = request
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._run, name="MCU_BoardSearch", daemon=True)
+                self._thread.start()
+            self._condition.notify()
+
+    def stop(self):
+        with self._condition:
+            self._closed = True
+            self._pending = None
+            self._condition.notify()
+
+    def _run(self):
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._closed or self._pending is not None)
+                if self._closed:
+                    return
+                request, self._pending = self._pending, None
+            generation, key, boards, recents, query, category = request
+            try:
+                with _INDEX_CACHE_LOCK:
+                    index = _INDEX_CACHE.get(key)
+                    if index is not None:
+                        _INDEX_CACHE.move_to_end(key)
+                if index is None:
+                    index = BoardSearchIndex(boards, recent_boards=recents)
+                    with _INDEX_CACHE_LOCK:
+                        _INDEX_CACHE[key] = index
+                        while len(_INDEX_CACHE) > 2:
+                            _INDEX_CACHE.popitem(last=False)
+                separator = -1
+                if not query.strip() and category == "ALL":
+                    recent_names = [name for name in recents if name in index.by_name]
+                    recent_set = set(recent_names)
+                    names = recent_names + [name for name in sorted(boards) if name not in recent_set]
+                    separator = len(recent_names) if recent_names else -1
+                else:
+                    names = index.search(query, category)
+                rows = []
+                if separator > 0:
+                    rows.append({"header": "RECENTLY USED BOARDS"})
+                for position, name in enumerate(names):
+                    if position == separator:
+                        rows.append({"header": "ALL BOARDS"})
+                    rows.append(index.by_name[name])
+                result = (generation, rows, names, index, "")
+            except Exception as exc:
+                result = (generation, [], [], None, str(exc))
+            with self._condition:
+                if self._closed:
+                    return
+                # Newer requests already waiting do not need an intermediate UI update.
+                if self._pending is not None:
+                    continue
+                self.completed.emit(result)
+
+
+class _BoardListModel(QAbstractListModel):
+    """Metadata stays in Python; Qt only paints visible rows."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.rows = []
+
+    def replace(self, rows):
+        self.beginResetModel()
+        self.rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.rows)
+
+    def flags(self, index):
+        if not index.isValid() or "header" in self.rows[index.row()]:
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self.rows):
+            return None
+        row = self.rows[index.row()]
+        if "header" in row:
+            if role == Qt.ItemDataRole.DisplayRole:
+                return row["header"]
+            if role == Qt.ItemDataRole.UserRole + 1:
+                return "header"
+            return None
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.UserRole):
+            return row["name"]
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return row["problem"] or row["sub_info"]
+        if role == Qt.ItemDataRole.UserRole + 2:
+            return row["display_family"]
+        if role == Qt.ItemDataRole.UserRole + 3:
+            return row["sub_info"]
+        if role == Qt.ItemDataRole.UserRole + 4:
+            return row["is_recent"]
+        return None
+
+
 # ── Custom Rich Item Delegate ────────────────────────────────────────────────
 
 class BoardListItemDelegate(QStyledItemDelegate):
@@ -470,10 +625,12 @@ class BoardListItemDelegate(QStyledItemDelegate):
         self.pal = pal
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        view = self.parent()
+        width = max(1, view.viewport().width() - 4) if isinstance(view, QListView) else 300
         is_header = index.data(Qt.ItemDataRole.UserRole + 1) == "header"
         if is_header:
-            return QSize(0, 26)
-        return QSize(0, 48)
+            return QSize(width, 26)
+        return QSize(width, 48)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
@@ -598,24 +755,25 @@ class BoardListItemDelegate(QStyledItemDelegate):
 class _SearchLineEdit(QLineEdit):
     """QLineEdit with Up / Down Arrow intercept to seamlessly navigate the list widget."""
 
-    def __init__(self, target_list: QListWidget, parent: Optional[QWidget] = None):
+    def __init__(self, target_list: QListView, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._target_list = target_list
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
         if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
-            count = self._target_list.count()
+            model = self._target_list.model()
+            count = model.rowCount()
             if count > 0:
-                curr = self._target_list.currentRow()
+                curr = self._target_list.currentIndex().row()
                 step = 1 if key == Qt.Key.Key_Down else -1
                 next_row = curr + step if curr >= 0 else (0 if key == Qt.Key.Key_Down else count - 1)
 
                 while 0 <= next_row < count:
-                    item = self._target_list.item(next_row)
-                    if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-                        self._target_list.setCurrentRow(next_row)
-                        self._target_list.scrollToItem(item)
+                    item = model.index(next_row)
+                    if item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                        self._target_list.setCurrentIndex(item)
+                        self._target_list.scrollTo(item)
                         break
                     next_row += step
             return
@@ -650,28 +808,25 @@ class BoardSearchDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowMaximizeButtonHint)
 
         self.on_select_callback = on_select_callback
-        if board_list is not None:
-            self.all_boards = list(board_list)
-        else:
-            self.all_boards = sorted(list(SUPPORTED_BOARDS.keys()))
+        self._board_subset = tuple(board_list) if board_list is not None else None
         self.current_board = current_board or ""
         self.result_board: Optional[str] = None
         self._active_category = "ALL"
-
-        # Load up to 5 valid recent boards with canonical name resolution
-        board_canonical_map = {b.lower(): b for b in self.all_boards}
-        resolved_recents: list[str] = []
-        for b in load_recent_boards():
-            canon = board_canonical_map.get(b.lower(), b)
-            if canon and canon not in resolved_recents:
-                resolved_recents.append(canon)
-        self.recent_boards = resolved_recents[:5]
-
-        # Build in-memory search index
-        self._search_index = BoardSearchIndex(
-            SUPPORTED_BOARDS,
-            recent_boards=self.recent_boards,
-        )
+        self._closed = False
+        self._generation = 0
+        self._search_pending = False
+        self._confirm_when_ready = False
+        self._select_initial_board = True
+        self._search_index = None
+        self._saved_recents = load_recent_boards()
+        self._set_catalog_snapshot()
+        self._worker = _BoardSearchWorker(self)
+        self.destroyed.connect(self._worker.stop)
+        self._worker.completed.connect(self._search_completed, Qt.ConnectionType.QueuedConnection)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(75)
+        self._search_timer.timeout.connect(self._dispatch_search)
 
         self._build_ui()
         self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_layout())
@@ -685,12 +840,25 @@ class BoardSearchDialog(QDialog):
         except Exception:
             pass
 
-        # Pre-select active board if present
-        if self.current_board in self.all_boards:
-            self._select_item_by_name(self.current_board)
-
         # Autofocus search entry immediately
         QTimer.singleShot(40, self.search_ent.setFocus)
+
+    def _set_catalog_snapshot(self, boards=None):
+        if boards is not None:
+            snapshot = dict(boards)
+        elif hasattr(SUPPORTED_BOARDS, "snapshot"):
+            _revision, snapshot = SUPPORTED_BOARDS.snapshot()
+        else:
+            snapshot = dict(SUPPORTED_BOARDS.items())
+        if self._board_subset is not None:
+            snapshot = {name: snapshot.get(name, {}) for name in self._board_subset}
+        self._boards_snapshot = snapshot
+        self.all_boards = sorted(snapshot)
+        canonical = {name.lower(): name for name in self.all_boards}
+        self.recent_boards = list(dict.fromkeys(canonical[name.lower()] for name in self._saved_recents
+                                               if name.lower() in canonical))[:5]
+        revision = tuple((name, id(info)) for name, info in snapshot.items())
+        self._index_key = (id(SUPPORTED_BOARDS), revision, self._board_subset, tuple(self.recent_boards))
 
     def _apply_dialog_theme(self, theme_mode: str | None = None) -> None:
         """Apply active theme palette across all BoardSearchDialog components."""
@@ -744,7 +912,7 @@ class BoardSearchDialog(QDialog):
         self._update_chip_styles()
 
         self.listbox.setStyleSheet(f"""
-            QListWidget {{
+            QListView {{
                 background-color: {bg_darkest};
                 border: 1px solid {border};
                 border-radius: 5px;
@@ -817,10 +985,15 @@ class BoardSearchDialog(QDialog):
         self.lbl_search = QLabel("Search:")
         search_layout.addWidget(self.lbl_search)
 
-        self.listbox = QListWidget()
+        self.listbox = QListView(self)
+        self._list_model = _BoardListModel(self.listbox)
+        self.listbox.setModel(self._list_model)
+        self.listbox.setLayoutMode(QListView.LayoutMode.Batched)
+        self.listbox.setResizeMode(QListView.ResizeMode.Adjust)
+        self.listbox.setBatchSize(128)
         self.listbox.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.listbox.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        self.listbox.setHorizontalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.listbox.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.listbox.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self._delegate = BoardListItemDelegate(self.listbox)
         self.listbox.setItemDelegate(self._delegate)
 
@@ -831,7 +1004,7 @@ class BoardSearchDialog(QDialog):
         self.search_ent.returnPressed.connect(self._confirm_selection)
         search_layout.addWidget(self.search_ent)
         self.btn_refresh = QPushButton("Refresh boards")
-        self.btn_refresh.setToolTip("Refresh available PlatformIO boards and installed board definitions")
+        self.btn_refresh.setToolTip("Refresh locally prepared board definitions; add or update packs in bootstrap")
         self.btn_refresh.clicked.connect(self._request_catalog_refresh)
         search_layout.addWidget(self.btn_refresh)
         root.addWidget(self.search_frame)
@@ -876,8 +1049,8 @@ class BoardSearchDialog(QDialog):
         list_v.addWidget(self.listbox)
         root.addWidget(list_container, stretch=1)
 
-        self.listbox.itemDoubleClicked.connect(lambda item: self._confirm_selection())
-        self.listbox.itemSelectionChanged.connect(self._update_select_button_state)
+        self.listbox.doubleClicked.connect(lambda item: self._confirm_selection())
+        self.listbox.selectionModel().selectionChanged.connect(self._update_select_button_state)
 
         # ── Action Buttons Footer ─────────────────────────────────────────────
         self.btn_frame = QFrame()
@@ -893,7 +1066,7 @@ class BoardSearchDialog(QDialog):
         self.framework_combo = QComboBox()
         self.framework_combo.setToolTip("Choose the framework your source files use. Arduino .ino sketches need Arduino.")
         self._framework_row.addWidget(self.framework_combo)
-        self.listbox.currentItemChanged.connect(self._update_frameworks)
+        self.listbox.selectionModel().currentChanged.connect(self._update_frameworks)
 
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setFixedSize(85, 30)
@@ -921,7 +1094,8 @@ class BoardSearchDialog(QDialog):
         QShortcut(QKeySequence("Enter"), self, activated=self._confirm_selection)
         from main.qt.signals import signals
         signals.board_catalog_updated.connect(self._catalog_updated)
-        QTimer.singleShot(0, self._request_catalog_refresh)
+        # Opening uses the published catalog. Only explicit Refresh requests
+        # registry/network discovery; startup already refreshes in the background.
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -953,6 +1127,8 @@ class BoardSearchDialog(QDialog):
         self.btn_refresh.setText("Refresh" if self.width() < 550 else "Refresh boards")
 
     def _request_catalog_refresh(self):
+        if self._closed:
+            return
         backend = getattr(self.parent(), "_backend", None)
         if backend:
             self.btn_refresh.setEnabled(False)
@@ -960,20 +1136,22 @@ class BoardSearchDialog(QDialog):
             backend.refresh_board_catalog(include_registry=True)
 
     def _catalog_updated(self, data):
+        if self._closed:
+            return
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("Refresh boards")
         if "error" in data:
             self.lbl_count.setText(f"Refresh failed: {data['error']}")
             return
-        self.all_boards = sorted(SUPPORTED_BOARDS.keys())
-        self._search_index = BoardSearchIndex(SUPPORTED_BOARDS, recent_boards=self.recent_boards)
+        self._set_catalog_snapshot(data.get("boards"))
+        self.lbl_hdr_sub.setText(f"{len(self.all_boards)} definitions")
         self._apply_filter(self.search_ent.text())
         if data.get("warning"):
             self.lbl_count.setToolTip(data["warning"])
 
     def _update_frameworks(self, current, previous=None):
-        name = current.data(Qt.ItemDataRole.UserRole) if current else ""
-        info = SUPPORTED_BOARDS.get(name, {})
+        name = current.data(Qt.ItemDataRole.UserRole) if current.isValid() else ""
+        info = self._search_index.boards.get(name, {}) if self._search_index else {}
         self.framework_combo.clear()
         allowed = sorted(info.get("frameworks") or ([info["framework"]] if info.get("framework") else []))
         self.framework_combo.addItems(allowed)
@@ -1022,7 +1200,8 @@ class BoardSearchDialog(QDialog):
         self.search_ent.setFocus()
 
     def _on_search_text_changed(self, text: str) -> None:
-        self._apply_filter(text)
+        self._mark_search_pending()
+        self._search_timer.start()
 
     def _on_escape_pressed(self) -> None:
         if self.search_ent.text():
@@ -1030,113 +1209,99 @@ class BoardSearchDialog(QDialog):
         else:
             self.reject()
 
-    def _populate_list(self, items: list[str], separator_after: int = -1) -> None:
-        self.listbox.clear()
-
-        # Build fast metadata lookup from index
-        index_by_name = {item["name"]: item for item in self._search_index.index}
-
-        if separator_after > 0:
-            rec_hdr = QListWidgetItem("RECENTLY USED BOARDS")
-            rec_hdr.setFlags(Qt.ItemFlag.NoItemFlags)
-            rec_hdr.setData(Qt.ItemDataRole.UserRole + 1, "header")
-            self.listbox.addItem(rec_hdr)
-
-        for idx, name in enumerate(items):
-            if idx == separator_after:
-                sep = QListWidgetItem("─────────────────────────────────────────────")
-                sep.setFlags(Qt.ItemFlag.NoItemFlags)
-                sep.setData(Qt.ItemDataRole.UserRole + 1, "header")
-                self.listbox.addItem(sep)
-
-                all_hdr = QListWidgetItem("ALL BOARDS")
-                all_hdr.setFlags(Qt.ItemFlag.NoItemFlags)
-                all_hdr.setData(Qt.ItemDataRole.UserRole + 1, "header")
-                self.listbox.addItem(all_hdr)
-
-            item = QListWidgetItem()
-            item.setText(name)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-
-            meta = index_by_name.get(name, {})
-            family = meta.get("display_family", "MCU")
-            sub_info = meta.get("sub_info", "")
-            from main.core.target_profile import target_problem
-            problem = target_problem(SUPPORTED_BOARDS.get(name, {}))
-            if problem:
-                sub_info = "Definition required • " + sub_info
-                item.setToolTip(problem)
-            is_rec = name in self.recent_boards
-
-            item.setData(Qt.ItemDataRole.UserRole + 2, family)
-            item.setData(Qt.ItemDataRole.UserRole + 3, sub_info)
-            item.setData(Qt.ItemDataRole.UserRole + 4, is_rec)
-
-            self.listbox.addItem(item)
-
-        # Update counter
-        cat_suffix = f" [{self._active_category}]" if self._active_category != "ALL" else ""
-        self.lbl_count.setText(f"{len(items)} of {len(self.all_boards)} boards{cat_suffix}")
-        self._update_select_button_state()
-
     def _update_select_button_state(self) -> None:
-        curr = self.listbox.currentItem()
-        is_sel = bool(curr and (curr.flags() & Qt.ItemFlag.ItemIsSelectable))
+        curr = self.listbox.currentIndex()
+        is_sel = bool(not self._search_pending and curr.isValid() and
+                      (curr.flags() & Qt.ItemFlag.ItemIsSelectable))
         self.btn_select.setEnabled(is_sel)
         self.btn_select.setCursor(Qt.CursorShape.PointingHandCursor if is_sel else Qt.CursorShape.ArrowCursor)
 
     def _select_item_by_name(self, name: str) -> None:
-        for idx in range(self.listbox.count()):
-            item = self.listbox.item(idx)
-            if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-                val = item.data(Qt.ItemDataRole.UserRole) or item.text()
-                if val == name or val.replace("★", "").strip() == name:
-                    self.listbox.setCurrentRow(idx)
-                    self.listbox.scrollToItem(item)
-                    break
+        for row, meta in enumerate(self._list_model.rows):
+            if meta.get("name") == name:
+                item = self._list_model.index(row)
+                self.listbox.setCurrentIndex(item)
+                self.listbox.scrollTo(item)
+                break
 
     def _apply_filter(self, query: str) -> None:
-        q = (query or "").strip()
-        separator_after = -1
+        self._mark_search_pending()
+        self._dispatch_search(query)
 
-        if not q and self._active_category == "ALL":
-            # Show recently used pinned at top, then the rest
-            recent_set = set(self.recent_boards)
-            rest = [b for b in self.all_boards if b not in recent_set]
-            if self.recent_boards:
-                matches = list(self.recent_boards) + rest
-                separator_after = len(self.recent_boards)
-            else:
-                matches = list(self.all_boards)
+    def _mark_search_pending(self):
+        self._generation += 1
+        self._search_pending = True
+        self._confirm_when_ready = False
+        self.lbl_count.setText("Searching…")
+        self.framework_combo.setEnabled(False)
+        self._update_select_button_state()
+
+    def _dispatch_search(self, query=None):
+        if self._closed:
+            return
+        self._search_timer.stop()
+        self._worker.submit((self._generation, self._index_key, self._boards_snapshot,
+                             tuple(self.recent_boards), self.search_ent.text() if query is None else query,
+                             self._active_category))
+
+    @Slot(object)
+    def _search_completed(self, result):
+        generation, rows, matches, index, error = result
+        if self._closed or generation != self._generation:
+            return
+        self._search_pending = False
+        self._search_index = index
+        self._list_model.replace(rows)
+        suffix = f" [{self._active_category}]" if self._active_category != "ALL" else ""
+        self.lbl_count.setText(f"Search failed: {error}" if error else
+                               f"{len(matches)} of {len(self.all_boards)} boards{suffix}")
+        self.framework_combo.setEnabled(True)
+        # Initial selection and arrow navigation still work with pinned headers.
+        select_name = matches[0] if matches else ""
+        if self._select_initial_board and not self.search_ent.text() and self.current_board in matches:
+            select_name = self.current_board
+        self._select_initial_board = False
+        if select_name:
+            self._select_item_by_name(select_name)
         else:
-            matches = self._search_index.search(q, category_filter=self._active_category)
-
-        self._populate_list(matches, separator_after=separator_after)
-
-        # Highlight first selectable match automatically for instant Enter-key selection
-        if matches:
-            for i in range(self.listbox.count()):
-                item = self.listbox.item(i)
-                if item and (item.flags() & Qt.ItemFlag.ItemIsSelectable):
-                    self.listbox.setCurrentRow(i)
-                    break
+            self._update_frameworks(QModelIndex())
+        self._update_select_button_state()
+        if self._confirm_when_ready:
+            self._confirm_when_ready = False
+            self._confirm_selection()
 
     def _confirm_selection(self) -> None:
-        curr = self.listbox.currentItem()
-        if curr and (curr.flags() & Qt.ItemFlag.ItemIsSelectable):
+        if self._closed:
+            return
+        if self._search_pending:
+            # Enter while typing waits for this query, never selects a stale row.
+            self._confirm_when_ready = True
+            self._dispatch_search()
+            return
+        backend = getattr(self.parent(), "_backend", None)
+        if backend and (backend.is_busy or getattr(backend, "active_operation", None) is not None):
+            return
+        curr = self.listbox.currentIndex()
+        if curr.isValid() and (curr.flags() & Qt.ItemFlag.ItemIsSelectable):
             raw_name = curr.data(Qt.ItemDataRole.UserRole)
-            if not raw_name:
-                raw_name = curr.text().replace("★", "").replace("⚡", "").strip()
             self.result_board = raw_name
-            backend = getattr(self.parent(), "_backend", None)
             if backend and self.framework_combo.currentText():
                 backend.set_board_framework(raw_name, self.framework_combo.currentText())
-            add_recent_board(self.result_board)
             if self.on_select_callback:
                 self.on_select_callback(self.result_board)
+            else:
+                add_recent_board(self.result_board)
             self.accept()
-        else:
-            self.reject()
+
+    def done(self, result):
+        if not self._closed:
+            self._closed = True
+            self._search_timer.stop()
+            self._worker.stop()
+            from main.qt.signals import signals
+            signals.board_catalog_updated.disconnect(self._catalog_updated)
+            signals.theme_changed.disconnect(self._apply_dialog_theme)
+        super().done(result)
 
     def selected_board(self) -> Optional[str]:
         return self.result_board

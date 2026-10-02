@@ -41,6 +41,9 @@ configure_webengine_environment()
 from src.modules.private_python_guard import enforce_private_python
 enforce_private_python()
 
+from src.modules.offline_runtime import activate
+activate()
+
 # Hide background subprocess consoles on Windows
 if sys.platform == "win32":
     try:
@@ -177,7 +180,7 @@ def main() -> int:
             record_crash_event("missing_dependency", "PySide6 is not installed", exc_type="ImportError", pid=os.getpid())
             msg = (
                 "MCU Flasher error: PySide6 is not installed.\n\n"
-                + ("Run python3 direct/setup_ubuntu.py to repair dependencies."
+                + ("Run python3 direct/ubuntu/setup.py to repair dependencies."
                    if sys.platform.startswith("linux") else
                    "Please run bootstrap or runThisOnWindows.vbs to install all dependencies.")
             )
@@ -187,6 +190,13 @@ def main() -> int:
                 except Exception:
                     pass
             print(msg, file=sys.stderr)
+            return 1
+
+        from src.modules.offline_bootstrap import ready
+        from src.modules.offline_runtime import bootstrap_instruction
+        from main.core.toolchain import _get_safe_platformio_core_dir
+        if not ready(_get_safe_platformio_core_dir(_project_root)):
+            print(bootstrap_instruction("Offline bootstrap preparation is incomplete"), file=sys.stderr)
             return 1
 
         # ── Qt Application ────────────────────────────────────────────────────
@@ -256,11 +266,23 @@ def main() -> int:
 
                     if candidate.is_file():
                         if not is_application_codebase_dir(candidate.parent):
-                            api.open_project(str(candidate.parent), active_file=str(candidate))
+                            opened = api.open_project(str(candidate.parent), active_file=str(candidate))
+                            if not opened.get("success"):
+                                if opened.get("already_open"):
+                                    mark_session_clean_exit(os.getpid())
+                                    return 0
+                                proj_arg = None
                         else:
                             proj_arg = None
                     elif candidate.is_dir():
-                        api.open_project(str(candidate))
+                        opened = api.open_project(str(candidate))
+                        if not opened.get("success"):
+                            if opened.get("already_open"):
+                                mark_session_clean_exit(os.getpid())
+                                return 0
+                            proj_arg = None
+                    else:
+                        proj_arg = None
             except Exception:
                 proj_arg = None
         if not proj_arg:
@@ -304,6 +326,9 @@ def main() -> int:
         # ── Main window ───────────────────────────────────────────────────────
         window = MCUMainWindow(backend=api)
         window.show()
+        if sys.platform.startswith("linux"):
+            from main.qt.project_activation import install_activation_server
+            window._activation_server = install_activation_server(window)
         window.raise_()
         window.activateWindow()
         if sys.platform == "win32":

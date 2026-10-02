@@ -116,6 +116,8 @@ class MCUSignals(QObject):
     # ── Ports ────────────────────────────────────────────────────────────────
     # Payload: list[{"device": str, "description": str, "hwid": str}]
     ports_updated = Signal(list)
+    # Explicit selection/clear, independent of enumeration and monitor connection.
+    port_selected = Signal(dict)
 
     # ── Board ────────────────────────────────────────────────────────────────
     # Payload: {"board_name": str}

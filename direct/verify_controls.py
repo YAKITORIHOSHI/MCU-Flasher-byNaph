@@ -224,6 +224,7 @@ class ControlChecks(unittest.TestCase):
         self.backend.hard_reset.assert_called_once_with(erase_flash=True)
 
     def test_actions_save_before_build_and_busy_during_transition(self):
+        self.backend.current_board, self.backend.current_port = "Demo", "COM99"
         window = self.own(QMainWindow())
         window._editor_panel = SimpleNamespace(trigger_save_all=Mock())
         toolbar = PrimaryToolbar(self.backend, window)
@@ -241,6 +242,116 @@ class ControlChecks(unittest.TestCase):
         toolbar._do_clean()
         window._editor_panel.trigger_save_all.assert_not_called()
         self.backend.clean_cache.assert_not_called()
+
+    def test_compile_upload_follow_selections_including_unresolved_and_programmer_targets(self):
+        window = self.own(QMainWindow())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        # Definition validation belongs to the build pipeline, not selection gating.
+        self.backend._resolve_board_info = lambda: ({"board": "fixture", "platform": "ststm32", "pio_resolved": True,
+            "upload_protocol": "stlink"} if self.backend.current_board == "ST-Link board" else {})
+        for board, port, compile_enabled, upload_enabled in (
+                ("", "", False, False), ("", "COM99", False, False),
+                ("Unresolved board", "", True, False),
+                ("ST-Link board", "COM99", True, True),
+                ("ST-Link board", "", True, True)):
+            self.backend.current_board, self.backend.current_port = board, port
+            toolbar._update_action_button_states()
+            self.assertEqual(toolbar.btn_compile.isEnabled(), compile_enabled)
+            self.assertEqual(toolbar.btn_upload.isEnabled(), upload_enabled)
+        self.backend.current_board = ""
+        toolbar._do_compile()
+        toolbar._do_upload()
+        self.backend.compile_sketch.assert_not_called()
+        self.backend.upload_sketch.assert_not_called()
+
+    def test_upload_speed_displays_board_defaults_without_changing_esp_preference(self):
+        from main.core import board_catalog
+        rows = {"Nano": {"platform": "atmelavr", "board": "nanoatmega328", "framework": "arduino", "upload_speed": 57600},
+                "Pico": {"platform": "raspberrypi", "board": "pico", "framework": "arduino"},
+                "ESP": self.info}
+        window = self.own(QMainWindow())
+        controls = ControlsBar(self.backend, window)
+        self.backend.upload_speed = "460800"
+        self.backend.set_upload_speed = Mock()
+        self.backend.set_baud_rate = Mock()
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", rows):
+            for name, text, enabled in (("Nano", "57600", False), ("Pico", "Auto", False), ("ESP", "460800", True)):
+                controls._update_hardware_defaults_for_board(name, update_monitor=False)
+                self.assertEqual(controls.upload_speed_combo.currentText(), text)
+                self.assertEqual(controls.upload_speed_combo.isEnabled(), enabled)
+        self.backend.set_upload_speed.assert_not_called()
+        self.backend.set_baud_rate.assert_not_called()
+
+    def test_action_gating_updates_from_signals_and_after_busy_phase(self):
+        from main.qt.signals import MCUSignals
+        bus = MCUSignals()
+        window = self.own(QMainWindow())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        toolbar.connect_signals(bus)
+        self.backend.current_board = "Demo"
+        bus.board_selected.emit({"board_name": "Demo"})
+        self.assertTrue(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.backend.current_port = "COM99"
+        bus.port_selected.emit({"port": "COM99"})
+        self.assertTrue(toolbar.btn_upload.isEnabled())
+        self.backend.is_busy = True
+        bus.operation_phase.emit({"phase": "compile", "is_busy": True})
+        bus.board_selected.emit({"board_name": "Demo"})
+        self.assertFalse(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.backend.current_port = ""
+        self.backend.is_busy = False
+        bus.operation_phase.emit({"phase": "idle", "is_busy": False})
+        self.assertTrue(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.backend.current_board = ""
+        bus.board_selected.emit({"board_name": ""})
+        self.assertFalse(toolbar.btn_compile.isEnabled())
+
+    def test_build_rechecks_selection_and_busy_state_after_editor_save(self):
+        window = self.own(QMainWindow())
+        window._editor_panel = SimpleNamespace(trigger_save_all=Mock())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        self.backend.current_board, self.backend.current_port = "Demo", "COM99"
+        toolbar._do_upload()
+        self.backend.current_port = ""
+        window._editor_panel.trigger_save_all.call_args.kwargs["callback"]()
+        self.backend.upload_sketch.assert_not_called()
+        toolbar._do_compile()
+        self.backend.is_busy = True
+        window._editor_panel.trigger_save_all.call_args.kwargs["callback"]()
+        self.backend.compile_sketch.assert_not_called()
+
+    def test_controls_selection_does_not_hash_sources_and_port_clear_updates_combo(self):
+        from main.qt.signals import MCUSignals
+        bus = MCUSignals()
+        window = self.own(QMainWindow())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window._primary_toolbar = toolbar
+        window.addToolBar(toolbar)
+        controls = ControlsBar(self.backend, window)
+        toolbar.connect_signals(bus)
+        controls.connect_signals(bus)
+        self.backend.check_can_skip_compile = Mock(side_effect=AssertionError("GUI source hashing"))
+        self.backend.current_board = "Demo"
+        bus.board_selected.emit({"board_name": "Demo"})
+        self.assertTrue(toolbar.btn_compile.isEnabled())
+        controls.port_combo.blockSignals(True)
+        controls.port_combo.addItem("Fixture port", "COM99")
+        controls.port_combo.blockSignals(False)
+        self.backend.current_port = "COM99"
+        bus.port_selected.emit({"port": "COM99"})
+        self.assertEqual(controls.port_combo.currentData(), "COM99")
+        self.assertTrue(toolbar.btn_upload.isEnabled())
+        self.backend.current_port = ""
+        bus.port_selected.emit({"port": ""})
+        self.assertEqual(controls.port_combo.currentIndex(), -1)
+        self.assertTrue(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
 
     def test_compact_actions_respect_live_state_and_release_popup(self):
         window = self.own(QMainWindow())

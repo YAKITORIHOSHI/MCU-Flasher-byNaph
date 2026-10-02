@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_SITE_PACKAGES = SCRIPT_DIR / "env" / "Lib" / "site-packages"
 XTERM_ASSET_DIR = SCRIPT_DIR / "src" / "assets" / "xterm"
-if ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
+if sys.platform == "win32" and ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(ENV_SITE_PACKAGES))
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))

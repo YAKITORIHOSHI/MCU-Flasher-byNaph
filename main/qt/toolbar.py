@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # pyrefly: ignore [missing-import]
 from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSize, QPoint
 # pyrefly: ignore [missing-import]
-from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication
+from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication, QIcon
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QToolBar, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -343,27 +343,27 @@ class PrimaryToolbar(QToolBar):
         self.lbl_sketch_icon = QLabel()
         self.lbl_sketch_icon.setPixmap(icon("project").pixmap(16, 16))
         self.lbl_sketch_icon.setStyleSheet("color: #56cfbf; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;")
-        self.lbl_sketch_icon.setToolTip("Click to select or create a project")
+        self.lbl_sketch_icon.setToolTip("Open another project window")
         self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sketch_icon.mousePressEvent = lambda e: self._on_new_project()
         rc_layout.addWidget(self.lbl_sketch_icon)
 
         self.lbl_sketch = QLabel("(no project)")
         self.lbl_sketch.setStyleSheet("color: #6b7280; font-size: 12px; font-family: Consolas; background: transparent;")
-        self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: change project")
+        self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: open another project")
         self.lbl_sketch.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sketch.mousePressEvent = self._on_sketch_label_click
         rc_layout.addWidget(self.lbl_sketch)
 
         # Project
-        self.btn_project = _make_action_btn("📁 Project", "Open or Create Project (Ctrl+O)", "btn-project",
+        self.btn_project = _make_action_btn("📁 Project", "Open another project window (Ctrl+O)", "btn-project",
                                             "#2d3748", "#3a4a60")
         self.btn_project.clicked.connect(self._on_new_project)
         rc_layout.addWidget(self.btn_project)
 
         # Download Boards/Libs button
-        self.btn_download = _make_action_btn("⬇ Download Boards/Libraries",
-                                             "Download boards and libraries",
+        self.btn_download = _make_action_btn("⬇ Bootstrap",
+                                             "Prepare offline board/library packs in bootstrap",
                                              "btn-download", "#2d3748", "#3a4a60")
         self.btn_download.clicked.connect(self._open_download_manager)
         rc_layout.addWidget(self.btn_download)
@@ -428,20 +428,29 @@ class PrimaryToolbar(QToolBar):
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _do_compile(self) -> None:
-        if self._backend and not self._is_busy():
-            mw = self.window()
-            if hasattr(mw, "_editor_panel") and mw._editor_panel:
-                mw._editor_panel.trigger_save_all(callback=self._backend.compile_sketch)
-            else:
-                self._backend.compile_sketch()
+        self._save_and_build(upload=False)
 
     def _do_upload(self) -> None:
-        if self._backend and not self._is_busy():
+        self._save_and_build(upload=True)
+
+    def _save_and_build(self, upload: bool) -> None:
+        def ready():
+            return bool(self._backend and self._backend.current_board and
+                        (not upload or self._upload_ready()) and not self._is_busy())
+
+        def run():
+            # Saving editor models is asynchronous; selections or busy state
+            # can change before the save acknowledgement reaches this callback.
+            if ready():
+                action = self._backend.upload_sketch if upload else self._backend.compile_sketch
+                action()
+
+        if ready():
             mw = self.window()
             if hasattr(mw, "_editor_panel") and mw._editor_panel:
-                mw._editor_panel.trigger_save_all(callback=self._backend.upload_sketch)
+                mw._editor_panel.trigger_save_all(callback=run)
             else:
-                self._backend.upload_sketch()
+                run()
 
     def _do_stop(self) -> None:
         if self._backend:
@@ -524,15 +533,6 @@ class PrimaryToolbar(QToolBar):
 
     def _on_sketch_label_click(self, event) -> None:
         if event.button() == Qt.MouseButton.RightButton:
-            if self._is_busy():
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(
-                    self.window(),
-                    "Action in Progress",
-                    "Changing project is not allowed while an action is in progress.\n\n"
-                    "Please wait for the current action to finish or stop it first.",
-                )
-                return
             self._on_new_project()
         elif self._backend:
             self._backend.open_in_explorer()
@@ -591,21 +591,14 @@ class PrimaryToolbar(QToolBar):
             pass
 
     def _on_new_project(self) -> None:
-        if self._is_busy():
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self.window(),
-                "Action in Progress",
-                "Changing project is not allowed while an action is in progress.\n\n"
-                "Please wait for the current action to finish or stop it first.",
-            )
-            return
         from main.qt.project_dialog import ProjectDialog
-        dlg = ProjectDialog(self._backend, parent=self.window())
+        dlg = ProjectDialog(self._backend, parent=self.window(), open_in_new_window=True)
         dlg.exec()
         dlg.deleteLater()
 
     def _open_download_manager(self) -> None:
+        if self._is_busy():
+            return
         from main.qt.download_dialog import launch_download_manager
         launch_download_manager(parent=self.window())
 
@@ -617,9 +610,9 @@ class PrimaryToolbar(QToolBar):
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
         if self._is_busy():
-            self.lbl_sketch.setToolTip("Current sketch folder (changing project is not allowed during actions)")
+            self.lbl_sketch.setToolTip("Current sketch folder — right-click: open another project")
         else:
-            self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: change project" if path else "Current sketch folder — left-click: open in Explorer • right-click: change project")
+            self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: open another project" if path else "Current sketch folder — left-click: open in Explorer • right-click: open another project")
         self._balance_spacers()
 
     @Slot(dict)
@@ -645,14 +638,14 @@ class PrimaryToolbar(QToolBar):
             self.btn_clean.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_modify.setEnabled(False)
             self.btn_modify.setCursor(Qt.CursorShape.ArrowCursor)
-            self.btn_project.setEnabled(False)
-            self.btn_project.setCursor(Qt.CursorShape.ArrowCursor)
-            self.btn_project.setToolTip("Changing project is not allowed while an action is in progress")
-            self.lbl_sketch_icon.setEnabled(False)
-            self.lbl_sketch_icon.setCursor(Qt.CursorShape.ArrowCursor)
-            self.lbl_sketch_icon.setToolTip("Changing project is not allowed while an action is in progress")
+            self.btn_project.setEnabled(True)
+            self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_project.setToolTip("Open another project window (Ctrl+O)")
+            self.lbl_sketch_icon.setEnabled(True)
+            self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.lbl_sketch_icon.setToolTip("Open another project window")
             if hasattr(self, "lbl_sketch"):
-                self.lbl_sketch.setToolTip("Current sketch folder (changing project is not allowed during actions)")
+                self.lbl_sketch.setToolTip("Current sketch folder — right-click: open another project")
 
             # STOP button: enabled during compile and build.
             # DISABLED during flash/reset (direct flash write — brick risk) and generic fallback.
@@ -705,54 +698,64 @@ class PrimaryToolbar(QToolBar):
             self.btn_modify.setCursor(Qt.CursorShape.PointingHandCursor)
             self.btn_project.setEnabled(True)
             self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.btn_project.setToolTip("Open or Create Project (Ctrl+O)")
+            self.btn_project.setToolTip("Open another project window (Ctrl+O)")
             self.lbl_sketch_icon.setEnabled(True)
             self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.lbl_sketch_icon.setToolTip("Click to select or create a project")
+            self.lbl_sketch_icon.setToolTip("Open another project window")
             if hasattr(self, "lbl_sketch"):
                 cur_path = getattr(self, "_current_sketch_path", "")
                 if cur_path:
-                    self.lbl_sketch.setToolTip(f"{cur_path} — left-click: open in Explorer • right-click: change project")
+                    self.lbl_sketch.setToolTip(f"{cur_path} — left-click: open in Explorer • right-click: open another project")
                 else:
-                    self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: change project")
+                    self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: open another project")
             # Delegate to action button gating (board/port awareness)
             self._update_action_button_states()
 
-    def _update_action_button_states(self) -> None:
-        """Gate Compile and Upload buttons on board/port selection.
+    def _upload_ready(self) -> bool:
+        if not self._backend or not self._backend.current_board:
+            return False
+        if self._backend.current_port:
+            return True
+        from main.core.target_profile import upload_target_ready
+        resolver = getattr(self._backend, "_resolve_board_info", None)
+        return upload_target_ready(resolver() if resolver else {})
 
-        Matches stable hardware_port_mixin._update_hardware_action_buttons:
-        - Compile: enabled when a board is selected (port irrelevant).
-        - Upload: enabled when BOTH a board and port are selected.
-        """
-        if self._backend and self._backend.is_busy:
+    def _update_action_button_states(self) -> None:
+        """Serial uploads require a port; verified native programmers use USB."""
+        if self._is_busy():
             return  # operation state machine owns buttons right now
 
-        from main.core.target_profile import target_problem, requires_upload_port
-        problem = target_problem(self._backend._resolve_board_info()) if self._backend else "Select a board first."
-        board_selected = bool(self._backend and self._backend.current_board and not problem)
-        port_selected = bool(self._backend.current_port) if self._backend else False
-        if self._backend and not requires_upload_port(self._backend._resolve_board_info()):
-            port_selected = True
+        board_selected = bool(self._backend and self._backend.current_board)
+        upload_ready = self._upload_ready()
+        native_upload = upload_ready and not self._backend.current_port
 
-        self.btn_compile.setToolTip(problem if problem else "Compile sketch (Ctrl+R)")
-        self.btn_upload.setToolTip(problem if problem else (
-            "Compile & upload (Ctrl+U)" if port_selected else "Select a serial port to upload."
+        self.btn_compile.setToolTip("Compile sketch (Ctrl+R)" if board_selected else "Select a board to compile.")
+        self.btn_upload.setToolTip("Select a board to upload." if not board_selected else (
+            "Compile & upload through this board's native USB/programmer interface (Ctrl+U)." if native_upload else (
+                "Compile & upload (Ctrl+U)" if upload_ready else "Select a serial port to upload.")
         ))
 
         self.btn_compile.setEnabled(board_selected)
         self.btn_compile.setCursor(Qt.CursorShape.PointingHandCursor if board_selected else Qt.CursorShape.ArrowCursor)
-        self.btn_upload.setEnabled(board_selected and port_selected)
-        self.btn_upload.setCursor(Qt.CursorShape.PointingHandCursor if (board_selected and port_selected) else Qt.CursorShape.ArrowCursor)
+        self.btn_upload.setEnabled(upload_ready)
+        self.btn_upload.setCursor(Qt.CursorShape.PointingHandCursor if upload_ready else Qt.CursorShape.ArrowCursor)
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor if self.btn_stop.isEnabled() else Qt.CursorShape.ArrowCursor)
 
     def connect_signals(self, sig_bus) -> None:
         sig_bus.operation_phase.connect(self.on_operation_phase)
+        sig_bus.board_selected.connect(self._on_target_selection_changed)
+        if hasattr(sig_bus, "port_selected"):
+            sig_bus.port_selected.connect(self._on_target_selection_changed)
         sig_bus.project_updated.connect(
             lambda p: self.update_sketch_label(p.get("path", ""))
         )
+        sig_bus.project_updated.connect(self._on_target_selection_changed)
         if hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
+
+    @Slot(dict)
+    def _on_target_selection_changed(self, _payload: dict) -> None:
+        self._update_action_button_states()
 
     def apply_theme(self, theme_name: str) -> None:
         for button in self.findChildren(QPushButton):
@@ -804,7 +807,7 @@ class PrimaryToolbar(QToolBar):
             if width < 1000:
                 self.lbl_sketch.setVisible(False)
                 self.btn_download.setText("⬇")
-                self.btn_download.setToolTip("Download Boards and Libraries")
+                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
                 self.btn_download.setFixedWidth(28)
                 if width < 520:
                     self.logo.setText("MCU")
@@ -814,15 +817,15 @@ class PrimaryToolbar(QToolBar):
                     self.logo.setText("MCU Flasher by Naph")
             elif width < 1250:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Download")
-                self.btn_download.setToolTip("Download boards and libraries")
+                self.btn_download.setText("⬇ Bootstrap")
+                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
                 self.logo.setText("MCU Flasher by Naph")
             else:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Download Boards/Libraries")
-                self.btn_download.setToolTip("Download boards and libraries")
+                self.btn_download.setText("⬇ Bootstrap")
+                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
                 self.logo.setText("MCU Flasher by Naph")
@@ -841,8 +844,8 @@ class PrimaryToolbar(QToolBar):
                 self._actions_popup = None
 
             self.lbl_sketch.setVisible(True)
-            self.btn_download.setText("⬇ Download Boards/Libraries")
-            self.btn_download.setToolTip("Download boards and libraries")
+            self.btn_download.setText("⬇ Bootstrap")
+            self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
             self.btn_download.setMinimumWidth(0)
             self.btn_download.setMaximumWidth(16777215)
             self.logo.setText("MCU Flasher by Naph")
@@ -857,6 +860,12 @@ class PrimaryToolbar(QToolBar):
             button.setMinimumWidth(30 if tiny else 0)
             button.setMaximumWidth(30 if tiny else 16777215)
         self.lbl_sketch_icon.setVisible(width >= 680)
+        # A half-screen workspace can be narrower than 400 logical pixels.
+        micro = width < 420
+        self.btn_actions_dropdown.setText("" if micro else "Actions ▾")
+        self.btn_actions_dropdown.setIcon(icon("settings") if micro else QIcon())
+        self.btn_actions_dropdown.setMinimumWidth(30 if micro else 100)
+        self.btn_actions_dropdown.setMaximumWidth(30 if micro else 16777215)
         self._balance_spacers()
 
     def _toggle_actions_menu(self) -> None:
@@ -1495,16 +1504,15 @@ class ControlsBar(QWidget):
             on_select_callback=self._select_board_from_dialog,
         )
         dlg.exec()
+        dlg.deleteLater()
 
     def _select_board_from_dialog(self, selected_board: str) -> None:
         if not selected_board:
             return
-        from main.core.config import add_recent_board
-        add_recent_board(selected_board)
         self.board_selector.set_board(selected_board)
         self._on_board_changed(selected_board)
 
-    def _update_hardware_defaults_for_board(self, board_name: str) -> None:
+    def _update_hardware_defaults_for_board(self, board_name: str, *, update_monitor: bool = True) -> None:
         """Apply board family defaults for monitor baud and upload speed."""
         from main.core.board_catalog import SUPPORTED_BOARDS
         from main.core.constants import default_monitor_baud, board_reset_capabilities
@@ -1525,19 +1533,25 @@ class ControlsBar(QWidget):
         ).get("family")
 
         # Upload speed configuration
-        if fam == "atmelavr":
-            self.upload_speed_combo.setCurrentText("115200")
-            self.upload_speed_combo.setEnabled(False)
-        elif fam in {"espressif32", "espressif8266"}:
+        previous = self.upload_speed_combo.blockSignals(True)
+        if fam in {"espressif32", "espressif8266"}:
             self.upload_speed_combo.setEnabled(True)
+            self.upload_speed_combo.setToolTip("Serial upload speed for this ESP board.")
             pref_spd = str(getattr(self._backend, "upload_speed", "") or "460800") if self._backend else "460800"
             if self.upload_speed_combo.findText(pref_spd) >= 0:
                 self.upload_speed_combo.setCurrentText(pref_spd)
             else:
                 self.upload_speed_combo.setCurrentText("460800")
         else:
-            self.upload_speed_combo.setEnabled(True)
-            self.upload_speed_combo.setCurrentText(str(DEFAULT_UPLOAD_SPEED))
+            speed = str(b_info.get("upload_speed") or "Auto")
+            if self.upload_speed_combo.findText(speed) < 0:
+                self.upload_speed_combo.addItem(speed)
+            self.upload_speed_combo.setCurrentText(speed)
+            self.upload_speed_combo.setEnabled(False)
+            self.upload_speed_combo.setToolTip("Uses the selected board's bootloader/programmer defaults.")
+        self.upload_speed_combo.blockSignals(previous)
+        if not update_monitor:
+            return
 
         # Default monitor baud rate configuration
         mon_baud = default_monitor_baud(
@@ -1564,16 +1578,21 @@ class ControlsBar(QWidget):
         MarqueeComboBox.showPopup(self.port_combo)
 
     def _on_board_changed(self, board_name: str) -> None:
-        if self._backend and board_name:
+        if self._backend:
             self._backend.select_board(board_name)
-        self._update_hardware_defaults_for_board(board_name)
+        else:
+            self._update_hardware_defaults_for_board(board_name)
         self._update_action_button_states_on_controls()
 
     def _on_port_changed(self, index: int) -> None:
         if not self._backend:
             return
         port = self.port_combo.currentData() or ""
-        self._backend.select_port(port)
+        if self._backend.select_port(port) is False:
+            self.port_combo.blockSignals(True)
+            previous = self.port_combo.findData(self._backend.current_port or "")
+            self.port_combo.setCurrentIndex(max(0, previous))
+            self.port_combo.blockSignals(False)
         self._update_action_button_states_on_controls()
 
     def _on_upload_speed_changed(self, speed: str) -> None:
@@ -1741,15 +1760,21 @@ class ControlsBar(QWidget):
     @Slot(dict)
     def on_board_selected(self, payload: dict) -> None:
         board = payload.get("board_name", "")
+        self.board_selector.set_board(board)
         if board:
-            self.board_selector.set_board(board)
             self._update_hardware_defaults_for_board(board)
-            can_skip = self._backend.check_can_skip_compile(board) if self._backend else False
-            self.cb_skip_compile.setEnabled(can_skip)
-            self.cb_skip_compile.setChecked(can_skip)
-            if self._backend:
-                self._backend.set_skip_compile(can_skip)
-            self._update_action_button_states_on_controls()
+        # Source fingerprinting is already coalesced by the backend worker.
+        # Never hash the sketch synchronously while handling board selection.
+        self.on_skip_compile_availability(False)
+        self._update_action_button_states_on_controls()
+
+    @Slot(dict)
+    def on_port_selected(self, payload: dict) -> None:
+        port = payload.get("port", "")
+        previous = self.port_combo.blockSignals(True)
+        self.port_combo.setCurrentIndex(self.port_combo.findData(port) if port else -1)
+        self.port_combo.blockSignals(previous)
+        self._update_action_button_states_on_controls()
 
     @Slot(bool)
     def on_skip_compile_availability(self, available: bool) -> None:
@@ -1782,6 +1807,8 @@ class ControlsBar(QWidget):
 
     def connect_signals(self, sig_bus) -> None:
         sig_bus.ports_updated.connect(self.on_ports_updated)
+        if hasattr(sig_bus, "port_selected"):
+            sig_bus.port_selected.connect(self.on_port_selected)
         sig_bus.board_selected.connect(self.on_board_selected)
         if hasattr(sig_bus, "project_updated"):
             sig_bus.project_updated.connect(self._on_project_updated)

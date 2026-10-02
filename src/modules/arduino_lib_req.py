@@ -699,6 +699,9 @@ def _launch_code_viewer(file_path, all_paths=None, parent=None):
 
 
 def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        messagebox.showinfo("Bootstrap required", "Prepare the code viewer dependencies in bootstrap. The workspace does not install packages.", parent=parent)
+        return
     """Install PyQt5/QScintilla on first use, then launch the viewer.
 
     Called from a background thread.  GUI updates are marshalled to the

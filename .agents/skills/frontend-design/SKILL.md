@@ -16,7 +16,11 @@ surfaces, clear selected tabs and separate keyboard focus. Avoid compositor blur
 and continuous animation on four/six-core devices. Preserve source-tab dirty
 indicators, drag order and buffer identity. Capture compact/wide and dark/light
 layouts, check native widget ownership, and verify only explicitly requested
-dialogs or Detach Editor actions open additional windows.
+dialogs, explicit Project actions or Detach Editor actions open additional windows.
+Set main window minimum width to half the current monitor's work-area width;
+allow wider resizing and maximization. Project
+selection opens a separate sketch window; show full paths for running projects
+and preserve the current project's dirty buffers, focus and terminal sessions.
 Carry the same palette into native setup and the Tk downloader. Keep utility
 screens focused on logs or package lists; advanced index URLs can be collapsed.
 Check selected-tab and button contrast in all three palettes, including after

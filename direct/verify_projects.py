@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Hardware-free multi-project checks; all writes stay in owned temp fixtures."""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from contextlib import ExitStack
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QRect, QTimer
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+from main.core import config
+from main.core.config_store import ConfigSnapshot
+from main.qt.main_window import MCUMainWindow
+from main.qt.project_dialog import ProjectDialog
+from main.qt.theme import build_stylesheet, register_fonts
+from main import web_bridge
+from src.modules.ui_metrics import WorkArea
+
+APP = QApplication.instance() or QApplication([])
+RENDER_DIR = None
+REAL_INSTANCE_IS_ALIVE = config._instance_is_alive
+
+CHILD = '''
+import sys, time, json
+from pathlib import Path
+from unittest.mock import patch
+root, folder, label, operation = sys.argv[1:]
+sys.path.insert(0, root)
+from main.core import config
+folder = Path(folder)
+with patch.object(Path, "home", return_value=folder):
+    config.LOCAL_GUI_CONFIG = folder / "portable.json"
+    config._CONFIG_MEM_SIGNATURE = None
+    snapshot = config._load_raw_config()
+    (folder / (label + ".ready")).write_text("ready")
+    deadline = time.monotonic() + 10
+    while not (folder / "go").exists():
+        if time.monotonic() > deadline: raise TimeoutError("parent gate")
+        time.sleep(.01)
+    if operation == "save":
+        snapshot.setdefault("instances", {})[config._INSTANCE_ID] = {"label": label}
+        snapshot.setdefault("shared", {})[label] = True
+        result = config._save_raw_config(snapshot)
+    else:
+        with patch.object(config, "_instance_is_alive", return_value=True):
+            if operation == "project":
+                result = config.set_active_sketch_dir(str(folder / "sketch"))
+            else:
+                result = config.claim_serial_port("COM999")
+    (folder / (label + ".result")).write_text(json.dumps(result))
+'''
+
+
+class ProjectChecks(unittest.TestCase):
+    def setUp(self):
+        (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
+        self.fixture = tempfile.TemporaryDirectory(dir=ROOT / "temp/audit", prefix="projects-")
+        self.addCleanup(self.fixture.cleanup)
+        self.folder = Path(self.fixture.name)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(Path, "home", return_value=self.folder))
+        self.stack.enter_context(patch.object(config, "LOCAL_GUI_CONFIG", self.folder / "portable.json"))
+        self.stack.enter_context(patch.object(config, "_CONFIG_MEM_SIGNATURE", None))
+        self.stack.enter_context(patch.object(config, "_CONFIG_MEM_CACHE", {}))
+        self.stack.enter_context(patch.object(config, "_CONFIG_MEM_MTIME", 0))
+        self.stack.enter_context(patch.object(config, "_INSTANCE_ID", "101"))
+        self.stack.enter_context(patch.object(config, "_instance_is_alive", return_value=True))
+        (self.folder / "sketch").mkdir()
+        (self.folder / "sketch/demo.ino").write_text("void setup() {}\nvoid loop() {}\n")
+        self.assertTrue(config._save_raw_config({"instances": {}, "shared": {}}))
+
+    def backend(self):
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.sketch_dir_path = self.folder / "original"
+        api.current_board, api.current_port = "Original target", "COM888"
+        api.active_file_path = str(api.sketch_dir_path / "unsaved.ino")
+        api.modified_files = {api.active_file_path: True}
+        api.is_busy, api.active_operation = True, "compile"
+        api.emit = Mock()
+        return api
+
+    def test_stale_settings_snapshot_preserves_other_window_and_nested_preferences(self):
+        first = config._load_raw_config()
+        stale = copy.deepcopy(first)
+        first["instances"]["202"] = {"active_sketch_dir": "other", "selected_port": "COM2"}
+        first["shared"]["theme_mode"] = "light"
+        self.assertTrue(config._save_raw_config(first))
+        stale["instances"]["101"] = {"active_sketch_dir": "current"}
+        stale["shared"]["monitor_font_size"] = 14
+        self.assertTrue(config._save_raw_config(stale))
+        stale["shared"]["unwritten"] = True
+        self.assertNotIn("unwritten", config._load_raw_config()["shared"])
+        current = config._load_raw_config()
+        self.assertIn("202", current["instances"])
+        self.assertEqual(current["shared"], {"theme_mode": "light", "monitor_font_size": 14})
+        current["shared"]["unsaved"] = True
+        self.assertNotIn("unsaved", config._load_raw_config()["shared"])
+
+    def test_project_and_port_claims_reject_second_owner_and_release_on_close(self):
+        self.assertTrue(config.set_active_sketch_dir(str(self.folder / "sketch")))
+        self.assertTrue(config.claim_serial_port("COM999"))
+        with patch.object(config, "_INSTANCE_ID", "202"):
+            self.assertFalse(config.set_active_sketch_dir(str(self.folder / "sketch")))
+            self.assertFalse(config.claim_serial_port("COM999 - Fixture device"))
+            self.assertTrue(config.set_active_sketch_dir(str(self.folder / "another")))
+            self.assertTrue(config.claim_serial_port("COM998"))
+        config.clean_instance_config("101")
+        with patch.object(config, "_INSTANCE_ID", "202"):
+            self.assertTrue(config.set_active_sketch_dir(str(self.folder / "sketch")))
+            self.assertTrue(config.claim_serial_port("COM999"))
+
+    def simultaneous(self, operation):
+        processes = []
+        try:
+            for label in ("one", "two"):
+                processes.append(subprocess.Popen(
+                    [sys.executable, "-B", "-c", CHILD, str(ROOT), str(self.folder), label, operation],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
+            deadline = time.monotonic() + 10
+            while not all((self.folder / (label + ".ready")).exists() for label in ("one", "two")):
+                self.assertLess(time.monotonic(), deadline, "child readiness timed out")
+                time.sleep(.01)
+            (self.folder / "go").write_text("go")
+            for child in processes:
+                out, err = child.communicate(timeout=10)
+                self.assertEqual(child.returncode, 0, (out + err).decode(errors="replace"))
+            return [json.loads((self.folder / (label + ".result")).read_text()) for label in ("one", "two")]
+        finally:
+            for child in processes:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+
+    def test_simultaneous_process_writes_retain_both_registrations(self):
+        self.assertEqual(self.simultaneous("save"), [True, True])
+        data = config._load_raw_config(fresh=True)
+        self.assertEqual(len(data["instances"]), 2)
+        self.assertTrue(data["shared"]["one"] and data["shared"]["two"])
+
+    def test_first_launch_concurrent_writes_preserve_new_instance_tables(self):
+        self.assertTrue(config._save_raw_config({}))
+        self.assertEqual(self.simultaneous("save"), [True, True])
+        data = config._load_raw_config(fresh=True)
+        self.assertEqual(len(data["instances"]), 2)
+        self.assertTrue(data["shared"]["one"] and data["shared"]["two"])
+
+    def test_simultaneous_project_claim_has_exactly_one_owner(self):
+        self.assertEqual(sorted(self.simultaneous("project")), [False, True])
+
+    def test_simultaneous_port_claim_has_exactly_one_owner(self):
+        self.assertEqual(sorted(self.simultaneous("port")), [False, True])
+
+    def test_new_window_launch_preserves_busy_current_project_and_dirty_files(self):
+        api = self.backend()
+        before = (api.sketch_dir_path, api.active_file_path, api.current_board, api.current_port, api.modified_files.copy())
+        child = Mock(pid=303)
+        child.poll.return_value = None
+        with patch.object(web_bridge, "find_project_window", return_value=None), \
+             patch.object(web_bridge.subprocess, "Popen", return_value=child) as spawn, \
+             patch("src.modules.private_python_guard.is_running_private_python", return_value=True), \
+             patch.object(QTimer, "singleShot"):
+            result = api.open_project_window(str(self.folder / "sketch/demo.ino"))
+        self.assertTrue(result["opened_new_window"])
+        self.assertIn("--new-window", spawn.call_args.args[0])
+        self.assertEqual(spawn.call_args.args[0][-1], str(self.folder / "sketch/demo.ino"))
+        self.assertEqual(before, (api.sketch_dir_path, api.active_file_path, api.current_board, api.current_port, api.modified_files))
+
+    def test_existing_project_focuses_without_launch_and_failed_child_is_reported(self):
+        api = self.backend()
+        with patch.object(web_bridge, "find_project_window", return_value={"pid": 202, "hwnd": 1}), \
+             patch.object(web_bridge, "focus_project_window", return_value=True), \
+             patch.object(web_bridge.subprocess, "Popen") as spawn:
+            self.assertTrue(api.open_project_window(str(self.folder / "sketch"))["success"])
+            spawn.assert_not_called()
+        child = Mock()
+        child.poll.return_value = 1
+        api._project_window_processes = [child]
+        api._check_project_window_startup()
+        self.assertEqual(api.emit.call_args.args[1]["type"], "error")
+        self.assertEqual(api._project_window_processes, [])
+
+    def test_lost_project_claim_returns_before_source_or_metadata_changes(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_project_files = Mock()
+        sketch = self.folder / "sketch/demo.ino"
+        before = sketch.read_bytes()
+        with patch.object(web_bridge, "find_project_window", side_effect=[None, {"pid": 202}]), \
+             patch.object(web_bridge, "set_active_sketch_dir", return_value=False), \
+             patch.object(web_bridge, "focus_project_window"), \
+             patch.object(web_bridge, "hide_internal_project_metadata") as metadata:
+            result = api.open_project(str(sketch.parent))
+        self.assertFalse(result["success"])
+        self.assertTrue(result["already_open"])
+        metadata.assert_not_called()
+        api.get_project_files.assert_not_called()
+        self.assertEqual(sketch.read_bytes(), before)
+        self.assertEqual(api.sketch_dir_path, self.folder / "original")
+
+    def test_new_project_never_overwrites_and_opens_independent_window_while_busy(self):
+        api = self.backend()
+        api.open_project_window = Mock(return_value={"success": True})
+        with patch.object(web_bridge, "ensure_hidden_read_first_md"):
+            result = api.create_project(str(self.folder), "new", include_h=True, open_in_new_window=True)
+            self.assertTrue(result["success"])
+            api.open_project_window.assert_called_once_with(str(self.folder / "new"))
+            sketch = self.folder / "new/new.ino"
+            sketch.write_text("user edits")
+            self.assertFalse(api.create_project(str(self.folder), "new", open_in_new_window=True)["success"])
+            self.assertEqual(sketch.read_text(), "user edits")
+
+    def test_reused_process_id_does_not_restore_old_port_or_project_ownership(self):
+        self.assertTrue(config._save_raw_config({"instances": {"101": {
+            "create_time": 1, "selected_port": "COM999", "active_sketch_dir": "old"}}, "shared": {}}))
+        with patch.object(config, "_own_create_time", return_value=100):
+            settings = config.load_gui_config()
+        self.assertFalse(settings.get("selected_port"))
+        self.assertFalse(settings.get("active_sketch_dir"))
+        self.assertEqual(settings["create_time"], 100)
+
+    def test_new_window_missing_from_cached_inventory_is_still_considered_alive(self):
+        import psutil
+        # Use the real predicate rather than this fixture's ownership stub.
+        with patch.object(psutil, "Process") as process:
+            process.return_value.create_time.return_value = 123
+            self.assertTrue(REAL_INSTANCE_IS_ALIVE("202", {"create_time": 123}, {"101": 100}))
+            self.assertFalse(REAL_INSTANCE_IS_ALIVE("202", {"create_time": 1}, {"101": 100}))
+            process.side_effect = psutil.NoSuchProcess(202)
+            self.assertFalse(REAL_INSTANCE_IS_ALIVE("202", {"create_time": 123}, {"101": 100}))
+
+    def test_picker_opens_new_window_and_lists_running_projects_in_all_themes(self):
+        api = self.backend()
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project_window = Mock(return_value={"success": True})
+        api.open_project = Mock()
+        config.set_active_sketch_dir(str(self.folder / "sketch"))
+        parent = QWidget()
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), parent=parent, open_in_new_window=True)
+        try:
+            self.assertFalse(dialog._is_busy())
+            self.assertEqual(dialog._open_projects_list.count(), 1)
+            dialog._tabs.setCurrentIndex(3)
+            for theme in ("default", "light", "solarized_dark"):
+                APP.setStyleSheet(build_stylesheet(theme))
+                dialog._apply_dialog_theme(theme)
+                dialog.show()
+                APP.processEvents()
+                if RENDER_DIR:
+                    self.assertTrue(dialog.grab().save(str(RENDER_DIR / ("project-picker-" + theme + ".png"))))
+            dialog._open_existing()
+            api.open_project_window.assert_called_once()
+            api.open_project.assert_not_called()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_half_screen_minimum_allows_wider_resize_and_restores_maximization(self):
+        class Window(MCUMainWindow):
+            def __init__(self):
+                QMainWindow.__init__(self)
+                self._layout_timer = QTimer(self)
+
+            def showEvent(self, event):
+                QMainWindow.showEvent(self, event)
+
+            def closeEvent(self, event):
+                QMainWindow.closeEvent(self, event)
+
+            _minimum_width_for_display = staticmethod(MCUMainWindow._minimum_width_for_display)
+            _update_minimum_window_size = MCUMainWindow._update_minimum_window_size
+            _calculate_optimal_geometry = MCUMainWindow._calculate_optimal_geometry
+            _restore_geometry = MCUMainWindow._restore_geometry
+            _get_active_screen = lambda self: None
+            _apply_responsive_layout = lambda self, width: None
+        window = Window()
+        try:
+            for width, height in ((1920, 1080), (1280, 720), (960, 540), (640, 480)):
+                area = WorkArea(-width, 20, width, height)
+                with patch("main.qt.main_window.work_area", return_value=area):
+                    window._update_minimum_window_size()
+                    self.assertEqual(window.minimumWidth(), width // 2)
+                    window.resize(width // 4, 400)
+                    self.assertEqual(window.width(), width // 2)
+                    window.resize(width * 3 // 4, 400)
+                    self.assertEqual(window.width(), width * 3 // 4)
+                    self.assertLessEqual(window.minimumWidth(), window.maximumWidth())
+                    self.assertGreaterEqual(window._calculate_optimal_geometry().width(), width // 2)
+            screen = SimpleNamespace(availableGeometry=lambda: QRect(-1920, 20, 1920, 1080))
+            settings = {"window_geometry": [-1800, 30, 1800, 900], "window_maximized": False}
+            window._backend = SimpleNamespace(get_settings=lambda: settings)
+            with patch("main.qt.main_window.work_area", return_value=WorkArea(-1920, 20, 1920, 1080)), \
+                 patch("main.qt.responsive.work_area", return_value=WorkArea(-1920, 20, 1920, 1080)), \
+                 patch("main.qt.main_window.QGuiApplication.screens", return_value=[screen]):
+                window._restore_geometry()
+                self.assertEqual(window.minimumWidth(), 960)
+                self.assertEqual(window.width(), 1800)
+                self.assertFalse(window.isMaximized())
+                settings["window_maximized"] = True
+                window._restore_geometry()
+                APP.processEvents()
+                self.assertTrue(window.isMaximized())
+                window.showNormal()
+                APP.processEvents()
+                self.assertFalse(window.isMaximized())
+        finally:
+            window.close()
+            window.deleteLater()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--render-dir", type=Path)
+    args = parser.parse_args()
+    RENDER_DIR = args.render_dir
+    if RENDER_DIR:
+        RENDER_DIR.mkdir(parents=True, exist_ok=True)
+    register_fonts()
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(ProjectChecks))
+    raise SystemExit(0 if result.wasSuccessful() else 1)

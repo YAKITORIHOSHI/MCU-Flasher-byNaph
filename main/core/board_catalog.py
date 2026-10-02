@@ -131,6 +131,21 @@ def _normalize_board_identity(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+def _normalize_arduino_define(value: object) -> str:
+    """boards.txt build.board omits the ARDUINO_ prefix used in PIO flags."""
+    normalized = _normalize_board_identity(value)
+    return normalized.removeprefix("arduino")
+
+
+def _board_name_without_vendor(name: object, vendor: object) -> str:
+    """Remove only a manifest's declared vendor prefix, not hardware words."""
+    name = str(name or "").strip()
+    vendor = str(vendor or "").strip()
+    if vendor:
+        name = re.sub(r"^" + re.escape(vendor) + r"(?:\s+|\s*[-:]\s*)", "", name, flags=re.IGNORECASE)
+    return _normalize_board_identity(name)
+
+
 def _board_name_tokens(value: object) -> set[str]:
     """Return meaningful lowercase words from a board name or identifier."""
     words = set(re.findall(r"[a-z0-9]+", str(value or "").lower()))
@@ -239,7 +254,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
     return records
 
 
-_BOARD_CATALOG_CACHE_VERSION = 2
+_BOARD_CATALOG_CACHE_VERSION = 3
 
 
 def _board_catalog_cache_path() -> Path:
@@ -332,9 +347,11 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
     Uses _PIO_BOARD_CATALOG_RAM_CACHE in RAM to eliminate repeated disk I/O
     and JSON parsing across hundreds of board files.
     """
-    root_value = str(core_dir or os.environ.get("PLATFORMIO_CORE_DIR") or "").strip()
+    root_value = str(core_dir or "").strip()
     if not root_value:
         try:
+            # The build resolves this application's store. Discovery must use
+            # the same root rather than an unrelated inherited environment.
             root_value = str(_get_safe_platformio_core_dir(SCRIPT_DIR))
         except Exception:
             root_value = ""
@@ -446,6 +463,8 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             "flash_mode": str(build.get("flash_mode") or "").strip(),
             "flash_size": str(upload.get("flash_size") or "").strip(),
             "upload_protocol": str(upload.get("protocol") or "").strip(),
+            "upload_speed": upload.get("speed"),
+            "require_upload_port": upload.get("require_upload_port"),
             "has_psram": any("BOARD_HAS_PSRAM" in str(flag) for flag in extra_flags),
             "hwids": hwids,
             "arduino_defines": defines,
@@ -477,6 +496,7 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, l
     rbuild = _normalize_board_identity(record.get("build_board"))
     cid = _normalize_board_identity(candidate.get("id"))
     cname = _normalize_board_identity(candidate.get("name"))
+    cname_without_vendor = _board_name_without_vendor(candidate.get("name"), candidate.get("vendor"))
     cvariant = _normalize_board_identity(candidate.get("variant"))
 
     if rec_mcu and pio_mcu:
@@ -488,16 +508,17 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, l
     if rvariant and cvariant and rvariant == cvariant:
         score += 190
         reasons.append("variant")
-    if rname and cname and rname == cname:
+    if rname and (rname == cname or rname == cname_without_vendor):
         score += 165
         reasons.append("name")
     if record.get("hwids") and candidate.get("hwids") and (record["hwids"] & candidate["hwids"]):
         score += 185
         reasons.append("usb")
-    if rbuild and rbuild in (candidate.get("arduino_defines") or set()):
+    defines = {_normalize_arduino_define(value) for value in candidate.get("arduino_defines") or ()}
+    if rbuild and _normalize_arduino_define(rbuild) in defines:
         score += 135
         reasons.append("arduino-define")
-    elif rid and rid in (candidate.get("arduino_defines") or set()):
+    elif rid and rid in defines:
         score += 120
         reasons.append("arduino-define")
 
@@ -541,6 +562,51 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | N
         "match_score": round(best_score, 2),
         "match_reasons": reasons,
     }
+
+
+def resolve_board_definition(display_name: str, info: dict, catalog: list[dict]) -> dict:
+    """Repair one cached row using canonical definitions, without family guesses.
+
+    This also works before downloaded-core discovery completes: the cached
+    Arduino identity contains the evidence needed to match installed manifests.
+    """
+    resolved = dict(info)
+    platform = str(info.get("platform") or "").lower()
+    board_id = str(info.get("board") or "").lower()
+    exact = [row for row in catalog if platform and board_id and
+             str(row.get("platform") or "").lower() == platform and
+             str(row.get("id") or "").lower() == board_id]
+    match = exact[0] if len(exact) == 1 else None
+    if match is None and info.get("arduino_board_id"):
+        record = {
+            "name": display_name, "arduino_id": info.get("arduino_board_id"),
+            "mcu": info.get("mcu"), "variant": info.get("arduino_variant"),
+            "build_board": info.get("arduino_build_board"), "hwids": info.get("hwids") or set(),
+        }
+        candidates = [row for row in catalog if not platform or str(row.get("platform") or "").lower() == platform]
+        match = _resolve_arduino_board_record(record, candidates)
+    if not match:
+        return resolved
+    frameworks = sorted(match.get("frameworks") or [])
+    resolved.update({
+        "platform": str(match.get("platform") or ""), "board": str(match.get("id") or ""),
+        "pio_resolved": True, "pio_manifest": str(match.get("manifest") or ""),
+        "pio_name": str(match.get("name") or ""), "pio_vendor": str(match.get("vendor") or ""),
+        "pio_match_score": match.get("match_score", 1000.0),
+        "pio_match_reasons": list(match.get("match_reasons") or ["platformio-native-manifest"]),
+        "frameworks": frameworks, "upload_protocol": str(match.get("upload_protocol") or ""),
+        "upload_speed": match.get("upload_speed"),
+        "require_upload_port": match.get("require_upload_port"),
+        "mcu": str(match.get("mcu") or info.get("mcu") or "").lower(),
+        "has_psram": bool(match.get("has_psram")),
+        "memory_type": match.get("memory_type") or None, "flash_mode": match.get("flash_mode") or None,
+    })
+    if resolved.get("framework") not in frameworks:
+        resolved["framework"] = "arduino" if "arduino" in frameworks else (frameworks[0] if len(frameworks) == 1 else "")
+    flash = re.match(r"(\d+(?:\.\d+)?)\s*MB", str(match.get("flash_size") or ""), re.IGNORECASE)
+    if flash:
+        resolved["flash_mb"] = float(flash.group(1))
+    return resolved
 
 
 def _fallback_platform_from_mcu(mcu: str) -> str:
@@ -633,22 +699,12 @@ def _fallback_board_id_for_platform(
 
 
 def load_registry_board_catalog() -> list[dict]:
-    """Ask PlatformIO for canonical available boards, including new platforms."""
-    from main.core.toolchain import find_pio_executable
+    """Read the canonical catalog saved by bootstrap; never contact a registry."""
     from main.core.target_profile import target_problem
-    command = find_pio_executable()
-    if not command:
-        raise RuntimeError("PlatformIO is missing. Repair the application runtime first.")
-    env = os.environ.copy()
-    env["PLATFORMIO_CORE_DIR"] = _get_safe_platformio_core_dir(SCRIPT_DIR)
-    result = subprocess.run(
-        command + ["boards", "--json-output"], capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=45, env=env,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
-    if result.returncode:
-        raise RuntimeError((result.stderr or "PlatformIO catalog request failed")[-600:])
-    records = json.loads(result.stdout)
+    snapshot = Path(_get_safe_platformio_core_dir(SCRIPT_DIR)) / ".mcu-offline-catalog.json"
+    if not snapshot.is_file():
+        return _load_platformio_board_catalog()
+    records = json.loads(snapshot.read_text(encoding="utf-8"))
     if not isinstance(records, list):
         raise ValueError("PlatformIO returned an invalid board catalog.")
     catalog = []
@@ -698,6 +754,11 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
     if registry_catalog:
         installed = {(b["platform"], b["id"]) for b in catalog}
         catalog.extend(b for b in registry_catalog if (b["platform"], b["id"]) not in installed)
+    # Empty board IDs in an older Arduino row cannot be refreshed by the
+    # native (platform, board ID) merge below. Resolve their retained identity.
+    boards = {name: resolve_board_definition(name, info, catalog)
+              if info.get("pio_resolved") is False or not info.get("board") else info
+              for name, info in boards.items()}
 
     resolved_rows: list[tuple[dict, dict | None]] = [
         (record, _resolve_arduino_board_record(record, catalog)) for record in records
@@ -752,10 +813,12 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
                 and existing.get("arduino_board_id") == arduino_id
                 and str(existing.get("platform", "")).lower() == platform.lower()
             ):
-                continue
-            display_name = f"{display_name} ({arduino_id})"
-            if display_name in used_names:
-                continue
+                if not match and existing.get("pio_resolved"):
+                    continue  # Preserve a verified registry row during offline discovery.
+            else:
+                display_name = f"{display_name} ({arduino_id})"
+                if display_name in used_names:
+                    continue
         used_names.add(display_name)
 
         entry: dict = {
@@ -774,6 +837,8 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "pio_vendor": str((match or {}).get("vendor") or ""),
             "pio_manifest": str((match or {}).get("manifest") or ""),
             "upload_protocol": str((match or {}).get("upload_protocol") or ""),
+            "upload_speed": (match or {}).get("upload_speed"),
+            "require_upload_port": (match or {}).get("require_upload_port"),
             "flash_mb": None,
             # Compile-time options come from the resolved PlatformIO manifest
             # first, because PlatformIO (not the downloaded Arduino core copy)
@@ -811,12 +876,14 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             prior.update({
                 "pio_resolved": True, "pio_manifest": str(pio_board.get("manifest") or ""),
                 "frameworks": frameworks, "upload_protocol": str(pio_board.get("upload_protocol") or ""),
+                "upload_speed": pio_board.get("upload_speed"),
+                "require_upload_port": pio_board.get("require_upload_port"),
                 "has_psram": bool(pio_board.get("has_psram")),
                 "memory_type": pio_board.get("memory_type") or None,
                 "flash_mode": pio_board.get("flash_mode") or None,
             })
             if prior.get("framework") not in frameworks:
-                prior["framework"] = "arduino" if "arduino" in frameworks else ""
+                prior["framework"] = "arduino" if "arduino" in frameworks else (frameworks[0] if len(frameworks) == 1 else "")
 
         # Skip duplicate display rows for identities already registered.
         if identity in identities:
@@ -830,9 +897,9 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         used_names.add(disp_name)
 
         frameworks = set(pio_board.get("frameworks") or [])
-        # This sketch editor uses Arduino. Other framework manifests remain
-        # discoverable but need an explicit framework project to be buildable.
-        framework = "arduino" if "arduino" in frameworks else ""
+        # A single declared framework needs no guess. Multiple native choices
+        # remain explicit in the picker; .ino compatibility is checked at build.
+        framework = "arduino" if "arduino" in frameworks else (next(iter(frameworks)) if len(frameworks) == 1 else "")
 
         entry = {
             "platform": b_platform,
@@ -850,6 +917,8 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "pio_vendor": str(pio_board.get("vendor") or ""),
             "pio_manifest": str(pio_board.get("manifest") or ""),
             "upload_protocol": str(pio_board.get("upload_protocol") or ""),
+            "upload_speed": pio_board.get("upload_speed"),
+            "require_upload_port": pio_board.get("require_upload_port"),
             "flash_mb": None,
             "has_psram": bool(pio_board.get("has_psram")),
             "memory_type": str(pio_board.get("memory_type") or "") or None,
@@ -872,12 +941,25 @@ class BoardCatalog(dict):
 
     def __init__(self, initial):
         self._lock = threading.RLock()
+        self._revision = 0
         super().__init__(initial)
 
     def replace(self, catalog):
         with self._lock:
             super().clear()
             super().update(catalog)
+            self._revision += 1
+
+    def snapshot(self):
+        """Return one coherent revision for background search indexing."""
+        with self._lock:
+            return self._revision, dict(super().items())
+
+    def set_definition(self, name, info):
+        """Publish a resolved row without losing concurrent catalog additions."""
+        with self._lock:
+            super().__setitem__(name, dict(info))
+            self._revision += 1
 
     def items(self):
         with self._lock:

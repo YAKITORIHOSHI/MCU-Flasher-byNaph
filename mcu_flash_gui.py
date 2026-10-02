@@ -33,6 +33,9 @@ if not enforce_minimum_cpu_requirement():
 from src.modules.private_python_guard import enforce_private_python
 enforce_private_python()
 
+from src.modules.offline_runtime import activate
+activate()
+
 # Hide background subprocess consoles on Windows
 if sys.platform == "win32":
     try:

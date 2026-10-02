@@ -34,7 +34,7 @@ configure_webengine_environment()
 
 # Strict enforcement: NEVER run with system/desktop Python
 from private_python_guard import enforce_private_python
-enforce_private_python(prefer_pythonw=True)
+enforce_private_python(prefer_pythonw=True, allow_repair=True)
 
 
 def _user_state_dir() -> Path:
@@ -252,7 +252,9 @@ if __name__ == "__main__":
                 if c_path.exists():
                     cand_project = c_path
         if cand_project is None:
-            for arg in sys.argv[1:]:
+            for index, arg in enumerate(sys.argv[1:], start=1):
+                if sys.argv[index - 1] == "--plan":
+                    continue
                 if not arg.startswith("-"):
                     c_path = Path(arg).resolve(strict=False)
                     if c_path.exists():
@@ -276,8 +278,8 @@ if __name__ == "__main__":
 
     # If another main GUI window is already active, skip bootstrap completely and launch the new window directly
     try:
-        from bootstrap import _is_main_gui_running, _spawn_main_gui
-        if _is_main_gui_running() and not any(arg in sys.argv for arg in ("--setup", "--repair", "--reinstall")):
+        from bootstrap import _is_main_gui_running, _spawn_main_gui, _explicit_setup_requested, _read_startup_health_snapshot
+        if _is_main_gui_running() and not _explicit_setup_requested() and _read_startup_health_snapshot() is not None:
             _spawn_main_gui()
             sys.exit(0)
     except Exception:

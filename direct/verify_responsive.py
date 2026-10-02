@@ -80,7 +80,7 @@ class QtResponsiveChecks(ControlChecks):
         layout.addWidget(controls)
         layout.addWidget(serial)
         host.show()
-        for width in (1920, 1366, 1024, 800, 640, 480, 800, 1920):
+        for width in (1920, 1366, 1024, 800, 640, 480, 464, 320, 800, 1920):
             host.resize(width, 620)
             toolbar.set_responsive_width(width)
             pump()

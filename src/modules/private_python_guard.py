@@ -12,9 +12,10 @@ If invoked by any other Python interpreter (system Python, Microsoft Store stub,
 PATH python, etc.):
 - Automatically re-launches under <project_root>/src/_python/python.exe with the
   exact same command-line arguments and an isolated environment.
-- If the private runtime is missing or damaged, attempts auto-healing from
+- A missing or damaged runtime stops workspace entry points with a bootstrap
+  repair instruction. Only bootstrap launchers can opt into auto-healing from
   installers/.handsoff/python-*-amd64.exe.
-- If healing fails, halts immediately with a clear error message. It will NEVER
+- If bootstrap healing fails, halts immediately with a clear error message. It will NEVER
   fall back to running on the desktop/system Python.
 """
 from __future__ import annotations
@@ -111,7 +112,7 @@ def _heal_private_runtime_if_needed(target_dir: Path) -> bool:
         return False
 
 
-def get_private_python_exe(prefer_pythonw: bool = False) -> Path:
+def get_private_python_exe(prefer_pythonw: bool = False, *, allow_repair: bool = False) -> Path:
     """
     Get the exact Path to the private Python executable in src/_python.
     STRICT: NEVER returns any system or external Python.
@@ -129,7 +130,7 @@ def get_private_python_exe(prefer_pythonw: bool = False) -> Path:
                         return candidate
                 except (OSError, subprocess.TimeoutExpired):
                     continue
-        raise RuntimeError("Ubuntu runtime is missing or damaged. Run: python3 direct/setup_ubuntu.py")
+        raise RuntimeError("Ubuntu runtime is missing or damaged. Run: python3 direct/ubuntu/setup.py")
     pyw = PRIVATE_PYTHON_DIR / "pythonw.exe"
     py  = PRIVATE_PYTHON_DIR / "python.exe"
 
@@ -152,6 +153,8 @@ def get_private_python_exe(prefer_pythonw: bool = False) -> Path:
             healthy = False
 
     if not healthy:
+        if not allow_repair:
+            raise RuntimeError("Private Python is missing or damaged. Run direct/windows/run.vbs --repair; the main app does not install runtimes.")
         # Attempt healing
         if _heal_private_runtime_if_needed(PRIVATE_PYTHON_DIR):
             target = pyw if prefer_pythonw and pyw.is_file() else py
@@ -205,7 +208,7 @@ def sanitize_environment() -> dict[str, str]:
     return env
 
 
-def enforce_private_python(prefer_pythonw: bool = False) -> None:
+def enforce_private_python(prefer_pythonw: bool = False, *, allow_repair: bool = False) -> None:
     """
     Call at the very beginning of application entry points.
     If the current process was started with any interpreter other than
@@ -226,7 +229,7 @@ def enforce_private_python(prefer_pythonw: bool = False) -> None:
         file=sys.stderr,
     )
     try:
-        private_exe = get_private_python_exe(prefer_pythonw=prefer_pythonw)
+        private_exe = get_private_python_exe(prefer_pythonw=prefer_pythonw, allow_repair=allow_repair)
     except RuntimeError as exc:
         print(f"[MCU Flasher] {exc}", file=sys.stderr)
         sys.exit(1)

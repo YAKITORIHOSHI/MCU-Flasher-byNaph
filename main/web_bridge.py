@@ -45,6 +45,7 @@ from main.core.config import (
     load_gui_config, save_gui_config, load_recent_projects, add_recent_project,
     load_recent_boards, add_recent_board, get_theme_mode, set_theme_mode,
     _try_acquire_reset_cache_lock, _release_reset_cache_lock, port_occupied_owner,
+    claim_serial_port,
     _load_raw_config, _save_raw_config,
     find_project_window, focus_project_window, set_active_sketch_dir,
     get_project_remembered_board, set_project_remembered_board,
@@ -63,7 +64,10 @@ from main.core.toolchain import (
     get_optimal_compiler_jobs, _max_cpu_jobs,
     board_toolchain_ready, prepare_platformio_board_toolchain,
     ensure_scons_ready,
+    _get_safe_platformio_core_dir,
 )
+from main.platforms import get_platform_backend
+_HOST_RUNTIME = get_platform_backend()
 from main.core.board_catalog import (
     SUPPORTED_BOARDS, _enrich_chip_features, _parse_esptool_write_progress,
     _parse_esptool_image_start, _parse_esptool_compressed, _parse_esptool_wrote,
@@ -425,11 +429,8 @@ class MCUWebBackendAPI:
                 seed = dict(SUPPORTED_BOARDS)
                 registry = None
                 warning = ""
-                if include_registry or not seed:
-                    try:
-                        registry = load_registry_board_catalog()
-                    except Exception as exc:
-                        warning = f"Online catalog unavailable; showing cached and installed boards. {exc}"
+                if include_registry:
+                    warning = "Offline workspace: refreshed local board packs. Add or update packs in bootstrap."
                 catalog = load_dynamic_boards(seed, registry_catalog=registry)
                 usb_ids = load_downloaded_board_usb_ids(catalog)
                 if not self._stop_port_monitor.is_set():
@@ -518,6 +519,7 @@ class MCUWebBackendAPI:
                     "serial:clear":     None,
                     "operation:phase":  bus.operation_phase,
                     "ports:updated":    bus.ports_updated,
+                    "port:selected":    bus.port_selected,
                     "board:selected":   bus.board_selected,
                     "boards:updated":   bus.board_catalog_updated,
                     "project:updated":  bus.project_updated,
@@ -627,7 +629,6 @@ class MCUWebBackendAPI:
                     added_devs = current_devs - last_devs
                     removed_devs = last_devs - current_devs
                     self._last_known_ports = list(ports)
-                    self.emit("ports:updated", ports)
 
                     if added_devs:
                         for dev in sorted(added_devs):
@@ -648,12 +649,22 @@ class MCUWebBackendAPI:
                             if self.current_port == dev:
                                 self._stop_serial_monitor()
                                 self.current_port = ""
+                                if not claim_serial_port(""):
+                                    self.emit("notification", {
+                                        "title": "Port settings unavailable",
+                                        "message": "The device disconnected, but its saved port selection could not be cleared.",
+                                        "type": "warning",
+                                    })
+                                self.emit("port:selected", {"port": ""})
                                 self.emit("serial:status", {
                                     "connected": False,
                                     "port": "",
                                     "baud": self.current_baud,
                                 })
                                 self._sync_project_hardware_state()
+                    # Publish after clearing disconnected selections, so the
+                    # GUI cannot race cleanup with a stale combo selection.
+                    self.emit("ports:updated", ports)
             except Exception:
                 pass  # never crash the monitor; back-off handled by wait below
 
@@ -1035,7 +1046,7 @@ class MCUWebBackendAPI:
 
             for bdir in candidate_dirs:
                 if bdir and bdir.is_dir():
-                    for fname in ("firmware.bin", "firmware.hex", "firmware.elf"):
+                    for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf"):
                         p = bdir / fname
                         if p.is_file() and p.stat().st_size >= 1024:
                             return p
@@ -1355,7 +1366,7 @@ class MCUWebBackendAPI:
         try:
             env_dir = cache_root / ".pio" / "build" / "mcu_env"
             if env_dir.is_dir():
-                for fname in ("firmware.bin", "firmware.hex", "firmware.elf", "firmware.map"):
+                for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf", "firmware.map"):
                     p = env_dir / fname
                     if p.is_file():
                         try:
@@ -1496,7 +1507,7 @@ class MCUWebBackendAPI:
             primary_build = cache_root / ".pio" / "build" / "mcu_env"
             if primary_build.is_dir() and any(
                 (primary_build / fname).is_file()
-                for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
+                for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf")
             ):
                 return True
 
@@ -1506,7 +1517,7 @@ class MCUWebBackendAPI:
                     isolated_dir = self._board_build_dir(target)
                     if isolated_dir.is_dir() and any(
                         (isolated_dir / fname).is_file()
-                        for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
+                        for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf")
                     ):
                         return True
                 except Exception:
@@ -2279,6 +2290,16 @@ class MCUWebBackendAPI:
                 "owner_pid": owner.get("pid"),
             }
 
+        # Claim before scaffolding, scans or metadata writes. A simultaneous
+        # opener must lose this claim without touching the project's files.
+        if not set_active_sketch_dir(str(p), hwnd=getattr(self, "_hwnd", 0)):
+            owner = find_project_window(p, exclude_self=True)
+            if owner:
+                focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0))
+            return {"success": False, "already_open": bool(owner),
+                    "error": "Project is already open in another window." if owner else
+                             "Could not register the project. Check that your settings folder is writable."}
+
         # Auto-scaffold default .ino if empty or missing source files
         source_extensions = {".ino", ".cpp", ".c", ".h", ".hpp"}
         has_source = False
@@ -2312,7 +2333,6 @@ class MCUWebBackendAPI:
 
         self.sketch_dir_path = p
         add_recent_project(str(p))
-        set_active_sketch_dir(str(p), hwnd=getattr(self, "_hwnd", 0))
 
         # Enforce file hiding and cleanup immediately upon opening sketch
         try:
@@ -2372,6 +2392,55 @@ class MCUWebBackendAPI:
                     sig_bus.ai_review_requested.emit(reviews[0].get("path", ""))
 
         return {"success": True, "project": payload}
+
+    def open_project_window(self, folder_path: str) -> dict[str, Any]:
+        """Explicitly open another sketch without changing this window's state."""
+        target = Path(folder_path).resolve()
+        folder = target.parent if target.is_file() else target
+        if not folder.is_dir() or is_application_codebase_dir(folder):
+            return {"success": False, "error": "Select an existing sketch folder outside the application."}
+        owner = find_project_window(folder)
+        if owner:
+            focused = focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0))
+            return {"success": focused, "already_open": True,
+                    "owner_pid": owner.get("pid", 0), "owner_hwnd": owner.get("hwnd", 0),
+                    "error": "The project is already open. Select its window from your desktop."}
+        try:
+            from src.modules.private_python_guard import is_running_private_python
+            if not is_running_private_python():
+                return {"success": False, "error": "Open projects using the application's private runtime."}
+            interpreter = Path(sys.executable)
+            if sys.platform == "win32" and (interpreter.parent / "pythonw.exe").is_file():
+                interpreter = interpreter.parent / "pythonw.exe"
+            args = [str(interpreter), "-B", str(SCRIPT_DIR / "mcu_flash_gui.py"),
+                    "--new-window", "--project", str(target)]
+            options = {"cwd": str(SCRIPT_DIR), "stdin": subprocess.DEVNULL,
+                       "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            if sys.platform == "win32":
+                options["creationflags"] = subprocess.CREATE_NO_WINDOW
+            else:
+                options["start_new_session"] = True
+            child = subprocess.Popen(args, **options)
+            # Retain handles for nonblocking early-exit reporting, never replay.
+            pending = getattr(self, "_project_window_processes", [])
+            self._project_window_processes = [p for p in pending if p.poll() is None] + [child]
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(2000, self._check_project_window_startup)
+            return {"success": True, "pid": child.pid, "opened_new_window": True}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": f"Could not open project window: {exc}"}
+
+    def _check_project_window_startup(self) -> None:
+        pending = []
+        for child in getattr(self, "_project_window_processes", []):
+            code = child.poll()
+            if code is None:
+                pending.append(child)
+            elif code != 0:
+                self.emit("notification", {"title": "Project window failed to open",
+                          "message": f"The new window exited with code {code}. Check logs/gui_crash.log.",
+                          "type": "error"})
+        self._project_window_processes = pending
 
     def open_project_picker(self) -> str:
         """Open native folder browser dialog."""
@@ -2466,9 +2535,10 @@ class MCUWebBackendAPI:
         include_h: bool = False,
         include_cpp: bool = False,
         template_type: str = "standard",
+        open_in_new_window: bool = False,
     ) -> dict[str, Any]:
         """Create a new sketch folder with full scaffold (matching old ProjectSelectorDialog)."""
-        if self.is_busy or getattr(self, "active_operation", None) is not None:
+        if not open_in_new_window and (self.is_busy or getattr(self, "active_operation", None) is not None):
             self.emit("notification", {
                 "title": "Action in Progress",
                 "message": "Creating or changing project is not allowed while an action is in progress.",
@@ -2484,7 +2554,8 @@ class MCUWebBackendAPI:
         if is_application_codebase_dir(parent_dir) or is_application_codebase_dir(target_dir):
             return {"success": False, "error": "Cannot create sketch inside MCU Flasher application folder."}
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # A new-project action must never overwrite an existing sketch.
+            target_dir.mkdir(parents=True, exist_ok=False)
             ensure_hidden_read_first_md(target_dir)
 
             ino_includes = f'#include "{clean_name}.h"\n\n' if include_h else ""
@@ -2541,7 +2612,10 @@ class MCUWebBackendAPI:
                 )
                 cpp_file.write_text(cpp_content, encoding="utf-8")
 
-            return self.open_project(str(target_dir))
+            return (self.open_project_window(str(target_dir)) if open_in_new_window
+                    else self.open_project(str(target_dir)))
+        except FileExistsError:
+            return {"success": False, "error": "That project folder already exists. Open it as an existing project."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -2760,10 +2834,15 @@ class MCUWebBackendAPI:
 
     def select_port(self, port: str):
         """Select COM port and update serial monitor."""
+        if not claim_serial_port(port):
+            owner = port_occupied_owner(port)
+            self.emit("notification", {"title": "Serial port unavailable",
+                      "message": f"{port} is selected in another project window (PID {owner})." if owner
+                                 else "Could not save the serial port selection. Check your settings folder.",
+                      "type": "warning"})
+            return False
         self.current_port = port
-        cfg = load_gui_config()
-        cfg["selected_port"] = port
-        save_gui_config(cfg)
+        self.emit("port:selected", {"port": port})
         self._sync_project_hardware_state()
 
         if not self.is_busy:
@@ -2780,10 +2859,12 @@ class MCUWebBackendAPI:
             threading.Thread(
                 target=_switch_port_worker, name="MCU_SwitchPort", daemon=True
             ).start()
+        return True
 
     def select_board(self, board_name: str):
         """Select microcontroller board model for the active session."""
         self.current_board = board_name
+        self.emit("board:selected", {"board_name": board_name})
         cfg = load_gui_config()
         cfg["selected_board"] = board_name
         save_gui_config(cfg)
@@ -2798,7 +2879,6 @@ class MCUWebBackendAPI:
             except Exception:
                 pass
         self._load_compile_cache(board_name)
-        self.emit("board:selected", {"board_name": board_name})
         self.update_skip_compile_availability()
         self._sync_project_hardware_state()
 
@@ -3175,19 +3255,60 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "✖ Compile error: No board selected. Please select a board first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Compile Failed", "message": "No board selected.", "type": "warning"})
             return
-        if not self._check_target("Compile", sketch=True):
-            return
-
         self.is_busy = True
         self._stop_requested = False
         self.active_operation = "compile"
-        self._current_op_phase = "compiling"
-        self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True, "op": "compile"})
+        self._current_op_phase = "resolving"
+        self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "compile"})
         self.emit("window:closable", {"closable": True})
 
         threading.Thread(
-            target=self._compile_worker, args=(False,), name="MCU_Compile", daemon=True
+            target=self._compile_requested_worker, name="MCU_Compile", daemon=True
         ).start()
+
+    def _release_requested_operation(self):
+        self.is_busy = False
+        self.active_operation = self._current_op_phase = None
+        self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+        self.emit("window:closable", {"closable": True})
+
+    def _resolve_requested_target(self, action: str) -> bool:
+        """Repair an unresolved cached selection off the GUI thread before rejecting it."""
+        from main.core.board_catalog import (
+            _load_platformio_board_catalog, resolve_board_definition,
+            load_registry_board_catalog, _save_board_catalog_cache,
+        )
+        name = self.current_board
+        info = self._resolve_board_info(name)
+        if info:
+            needs_resolution = info.get("pio_resolved") is False or not info.get("board")
+            if needs_resolution:
+                self.emit("console:log", {"text": f"  Resolving board definition for {name}…", "tag": "info", "newline": True})
+            resolved = resolve_board_definition(name, info, _load_platformio_board_catalog())
+            if resolved.get("pio_resolved") is False or not resolved.get("board"):
+                from src.modules.offline_runtime import bootstrap_instruction
+                self.emit("console:log", {"text": bootstrap_instruction(f"Offline board definition unavailable: {name}"),
+                                          "tag": "error", "newline": True})
+            if resolved.get("pio_resolved") and resolved.get("board") and resolved != info:
+                SUPPORTED_BOARDS.set_definition(name, resolved)
+                _revision, catalog = SUPPORTED_BOARDS.snapshot()
+                _save_board_catalog_cache(catalog)
+                self.emit("boards:updated", {"boards": catalog})
+                self.emit("console:log", {"text": f"  Target: {resolved['platform']}:{resolved['board']} ({self._resolve_board_info(name).get('framework', '')})",
+                                          "tag": "success", "newline": True})
+        return self._check_target(action, sketch=True)
+
+    def _compile_requested_worker(self):
+        try:
+            if not self._resolve_requested_target("Compile"):
+                self._release_requested_operation()
+                return False
+            return self._compile_worker(False)
+        except Exception as exc:
+            self.emit("console:log", {"text": f"Build preparation failed: {exc}", "tag": "error", "newline": True})
+            self.emit("notification", {"title": "Build failed", "message": str(exc), "type": "error"})
+            self._release_requested_operation()
+            return False
 
     @staticmethod
     def _convert_sketch_inos_to_cpp(primary_ino: Path, ino_files: list[Path]) -> str:
@@ -3300,7 +3421,7 @@ class MCUWebBackendAPI:
         _env_build_dir = cache_root / ".pio" / "build" / "mcu_env"
         is_fresh_board = not _env_build_dir.is_dir() or not any(
             (_env_build_dir / fname).is_file()
-            for fname in ("firmware.bin", "firmware.hex", "firmware.elf")
+            for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf")
         )
         if is_fresh_board:
             self.emit("console:log", {
@@ -3323,50 +3444,17 @@ class MCUWebBackendAPI:
             if not pio_cmd:
                 self.emit("console:log", {"text": "✖ PlatformIO executable not found.", "tag": "error", "newline": True})
                 self.is_busy = False
+                self.active_operation = self._current_op_phase = None
                 self.emit("operation:phase", {"phase": "idle", "is_busy": False})
                 return False
 
-            # If board toolchain is not yet downloaded or verified, prepare it on-demand
             binfo = self._resolve_board_info(self.current_board)
             platform_name = str(binfo.get("platform", "")).strip()
             board_id = str(binfo.get("board", "")).strip()
             framework = str(binfo.get("framework", "arduino")).strip() or "arduino"
-            if platform_name and board_id:
-                try:
-                    if not board_toolchain_ready(core_dir, platform_name, board_id, framework):
-                        self.emit("console:log", {
-                            "text": f"  ⬇ Preparing toolchain for {self.current_board} ({platform_name}:{board_id})...",
-                            "tag": "info",
-                            "newline": True,
-                        })
-                        def _on_pio_line(line):
-                            self.emit("console:log", {"text": f"    {line}", "tag": "dim", "newline": True})
-                        def _on_pio_status(st):
-                            self.emit("console:log", {"text": f"  ℹ {st}", "tag": "info", "newline": True})
-                        self._framework_download_active = True
-                        self._current_op_phase = "installing"
-                        self.emit("operation:phase", {"phase": "installing", "is_busy": True, "can_stop": False, "op": self.active_operation})
-                        self.emit("window:closable", {"closable": False})
-                        try:
-                            prepare_platformio_board_toolchain(
-                                platform=platform_name,
-                                board_id=board_id,
-                                framework=framework,
-                                label=self.current_board,
-                                on_line=_on_pio_line,
-                                on_status=_on_pio_status,
-                            )
-                        finally:
-                            self._framework_download_active = False
-                            self._current_op_phase = "compiling"
-                            self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True, "op": self.active_operation})
-                            self.emit("window:closable", {"closable": True})
-                except Exception as _toolchain_err:
-                    self.emit("console:log", {
-                        "text": f"  ⚠ Toolchain readiness check: {_toolchain_err}",
-                        "tag": "dim",
-                        "newline": True,
-                    })
+            if not board_toolchain_ready(core_dir, platform_name, board_id, framework):
+                from src.modules.offline_runtime import bootstrap_instruction
+                raise RuntimeError(bootstrap_instruction(f"Board pack unavailable: {platform_name}:{board_id} ({framework})"))
 
             # Pre-create build directories to avoid SCons dbm/dblite FileNotFoundError
             (cache_root / ".pio" / "build" / "mcu_env").mkdir(parents=True, exist_ok=True)
@@ -3514,7 +3602,9 @@ class MCUWebBackendAPI:
             core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
             # Pre-verify SCons build engine so PlatformIO doesn't
             # re-download it mid-compile (avoids scary console noise).
-            ensure_scons_ready(core_dir)
+            if not ensure_scons_ready(core_dir):
+                from src.modules.offline_runtime import bootstrap_instruction
+                raise RuntimeError(bootstrap_instruction("PlatformIO tool-scons is missing"))
             launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
             launch_env["PLATFORMIO_CACHE_DIR"] = str(core_dir / ".cache")
             launch_env["PLATFORMIO_GLOBALLIB_DIR"] = str(core_dir / "lib")
@@ -3536,15 +3626,6 @@ class MCUWebBackendAPI:
             launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
             launch_env["SCONSFLAGS"] = f"-j{jobs}"
 
-            creation_flags = (
-                (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
-            )
-            startupinfo = None
-            if sys.platform == "win32":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001)
-                startupinfo.wShowWindow = 0
-
             self._active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -3553,11 +3634,9 @@ class MCUWebBackendAPI:
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creation_flags,
-                startupinfo=startupinfo,
                 cwd=str(cache_root),
                 env=launch_env,
-                start_new_session=(sys.platform != "win32"),
+                **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
 
             output_lines: list[str] = []
@@ -3929,7 +4008,8 @@ class MCUWebBackendAPI:
                             board_build_dir = self._effective_cache_root(self.sketch_dir_path) / "boards" / self._board_cache_key(self.current_board) / ".pio" / "build" / self._pio_env_name(self.current_board)
                         firmware = board_build_dir / "firmware.bin"
                         if not firmware.exists():
-                            firmware = board_build_dir / "firmware.hex"
+                            firmware = next((board_build_dir / filename for filename in ("firmware.hex", "firmware.uf2", "firmware.elf")
+                                             if (board_build_dir / filename).is_file()), firmware)
                         if firmware.exists():
                             stat = firmware.stat()
                             captured_meta["firmware_size"] = stat.st_size
@@ -3954,7 +4034,8 @@ class MCUWebBackendAPI:
                         target_env_dir = cache_root / ".pio" / "build" / self._pio_env_name(self.current_board)
                     fw_file = target_env_dir / "firmware.bin"
                     if not fw_file.exists():
-                        fw_file = target_env_dir / "firmware.hex"
+                        fw_file = next((target_env_dir / filename for filename in ("firmware.hex", "firmware.uf2", "firmware.elf")
+                                        if (target_env_dir / filename).is_file()), fw_file)
                     bl_file = target_env_dir / "bootloader.bin"
                     pt_file = target_env_dir / "partitions.bin"
                     if fw_file.exists():
@@ -5375,14 +5456,11 @@ class MCUWebBackendAPI:
         platform = binfo["platform"]
         board = binfo["board"]
         framework = binfo["framework"]
-        speed_val = getattr(self, "upload_speed", "") or ("115200" if platform == "atmelavr" else str(DEFAULT_UPLOAD_SPEED))
-        try:
-            speed_val = str(min(int(speed_val), MAX_BAUD_RATE))
-        except Exception:
-            pass
-        upload_speed = "115200" if platform == "atmelavr" else str(speed_val)
+        from main.core.target_profile import upload_configuration
+        upload_options = upload_configuration(binfo, getattr(self, "upload_speed", "") or str(DEFAULT_UPLOAD_SPEED))
 
-        extra_dirs = []
+        offline_libraries = Path(_get_safe_platformio_core_dir(SCRIPT_DIR)) / "lib"
+        extra_dirs = [offline_libraries.as_posix()] if offline_libraries.is_dir() else []
         app_lib_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src" / "Libs"
         if app_lib_dir.is_dir():
             extra_dirs.append(app_lib_dir.as_posix())
@@ -5435,7 +5513,7 @@ class MCUWebBackendAPI:
             f"board = {board}\n"
             f"framework = {framework}\n"
             f"monitor_speed = {safe_monitor_baud}\n"
-            f"upload_speed = {upload_speed}\n"
+            f"{upload_options}"
             f"{lib_extra}"
             f"{lib_deps_str}"
         )
@@ -5526,12 +5604,38 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "✖ Upload error: No board selected. Please select a board first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Upload Failed", "message": "No board selected.", "type": "warning"})
             return
-        if not self._check_target("Upload", sketch=True):
-            return
-        from main.core.target_profile import requires_upload_port
-        if not self.current_port and requires_upload_port(self._resolve_board_info()):
+        from main.core.target_profile import upload_target_ready
+        if not upload_target_ready(self._resolve_board_info(), self.current_port):
             self.emit("console:log", {"text": "✖ Upload error: No COM port selected. Please select a port first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Upload Failed", "message": "No port selected.", "type": "warning"})
+            return
+
+        self.is_busy = True
+        self._stop_requested = False
+        self.active_operation = "upload"
+        self._current_op_phase = "resolving"
+        self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "upload"})
+        self.emit("window:closable", {"closable": True})
+        threading.Thread(target=self._upload_requested_worker, args=(cfg,), name="MCU_Upload", daemon=True).start()
+
+    def _upload_requested_worker(self, cfg):
+        try:
+            if not self._resolve_requested_target("Upload"):
+                self._release_requested_operation()
+                return
+            self._start_resolved_upload(cfg)
+        except Exception as exc:
+            self.emit("console:log", {"text": f"Upload preparation failed: {exc}", "tag": "error", "newline": True})
+            self.emit("notification", {"title": "Upload failed", "message": str(exc), "type": "error"})
+            self._release_requested_operation()
+
+    def _start_resolved_upload(self, cfg):
+        """Snapshot the verified target and check cached sources on the worker."""
+        from main.core.target_profile import requires_upload_port
+        if not self.current_port and requires_upload_port(self._resolve_board_info()):
+            self.emit("console:log", {"text": "Upload cancelled: the selected port disconnected during board resolution.",
+                                      "tag": "error", "newline": True})
+            self._release_requested_operation()
             return
 
         selected_board = self.current_board
@@ -5548,7 +5652,7 @@ class MCUWebBackendAPI:
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         self._stop_requested = False
 
-        # Synchronously determine whether upload can skip compilation
+        # Fingerprint sources on the worker, after board resolution.
         can_skip = self.check_can_skip_compile_for_upload(selected_board)
 
         self.is_busy = True
@@ -5563,32 +5667,35 @@ class MCUWebBackendAPI:
             self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True, "op": "upload"})
             self.emit("window:closable", {"closable": True})
 
-        native = sys.platform.startswith("linux") or str(selected_board_info.get("platform")) not in {
-            "espressif32", "espressif8266", "atmelavr",
-        }
-        threading.Thread(
-            target=self._native_upload_worker if native else self._upload_worker,
-            args=(can_skip,), name="MCU_Upload", daemon=True,
-        ).start()
+        native = _HOST_RUNTIME.use_native_upload(selected_board_info)
+        worker = self._native_upload_worker if native else self._upload_worker
+        worker(can_skip)
 
     def _native_upload_worker(self, can_skip=False):
         """Delegate native programmer protocols to PIO, with one write attempt."""
-        port = str(self._active_port_label or "")
+        from main.core.target_profile import requires_upload_port
+        monitor_port = str(self._active_port_label or "")
         monitor_paused = False
         try:
-            owner = port_occupied_owner(port)
+            owner = port_occupied_owner(monitor_port) if monitor_port else None
             if owner:
-                raise RuntimeError(f"Port {port} is in use by another window (PID {owner}).")
+                raise RuntimeError(f"Port {monitor_port} is in use by another window (PID {owner}).")
             if not can_skip and not self._compile_worker(is_upload=True):
                 return
             if self._stop_requested:
                 return
+            # First compile can install the platform and reveal its native
+            # transport. Re-read metadata before passing any serial argument.
+            info = self._resolve_board_info() or getattr(self, "_active_board_info", {})
+            port = monitor_port if requires_upload_port(info) else ""
+            if info and requires_upload_port(info) and (not port or self.current_port != port):
+                raise RuntimeError("The selected serial upload port disconnected or changed during compilation.")
             command = list(find_pio_executable() or [])
             if not command:
                 raise RuntimeError("PlatformIO is unavailable. Repair the application runtime.")
             cache_root = self._effective_cache_root(self.sketch_dir_path)
             self._generate_platformio_ini(cache_root)
-            if port:
+            if monitor_port:
                 self._stop_serial_monitor()
                 monitor_paused = True
             self.is_busy = True
@@ -5610,7 +5717,7 @@ class MCUWebBackendAPI:
             self._active_process = subprocess.Popen(
                 command, cwd=str(cache_root), env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                creationflags=(subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0,
+                **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
             for line in self._active_process.stdout:
                 self.emit("console:log", {"text": line.rstrip(), "newline": True})
@@ -5634,7 +5741,7 @@ class MCUWebBackendAPI:
             self.emit("operation:phase", {"phase": "idle", "is_busy": False})
             self.emit("window:closable", {"closable": True})
             self._unmap_unc_after_build()
-            if monitor_paused and self.current_port == port:
+            if monitor_paused and self.current_port == monitor_port:
                 self._start_serial_monitor()
 
     def _get_jobs(self) -> int:
@@ -5644,12 +5751,8 @@ class MCUWebBackendAPI:
             return min(int(configured_jobs), safe_jobs)
         return safe_jobs
 
-    _board_cache_key_memo: dict[str, str] = {}
-
     def _board_cache_key(self, board_name: str | None = None) -> str:
         name = board_name or self.current_board or "unknown_board"
-        if name in self._board_cache_key_memo:
-            return self._board_cache_key_memo[name]
         binfo = self._resolve_board_info(name)
         identity = {
             "display_name": name,
@@ -5668,7 +5771,6 @@ class MCUWebBackendAPI:
         ) or str(name or "unknown_board")
         safe_prefix = re.sub(r"[^\w\-.]+", "_", readable).strip("_")
         key = f"{safe_prefix}_{digest}"
-        self._board_cache_key_memo[name] = key
         return key
 
     def _esptool_target(self, board_name: str | None = None,
@@ -5832,7 +5934,7 @@ class MCUWebBackendAPI:
             monitor_speed = "115200"
         else:
             monitor_speed = default_monitor_baud(platform, board_id, board_name)
-        upload_speed = "115200" if is_avr or is_esp8266 else "460800"
+        from main.core.target_profile import upload_configuration
 
         env_lines = [
             f"platform = {platform}",
@@ -5840,10 +5942,10 @@ class MCUWebBackendAPI:
             f"framework = {framework}",
             f"monitor_speed = {monitor_speed}",
         ]
-        if not is_native:
-            env_lines.append(f"upload_speed = {upload_speed}")
+        reset_upload_info = dict(info)
         if is_esp32 or is_esp8266:
-            env_lines.append("upload_protocol = esptool")
+            reset_upload_info["upload_protocol"] = "esptool"
+        env_lines.extend(upload_configuration(reset_upload_info, "115200" if is_esp8266 else "460800").strip().splitlines())
         if flash_mode:
             env_lines.append(f"board_build.flash_mode = {flash_mode}")
         if flash_size:
@@ -6010,7 +6112,7 @@ class MCUWebBackendAPI:
         except Exception as exc:
             return None, f"Could not prepare reset project files: {exc}"
 
-        pio_path = find_pio_executable() or ensure_platformio()
+        pio_path = find_pio_executable()
         if not pio_path:
             return None, "PlatformIO is unavailable."
         jobs = self._get_jobs()
@@ -6236,6 +6338,10 @@ class MCUWebBackendAPI:
         """
         if not self.current_port:
             self.emit("console:log", {"text": "✖ Upload error: No COM port selected.", "tag": "error", "newline": True})
+            self.is_busy = False
+            self.active_operation = self._current_op_phase = None
+            self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+            self.emit("window:closable", {"closable": True})
             return
 
         port = self.current_port
@@ -6247,7 +6353,9 @@ class MCUWebBackendAPI:
                 "newline": True,
             })
             self.is_busy = False
+            self.active_operation = self._current_op_phase = None
             self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+            self.emit("window:closable", {"closable": True})
             return
 
         # 1. Compile sketch or reuse compile cache if sources and board are unchanged
@@ -6585,7 +6693,7 @@ class MCUWebBackendAPI:
                     "replace_pattern": r"💡\s*Hold BOOT now.*",
                     "newline": True,
                 })
-            pio_cmd = find_pio_executable() or ensure_platformio()
+            pio_cmd = find_pio_executable()
             if not pio_cmd:
                 self.emit("console:log", {"text": "✖ PlatformIO not available for upload.", "tag": "error", "newline": True})
                 return
@@ -6628,17 +6736,9 @@ class MCUWebBackendAPI:
                     launch_env["ESPTOOL_CFGFILE"] = esptool_cfg_path
                 launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = str(_MAX_CONNECT_RETRIES)
 
-            if is_avr:
-                # Ensure tool-avrdude upload tool is ready before invoking PlatformIO upload
-                core_pkg_dir = Path(str(core_dir)) / "packages" / "tool-avrdude"
-                if not core_pkg_dir.is_dir() or (not (core_pkg_dir / "package.json").is_file() and not (core_pkg_dir / ".piopm").is_file()):
-                    try:
-                        # pyrefly: ignore [missing-import]
-                        from bootstrap import prepare_platformio_board_toolchain
-                        self.emit("console:log", {"text": "  ⚙ Ensuring AVR upload tool (tool-avrdude)...", "tag": "info", "newline": True})
-                        prepare_platformio_board_toolchain("atmelavr", binfo.get("board", "uno") or "uno", "arduino")
-                    except Exception:
-                        pass
+            if is_avr and not (Path(core_dir) / "packages/tool-avrdude/package.json").is_file():
+                from src.modules.offline_runtime import bootstrap_instruction
+                raise RuntimeError(bootstrap_instruction("AVR upload tool tool-avrdude is missing"))
 
             self._active_process = subprocess.Popen(
                 cmd,
@@ -7392,7 +7492,7 @@ class MCUWebBackendAPI:
                 if reset_strategy == "avr_bootloader":
                     pio_path = find_pio_executable()
                     if not pio_path:
-                        pio_path = ensure_platformio()
+                        pio_path = find_pio_executable()
                     if not pio_path:
                         self.emit("console:log", {"text": "  ✖ PlatformIO is unavailable.", "tag": "error", "newline": True})
                         return
@@ -7769,7 +7869,7 @@ class MCUWebBackendAPI:
 
                 pio_cmd = find_pio_executable()
                 if not pio_cmd:
-                    pio_cmd = ensure_platformio()
+                    pio_cmd = find_pio_executable()
                 if not pio_cmd:
                     self.emit("console:log", {"text": "✖ PlatformIO core not available for Soft Reset.", "tag": "error", "newline": True})
                     return

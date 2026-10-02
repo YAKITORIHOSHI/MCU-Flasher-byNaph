@@ -37,8 +37,8 @@ class RuntimeChecks(unittest.TestCase):
 
     def test_source_syntax(self):
         files = [ROOT / "mcu_flash_gui.py", *ROOT.joinpath("main").rglob("*.py")]
-        files += [ROOT / "src/modules" / name for name in ("private_python_guard.py", "recovery.py", "platform_runtime.py", "runtime_resources.py", "launcher.py", "project_terminal.py", "arduino_lib_req.py", "bootstrap.py", "tk_glass.py", "ui_palette.py", "ui_metrics.py")]
-        files += [ROOT / "direct/setup_ubuntu.py"]
+        files += [ROOT / "src/modules" / name for name in ("private_python_guard.py", "recovery.py", "platform_runtime.py", "runtime_resources.py", "launcher.py", "project_terminal.py", "arduino_lib_req.py", "bootstrap.py", "offline_bootstrap.py", "offline_runtime.py", "offline_platformio.py", "dedicated_AI.py", "tk_glass.py", "ui_palette.py", "ui_metrics.py")]
+        files += [ROOT / "direct/setup_ubuntu.py", ROOT / "direct/ubuntu/setup.py"]
         for path in files:
             compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
 
@@ -271,8 +271,13 @@ class RuntimeChecks(unittest.TestCase):
         from main.core import board_catalog, toolchain
         command = [sys.executable, "-m", "platformio"]
         payload = [{"id": "future_board", "name": "Future board", "platform": "futureplatform", "frameworks": ["arduino"], "rom": 1048576}]
-        with patch.object(toolchain, "find_pio_executable", return_value=command), patch.object(board_catalog.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(payload))), patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=str(ROOT / "temp/audit/runtime")):
-            self.assertEqual(board_catalog.load_registry_board_catalog()[0]["id"], "future_board")
+        import tempfile
+        audit = ROOT / "temp/audit/runtime"
+        audit.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit) as fixture:
+            (Path(fixture) / ".mcu-offline-catalog.json").write_text(json.dumps(payload))
+            with patch.object(toolchain, "find_pio_executable", return_value=command), patch.object(board_catalog.subprocess, "run", side_effect=AssertionError("Runtime catalog must stay offline")), patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=fixture):
+                self.assertEqual(board_catalog.load_registry_board_catalog()[0]["id"], "future_board")
         self.assertEqual(command, [sys.executable, "-m", "platformio"])
 
     def test_installed_manifest_refreshes_copied_cache(self):
@@ -298,6 +303,37 @@ class RuntimeChecks(unittest.TestCase):
         self.assertFalse(api.is_busy)
         self.assertIsNone(api.active_operation)
         self.assertTrue(any(name == "notification" and payload["type"] == "error" for name, payload in events))
+
+    def test_missing_compiler_releases_operation_before_idle_signal(self):
+        from main import web_bridge
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.current_board, api._active_process = "demo", None
+        api.sketch_dir_path = ROOT / "temp/audit/nonexistent-sketch"
+        api._resolve_board_info = lambda name=None: {}
+        api._effective_cache_root = lambda path: ROOT / "temp/audit/nonexistent-build"
+        api._unmap_unc_after_build = lambda: None
+        events = []
+        api.emit = lambda event, data: events.append((event, data, api.is_busy, api.active_operation))
+        with patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(ROOT / "temp/audit/nonexistent-runtime", False)), \
+                patch.object(web_bridge, "find_pio_executable", return_value=None):
+            self.assertFalse(api._compile_worker())
+        idle = [entry for entry in events if entry[0] == "operation:phase" and entry[1]["phase"] == "idle"]
+        self.assertTrue(idle)
+        self.assertEqual(idle[-1][2:], (False, None))
+
+    def test_upload_rejection_releases_operation_without_hardware_calls(self):
+        from main import web_bridge
+        for port, owner in (("", None), ("SIMULATED", "99999")):
+            api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+            api.current_port = port
+            api.is_busy, api.active_operation, api._current_op_phase = True, "upload", "compiling"
+            events = []
+            api.emit = lambda event, data: events.append((event, data, api.is_busy, api.active_operation))
+            with patch.object(web_bridge, "port_occupied_owner", return_value=owner):
+                api._upload_worker()
+            idle = [entry for entry in events if entry[0] == "operation:phase" and entry[1]["phase"] == "idle"]
+            self.assertTrue(idle)
+            self.assertEqual(idle[-1][2:], (False, None))
 
     def test_native_upload_failure_is_not_replayed(self):
         from main import web_bridge
@@ -381,6 +417,36 @@ class RuntimeChecks(unittest.TestCase):
                 self.assertEqual(result.returncode, 0)
             finally:
                 _release_reset_cache_lock(handle)
+
+    def test_disconnected_port_clears_claim_before_catalog_reaches_controls(self):
+        from main import web_bridge
+        from unittest.mock import Mock
+        for persisted in (True, False):
+            api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+            api.current_port, api.current_baud = "SIMULATED", 115200
+            api.is_busy = False
+            api._last_known_ports = [{"device": "SIMULATED"}]
+            api._stop_port_monitor = threading.Event()
+            api._init_hardware = Mock()
+            api._scan_ports = Mock(return_value=[])
+            api._stop_serial_monitor = Mock()
+            api._sync_project_hardware_state = Mock()
+            events = []
+            def emit(event, data):
+                events.append((event, data, api.current_port))
+                if event == "ports:updated":
+                    api._stop_port_monitor.set()
+            api.emit = emit
+            with patch.object(api._stop_port_monitor, "wait", return_value=False), \
+                    patch.object(web_bridge, "claim_serial_port", return_value=persisted) as claim:
+                api._port_monitor_loop()
+            claim.assert_called_once_with("")
+            api._stop_serial_monitor.assert_called_once()
+            names = [event for event, _, _ in events]
+            self.assertLess(names.index("port:selected"), names.index("ports:updated"))
+            self.assertEqual(events[-1][2], "")
+            if not persisted:
+                self.assertTrue(any(data.get("title") == "Port settings unavailable" for _, data, _ in events if isinstance(data, dict)))
 
     def test_old_serial_reader_cannot_disconnect_new_reader(self):
         from main import web_bridge
@@ -523,7 +589,7 @@ def qt_smoke(app, render_dir=None):
     board_catalog.SUPPORTED_BOARDS.replace(fixture)
     # This fixture deliberately exercises wide and compact layouts even when
     # an offscreen CI platform advertises only an 800-pixel virtual monitor.
-    with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1940, 1080)), patch.object(file_utils, "hide_internal_project_metadata"), patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}}), patch.object(config, "_save_raw_config"), patch.object(config, "save_gui_config"), patch.object(config, "get_theme_mode", return_value="default"), patch.object(config, "focus_project_window", return_value=False):
+    with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1940, 1080)), patch("main.qt.main_window.work_area", return_value=WorkArea(0, 0, 1940, 1080)), patch.object(file_utils, "hide_internal_project_metadata"), patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}}), patch.object(config, "_save_raw_config"), patch.object(config, "save_gui_config"), patch.object(config, "get_theme_mode", return_value="default"), patch.object(config, "focus_project_window", return_value=False):
         window = MCUMainWindow(backend)
         backend.start_services.assert_not_called()
         backend._scan_ports.assert_not_called()
@@ -668,6 +734,11 @@ def qt_smoke(app, render_dir=None):
                 render_dir.mkdir(parents=True, exist_ok=True)
                 assert window.grab().save(str(render_dir / "glass-dark.png"))
             dialog = BoardSearchDialog(window, board_list=["Demo target"], current_board="Demo target")
+            for _ in range(200):
+                if not dialog._search_pending:
+                    break
+                QTest.qWait(10)
+            assert not dialog._search_pending, "Board search worker did not finish"
             assert dialog.framework_combo.currentText() == "arduino"
             if render_dir:
                 dialog.show()
@@ -713,7 +784,8 @@ def qt_smoke(app, render_dir=None):
             assert value is True, f"Source-tab keyboard navigation, accessibility or external drag handling failed: {value!r}"
             # Simulate a small logical work area, such as a scaled laptop screen.
             from PySide6.QtCore import QRect
-            window._update_minimum_window_size(SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 640, 480)))
+            with patch("main.qt.main_window.work_area", return_value=WorkArea(0, 0, 1280, 480)):
+                window._update_minimum_window_size()
             window.resize(640, 432)
             QTimer.singleShot(250, capture_small)
 
@@ -775,6 +847,7 @@ def qt_smoke(app, render_dir=None):
                 check_small_panel(index + 1)
                 return
             window._bottom_tabs.setCurrentIndex(0)
+            window._update_minimum_window_size()
             window.resize(900, 700)
             QTimer.singleShot(250, capture_compact)
 

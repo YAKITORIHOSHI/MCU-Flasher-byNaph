@@ -316,15 +316,25 @@ class PerformanceChecks(unittest.TestCase):
                      "STARTUP_HEALTH_SCHEMA": 3, "_STARTUP_REQUIRED_PACKAGE_DIRS": ("serial",),
                      "_startup_site_packages_dir": lambda: site, "_record_bootstrap_log": Mock()}
             exec(compile(helpers, "<isolated bootstrap helpers>", "exec"), scope)
-            with patch.object(sys, "argv", ["bootstrap.py"]), patch.dict(os.environ, {"PLATFORMIO_CORE_DIR": ""}), patch.dict(sys.modules, {"crash_detector": SimpleNamespace(detect_previous_crash=lambda: {"crashed": False})}):
+            from src.modules import offline_bootstrap
+            import platform as host_platform
+            offline_core = fixture / "native-core"
+            offline_core.mkdir()
+            (offline_core / "fixture.json").write_text("{}")
+            certificate = {"schema": offline_bootstrap.SCHEMA, "plan": offline_bootstrap.plan_hash(offline_bootstrap.load_plan()),
+                           "default_plan": offline_bootstrap.plan_hash(offline_bootstrap.load_plan()),
+                           "host": sys.platform, "architecture": host_platform.machine(), "files": ["fixture.json"]}
+            (offline_core / offline_bootstrap.MARKER).write_text(json.dumps(certificate))
+            with patch.object(sys, "argv", ["bootstrap.py"]), patch.dict(os.environ, {"PLATFORMIO_CORE_DIR": str(offline_core)}), patch.dict(sys.modules, {"crash_detector": SimpleNamespace(detect_previous_crash=lambda: {"crashed": False})}):
                 self.assertIsNone(scope["_read_startup_health_snapshot"]())
                 self.assertTrue(scope["_write_startup_health_snapshot"]())
                 child = Mock()
                 child.wait.side_effect = subprocess.TimeoutExpired("fixture", 1)
                 scope["_spawn_main_gui"] = Mock(return_value=(child, None))
                 self.assertTrue(scope["_try_fast_normal_launch"]())
-                with patch.object(sys, "argv", ["bootstrap.py", "--repair"]):
-                    self.assertFalse(scope["_try_fast_normal_launch"]())
+                for arguments in (["--repair"], ["--plan", "custom-plan.json"]):
+                    with patch.object(sys, "argv", ["bootstrap.py", *arguments]):
+                        self.assertFalse(scope["_try_fast_normal_launch"]())
                 child.wait.side_effect = None
                 child.wait.return_value = 1
                 self.assertFalse(scope["_try_fast_normal_launch"]())

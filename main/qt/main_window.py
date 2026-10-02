@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from main.qt.signals import signals as sig_bus
-from main.qt.responsive import active_screen, clamp_window, ScreenWatcher
+from main.qt.responsive import active_screen, work_area, clamp_window, ScreenWatcher
 
 # ── Project root resolution ───────────────────────────────────────────────────
 _this_file = Path(__file__).resolve()
@@ -100,13 +100,15 @@ class MCUMainWindow(QMainWindow):
         """Calculate initial window geometry adapted to screen work area dimensions."""
         if screen is None:
             screen = self._get_active_screen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1280, 720)
+        area = work_area(self, screen)
+        avail = QRect(area.x, area.y, area.width, area.height)
         avail_w = avail.width()
         avail_h = avail.height()
 
         from src.modules.ui_metrics import WorkArea, preferred_size
         target_w, target_h = preferred_size(
             WorkArea(avail.x(), avail.y(), avail_w, avail_h), 1440, 920, ratio=.90)
+        target_w = max(target_w, self._minimum_width_for_display(avail_w, avail_h))
 
         # Center within the available work area (respecting taskbar location)
         x = avail.x() + max(0, (avail_w - target_w) // 2)
@@ -120,21 +122,24 @@ class MCUMainWindow(QMainWindow):
         """Use logical work-area width; Qt already applies the OS display scale."""
         screen_width = max(1, int(screen_width))
         screen_height = max(1, int(screen_height))
-        return min(max(1, screen_width - 24), max(480, min(660, screen_width // 2)))
+        return max(1, screen_width // 2)
 
     def _update_minimum_window_size(self, screen: QScreen | None = None) -> None:
         """Fit minimum dimensions to the current logical work area."""
         if screen is None:
             screen = self._get_active_screen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1280, 720)
+        area = work_area(self, screen)
+        avail = QRect(area.x, area.y, area.width, area.height)
         sw = avail.width()
         sh = avail.height()
         new_min_w = self._minimum_width_for_display(sw, sh)
         new_min_h = min(380, max(1, sh - 48))
+        self.setMaximumWidth(16777215)
         self.setMinimumSize(new_min_w, new_min_h)
 
     def _setup_window(self) -> None:
         self.setWindowTitle("MCU Flasher by Naph")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
 
         # Logical work-area bounds permit compact and portrait desktops.
         screen = self._get_active_screen()
@@ -625,6 +630,8 @@ class MCUMainWindow(QMainWindow):
         from main.core.board_catalog import SUPPORTED_BOARDS
         SUPPORTED_BOARDS.replace(data.get("boards", {}))
         self._primary_toolbar._update_action_button_states()
+        if self._backend and self._backend.current_board:
+            self._controls_bar._update_hardware_defaults_for_board(self._backend.current_board, update_monitor=False)
         if data.get("warning"):
             self._status_label.setText("Showing cached and installed boards; online refresh was unavailable.")
             self._status_label.setToolTip(data["warning"])
@@ -909,18 +916,10 @@ class MCUMainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _shortcut_compile(self) -> None:
-        if self._backend and not self._backend.is_busy:
-            if hasattr(self, "_editor_panel") and self._editor_panel:
-                self._editor_panel.trigger_save_all(callback=self._backend.compile_sketch)
-            else:
-                self._backend.compile_sketch()
+        self._primary_toolbar._do_compile()
 
     def _shortcut_upload(self) -> None:
-        if self._backend and not self._backend.is_busy:
-            if hasattr(self, "_editor_panel") and self._editor_panel:
-                self._editor_panel.trigger_save_all(callback=self._backend.upload_sketch)
-            else:
-                self._backend.upload_sketch()
+        self._primary_toolbar._do_upload()
 
     def _shortcut_save(self) -> None:
         self._trigger_temporary_action("Saving", 700)
@@ -938,18 +937,10 @@ class MCUMainWindow(QMainWindow):
         return False
 
     def _shortcut_open_project(self) -> None:
-        if self._is_busy():
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Action in Progress",
-                "Changing project is not allowed while an action is in progress.\n\n"
-                "Please wait for the current action to finish or stop it first.",
-            )
-            return
         from main.qt.project_dialog import ProjectDialog
-        dlg = ProjectDialog(self._backend, parent=self)
+        dlg = ProjectDialog(self._backend, parent=self, open_in_new_window=True)
         dlg.exec()
+        dlg.deleteLater()
 
     def _open_modify_files_dialog(self) -> None:
         """Open the Modify Project Files dialog."""
@@ -1315,6 +1306,7 @@ class MCUMainWindow(QMainWindow):
                         break
 
                 if matching_screen:
+                    self._update_minimum_window_size(matching_screen)
                     avail = matching_screen.availableGeometry()
                     # Clamp dimensions to the available work area
                     w = min(w, avail.width())
@@ -1328,6 +1320,7 @@ class MCUMainWindow(QMainWindow):
                     optimal = self._calculate_optimal_geometry()
                     self.setGeometry(optimal)
 
+            clamp_window(self)
             if was_maximized:
                 self.showMaximized()
         except Exception:

@@ -66,9 +66,11 @@ class ProjectDialog(QDialog):
         backend: Optional["MCUWebBackendAPI"] = None,
         initial_dir: str = "",
         parent: QWidget | None = None,
+        open_in_new_window: bool = False,
     ):
         super().__init__(parent)
         self._backend = backend
+        self._open_in_new_window = open_in_new_window
         self.selected_project: Optional[Path] = None
 
         # Determine start directory (NEVER the application codebase)
@@ -100,6 +102,8 @@ class ProjectDialog(QDialog):
             self._update_existing_preview(self._start_dir)
 
     def _is_busy(self) -> bool:
+        if self._open_in_new_window:
+            return False
         if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
             return True
         p = self.parent()
@@ -161,7 +165,8 @@ class ProjectDialog(QDialog):
         hl.setSpacing(2)
 
         self._title_lbl = QLabel("MCU Flasher by Naph")
-        self._sub_lbl = QLabel("Open an existing sketch project, or create a new one")
+        self._sub_lbl = QLabel("Open each sketch in its own window" if self._open_in_new_window
+                              else "Open an existing sketch project, or create a new one")
 
         hl.addWidget(self._title_lbl)
         hl.addWidget(self._sub_lbl)
@@ -179,6 +184,7 @@ class ProjectDialog(QDialog):
 
         # ── Tab 3: Recent Projects ──────────────────────────────────────────
         self._setup_recents_tab()
+        self._setup_open_projects_tab()
 
         # Apply active theme dynamically to all widgets
         self._apply_dialog_theme()
@@ -517,7 +523,7 @@ class ProjectDialog(QDialog):
         btn_row.addWidget(self._btn_open_existing)
 
         layout.addLayout(btn_row)
-        self._tabs.addTab(tab, "📂 Existing Project")
+        self._tabs.addTab(tab, "Existing project")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Tab 2: New Project
@@ -605,7 +611,7 @@ class ProjectDialog(QDialog):
         btn_row.addWidget(self._btn_create)
 
         layout.addLayout(btn_row)
-        self._tabs.addTab(tab, "✨ New Project")
+        self._tabs.addTab(tab, "New project")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Tab 3: Recent Projects
@@ -650,7 +656,7 @@ class ProjectDialog(QDialog):
         btn_row.addWidget(self._btn_open_recent)
 
         layout.addLayout(btn_row)
-        self._tabs.addTab(tab, "🕒 Recent Projects")
+        self._tabs.addTab(tab, "Recent projects")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Helpers & Event Handlers
@@ -763,7 +769,7 @@ class ProjectDialog(QDialog):
 
         try:
             if self._backend:
-                res = self._backend.open_project(path)
+                res = self._open_project(path)
                 if not res.get("success"):
                     self.setEnabled(True)
                     QApplication.restoreOverrideCursor()
@@ -823,6 +829,7 @@ class ProjectDialog(QDialog):
                     include_h=self._cb_include_h.isChecked(),
                     include_cpp=self._cb_include_cpp.isChecked(),
                     template_type=tmpl,
+                    open_in_new_window=self._open_in_new_window,
                 )
                 if not res.get("success"):
                     self.setEnabled(True)
@@ -932,7 +939,7 @@ class ProjectDialog(QDialog):
 
         try:
             if self._backend:
-                res = self._backend.open_project(path)
+                res = self._open_project(path)
                 if not res.get("success"):
                     self.setEnabled(True)
                     QApplication.restoreOverrideCursor()
@@ -963,3 +970,80 @@ class ProjectDialog(QDialog):
         self._btn_open_recent.setCursor(Qt.CursorShape.ArrowCursor)
         self._btn_clear_recents.setEnabled(False)
         self._btn_clear_recents.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _open_project(self, path: str) -> dict:
+        if self._open_in_new_window:
+            result = self._backend.open_project_window(path)
+            if result.get("success") and result.get("already_open"):
+                from main.core.config import focus_project_window
+                # Closing a modal picker can reactivate its parent; focus the
+                # requested project after the dialog has finished closing.
+                hwnd, pid = result.get("owner_hwnd", 0), result.get("owner_pid", 0)
+                QTimer.singleShot(250, lambda: focus_project_window(hwnd, pid))
+            return result
+        return self._backend.open_project(path)
+
+    def _setup_open_projects_tab(self) -> None:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        hint = QLabel("Each window keeps its own editor, terminal and board/port selection.", tab)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self._open_projects_list = QListWidget(tab)
+        self._open_projects_list.itemDoubleClicked.connect(self._focus_open_project)
+        layout.addWidget(self._open_projects_list, 1)
+        self._open_projects_status = QLabel(tab)
+        self._open_projects_status.setWordWrap(True)
+        layout.addWidget(self._open_projects_status)
+        buttons = QHBoxLayout()
+        refresh = QPushButton("Refresh", tab)
+        refresh.clicked.connect(self._load_open_projects)
+        buttons.addWidget(refresh)
+        buttons.addStretch()
+        self._focus_project_btn = QPushButton("Show window", tab)
+        self._focus_project_btn.clicked.connect(self._focus_open_project)
+        buttons.addWidget(self._focus_project_btn)
+        layout.addLayout(buttons)
+        self._tabs.addTab(tab, "Open projects")
+        self._tabs.currentChanged.connect(lambda index: self._load_open_projects()
+                                          if self._tabs.widget(index) is tab else None)
+        self._load_open_projects()
+
+    def _load_open_projects(self) -> None:
+        from main.core.config import get_open_projects
+        self._open_projects_list.clear()
+        for project in get_open_projects():
+            folder = Path(project["folder"])
+            label = folder.name + (" (this window)" if project["current"] else "")
+            item = QListWidgetItem(f"{label}\n{folder}")
+            item.setToolTip(str(folder))
+            item.setData(Qt.ItemDataRole.UserRole, project)
+            self._open_projects_list.addItem(item)
+        has_projects = self._open_projects_list.count() > 0
+        self._focus_project_btn.setEnabled(has_projects)
+        if has_projects:
+            self._open_projects_list.setCurrentRow(0)
+        self._open_projects_status.setText("" if has_projects else "No sketch windows are open yet.")
+
+    def _focus_open_project(self, item=None) -> None:
+        from main.core.config import find_project_window, focus_project_window
+        if not isinstance(item, QListWidgetItem):
+            item = self._open_projects_list.currentItem()
+        if item is None:
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        owner = find_project_window(project["folder"])
+        if not owner:
+            self._load_open_projects()
+            self._open_projects_status.setText("That project window has closed.")
+            return
+        if project["current"] and self.parentWidget():
+            self.reject()
+            self.parentWidget().raise_()
+            self.parentWidget().activateWindow()
+        elif focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0)):
+            self.reject()
+            hwnd, pid = owner.get("hwnd", 0), owner.get("pid", 0)
+            QTimer.singleShot(250, lambda: focus_project_window(hwnd, pid))
+        else:
+            self._open_projects_status.setText("Select this project window from your desktop.")

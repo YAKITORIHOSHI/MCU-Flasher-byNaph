@@ -40,10 +40,17 @@ jobs:
       - name: Linux runtime and verification
         if: runner.os == 'Linux'
         run: |
+          bash -n direct/ubuntu/run.sh
           bash -n direct/runThisOnUbuntu.sh
           # Verification may run on a runner below the desktop's CPU minimum.
           python -m venv .venv-linux
-          .venv-linux/bin/python -m pip install -r direct/requirements-ubuntu.txt
+          .venv-linux/bin/python -m pip install -r direct/ubuntu/requirements.txt
+          .venv-linux/bin/python -B direct/verify_platforms.py
+          .venv-linux/bin/python -B direct/verify_offline.py
+          .venv-linux/bin/python -B direct/verify_target_resolution.py
+          .venv-linux/bin/python -B direct/verify_board_families.py
+          .venv-linux/bin/python -B direct/verify_board_search.py
+          .venv-linux/bin/python -B direct/verify_projects.py
           .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility
           .venv-linux/bin/python -B direct/verify_performance.py
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_controls.py --render-dir temp/audit/compatibility
@@ -51,12 +58,46 @@ jobs:
           for scale in 1 1.25 1.5 2; do
             xvfb-run -a env QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=$scale .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/compatibility/scale-$scale
           done
+      - name: Native Ubuntu AVR Compile-button integration
+        if: runner.os == 'Linux'
+        env:
+          PLATFORMIO_CORE_DIR: ${{ github.workspace }}/temp/audit/ci-native-avr-core
+          PLATFORMIO_PACKAGES_DIR: ${{ github.workspace }}/temp/audit/ci-native-avr-core/packages
+          PLATFORMIO_PLATFORMS_DIR: ${{ github.workspace }}/temp/audit/ci-native-avr-core/platforms
+          PLATFORMIO_GLOBALLIB_DIR: ${{ github.workspace }}/temp/audit/ci-native-avr-core/lib
+          PLATFORMIO_CACHE_DIR: ${{ github.workspace }}/temp/audit/ci-native-avr-core/.cache
+          PLATFORMIO_NO_TELEMETRY: '1'
+          PLATFORMIO_DISABLE_UPGRADE_CHECK: '1'
+        run: |
+          # Provision native packages only in a CI scratch fixture; no hardware.
+          .venv-linux/bin/python - <<'PY'
+          from pathlib import Path
+          project = Path('temp/audit/ci-native-avr-project')
+          (project / 'src').mkdir(parents=True, exist_ok=True)
+          (project / 'platformio.ini').write_text('[env:probe]\nplatform = atmelavr\nboard = uno\nframework = arduino\n')
+          (project / 'src/main.cpp').write_text('#include <Arduino.h>\nvoid setup() {}\nvoid loop() {}\n')
+          PY
+          .venv-linux/bin/python -B -m platformio run -d temp/audit/ci-native-avr-project -j 2
+          .venv-linux/bin/python -B -m platformio pkg install -g -t platformio/tool-avrdude
+          .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-installed-avr --avr-core temp/audit/ci-native-avr-core
       - name: Windows runtime and verification
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           python -m venv env
           & env/Scripts/python.exe -m pip install 'PySide6>=6.7,<7' 'pyserial>=3.5,<4' 'psutil>=5.9,<8' 'platformio>=6.1,<7' 'requests>=2.31,<3' pywinpty websockets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_platforms.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_offline.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_target_resolution.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_board_families.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_board_search.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_projects.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_runtime.py --render-dir temp/audit/compatibility
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -80,5 +121,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
-          path: temp/audit/compatibility/**/*.png
+          path: |
+            temp/audit/compatibility/**/*.png
+            temp/audit/target-resolution/*/*.json
+            temp/audit/target-resolution/*/*.log
           if-no-files-found: ignore

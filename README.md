@@ -61,6 +61,9 @@ Qt sizing uses logical pixels and follows the window's current monitor and
 available work area, including taskbars and negative monitor coordinates.
 Qt applies display scaling once; Tk uses its own native font and pixel metrics.
 Monitor and resize changes are coalesced without an idle polling loop.
+Each main window has a minimum width of half the current monitor's available
+width. It can resize wider and maximize normally; saved maximized state is
+restored. Minimum sizing follows the current monitor in Qt logical pixels.
 Tabs map to exact root filenames rather than loading order, and Ubuntu paths
 retain case. Startup project loading is coalesced to avoid duplicate models.
 
@@ -78,8 +81,8 @@ limited to two board-index requests on constrained PCs and four otherwise.
 The editor engine is offline Monaco with automatic resource settings; Settings
 does not offer the unused legacy lightweight-engine selector.
 
-The board picker refreshes PlatformIO's available definitions and preserves
-offline installed/cache entries. It validates exact targets and exposes declared
+The board picker refreshes locally prepared PlatformIO definitions and preserves
+installed/cache entries. It validates exact targets and exposes declared
 framework choices. Future boards require compatible toolchain definitions;
 universal hardware support is not guaranteed. Firmware reuse is allowed only
 when source and target fingerprints match. Serial and editor failures use
@@ -113,7 +116,7 @@ Compiler concurrency also respects physical core count when the OS reports it.
 | Feature | Description |
 | --- | --- |
 | **🖥️ Native PySide6 (Qt) Desktop UI** | High-performance, hardware-accelerated desktop interface built with PySide6 (`main/qt/`), featuring Glass Smoked Dark, Glass Frosted Light, and Solarized Dark themes with Montserrat typography and responsive splitters. |
-| **🔨 Unified One-Click Build & Flash** | Dual toolchain backend (PlatformIO SCons engine + Arduino CLI) for ESP32, ESP8266, and Arduino AVR microcontrollers with incremental caching in `.mcu_flasher_build_cache/`. |
+| **🔨 Unified One-Click Build & Flash** | Exact PlatformIO board/framework builds with native programmer uploads for AVR, STM32, RP2040, SAM/SAMD, nRF52, Teensy and other declared targets; optimized ESP/AVR serial paths and incremental build caching. |
 | **🛡️ Critical Operation Protection** | Safeguards against closing the application during sensitive hardware writes (flashing, flash erasing, bootloader recovery resets, and toolchain downloads) to prevent bricking microcontrollers or corrupting installations. |
 | **📟 Advanced Serial Monitor & Auto-Reset Parity** | Real-time terminal with ANSI color rendering, timestamps, pause/resume, send bar, and high-throughput batch coalescing. Automatically issues a silent DTR/RTS pulse upon upload completion and focuses the monitor after a 500ms grace delay. |
 | **⚡ Reset on Baud Change Toggle** | Configurable setting in Settings Dialog to automatically pulse DTR/RTS when switching baud rates (rebooting MCU into `setup()` at the new baud rate) or maintain uninterrupted execution. |
@@ -121,14 +124,34 @@ Compiler concurrency also respects physical core count when the OS reports it.
 | **✏️ Offline Monaco Code Editor** | Embedded offline Monaco Editor (VS Code engine) via `QWebEngineView` and `QWebChannel` featuring C/C++ syntax highlighting, Go-To-Definition (`F12`), hover cards, and debounced auto-saving with zero CDN dependencies. |
 | **🤖 Dedicated AI Assistant & Diff Glow** | Embedded OpenCode AI assistant with real-time file watcher, line-level LCS diffing, and animated pulsating diff glows (🟢 green added, 🔴 red removed) with a floating quick-dismiss banner. |
 | **💻 Multi-Session Project Terminal** | Windows PowerShell/CMD ConPTY sessions and native Linux Bash PTYs rendered by offline xterm.js, with session tabs, coding CLI support, bounded output, and display-only Clear. |
-| **🔄 On-Demand Board Toolchains** | Newly downloaded board packages (ESP8266, STM32, RP2040) automatically install and configure required compilers on demand during first build with live progress tracking, requiring **zero application restarts**. |
-| **🌐 Dynamic Third-Party Board Manager URLs** | Download Manager supports custom vendor package index URLs (HTTP/HTTPS, GitHub raw/blob, redirects) with archive unpacking and local caching. |
+| **🔄 Bootstrap-Prepared Offline Toolchains** | Bootstrap prepares declared frameworks, compiler variants, upload/debug tools, builder dependencies and configured sketch libraries. The workspace never downloads missing packages during compilation, upload or reset. |
+| **🌐 Custom Offline Package Plan** | Add PlatformIO platform and library specifications to the bootstrap plan before offline use. The workspace's Bootstrap action starts separate host setup. |
 | **📁 Remote Network Share (UNC) Support** | Seamless compilation and flashing of sketches stored on Windows SMB network shares (`\\server\share`) with automatic drive mapping and local SSD build acceleration. |
 | **🔒 Strict Private Python Runtime Guard** | `private_python_guard.py` ensures the entire application runs strictly on the isolated bundled Windows runtime or native Linux virtual environment, eliminating conflicts or leaks with desktop/system Python. |
 | **🚨 Session Sentinel & Crash Detection** | `crash_detector.py` provides automatic unhandled exception logging, session sentinel tracking, and startup crash recovery. |
 | **🍃 Low-End Hardware Optimization** | Dynamic CPU core and RAM budgeting, `BELOW_NORMAL_PRIORITY_CLASS` subprocess scheduling, and generous silence watchdogs keep the UI responsive even on budget quad-core systems. |
 
 ### Startup and resource limits
+
+All application dependency downloads belong to bootstrap. The default package
+plan in [direct/offline-packages.json](direct/offline-packages.json) covers AVR,
+megaAVR, SAM/SAMD, ESP32, ESP8266, STM32, RP2040, nRF52 and Teensy, including their
+declared frameworks and optional upload/debug tools. Bootstrap checks each
+distinct builder environment before recording local readiness. Incomplete
+preparation stops launch; a deleted package requires bootstrap repair.
+
+The main app and its PlatformIO commands enforce offline operation. Missing
+packages report the bootstrap repair command, and **Refresh boards** reads local
+definitions. Editor, terminal and assistant frontend assets are bundled locally.
+The toolbar's **Bootstrap** action opens a separate setup process. Add custom
+platform and library specifications to the package plan before running setup;
+the default library set includes Servo, ESP32Servo and ArduinoJson. An arbitrary
+new sketch may need additional libraries in that plan. Bootstrap must prepare
+them while online before the sketch can build offline.
+
+This comprehensive initial preparation can take substantial time and disk space.
+Subsequent launches verify local files without a network check. Windows and
+Ubuntu need their own native prepared stores.
 
 Windows installations save a per-user health snapshot after successful setup.
 Subsequent launches check local runtime paths and source fingerprints before
@@ -165,7 +188,9 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu:** follow [native setup and compatibility notes](direct/UBUNTU.md). Run `python3 direct/setup_ubuntu.py`, then `bash direct/runThisOnUbuntu.sh`. The application detects the host OS and keeps native Linux packages separate from Windows packages.
+**Ubuntu:** follow [native setup and compatibility notes](direct/UBUNTU.md). Run `python3 direct/ubuntu/setup.py`, then `bash direct/ubuntu/run.sh`. Repair with `bash direct/ubuntu/run.sh --repair`. Setup and native dependencies live in `direct/ubuntu/`.
+
+Windows files live in `direct/windows/`. Host toolchain implementations are separate in `main/platforms/windows.py` and `main/platforms/ubuntu.py`; they share the editor, project windows and CPU/RAM budgets. Ubuntu uses its native virtual environment and architecture-specific PlatformIO store. The older launch paths remain compatibility forwarders.
 
 **Windows:**
 
@@ -176,7 +201,7 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 MCU_Flasher.exe
 
 # Or launch via the bootstrap launcher (runs under standard user privileges):
-direct\runThisOnWindows.vbs
+direct\windows\run.vbs
 
 # Or run directly using the private Python environment in a terminal:
 python mcu_flash_gui.py
@@ -188,7 +213,8 @@ python mcu_flash_gui.py
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
 4. **Pre-Built Toolchain Seeding**: Seeds the pre-built PlatformIO core (~1.7GB fast download with resume & SHA-256 verification) and Arduino CLI binaries.
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
-6. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition.
+6. **Offline Package Preparation**: Installs every configured platform's declared framework and uploader/debugger package variants, prepares builders and sketch libraries, and verifies local editor/terminal assets. Bootstrap writes readiness only after the whole plan succeeds.
+7. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition. Direct GUI entry points require bootstrap readiness and never run installers.
 
 > [!IMPORTANT]
 > **Python Requirement (Git Source vs. Release Package)**:
@@ -196,7 +222,7 @@ python mcu_flash_gui.py
 > - **Release Package (`MCU_Flasher.exe`)**: Pre-built standalone release packages are completely self-contained — **no Python installation is required** on the machine.
 
 > [!NOTE]
-> **Storage Requirement**: Initial installation requires approximately **6GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
+> **Storage Requirement**: The complete default offline plan can require substantial space and download time. Its size depends on the current platform/framework packages; the older 6 GB baseline covers only a limited toolchain set. Add custom libraries to `direct/offline-packages.json` before running bootstrap while online.
 
 > [!IMPORTANT]
 > **Hardware Requirement**: At least **4 CPU cores** are required. Startup checks physical cores when available and uses logical threads as a fallback when the OS cannot report physical topology. Unsupported systems receive an incompatibility notice before the application starts.
@@ -222,6 +248,10 @@ MCU Flasher by Naph/
 │   ├── mcu_flash_gui.py             # PySide6 application lifecycle, core checks & window bootstrapper
 │   ├── web_bridge.py                # Centralized thread-safe backend engine & toolchain controller
 │   │
+│   ├── platforms/                   # Separate host toolchain/process implementations
+│   │   ├── windows.py              # Windows bootstrap, executable discovery and short paths
+│   │   └── ubuntu.py               # Native Python/PlatformIO, POSIX sessions and Linux paths
+│   │
 │   ├── qt/                          # Native PySide6 (Qt for Python) Desktop UI Panels
 │   │   ├── __init__.py              # Qt package initializer
 │   │   ├── main_window.py           # MCUMainWindow root window with resizable splitters & dock tabs
@@ -241,17 +271,18 @@ MCU Flasher by Naph/
 │   │   ├── settings_dialog.py       # Preferences modal (themes, CPU jobs, auto-save, baud reset)
 │   │   ├── project_dialog.py        # Project selector & new project scaffolding wizard
 │   │   ├── modify_dialog.py         # Project sketch file management dialog (add, rename, delete)
-│   │   ├── download_dialog.py       # Board package & toolchain download manager (3rd-party URLs)
+│   │   ├── download_dialog.py       # Explicit handoff to a separate bootstrap process
 │   │   ├── theme.py                 # Multi-theme QSS stylesheet generator (Glass Dark, Glass Light, Solarized)
 │   │   └── signals.py               # Centralized QtSignalBus for thread-safe cross-thread event routing
 │   │
 │   └── core/                        # Core Foundations & System Services
-│       ├── __init__.py              # Core package re-exports
+│       ├── __init__.py              # Lazy core exports without host import cycles
 │       ├── constants.py             # Global constants, regex patterns, baud rates, headers & telemetry
 │       ├── theme.py                 # Theme color tokens, font definitions, and dark/light styling rules
 │       ├── config.py                # Config persistence (gui_config.json) & multi-instance PID locks
 │       ├── file_utils.py            # Windows attributes (attrib +h), UNC path detection, robust file I/O
-│       ├── toolchain.py             # Toolchain discovery, directory junctions & CPU worker budgeting
+│       ├── toolchain.py             # Stable API selecting only the current host implementation
+│       ├── build_resources.py       # Shared CPU, RAM and storage worker budgets
 │       ├── board_catalog.py         # Installed/cached/registry board definitions and framework choices
 │       ├── target_profile.py        # Exact target validation and upload transport requirements
 │       └── board_compat.py          # Board compatibility detection & GPIO pin conflict analyzer
@@ -310,10 +341,15 @@ MCU Flasher by Naph/
 │       └── dbs_delete.py            # Notification DB CRUD: delete
 │
 ├── direct/
-│   ├── runThisOnWindows.vbs         # Silent Windows launcher with CPU guard
-│   ├── runThisOnUbuntu.sh           # Native Linux virtual-environment launcher
-│   ├── setup_ubuntu.py              # Repairable Ubuntu setup without system pip writes
+│   ├── windows/run.vbs             # Silent Windows launcher with CPU guard
+│   ├── ubuntu/run.sh               # Native Ubuntu virtual-environment launcher
+│   ├── ubuntu/setup.py             # Repairable Ubuntu setup without system pip writes
+│   ├── ubuntu/requirements.txt     # Native Linux dependencies
+│   ├── runThisOnWindows.vbs         # Compatibility forwarder to windows/run.vbs
+│   ├── runThisOnUbuntu.sh           # Compatibility forwarder to ubuntu/run.sh
+│   ├── setup_ubuntu.py              # Compatibility forwarder to ubuntu/setup.py
 │   ├── UBUNTU.md                    # Linux setup, permissions and verification limits
+│   ├── verify_platforms.py          # Isolated host selection, launch syntax and native paths
 │   ├── verify_runtime.py            # Hardware-free runtime and real Qt/Monaco checks
 │   └── verify_terminal.py           # Windows ConPTY/xterm interactive protocol checks
 │
@@ -351,33 +387,39 @@ MCU Flasher by Naph/
 - Launch the application by double-clicking **`MCU_Flasher.exe`** (or running **`direct\runThisOnWindows.vbs`**).
 - **Private Python Runtime Enforcer**: Handled transparently by `src/modules/private_python_guard.py`. Windows uses its bundled private runtime. Linux uses `.venv-linux` (or a valid local Linux `env` virtual environment) and provides a setup command when it is missing.
 - **Session Sentinel & Crash Detection**: `src/modules/crash_detector.py` monitors runtime integrity, providing unhandled exception logging and clean startup recovery markers.
-- The bootstrapper verifies required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`) and toolchains unattended. Additional downloaded board platforms are prepared on demand during first compile, keeping initial startup instant.
+- Bootstrap verifies runtime dependencies and prepares the configured board/framework/tool/library packs before opening the app. Compile, Upload and Reset use installed packages only.
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
 
 ### 2. Opening, Selecting & Scaffolding Projects
-- Click **`📂 Select Project`** on the toolbar to choose an existing sketch directory.
-- **Quick Reselect**: Right-click the project title or folder icon to re-open the sketch picker. Clicking **Cancel** closes the dialog cleanly without interrupting active editor or monitor sessions.
-- **New Project Scaffolding**: Click **`✨ New Project`**, enter a project name, and MCU Flasher creates a structured project directory with boilerplate code, standard header inclusions, and ready-to-build configuration.
+- Click **Project** or press **Ctrl+O** to open another sketch in its own window. The startup picker opens the first project. Each window keeps independent editor buffers, terminals, build output and board/port selections; additional windows start with hardware unselected.
+- **Open projects** lists running sketch windows and their folder paths. Use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
+- Right-click the project title or click its folder icon to reopen the picker. **Cancel** leaves the current editor and monitor sessions intact. Another project can be opened while the current one compiles; its active operation continues.
+- **New project** scaffolds a sketch with optional header/source files and opens it in another window. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
 
 ### 3. Selecting Boards & COM Ports
 - **Manual Hardware Selection**: MCU Flasher opens with no board and no port pre-selected (`""`). You retain full control over target hardware, preventing unintentional flashing or port locking.
 - **Active COM Port Enumeration**: The port dropdown enumerates all active serial ports with hardware descriptions (e.g. `COM9 - USB-SERIAL CH340 (COM9)`). Selecting a port connects instantly.
 - **Zero-Reset ESP32 Protection**: Serial ports open with DTR and RTS explicitly de-asserted (`conn.dtr = False`, `conn.rts = False`). Background `esptool` probing is disabled, ensuring running firmware on an attached ESP32 continues running smoothly without an unintended reset.
-- **Board Catalog Search**: Click **`🔍 Search Boards`** to open the search modal and filter through 460+ microcontrollers by name, architecture, or manufacturer.
-- **Additional Board Manager URLs**: Open **`⬇ Download Boards/Libraries`**, enter third-party package index URLs in **Additional board manager URLs**, and click **`⟳ Apply & Refresh`**. The engine dynamically parses HTTP/HTTPS URLs, GitHub raw/blob links, handles redirects, caches metadata, and downloads package archives.
+- **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards, framework selection and typo fallback remain available. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
+- **Additional board platforms and libraries**: Add their PlatformIO specifications to `direct/offline-packages.json`, then open **Bootstrap** or run the host setup command while online. The workspace never opens the network downloader.
 
 ### 4. Compiling & Flashing Code
 - **Compile Only (`🔨 Compile`)**:
+  - Available as soon as a board is selected, even without a serial port. The build pipeline checks the exact board definition and framework and reports missing definitions when invoked.
+  - An older cached Arduino row with no PlatformIO board ID is repaired against this app's installed manifests before compilation. Matching recognizes the manifest's declared vendor prefix and Arduino build-define prefix, preserves the selected board name, and rejects ambiguous targets. Missing definitions require bootstrap preparation; runtime never queries the online registry.
   - Compiles the sketch using the PlatformIO SCons engine or Arduino CLI.
   - *Non-Blocking Execution*: The Serial Monitor remains active, streaming, and fully interactive during compilation!
   - Caches intermediate objects in `.mcu_flasher_build_cache/boards/<board-key>/` for near-instant incremental rebuilds.
-  - **On-Demand Toolchain Setup (Zero App Restart)**: Newly downloaded board packages (e.g. ESP8266, STM32, RP2040) automatically install and verify their compilers on demand during first compile with live progress bars. When finished, compilation proceeds immediately without restarting the application!
+  - **Offline Toolchain Preparation**: Add a board platform or library to `direct/offline-packages.json`, then run bootstrap while online. The main app blocks registry/VCS package installation and uses the prepared local store.
   - **Resource-Aware Throttling**: Checks physical RAM and logical CPU cores via `psutil`. Background subprocesses are scheduled with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`), ensuring the UI, Monaco editor, and serial monitor stay fully responsive even during heavy compiles.
 - **Upload Firmware (`⚡ Upload`)**:
+  - Serial uploads require a selected board and port. Boards with verified native USB/programmer interfaces (such as ST-Link, J-Link, CMSIS-DAP, picotool, DFU or Teensy) can upload without a serial port; the tooltip identifies this interface. Unknown transports require a port. Buttons and keyboard shortcuts recheck selection and busy state after saving.
   - Compiles modified files and flashes the binary to the microcontroller.
   - Features unit-aware byte parsing for modern `esptool` v5.4.0+ outputs.
   - Automatically pauses the Serial Monitor during the write phase to release port contention, then auto-resumes monitoring once flashing finishes.
+  - Uses the exact board's declared protocol and bootloader speed. Nano ATmega328 keeps its 57600-baud default; Uno and Mega keep theirs. The speed control shows the board default or **Auto** on non-ESP boards. Native programmers never receive a serial-port argument, and hardware writes are never automatically replayed.
+- **Framework compatibility**: Select a framework declared by the board in the picker. `.ino` files require Arduino; native C/C++ projects can use other declared frameworks. First-use preparation resolves their own packages rather than compiling an Arduino placeholder. Framework and board-definition changes use distinct firmware/cache identities. BIN, HEX, UF2 and ELF artifacts are recognized. Exact PlatformIO definitions, compatible source/libraries, packages and hardware drivers remain required; arbitrary unsupported boards are not inferred from their family name.
 - **Stop Operation (`🛑 Stop`)**: Cancels an active compilation, upload, or resets a hanging serial session.
 
 ### 5. Live Serial Monitor & Post-Upload Auto-Reset
@@ -448,7 +490,8 @@ MCU Flasher by Naph/
 ### Root Entry Points & Launchers
 
 - **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without prompting for unnecessary Administrator elevation.
-- **`direct\runThisOnWindows.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations.
+- **`direct/windows/run.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations. `direct/runThisOnWindows.vbs` forwards here for existing executable launchers.
+- **`direct/ubuntu/setup.py` / `run.sh`**: Native Ubuntu setup and launch. Create/repair `.venv-linux`, preserve project arguments and keep system Python unchanged; `run.sh --repair` explicitly repairs the runtime.
 - **`mcu_flash_gui.py`**: Root entry point forwarder. Enforces private Python execution via `private_python_guard.py`, installs console-hiding hooks, and delegates directly to `main.mcu_flash_gui.main()`.
 
 ---
@@ -481,9 +524,10 @@ MCU Flasher by Naph/
 
 - **`main/core/constants.py`**: Immutable constants, regex patterns (`ANSI_CSI_RE`, `_ESPTOOL_*_RE`), default baud rates, C++ standard headers, and telemetry helpers.
 - **`main/core/theme.py`**: `Theme` class holding color tokens, typography parameters, and visual styles.
-- **`main/core/config.py`**: Manages `src/gui_config.json`, single-instance mutex locks (`_claim_gui_instance`), occupied COM port tracking, and recent projects.
+- **`main/core/config.py` / `config_store.py`**: Manage portable/per-user preferences, atomic project/serial-port ownership and recent projects. Locked snapshot merging preserves registrations and unrelated preferences when multiple sketch windows save at once.
 - **`main/core/file_utils.py`**: Low-level Windows file operations (`attrib +h`, `ensure_file_writable`, `robust_rmtree`), UNC share detection (`is_unc_or_network_path`), and AI review history backups (`AIEditBackupStore`).
-- **`main/core/toolchain.py`**: Toolchain discovery, PlatformIO core junctions (`C:\.platformio-mcu-gui`), and CPU worker allocations.
+- **`main/core/toolchain.py`**: Stable API selecting `main/platforms/windows.py` or `main/platforms/ubuntu.py`. Windows owns executable discovery and short-path junctions; Ubuntu owns native package paths and POSIX process sessions. Both implementations use guarded, installed-only PlatformIO commands. Ubuntu replaces inherited Windows PlatformIO paths and uses native upload for every board family.
+- **`main/core/build_resources.py`**: Shared compiler/background CPU, RAM and storage budgets.
 - **`main/core/board_catalog.py`**: Dynamic board catalog parser (merging PlatformIO and Arduino index boards), USB VID/PID mapping table, and unit-aware `_parse_byte_size` for modern `esptool`.
 - **`main/core/board_compat.py`**: Heuristic board compatibility analyzer and pinout GPIO conflict checker.
 
@@ -494,6 +538,8 @@ MCU Flasher by Naph/
 - **`src/modules/private_python_guard.py`**: Strict private Python runtime enforcer. Halts execution if triggered by system/desktop Python and seamlessly re-launches under `src/_python/python.exe`.
 - **`src/modules/crash_detector.py`**: Session sentinel, unhandled exception recorder, and startup crash recovery marker engine.
 - **`src/modules/bootstrap.py`**: Windows runtime bootstrapper with a resizable native PySide6 glass setup window, bounded logs and inline package progress. Repairs Python and dependencies, prepares PlatformIO, and launches the workspace. A healthy Windows installation uses the cached launch path; Ubuntu uses its native virtual environment.
+- **`src/modules/offline_bootstrap.py`**: Prepares `direct/offline-packages.json` before workspace launch and certifies host-native dependencies. An explicit custom plan can be supplied with `direct/windows/run.vbs --repair --plan "path/to/plan.json"` or `python3 direct/ubuntu/setup.py --plan "path/to/plan.json"`. Changing the default plan requires bootstrap preparation again.
+- **`src/modules/offline_runtime.py` / `offline_platformio.py`**: Prevent workspace package downloads and dependency installer fallbacks. Missing local packages report the host bootstrap repair command; local terminal sockets and symlinked libraries remain usable.
 - **`src/modules/launcher.py`**: Entry point launcher configuring Windows `AppUserModelID` for taskbar grouping and single-instance mutex handling.
 - **`src/modules/dedicated_AI.py`**: OpenCode AI assistant process controller (HTTP server + WebSocket + pywinpty).
 - **`src/modules/project_terminal.py`**: Standalone project terminal server & PTY backend for integrated multi-terminal sessions.
@@ -595,10 +641,39 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
+& src/_python/python.exe -B direct/verify_platforms.py
+& src/_python/python.exe -B direct/verify_offline.py
 & src/_python/python.exe -B direct/verify_controls.py
+& src/_python/python.exe -B direct/verify_board_search.py --render-dir temp/audit/board-search --benchmark temp/audit/board-search/timing.json
+& src/_python/python.exe -B direct/verify_target_resolution.py
+& src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
 & src/_python/python.exe -B direct/verify_responsive.py
+& src/_python/python.exe -B direct/verify_projects.py --render-dir temp/audit/projects
 ```
+
+For an optional real ESP32 compile probe on Windows, use
+`direct/verify_target_resolution.py --compile-installed-esp32`. It copies the
+required installed packages into `temp/audit/target-resolution/`, builds a tiny
+Arduino sketch, and verifies the application Compile button through board
+resolution, `.ino` conversion, PlatformIO and `firmware.bin`. Persistence and
+hardware calls are mocked; no upload runs and the live package store stays
+unchanged. The copied packages use about 1.2 GB of scratch space.
+
+`direct/verify_target_resolution.py --compile-installed-avr` proves real
+Compile-button builds for Uno, Nano ATmega328 and Mega 2560 with isolated copied
+packages and HEX outputs. `direct/verify_board_families.py` additionally checks
+representative STM32, Pico, SAMD, nRF52, Teensy and unknown declared platforms,
+framework selection/preparation, native Upload clicks without COM, transport
+arguments, failed-build gating and UF2 caches using simulated processes. These
+checks never install packages or write to physical hardware.
+
+`direct/verify_platforms.py` checks host selection/import order, native package
+paths, setup argument forwarding, upload process options and Bash/Windows Script
+Host syntax without running installers or launchers. The compatibility workflow
+also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04, then
+checks the actual Compile button for Uno, Nano and Mega using copied native
+packages. Native Ubuntu results remain pending until that workflow runs.
 
 For native setup/downloader screenshots, run the controls verifier with
 `QT_QPA_PLATFORM=windows` and `--render-dir temp/audit/controls`. On Ubuntu use
@@ -611,7 +686,11 @@ settings and setup on small work areas, wrapped board filters, popup scrolling,
 monitor-change coalescing and native Tk details. Start a fresh process for each
 `QT_SCALE_FACTOR` value (1, 1.25, 1.5 and 2); the Tk fixture also simulates its
 native point scaling. Use `--render-dir temp/audit/responsive` for previews.
-The runtime preview also checks all six tool panels at a 640×480 work area,
+The project verifier checks competing processes, stale settings snapshots,
+exclusive project/port claims, independent opening during compile, existing
+folder protection and themed project-picker captures. It mocks GUI spawning
+and metadata and writes only isolated fixtures under `temp/`.
+The runtime preview also checks all six tool panels in a 640-pixel workspace at the half-screen minimum,
 including control visibility and the serial send bar. Its terminal layout probe
 does not start a shell; `verify_terminal.py` checks the actual PTY separately.
 
