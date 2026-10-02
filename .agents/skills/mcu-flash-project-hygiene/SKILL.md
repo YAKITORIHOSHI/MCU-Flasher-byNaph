@@ -1,11 +1,16 @@
 ---
 name: mcu-flash-project-hygiene
-description: Audit and improve Windows MCU Flasher project hygiene, including generated-file visibility, Windows hidden attributes, safe writable metadata, PlatformIO board caches, Clean targets, and protection of user sketch files. Use for changes involving hide_internal_project_metadata, hide_hidden_attribute, hide_generated_directory, ensure_file_writable, generated project files, or cache cleanup in main/core/file_utils.py or main/mcu_flash_gui.py.
+description: Audit MCU Flasher project hygiene on Windows and Ubuntu, including Windows hidden attributes, safe writable metadata, exact-board caches, generated agent instructions, Clean targets and protection of user sketches. Use for metadata generation, file utilities or cache cleanup changes.
 ---
 
 # MCU Flasher Project Hygiene
 
-Work on the Windows main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), Windows launchers, and supporting utilities.
+Work on the main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), native launchers and supporting utilities. Windows attribute helpers are best-effort; Linux uses dot-prefixed containers and must not invoke `attrib.exe` or Windows junctions.
+
+Generated AGENTS instructions retain authoritative hardware state and root-sketch
+firmware boundaries. `application_agent_guidance()` adds application development
+rules only to application checkouts. Verify that distinction without running
+metadata generation against live caches or modifying AI backup journals.
 
 ## Preserve ownership boundaries
 
@@ -44,6 +49,9 @@ Classify paths before changing attributes or deleting anything:
   older app version.
 - Keep `hide_internal_project_metadata(project)` idempotent and shallow. It
   should reconcile known root metadata without scanning build trees.
+- Schedule startup reconciliation after the workspace is shown and execute it
+  in a background worker. Do not repeat the same reconciliation synchronously
+  while constructing the project selector. Mock it in all Qt startup verifiers.
 
 ## Keep cache and Clean behavior safe
 

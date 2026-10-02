@@ -1176,10 +1176,51 @@ def _is_mcu_generated_instruction_file(path) -> bool:
         return False
 
 
+def application_agent_guidance(project_dir) -> str:
+    """Add application rules only to this codebase, never to ordinary sketches."""
+    if not is_application_codebase_dir(project_dir):
+        return ""
+    return (
+        "## Application development scope\n\n"
+        "This directory contains the MCU Flasher application. When the user requests app changes, "
+        "the root-sketch restriction in Step 2 applies to firmware work only. App work may edit "
+        "`main/`, `src/` source/assets, `direct/`, documentation, `.github/` and `.agents/skills/` "
+        "within this checkout. Preserve live hardware specifications, user sketches, settings, "
+        "and the protected cache/journal boundaries above. Do not infer a connected board.\n\n"
+        "- Read `.agents/skills/mcu-flash-gui-dev/SKILL.md` for app development; use "
+        "frontend-design for visual changes and project-hygiene for generated metadata logic.\n"
+        "- Keep the workspace compact: board selection stays in Controls; no target-board banner. "
+        "Every toolbar widget must have a parent before being shown. Only explicit dialogs, "
+        "menus and Detach Editor actions open additional windows.\n"
+        "- Preserve keyboard focus, source-tab dirty state/order and editor buffers through "
+        "resizing, theme changes and detach/reattach. Use static theme-based glass surfaces.\n"
+        "- Use Qt logical sizing without applying DPI twice. Fit window frames to the current "
+        "monitor work area, reflow compact rows and scroll short details. Keep Tk native metrics "
+        "separate and preserve saved content fonts. Reserve height for tool tabs and active "
+        "panel controls before log output. Verify with `direct/verify_responsive.py`.\n"
+        "- Keep setup and downloader palettes consistent with the workspace, including Solarized. "
+        "Revalidate busy/target state in Actions and Settings callbacks; report failed settings "
+        "writes. Verify auxiliary screens with isolated fixtures, without installing or launching.\n"
+        "- Support Windows and native Ubuntu paths separately. Require four CPU cores "
+        "(physical when detectable, logical fallback), and keep four/six-core resource budgets.\n"
+        "- Show the workspace before starting services. Keep discovery and parsing off the GUI "
+        "thread; bound log events, display histories and caches. Return syntax completion through "
+        "queued Qt signals and discard stale revisions.\n"
+        "- Preserve PTY capability replies, Unicode, bracketed paste and output backpressure "
+        "for coding CLIs. Clear is display-only. Never replay commands or hardware writes.\n"
+        "- Run hardware-free `direct/verify_runtime.py` using the private runtime; on Windows "
+        "also run `direct/verify_terminal.py`. Put captures and audit scratch work in `temp/`. "
+        "Use `direct/verify_performance.py` for isolated resource regressions. "
+        "Mock persistence/hardware calls; never run metadata generation against live caches "
+        "during verification. Update README and relevant skills with behavior changes.\n\n"
+    )
+
+
 def ensure_hidden_read_first_md(sketch_dir) -> None:
     """
     Generate hidden .opencodeignore and AGENTS.md in the project build cache.
-    Instructs OpenCode CLI to ONLY read root sketch files (*.ino, *.h, *.cpp) and NOTE.txt.
+    Ordinary sketch instructions restrict firmware edits to root sources.
+    Application checkouts additionally describe the authorized app development scope.
     Excludes the private build cache from OpenCode file scans.
     Removes redundant duplicate instruction files and applies Windows hidden attribute so Windows Explorer stays 100% clean.
     """
@@ -1315,7 +1356,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "- Treat the backup tree as READ-ONLY. Never modify, rename, or delete backup files.\n"
             f"- Never read or edit `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}/.state`; it is application journal data.\n"
             "- When the user explicitly asks to recover or compare an earlier AI edit, locate the matching project/file entry and restore only the requested content section.\n\n"
-            "---\n"
+            + application_agent_guidance(s_dir) + "---\n"
             "*Generated automatically by MCU Flash GUI by Naph for OpenCode AI Assistant.*\n"
         )
 
@@ -1332,7 +1373,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         workflow_skill_content = (
             "---\n"
             "name: sketch-workflow\n"
-            "description: \"Live microcontroller hardware specs, board settings, COM port, baud rate, and sketch workflow. Use for all Arduino/ESP32 coding, editing, and hardware questions.\"\n"
+            "description: \"Live hardware specs, exact board/framework settings, serial ports and root-sketch workflow. Use for firmware and hardware questions; use mcu-flash-gui-dev for application changes.\"\n"
             "---\n\n"
             "# Sketch Project Workflow & Priority Guide\n\n"
             "## 📋 LIVE HARDWARE & PROJECT SPECIFICATIONS (ALWAYS USE THIS LIST)\n"
@@ -1358,10 +1399,12 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             f"If troubleshooting compiler or upload errors, read `{PROJECT_BUILD_CACHE_DIR}/dbs_notif.json` to view recent error logs and device events.\n"
         )
 
+        workflow_skill_content += application_agent_guidance(s_dir)
+
         target_skill_content = (
             "---\n"
             "name: mcu-sketch-target\n"
-            "description: \"Microcontroller target architecture (ESP32/ESP8266/AVR), GPIO pinout constraints, library dependencies (NeoPixel, FastLED, WiFi, BLE, SPI, Wire), and sketch source file boundaries.\"\n"
+            "description: \"Exact target and declared framework, architecture-specific GPIO/library constraints, upload transport and root firmware source boundaries.\"\n"
             "---\n\n"
             "# Microcontroller Target & Hardware Specifications\n\n"
             "## 🎯 TARGET HARDWARE ARCHITECTURE\n"
@@ -1371,6 +1414,8 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             f"- **Active Port**: `{live_port}`\n"
             f"- **Serial Baud Rate**: `{live_baud}`\n\n"
             "## 💡 CODING & LIBRARY GUIDELINES\n"
+            "- **Exact target**: Use the resolved PlatformIO definition and declared framework. Arduino `.ino` sketches require Arduino; other frameworks need matching sources/libraries. Never substitute a family or invent hardware.\n"
+            "- **Host and ports**: Windows uses COM ports; Ubuntu uses native device paths. USB/debug programmer targets may use native transports without a serial port.\n"
             "- **Arduino / ESP32 Code**: Write high-quality, non-blocking Arduino C++ code.\n"
             "- **Libraries**: Use standard Arduino libraries matching the architecture (e.g. `Adafruit_NeoPixel`, `FastLED`, `WiFi`, `BluetoothSerial`, `Wire`, `SPI`).\n"
             "- **Pin Assignments**: Verify GPIO pin compatibility with the selected board architecture.\n"

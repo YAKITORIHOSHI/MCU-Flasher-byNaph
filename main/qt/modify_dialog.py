@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QLineEdit, QComboBox,
     QMessageBox,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".txt"]
 
@@ -31,11 +32,13 @@ class ModifyFilesDialog(QDialog):
     def __init__(self, backend: Optional["MCUWebBackendAPI"] = None, parent: QWidget | None = None):
         super().__init__(parent)
         self._backend = backend
-        self.setWindowTitle("🛠 Modify Project Files")
-        self.setFixedSize(500, 360)
+        self.setWindowTitle("Modify project files")
+        from main.qt.responsive import fit_dialog, ScreenWatcher
+        fit_dialog(self, (480, 340), (320, 260))
         self.setModal(True)
 
         self._setup_ui()
+        self._screen_watcher = ScreenWatcher(self)
         self._apply_dialog_theme()
         self._refresh_file_lists()
 
@@ -231,7 +234,7 @@ class ModifyFilesDialog(QDialog):
         root.setSpacing(12)
 
         # Header
-        self._header_lbl = QLabel("🛠 Modify Project Files")
+        self._header_lbl = QLabel("Modify project files")
         root.addWidget(self._header_lbl)
 
         sketch_path = str(self._backend.sketch_dir_path) if self._backend else "No project"

@@ -4,14 +4,16 @@ MCU Flasher Project Terminal
 The Project Terminal uses the same native architecture as the OpenCode panel:
 pywebview/WebView2 renders xterm.js, while pywinpty owns the real Windows
 PowerShell and Command Prompt sessions.  It runs in a small child process so
-the Tk event loop and WebView2 message loop never compete with one another.
+the Qt event loop and WebView2 message loop never compete with one another.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import codecs
 import ctypes
+import concurrent.futures
 import json
 import os
 import re
@@ -32,6 +34,9 @@ ENV_SITE_PACKAGES = SCRIPT_DIR / "env" / "Lib" / "site-packages"
 XTERM_ASSET_DIR = SCRIPT_DIR / "src" / "assets" / "xterm"
 if ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(ENV_SITE_PACKAGES))
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from src.modules.runtime_resources import performance_profile
 
 try:
     from winpty import PtyProcess
@@ -195,6 +200,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         let activeShell = null;
         let socket = null;
         let fallback = false;
+        let currentFontSize = 14;
         let currentTheme = __THEME_XTERM__;
         const root = document.getElementById("terminal-root");
         const emptyState = document.getElementById("empty-state");
@@ -230,16 +236,21 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
         applyTheme(currentTheme);
 
-        function sanitizeTerminalInput(data) {
-            if (!data || typeof data !== "string") return "";
-            return data
-                .replace(/\x1b\[\?[0-9;]*c/g, "")
-                .replace(/\x1b\[>[0-9;]*c/g, "")
-                .replace(/\x1b\[\?[0-9;]*\$y/g, "")
-                .replace(/\x1b\[[0-9;]*\$y/g, "")
-                .replace(/\x1b\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
-                .replace(/\x1bP>\|[^\x1b\x07]*(?:\x1b\\|\x07)?/g, "")
-                .replace(/\x1b\[>[0-9;]*q/g, "");
+        const lastSizes = {};
+        const replayDepth = {};
+        function writeOutput(id, data, replay = false) {
+            const term = terminals[id];
+            if (!term || typeof data !== "string") return;
+            if (replay) replayDepth[id] = (replayDepth[id] || 0) + 1;
+            // Replies from a replay must never become input to a running CLI.
+            // write callbacks bound the backend's pending output by what xterm
+            // has actually parsed, keeping verbose commands within RAM limits.
+            term.write(data, () => {
+                if (replay) replayDepth[id]--;
+                if (!replay && socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({type: "ack", shell: id, chars: data.length}));
+                }
+            });
         }
 
         function getOrCreateHost(id) {
@@ -293,11 +304,11 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             try {
                 const host = getOrCreateHost(kind);
                 const term = new Terminal({
-                    cursorBlink: true,
+                    cursorBlink: __CURSOR_BLINK__,
                     cursorStyle: "block",
-                    fontSize: 14,
+                    fontSize: currentFontSize,
                     fontFamily: 'Consolas, "Courier New", monospace',
-                    scrollback: 5000,
+                    scrollback: __SCROLLBACK__,
                     overviewRulerWidth: 0,
                     theme: Object.assign({}, currentTheme)
                 });
@@ -307,9 +318,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
                 term.onData(data => {
-                    const clean = sanitizeTerminalInput(data);
-                    if (clean && socket && socket.readyState === WebSocket.OPEN && activeShell === kind) {
-                        socket.send(JSON.stringify({ type: "input", shell: kind, data: clean }));
+                    // xterm emits both keyboard input and capability replies.
+                    // Hidden sessions must also answer their own CLI queries.
+                    if (data && !replayDepth[kind] && socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ type: "input", shell: kind, data }));
                     }
                 });
                 return true;
@@ -320,6 +332,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function removeTerminal(id) {
+            delete lastSizes[id];
             if (terminals[id]) {
                 try { terminals[id].dispose(); } catch (e) {}
                 delete terminals[id];
@@ -348,6 +361,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             const term = terminals[termId];
             if (socket && socket.readyState === WebSocket.OPEN && term) {
                 if (term.cols >= 10 && term.rows >= 3) {
+                    const size = term.cols + "x" + term.rows;
+                    if (lastSizes[termId] === size) return;
+                    lastSizes[termId] = size;
                     socket.send(JSON.stringify({
                         type: "resize", shell: termId,
                         cols: term.cols, rows: term.rows
@@ -369,9 +385,13 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             sendResize(activeShell);
         }
 
-        window.addEventListener("resize", () => {
-            window.requestAnimationFrame(fitAll);
-        });
+        let fitPending = false;
+        function scheduleFit() {
+            if (fitPending) return;
+            fitPending = true;
+            window.requestAnimationFrame(() => { fitPending = false; fitAll(); });
+        }
+        window.addEventListener("resize", scheduleFit);
 
         if (window.xtermErr) {
             enableFallback();
@@ -397,6 +417,16 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     applyTheme(message.theme);
                     return;
                 }
+                if (message.type === "font") {
+                    currentFontSize = message.size;
+                    Object.values(terminals).forEach(term => { term.options.fontSize = currentFontSize; });
+                    scheduleFit();
+                    return;
+                }
+                if (message.type === "fit") {
+                    scheduleFit();
+                    return;
+                }
                 if (message.type === "create") {
                     makeTerminal(message.shell);
                     setActiveShell(message.shell);
@@ -418,12 +448,17 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     }
                     return;
                 }
+                if (message.type === "clear") {
+                    const term = terminals[message.shell];
+                    if (term) term.clear();
+                    return;
+                }
                 if (message.type === "snapshot") {
                     makeTerminal(message.shell);
                     const term = terminals[message.shell];
                     if (term) {
                         term.reset();
-                        term.write(message.data || "");
+                        writeOutput(message.shell, message.data || "", true);
                         try { term.scrollToBottom(); } catch (e) {}
                     }
                     return;
@@ -431,7 +466,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 if (message.type === "output") {
                     makeTerminal(message.shell);
                     const term = terminals[message.shell];
-                    if (term) term.write(message.data || "");
+                    if (term) writeOutput(message.shell, message.data || "");
                     return;
                 }
             };
@@ -460,18 +495,16 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         document.addEventListener("paste", event => {
             const term = terminals[activeShell];
             if (!term || !event.clipboardData) return;
-            const value = event.clipboardData.getData("text")
-                .replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+            const value = event.clipboardData.getData("text");
             if (socket && socket.readyState === WebSocket.OPEN && value) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
-                socket.send(JSON.stringify({ type: "input", shell: activeShell, data: value }));
+                term.paste(value);
             }
         }, true);
 
-        window.addEventListener("resize", fitAll);
         if (typeof ResizeObserver !== "undefined") {
-            new ResizeObserver(fitAll).observe(root);
+            new ResizeObserver(scheduleFit).observe(root);
         }
         [50, 150, 350, 700, 1200].forEach(ms => setTimeout(fitAll, ms));
     </script>
@@ -482,8 +515,11 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 
 def get_terminal_html() -> str:
     t = _resolve_terminal_theme()
+    profile = performance_profile()
     return (
         HTML_CONTENT_TEMPLATE
+        .replace("__SCROLLBACK__", str(profile.terminal_scrollback))
+        .replace("__CURSOR_BLINK__", "false" if profile.constrained else "true")
         .replace("__THEME_BG__", t["bg"])
         .replace("__THEME_FG__", t["fg"])
         .replace("__THEME_CURSOR__", t["cursor"])
@@ -623,13 +659,17 @@ def _build_terminal_env(target_dir: str) -> dict[str, str]:
 
     final_paths: list[str] = []
     seen: set[str] = set()
-    for p in extra_paths + existing_paths:
+    for p in existing_paths + extra_paths:
         norm = os.path.normcase(os.path.normpath(p))
         if norm and norm not in seen and os.path.isdir(p):
             seen.add(norm)
             final_paths.append(p)
 
     env["PATH"] = os.pathsep.join(final_paths)
+    # The app's private interpreter overrides must not leak into installed
+    # coding CLIs or their child Python processes.
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
 
     # Ensure PATHEXT includes all executable extensions
     pathext = env.get("PATHEXT", "")
@@ -648,7 +688,11 @@ def _build_terminal_env(target_dir: str) -> dict[str, str]:
     # Terminal capabilities & truecolor support for AI CLIs (Ink, React, Chalk, TrueColor)
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
-    env["FORCE_COLOR"] = "1"
+    env["TERM_PROGRAM"] = "MCUFlasher"
+    # Let each CLI detect this real TTY. FORCE_COLOR=1 both limits truecolor
+    # detection and conflicts with an inherited NO_COLOR preference.
+    if "NO_COLOR" in env:
+        env.pop("FORCE_COLOR", None)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     if "LANG" not in env or not env["LANG"]:
@@ -676,15 +720,9 @@ def re_prompt(kind: str, text: str) -> bool:
     return bool(RE_CMD_PROMPT.search(text)) or ("> " in text or text.rstrip().endswith(">"))
 
 
-RE_TERMINAL_QUERY_RESPONSE = re.compile(
-    r"\x1b(?:\[\?[0-9;]*c|\[>[0-9;]*c|\[\?[0-9;]*\$y|\[[0-9;]*\$y|\]\d+;[^\x1b\x07]*(?:\x1b\\|\x07)?|P>\|[^\x1b\x07]*(?:\x1b\\|\x07)?|\[>[0-9;]*q)"
-)
-
-
 def sanitize_terminal_input(data: str) -> str:
-    if not data:
-        return ""
-    return RE_TERMINAL_QUERY_RESPONSE.sub("", str(data))
+    """Validate the message type without altering PTY protocol bytes."""
+    return data if isinstance(data, str) else ""
 
 
 def _find_free_pair(start_port: int = 8765) -> int:
@@ -716,15 +754,32 @@ class ShellSession:
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
         self.generation = 0
-        self.history = deque(maxlen=3000)
+        self.history = deque(maxlen=2000)
+        self.history_chars = 0
+        self.history_limit = performance_profile().terminal_history_chars
+        self.dimensions = (30, 120)
 
     def append_history(self, data: str) -> None:
         with self.lock:
-            self.history.append(str(data or ""))
+            text = str(data or "")[-self.history_limit:]
+            if not text:
+                return
+            if len(self.history) == self.history.maxlen:
+                self.history_chars -= len(self.history.popleft())
+            self.history.append(text)
+            self.history_chars += len(text)
+            while self.history_chars > self.history_limit:
+                excess = self.history_chars - self.history_limit
+                first = self.history.popleft()
+                if len(first) > excess:
+                    self.history.appendleft(first[excess:])
+                    self.history_chars -= excess
+                else:
+                    self.history_chars -= len(first)
 
     def history_text(self) -> str:
         with self.lock:
-            return "".join(self.history)[-500_000:]
+            return "".join(self.history)
 
 
 class ProjectTerminalServer:
@@ -745,6 +800,10 @@ class ProjectTerminalServer:
         self.session_counter = 0
         self.clients = set()
         self.clients_lock = threading.RLock()
+        self._pending_output = {}
+        self._output_events = {}
+        self._loop_thread = None
+        self._output_limit = 128_000
 
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
@@ -764,18 +823,42 @@ class ProjectTerminalServer:
 
     async def _send(self, websocket, payload: dict) -> None:
         try:
+            if payload.get("type") == "output":
+                event = self._output_events.get(websocket)
+                while event and sum(self._pending_output.get(websocket, {}).values()) >= self._output_limit:
+                    event.clear()
+                    await event.wait()
+                    if websocket not in self.clients:
+                        return
+                if event:
+                    counts = self._pending_output[websocket]
+                    sid = payload.get("shell")
+                    # JS reports UTF-16 lengths; match it for Unicode output.
+                    chars = len(payload.get("data", "").encode("utf-16-le")) // 2
+                    counts[sid] = counts.get(sid, 0) + chars
             await websocket.send(json.dumps(payload, ensure_ascii=False))
         except Exception:
             pass
 
-    def broadcast(self, payload: dict) -> None:
+    def broadcast(self, payload: dict, session: ShellSession | None = None) -> None:
         if not self.loop or not self.loop.is_running():
             return
         with self.clients_lock:
             clients = list(self.clients)
         for websocket in clients:
             try:
-                asyncio.run_coroutine_threadsafe(self._send(websocket, payload), self.loop)
+                future = asyncio.run_coroutine_threadsafe(self._send(websocket, payload), self.loop)
+                if payload.get("type") == "output" and threading.get_ident() != self._loop_thread:
+                    # One pending send per reader. Slow xterm clients pause the
+                    # reader rather than building an unbounded queue of tasks.
+                    while self.running and (session is None or session.running):
+                        try:
+                            future.result(timeout=0.25)
+                            break
+                        except concurrent.futures.TimeoutError:
+                            continue
+                    if not future.done():
+                        future.cancel()
             except Exception:
                 pass
 
@@ -793,6 +876,7 @@ class ProjectTerminalServer:
             session.target = self.target_dir
             session.stop_event.clear()
             session.history.clear()
+            session.history_chars = 0
         session.thread = threading.Thread(
             target=self._shell_worker,
             args=(session, generation),
@@ -849,22 +933,17 @@ class ProjectTerminalServer:
         ready_candidate = None
         try:
             shell_env = _build_terminal_env(self.target_dir)
-            try:
-                pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
-            except Exception as spawn_exc:
-                if kind == "pwsh":
-                    cmd_exe = _native_shell_executable("cmd")
-                    if cmd_exe:
-                        argv = [cmd_exe, "/D"]
-                        pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=(30, 120))
-                    else:
-                        raise spawn_exc
-                else:
-                    raise spawn_exc
+            with session.lock:
+                dimensions = session.dimensions
+            pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=dimensions)
 
             with session.lock:
+                if not is_current():
+                    return
                 session.pty = pty
+                pty.setwinsize(*session.dimensions)
             probe = ""
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
             while is_current():
                 try:
                     data = pty.read(4096)
@@ -875,15 +954,10 @@ class ProjectTerminalServer:
                         break
                     if ready_candidate is None:
                         ready_candidate = time.monotonic()
-                    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
+                    text = decoder.decode(data) if isinstance(data, bytes) else str(data)
                     session.append_history(text)
-                    self.broadcast({"type": "output", "shell": sid, "data": text})
+                    self.broadcast({"type": "output", "shell": sid, "data": text}, session)
                     probe = (probe + text)[-8000:]
-                    if '\x1b[c' in text:
-                        try:
-                            pty.write('\x1b[?1;2c')
-                        except Exception:
-                            pass
                     if not session.ready and (
                         re_prompt(kind, probe)
                         or (ready_candidate and time.monotonic() - ready_candidate >= 0.75)
@@ -950,13 +1024,10 @@ class ProjectTerminalServer:
             if shell_id in self.sessions:
                 session = self.sessions[shell_id]
                 with session.lock:
-                    pty = session.pty if session.running else None
-                if pty:
-                    try:
-                        pty.write("Clear-Host\r\n" if session.kind == "pwsh" else "cls\r\n")
-                    except Exception:
-                        pass
-                self.broadcast({"type": "reset", "shell": shell_id})
+                    session.history.clear()
+                    session.history_chars = 0
+                # Never type a shell command into a running coding CLI.
+                self.broadcast({"type": "clear", "shell": shell_id})
                 return {"success": True}
             return {"success": False, "error": "Session not found"}
 
@@ -966,6 +1037,18 @@ class ProjectTerminalServer:
                 self.broadcast({"type": "theme", "theme": theme})
                 return {"success": True}
             return {"success": False, "error": "Invalid terminal theme"}
+
+        if action == "fit":
+            self.broadcast({"type": "fit"})
+            return {"success": True}
+
+        if action == "font":
+            try:
+                size = max(6, min(48, int(message.get("size", 14))))
+            except (ValueError, TypeError):
+                return {"success": False, "error": "Invalid terminal font size"}
+            self.broadcast({"type": "font", "size": size})
+            return {"success": True}
 
         if action == "select":
             if shell_id in self.sessions:
@@ -998,6 +1081,8 @@ class ProjectTerminalServer:
     async def websocket_handler(self, websocket):
         with self.clients_lock:
             self.clients.add(websocket)
+        self._pending_output[websocket] = {}
+        self._output_events[websocket] = asyncio.Event()
         try:
             for sid, session in list(self.sessions.items()):
                 await self._send(websocket, {"type": "create", "shell": sid, "kind": session.kind})
@@ -1006,13 +1091,25 @@ class ProjectTerminalServer:
             for sid, session in list(self.sessions.items()):
                 history = session.history_text()
                 if history:
-                    await self._send(websocket, {"type": "output", "shell": sid, "data": history})
+                    await self._send(websocket, {"type": "snapshot", "shell": sid, "data": history})
             async for raw in websocket:
                 try:
                     message = json.loads(raw)
                 except Exception:
                     continue
+                if not isinstance(message, dict):
+                    continue
                 message_type = message.get("type")
+                if message_type == "ack":
+                    try:
+                        count = max(0, min(4_000_000, int(message.get("chars", 0))))
+                    except (TypeError, ValueError):
+                        continue
+                    counts = self._pending_output.get(websocket, {})
+                    sid = str(message.get("shell", ""))
+                    counts[sid] = max(0, counts.get(sid, 0) - count)
+                    self._output_events[websocket].set()
+                    continue
                 if message_type == "client_ready":
                     if message.get("xterm") is False:
                         self._write_port_file(xterm=False)
@@ -1041,12 +1138,14 @@ class ProjectTerminalServer:
                     continue
                 if message_type == "resize":
                     try:
-                        cols = max(20, int(message.get("cols", 120)))
-                        rows = max(5, int(message.get("rows", 30)))
+                        cols = max(10, min(1000, int(message.get("cols", 120))))
+                        rows = max(2, min(500, int(message.get("rows", 30))))
                     except Exception:
                         cols, rows = 120, 30
-                    for session in self.sessions.values():
+                    session = self.sessions.get(str(message.get("shell", self.active_shell)))
+                    if session:
                         with session.lock:
+                            session.dimensions = (rows, cols)
                             pty = session.pty if session.running else None
                         if pty:
                             try:
@@ -1058,6 +1157,10 @@ class ProjectTerminalServer:
         finally:
             with self.clients_lock:
                 self.clients.discard(websocket)
+            event = self._output_events.pop(websocket, None)
+            if event:
+                event.set()
+            self._pending_output.pop(websocket, None)
 
     def run_http_server(self) -> None:
         owner = self
@@ -1138,6 +1241,7 @@ class ProjectTerminalServer:
         if websockets is None:
             raise RuntimeError("websockets is unavailable")
         self.loop = asyncio.get_running_loop()
+        self._loop_thread = threading.get_ident()
         async with websockets.serve(self.websocket_handler, "127.0.0.1", self.port + 1, max_size=2**22):
             self._write_port_file()
             await asyncio.Future()

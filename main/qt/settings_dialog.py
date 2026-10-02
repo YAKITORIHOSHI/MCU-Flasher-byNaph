@@ -3,11 +3,10 @@
 """
 main.qt.settings_dialog — Comprehensive Settings Dialog for MCU Flasher by Naph.
 
-Faithfully aligned with the original stable release (settings_dialog_mixin.py).
-Provides structured multi-section configuration:
-  • Performance Settings (CPU multithreading, Graphics acceleration, Console font size, Warning filter)
-  • Appearance & Theme (Color themes, System Default OS following)
-  • File Editor (Default vs Monaco with crash risk guard for low-spec PCs)
+Uses the active glass palette with structured, resource-aware configuration:
+  • Performance Settings (CPU multithreading, Continuous panel resize, Console font size, Warning filter)
+  • Appearance & Theme (Glass Smoked Dark, Frosted Light, Solarized and OS following)
+  • File Editor (Offline Monaco with automatic low-end resource settings)
   • Auto-Save (Toggle & millisecond delay)
   • Startup (Bootstrap pipeline indicator)
   • Hardware Reset Operations (Hard Reset Bootloader/Erase & Soft Reset Flash)
@@ -15,6 +14,7 @@ Provides structured multi-section configuration:
 from __future__ import annotations
 
 import os
+import copy
 from typing import Optional, TYPE_CHECKING
 from pathlib import Path
 
@@ -22,25 +22,26 @@ if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QCursor
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QCheckBox, QSpinBox, QGroupBox, QScrollArea,
-    QMessageBox,
+    QMessageBox, QBoxLayout,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 from main.core.constants import board_reset_capabilities
+from main.core.target_profile import target_problem
 from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import (
     _load_raw_config, _save_raw_config,
     get_theme_settings, set_theme_mode, _detect_system_theme,
     get_monitor_font_size, get_hide_build_console_warnings, set_hide_build_console_warnings,
-    get_editor_mode, set_editor_mode,
     get_autosave_settings, set_autosave_settings,
     get_reset_on_baud_change, set_reset_on_baud_change,
 )
 from main.core.toolchain import _resource_safe_worker_count, _system_reserved_cpu_count
 from main.qt.signals import signals
+from main.qt.responsive import fit_dialog, ScreenWatcher
 
 
 class SettingsDialog(QDialog):
@@ -54,31 +55,7 @@ class SettingsDialog(QDialog):
         self._backend = backend
         self.setWindowTitle("Settings — MCU Flasher by Naph")
 
-        # Adaptive dimensions based on active screen available work area
-        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else None
-        avail_w = avail.width() if avail else 1280
-        avail_h = avail.height() if avail else 720
-
-        target_w = min(600, max(520, int(avail_w * 0.85)))
-        target_h = min(740, max(520, int(avail_h * 0.88)))
-        target_w = min(target_w, avail_w)
-        target_h = min(target_h, avail_h)
-
-        self.setMinimumWidth(min(520, target_w))
-        self.resize(target_w, target_h)
-
-        if parent:
-            geo = parent.geometry()
-            self.move(
-                geo.x() + max(0, (geo.width() - target_w) // 2),
-                geo.y() + max(0, (geo.height() - target_h) // 2),
-            )
-        elif avail:
-            self.move(
-                avail.x() + max(0, (avail_w - target_w) // 2),
-                avail.y() + max(0, (avail_h - target_h) // 2),
-            )
+        fit_dialog(self, (560, 680), (340, 300))
         _this_file = Path(__file__).resolve()
         _project_root = _this_file.parent.parent.parent
         _icons_dir = _project_root / "src" / "assets" / "icons"
@@ -89,6 +66,7 @@ class SettingsDialog(QDialog):
         self._shared = self._raw_cfg.get("shared", {})
 
         self._build_ui()
+        self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_rows())
 
         from main.core.config import get_theme_mode
         self._apply_dialog_theme(get_theme_mode())
@@ -109,64 +87,38 @@ class SettingsDialog(QDialog):
         if hasattr(self, "btn_save"):
             self.btn_save.setFocus()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_form_rows"):
+            self._adapt_rows()
+
+    def _adapt_rows(self) -> None:
+        available = self.width() - 64
+        for row, label in self._form_rows:
+            field = row.itemAt(1).widget()
+            stacked = available < 164 + field.minimumSizeHint().width() + row.spacing()
+            row.setDirection(QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight)
+            label.setMinimumWidth(0 if stacked else 158)
+            label.setMaximumWidth(16777215 if stacked else 158)
+            label.setWordWrap(stacked)
+        narrow = available < 440
+        for row in (self._autosave_row, self._reset_row):
+            row.setDirection(QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight)
+
     def _apply_dialog_theme(self, mode: str) -> None:
         from main.qt.theme import get_palette
         pal = get_palette(mode)
-        if mode == "light":
-            bg = "#f5f6f8"
-            fg = "#2e3440"
-            scroll_bg = "#ffffff"
-            scroll_bar = "#e5e9f0"
-            scroll_handle = "#d8dee9"
-            scroll_handle_hover = "#88c0d0"
-            group_bg = "#ffffff"
-            group_border = "#d8dee9"
-            group_title = "#5e81ac"
-            combo_bg = "#f0f4f8"
-            combo_fg = "#2e3440"
-            combo_border = "#c4cdd9"
-            chk_bg = "#ffffff"
-            chk_border = "#9aaec7"
-            chk_checked_bg = "#2563eb"
-            chk_checked_hover = "#1d4ed8"
-        elif mode == "solarized_dark":
-            bg = "#002b36"
-            fg = "#93a1a1"
-            scroll_bg = "#073642"
-            scroll_bar = "#073642"
-            scroll_handle = "#586e75"
-            scroll_handle_hover = "#2aa198"
-            group_bg = "#073642"
-            group_border = "#586e75"
-            group_title = "#2aa198"
-            combo_bg = "#002b36"
-            combo_fg = "#93a1a1"
-            combo_border = "#586e75"
-            chk_bg = "#002b36"
-            chk_border = "#586e75"
-            chk_checked_bg = "#2aa198"
-            chk_checked_hover = "#20827b"
-        else:
-            bg = "#0c0d10"
-            fg = "#cdd6f4"
-            scroll_bg = "#0b0e14"
-            scroll_bar = "#0b0e14"
-            scroll_handle = "#3e4f6d"
-            scroll_handle_hover = "#56cfbf"
-            group_bg = "#151922"
-            group_border = "#2d3748"
-            group_title = "#56cfbf"
-            combo_bg = "#1c2333"
-            combo_fg = "#e8eaf6"
-            combo_border = "#2d3748"
-            chk_bg = "#12161f"
-            chk_border = "#4a5d78"
-            chk_checked_bg = "#2a7566"
-            chk_checked_hover = "#348f7d"
+        bg, fg = pal["BG_DARK"], pal["TEXT"]
+        scroll_bg, scroll_bar = pal["BG_DARKEST"], pal["BG_DARK"]
+        scroll_handle, scroll_handle_hover = pal["BORDER"], pal["CYAN"]
+        group_bg, group_border, group_title = pal["BG_MID"], pal["BORDER"], pal["CYAN"]
+        combo_bg, combo_fg, combo_border = pal["BG_DARKEST"], pal["TEXT"], pal["BORDER"]
+        chk_bg, chk_border = pal["BG_DARK"], pal["BORDER"]
+        chk_checked_bg, chk_checked_hover = pal["CYAN_DIM"], pal["BTN_MONITOR_H"]
 
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {bg};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {pal['BG_MID']}, stop:1 {bg});
                 color: {fg};
             }}
             QScrollArea {{
@@ -201,7 +153,7 @@ class SettingsDialog(QDialog):
             QGroupBox {{
                 background-color: {group_bg};
                 border: 1px solid {group_border};
-                border-radius: 6px;
+                border-radius: 12px;
                 margin-top: 10px;
                 padding-top: 14px;
                 color: {group_title};
@@ -349,7 +301,7 @@ class SettingsDialog(QDialog):
         container.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 4, 8, 4)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         # ── 1. Performance Settings ──────────────────────────────────────────
         perf_box = QGroupBox("Performance Settings")
@@ -359,7 +311,7 @@ class SettingsDialog(QDialog):
         # CPU multithreading
         cpu_row = QHBoxLayout()
         cpu_lbl = QLabel("CPU Cores Multithreading:")
-        cpu_lbl.setFixedWidth(190)
+        cpu_lbl.setFixedWidth(158)
         cpu_row.addWidget(cpu_lbl)
 
         total_processors = os.cpu_count() or 4
@@ -384,16 +336,19 @@ class SettingsDialog(QDialog):
         cpu_row.addWidget(self.cpu_combo, stretch=1)
         pv.addLayout(cpu_row)
 
-        # Graphics acceleration
-        self.cb_g_accel = QCheckBox("Graphics Acceleration (Smooth sash resize)")
-        current_g = self._shared.get("graphics_acceleration", "ON")
+        # Continuous splitter resize; retain the legacy persistence key.
+        self.cb_g_accel = QCheckBox("Continuous panel resizing")
+        self.cb_g_accel.setToolTip("Turn off on slower devices to show a divider preview until you release it. This controls splitter resizing; GPU policy is managed automatically.")
+        from src.modules.runtime_resources import performance_profile
+        self._default_continuous_resize = not performance_profile().constrained
+        current_g = self._shared.get("graphics_acceleration", "ON" if self._default_continuous_resize else "OFF")
         self.cb_g_accel.setChecked(current_g == "ON")
         pv.addWidget(self.cb_g_accel)
 
         # Font size
         font_row = QHBoxLayout()
         font_lbl = QLabel("Editor & Monitor font size:")
-        font_lbl.setFixedWidth(190)
+        font_lbl.setFixedWidth(158)
         font_row.addWidget(font_lbl)
 
         self.font_combo = QComboBox()
@@ -429,16 +384,16 @@ class SettingsDialog(QDialog):
 
         theme_row = QHBoxLayout()
         theme_lbl = QLabel("Color Theme:")
-        theme_lbl.setFixedWidth(190)
+        theme_lbl.setFixedWidth(158)
         theme_row.addWidget(theme_lbl)
 
         self._theme_map = {
-            "Default (Dark Cyberpunk)": "default",
-            "Light (Clean & Bright)": "light",
+            "Glass (Smoked blue)": "default",
+            "Glass (Frosted light)": "light",
             "Solarized Dark (Teal / Cyan)": "solarized_dark",
         }
         self._theme_rev = {v: k for k, v in self._theme_map.items()}
-        self._theme_rev["dark"] = "Default (Dark Cyberpunk)"
+        self._theme_rev["dark"] = "Glass (Smoked blue)"
 
         self.theme_combo = QComboBox()
         for label in self._theme_map.keys():
@@ -446,12 +401,13 @@ class SettingsDialog(QDialog):
 
         cur_saved_theme, cur_follow_sys = get_theme_settings()
         self._last_manual_theme = "default" if cur_saved_theme == "dark" else cur_saved_theme
-        self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, "Default (Dark Cyberpunk)"))
+        self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, "Glass (Smoked blue)"))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         theme_row.addWidget(self.theme_combo, stretch=1)
         tv.addLayout(theme_row)
 
-        self.cb_theme_system = QCheckBox("System Default (Follow Windows Light / Dark mode)")
+        self.cb_theme_system = QCheckBox("Follow system appearance")
+        self.cb_theme_system.setToolTip("Follow the operating system’s light or dark appearance; retain your manual theme for when this is disabled.")
         self.cb_theme_system.setChecked(cur_follow_sys)
         self.cb_theme_system.toggled.connect(self._on_theme_system_toggled)
         tv.addWidget(self.cb_theme_system)
@@ -471,27 +427,15 @@ class SettingsDialog(QDialog):
 
         ed_row = QHBoxLayout()
         ed_lbl = QLabel("Editor Engine:")
-        ed_lbl.setFixedWidth(190)
+        ed_lbl.setFixedWidth(158)
         ed_row.addWidget(ed_lbl)
 
-        self.editor_combo = QComboBox()
-        self._ed_default_label = "Default (Lightweight)"
-        self._ed_monaco_label = "Monaco (VS Code-style, heavier)"
-        self.editor_combo.addItems([self._ed_default_label, self._ed_monaco_label])
-
-        cur_editor = get_editor_mode()
-        self._current_editor_mode = cur_editor
-        if cur_editor == "monaco":
-            self.editor_combo.setCurrentText(self._ed_monaco_label)
-        else:
-            self.editor_combo.setCurrentText(self._ed_default_label)
-
-        self._monaco_confirmed = (cur_editor == "monaco")
-        self.editor_combo.currentIndexChanged.connect(self._on_editor_choice)
-        ed_row.addWidget(self.editor_combo, stretch=1)
+        editor_label = QLabel("Offline Monaco", editor_box)
+        editor_label.setObjectName("editor-engine-label")
+        ed_row.addWidget(editor_label, stretch=1)
         ev.addLayout(ed_row)
 
-        editor_note = QLabel("Changing the editor takes effect the next time the app is started.")
+        editor_note = QLabel("CPU and RAM detection automatically reduce editor animation, minimap and background checks on constrained devices.")
         editor_note.setProperty("role", "dim")
         editor_note.setWordWrap(True)
         ev.addWidget(editor_note)
@@ -535,7 +479,8 @@ class SettingsDialog(QDialog):
         sm_v = QVBoxLayout(serial_box)
         sm_v.setSpacing(8)
 
-        self.cb_reset_on_baud = QCheckBox("Reset MCU via DTR/RTS on baud rate change")
+        self.cb_reset_on_baud = QCheckBox("Reset MCU when baud rate changes")
+        self.cb_reset_on_baud.setToolTip("Reset the MCU via DTR/RTS when the serial monitor baud rate changes.")
         self.cb_reset_on_baud.setChecked(get_reset_on_baud_change())
         sm_v.addWidget(self.cb_reset_on_baud)
 
@@ -552,7 +497,8 @@ class SettingsDialog(QDialog):
         # ── 6. Startup ───────────────────────────────────────────────────────
         startup_box = QGroupBox("Startup")
         sv = QVBoxLayout(startup_box)
-        startup_lbl = QLabel("Bootstrap runs before the main app on every launch.")
+        startup_lbl = QLabel("Windows uses cached runtime health checks for faster launches; changed or missing dependencies trigger setup. Ubuntu uses its native Python environment. Resource limits apply automatically on 4- and 6-core devices.")
+        startup_lbl.setWordWrap(True)
         startup_lbl.setProperty("role", "dim")
         sv.addWidget(startup_lbl)
         layout.addWidget(startup_box)
@@ -580,7 +526,8 @@ class SettingsDialog(QDialog):
             board_name,
             binfo.get("framework", ""),
         )
-        can_soft = bool(reset_caps.get("soft_reset") or binfo.get("pio_resolved", True))
+        target_valid = bool(binfo) and not target_problem(binfo)
+        can_soft = target_valid and bool(reset_caps.get("soft_reset"))
 
         btn_row = QHBoxLayout()
         hard_reset_label = (
@@ -647,16 +594,18 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(self.btn_soft_reset)
         rv.addLayout(btn_row)
 
-        has_board = bool(board_name and binfo)
+        has_board = bool(board_name and target_valid)
         has_port = bool(self._backend and getattr(self._backend, "current_port", ""))
-        can_hard = bool(reset_caps.get("hard_reset_ui"))
-        if not has_board or not has_port:
+        can_hard = target_valid and bool(reset_caps.get("hard_reset_ui"))
+        busy = bool(getattr(self._backend, "is_busy", False) or getattr(self._backend, "active_operation", None))
+        if not has_board or not has_port or busy:
             self.btn_hard_reset.setEnabled(False)
             self.btn_hard_reset.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_soft_reset.setEnabled(False)
             self.btn_soft_reset.setCursor(Qt.CursorShape.ArrowCursor)
-            warn_lbl = QLabel("⚠ Please select an MCU board and COM port in the main toolbar to use Hardware Reset.")
-            warn_lbl.setStyleSheet("color: #f1c40f; font-size: 10px; font-style: italic;")
+            warn_lbl = QLabel("Wait for the current operation to finish before resetting." if busy else "Select a resolved MCU board and serial port to use Hardware Reset.")
+            warn_lbl.setProperty("role", "dim")
+            warn_lbl.setWordWrap(True)
             rv.addWidget(warn_lbl)
         else:
             if not can_hard:
@@ -670,12 +619,16 @@ class SettingsDialog(QDialog):
             if not can_soft:
                 self.btn_soft_reset.setEnabled(False)
                 self.btn_soft_reset.setCursor(Qt.CursorShape.ArrowCursor)
-                self.btn_soft_reset.setText("Soft Reset unavailable (Arduino framework required)")
+                self.btn_soft_reset.setText("Soft Reset unavailable")
+                self.btn_soft_reset.setToolTip("Soft reset requires a supported board using the Arduino framework.")
 
         layout.addWidget(reset_box)
 
         # Finish scroll setup
         self.scroll.setWidget(container)
+        self._form_rows = [(cpu_row, cpu_lbl), (font_row, font_lbl), (theme_row, theme_lbl), (ed_row, ed_lbl)]
+        self._autosave_row, self._reset_row = as_row, btn_row
+        self._adapt_rows()
         outer_layout.addWidget(self.scroll, stretch=1)
 
         # ── Dialog Action Buttons (Reset Defaults / Cancel / Save) ───────────
@@ -711,7 +664,7 @@ class SettingsDialog(QDialog):
             self,
             "Reset All Settings",
             "Are you sure you want to restore all settings to their default values?\n\n"
-            "This will reset CPU Multithreading, Graphics Acceleration, Font Size, Console Warnings, Theme, Auto-Save, and Serial Monitor options to factory defaults.",
+            "This will reset CPU Multithreading, Panel Resize, Font Size, Console Warnings, Theme, Auto-Save, and Serial Monitor options to resource-aware defaults.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -720,7 +673,7 @@ class SettingsDialog(QDialog):
 
         # Restore UI controls
         self.cpu_combo.setCurrentText(self._high_val)
-        self.cb_g_accel.setChecked(True)
+        self.cb_g_accel.setChecked(self._default_continuous_resize)
         idx_11 = self.font_combo.findData(11)
         if idx_11 >= 0:
             self.font_combo.setCurrentIndex(idx_11)
@@ -728,9 +681,8 @@ class SettingsDialog(QDialog):
 
         self.cb_theme_system.setChecked(False)
         self.theme_combo.setEnabled(True)
-        self.theme_combo.setCurrentText("Default (Dark Cyberpunk)")
+        self.theme_combo.setCurrentText(self._theme_rev["default"])
 
-        self.editor_combo.setCurrentText(self._ed_default_label)
         self.cb_autosave.setChecked(False)
         self.autosave_spin.setValue(1500)
         self.cb_reset_on_baud.setChecked(False)
@@ -750,42 +702,38 @@ class SettingsDialog(QDialog):
             self.theme_combo.setEnabled(False)
             detected = _detect_system_theme()
             self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentText(self._theme_rev.get(detected, "Default (Dark Cyberpunk)"))
+            self.theme_combo.setCurrentText(self._theme_rev.get(detected, "Glass (Smoked blue)"))
             self.theme_combo.blockSignals(False)
         else:
             self.theme_combo.setEnabled(True)
             self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, "Default (Dark Cyberpunk)"))
+            self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, self._theme_rev["default"]))
             self.theme_combo.blockSignals(False)
 
-    def _on_editor_choice(self, index: int) -> None:
-        chosen = self.editor_combo.currentText()
-        if chosen == self._ed_monaco_label and not self._monaco_confirmed:
-            ret = QMessageBox.question(
-                self,
-                "Monaco Editor Warning",
-                "The Monaco editor is a heavier, browser-based editor.\n\n"
-                "On low-spec devices, it may cause the application to "
-                "freeze or crash on startup.\n\n"
-                "Do you want to continue selecting Monaco?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if ret == QMessageBox.StandardButton.Yes:
-                self._monaco_confirmed = True
-            else:
-                self.editor_combo.setCurrentText(self._ed_default_label)
+    def _reset_target(self, hard: bool = False):
+        """Recheck live state before a destructive reset confirmation."""
+        backend = self._backend
+        if not backend or getattr(backend, "is_busy", False) or getattr(backend, "active_operation", None):
+            QMessageBox.warning(self, "Reset unavailable", "Wait for the current operation to finish.")
+            return None
+        name = getattr(backend, "current_board", "")
+        port = getattr(backend, "current_port", "")
+        try:
+            info = backend._resolve_board_info(name) if name else {}
+        except Exception:
+            info = {}
+        caps = board_reset_capabilities(info.get("platform", ""), info.get("board", ""), name, info.get("framework", ""))
+        if not port or not info or target_problem(info) or not caps.get("hard_reset_ui" if hard else "soft_reset"):
+            QMessageBox.warning(self, "Reset unavailable", "Select a resolved board and serial port with a supported reset strategy. Soft Reset requires the Arduino framework.")
+            return None
+        return name, port, info, caps
 
     def _run_hard_reset(self) -> None:
-        port = getattr(self._backend, "current_port", "")
-        bname = getattr(self._backend, "current_board", "")
-        binfo = self._backend._resolve_board_info(bname) if hasattr(self._backend, "_resolve_board_info") else {}
+        target = self._reset_target(hard=True)
+        if target is None:
+            return
+        bname, port, binfo, reset_caps = target
         plat = str(binfo.get("platform", "")).lower()
-        reset_caps = board_reset_capabilities(
-            plat,
-            binfo.get("board", ""),
-            bname,
-            binfo.get("framework", ""),
-        )
         strategy = reset_caps.get("hard_strategy")
         if strategy == "esp32_recovery":
             title = "ESP32 Full Erase + Burn Bootloader"
@@ -831,13 +779,15 @@ class SettingsDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if ret == QMessageBox.StandardButton.Yes and self._backend:
-            erase = "Erase" in self.btn_hard_reset.text()
+            erase = strategy == "esp8266_erase"
             self._backend.hard_reset(erase_flash=erase)
             self.accept()
 
     def _run_soft_reset(self) -> None:
-        port = getattr(self._backend, "current_port", "")
-        bname = getattr(self._backend, "current_board", "")
+        target = self._reset_target()
+        if target is None:
+            return
+        bname, port, _, _ = target
         ret = QMessageBox.question(
             self,
             "Soft Reset (Reset Flash)",
@@ -855,7 +805,7 @@ class SettingsDialog(QDialog):
 
     def _save_and_apply(self) -> None:
         """Persist all settings and emit console log confirmations."""
-        data = _load_raw_config()
+        data = copy.deepcopy(_load_raw_config())
         if "shared" not in data or not isinstance(data["shared"], dict):
             data["shared"] = {}
 
@@ -869,7 +819,7 @@ class SettingsDialog(QDialog):
             cpu_key = "HIGH"
         data["shared"]["cpu_multithreading"] = cpu_key
 
-        # 2. Graphics Acceleration
+        # 2. Splitter resize preference (legacy config key retained)
         g_accel = "ON" if self.cb_g_accel.isChecked() else "OFF"
         data["shared"]["graphics_acceleration"] = g_accel
 
@@ -879,7 +829,6 @@ class SettingsDialog(QDialog):
 
         # 4. Hide Warnings in Build Console
         hide_warn = self.cb_hide_warnings.isChecked()
-        set_hide_build_console_warnings(hide_warn)
         data["shared"]["hide_build_console_warnings"] = hide_warn
 
         # 5. Appearance & Theme
@@ -895,43 +844,37 @@ class SettingsDialog(QDialog):
 
         data["shared"]["theme_mode"] = saved_mode
         data["shared"]["theme_follow_system"] = follow_sys
-        set_theme_mode(saved_mode, follow_system=follow_sys)
 
-        from main.core.theme import Theme
-        Theme.apply_theme(active_theme)
-
-        from main.qt.theme import build_stylesheet
-        # pyrefly: ignore [missing-import]
-        from PySide6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app:
-            app.setStyleSheet(build_stylesheet(active_theme))
-
-        self._apply_dialog_theme(active_theme)
-
-        # 6. File Editor
-        new_editor_mode = "monaco" if self.editor_combo.currentText() == self._ed_monaco_label else "default"
-        data["shared"]["editor_mode"] = new_editor_mode
-        set_editor_mode(new_editor_mode)
+        # Preserve legacy editor_mode data; the Qt workspace uses offline Monaco
+        # with an automatic resource profile and has no alternative engine.
 
         # 7. Auto-Save
         as_enabled = self.cb_autosave.isChecked()
         as_delay = self.autosave_spin.value()
-        set_autosave_settings(as_enabled, as_delay)
         data["shared"]["autosave_enabled"] = as_enabled
         data["shared"]["autosave_delay_ms"] = as_delay
 
         # 8. Serial Monitor (Reset on Baud Change)
         reset_on_baud = self.cb_reset_on_baud.isChecked()
-        set_reset_on_baud_change(reset_on_baud)
         data["shared"]["reset_on_baud_change"] = reset_on_baud
+        # Persist the complete preference set once before applying it live.
+        if _save_raw_config(data) is False:
+            QMessageBox.critical(self, "Settings not saved", "The configuration files could not be written. Check that your user folder is writable and try again.")
+            return
+
+        from main.core.theme import Theme
+        from main.qt.theme import build_stylesheet
+        from PySide6.QtWidgets import QApplication
+        Theme.apply_theme(active_theme)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(build_stylesheet(active_theme))
+        self._apply_dialog_theme(active_theme)
+
         if self._backend and hasattr(self._backend, "set_reset_on_baud_change"):
             self._backend.set_reset_on_baud_change(reset_on_baud)
         if hasattr(signals, "reset_on_baud_changed"):
             signals.reset_on_baud_changed.emit(reset_on_baud)
-
-        # Save to disk
-        _save_raw_config(data)
 
         # Record into persistent Notification database and emit to Notifications tab
         theme_str = f"System Default ({active_theme.replace('_', ' ').title()})" if follow_sys else active_theme.replace('_', ' ').title()
@@ -941,7 +884,7 @@ class SettingsDialog(QDialog):
 
         notif_msg = (
             f"• CPU Multithreading: {cpu_key}\n"
-            f"• Graphics Acceleration: {g_accel}\n"
+            f"• Continuous Panel Resize: {g_accel}\n"
             f"• Editor & Monitor Font: {new_font_size} pt\n"
             f"• Console Warnings: {warn_str}\n"
             f"• Theme Mode: {theme_str}\n"
@@ -977,7 +920,7 @@ class SettingsDialog(QDialog):
         if hasattr(signals, "autosave_settings_changed"):
             signals.autosave_settings_changed.emit(as_enabled, as_delay)
 
-        # Apply graphics acceleration live to splitters
+        # Apply continuous resizing live to splitters.
         if hasattr(signals, "graphics_accel_changed"):
             signals.graphics_accel_changed.emit(g_accel == "ON")
 

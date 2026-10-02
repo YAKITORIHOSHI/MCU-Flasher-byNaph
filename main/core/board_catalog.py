@@ -10,6 +10,7 @@ import json
 import re
 import difflib
 import threading
+import subprocess
 from pathlib import Path
 from typing import Optional, Any
 
@@ -238,17 +239,12 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
     return records
 
 
-_BOARD_CATALOG_CACHE_VERSION = 1
+_BOARD_CATALOG_CACHE_VERSION = 2
 
 
 def _board_catalog_cache_path() -> Path:
-    """Return a user-local cache path so startup never modifies the project tree."""
-    base = Path(
-        os.environ.get("LOCALAPPDATA", "").strip()
-        or os.environ.get("APPDATA", "").strip()
-        or Path.home() / "AppData" / "Local"
-    )
-    return base / ".mcuflasher-app" / "board_catalog.json"
+    from src.modules.platform_runtime import app_cache_dir
+    return app_cache_dir() / "board_catalog.json"
 
 
 def _json_safe_board_value(value):
@@ -346,7 +342,7 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         return []
     root = Path(os.path.expandvars(os.path.expanduser(root_value)))
 
-    # Compute fast directory fingerprint in RAM to detect if platforms or custom boards changed
+    # Include file metadata: editing a manifest does not change directory mtime.
     global_boards = root / "boards"
     platforms_root = root / "platforms"
     try:
@@ -358,7 +354,17 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
                 if p.is_dir():
                     b = p / "boards"
                     platform_st.append((p.name, p.stat().st_mtime_ns, b.stat().st_mtime_ns if b.is_dir() else 0))
-        fp = (gb_mtime, pr_mtime, tuple(platform_st))
+        manifests = list(global_boards.glob("*.json")) if global_boards.is_dir() else []
+        if platforms_root.is_dir():
+            for platform_dir in platforms_root.iterdir():
+                board_dir = platform_dir / "boards"
+                if board_dir.is_dir():
+                    manifests.extend(board_dir.glob("*.json"))
+        manifest_stats = []
+        for path in sorted(manifests):
+            stat = path.stat()
+            manifest_stats.append((str(path), stat.st_size, stat.st_mtime_ns))
+        fp = (gb_mtime, pr_mtime, tuple(platform_st), tuple(manifest_stats))
     except Exception:
         fp = ()
 
@@ -439,6 +445,7 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             "memory_type": str(arduino_build.get("memory_type") or build.get("memory_type") or "").strip(),
             "flash_mode": str(build.get("flash_mode") or "").strip(),
             "flash_size": str(upload.get("flash_size") or "").strip(),
+            "upload_protocol": str(upload.get("protocol") or "").strip(),
             "has_psram": any("BOARD_HAS_PSRAM" in str(flag) for flag in extra_flags),
             "hwids": hwids,
             "arduino_defines": defines,
@@ -527,7 +534,7 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | N
     strong = any(x in reasons for x in ("id", "variant", "name", "usb", "arduino-define"))
     if best_score < (120.0 if strong else 105.0):
         return None
-    if not strong and best_score - second_score < 18.0:
+    if best_score - second_score < 18.0:
         return None
     return {
         **best,
@@ -625,7 +632,48 @@ def _fallback_board_id_for_platform(
     return aid or "generic"
 
 
-def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> dict:
+def load_registry_board_catalog() -> list[dict]:
+    """Ask PlatformIO for canonical available boards, including new platforms."""
+    from main.core.toolchain import find_pio_executable
+    from main.core.target_profile import target_problem
+    command = find_pio_executable()
+    if not command:
+        raise RuntimeError("PlatformIO is missing. Repair the application runtime first.")
+    env = os.environ.copy()
+    env["PLATFORMIO_CORE_DIR"] = _get_safe_platformio_core_dir(SCRIPT_DIR)
+    result = subprocess.run(
+        command + ["boards", "--json-output"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=45, env=env,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if result.returncode:
+        raise RuntimeError((result.stderr or "PlatformIO catalog request failed")[-600:])
+    records = json.loads(result.stdout)
+    if not isinstance(records, list):
+        raise ValueError("PlatformIO returned an invalid board catalog.")
+    catalog = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        identity = {"platform": record.get("platform"), "board": record.get("id"), "framework": "arduino"}
+        if target_problem(identity):
+            continue
+        frameworks = record.get("frameworks") or []
+        if not isinstance(frameworks, (list, tuple)):
+            continue
+        try:
+            flash_size = f"{float(record.get('rom') or 0) / (1024 * 1024):g}MB"
+        except (TypeError, ValueError, OverflowError):
+            flash_size = "unknown"
+        catalog.append({
+            **record, "frameworks": {str(f).lower() for f in frameworks},
+            "flash_size": flash_size,
+            "hwids": set(), "arduino_defines": set(), "manifest": "",
+        })
+    return catalog
+
+
+def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, registry_catalog=None) -> dict:
     """Load downloaded/installed Arduino boards and resolve them to real PlatformIO IDs.
 
     Arduino ``boards.txt`` identifiers and PlatformIO board IDs are different
@@ -642,11 +690,14 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         # deferred refresh will populate the real catalog after Tk is visible.
         return default_boards.copy()
 
-    boards = default_boards.copy()
+    boards = {name: dict(info) for name, info in default_boards.items() if isinstance(info, dict)}
     records: list[dict] = []
     for search_root in _get_arduino_board_search_roots():
         records.extend(_parse_downloaded_arduino_board_files(search_root))
     catalog = _load_platformio_board_catalog()
+    if registry_catalog:
+        installed = {(b["platform"], b["id"]) for b in catalog}
+        catalog.extend(b for b in registry_catalog if (b["platform"], b["id"]) not in installed)
 
     resolved_rows: list[tuple[dict, dict | None]] = [
         (record, _resolve_arduino_board_record(record, catalog)) for record in records
@@ -689,10 +740,10 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         ).strip()
         arduino_id = str(record.get("arduino_id") or "")
         raw_id = str((match or {}).get("id") or "").strip()
-        pio_id = raw_id or _fallback_board_id_for_platform(
-            platform, arduino_id, str(record.get("mcu") or ""), display_name
-        )
-        pio_resolved = bool(match and platform and raw_id) or bool(platform and pio_id)
+        # Arduino and PlatformIO IDs are different namespaces. A plausible
+        # family/id is not sufficient evidence to flash a board safely.
+        pio_id = raw_id
+        pio_resolved = bool(match and platform and raw_id)
 
         if display_name in used_names:
             existing = boards.get(display_name)
@@ -711,6 +762,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
             "platform": platform,
             "board": pio_id,
             "framework": "arduino",
+            "frameworks": sorted((match or {}).get("frameworks") or ["arduino"]),
             "pio_resolved": pio_resolved,
             "pio_match_score": (match or {}).get("match_score", 0.0),
             "pio_match_reasons": list((match or {}).get("match_reasons") or []),
@@ -721,6 +773,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
             "pio_name": str((match or {}).get("name") or ""),
             "pio_vendor": str((match or {}).get("vendor") or ""),
             "pio_manifest": str((match or {}).get("manifest") or ""),
+            "upload_protocol": str((match or {}).get("upload_protocol") or ""),
             "flash_mb": None,
             # Compile-time options come from the resolved PlatformIO manifest
             # first, because PlatformIO (not the downloaded Arduino core copy)
@@ -736,6 +789,12 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
             entry["flash_mb"] = float(m.group(1))
         boards[display_name] = entry
 
+    # Index aliases once: refreshing thousands of manifests must stay linear.
+    identities: dict[tuple[str, str], list[dict]] = {}
+    for prior in boards.values():
+        identity = (str(prior.get("platform", "")).lower(), str(prior.get("board", "")).lower())
+        identities.setdefault(identity, []).append(prior)
+
     # ── Register native PlatformIO board manifests from installed platforms ───
     for pio_board in catalog:
         b_id = str(pio_board.get("id") or "").strip()
@@ -744,13 +803,23 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         if not b_id or not b_platform:
             continue
 
-        # Skip if this board id for this platform is already registered
-        if any(
-            isinstance(v, dict)
-            and str(v.get("board", "")).lower() == b_id.lower()
-            and str(v.get("platform", "")).lower() == b_platform.lower()
-            for v in boards.values()
-        ):
+        # Refresh cached identities from the current host's canonical manifest.
+        # A copied Windows cache must not mask freshly installed Linux metadata.
+        identity = (b_platform.lower(), b_id.lower())
+        for prior in identities.get(identity, ()):
+            frameworks = sorted(pio_board.get("frameworks") or [])
+            prior.update({
+                "pio_resolved": True, "pio_manifest": str(pio_board.get("manifest") or ""),
+                "frameworks": frameworks, "upload_protocol": str(pio_board.get("upload_protocol") or ""),
+                "has_psram": bool(pio_board.get("has_psram")),
+                "memory_type": pio_board.get("memory_type") or None,
+                "flash_mode": pio_board.get("flash_mode") or None,
+            })
+            if prior.get("framework") not in frameworks:
+                prior["framework"] = "arduino" if "arduino" in frameworks else ""
+
+        # Skip duplicate display rows for identities already registered.
+        if identity in identities:
             continue
 
         disp_name = b_name
@@ -761,12 +830,15 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         used_names.add(disp_name)
 
         frameworks = set(pio_board.get("frameworks") or [])
-        framework = "arduino" if ("arduino" in frameworks or not frameworks) else sorted(frameworks)[0]
+        # This sketch editor uses Arduino. Other framework manifests remain
+        # discoverable but need an explicit framework project to be buildable.
+        framework = "arduino" if "arduino" in frameworks else ""
 
         entry = {
             "platform": b_platform,
             "board": b_id,
             "framework": framework,
+            "frameworks": sorted(frameworks),
             "pio_resolved": True,
             "pio_match_score": 100.0,
             "pio_match_reasons": ["platformio-native-manifest"],
@@ -777,6 +849,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
             "pio_name": b_name,
             "pio_vendor": str(pio_board.get("vendor") or ""),
             "pio_manifest": str(pio_board.get("manifest") or ""),
+            "upload_protocol": str(pio_board.get("upload_protocol") or ""),
             "flash_mb": None,
             "has_psram": bool(pio_board.get("has_psram")),
             "memory_type": str(pio_board.get("memory_type") or "") or None,
@@ -788,12 +861,53 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False) -> 
         if m:
             entry["flash_mb"] = float(m.group(1))
         boards[disp_name] = entry
+        identities.setdefault(identity, []).append(entry)
 
     _save_board_catalog_cache(boards)
     return boards
 
 
-SUPPORTED_BOARDS = load_dynamic_boards({}, prefer_cache=True)
+class BoardCatalog(dict):
+    """Keep imported catalog references stable and iteration safe during refresh."""
+
+    def __init__(self, initial):
+        self._lock = threading.RLock()
+        super().__init__(initial)
+
+    def replace(self, catalog):
+        with self._lock:
+            super().clear()
+            super().update(catalog)
+
+    def items(self):
+        with self._lock:
+            return tuple(super().items())
+
+    def keys(self):
+        with self._lock:
+            return tuple(super().keys())
+
+    def values(self):
+        with self._lock:
+            return tuple(super().values())
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def get(self, key, default=None):
+        with self._lock:
+            return super().get(key, default)
+
+    def __getitem__(self, key):
+        with self._lock:
+            return super().__getitem__(key)
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
+
+
+SUPPORTED_BOARDS = BoardCatalog(load_dynamic_boards({}, prefer_cache=True))
 
 def load_downloaded_board_usb_ids(board_catalog: dict | None = None) -> dict[tuple[int, int], tuple[str, ...]]:
     """Map VID/PID pairs to every downloaded/installed board that declares them.
@@ -845,7 +959,9 @@ def load_downloaded_board_usb_ids(board_catalog: dict | None = None) -> dict[tup
         if names
     }
 
-DOWNLOADED_BOARD_USB_IDS = load_downloaded_board_usb_ids(SUPPORTED_BOARDS)
+# Importing the GUI must never traverse package trees. The background catalog
+# refresh populates this shared mapping once discovery has completed.
+DOWNLOADED_BOARD_USB_IDS: dict[tuple[int, int], tuple[str, ...]] = {}
 
 # Generic WCH bridge IDs commonly used by Arduino UNO/Nano clones. Explicit
 # ESP32/ESP8266/NodeMCU descriptor text is checked first and remains authoritative.

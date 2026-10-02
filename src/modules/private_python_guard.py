@@ -40,11 +40,19 @@ PRIVATE_PYTHON_DIR = _PROJECT_ROOT / "src" / "_python"
 
 
 ENV_PYTHON_DIR = _PROJECT_ROOT / "env"
+LINUX_ENV_DIR = _PROJECT_ROOT / ".venv-linux"
 
 
 def is_running_private_python() -> bool:
     """Return True iff current sys.executable is inside src/_python or the project venv (env/)."""
     try:
+        if sys.platform.startswith("linux"):
+            # Ubuntu venv executables normally point to /usr/bin/python.
+            # sys.prefix identifies the environment; resolving executable does not.
+            prefix = Path(sys.prefix).resolve()
+            return sys.prefix != sys.base_prefix and prefix in {
+                LINUX_ENV_DIR.resolve(), ENV_PYTHON_DIR.resolve(),
+            }
         current_exe = Path(sys.executable).resolve()
         private_dir = PRIVATE_PYTHON_DIR.resolve()
         if private_dir in current_exe.parents or current_exe == (private_dir / "python.exe") or current_exe == (private_dir / "pythonw.exe"):
@@ -108,6 +116,20 @@ def get_private_python_exe(prefer_pythonw: bool = False) -> Path:
     Get the exact Path to the private Python executable in src/_python.
     STRICT: NEVER returns any system or external Python.
     """
+    if sys.platform.startswith("linux"):
+        for env_dir in (LINUX_ENV_DIR, ENV_PYTHON_DIR):
+            candidate = env_dir / "bin" / "python"
+            if candidate.is_file():
+                try:
+                    result = subprocess.run(
+                        [str(candidate), "-c", "import sys, encodings; assert sys.prefix != sys.base_prefix"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                    )
+                    if result.returncode == 0:
+                        return candidate
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+        raise RuntimeError("Ubuntu runtime is missing or damaged. Run: python3 direct/setup_ubuntu.py")
     pyw = PRIVATE_PYTHON_DIR / "pythonw.exe"
     py  = PRIVATE_PYTHON_DIR / "python.exe"
 
@@ -171,6 +193,11 @@ def sanitize_environment() -> dict[str, str]:
         env.pop(var, None)
 
     # Prepend private python and Scripts to PATH
+    if sys.platform.startswith("linux"):
+        runtime_bin = get_private_python_exe().parent
+        env["PATH"] = str(runtime_bin) + os.pathsep + env.get("PATH", "")
+        env["PYTHONNOUSERSITE"] = "1"
+        return env
     scripts_dir = PRIVATE_PYTHON_DIR / "Scripts"
     path_val = env.get("PATH", "")
     paths = [str(PRIVATE_PYTHON_DIR), str(scripts_dir)]
@@ -192,12 +219,17 @@ def enforce_private_python(prefer_pythonw: bool = False) -> None:
         return
 
     # Not running under private Python — reject external/system Python and switch to private runtime
+    runtime_dir = LINUX_ENV_DIR if sys.platform.startswith("linux") else PRIVATE_PYTHON_DIR
     print(
         f"[MCU Flasher] External system Python rejected ({sys.executable}). "
-        f"Exclusively using private Python runtime at {PRIVATE_PYTHON_DIR}.",
+        f"Exclusively using private Python runtime at {runtime_dir}.",
         file=sys.stderr,
     )
-    private_exe = get_private_python_exe(prefer_pythonw=prefer_pythonw)
+    try:
+        private_exe = get_private_python_exe(prefer_pythonw=prefer_pythonw)
+    except RuntimeError as exc:
+        print(f"[MCU Flasher] {exc}", file=sys.stderr)
+        sys.exit(1)
     clean_env = sanitize_environment()
 
     cmd = [str(private_exe)] + sys.argv

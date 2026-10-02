@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from main.qt.signals import signals as sig_bus
+from main.qt.responsive import active_screen, clamp_window, ScreenWatcher
 
 # ── Project root resolution ───────────────────────────────────────────────────
 _this_file = Path(__file__).resolve()
@@ -74,32 +75,26 @@ class MCUMainWindow(QMainWindow):
         self._editor_pane_visible_before_detach = True
         self._detached_window = None
         self._active_operation: str | None = None
+        self._startup_complete = False
+        self._startup_scheduled = False
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(60)
+        self._layout_timer.timeout.connect(self._settle_embedded_layout)
 
         self._setup_window()
         self._build_ui()
         self._connect_signals()
         self._restore_geometry()
-
-        if self._backend and hasattr(self._backend, "start_services"):
-            self._backend.start_services()
+        self._screen_watcher = ScreenWatcher(self, self._on_screen_changed)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Window setup & Screen Adaptation
     # ─────────────────────────────────────────────────────────────────────────
 
     def _get_active_screen(self) -> QScreen | None:
-        """Return the screen where the cursor or window currently resides."""
-        try:
-            cursor_pos = QCursor.pos()
-            screen = QGuiApplication.screenAt(cursor_pos)
-            if screen is not None:
-                return screen
-        except Exception:
-            pass
-        try:
-            return QGuiApplication.primaryScreen()
-        except Exception:
-            return None
+        """Use the window's monitor, falling back to the cursor before show."""
+        return active_screen(self)
 
     def _calculate_optimal_geometry(self, screen: QScreen | None = None) -> QRect:
         """Calculate initial window geometry adapted to screen work area dimensions."""
@@ -109,13 +104,9 @@ class MCUMainWindow(QMainWindow):
         avail_w = avail.width()
         avail_h = avail.height()
 
-        # Dynamic target: 90% of available work area, capped at max 1440x920
-        target_w = min(1440, max(840, int(avail_w * 0.90)))
-        target_h = min(920, max(560, int(avail_h * 0.90)))
-
-        # Clamp strictly to available work area (never overflow)
-        target_w = min(target_w, avail_w)
-        target_h = min(target_h, avail_h)
+        from src.modules.ui_metrics import WorkArea, preferred_size
+        target_w, target_h = preferred_size(
+            WorkArea(avail.x(), avail.y(), avail_w, avail_h), 1440, 920, ratio=.90)
 
         # Center within the available work area (respecting taskbar location)
         x = avail.x() + max(0, (avail_w - target_w) // 2)
@@ -126,44 +117,26 @@ class MCUMainWindow(QMainWindow):
     def _minimum_width_for_display(
         screen_width: int, screen_height: int, display_scale: float = 1.0
     ) -> int:
-        """Half-screen normally; compact but on-screen for portrait displays (matches LATEST-WORKING-MCU- FLASHER)."""
+        """Use logical work-area width; Qt already applies the OS display scale."""
         screen_width = max(1, int(screen_width))
         screen_height = max(1, int(screen_height))
-        display_scale = max(0.75, min(3.0, float(display_scale or 1.0)))
-        safe_margin = min(screen_width // 4, round(24 * display_scale))
-        usable_width = max(240, screen_width - safe_margin)
-        compact_floor = round(320 * display_scale)
-        minimum = max(compact_floor, screen_width // 2)
-        if screen_height > screen_width and screen_width < 900:
-            minimum = max(minimum, min(round(560 * display_scale), usable_width))
-        return min(minimum, usable_width)
+        return min(max(1, screen_width - 24), max(480, min(660, screen_width // 2)))
 
     def _update_minimum_window_size(self, screen: QScreen | None = None) -> None:
-        """Set window minimum width to half the screen the window is currently on."""
+        """Fit minimum dimensions to the current logical work area."""
         if screen is None:
             screen = self._get_active_screen()
         avail = screen.availableGeometry() if screen else QRect(0, 0, 1280, 720)
         sw = avail.width()
         sh = avail.height()
-        display_scale = 1.0
-        try:
-            dpi = screen.logicalDotsPerInch() if screen else 96.0
-            display_scale = max(1.0, dpi / 96.0)
-        except Exception:
-            pass
-        new_min_w = self._minimum_width_for_display(sw, sh, display_scale)
-        logical_screen_h = sh / display_scale
-        logical_min_h = min(460, max(400, logical_screen_h - 120))
-        safe_margin_h = min(sh // 4, round(48 * display_scale))
-        new_min_h = min(
-            round(logical_min_h * display_scale), max(260, sh - safe_margin_h)
-        )
+        new_min_w = self._minimum_width_for_display(sw, sh)
+        new_min_h = min(380, max(1, sh - 48))
         self.setMinimumSize(new_min_w, new_min_h)
 
     def _setup_window(self) -> None:
-        self.setWindowTitle("⚡ MCU Flasher by Naph")
+        self.setWindowTitle("MCU Flasher by Naph")
 
-        # Adaptive minimum size: ensures root minsize width is half the current active monitor screen
+        # Logical work-area bounds permit compact and portrait desktops.
         screen = self._get_active_screen()
         self._update_minimum_window_size(screen)
 
@@ -178,12 +151,9 @@ class MCUMainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # Hook screen change event to adapt dynamically when moved across monitors
-        win_handle = self.windowHandle()
-        if win_handle and not getattr(self, "_screen_hooked", False):
-            self._screen_hooked = True
-            win_handle.screenChanged.connect(self._on_screen_changed)
-
+        if not self._startup_scheduled:
+            self._startup_scheduled = True
+            QTimer.singleShot(100, self._on_startup)
         self._update_minimum_window_size()
         self._apply_responsive_layout(self.width())
 
@@ -203,35 +173,44 @@ class MCUMainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_responsive_layout(event.size().width())
+        self._layout_timer.start()
+
+    def _settle_embedded_layout(self) -> None:
+        """Fit embedded views once after a burst of resize/state events."""
+        self._fit_panes_for_height()
         if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
             if hasattr(self._editor_panel, "force_layout"):
                 self._editor_panel.force_layout()
         if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():
             self._terminal_panel._resize_embedded_terminal()
-            QTimer.singleShot(50, self._terminal_panel._resize_embedded_terminal)
-            QTimer.singleShot(150, self._terminal_panel._resize_embedded_terminal)
         if hasattr(self, "_ai_panel") and getattr(self, "_ai_visible", False):
             self._ai_panel._resize_embedded_ai()
-            QTimer.singleShot(50, self._ai_panel._resize_embedded_ai)
-            QTimer.singleShot(150, self._ai_panel._resize_embedded_ai)
+
+    def _fit_panes_for_height(self) -> None:
+        if not hasattr(self, "_bottom_tabs") or self._editor_detached:
+            return
+        if not self._editor_pane_visible or not self._monitors_pane_visible:
+            return
+        available = self._v_splitter.height()
+        if available <= 0:
+            return
+        panel = self._bottom_tabs.currentWidget()
+        # Reserve tab navigation, fixed header/send rows, and one output line.
+        required = self._bottom_tabs.tabBar().sizeHint().height()
+        required += max(24, panel.minimumSizeHint().height() if panel else 24)
+        gap = self._v_splitter.handleWidth()
+        monitor_min = min(required, max(0, available - gap - 38))
+        editor_min = min(150, max(0, available - monitor_min - gap))
+        if self._editor_area.minimumHeight() != editor_min:
+            self._editor_area.setMinimumHeight(editor_min)
+        if self._bottom_tabs.minimumHeight() != monitor_min:
+            self._bottom_tabs.setMinimumHeight(monitor_min)
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self._apply_responsive_layout(self.width())
-            if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
-                if hasattr(self._editor_panel, "force_layout"):
-                    self._editor_panel.force_layout()
-                    QTimer.singleShot(30, self._editor_panel.force_layout)
-                    QTimer.singleShot(100, self._editor_panel.force_layout)
-            if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():
-                QTimer.singleShot(30, self._terminal_panel._resize_embedded_terminal)
-                QTimer.singleShot(100, self._terminal_panel._resize_embedded_terminal)
-                QTimer.singleShot(250, self._terminal_panel._resize_embedded_terminal)
-            if hasattr(self, "_ai_panel") and getattr(self, "_ai_visible", False):
-                QTimer.singleShot(30, self._ai_panel._resize_embedded_ai)
-                QTimer.singleShot(100, self._ai_panel._resize_embedded_ai)
-                QTimer.singleShot(250, self._ai_panel._resize_embedded_ai)
+            self._layout_timer.start()
 
     def _update_tab_titles_responsive(self, width: int) -> None:
         """Adapt bottom tab titles to avoid squeezing and truncation."""
@@ -239,33 +218,36 @@ class MCUMainWindow(QMainWindow):
             return
         if width >= 1150:
             titles = [
-                "⚙ Build Console",
-                "📡 Serial Monitor",
-                "🔧 Compatible Devices",
-                "🔔 Notifications",
-                "🔍 Syntax Check",
-                "🖥 Terminal",
+                "Build Console",
+                "Serial Monitor",
+                "Compatible Devices",
+                "Notifications",
+                "Syntax Check",
+                "Terminal",
             ]
         elif width >= 850:
             titles = [
-                "⚙ Build",
-                "📡 Serial",
-                "🔧 Devices",
-                "🔔 Alerts",
-                "🔍 Syntax",
-                "🖥 Term",
+                "Build",
+                "Serial",
+                "Devices",
+                "Alerts",
+                "Syntax",
+                "Terminal",
             ]
         else:
             titles = [
-                "⚙",
-                "📡",
-                "🔧",
-                "🔔",
-                "🔍",
-                "🖥",
+                "Build",
+                "Serial",
+                "Devices",
+                "Alerts",
+                "Syntax",
+                "Terminal",
             ]
+        from main.qt.icons import icon
+        names = ("console", "serial", "devices", "alerts", "search", "console")
         for i, title in enumerate(titles):
             if i < self._bottom_tabs.count():
+                self._bottom_tabs.setTabIcon(i, icon(names[i]))
                 if self._bottom_tabs.tabText(i) != title:
                     self._bottom_tabs.setTabText(i, title)
 
@@ -307,15 +289,7 @@ class MCUMainWindow(QMainWindow):
             return
         try:
             self._update_minimum_window_size(new_screen)
-            if not self.isMaximized():
-                avail = new_screen.availableGeometry()
-                cur = self.geometry()
-                new_w = min(cur.width(), avail.width())
-                new_h = min(cur.height(), avail.height())
-                new_x = max(avail.left(), min(cur.x(), avail.right() - 200))
-                new_y = max(avail.top(), min(cur.y(), avail.bottom() - 100))
-                if (new_x, new_y, new_w, new_h) != (cur.x(), cur.y(), cur.width(), cur.height()):
-                    self.setGeometry(new_x, new_y, new_w, new_h)
+            clamp_window(self, new_screen)
             if hasattr(self, "_controls_bar") and hasattr(self._controls_bar, "update_adaptive_sizing"):
                 self._controls_bar.update_adaptive_sizing()
             if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "update_adaptive_sizing"):
@@ -338,7 +312,11 @@ class MCUMainWindow(QMainWindow):
         from main.qt.compat_panel import CompatPanel
         from main.qt.notif_panel import NotifPanel
         from main.qt.syntax_panel import SyntaxPanel
-        from main.qt.terminal_panel import TerminalPanel
+        if sys.platform.startswith("linux"):
+            from main.qt.posix_terminal_panel import PosixTerminalPanel as TerminalPanel
+        else:
+            from main.qt.terminal_panel import TerminalPanel
+        from main.qt.glass import GlassWorkspace, WorkspaceTabBar
         from main.qt.theme import build_stylesheet, register_fonts
         from main.core.config import get_theme_mode
         from main.core.theme import Theme
@@ -348,11 +326,12 @@ class MCUMainWindow(QMainWindow):
         Theme.apply_theme(active_theme)
         register_fonts()
         app = QApplication.instance()
-        if app:
+        if app and app.property("mcuAppliedTheme") != active_theme:
             app_font = QFont("Montserrat", 10)
             app_font.setStyleHint(QFont.StyleHint.SansSerif)
             app.setFont(app_font)
             app.setStyleSheet(build_stylesheet(active_theme))
+            app.setProperty("mcuAppliedTheme", active_theme)
 
         # ── Primary Toolbar ──────────────────────────────────────────────────
         self._primary_toolbar = PrimaryToolbar(self._backend, self)
@@ -360,12 +339,7 @@ class MCUMainWindow(QMainWindow):
 
         # ── Controls Bar ─────────────────────────────────────────────────────
         self._controls_bar = ControlsBar(self._backend, self)
-        # Use a container widget as a second "toolbar row"
-        controls_container = QWidget()
-        cv = QVBoxLayout(controls_container)
-        cv.setContentsMargins(0, 0, 0, 0)
-        cv.setSpacing(0)
-        cv.addWidget(self._controls_bar)
+        # The native toolbar owns the controls; no temporary top-level container.
         self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
         # pyrefly: ignore [missing-import]
         from PySide6.QtWidgets import QToolBar
@@ -377,29 +351,31 @@ class MCUMainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
 
         # ── Central widget ────────────────────────────────────────────────────
-        central = QWidget()
+        central = GlassWorkspace()
         self.setCentralWidget(central)
         central_layout = QVBoxLayout(central)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
+        central_layout.setContentsMargins(10, 8, 10, 8)
+        central_layout.setSpacing(8)
 
         # ── Horizontal splitter: main area | AI side panel ────────────────────
         from main.core.config import _load_raw_config
+        from src.modules.runtime_resources import performance_profile
+        constrained = performance_profile().constrained
         try:
             _cfg = _load_raw_config()
-            g_accel = _cfg.get("shared", {}).get("graphics_acceleration", "ON") == "ON"
+            g_accel = _cfg.get("shared", {}).get("graphics_acceleration", "OFF" if constrained else "ON") == "ON"
         except Exception:
-            g_accel = True
+            g_accel = not constrained
 
         self._h_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._h_splitter.setHandleWidth(6)
+        self._h_splitter.setHandleWidth(8)
         self._h_splitter.setChildrenCollapsible(False)
         self._h_splitter.setOpaqueResize(g_accel)
         central_layout.addWidget(self._h_splitter, stretch=1)
 
         # ── Main vertical splitter: Editor | Bottom tabs ──────────────────────
         self._v_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._v_splitter.setHandleWidth(6)
+        self._v_splitter.setHandleWidth(8)
         self._v_splitter.setChildrenCollapsible(False)
         self._v_splitter.setOpaqueResize(g_accel)
         self._h_splitter.addWidget(self._v_splitter)
@@ -427,7 +403,10 @@ class MCUMainWindow(QMainWindow):
 
         # ── Bottom tab widget ─────────────────────────────────────────────────
         self._bottom_tabs = QTabWidget()
+        self._bottom_tabs.setObjectName("workspace-tabs")
+        self._bottom_tabs.setTabBar(WorkspaceTabBar(self._bottom_tabs))
         self._bottom_tabs.setDocumentMode(True)
+        self._bottom_tabs.tabBar().setDrawBase(False)
         self._bottom_tabs.setTabPosition(QTabWidget.TabPosition.North)
         self._bottom_tabs.setUsesScrollButtons(True)
         self._v_splitter.addWidget(self._bottom_tabs)
@@ -441,28 +420,27 @@ class MCUMainWindow(QMainWindow):
         # ── Build Console tab ─────────────────────────────────────────────────
         self._console_container = ConsolePanelContainer(backend=self._backend)
         self._console_panel = self._console_container.console
-        self._bottom_tabs.addTab(self._console_container, "⚙ Build Console")
+        self._bottom_tabs.addTab(self._console_container, "Build Console")
 
         # ── Serial Monitor tab (placed beside Build Console) ──────────────────
         self._serial_panel = SerialPanel(self._backend)
-        self._bottom_tabs.addTab(self._serial_panel, "📡 Serial Monitor")
+        self._bottom_tabs.addTab(self._serial_panel, "Serial Monitor")
 
         # ── Compatible Devices tab ────────────────────────────────────────────
         self._compat_panel = CompatPanel()
-        self._compat_panel.connect_signals(sig_bus)
-        self._bottom_tabs.addTab(self._compat_panel, "🔧 Compatible Devices")
+        self._bottom_tabs.addTab(self._compat_panel, "Compatible Devices")
 
         # ── Notifications tab ─────────────────────────────────────────────────
         self._notif_panel = NotifPanel(self._backend)
-        self._bottom_tabs.addTab(self._notif_panel, "🔔 Notifications")
+        self._bottom_tabs.addTab(self._notif_panel, "Notifications")
 
         # ── Syntax Check tab ──────────────────────────────────────────────────
         self._syntax_panel = SyntaxPanel(self._backend)
-        self._bottom_tabs.addTab(self._syntax_panel, "🔍 Syntax Check")
+        self._bottom_tabs.addTab(self._syntax_panel, "Syntax Check")
 
         # ── Terminal tab ──────────────────────────────────────────────────────
         self._terminal_panel = TerminalPanel(self._backend, self)
-        self._bottom_tabs.addTab(self._terminal_panel, "🖥 Terminal")
+        self._bottom_tabs.addTab(self._terminal_panel, "Terminal")
 
         # Set helpful hover tooltips across all bottom tabs
         self._bottom_tabs.setTabToolTip(0, "Build Console (Ctrl+R to compile, Ctrl+U to upload)")
@@ -470,7 +448,7 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setTabToolTip(2, "Compatible Microcontroller Devices")
         self._bottom_tabs.setTabToolTip(3, "Notifications & Event Log")
         self._bottom_tabs.setTabToolTip(4, "Syntax Diagnostics & Code Analysis")
-        self._bottom_tabs.setTabToolTip(5, "Integrated PowerShell / CMD Terminal")
+        self._bottom_tabs.setTabToolTip(5, "Integrated Bash terminal" if sys.platform.startswith("linux") else "Integrated PowerShell / CMD terminal")
 
         # Ensure Build Console is always the default active bottom tab on startup
         self._bottom_tabs.setCurrentIndex(0)
@@ -489,7 +467,10 @@ class MCUMainWindow(QMainWindow):
         self._v_splitter.splitterMoved.connect(_on_v_splitter_moved)
 
         # ── AI side panel (hidden by default) ─────────────────────────────────
-        from main.qt.ai_panel import AIPanel
+        if sys.platform.startswith("linux"):
+            from main.qt.posix_terminal_panel import PosixAIPanel as AIPanel
+        else:
+            from main.qt.ai_panel import AIPanel
         self._ai_panel = AIPanel(self._backend, self)
         self._ai_panel.setMinimumWidth(240)
         # No setMaximumWidth — user can freely resize via splitter handle
@@ -532,14 +513,20 @@ class MCUMainWindow(QMainWindow):
                 self._terminal_panel._on_tab_revealed()
             else:
                 self._terminal_panel._on_tab_hidden()
+        self._fit_panes_for_height()
+        self._layout_timer.start()
 
     def _on_theme_changed(self, theme_name: str) -> None:
         from main.core.theme import Theme
         from main.qt.theme import build_stylesheet
         Theme.apply_theme(theme_name)
+        self._update_tab_titles_responsive(self.width())
         app = QApplication.instance()
         if app:
             app.setStyleSheet(build_stylesheet(theme_name))
+        from main.qt.icons import ActionButton
+        for button in self.findChildren(ActionButton):
+            button.refresh_icon()
         if hasattr(self, "_editor_panel") and self._editor_panel:
             self._editor_panel.set_theme(theme_name)
         if hasattr(self, "_primary_toolbar") and self._primary_toolbar:
@@ -548,6 +535,8 @@ class MCUMainWindow(QMainWindow):
             self._controls_bar.apply_theme(theme_name)
         if hasattr(self, "_terminal_panel") and self._terminal_panel:
             self._terminal_panel.apply_theme(theme_name)
+        if hasattr(self, "_ai_panel") and hasattr(self._ai_panel, "apply_theme"):
+            self._ai_panel.apply_theme(theme_name)
         if hasattr(self, "_console_container") and hasattr(self._console_container, "apply_theme"):
             self._console_container.apply_theme(theme_name)
         if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "apply_theme"):
@@ -558,12 +547,13 @@ class MCUMainWindow(QMainWindow):
             self._compat_panel.apply_theme(theme_name)
         if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
             self._notif_panel.apply_theme(theme_name)
+        self._apply_responsive_layout(self.width())
 
     def _build_status_bar(self) -> None:
         sb = QStatusBar()
         sb.setSizeGripEnabled(False)
         self.setStatusBar(sb)
-        sb.setFixedHeight(24)
+        sb.setFixedHeight(26)
 
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(False)
@@ -602,6 +592,7 @@ class MCUMainWindow(QMainWindow):
         sig_bus.notification.connect(self._on_notification)
         sig_bus.project_updated.connect(self._on_project_updated)
         sig_bus.window_closable.connect(self._set_window_closable)
+        sig_bus.board_catalog_updated.connect(self._on_catalog_updated)
 
         # Connect child panels
         self._console_container.connect_signals(sig_bus)
@@ -622,6 +613,21 @@ class MCUMainWindow(QMainWindow):
         sig_bus.theme_changed.connect(self._on_theme_changed)
         if hasattr(sig_bus, "graphics_accel_changed"):
             sig_bus.graphics_accel_changed.connect(self._on_graphics_accel_changed)
+
+    @Slot(dict)
+    def _on_catalog_updated(self, data):
+        if self._backend and self._backend.is_busy:
+            QTimer.singleShot(500, lambda: self._on_catalog_updated(data))
+            return
+        if "error" in data:
+            self._status_label.setText(f"Board catalog unavailable: {data['error']}")
+            return
+        from main.core.board_catalog import SUPPORTED_BOARDS
+        SUPPORTED_BOARDS.replace(data.get("boards", {}))
+        self._primary_toolbar._update_action_button_states()
+        if data.get("warning"):
+            self._status_label.setText("Showing cached and installed boards; online refresh was unavailable.")
+            self._status_label.setToolTip(data["warning"])
 
     @Slot(bool)
     def _on_graphics_accel_changed(self, enabled: bool) -> None:
@@ -885,7 +891,7 @@ class MCUMainWindow(QMainWindow):
     def _on_project_updated(self, payload: dict) -> None:
         name = payload.get("name", "")
         if name:
-            self.setWindowTitle(f"⚡ MCU Flasher by Naph — {name}")
+            self.setWindowTitle(f"MCU Flasher by Naph — {name}")
         path = payload.get("path", "")
         if path and hasattr(self, "_primary_toolbar"):
             self._primary_toolbar.update_sketch_label(path)
@@ -1248,14 +1254,19 @@ class MCUMainWindow(QMainWindow):
 
     def _on_startup(self) -> None:
         """Post-show initialization: update sketch label and precompiled state."""
+        if self._startup_complete:
+            return
+        self._startup_complete = True
         if self._backend:
             path = str(self._backend.sketch_dir_path)
             self._primary_toolbar.update_sketch_label(path)
             name = Path(path).name
             if name:
-                self.setWindowTitle(f"⚡ MCU Flasher by Naph — {name}")
+                self.setWindowTitle(f"MCU Flasher by Naph — {name}")
 
             self._backend.update_skip_compile_availability()
+            if hasattr(self._backend, "start_services"):
+                self._backend.start_services()
 
             # Enforce project file hygiene and initial hardware state sync in background worker
             # to prevent mechanical HDD seek stalls from blocking the GUI thread during window show
@@ -1275,8 +1286,6 @@ class MCUMainWindow(QMainWindow):
 
             # Load active file into Monaco immediately without sluggish delay
             self._load_initial_file()
-            QTimer.singleShot(50, self._load_initial_file)
-            QTimer.singleShot(150, self._load_initial_file)
 
     def _load_initial_file(self) -> None:
         if self._backend and self._backend.active_file_path:

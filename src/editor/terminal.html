@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCU Flasher terminal</title>
+  <link rel="stylesheet" href="../assets/xterm/xterm.css">
+  <style>
+    html, body, #terminal { height: 100%; margin: 0; overflow: hidden; background: #101b2a; }
+    #terminal { padding: 8px; box-sizing: border-box; }
+    #error { padding: 12px; color: #e3edf6; font: 14px sans-serif; }
+  </style>
+  <script src="../assets/xterm/xterm.js"></script>
+  <script src="../assets/xterm/xterm-addon-fit.js"></script>
+  <script src="qwebchannel.js"></script>
+</head>
+<body>
+  <div id="terminal" aria-label="Interactive project terminal"></div>
+  <script>
+    (() => {
+      if (!window.Terminal || !window.FitAddon || !window.QWebChannel) {
+        document.body.innerHTML = '<p id="error">Terminal assets are missing. Restore the app’s xterm assets and reopen the session.</p>';
+        return;
+      }
+      const term = new Terminal({scrollback: 5000, fontFamily: 'Ubuntu Mono, DejaVu Sans Mono, monospace', fontSize: 14,
+        theme: {background: '#101b2a', foreground: '#e3edf6', cursor: '#80d9ce'}});
+      const fit = new FitAddon.FitAddon();
+      term.loadAddon(fit);
+      term.open(document.getElementById('terminal'));
+      let bridge = null;
+      window.writeOutput = data => term.write(data, () => { if (bridge) bridge.consumed(data.length); });
+      window.sessionEnded = message => term.write('\r\n\r\n' + message + '\r\n');
+      window.clearTerminal = () => term.clear();
+      let lastSize = '', fitPending = false;
+      window.fitTerminal = () => {
+        const host = document.getElementById('terminal');
+        if (host.offsetWidth < 50 || host.offsetHeight < 50) return;
+        fit.fit();
+        const size = term.rows + 'x' + term.cols;
+        if (bridge && size !== lastSize) { lastSize = size; bridge.resize(term.rows, term.cols); }
+      };
+      window.configureTerminal = (theme, size, scrollback = 5000) => {
+        term.options.theme = theme; term.options.fontSize = size;
+        term.options.scrollback = scrollback; window.fitTerminal();
+      };
+      new QWebChannel(qt.webChannelTransport, channel => {
+        bridge = channel.objects.terminalBridge;
+        term.onData(data => bridge.write(data));
+        bridge.start(() => { window.fitTerminal(); term.focus(); });
+      });
+      new ResizeObserver(() => {
+        if (fitPending) return;
+        fitPending = true;
+        requestAnimationFrame(() => { fitPending = false; window.fitTerminal(); });
+      }).observe(document.getElementById('terminal'));
+    })();
+  </script>
+</body>
+</html>

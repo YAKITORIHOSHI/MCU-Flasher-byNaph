@@ -1,8 +1,8 @@
 # 🛠️ MCU Flasher by Naph
 
-> **A modern, high-performance Windows desktop application for ESP32, ESP8266, and Arduino microcontrollers — compile, flash, monitor, and code in one unified, modular interface.**
+> **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows and Ubuntu.**
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Ubuntu-blue)
 ![Architecture](https://img.shields.io/badge/architecture-PySide6%20%7C%20Qt%20for%20Python-41CD52)
 ![Python](https://img.shields.io/badge/python-3.10%2B%20(Private%20Runtime)-blue)
 ![Toolchain](https://img.shields.io/badge/toolchain-PlatformIO%20%2B%20Arduino%20CLI-orange)
@@ -23,7 +23,7 @@
   - [5. Live Serial Monitor & Post-Upload Auto-Reset](#5-live-serial-monitor--post-upload-auto-reset)
   - [6. Critical Operation Protection & Safe Shutdown](#6-critical-operation-protection--safe-shutdown)
   - [7. Offline Monaco Code Editor](#7-offline-monaco-code-editor)
-  - [8. Multi-Session Project Terminal (PowerShell ↔ CMD)](#8-multi-session-project-terminal-powershell--cmd)
+  - [8. Multi-Session Project Terminal](#8-multi-session-project-terminal)
   - [9. OpenCode AI Assistant & Pulsating Diff Glow](#9-opencode-ai-assistant--pulsating-diff-glow)
   - [10. Soft Reset & Hard Reset Recovery Flashing](#10-soft-reset--hard-reset-recovery-flashing)
   - [11. Remote Network Shares (UNC Paths)](#11-remote-network-shares-unc-paths)
@@ -42,9 +42,77 @@
 
 ## ✨ Features
 
+The shared interface now uses translucent surfaces, subtle gradients, rounded
+panels, portable vector icons, and responsive action menus. Board and serial
+selection stay in the Controls row, with no target-board banner. Source and
+tool tabs use individual glass surfaces with clear selection and keyboard focus.
+Source tabs retain dirty indicators and drag ordering; arrow keys, Home and End
+switch files when the tab row has focus. Long filenames truncate with full-path
+tooltips and horizontal scrolling.
+Toolbar buttons, tab padding and workspace gaps are slightly smaller; saved
+editor and terminal font sizes are preserved. Controls reflow into additional
+rows as the window narrows. Settings fields stack above their inputs when
+needed, board filters wrap, and short detail panes scroll. The downloader moves
+its header actions below the title and stacks package lists above details.
+On short screens, the editor/tool splitter reserves space for the selected
+tool's header, search or send controls, and scrollable output. Tool navigation
+stays visible while the editor takes the remaining space.
+Qt sizing uses logical pixels and follows the window's current monitor and
+available work area, including taskbars and negative monitor coordinates.
+Qt applies display scaling once; Tk uses its own native font and pixel metrics.
+Monitor and resize changes are coalesced without an idle polling loop.
+Tabs map to exact root filenames rather than loading order, and Ubuntu paths
+retain case. Startup project loading is coalesced to avoid duplicate models.
+
+Startup opens the main workspace. The compact **Actions** menu belongs to its
+toolbar; it does not create a separate desktop window. **Detach Editor** opens
+the full code editor only on request. Closing it attaches the same editor and
+its unsaved buffers back to the main workspace.
+Settings reset and system-theme fallback resolve the current glass theme names.
+The downloader shows cached catalogs before network refreshes and keeps compact
+grouped metadata in an automatically rebuilt cache. Fresh local indexes need no
+connectivity probe. Installed-package and detail scans run in bounded workers;
+rapid selections cancel older scans. Unchanged inventories reuse a five-second
+snapshot, and download progress updates are coalesced. Network concurrency is
+limited to two board-index requests on constrained PCs and four otherwise.
+The editor engine is offline Monaco with automatic resource settings; Settings
+does not offer the unused legacy lightweight-engine selector.
+
+The board picker refreshes PlatformIO's available definitions and preserves
+offline installed/cache entries. It validates exact targets and exposes declared
+framework choices. Future boards require compatible toolchain definitions;
+universal hardware support is not guaranteed. Firmware reuse is allowed only
+when source and target fingerprints match. Serial and editor failures use
+bounded recovery; these recovery paths never replay uploads, erases, resets,
+or commands.
+
+See [Ubuntu and recovery details](direct/UBUNTU.md) and
+[hardware-free verification](direct/verify_runtime.py). Windows regression and
+Qt preview checks pass locally; native Ubuntu CI and hardware flashing remain
+unverified in this workspace.
+
+The project terminal passes xterm capability replies and bracketed paste to
+interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
+commands have been verified through its Windows PTY; a local interactive probe
+also checks Unicode paste, Ctrl+C, alternate screen and window dimensions.
+Clear clears the display without typing into the active CLI. See
+[terminal verification](direct/verify_terminal.py).
+
+Devices with 4 or 6 physical cores (including CPUs with 8 or 12 SMT threads)
+or at most 6 logical CPU threads use reduced editor animation,
+background checking and terminal scrollback. Builds reserve two logical CPU
+threads for the interface and OS (up to 2 compiler jobs on 4 threads, up to
+4 on 6 threads, reduced further under RAM pressure). Saved job counts cannot
+bypass this budget. Fewer than 4 physical cores blocks launch with an
+incompatibility notice before GUI initialization or runtime repair. Unknown
+logical CPU counts also stop startup with a diagnostic. When physical topology
+is unavailable, the minimum is checked against logical threads.
+Compiler concurrency also respects physical core count when the OS reports it.
+
+
 | Feature | Description |
 | --- | --- |
-| **🖥️ Native PySide6 (Qt) Desktop UI** | High-performance, hardware-accelerated desktop interface built with PySide6 (`main/qt/`), featuring Cyberpunk Dark, Clean Light, and Solarized Dark themes with Montserrat typography and responsive splitters. |
+| **🖥️ Native PySide6 (Qt) Desktop UI** | High-performance, hardware-accelerated desktop interface built with PySide6 (`main/qt/`), featuring Glass Smoked Dark, Glass Frosted Light, and Solarized Dark themes with Montserrat typography and responsive splitters. |
 | **🔨 Unified One-Click Build & Flash** | Dual toolchain backend (PlatformIO SCons engine + Arduino CLI) for ESP32, ESP8266, and Arduino AVR microcontrollers with incremental caching in `.mcu_flasher_build_cache/`. |
 | **🛡️ Critical Operation Protection** | Safeguards against closing the application during sensitive hardware writes (flashing, flash erasing, bootloader recovery resets, and toolchain downloads) to prevent bricking microcontrollers or corrupting installations. |
 | **📟 Advanced Serial Monitor & Auto-Reset Parity** | Real-time terminal with ANSI color rendering, timestamps, pause/resume, send bar, and high-throughput batch coalescing. Automatically issues a silent DTR/RTS pulse upon upload completion and focuses the monitor after a 500ms grace delay. |
@@ -52,17 +120,54 @@
 | **🔌 Zero-Reset Connection & Port Safety** | Passive port opening with explicitly de-asserted DTR/RTS control lines ensures connected ESP32 microcontrollers continue running active firmware without unintentional reboots. |
 | **✏️ Offline Monaco Code Editor** | Embedded offline Monaco Editor (VS Code engine) via `QWebEngineView` and `QWebChannel` featuring C/C++ syntax highlighting, Go-To-Definition (`F12`), hover cards, and debounced auto-saving with zero CDN dependencies. |
 | **🤖 Dedicated AI Assistant & Diff Glow** | Embedded OpenCode AI assistant with real-time file watcher, line-level LCS diffing, and animated pulsating diff glows (🟢 green added, 🔴 red removed) with a floating quick-dismiss banner. |
-| **💻 Multi-Session Project Terminal** | Embedded terminal powered by `pywinpty` + `xterm.js` with VS Code-style multi-terminal tabs, live **PowerShell (`pwsh`) ↔ CMD** creation, per-session viewport controls, and clear/kill options. |
+| **💻 Multi-Session Project Terminal** | Windows PowerShell/CMD ConPTY sessions and native Linux Bash PTYs rendered by offline xterm.js, with session tabs, coding CLI support, bounded output, and display-only Clear. |
 | **🔄 On-Demand Board Toolchains** | Newly downloaded board packages (ESP8266, STM32, RP2040) automatically install and configure required compilers on demand during first build with live progress tracking, requiring **zero application restarts**. |
 | **🌐 Dynamic Third-Party Board Manager URLs** | Download Manager supports custom vendor package index URLs (HTTP/HTTPS, GitHub raw/blob, redirects) with archive unpacking and local caching. |
 | **📁 Remote Network Share (UNC) Support** | Seamless compilation and flashing of sketches stored on Windows SMB network shares (`\\server\share`) with automatic drive mapping and local SSD build acceleration. |
-| **🔒 Strict Private Python Runtime Guard** | `private_python_guard.py` ensures the entire application runs strictly on the isolated bundled Python runtime in `src/_python/`, eliminating conflicts or leaks with desktop/system Python. |
+| **🔒 Strict Private Python Runtime Guard** | `private_python_guard.py` ensures the entire application runs strictly on the isolated bundled Windows runtime or native Linux virtual environment, eliminating conflicts or leaks with desktop/system Python. |
 | **🚨 Session Sentinel & Crash Detection** | `crash_detector.py` provides automatic unhandled exception logging, session sentinel tracking, and startup crash recovery. |
 | **🍃 Low-End Hardware Optimization** | Dynamic CPU core and RAM budgeting, `BELOW_NORMAL_PRIORITY_CLASS` subprocess scheduling, and generous silence watchdogs keep the UI responsive even on budget quad-core systems. |
+
+### Startup and resource limits
+
+Windows installations save a per-user health snapshot after successful setup.
+Subsequent launches check local runtime paths and source fingerprints before
+opening the GUI. First launch, a changed installation, missing dependencies,
+explicit `--repair`/`--setup`, or a recorded crash runs verification again.
+An immediate failed GUI launch falls back to repair. The project picker no
+longer starts a hidden editor; services begin after the workspace is shown.
+Port enumeration and catalog/USB discovery run in background workers.
+
+Four/six-core and low-memory profiles use one syntax parser, eight-second
+project-check intervals, 2,000 display history entries, 256,000 characters of
+pending output per stream/layer and 512,000 characters of retained display
+history. Larger systems use two parsers and larger bounded buffers. Worker logs
+are bounded before entering Qt's event queue; render batches, very long lines,
+notification text and source/diagnostic caches also have limits. Older display
+output can be omitted under sustained overload, with a visible notice. These
+display limits do not apply to coding-terminal protocol traffic, which uses
+PTY/xterm backpressure. Clear also discards retained serial display history.
+
+Editor parsing runs off the UI thread and keeps only the latest pending revision.
+Syntax results return through queued Qt signals, so repeated checks recover
+after a transient failure. Resize events share a settling timer, fonts register
+once, and vector icons use a bounded cache.
+
+A local Windows Qt benchmark with simulated project data measured the import
+phase at **3.78 s before / 0.24 s after**, the longest console flush at
+**56 ms / 3.8 ms**, and pending text for a 20,000-entry burst at
+**20.1 MB / 0.25 MB**. These are component measurements on one host; complete
+launcher time and actual four/six-core hardware performance vary. The editor's
+base WebEngine memory footprint remains, while streaming/cached memory growth
+is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ---
 
 ## 🚀 Quick Start
+
+**Ubuntu:** follow [native setup and compatibility notes](direct/UBUNTU.md). Run `python3 direct/setup_ubuntu.py`, then `bash direct/runThisOnUbuntu.sh`. The application detects the host OS and keeps native Linux packages separate from Windows packages.
+
+**Windows:**
 
 ### Launching the Application
 
@@ -94,7 +199,7 @@ python mcu_flash_gui.py
 > **Storage Requirement**: Initial installation requires approximately **6GB of starting storage** for core toolchains, compilers, and dependencies. Storage usage may increment as additional Arduino/PlatformIO libraries and board platforms are installed.
 
 > [!IMPORTANT]
-> **Hardware Requirement**: This application requires at least **4 logical CPU cores/threads**. On systems with fewer than 4 logical cores, startup halts with a clear system compatibility message to prevent system freezing.
+> **Hardware Requirement**: At least **4 CPU cores** are required. Startup checks physical cores when available and uses logical threads as a fallback when the OS cannot report physical topology. Unsupported systems receive an incompatibility notice before the application starts.
 
 > [!TIP]
 > **Manual Hardware Gating**: MCU Flasher launches cleanly with no board and no COM port pre-selected. An MCU already connected when the app opens is never reset on connection; reset happens only through the physical/on-app reset control or after an upload.
@@ -125,6 +230,9 @@ MCU Flasher by Naph/
 │   │   ├── console_panel.py         # Colorized build and upload console output with ANSI regex parsing
 │   │   ├── serial_panel.py          # Real-time serial monitor with baud control, send bar & timestamp
 │   │   ├── terminal_panel.py        # Embedded multi-session terminal panel (PowerShell & CMD tabs)
+│   │   ├── posix_terminal_panel.py  # Native Linux PTY terminal and optional OpenCode assistant
+│   │   ├── glass.py                 # Static workspace surface and focused tool-tab navigation
+│   │   ├── icons.py                 # Theme-aware vector action icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel with session management
 │   │   ├── compat_panel.py          # Compatible boards and MCU pinout compatibility viewer
 │   │   ├── syntax_panel.py          # Real-time C++ syntax checker diagnostic tree
@@ -134,7 +242,7 @@ MCU Flasher by Naph/
 │   │   ├── project_dialog.py        # Project selector & new project scaffolding wizard
 │   │   ├── modify_dialog.py         # Project sketch file management dialog (add, rename, delete)
 │   │   ├── download_dialog.py       # Board package & toolchain download manager (3rd-party URLs)
-│   │   ├── theme.py                 # Multi-theme QSS stylesheet generator (Cyberpunk, Light, Solarized)
+│   │   ├── theme.py                 # Multi-theme QSS stylesheet generator (Glass Dark, Glass Light, Solarized)
 │   │   └── signals.py               # Centralized QtSignalBus for thread-safe cross-thread event routing
 │   │
 │   └── core/                        # Core Foundations & System Services
@@ -144,7 +252,8 @@ MCU Flasher by Naph/
 │       ├── config.py                # Config persistence (gui_config.json) & multi-instance PID locks
 │       ├── file_utils.py            # Windows attributes (attrib +h), UNC path detection, robust file I/O
 │       ├── toolchain.py             # Toolchain discovery, directory junctions & CPU worker budgeting
-│       ├── board_catalog.py         # 460+ board definitions, dynamic catalog loader, USB VID/PID map
+│       ├── board_catalog.py         # Installed/cached/registry board definitions and framework choices
+│       ├── target_profile.py        # Exact target validation and upload transport requirements
 │       └── board_compat.py          # Board compatibility detection & GPIO pin conflict analyzer
 │
 ├── src/                              # Core System Modules, Offline Assets & Runtime Guards
@@ -163,16 +272,22 @@ MCU Flasher by Naph/
 │   │   ├── crash_detector.py        # Session sentinel, crash event recorder & unhandled exception hook
 │   │   ├── dedicated_AI.py          # OpenCode AI assistant process controller & file watcher
 │   │   ├── project_terminal.py      # Standalone project terminal server & PTY backend
-│   │   ├── arduino_lib_req.py       # C++ header dependency scanner & automatic library downloader
+│   │   ├── platform_runtime.py      # Host detection, native paths, locks and CPU startup guard
+│   │   ├── runtime_resources.py     # Shared CPU/RAM budgets for builds, editors and terminals
+│   │   ├── recovery.py              # Bounded transient recovery without command replay
+│   │   ├── arduino_lib_req.py       # Glass Arduino library, board-package and installed-item browser
+│   │   ├── tk_glass.py              # Static glass cards and contrast helpers for the downloader
+│   │   ├── ui_palette.py            # Toolkit-independent color mixing and button contrast
 │   │   ├── detector.py              # USB serial port auto-detection & board probing
 │   │   ├── downloader.py            # Resumable downloader with SHA-256 verification & GDrive support
 │   │   ├── win_subprocess_hide.py   # Windows CREATE_NO_WINDOW background subprocess suppressor
-│   │   ├── reset_editor.py          # Editor state reset utility
+│   │   ├── reset_editor.py          # Historical settings tool; not Qt renderer recovery
 │   │   ├── setup_ide_paths.py       # Dynamic compile_commands.json path re-navigator
 │   │   └── get-platformio.py        # Bundled official PlatformIO installer script
 │   │
 │   ├── editor/                      # Offline Monaco Editor Web Engine (Zero CDN Dependency)
 │   │   ├── index.html               # Monaco iframe host with QWebChannel bridge & diff animation CSS
+│   │   ├── terminal.html            # Offline Linux xterm.js frontend with PTY acknowledgements
 │   │   ├── bundle.js                # Self-contained offline Monaco code editor engine
 │   │   ├── qwebchannel.js           # Bidirectional Qt-to-JavaScript communication bridge
 │   │   ├── 18.bundle.js             # Monaco Editor async chunk (lazy-loaded features)
@@ -195,7 +310,12 @@ MCU Flasher by Naph/
 │       └── dbs_delete.py            # Notification DB CRUD: delete
 │
 ├── direct/
-│   └── runThisOnWindows.vbs         # Silent VBScript launcher; targeted UAC only when required
+│   ├── runThisOnWindows.vbs         # Silent Windows launcher with CPU guard
+│   ├── runThisOnUbuntu.sh           # Native Linux virtual-environment launcher
+│   ├── setup_ubuntu.py              # Repairable Ubuntu setup without system pip writes
+│   ├── UBUNTU.md                    # Linux setup, permissions and verification limits
+│   ├── verify_runtime.py            # Hardware-free runtime and real Qt/Monaco checks
+│   └── verify_terminal.py           # Windows ConPTY/xterm interactive protocol checks
 │
 ├── installers/                      # Offline Binaries, Toolchains & USB Drivers (Git LFS)
 │   ├── .handsoff/                   # Portable Python runtime installers (python-*-amd64.exe)
@@ -229,7 +349,7 @@ MCU Flasher by Naph/
 
 ### 1. Launching & First-Run Auto-Bootstrap
 - Launch the application by double-clicking **`MCU_Flasher.exe`** (or running **`direct\runThisOnWindows.vbs`**).
-- **Private Python Runtime Enforcer**: Handled transparently by `src/modules/private_python_guard.py`. The app will only ever run inside `src/_python/` and will auto-relaunch if triggered via system Python.
+- **Private Python Runtime Enforcer**: Handled transparently by `src/modules/private_python_guard.py`. Windows uses its bundled private runtime. Linux uses `.venv-linux` (or a valid local Linux `env` virtual environment) and provides a setup command when it is missing.
 - **Session Sentinel & Crash Detection**: `src/modules/crash_detector.py` monitors runtime integrity, providing unhandled exception logging and clean startup recovery markers.
 - The bootstrapper verifies required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`) and toolchains unattended. Additional downloaded board platforms are prepared on demand during first compile, keeping initial startup instant.
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
@@ -288,18 +408,22 @@ MCU Flasher by Naph/
   - Embedded offline via `QWebEngineView` and `QWebChannel` (`src/editor/qwebchannel.js`).
   - 100% offline: zero CDN dependencies, local bundled scripts, web workers, and font assets.
   - Features: Multi-tab editing with drag reordering, C++ autocomplete, F12 / Ctrl+Click Go-To-Definition, Ctrl+Hover documentation cards, and real-time syntax checking.
+  - Source tabs support keyboard navigation and announce selection and unsaved changes. Workspace tool tabs shorten labels in compact windows and keep full tooltips.
+  - **Detach Editor** moves the existing editor into a separate window. Closing that window reattaches it; files and dirty buffers stay in memory.
   - Debounced auto-saving (customizable delay in Settings).
   - Keyboard shortcuts: `Ctrl+R` to Compile, `Ctrl+U` to Upload, `Ctrl+S` to Save All, `Ctrl+` / `Ctrl-` to zoom.
 
-### 8. Multi-Session Project Terminal (PowerShell ↔ CMD)
-- Click the **`💻 Project Terminal`** tab in the bottom dock.
-- **VS Code Style Multi-Terminal Management**:
+### 8. Multi-Session Project Terminal
+- Click **Terminal** in the bottom dock.
+- **Session management**:
   - **`[▾]` New Shell Selector**: Choose between **PowerShell (`pwsh`)** and **Command Prompt (`cmd`)** to spawn a new shell.
   - **Dynamic Session Tab Bar**: Tab chips for every active terminal session with active state highlighting and individual close buttons (**`✕`**).
-  - **`[⌧ Clear]`**: Clears the active terminal viewport (`Clear-Host` for PowerShell, `cls` for CMD).
+  - **Clear**: Clears the active terminal display and retained display history without sending a command to a shell or coding CLI.
   - **`[🗑 Kill]`**: Destroys the active terminal session, terminating the background PTY worker.
 - **Zero-Session Idle State**: Starts cleanly with zero open sessions and seamlessly transitions to an idle placeholder when all sessions are closed.
-- **PTY Subprocess Architecture**: Powered by `pywinpty` + `xterm.js` in an isolated process to prevent UI thread contention.
+- **Windows**: PowerShell/CMD use real ConPTY sessions (`pywinpty`) in an isolated child process with WebView2/xterm.js rendering. Each session receives its own window dimensions.
+- **Ubuntu**: Bash uses native PTYs with Qt WebEngine and offline xterm.js. The terminal preserves PATH so installed coding CLIs can run.
+- Capability replies, alternate screens, Ctrl+C, Unicode and bracketed paste pass through the PTY. Output acknowledgements limit queued data when the renderer is slow. Shell failures are visible; sessions and commands are never automatically replayed.
 
 ### 9. OpenCode AI Assistant & Pulsating Diff Glow
 - Click the **`🤖 AI Assistant`** button on the toolbar to open the embedded AI side panel.
@@ -310,7 +434,7 @@ MCU Flasher by Naph/
   - Floating banner with line count summaries and a quick **"Dismiss Glow ✖"** button.
 
 ### 10. Soft Reset & Hard Reset Recovery Flashing
-- **Soft Reset**: Flashes a minimal lightweight Arduino-framework routine through the selected board's PlatformIO definition. Available for all supported boards to reset flash state.
+- **Soft Reset**: Flashes a minimal Arduino routine through a resolved board definition that declares Arduino support. Other frameworks and unresolved targets receive an explanation. This writes firmware and is not a generic reset for arbitrary hardware.
 - **Hard Reset**: Executes board-family specific capability routines: ESP32 recovery images, ESP8266 full SPI-flash erase, or AVR bootloader recovery. Unsupported microcontrollers are refused safely.
 
 ### 11. Remote Network Shares (UNC Paths)
@@ -340,12 +464,15 @@ MCU Flasher by Naph/
   - **`console_panel.py`**: Colorized build output with regex ANSI color parsing and autoscroll.
   - **`serial_panel.py`**: High-performance real-time serial monitor with line ending selector, baud rate dropdown, timestamp toggling, and quick send bar.
   - **`terminal_panel.py`**: Multi-session integrated terminal panel supporting PowerShell and CMD tabs.
+  - **`posix_terminal_panel.py`**: Native Linux Bash PTYs and optional OpenCode integration using Qt WebEngine/xterm.js.
+  - **`glass.py` / `icons.py`**: Static glass workspace, focused tool tabs and theme-aware vector icons.
+  - **`detached_editor.py`**: Explicit editor window and themed attach placeholder; closing reattaches the same editor.
   - **`ai_panel.py`**: Collapsible OpenCode AI assistant side panel.
   - **`syntax_panel.py`**: Interactive AST syntax diagnostic tree with line jump navigation.
   - **`compat_panel.py`**: Board compatibility matrix and GPIO pinout inspector.
   - **`notif_panel.py`**: Per-sketch notification log viewer.
   - **`settings_dialog.py` / `project_dialog.py` / `download_dialog.py` / `modify_dialog.py`**: Native Qt modal dialogs.
-  - **`theme.py`**: Precision dark/light QSS stylesheet engine supporting Cyberpunk Dark, Clean Light, and Solarized Dark themes.
+  - **`theme.py`**: Precision dark/light QSS stylesheet engine supporting Glass Smoked Dark, Glass Frosted Light, and Solarized Dark themes.
   - **`signals.py`**: Centralized `QtSignalBus` maintaining thread-safe Qt signals for all worker-to-UI communication.
 
 ---
@@ -366,15 +493,18 @@ MCU Flasher by Naph/
 
 - **`src/modules/private_python_guard.py`**: Strict private Python runtime enforcer. Halts execution if triggered by system/desktop Python and seamlessly re-launches under `src/_python/python.exe`.
 - **`src/modules/crash_detector.py`**: Session sentinel, unhandled exception recorder, and startup crash recovery marker engine.
-- **`src/modules/bootstrap.py`**: Windows runtime bootstrapper with upscale HTML/Edge WebView2 window that self-heals Python, installs dependencies, downloads pre-built PlatformIO core, and launches the GUI.
+- **`src/modules/bootstrap.py`**: Windows runtime bootstrapper with a resizable native PySide6 glass setup window, bounded logs and inline package progress. Repairs Python and dependencies, prepares PlatformIO, and launches the workspace. A healthy Windows installation uses the cached launch path; Ubuntu uses its native virtual environment.
 - **`src/modules/launcher.py`**: Entry point launcher configuring Windows `AppUserModelID` for taskbar grouping and single-instance mutex handling.
 - **`src/modules/dedicated_AI.py`**: OpenCode AI assistant process controller (HTTP server + WebSocket + pywinpty).
 - **`src/modules/project_terminal.py`**: Standalone project terminal server & PTY backend for integrated multi-terminal sessions.
 - **`src/modules/win_subprocess_hide.py`**: Enforces `CREATE_NO_WINDOW` on all background subprocesses.
-- **`src/modules/arduino_lib_req.py`**: Resolves required C++ headers and auto-downloads missing Arduino libraries.
+- **`src/modules/arduino_lib_req.py`**: Tk/ttk glass browser for Arduino libraries, board packages and installed items. Keeps search, version selection, checksum verification and cancellation; **Board indexes** reveals advanced vendor URLs. **Quit** releases the process; closing the window keeps its catalog ready to reopen.
+- **`src/modules/tk_glass.py`**: Static bordered glass cards with resize-coalesced highlights and readable button colors. No compositor blur or animation loop.
+- **`src/modules/browser_loading.py`**: Source-validated compact catalog caches, atomic background cache writes, bounded disk scans and demand-driven Tk callback delivery.
+- **`main/qt/responsive.py`** and **`src/modules/ui_metrics.py`**: Shared work-area fitting, dialog placement and event-driven monitor tracking. Keep Qt logical coordinates separate from Tk native pixels.
 - **`src/modules/detector.py`**: USB serial port auto-detection and board identification helper.
 - **`src/modules/downloader.py`**: Resumable multi-threaded downloader with SHA-256 validation and Google Drive virus-scan bypass.
-- **`src/modules/reset_editor.py`**: Editor state reset utility.
+- **`src/modules/reset_editor.py`**: Historical settings tool for older Tkinter releases. It does not switch or repair the current Qt editor; use the editor's Reload recovery control.
 - **`src/modules/setup_ide_paths.py`**: Re-navigates `compile_commands.json` paths when sketches move across directories.
 
 ---
@@ -414,7 +544,6 @@ Application settings are persisted in `src/gui_config.json`:
   "board": "esp32:esp32:esp32",
   "programmer": "esptool",
   "shared": {
-    "editor_mode": "monaco",
     "cpu_multithreading": "HIGH",
     "graphics_acceleration": "ON",
     "reset_on_baud_change": false,
@@ -427,7 +556,7 @@ Application settings are persisted in `src/gui_config.json`:
 ```
 
 ### Key Configuration Options:
-- **`theme`**: Active UI color theme (`"default"` for Dark Cyberpunk, `"light"` for Clean Light, `"solarized_dark"` for Solarized Dark).
+- **`theme`**: Active UI color theme (`"default"` for Glass Smoked Dark, `"light"` for Glass Frosted Light, `"solarized_dark"` for Solarized Dark).
 - **`cpu_multithreading`**: Compiler worker budgeting mode (`"LOW"`, `"MEDIUM"`, `"HIGH"`).
 - **`reset_on_baud_change`**: Whether changing the serial monitor baud rate triggers a silent DTR/RTS hardware reset pulse (`true`/`false`).
 - **`autosave_enabled` & `autosave_delay`**: Debounced automatic file saving state and delay in milliseconds.
@@ -438,13 +567,62 @@ Application settings are persisted in `src/gui_config.json`:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10 or Windows 11
-- **Hardware**: Minimum **4 logical CPU cores/threads** (enforced at startup)
+- **Operating System**: Windows 10/11; native Ubuntu support is implemented, with Ubuntu 22.04/24.04 CI targets (native Linux verification pending).
+- **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
 - **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
 - **Version Control**: Git with Git LFS (`git lfs install`)
 
 ### Verification & Syntax Checking
+
+Run the hardware-free checks with the application's runtime. They use simulated
+project data and check keyboard tabs, compact/wide window ownership, exact file
+mapping, explicit detach/close/reattach, dirty renderer recovery, target rules,
+CPU budgets and terminal controls. Rendered previews go under ignored `temp/`.
+
+Settings preserves Solarized Dark as a manual choice while following the OS.
+The downloader reads the same per-user theme policy and refreshes its palette
+when reopened. Setup progress and status use the selected palette too. Settings
+**Continuous panel resizing** controls splitter previews; GPU
+policy is automatic. Its unsaved default is off on the constrained resource
+profile. Saved user preferences take precedence. Settings writes once, reports
+write failures and preserves unrelated configuration; reset actions recheck the
+resolved target, framework, port and operation state before confirmation.
+
+```powershell
+& src/_python/python.exe -B direct/verify_runtime.py --render-dir temp/audit/workspace
+& src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 4
+& src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
+& src/_python/python.exe -B direct/verify_terminal.py
+& src/_python/python.exe -B direct/verify_performance.py
+& src/_python/python.exe -B direct/verify_controls.py
+& src/_python/python.exe -B direct/verify_browser_loading.py
+& src/_python/python.exe -B direct/verify_responsive.py
+```
+
+For native setup/downloader screenshots, run the controls verifier with
+`QT_QPA_PLATFORM=windows` and `--render-dir temp/audit/controls`. On Ubuntu use
+`QT_QPA_PLATFORM=xcb` under a desktop or Xvfb. Setup classes are isolated from
+installation and launch code; downloader fixtures never start network workers
+or write live download settings. These checks cover all compact Actions,
+settings persistence/signals, reset gating, theme switching and log trimming.
+The responsive verifier covers narrow/wide control rows, readable baud values,
+settings and setup on small work areas, wrapped board filters, popup scrolling,
+monitor-change coalescing and native Tk details. Start a fresh process for each
+`QT_SCALE_FACTOR` value (1, 1.25, 1.5 and 2); the Tk fixture also simulates its
+native point scaling. Use `--render-dir temp/audit/responsive` for previews.
+The runtime preview also checks all six tool panels at a 640×480 work area,
+including control visibility and the serial send bar. Its terminal layout probe
+does not start a shell; `verify_terminal.py` checks the actual PTY separately.
+
+Ubuntu uses `.venv-linux/bin/python -B direct/verify_runtime.py`; see
+[Ubuntu verification limits](direct/UBUNTU.md#verification-and-current-limits).
+CPU previews simulate policy rather than physical device performance. Native
+Windows WebView2 focus, Ubuntu desktop behavior and physical flashing also need
+verification on their respective systems. Relevant `.agents/skills/` and the
+application-only AGENTS generator document the same ownership/resource rules;
+do not regenerate instructions against live caches during verification.
+
 ```powershell
 # Verify syntax compilation across the PySide6 package entry point:
 python -m py_compile main/mcu_flash_gui.py

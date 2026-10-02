@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any
 import threading
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import Qt, Slot, QTimer
+from PySide6.QtCore import Qt, Slot, QTimer, Signal
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import QColor, QBrush
 # pyrefly: ignore [missing-import]
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QAbstractItemView,
     QComboBox, QLineEdit
 )
+from main.qt.icons import ActionButton as QPushButton
 
 from src import syntax_checker
 from main.core.file_utils import get_sketch_files_fast
@@ -36,12 +37,17 @@ class SyntaxPanel(QWidget):
     severity filtering, live search, and error count badges.
     """
 
+    _analysis_finished = Signal(dict)
+
     def __init__(self, backend=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._backend = backend
         self._all_diagnostics: List[Dict[str, Any]] = []
         self._last_mtimes: Dict[str, tuple[int, int]] = {}
         self._is_checking = False
+        self._analysis_generation = 0
+        self._analysis_finished.connect(self._finish_analysis, Qt.ConnectionType.QueuedConnection)
+        sig_bus.project_updated.connect(self._on_project_updated)
 
         self._build_ui()
         try:
@@ -54,18 +60,10 @@ class SyntaxPanel(QWidget):
         self.apply_theme(get_theme_mode())
 
         # Background periodic syntax checking timer (every 4 seconds when idle, 8s on low-end)
-        is_low_end = False
-        try:
-            import os
-            import psutil
-            mem_tot = psutil.virtual_memory().total
-            cpus = os.cpu_count() or 2
-            is_low_end = (mem_tot < 5.5 * 1024 ** 3) or (cpus <= 2)
-        except Exception:
-            pass
+        from src.modules.runtime_resources import performance_profile
 
         self._bg_timer = QTimer(self)
-        self._bg_timer.setInterval(8000 if is_low_end else 4000)
+        self._bg_timer.setInterval(performance_profile().syntax_interval_ms)
         self._bg_timer.timeout.connect(self._on_bg_timer_tick)
         self._bg_timer.start()
 
@@ -314,11 +312,10 @@ class SyntaxPanel(QWidget):
 
     def _render_rows(self, diagnostics: List[Dict[str, Any]]) -> None:
         """Populate the table widget with the provided diagnostic items."""
-        self._table.setRowCount(0)
+        self._table.setUpdatesEnabled(False)
+        self._table.setRowCount(len(diagnostics))
 
-        for diag in diagnostics:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
+        for row, diag in enumerate(diagnostics):
 
             fpath = str(diag.get("file", ""))
             fname = Path(fpath).name if fpath else "sketch"
@@ -348,6 +345,7 @@ class SyntaxPanel(QWidget):
             self._table.setItem(row, 1, item_line)
             self._table.setItem(row, 2, item_sev)
             self._table.setItem(row, 3, item_desc)
+        self._table.setUpdatesEnabled(True)
 
     def _on_row_double_clicked(self, item: QTableWidgetItem) -> None:
         """Navigate editor to target file and line on row double-click."""
@@ -370,17 +368,17 @@ class SyntaxPanel(QWidget):
 
     def _get_project_dir(self) -> Optional[Path]:
         if self._backend and hasattr(self._backend, "get_project_dir"):
-            p = Path(self._backend.get_project_dir())
-            if p.exists():
+            value = self._backend.get_project_dir()
+            p = Path(value) if value else None
+            if p:
                 return p
         if self._backend and hasattr(self._backend, "sketch_dir_path") and self._backend.sketch_dir_path:
             p = Path(self._backend.sketch_dir_path)
-            if p.exists():
-                return p
+            return p
         return None
 
     def _on_bg_timer_tick(self) -> None:
-        """Periodic background check: only runs if files changed since last scan."""
+        """Scan and parse off the UI thread, skipping unchanged root sources."""
         if self._is_checking:
             return
 
@@ -392,68 +390,75 @@ class SyntaxPanel(QWidget):
         if not proj_dir:
             return
 
-        current_mtimes: Dict[str, tuple[int, int]] = {}
-        files = []
-        valid_exts = {".ino", ".cpp", ".c", ".h", ".hpp"}
-        try:
-            for p in proj_dir.iterdir():
-                if p.is_file() and p.suffix.lower() in valid_exts and not p.name.startswith("."):
-                    try:
-                        st = p.stat()
-                        current_mtimes[str(p)] = (st.st_mtime_ns, st.st_size)
-                        files.append(p)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        if not files:
-            return
-
-        if self._last_mtimes and self._last_mtimes == current_mtimes:
-            return  # Zero file changes, skip!
-
-        self._last_mtimes = current_mtimes
-        self._execute_analysis(files)
+        self._execute_analysis(None)
 
     def _run_manual_check(self) -> None:
         """Execute parallel syntax checking across all sketch files in project."""
         proj_dir = self._get_project_dir()
         if not proj_dir:
             return
-        files = get_sketch_files_fast(proj_dir)
-        self._execute_analysis(files, is_manual=True)
+        self._execute_analysis(None, is_manual=True)
 
-    def _execute_analysis(self, files: list, is_manual: bool = False) -> None:
-        if not files or self._is_checking:
+    def _execute_analysis(self, files: list | None, is_manual: bool = False) -> None:
+        project = self._get_project_dir()
+        if project is None or self._is_checking:
             return
         self._is_checking = True
+        self._analysis_generation += 1
+        generation = self._analysis_generation
+        last_mtimes = dict(self._last_mtimes)
         self._lbl_status.setText("Checking…")
         self._lbl_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-family: monospace;")
         if is_manual:
             sig_bus.console_progress.emit({"action": "Checking Syntax"})
 
         def _worker():
+            result = {"project": str(project), "generation": generation, "manual": is_manual}
             try:
-                # analyze_files_parallel returns list[dict]
-                diagnostics = syntax_checker.analyze_files_parallel(files)
-            except Exception:
-                diagnostics = []
-
-            def _done():
-                self._is_checking = False
-                self.set_diagnostics(diagnostics)
-                # Broadcast to editor markers
-                sig_bus.syntax_errors.emit(diagnostics)
-                if is_manual:
-                    sig_bus.console_progress.emit({"action": "Completed"})
-
-            QTimer.singleShot(0, _done)
+                sources = files if files is not None else get_sketch_files_fast(project)
+                mtimes = {}
+                for p in sources:
+                    st = Path(p).stat()
+                    mtimes[str(p)] = (st.st_mtime_ns, st.st_size)
+                result["mtimes"] = mtimes
+                result["unchanged"] = not is_manual and last_mtimes == mtimes
+                if not result["unchanged"]:
+                    result["diagnostics"] = syntax_checker.analyze_files_parallel(sources)
+            except Exception as exc:
+                result["error"] = str(exc)
+            try:
+                self._analysis_finished.emit(result)
+            except RuntimeError:
+                pass  # The panel was destroyed while the read-only worker finished.
 
         threading.Thread(target=_worker, name="MCU_SyntaxWorker", daemon=True).start()
 
+    @Slot(dict)
+    def _finish_analysis(self, result: dict) -> None:
+        """Queued Qt delivery guarantees widget updates run on the GUI thread."""
+        self._is_checking = False
+        if result["generation"] != self._analysis_generation or result["project"] != str(self._get_project_dir()):
+            return
+        if result.get("error"):
+            self._lbl_status.setText("Check failed — retry available")
+            self._lbl_status.setToolTip(result["error"])
+        elif not result.get("unchanged"):
+            self._last_mtimes = result["mtimes"]
+            self.set_diagnostics(result.get("diagnostics", []))
+            sig_bus.syntax_errors.emit(result.get("diagnostics", []))
+        else:
+            self.set_diagnostics(self._all_diagnostics)
+        if result["manual"]:
+            sig_bus.console_progress.emit({"action": "Check failed" if result.get("error") else "Completed"})
+
+    @Slot(dict)
+    def _on_project_updated(self, _payload: dict) -> None:
+        self.clear()
+
     def clear(self) -> None:
         """Clear all entries in the syntax table."""
+        self._analysis_generation += 1
+        self._last_mtimes.clear()
         self._all_diagnostics.clear()
         self._table.setRowCount(0)
         self._badge_errors.setText("✖ 0")

@@ -3,14 +3,12 @@
 """
 reset_editor.py
 
-Standalone recovery tool for MCU Flasher by Naph.
+Legacy compatibility tool for releases with a Tkinter editor selector.
+The current native Qt workspace always uses offline Monaco with automatic
+resource settings. This historical setting does not switch its editor or
+repair its renderer; use the editor's Reload recovery control instead.
 
-If the Monaco (VS Code-style) editor is causing crashes, freezes, or other
-hardware-compatibility problems on a low-spec machine, run this script to
-force the app's File Editor setting back to "Default" (the lightweight
-Tkinter editor) without having to open the app itself.
-
-It edits the same config file the main app reads/writes:
+This tool edits the historical config, not current src/gui_config.json:
     ~/.mcu_gui_config.json   ->  data["shared"]["editor_mode"]
 
 Usage:
@@ -39,7 +37,8 @@ def save_config(data: dict):
 
 
 def main():
-    print("MCU Flasher — Editor Reset Tool")
+    print("MCU Flasher — Legacy Editor Settings Tool")
+    print("This does not change or repair the current Qt/Monaco editor.")
     print(f"Config file: {CONFIG_FILE}")
     print()
 
@@ -48,7 +47,7 @@ def main():
 
     previous_mode = shared.get("editor_mode", "default")
 
-    # Force back to the lightweight Tkinter editor.
+    # Select the historical Tkinter editor in older releases only.
     shared["editor_mode"] = "default"
 
     # Clear the Monaco crash-safety sentinel too, so a stale flag doesn't
@@ -67,7 +66,7 @@ def main():
         print("✔ Editor was already set to Default. Sentinel cleared, nothing else to do.")
 
     print()
-    print("You can now safely restart MCU Flasher by Naph.")
+    print("Legacy settings updated. Current Qt renderer recovery uses the editor Reload control.")
 
 
 if __name__ == "__main__":

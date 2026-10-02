@@ -16,6 +16,7 @@ from typing import Optional
 
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import QWidget, QMessageBox
+from main.qt.icons import ActionButton as QPushButton
 from main.qt.signals import signals as sig_bus
 
 _this_file = Path(__file__).resolve()

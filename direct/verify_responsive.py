@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Hardware-free screen/scale checks. Set QT_SCALE_FACTOR before starting.
+
+Use --render-dir for owned fixture images. No application backend, downloads,
+firmware operations or live preference writes are started by these checks.
+"""
+from __future__ import annotations
+import argparse
+import os
+import sys
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
+from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
+from PySide6.QtCore import QRect, QPoint, QObject, Signal
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QAbstractButton, QLineEdit
+from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
+from main.qt.serial_panel import SerialPanel
+from main.qt.theme import build_stylesheet, register_fonts
+from main.qt.responsive import clamp_window, fit_dialog, ScreenWatcher
+from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size
+
+RENDER_DIR = None
+
+
+def pump():
+    for _ in range(5):
+        APP.processEvents()
+        time.sleep(.025)
+
+
+def capture(widget, name):
+    if RENDER_DIR:
+        assert widget.grab().save(str(RENDER_DIR / (name + '.png')))
+
+
+class QtResponsiveChecks(ControlChecks):
+    def setUp(self):
+        super().setUp()
+        register_fonts()
+        APP.setStyleSheet(build_stylesheet('default'))
+
+    def contained(self, widget, parent):
+        rect = QRect(widget.mapTo(parent, QPoint()), widget.size())
+        self.assertTrue(parent.rect().contains(rect),
+                        f'{widget.objectName() or type(widget).__name__} {rect} outside {parent.rect()}')
+
+    def test_coordinate_bounds(self):
+        for area in (WorkArea(0, 0, 640, 480), WorkArea(-1280, 40, 1280, 680), WorkArea(1920, -900, 900, 900)):
+            x, y, w, h = fit_rect(-4000, -4000, 4000, 4000, area, 8)
+            self.assertGreaterEqual(x, area.x + 8)
+            self.assertGreaterEqual(y, area.y + 8)
+            self.assertLessEqual(x + w, area.x + area.width - 8)
+            self.assertLessEqual(y + h, area.y + area.height - 8)
+            width, height = preferred_size(area, 900, 660)
+            self.assertLessEqual(width, area.width - 24)
+            self.assertLessEqual(height, area.height - 48)
+        widget = self.own(QWidget())
+        with patch('main.qt.responsive.work_area', return_value=WorkArea(-640, 20, 640, 480)):
+            fit_dialog(widget, (900, 660), (340, 300))
+            widget.show()
+            pump()
+            widget.setGeometry(-900, -600, 900, 660)
+            clamp_window(widget)
+            frame = widget.frameGeometry()
+            self.assertTrue(QRect(-640, 20, 640, 480).contains(frame), str(frame))
+
+    def test_control_rows_and_serial_reflow(self):
+        host = self.own(QWidget())
+        layout = QVBoxLayout(host)
+        toolbar = PrimaryToolbar(self.backend, host)
+        controls = ControlsBar(self.backend, host)
+        serial = SerialPanel(self.backend, host)
+        layout.addWidget(toolbar)
+        layout.addWidget(controls)
+        layout.addWidget(serial)
+        host.show()
+        for width in (1920, 1366, 1024, 800, 640, 480, 800, 1920):
+            host.resize(width, 620)
+            toolbar.set_responsive_width(width)
+            pump()
+            self.assertLessEqual(host.width(), width, 'A layout minimum forced the window wider')
+            for field in (controls.board_selector, controls.btn_search_board, controls.port_combo,
+                          controls.upload_speed_combo, controls.cb_timestamp, controls.cb_skip_compile):
+                self.contained(field, controls)
+            if controls.is_compact():
+                self.contained(controls.btn_opt_dropdown, controls)
+            for button in (toolbar.btn_compile, toolbar.btn_upload, toolbar.btn_actions_dropdown,
+                           toolbar.btn_project, toolbar.btn_download):
+                if button.isVisible():
+                    self.contained(button, toolbar)
+            if width < 560:
+                self.assertTrue(toolbar.right_container.isVisible())
+                self.contained(toolbar.btn_project, toolbar)
+                self.contained(toolbar.btn_download, toolbar)
+            for field in (serial.btn_reset, serial.btn_pause, serial.cb_autoscroll, serial.cb_auto_clear,
+                          serial.cb_ansi_clear, serial.baud_combo, serial.btn_copy, serial.btn_clear):
+                self.contained(field, serial._header)
+            self.assertLess(controls.upload_speed_combo.width(), 130)
+            self.assertLess(serial.baud_combo.width(), 130)
+            for combo in (controls.upload_speed_combo, serial.baud_combo):
+                text = max(combo.fontMetrics().horizontalAdvance(combo.itemText(i)) for i in range(combo.count()))
+                self.assertGreaterEqual(combo.width(), text + 40, 'Digits must fit beside padding and the arrow')
+            if width in (1920, 800, 480):
+                capture(host, f'controls-{width}')
+        self.assertEqual(controls._row_mode, 1)
+        self.assertFalse(serial._header_stacked)
+
+    def test_settings_and_setup_small_workareas(self):
+        for width, height in ((1280, 720), (800, 600), (640, 480), (480, 640)):
+            area = WorkArea(0, 0, width, height)
+            with patch('main.qt.responsive.work_area', return_value=area):
+                settings = self.settings()
+                settings.show()
+                setup, _gui, _namespace = bootstrap_fixture()
+                self.own(setup)
+                setup.show()
+                pump()
+                for dialog in (settings, setup):
+                    clamp_window(dialog)
+                    self.assertTrue(QRect(0, 0, width, height).contains(dialog.frameGeometry()), str(dialog.frameGeometry()))
+                for button in (settings.btn_save, settings.btn_cancel, settings.btn_reset):
+                    self.contained(button, settings)
+                content = settings.scroll.widget()
+                self.assertLessEqual(content.width(), settings.scroll.viewport().width())
+                for field in (settings.cpu_combo, settings.theme_combo, settings.autosave_spin):
+                    self.contained(field, field.parentWidget())
+                    self.assertGreaterEqual(field.width(), field.minimumSizeHint().width())
+                capture(settings, f'settings-{width}x{height}')
+                capture(setup, f'setup-{width}x{height}')
+                settings.hide()
+                setup.hide()
+
+    def test_picker_and_modify_fit_narrow_workarea(self):
+        from main.qt.board_dialog import BoardSearchDialog
+        from main.qt.modify_dialog import ModifyFilesDialog
+        from main.qt import board_dialog
+        with patch('main.qt.responsive.work_area', return_value=WorkArea(0, 0, 480, 640)), \
+             patch.object(board_dialog, 'load_recent_boards', return_value=[]):
+            picker = self.own(BoardSearchDialog(board_list=['Demo target']))
+            modify = self.own(ModifyFilesDialog(self.backend))
+            for dialog in (picker, modify):
+                dialog.show()
+                pump()
+                self.assertLessEqual(dialog.frameGeometry().width(), 480)
+                for widget in dialog.findChildren(QAbstractButton):
+                    if widget.isVisible() and not widget.objectName().startswith('qt_scrollarea'):
+                        self.contained(widget, dialog)
+                capture(dialog, 'picker-narrow' if dialog is picker else 'modify-narrow')
+                dialog.hide()
+
+    def test_popup_edges_and_watcher_quiet_idle(self):
+        host = self.own(QWidget())
+        toolbar = PrimaryToolbar(self.backend, host)
+        QVBoxLayout(host).addWidget(toolbar)
+        toolbar.set_responsive_width(480)
+        host.setGeometry(0, 360, 480, 100)
+        host.show()
+        watcher = ScreenWatcher(host)
+        pump()
+        self.assertFalse(watcher._timer.isActive())
+        with patch('main.qt.responsive.work_area', return_value=WorkArea(0, 0, 480, 160)):
+            toolbar._toggle_actions_menu()
+            popup = toolbar._actions_popup
+            pump()
+            self.assertTrue(QRect(0, 0, 480, 160).contains(popup.geometry()), str(popup.geometry()))
+            self.assertGreater(popup._scroll.verticalScrollBar().maximum(), 0)
+            popup.close()
+
+    def test_workarea_and_monitor_changes_coalesce(self):
+        class Screen(QObject):
+            availableGeometryChanged = Signal(QRect)
+            logicalDotsPerInchChanged = Signal(float)
+            def __init__(self, rect):
+                super().__init__()
+                self.rect = rect
+            def availableGeometry(self):
+                return self.rect
+        first = Screen(QRect(0, 0, 1280, 720))
+        second = Screen(QRect(-900, 40, 900, 600))
+        current = [first]
+        widget = self.own(QWidget())
+        refreshed = []
+        watcher = ScreenWatcher(widget, refreshed.append)
+        with patch('main.qt.responsive.active_screen', side_effect=lambda _widget=None: current[0]):
+            fit_dialog(widget)
+            widget.show()
+            pump()
+            refreshed.clear()
+            first.rect = QRect(0, 40, 640, 440)
+            for _ in range(50):
+                first.availableGeometryChanged.emit(first.rect)
+                first.logicalDotsPerInchChanged.emit(144)
+            pump()
+            self.assertEqual(refreshed, [first])
+            self.assertTrue(first.rect.contains(widget.frameGeometry()))
+            current[0] = second
+            watcher._schedule()
+            pump()
+            self.assertIs(watcher._screen, second)
+            self.assertTrue(second.rect.contains(widget.frameGeometry()))
+            self.assertFalse(watcher._timer.isActive())
+            refreshed.clear()
+            first.availableGeometryChanged.emit(first.rect)
+            pump()
+            self.assertEqual(refreshed, [], 'The old screen must be disconnected')
+
+
+class TkResponsiveChecks(DownloaderChecks):
+    def setUp(self):
+        import tkinter as tk
+        create_root = tk.Tk
+        def scaled_root(*args, **kwargs):
+            root = create_root(*args, **kwargs)
+            root.tk.call('tk', 'scaling', float(os.environ.get('QT_SCALE_FACTOR', '1')) * 96 / 72)
+            return root
+        with patch.object(tk, 'Tk', side_effect=scaled_root):
+            super().setUp()
+
+    def test_header_and_panes_at_native_font_scales(self):
+        app = self.app
+        from src.modules.tk_glass import ui_scale
+        scale = ui_scale(self.root)
+        maximum = self.root.winfo_screenwidth() - 48
+        wide = min(round(1040 * scale), maximum)
+        narrow = min(round(480 * scale), maximum)
+        for width in (wide, narrow, wide):
+            height = min(round(660 * scale), self.root.winfo_screenheight() - 80)
+            self.root.geometry(f'{width}x{height}+20+20')
+            self.root.deiconify()
+            self.pump()
+            self.assertEqual(app.lib_tab._responsive_panes._vertical,
+                             app.lib_tab._responsive_panes.pane.winfo_width() < round(660 * scale))
+            for button in (app.sources_btn, app.refresh_btn, app.quit_btn):
+                self.assertTrue(button.winfo_ismapped())
+                self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
+                self.assertLessEqual(button.winfo_y() + button.winfo_height(), button.master.winfo_height())
+            self.assertTrue(app.progress.winfo_ismapped())
+            self.assertLessEqual(app.progress.winfo_rooty() + app.progress.winfo_height(), self.root.winfo_rooty() + self.root.winfo_height())
+            app.notebook.select(2)
+            self.pump()
+            self.assertEqual(app.installed_tab._responsive_panes._vertical,
+                             app.installed_tab._responsive_panes.pane.winfo_width() < round(660 * scale))
+            detail = app.installed_tab
+            for control in (detail.search_entry, detail.lbl_search_status):
+                self.assertTrue(control.winfo_ismapped())
+                self.assertLessEqual(control.winfo_x() + control.winfo_width(), control.master.winfo_width())
+            self.assertGreater(detail.search_entry.winfo_width(), round(70 * scale))
+            self.assertIs(detail._details_view._root(), self.root, 'Do not shadow Tk base methods')
+            detail.lbl_placeholder.pack_forget()
+            detail._details_view.pack(fill='both', expand=True, padx=10, pady=8)
+            detail.lbl_name.configure(text='Installed device toolkit')
+            detail.lbl_type.configure(text='Type: Library')
+            detail.lbl_path.configure(text=str(ROOT / 'temp/audit/fixture-download/device-toolkit'))
+            self.pump()
+            canvas = detail._details_view.canvas
+            canvas.yview_moveto(1)
+            self.pump()
+            self.assertGreater(canvas.winfo_height(), 40)
+            self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
+            if RENDER_DIR:
+                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
+                self.assertTrue(pixmap.save(str(RENDER_DIR / f'installed-{width}.png')))
+            app.notebook.select(0)
+            self.pump()
+            if RENDER_DIR:
+                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
+                self.assertTrue(pixmap.save(str(RENDER_DIR / f'downloader-{width}.png')))
+
+
+def main():
+    global RENDER_DIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--render-dir', type=Path)
+    args = parser.parse_args()
+    RENDER_DIR = args.render_dir
+    if RENDER_DIR:
+        RENDER_DIR.mkdir(parents=True, exist_ok=True)
+    suite = unittest.TestSuite()
+    for cls in (QtResponsiveChecks, TkResponsiveChecks):
+        for name in cls.__dict__:
+            if name.startswith('test_'):
+                suite.addTest(cls(name))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    print(f'Qt display scale: {APP.primaryScreen().devicePixelRatio():g}')
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

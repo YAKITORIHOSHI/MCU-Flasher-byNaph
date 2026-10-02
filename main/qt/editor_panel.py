@@ -12,7 +12,7 @@ Architecture
 ─────────────
   Python side:  EditorBridgeAPI  (QObject with @Slot methods)
   JS side:      qtWebChannel object injected via qwebchannel.js
-  Transport:    QWebChannel over the internal WebSocket transport
+  Transport:    Qt WebEngine's built-in WebChannel transport
 
 The Monaco editor HTML already lives at ``src/editor/index.html`` and
 loads ``bundle.js`` offline.  A small patch is injected at load time
@@ -37,10 +37,8 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 # pyrefly: ignore [missing-import]
 from PySide6.QtWebChannel import QWebChannel
 # pyrefly: ignore [missing-import]
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
-# ─────────────────────────────────────────────────────────────────────────────
-# QWebChannel JS bootstrap
 # ─────────────────────────────────────────────────────────────────────────────
 # QWebChannel JS bootstrap
 # Injected after the page loads as fallback/sync to ensure QWebChannel connects
@@ -73,10 +71,18 @@ class EditorBridgeAPI(QObject):
     theme_changed  = Signal(str)               # (theme_name)
     request_save   = Signal()
     request_save_all = Signal()
+    _syntax_finished = Signal(dict)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
         super().__init__(parent)
         self._backend = backend
+        self._buffer_snapshots = {}
+        self._recovery_buffers = {}
+        self._recovering_buffers = False
+        self._syntax_generation = 0
+        self._syntax_running = False
+        self._syntax_pending = None
+        self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
 
     # ── Called FROM Monaco JS ─────────────────────────────────────────────
 
@@ -105,6 +111,8 @@ class EditorBridgeAPI(QObject):
             except Exception:
                 pass
             res = self._backend.save_file(file_path, content)
+            if res.get("success"):
+                self._buffer_snapshots.pop(str(Path(file_path).resolve()), None)
             if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
                 self._backend.ai_watcher.note_user_save(file_path, content)
             return res
@@ -175,10 +183,41 @@ class EditorBridgeAPI(QObject):
 
     @Slot(str, str, result=str)
     def realtime_check_syntax(self, file_path: str, content: str) -> str:
-        """Monaco requests real-time syntax diagnostics."""
-        if self._backend:
-            return self._backend.realtime_check_syntax(file_path, content)
-        return "[]"
+        """Coalesce edits; parsing never blocks the WebChannel/UI thread."""
+        self._syntax_generation += 1
+        self._syntax_pending = (self._syntax_generation, file_path, content)
+        self._start_syntax()
+        return "null"  # Results arrive through the queued marker signal.
+
+    def _start_syntax(self):
+        if self._syntax_running or self._syntax_pending is None:
+            return
+        generation, path, content = self._syntax_pending
+        self._syntax_pending = None
+        self._syntax_running = True
+        from src.syntax_checker import analyze_cpp_syntax, get_syntax_executor
+        def analyze():
+            result = {"generation": generation, "path": path}
+            try:
+                result["diagnostics"] = analyze_cpp_syntax(content, Path(path))
+            except Exception as exc:
+                result["error"] = str(exc)
+            try:
+                self._syntax_finished.emit(result)
+            except RuntimeError:
+                pass
+        get_syntax_executor().submit(analyze)
+
+    @Slot(dict)
+    def _finish_syntax(self, result):
+        self._syntax_running = False
+        if result["generation"] == self._syntax_generation and self._backend and str(self._backend.active_file_path) == result["path"]:
+            from main.qt.signals import signals
+            if "error" in result:
+                signals.notification.emit({"title": "Syntax check failed", "message": result["error"], "type": "warning"})
+            else:
+                signals.syntax_errors.emit(result["diagnostics"])
+        self._start_syntax()
 
     @Slot(str)
     def set_active_file(self, file_path: str) -> None:
@@ -192,6 +231,8 @@ class EditorBridgeAPI(QObject):
         """Monaco reports a file became dirty or clean."""
         if self._backend:
             self._backend.mark_modified(file_path, is_modified)
+            if not is_modified:
+                self._buffer_snapshots.pop(str(Path(file_path).resolve()), None)
             if is_modified:
                 try:
                     from main.qt.signals import signals as sig_bus
@@ -202,6 +243,40 @@ class EditorBridgeAPI(QObject):
                 p = self.parent()
                 if p and hasattr(p, "_schedule_autosave"):
                     p._schedule_autosave()
+
+    @Slot(str, str)
+    def snapshot_buffer(self, file_path: str, content: str):
+        """Keep dirty editor text in Python memory across renderer recovery."""
+        if not self._backend or not self._backend.sketch_dir_path:
+            return
+        path = Path(file_path).resolve()
+        if path.parent != Path(self._backend.sketch_dir_path).resolve():
+            return
+        if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}:
+            self._buffer_snapshots[str(path)] = content
+
+    @Slot(result="QVariant")
+    def get_recovery_buffers(self):
+        if not self._recovering_buffers or not self._backend:
+            return {}
+        project = Path(self._backend.sketch_dir_path).resolve()
+        return {path: content for path, content in self._recovery_buffers.items()
+                if Path(path).parent == project}
+
+    def begin_buffer_recovery(self):
+        # Freeze before loadProject marks disk models clean or emits content
+        # events; those events must not erase the pre-crash dirty snapshots.
+        if not self._recovering_buffers:
+            self._recovery_buffers = {
+                path: content for path, content in self._buffer_snapshots.items()
+                if self._backend and self._backend.modified_files.get(path)
+            }
+        self._recovering_buffers = True
+
+    @Slot()
+    def recovery_complete(self):
+        self._recovering_buffers = False
+        self._recovery_buffers.clear()
 
     @Slot(str, result="QVariant")
     def run_action(self, action_name: str) -> dict:
@@ -365,6 +440,9 @@ class MonacoEditorPanel(QWidget):
         self._backend = backend
         self._project_root = project_root
         self._editor_html = project_root / "src" / "editor" / "index.html"
+        from src.modules.recovery import RecoveryBudget
+        self._renderer_recovery = RecoveryBudget(delays=(0.5, 1.5, 4.0), window=120)
+        self._recovery_pending = False
 
         from main.core.config import get_autosave_settings
         self._autosave_enabled, self._autosave_delay = get_autosave_settings()
@@ -378,6 +456,16 @@ class MonacoEditorPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        self._recovery_notice = QWidget(self)
+        notice_layout = QHBoxLayout(self._recovery_notice)
+        self._recovery_text = QLabel()
+        self._recovery_text.setWordWrap(True)
+        notice_layout.addWidget(self._recovery_text, 1)
+        retry = QPushButton("Reload editor")
+        retry.clicked.connect(self._manual_editor_reload)
+        notice_layout.addWidget(retry)
+        self._recovery_notice.hide()
+        layout.addWidget(self._recovery_notice)
 
         # ── QWebEngineView ──────────────────────────────────────────────────
         self._view = QWebEngineView(self)
@@ -389,20 +477,12 @@ class MonacoEditorPanel(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
 
-        # On budget/low-end systems, disable hardware 2D canvas to prevent D3D11 device crashes & leaks
-        is_low_end = False
-        try:
-            import os
-            import psutil
-            mem_tot = psutil.virtual_memory().total
-            cpus = os.cpu_count() or 2
-            is_low_end = (mem_tot < 5.5 * 1024 ** 3) or (cpus <= 2)
-        except Exception:
-            pass
+        from src.modules.runtime_resources import performance_profile
+        self._performance = performance_profile()
 
         settings.setAttribute(
             QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
-            not is_low_end
+            not self._performance.low_memory
         )
         settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)
 
@@ -468,13 +548,18 @@ class MonacoEditorPanel(QWidget):
     @Slot(bool)
     def _on_load_finished(self, ok: bool) -> None:
         if not ok:
+            self._recover_editor("The offline editor could not load.")
             return
+        self._recovery_notice.hide()
         focus_proxy = self._view.focusProxy()
         if focus_proxy:
             focus_proxy.installEventFilter(self)
 
         # Ensure QWebChannel and project loading runs in JS
         self._view.page().runJavaScript(_WEBCHANNEL_INIT_JS)
+        self._view.page().runJavaScript(
+            f"window.setPerformanceMode?.({json.dumps(self._performance.constrained)})"
+        )
 
         # Apply configured font size
         try:
@@ -565,8 +650,35 @@ class MonacoEditorPanel(QWidget):
             self.force_layout()
 
     def _on_render_process_terminated(self, termination_status: Any, exit_code: int) -> None:
-        """Auto-recover if WebEngine renderer process ever terminates under memory pressure."""
-        QTimer.singleShot(200, self._load_editor)
+        self._bridge.begin_buffer_recovery()
+        self._recover_editor(f"Editor renderer stopped (exit {exit_code}).")
+
+    def _recover_editor(self, reason):
+        if self._recovery_pending:
+            return
+        delay = self._renderer_recovery.next_delay()
+        if delay is None:
+            message = reason + " Automatic recovery stopped after repeated failures. Reopen the project or restart the app."
+        else:
+            message = reason + f" Reloading in {delay:g}s; recent unsaved buffer snapshots will be restored."
+            self._recovery_pending = True
+            QTimer.singleShot(int(delay * 1000), self._recovery_reload)
+        self._recovery_text.setText(message)
+        self._recovery_notice.show()
+        if self._backend:
+            self._backend.emit("console:log", {"text": message, "tag": "warning", "newline": True})
+
+    def _recovery_reload(self):
+        self._recovery_pending = False
+        self._load_editor()
+
+    def _manual_editor_reload(self):
+        if self._recovery_pending:
+            return
+        from src.modules.recovery import RecoveryBudget
+        self._renderer_recovery = RecoveryBudget(window=120)
+        self._bridge.begin_buffer_recovery()
+        self._recovery_reload()
 
     def _step_font_size(self, delta: int) -> None:
         """Step editor font size and notify JS and settings."""

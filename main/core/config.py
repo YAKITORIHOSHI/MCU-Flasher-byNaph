@@ -44,7 +44,7 @@ _RESET_CACHE_MUTEX_NAME = "Local\\MCUFlasherByNaph.ResetCache"
 
 
 def _try_acquire_reset_cache_lock():
-    """Acquire the Windows cross-process reset-cache mutex without waiting.
+    """Acquire a cross-process reset-cache lock without waiting.
 
     Hard Reset, Soft Reset, and Clean share app-level recovery folders even
     when ``--new-window`` starts multiple processes.  Serializing those three
@@ -53,7 +53,19 @@ def _try_acquire_reset_cache_lock():
     exit, so a crash cannot leave a permanent lock.
     """
     if sys.platform != "win32":
-        return True
+        stream = None
+        try:
+            import fcntl
+            from src.modules.platform_runtime import app_cache_dir
+            directory = app_cache_dir()
+            directory.mkdir(parents=True, exist_ok=True)
+            stream = (directory / "reset-cache.lock").open("a+")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return stream
+        except (ImportError, OSError):
+            if stream is not None:
+                stream.close()
+            return None
     try:
         import ctypes
         from ctypes import wintypes
@@ -79,7 +91,14 @@ def _try_acquire_reset_cache_lock():
 
 def _release_reset_cache_lock(handle) -> None:
     """Release a handle returned by ``_try_acquire_reset_cache_lock``."""
-    if not handle or sys.platform != "win32":
+    if not handle:
+        return
+    if sys.platform != "win32":
+        try:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
         return
     try:
         import ctypes
@@ -141,16 +160,45 @@ def _load_raw_config() -> dict:
 
 
 def _save_raw_config(data: dict):
+    """Replace configuration atomically and report persistence failures."""
+    import os
+    import tempfile
     global _CONFIG_MEM_CACHE, _CONFIG_MEM_MTIME
     payload = json.dumps(data, indent=2)
-    _CONFIG_MEM_CACHE = data.copy()
-    _CONFIG_MEM_MTIME = time.time()
-    for target in (LOCAL_GUI_CONFIG, Path.home() / ".mcu_gui_config.json"):
+    saved = False
+    user_config = Path.home() / ".mcu_gui_config.json"
+    try:
+        user_authoritative = isinstance(json.loads(user_config.read_text(encoding="utf-8")), dict)
+    except (OSError, ValueError):
+        user_authoritative = False
+    user_saved = False
+    for target in (LOCAL_GUI_CONFIG, user_config):
+        temporary = None
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(payload, encoding="utf-8")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                             prefix=target.name + ".", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+            os.replace(temporary, target)
+            saved = True
+            if target == user_config:
+                user_saved = True
         except Exception:
             pass
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    # A failed update to an existing per-user config cannot be hidden by a
+    # successful portable write: the loader will prefer the per-user file.
+    saved = saved and (user_saved or not user_authoritative)
+    if saved:
+        _CONFIG_MEM_CACHE = data.copy()
+        _CONFIG_MEM_MTIME = time.time()
+    return saved
 
 
 def _own_create_time():
@@ -217,7 +265,7 @@ def _instance_is_alive(pid: str, inst: dict, alive: "dict[str, float] | None") -
 
 
 def get_editor_mode() -> str:
-    """Return the persisted editor mode preference: 'default' or 'monaco'."""
+    """Return legacy editor mode data; the native Qt editor is always Monaco."""
     data = _load_raw_config()
     return data.get("shared", {}).get("editor_mode", "default")
 
@@ -228,7 +276,27 @@ def set_editor_mode(mode: str):
     _save_raw_config(data)
 
 def _detect_system_theme() -> str:
-    """Query Windows registry for system app theme preference (Dark or Light)."""
+    """Query the native desktop appearance without making startup depend on it."""
+    if sys.platform.startswith("linux"):
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QGuiApplication
+            app = QGuiApplication.instance()
+            if app:
+                scheme = app.styleHints().colorScheme()
+                if scheme != Qt.ColorScheme.Unknown:
+                    return "default" if scheme == Qt.ColorScheme.Dark else "light"
+        except (ImportError, AttributeError):
+            pass
+        try:
+            import subprocess
+            result = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                                    capture_output=True, text=True, timeout=0.5)
+            if result.returncode == 0:
+                return "default" if "dark" in result.stdout else "light"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return "default"
     try:
         import winreg
         key = winreg.OpenKey(

@@ -5,8 +5,8 @@ main.qt.theme — Qt stylesheet generator for MCU Flasher by Naph.
 
 Converts the framework-neutral Theme.* color constants from
 main.core.theme into a complete QApplication stylesheet.
-Supports "default" (Dark Cyberpunk), "solarized_dark" (Teal / Cyan),
-and "light" (Clean & Bright).
+Supports "default" (Glass Smoked Dark), "solarized_dark" (Solarized Dark),
+and "light" (Glass Frosted Light), with static glass tab surfaces.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ _project_root = _this_file.parent.parent.parent
 _icons_dir = _project_root / "src" / "assets" / "icons"
 _icon_checked = (_icons_dir / "checkbox_checked.svg").as_posix()
 _icon_checked_dim = (_icons_dir / "checkbox_checked_disabled.svg").as_posix()
+_icon_arrow = (_icons_dir / "chevron-down.svg").as_posix()
 
 
 def get_palette(theme_mode: str = "default") -> dict[str, str]:
@@ -38,14 +39,21 @@ def get_palette(theme_mode: str = "default") -> dict[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def register_fonts() -> None:
-    """Load Montserrat TTF files into the Qt font database."""
+    """Register the UI weights once per Qt application, without recursive scans."""
     try:
         # pyrefly: ignore [missing-import]
-        from PySide6.QtGui import QFontDatabase
+        from PySide6.QtGui import QFontDatabase, QGuiApplication
+        app = QGuiApplication.instance()
+        if app is None or app.property("mcuFontsRegistered"):
+            return
         fonts_dir = _project_root / "src" / "fonts" / "Montserrat"
-        if fonts_dir.exists():
-            for ttf in fonts_dir.rglob("*.ttf"):
-                QFontDatabase.addApplicationFont(str(ttf.resolve()))
+        for weight in ("Regular", "Medium", "SemiBold", "Bold", "Italic"):
+            for directory in (fonts_dir / "static", fonts_dir):
+                ttf = directory / f"Montserrat-{weight}.ttf"
+                if ttf.is_file():
+                    QFontDatabase.addApplicationFont(str(ttf))
+                    break
+        app.setProperty("mcuFontsRegistered", True)
     except Exception:
         pass
 
@@ -100,21 +108,29 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     btn_disabled_fg     = "#94a3b8" if theme_mode == "light" else "#4b5563"
     btn_disabled_border = "#cbd5e1" if theme_mode == "light" else "#1c2333"
 
+    def translucent(color: str, alpha: int) -> str:
+        value = color.lstrip("#")
+        return f"rgba({int(value[:2], 16)}, {int(value[2:4], 16)}, {int(value[4:6], 16)}, {alpha})"
+
+    glass = translucent(bg_dark, 225)
+    glass_highlight = translucent(bg_light, 220)
+    rim = translucent(text_bright, 55)
+    selected = translucent(cyan, 35)
+
     return f"""
 /* ── Global ─────────────────────────────────────────────────────────────── */
 * {{
-    font-family: "Montserrat", "Segoe UI", sans-serif;
-    font-size: 13px;
-    outline: none;
+    font-family: "Montserrat", "Segoe UI", "Ubuntu", sans-serif;
+    font-size: 12px;
 }}
 
 QMainWindow {{
-    background-color: {bg_darkest};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_mid}, stop:0.48 {bg_darkest}, stop:1 {bg_dark});
     color: {text};
 }}
 
 QDialog {{
-    background-color: {bg_dark};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_mid}, stop:1 {bg_dark});
     color: {text};
 }}
 
@@ -136,21 +152,21 @@ QToolBar {{
 }}
 
 QToolBar#primary-toolbar {{
-    background-color: {bg_dark};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
     border: none;
-    border-bottom: 2px solid {cyan_dim};
-    padding: 6px 12px;
+    border-bottom: 1px solid {rim};
+    padding: 7px 10px;
     spacing: 4px;
 }}
 
 QToolBar#controls-toolbar {{
-    background-color: {bg_mid};
+    background-color: {glass};
     border: none;
     padding: 0px;
 }}
 
 QWidget#controls-bar {{
-    background-color: {bg_mid};
+    background-color: {glass};
     border-bottom: 1px solid {border};
 }}
 
@@ -199,7 +215,7 @@ QPushButton {{
     background-color: {btn_clear};
     color: {text_bright};
     border: 1px solid {border};
-    border-radius: 5px;
+    border-radius: 8px;
     padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
@@ -439,7 +455,7 @@ QPushButton#btn-search-board:enabled {{
     border-radius: 4px;
     padding: 0px;
     text-align: center;
-    font-size: 13px;
+    font-size: 12px;
     font-family: 'Segoe UI Emoji', 'Segoe UI Symbol', 'Segoe UI', sans-serif;
 }}
 QPushButton#btn-search-board:enabled:hover {{
@@ -524,7 +540,7 @@ QDialog QPushButton:enabled {{
     color: {text_bright};
     border: 1px solid {border};
     border-radius: 5px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
 }}
@@ -647,7 +663,8 @@ QTabBar {{
 
 QTabWidget::pane {{
     background-color: {bg_darkest};
-    border: none;
+    border: 1px solid {rim};
+    border-radius: 10px;
     border-top: 1px solid {border};
 }}
 
@@ -658,7 +675,7 @@ QTabBar::tab {{
     border-bottom: 1px solid {border};
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     font-size: 12px;
     font-weight: 600;
     margin-right: 2px;
@@ -946,5 +963,60 @@ QSizeGrip {{
     height: 0px;
     image: none;
     background: transparent;
+}}
+
+/* Portable glass surfaces. Reading panes stay opaque for stable contrast. */
+QWidget#monaco-editor-panel {{
+    background: {bg_darkest}; border: 1px solid {rim}; border-radius: 10px;
+}}
+QWidget#editor-detached-placeholder {{ background: {bg_darkest}; }}
+QLabel#detached-editor-description {{ color: {text_dim}; font-size: 12px; }}
+QWidget#console-header, QWidget#serial-header, QWidget#compat-header,
+QFrame#notif-header, QFrame#terminal-header, QFrame#syntax-header {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
+    border-bottom: 1px solid {rim};
+}}
+QTabWidget#workspace-tabs {{ background: transparent; }}
+QTabWidget#workspace-tabs::pane {{
+    background: {bg_darkest}; border: 1px solid {rim}; border-radius: 10px;
+}}
+QTabWidget#workspace-tabs QTabBar {{
+    background: transparent; border: none;
+}}
+QTabWidget#workspace-tabs QTabBar::tab {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
+    color: {text_dim}; border: 1px solid {rim}; border-radius: 9px;
+    padding: 6px 12px; margin-right: 4px; margin-bottom: 4px;
+    font-size: 12px; font-weight: 600;
+}}
+QTabWidget#workspace-tabs QTabBar::tab:selected {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {selected}, stop:1 {glass_highlight});
+    color: {text_bright}; border: 1px solid {cyan}; border-bottom: 2px solid {cyan};
+}}
+QTabWidget#workspace-tabs QTabBar::tab:hover:!selected {{
+    background: {glass_highlight}; color: {text}; border: 1px solid {border_lit};
+}}
+QTabWidget#workspace-tabs QTabBar QToolButton {{
+    background: {bg_dark}; border: 1px solid {rim}; border-radius: 7px;
+}}
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:hover {{ background: {selected}; }}
+QPushButton:focus, QToolButton:focus, QCheckBox:focus,
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 2px solid {cyan}; }}
+QPushButton#btn-compile:focus, QPushButton#btn-upload:focus,
+QPushButton#btn-stop:focus, QPushButton#btn-save:focus,
+QPushButton#btn-save-all:focus {{ border: 2px solid {cyan}; }}
+QDialog QGroupBox {{ border: 1px solid {rim}; border-radius: 12px; }}
+QPushButton#btn-compile:enabled, QPushButton#btn-upload:enabled,
+QPushButton#btn-save:enabled, QPushButton#btn-save-all:enabled,
+QPushButton#btn-modify:enabled {{
+    background: {glass_highlight}; color: {text_bright}; border: 1px solid {border_lit};
+}}
+QPushButton#btn-compile:enabled:hover, QPushButton#btn-upload:enabled:hover,
+QPushButton#btn-save:enabled:hover, QPushButton#btn-save-all:enabled:hover,
+QPushButton#btn-modify:enabled:hover {{ background: {selected}; color: {text_bright}; }}
+QPushButton#btn-stop:enabled {{ background: {btn_stop}; }}
+QComboBox::down-arrow {{
+    image: url("{_icon_arrow}"); width: 12px; height: 12px; border: none;
 }}
 """

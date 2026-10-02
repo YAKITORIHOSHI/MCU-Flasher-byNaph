@@ -76,6 +76,10 @@ logs/*
 .show_dm_trigger
 index_json/.*
 index_json/library_index.json
+# Derived downloader catalogs and interrupted atomic cache writes
+index_json/library_index.json.catalog-v*.json
+index_json/browser_boards_catalog-v*.json
+index_json/*.tmp-*
 
 # === User & Device Specific Local Configurations & Secrets ===
 .env
@@ -133,6 +137,7 @@ ___*.py
 # === Node / OpenCode modules ===
 .opencode/node_modules/
 node_modules/
+.venv-linux/
 
 # === Tests ===
 test/

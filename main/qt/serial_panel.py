@@ -22,10 +22,11 @@ from datetime import datetime
 from PySide6.QtCore import QTimer, Slot, Qt, QEvent
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
-    QApplication,
+    QApplication, QSizePolicy,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 _TAG_COLORS: dict[str, str] = {
     "info":    "#5ca4f0",
@@ -53,15 +54,20 @@ _ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 class SerialOutputView(QPlainTextEdit):
     """Read-only high-performance serial monitor output view.
 
-    Uses coalesced batch chunking and throttled queue draining matching
-    the proven 3e5f41a optimization to handle up to 921600+ baud streaming
-    without Qt UI freezes.
+    Coalesces output with bounded pending/history buffers, small render batches
+    and long-line limits. Sustained display overload produces a visible notice.
     """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setReadOnly(True)
-        self.setMaximumBlockCount(10000)
+        self.setUndoRedoEnabled(False)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        from src.modules.runtime_resources import performance_profile
+        from main.qt.log_buffer import LogBuffer
+        profile = performance_profile()
+        self._history_limit = 512_000 if profile.constrained else 2_000_000
+        self.setMaximumBlockCount(profile.terminal_scrollback)
         from main.core.config import get_monitor_font_size
         init_font_size = get_monitor_font_size()
         self.set_font_size(init_font_size)
@@ -81,13 +87,14 @@ class SerialOutputView(QPlainTextEdit):
         self._ansi_clear_enabled = True
         from main.core.config import load_gui_config
         self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
-        self._entries: list[tuple[str, str, bool, str]] = []
-        self._queue: deque[tuple[str, str, bool]] = deque()
+        self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda item: item[0])
+        self._queue = LogBuffer(256_000 if profile.constrained else 1_000_000, 2000, lambda item: item[0])
         self._last_autoscroll = 0.0
 
         # Batch drain timer (drains queue at ~30ms / ~33 FPS)
         self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(30)
+        from src.modules.runtime_resources import performance_profile
+        self._flush_timer.setInterval(40 if performance_profile().constrained else 30)
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
@@ -250,6 +257,8 @@ class SerialOutputView(QPlainTextEdit):
             cursor.insertText(text_chunk, fmt)
 
         cursor.endEditBlock()
+        from main.qt.log_buffer import trim_document
+        trim_document(self, self._history_limit)
 
         if (self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up) or was_at_bottom:
             self.setTextCursor(cursor)
@@ -263,14 +272,15 @@ class SerialOutputView(QPlainTextEdit):
             return
         tag: str  = payload.get("tag", "normal")
         lines = payload.get("lines")
+        from main.qt.log_buffer import display_text
         if lines and isinstance(lines, list):
             for l in lines:
-                self._queue.append((str(l), tag, True))
+                self._queue.append((display_text(l), tag, True))
             if not self._flush_timer.isActive():
                 self._flush_timer.start()
             return
 
-        text: str = payload.get("text", "")
+        text: str = display_text(payload.get("text", ""))
         newline: bool = payload.get("newline", True)
         self._queue.append((text, tag, newline))
         if not self._flush_timer.isActive():
@@ -282,12 +292,10 @@ class SerialOutputView(QPlainTextEdit):
                 self._flush_timer.stop()
             return
 
-        # Drain up to 1000 items per flush tick to prevent backlog freeze
-        items: list[tuple[str, str, bool]] = []
-        count = 0
-        while self._queue and count < 1000:
-            items.append(self._queue.popleft())
-            count += 1
+        items = self._queue.drain(max_items=128, max_chars=32768)
+        notice = self._queue.take_notice()
+        if notice:
+            items.insert(0, (notice, "warning", True))
 
         if not items:
             return
@@ -307,7 +315,9 @@ class SerialOutputView(QPlainTextEdit):
         for clean_text, tag, is_newline in items:
             if "\x1b" in clean_text:
                 if self._ansi_clear_enabled and _ANSI_CLEAR_RE.search(clean_text):
-                    _flush_chunk()
+                    curr_pieces.clear()
+                    coalesced_chunks.clear()
+                    self._entries.clear()
                     super().clear()
                     clean_text = _ANSI_CLEAR_RE.sub("", clean_text)
                 clean_text = _ANSI_CSI_RE.sub("", clean_text)
@@ -330,8 +340,6 @@ class SerialOutputView(QPlainTextEdit):
                 curr_pieces.append(payload)
 
             self._entries.append((clean_text, tag, is_newline, batch_ts))
-            if len(self._entries) > 10000:
-                self._entries.pop(0)
 
         _flush_chunk()
 
@@ -348,6 +356,8 @@ class SerialOutputView(QPlainTextEdit):
                 cursor.insertText(text_chunk, fmt)
         finally:
             cursor.endEditBlock()
+        from main.qt.log_buffer import trim_document
+        trim_document(self, self._history_limit)
         if self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up:
             self.setTextCursor(cursor)
             now = time.monotonic()
@@ -360,6 +370,7 @@ class SerialOutputView(QPlainTextEdit):
 
     @Slot()
     def clear(self) -> None:
+        self._entries.clear()
         self._queue.clear()
         self._user_scrolled_up = False
         self._scrollbar_held = False
@@ -389,24 +400,25 @@ class SerialPanel(QWidget):
 
         # ── Header ───────────────────────────────────────────────────────────
         header = QWidget()
-        header.setFixedHeight(40)
+        self._header = header
+        header.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         header.setObjectName("serial-header")
-        h = QHBoxLayout(header)
+        h = QGridLayout(header)
         h.setContentsMargins(10, 4, 10, 4)
         h.setSpacing(8)
         self._header_layout = h
 
-        title = QLabel("📡 SERIAL MONITOR")
+        title = QLabel("Serial monitor")
         self._title_lbl = title
         title.setStyleSheet("color: #00d2ff; font-weight: bold; font-size: 12px;")
-        h.addWidget(title)
+        h.addWidget(title, 0, 0)
 
         # Reset MCU button
         self.btn_reset = QPushButton("↺ Reset")
         self.btn_reset.setFixedHeight(26)
         self.btn_reset.setToolTip("Hardware reboot microcontroller via DTR/RTS reset pulse")
         self.btn_reset.clicked.connect(self._on_reset)
-        h.addWidget(self.btn_reset)
+        h.addWidget(self.btn_reset, 0, 1)
 
         # Pause button
         self.btn_pause = QPushButton("⏸ Pause")
@@ -414,9 +426,9 @@ class SerialPanel(QWidget):
         self.btn_pause.setCheckable(True)
         self.btn_pause.setToolTip("Pause / resume serial stream display")
         self.btn_pause.clicked.connect(self._on_pause_toggle)
-        h.addWidget(self.btn_pause)
+        h.addWidget(self.btn_pause, 0, 2)
 
-        h.addStretch()
+        h.setColumnStretch(3, 1)
 
         # Autoscroll
         self.cb_autoscroll = QCheckBox("Auto-scroll")
@@ -425,7 +437,7 @@ class SerialPanel(QWidget):
         self.cb_autoscroll.stateChanged.connect(
             lambda s: self._output.set_autoscroll(bool(s))
         )
-        h.addWidget(self.cb_autoscroll)
+        h.addWidget(self.cb_autoscroll, 0, 3)
 
         # Clear on Action checkbox
         from main.core.config import load_gui_config
@@ -435,7 +447,7 @@ class SerialPanel(QWidget):
         self.cb_auto_clear.setChecked(init_clear_serial)
         self.cb_auto_clear.setToolTip("Clear serial monitor before each compile/upload/reset action")
         self.cb_auto_clear.stateChanged.connect(self._on_auto_clear_changed)
-        h.addWidget(self.cb_auto_clear)
+        h.addWidget(self.cb_auto_clear, 0, 4)
 
         # ANSI clear-screen checkbox
         self.cb_ansi_clear = QCheckBox("Clear-screen")
@@ -444,14 +456,14 @@ class SerialPanel(QWidget):
         self.cb_ansi_clear.stateChanged.connect(
             lambda s: self._output.set_ansi_clear_enabled(bool(s))
         )
-        h.addWidget(self.cb_ansi_clear)
+        h.addWidget(self.cb_ansi_clear, 0, 5)
 
         # Separator
         div = QFrame()
         self._div_sep = div
         div.setFrameShape(QFrame.Shape.VLine)
         div.setStyleSheet("color: #2a5f58;")
-        h.addWidget(div)
+        h.addWidget(div, 0, 6)
 
         # Connection status label
         initial_connected = False
@@ -464,13 +476,13 @@ class SerialPanel(QWidget):
             if initial_connected else
             "color: #e74c3c; font-size: 12px; font-weight: 600;"
         )
-        h.addWidget(self.lbl_status)
+        h.addWidget(self.lbl_status, 0, 7)
 
         div2 = QFrame()
         self._div2_sep = div2
         div2.setFrameShape(QFrame.Shape.VLine)
         div2.setStyleSheet("color: #2a5f58;")
-        h.addWidget(div2)
+        h.addWidget(div2, 0, 8)
 
         # Baud rate container (label + combo)
         self.baud_container = QWidget()
@@ -480,7 +492,7 @@ class SerialPanel(QWidget):
         b_layout.setContentsMargins(0, 0, 0, 0)
         b_layout.setSpacing(6)
 
-        self._lbl_baud = QLabel("BAUD RATE")
+        self._lbl_baud = QLabel("Baud rate")
         self._lbl_baud.setStyleSheet("font-size: 11px; font-weight: 600; background: transparent;")
         b_layout.addWidget(self._lbl_baud)
 
@@ -493,7 +505,7 @@ class SerialPanel(QWidget):
         b_layout.addWidget(self.baud_combo)
 
         self._baud_container = self.baud_container
-        h.addWidget(self.baud_container)
+        h.addWidget(self.baud_container, 0, 9)
 
         # Copy button
         self.btn_copy = QPushButton("⧉ Copy")
@@ -501,7 +513,7 @@ class SerialPanel(QWidget):
         self.btn_copy.setToolTip("Copy serial monitor output to clipboard")
         self.btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_copy.clicked.connect(self._copy_output)
-        h.addWidget(self.btn_copy)
+        h.addWidget(self.btn_copy, 0, 10)
 
         # Clear button
         self.btn_clear = QPushButton("🗑 Clear")
@@ -509,8 +521,9 @@ class SerialPanel(QWidget):
         self.btn_clear.setToolTip("Clear serial monitor output buffer")
         self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear.clicked.connect(self._output_clear)
-        h.addWidget(self.btn_clear)
+        h.addWidget(self.btn_clear, 0, 11)
 
+        self._header_stacked = None
         # ── Separator ────────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -518,6 +531,10 @@ class SerialPanel(QWidget):
 
         # ── Output View ───────────────────────────────────────────────────────
         self._output = SerialOutputView()
+        output_policy = self._output.sizePolicy()
+        output_policy.setVerticalPolicy(QSizePolicy.Policy.Ignored)
+        self._output.setSizePolicy(output_policy)
+        self._output.setMinimumHeight(24)
 
         # ── Send Bar ─────────────────────────────────────────────────────────
         send_bar = QWidget()
@@ -527,7 +544,7 @@ class SerialPanel(QWidget):
         sb.setContentsMargins(10, 4, 10, 4)
         sb.setSpacing(8)
 
-        sb.addWidget(QLabel("SEND ▸"))
+        sb.addWidget(QLabel("Send >"))
 
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Type command and press Enter…")
@@ -568,41 +585,14 @@ class SerialPanel(QWidget):
         self.set_responsive_width(event.size().width())
 
     def _get_adaptive_baud_width(self, width: int | None = None) -> int:
-        """Calculate responsive width for baud combo considering screen dimension, font metrics, and DPI scale."""
-        w = width if width is not None else getattr(self, "_current_responsive_width", self.width())
+        """Reserve text and arrow space without multiplying Qt's logical metrics."""
         try:
             fm = self.baud_combo.fontMetrics()
             text_w = max(fm.horizontalAdvance(b) for b in _BAUD_RATES)
         except Exception:
             text_w = 48
 
-        # Screen dimension tiering: ensure plenty of room for 6-digit baud rates
-        if w >= 1500:
-            extra_padding = 74
-            floor_width = 118
-        elif w >= 1200:
-            extra_padding = 66
-            floor_width = 110
-        elif w >= 950:
-            extra_padding = 56
-            floor_width = 100
-        elif w >= 800:
-            extra_padding = 48
-            floor_width = 92
-        else:
-            extra_padding = 40
-            floor_width = 86
-
-        dpi_scale = 1.0
-        try:
-            screen = self.screen() or (QApplication.primaryScreen() if QApplication.instance() else None)
-            if screen:
-                dpi_scale = max(1.0, screen.logicalDotsPerInch() / 96.0)
-        except Exception:
-            dpi_scale = 1.0
-
-        computed = int((text_w + extra_padding) * min(1.3, max(1.0, dpi_scale ** 0.5)))
-        return max(floor_width, computed)
+        return max(86, text_w + 44)
 
     def update_adaptive_sizing(self) -> None:
         """Refresh adaptive sizing when screen resolution or DPI scaling changes."""
@@ -615,7 +605,7 @@ class SerialPanel(QWidget):
         baud_w = self._get_adaptive_baud_width(width)
         if width >= 1100:
             self._is_ultra_compact = False
-            self._title_lbl.setText("📡 SERIAL MONITOR")
+            self._title_lbl.setText("Serial monitor")
             self.btn_reset.setText("↺ Reset")
             self.btn_pause.setText("▶ Resume" if self._paused else "⏸ Pause")
             self.cb_autoscroll.setText("Auto-scroll")
@@ -623,7 +613,7 @@ class SerialPanel(QWidget):
             self.cb_ansi_clear.setText("Clear-screen")
             if hasattr(self, "_lbl_baud"):
                 self._lbl_baud.setVisible(True)
-                self._lbl_baud.setText("BAUD RATE")
+                self._lbl_baud.setText("Baud rate")
             self.baud_combo.setFixedWidth(baud_w)
             self.btn_copy.setText("⧉ Copy")
             self.btn_clear.setText("🗑 Clear")
@@ -632,7 +622,7 @@ class SerialPanel(QWidget):
                 self._header_layout.setContentsMargins(10, 4, 10, 4)
         elif width >= 850:
             self._is_ultra_compact = False
-            self._title_lbl.setText("📡 Serial")
+            self._title_lbl.setText("Serial")
             self.btn_reset.setText("↺ Reset")
             self.btn_pause.setText("▶ Resume" if self._paused else "⏸ Pause")
             self.cb_autoscroll.setText("Auto")
@@ -649,7 +639,7 @@ class SerialPanel(QWidget):
                 self._header_layout.setContentsMargins(6, 4, 6, 4)
         else:
             self._is_ultra_compact = True
-            self._title_lbl.setText("📡")
+            self._title_lbl.setText("Serial")
             self.btn_reset.setText("↺")
             self.btn_pause.setText("▶" if self._paused else "⏸")
             self.cb_autoscroll.setText("Auto")
@@ -663,6 +653,37 @@ class SerialPanel(QWidget):
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
                 self._header_layout.setContentsMargins(4, 4, 4, 4)
+
+        self._reflow_header(width)
+
+    def _reflow_header(self, width: int) -> None:
+        h = self._header_layout
+        first = (self._title_lbl, self.btn_reset, self.btn_pause, self.lbl_status, self.btn_copy, self.btn_clear)
+        second = (self.cb_autoscroll, self.cb_auto_clear, self.cb_ansi_clear, self.baud_container)
+        regular = (self._title_lbl, self.btn_reset, self.btn_pause, self.cb_autoscroll, self.cb_auto_clear,
+                   self.cb_ansi_clear, self._div_sep, self.lbl_status, self._div2_sep,
+                   self.baud_container, self.btn_copy, self.btn_clear)
+        required = sum(w.minimumSizeHint().width() for w in regular) + 60
+        stacked = width < required
+        if stacked != self._header_stacked:
+            for widget in regular:
+                h.removeWidget(widget)
+            for col in range(len(regular)):
+                h.setColumnStretch(col, 0)
+            self._div_sep.setVisible(not stacked)
+            self._div2_sep.setVisible(not stacked)
+            if stacked:
+                for col, widget in enumerate(first):
+                    h.addWidget(widget, 0, col)
+                for col, widget in enumerate(second):
+                    h.addWidget(widget, 1, col, 1, 3 if col == 3 else 1)
+                h.setColumnStretch(3, 1)
+            else:
+                for col, widget in enumerate(regular):
+                    h.addWidget(widget, 0, col)
+                h.setColumnStretch(3, 1)
+            self._header_stacked = stacked
+        self._header.setFixedHeight(max(36, h.sizeHint().height()))
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 

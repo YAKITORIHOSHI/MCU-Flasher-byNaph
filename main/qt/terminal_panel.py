@@ -22,10 +22,11 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -96,6 +97,8 @@ class TerminalPanel(QWidget):
     Embeds the native xterm.js + ConPTY pywebview window via Win32 SetParent.
     """
 
+    control_failed = Signal(str)
+
     def __init__(self, backend=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._backend = backend
@@ -114,6 +117,11 @@ class TerminalPanel(QWidget):
         self._active_session_id: Optional[str] = None
         self._session_counter = 0
         self._pending_controls: list[tuple[str, Optional[str], Optional[dict]]] = []
+        self._control_queue = deque()
+        self._control_lock = threading.Lock()
+        self._control_worker_running = False
+        self._control_generation = 0
+        self.control_failed.connect(self._on_control_failed)
 
         self._current_theme = "default"
         self._current_font_size = 14
@@ -126,7 +134,8 @@ class TerminalPanel(QWidget):
         self._spin_idx = 0
 
         self._embed_poll_timer = QTimer(self)
-        self._embed_poll_timer.setInterval(60)
+        from src.modules.runtime_resources import performance_profile
+        self._embed_poll_timer.setInterval(120 if performance_profile().constrained else 60)
         self._embed_poll_timer.timeout.connect(self._poll_for_terminal_window)
         self._poll_attempts = 0
 
@@ -191,7 +200,7 @@ class TerminalPanel(QWidget):
         self._btn_add_tab = QPushButton("+ ▾")
         self._btn_add_tab.setObjectName("btn-terminal-add")
         self._btn_add_tab.setFixedSize(32, 20)
-        self._btn_add_tab.setToolTip("New Terminal (choose PowerShell or Command Prompt)")
+        self._btn_add_tab.setToolTip("Open PowerShell or Command Prompt, then run an installed coding CLI such as codex, claude, or opencode.")
         self._btn_add_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_add_tab.setStyleSheet("""
             QPushButton#btn-terminal-add {
@@ -293,13 +302,13 @@ class TerminalPanel(QWidget):
         self._loader_card = QFrame()
         self._loader_card.setStyleSheet("QFrame { background: #0a0e14; border: none; }")
         lv = QVBoxLayout(self._loader_card)
-        lv.setContentsMargins(20, 20, 20, 20)
-        lv.setSpacing(10)
+        lv.setContentsMargins(8, 8, 8, 8)
+        lv.setSpacing(6)
         lv.addStretch()
 
         self._spin_lbl = QLabel("⠋")
         self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._spin_lbl.setStyleSheet("font-size: 26px; color: #56cfbf;")
+        self._spin_lbl.setStyleSheet("font-size: 20px; color: #56cfbf;")
         lv.addWidget(self._spin_lbl)
 
         self._load_title = QLabel("Initializing Project Terminal…")
@@ -781,22 +790,54 @@ class TerminalPanel(QWidget):
             payload.update(extra)
         data = json.dumps(payload).encode("utf-8")
         url = f"http://127.0.0.1:{int(port)}/control"
+        with self._control_lock:
+            item = (self._control_generation, action, url, data)
+            # Coalesce geometry/style updates while preserving session actions.
+            if action in ("fit", "font", "theme") and self._control_queue and self._control_queue[-1][1] == action:
+                self._control_queue[-1] = item
+            elif len(self._control_queue) < 128:
+                self._control_queue.append(item)
+            else:
+                self.control_failed.emit("Terminal controls are still busy. Try again after the current request finishes.")
+                return
+            if self._control_worker_running:
+                return
+            self._control_worker_running = True
+        threading.Thread(target=self._drain_controls, daemon=True, name="TerminalSendControl").start()
 
-        def _worker():
+    def _drain_controls(self):
+        import urllib.request
+        while True:
+            with self._control_lock:
+                if not self._control_queue:
+                    self._control_worker_running = False
+                    return
+                generation, action, url, data = self._control_queue.popleft()
+                if generation != self._control_generation:
+                    continue
             try:
-                import urllib.request
-                req = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=2.0):
-                    pass
-            except Exception:
-                pass
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                with urllib.request.urlopen(req, timeout=2.0) as response:
+                    result = json.loads(response.read())
+                if result.get("success") is False:
+                    self._report_control_failure(generation, f"Terminal {action}: {result.get('error', 'request failed')}")
+            except (OSError, ValueError) as exc:
+                self._report_control_failure(generation, f"Terminal {action} could not be delivered: {exc}")
 
-        threading.Thread(target=_worker, daemon=True, name="TerminalSendControl").start()
+    def _report_control_failure(self, generation, message):
+        with self._control_lock:
+            if generation != self._control_generation:
+                return
+            try:
+                self.control_failed.emit(message)
+            except RuntimeError:
+                # The Qt container can be deleted while an IPC request ends.
+                return
+
+    def _on_control_failed(self, message):
+        self._status_dot.setToolTip(message)
+        if self._backend and hasattr(self._backend, "emit"):
+            self._backend.emit("console:log", {"text": message, "tag": "error", "newline": True})
 
     def _flush_pending_controls(self) -> None:
         if not self._port or not self._pending_controls:
@@ -1105,12 +1146,14 @@ class TerminalPanel(QWidget):
         self._apply_panel_theme(theme_name)
         payload = self._build_terminal_theme_payload(theme_name)
         self._send_control("theme", extra={"theme": payload})
+        self._send_control("font", extra={"size": self._current_font_size})
 
     def set_font_size(self, size: int) -> None:
         try:
-            self._current_font_size = int(size)
+            self._current_font_size = max(6, min(48, int(size)))
         except (ValueError, TypeError):
             self._current_font_size = 14
+        self._send_control("font", extra={"size": self._current_font_size})
 
     def connect_signals(self, sig_bus) -> None:
         if hasattr(sig_bus, "font_size_changed"):
@@ -1143,6 +1186,10 @@ class TerminalPanel(QWidget):
     # ── Cleanup & Shutdown ───────────────────────────────────────────────────
     def _stop_shell(self) -> None:
         """Cleanly terminate child process tree on shutdown."""
+        with self._control_lock:
+            self._control_generation += 1
+            self._control_queue.clear()
+        self._pending_controls.clear()
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()
         self._spin_timer.stop()

@@ -6,6 +6,30 @@ license: Complete terms in LICENSE.txt
 
 # Frontend Design
 
+## MCU Flasher workspace contract
+
+For this application's Qt/Monaco UI, refine the existing smoked/frosted glass
+palette and Montserrat navigation rather than introducing website sections.
+Keep board/port selection in Controls and keep the editor dominant; do not add
+a target-board banner. Use static gradients and theme tokens, opaque reading
+surfaces, clear selected tabs and separate keyboard focus. Avoid compositor blur
+and continuous animation on four/six-core devices. Preserve source-tab dirty
+indicators, drag order and buffer identity. Capture compact/wide and dark/light
+layouts, check native widget ownership, and verify only explicitly requested
+dialogs or Detach Editor actions open additional windows.
+Carry the same palette into native setup and the Tk downloader. Keep utility
+screens focused on logs or package lists; advanced index URLs can be collapsed.
+Check selected-tab and button contrast in all three palettes, including after
+a sleeping downloader is reopened. Coalesce static card redraws on resize.
+Use Qt logical coordinates without multiplying by DPI or devicePixelRatio;
+Tk uses native pixel/point metrics. Reduce chrome spacing before reducing text.
+Preserve saved content fonts, reflow rows from their content budgets, and fit
+complete window frames to the current monitor's work area. Check at 100–200%
+scaling with `direct/verify_responsive.py`; scroll short dialogs and details.
+Reserve short-screen height for tool navigation and the active panel's controls;
+let scrollable output shrink before headers. Review every tool tab, not only
+Build and Serial.
+
 Approach this as the design lead at a design studio known for giving every client a distinct visual identity that is not mistaken for anyone else's. This client has already rejected proposals that felt cliché or templated, and is paying for a distinctive point of view: make deliberate, opinionated choices about palette, typography, and layout that are specific to this brief, and take aesthetic risk if justified.
 
 ## Ground your designs in the subject matter

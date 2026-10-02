@@ -10,7 +10,8 @@ leave child interpreters behind.
 
 Called by MCU-Flash-GUI.vbs. On a fresh system this runs
 once with a visible console window showing progress.
-Every launch runs the Bootstrap verification before the main GUI opens.
+Verified warm launches use a local health snapshot. First runs, changed
+installations, explicit repair and recorded crashes run dependency verification.
 """
 
 import hashlib
@@ -232,11 +233,25 @@ def load_bootstrap_config() -> dict:
     return {}
 
 def save_bootstrap_config(cfg: dict) -> bool:
+    """Keep the previous setup preferences intact if replacement fails."""
+    import tempfile
+    temporary = None
     try:
-        BOOTSTRAP_CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        BOOTSTRAP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=BOOTSTRAP_CONFIG_FILE.parent,
+                                         prefix=BOOTSTRAP_CONFIG_FILE.name + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(cfg, indent=2))
+        os.replace(temporary, BOOTSTRAP_CONFIG_FILE)
         return True
     except Exception:
         return False
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _update_check_skip_reason(gui=None) -> str | None:
@@ -1331,29 +1346,21 @@ if HAS_PYSIDE6_BOOTSTRAP:
             self._live_block_type: Optional[str] = None
             self.setWindowTitle("MCU Flasher by Naph — Setup")
             self.setObjectName("BootstrapDialog")
+            try:
+                from main.qt.theme import register_fonts
+                register_fonts()
+            except ImportError:
+                pass  # Standalone setup can still use the system UI font.
+            self.setFont(QFont("Montserrat", 10))
 
-            # Fixed dimensions derived from user screen dimensions (~70% of usable display), strictly non-resizable
-            screen = QApplication.primaryScreen()
-            if screen:
-                avail = screen.availableGeometry()
-                sw, sh = avail.width(), avail.height()
-                sx, sy = avail.x(), avail.y()
-            else:
-                sw, sh = 1920, 1080
-                sx, sy = 0, 0
-
-            width = min(sw - 32, max(520, int(sw * 0.70)))
-            height = min(sh - 48, max(420, int(sh * 0.70)))
-            self.setFixedSize(width, height)
-            self.setSizeGripEnabled(False)
-            flags = self.windowFlags()
-            flags &= ~Qt.WindowType.WindowMaximizeButtonHint
-            flags |= Qt.WindowType.MSWindowsFixedSizeDialogHint
-            self.setWindowFlags(flags)
-
-            x = sx + max(0, (sw - width) // 2)
-            y = sy + max(0, (sh - height) // 2)
-            self.move(x, y)
+            # Qt geometry is already scaled to logical pixels.
+            from main.qt.responsive import fit_dialog, ScreenWatcher
+            fit_dialog(self, (900, 660), (340, 300))
+            self._screen_watcher = ScreenWatcher(self)
+            self.setSizeGripEnabled(True)
+            from src.modules.runtime_resources import performance_profile
+            self._constrained = performance_profile().constrained
+            self._display_char_limit = 256000 if self._constrained else 1000000
 
             # Window icon
             try:
@@ -1401,14 +1408,21 @@ if HAS_PYSIDE6_BOOTSTRAP:
 
             base_style = f"""
                 QDialog#BootstrapDialog {{
-                    background-color: {bg_dark};
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_mid}, stop:1 {bg_darkest});
                     color: {text};
                     font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
                 }}
+                QFrame#setupHeader, QFrame#setupFooter {{
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_light}, stop:1 {bg_dark});
+                    border: 1px solid {border};
+                    border-top: 1px solid {border_lit};
+                    border-radius: 12px;
+                }}
+                QLabel {{ background: transparent; border: none; color: {text}; }}
                 QLabel#titleLabel {{
-                    color: {cyan};
+                    color: {text_bright};
                     font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-size: 14px;
+                    font-size: 17px;
                     font-weight: bold;
                     letter-spacing: 0.5px;
                 }}
@@ -1422,6 +1436,10 @@ if HAS_PYSIDE6_BOOTSTRAP:
                     font-family: 'Consolas', monospace;
                     font-size: 12px;
                     font-weight: bold;
+                    background: {bg_darkest};
+                    border: 1px solid {border};
+                    border-radius: 8px;
+                    padding: 8px 12px;
                 }}
                 QLabel#spinLabel {{
                     color: {cyan};
@@ -1454,11 +1472,11 @@ if HAS_PYSIDE6_BOOTSTRAP:
                 QPlainTextEdit#logEdit {{
                     background-color: {bg_darkest};
                     border: 1px solid {border};
-                    border-radius: 6px;
+                    border-radius: 12px;
                     color: {text};
                     font-family: 'Consolas', 'Cascadia Code', monospace;
-                    font-size: 11px;
-                    padding: 8px;
+                    font-size: 12px;
+                    padding: 12px;
                 }}
                 /* ── High-Visibility Modern Pill ScrollBars ────────── */
                 QScrollBar:vertical {{
@@ -1528,7 +1546,7 @@ if HAS_PYSIDE6_BOOTSTRAP:
                     color: {text_bright};
                 }}
                 QCheckBox:focus {{
-                    outline: none;
+                    color: {cyan};
                 }}
                 QCheckBox::indicator {{
                     width: 15px;
@@ -1589,48 +1607,46 @@ if HAS_PYSIDE6_BOOTSTRAP:
             )
 
             layout = QVBoxLayout(self)
-            layout.setContentsMargins(18, 14, 18, 0)
-            layout.setSpacing(8)
+            layout.setContentsMargins(14, 14, 14, 10)
+            layout.setSpacing(10)
 
             # ── Header row ────────────────────────────────────────────────────
-            header_layout = QHBoxLayout()
+            header = QFrame(self)
+            header.setObjectName("setupHeader")
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(14, 12, 14, 12)
             title_col = QVBoxLayout()
             title_col.setSpacing(2)
 
-            self.title_lbl = QLabel("⚡  MCU Flasher by Naph", self)
+            self.title_lbl = QLabel("Runtime setup", self)
             self.title_lbl.setObjectName("titleLabel")
-            self.sub_lbl = QLabel("Setting up dependencies…", self)
+            self.sub_lbl = QLabel("MCU Flasher by Naph · Verify dependencies and prepare board tools", self)
+            self.sub_lbl.setWordWrap(True)
             self.sub_lbl.setObjectName("subLabel")
             title_col.addWidget(self.title_lbl)
             title_col.addWidget(self.sub_lbl)
-            header_layout.addLayout(title_col)
-
-            header_layout.addStretch()
+            header_layout.addLayout(title_col, stretch=1)
 
             self.timer_lbl = QLabel("⏱ 00:00", self)
             self.timer_lbl.setObjectName("timerLabel")
+            self.timer_lbl.setFixedWidth(96)
             header_layout.addWidget(self.timer_lbl)
-            layout.addLayout(header_layout)
-
-            # ── Divider line 1 ────────────────────────────────────────────────
-            div1 = QFrame(self)
-            div1.setStyleSheet(f"background-color: {border}; max-height: 1px; border: none;")
-            layout.addWidget(div1)
+            layout.addWidget(header)
 
             # ── Log edit ──────────────────────────────────────────────────────
             self.log_edit = QPlainTextEdit(self)
             self.log_edit.setObjectName("logEdit")
             self.log_edit.setReadOnly(True)
-            self.log_edit.setMaximumBlockCount(4000)
+            self.log_edit.setMaximumBlockCount(1000 if self._constrained else 4000)
             self.log_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
             layout.addWidget(self.log_edit, stretch=1)
 
-            # ── Divider line 2 ────────────────────────────────────────────────
-            div2 = QFrame(self)
-            div2.setStyleSheet(f"background-color: {border}; max-height: 1px; border: none;")
-            layout.addWidget(div2)
-
-            # ── Status bar (spinner + status + checkboxes + percentage) ────────
+            # Status and preferences occupy separate rows at compact widths.
+            footer = QFrame(self)
+            footer.setObjectName("setupFooter")
+            footer_layout = QVBoxLayout(footer)
+            footer_layout.setContentsMargins(14, 12, 14, 12)
+            footer_layout.setSpacing(10)
             status_row = QHBoxLayout()
             status_row.setContentsMargins(0, 2, 0, 4)
             status_row.setSpacing(10)
@@ -1641,31 +1657,34 @@ if HAS_PYSIDE6_BOOTSTRAP:
 
             self.status_lbl = QLabel(gui._status_text, self)
             self.status_lbl.setObjectName("statusLabel")
-            status_row.addWidget(self.status_lbl)
+            self.status_lbl.setWordWrap(True)
+            status_row.addWidget(self.status_lbl, stretch=1)
 
-            status_row.addStretch()
+            options_row = QHBoxLayout()
+            options_row.setSpacing(12)
 
             # Skip Updates checkbox
             self.skip_cb = QCheckBox("Skip Updates", self)
             self.skip_cb.setChecked(bool(gui._skip_updates))
             self.skip_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.skip_cb.setToolTip("Skip online toolchain and platform update checks on launch")
+            self.skip_cb.setToolTip("Skip optional online updates. Missing or broken required dependencies are still repaired.")
             self.skip_cb.toggled.connect(self._on_skip_toggled)
-            status_row.addWidget(self.skip_cb)
+            options_row.addWidget(self.skip_cb)
 
             # Auto-Scroll checkbox (default checked)
             self.auto_scroll_cb = QCheckBox("Auto-Scroll", self)
             self.auto_scroll_cb.setChecked(True)
             self.auto_scroll_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.auto_scroll_cb.setToolTip("Automatically keep the build log scrolled to the latest output")
-            status_row.addWidget(self.auto_scroll_cb)
+            self.auto_scroll_cb.setToolTip("Keep the setup log scrolled to the latest output")
+            options_row.addWidget(self.auto_scroll_cb)
+            options_row.addStretch()
 
             # Percentage label
             self.pct_lbl = QLabel("0%", self)
             self.pct_lbl.setObjectName("pctLabel")
             status_row.addWidget(self.pct_lbl)
 
-            layout.addLayout(status_row)
+            footer_layout.addLayout(status_row)
 
             # ── Progress bar (at the very bottom, full width edge-to-edge) ───
             self.prog_bar = QProgressBar(self)
@@ -1673,13 +1692,15 @@ if HAS_PYSIDE6_BOOTSTRAP:
             self.prog_bar.setValue(0)
             self.prog_bar.setTextVisible(False)
             self.prog_bar.setFixedHeight(6)
-            layout.addWidget(self.prog_bar)
+            footer_layout.addWidget(self.prog_bar)
+            footer_layout.addLayout(options_row)
+            layout.addWidget(footer)
 
             # Timers for elapsed timer and animated spinner
             self._spin_idx = 0
             self._spinner_timer = QTimer(self)
             self._spinner_timer.timeout.connect(self._tick_spinner)
-            self._spinner_timer.start(90)
+            self._spinner_timer.start(180 if self._constrained else 100)
 
             self._clock_timer = QTimer(self)
             self._clock_timer.timeout.connect(self._tick_clock)
@@ -1700,8 +1721,10 @@ if HAS_PYSIDE6_BOOTSTRAP:
 
         def _unset_topmost(self):
             try:
+                visible = self.isVisible() and not getattr(self._gui, "_closed", False)
                 self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
-                self.show()
+                if visible:
+                    self.show()
             except Exception:
                 pass
 
@@ -1716,26 +1739,32 @@ if HAS_PYSIDE6_BOOTSTRAP:
             self.timer_lbl.setText(t_str)
 
         def _tick_spinner(self):
-            if getattr(self._gui, "_spinning", True):
+            if self.isVisible() and getattr(self._gui, "_spinning", True):
                 self.spin_lbl.setText(_BootstrapDialog.SPINNER[self._spin_idx % len(_BootstrapDialog.SPINNER)])
                 self._spin_idx += 1
 
         def _on_skip_toggled(self, checked: bool):
+            previous = self._gui._skip_updates
             self._gui._skip_updates = checked
             try:
                 c = load_bootstrap_config()
                 c["skip_updates"] = checked
-                save_bootstrap_config(c)
-            except Exception:
-                pass
+                if not save_bootstrap_config(c):
+                    raise OSError("Configuration is not writable")
+            except (OSError, TypeError, ValueError) as error:
+                self._gui._skip_updates = previous
+                self.skip_cb.blockSignals(True)
+                self.skip_cb.setChecked(previous)
+                self.skip_cb.blockSignals(False)
+                self._on_log(f"Skip Updates was not saved: {error}. Check folder permissions and try again.", "warn")
 
-        def _insert_with_bar_styling(self, cursor: QTextCursor, text: str, default_fmt: QTextCharFormat, color: str = "#00e5ff"):
+        def _insert_with_bar_styling(self, cursor: QTextCursor, text: str, default_fmt: QTextCharFormat, color: Optional[str] = None):
             """Insert text with enlarged, bold glyph formatting for any progress bar characters."""
             if "▰" not in text and "▱" not in text:
                 cursor.insertText(text, default_fmt)
                 return
             bar_fmt = QTextCharFormat()
-            bar_fmt.setForeground(QColor(color))
+            bar_fmt.setForeground(QColor(color or self._theme_pal["T_CYAN"]))
             bar_fmt.setFontFamilies(["Segoe UI Symbol", "Segoe UI Variable Static Display", "Consolas", "monospace"])
             bar_fmt.setFontPointSize(12.0)
             bar_fmt.setFontWeight(QFont.Weight.Bold)
@@ -1750,6 +1779,9 @@ if HAS_PYSIDE6_BOOTSTRAP:
 
         @Slot(str, str)
         def _on_log(self, text: str, tag: str):
+            self._sync_live_block()
+            if len(text) > 8192:
+                text = text[:8192] + " … [display shortened; full output retained in the setup log]"
             pal = getattr(self, "_theme_pal", _T_PALETTE)
             green    = pal.get("T_GREEN", "#10b981")
             yellow   = pal.get("T_YELLOW", "#f59e0b")
@@ -1787,19 +1819,22 @@ if HAS_PYSIDE6_BOOTSTRAP:
                 pos = min(self._live_block_start, max(0, doc.characterCount() - 1))
                 cursor.setPosition(pos)
                 self._insert_with_bar_styling(cursor, msg, fmt, color)
-                inserted = cursor.position() - pos
-                self._live_block_start = pos + inserted
             else:
                 cursor = QTextCursor(doc)
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 self._insert_with_bar_styling(cursor, msg, fmt, color)
 
+            self._sync_live_block()
+
+            self._trim_display()
             if self.auto_scroll_cb.isChecked():
                 sb = self.log_edit.verticalScrollBar()
                 sb.setValue(sb.maximum())
 
         @Slot(str, str)
         def _on_update_block(self, block_type: str, table_text: str):
+            self._sync_live_block()
+            table_text = table_text[:65536]
             if not table_text.strip():
                 return
             doc = self.log_edit.document()
@@ -1810,7 +1845,8 @@ if HAS_PYSIDE6_BOOTSTRAP:
             self._live_block_type = block_type
 
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor("#00e5ff"))
+            cyan = self._theme_pal["T_CYAN"]
+            fmt.setForeground(QColor(cyan))
             fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
 
             cursor = QTextCursor(doc)
@@ -1828,18 +1864,45 @@ if HAS_PYSIDE6_BOOTSTRAP:
                 self._live_block_start = cursor.position()
 
             start_pos = cursor.position()
-            self._insert_with_bar_styling(cursor, table_text, fmt, "#00e5ff")
-            self._live_block_len = cursor.position() - start_pos
+            self._insert_with_bar_styling(cursor, table_text, fmt, cyan)
+            # Persistent cursors follow insertion and removal of old log lines.
+            # Integer offsets alone become stale when maximumBlockCount trims.
+            self._live_end_cursor = QTextCursor(cursor)
+            self._live_start_cursor = QTextCursor(doc)
+            self._live_start_cursor.setPosition(max(0, cursor.position() - len(table_text.encode("utf-16-le")) // 2))
+            self._sync_live_block()
 
+            self._trim_display()
             if self.auto_scroll_cb.isChecked():
                 sb = self.log_edit.verticalScrollBar()
                 sb.setValue(sb.maximum())
 
-        @Slot()
-        def _on_commit_block(self):
+        def _sync_live_block(self):
+            start = getattr(self, "_live_start_cursor", None)
+            end = getattr(self, "_live_end_cursor", None)
+            if start is not None and end is not None:
+                self._live_block_start = start.position()
+                self._live_block_len = max(0, end.position() - start.position())
+
+        def _trim_display(self):
+            doc = self.log_edit.document()
+            excess = doc.characterCount() - self._display_char_limit - 1
+            if excess > 0:
+                cursor = QTextCursor(doc)
+                cursor.setPosition(0)
+                cursor.setPosition(excess, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                self._sync_live_block()
+
+        def _forget_live_block(self):
+            self._live_start_cursor = self._live_end_cursor = None
             self._live_block_start = None
             self._live_block_len = 0
             self._live_block_type = None
+
+        @Slot()
+        def _on_commit_block(self):
+            self._forget_live_block()
             doc = self.log_edit.document()
             cursor = QTextCursor(doc)
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -1847,6 +1910,7 @@ if HAS_PYSIDE6_BOOTSTRAP:
 
         @Slot()
         def _on_clear_block(self):
+            self._sync_live_block()
             if self._live_block_start is not None and self._live_block_len > 0:
                 doc = self.log_edit.document()
                 if self._live_block_start < doc.characterCount():
@@ -1855,9 +1919,7 @@ if HAS_PYSIDE6_BOOTSTRAP:
                     end_pos = min(self._live_block_start + self._live_block_len, doc.characterCount() - 1)
                     cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
                     cursor.removeSelectedText()
-            self._live_block_start = None
-            self._live_block_len = 0
-            self._live_block_type = None
+            self._forget_live_block()
 
         @Slot(str)
         def _on_status(self, text: str):
@@ -1873,7 +1935,8 @@ if HAS_PYSIDE6_BOOTSTRAP:
         def _on_stop_spinner(self, done_text: str, ok: bool):
             self._spinner_timer.stop()
             self.spin_lbl.setText("✔" if ok else "✖")
-            self.spin_lbl.setStyleSheet("color: #10b981; font-size: 13px; font-weight: bold;" if ok else "color: #ef4444; font-size: 13px; font-weight: bold;")
+            color = self._theme_pal["T_GREEN" if ok else "T_RED"]
+            self.spin_lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold;")
             self.status_lbl.setText(done_text)
 
         @Slot(object, tuple)
@@ -1904,6 +1967,8 @@ if HAS_PYSIDE6_BOOTSTRAP:
         @Slot()
         def _on_close(self):
             self._allow_close = True
+            self._spinner_timer.stop()
+            self._clock_timer.stop()
             self.close()
 
 
@@ -1952,6 +2017,7 @@ class BootstrapGUI:
         self._closed = False
         self._spinning = True
         self._log_history: list[dict] = []
+        self._log_history_chars = 0
         self._theme_mode = _BOOTSTRAP_THEME_MODE
 
         cfg = load_bootstrap_config()
@@ -1968,11 +2034,9 @@ class BootstrapGUI:
             if app is None:
                 app = QApplication(sys.argv if sys.argv else [""])
             try:
-                from PySide6.QtGui import QFontDatabase, QFont
-                fonts_dir = SCRIPT_DIR / "src" / "fonts" / "Montserrat"
-                if fonts_dir.exists():
-                    for ttf in fonts_dir.rglob("*.ttf"):
-                        QFontDatabase.addApplicationFont(str(ttf.resolve()))
+                from PySide6.QtGui import QFont
+                from main.qt.theme import register_fonts
+                register_fonts()
                 app_font = QFont("Montserrat", 10)
                 app_font.setStyleHint(QFont.StyleHint.SansSerif)
                 app.setFont(app_font)
@@ -1984,12 +2048,14 @@ class BootstrapGUI:
 
     def _append(self, text: str, tag: str = "normal"):
         _record_bootstrap_log(tag.upper(), text)
-        item = {"text": text, "tag": tag}
+        shown = text if len(text) <= 8192 else text[:8192] + " … [display shortened; full output retained in the setup log]"
+        item = {"text": shown, "tag": tag}
         self._log_history.append(item)
-        if len(self._log_history) > 2500:
-            self._log_history.pop(0)
+        self._log_history_chars += len(shown)
+        while self._log_history and (len(self._log_history) > 2500 or self._log_history_chars > 256000):
+            self._log_history_chars -= len(self._log_history.pop(0)["text"])
         if self._signals:
-            self._signals.sig_log.emit(text, tag)
+            self._signals.sig_log.emit(shown, tag)
         else:
             print(text)
 
@@ -9751,7 +9817,7 @@ def _is_env_healthy() -> bool:
 # changed app/runtime fingerprint, or unreadable snapshot falls back to the
 # existing setup UI.  No network, installer, or optional-package import is
 # performed while deciding the normal path.
-STARTUP_HEALTH_SCHEMA = 2
+STARTUP_HEALTH_SCHEMA = 3
 
 
 def _user_startup_state_dir() -> Path:
@@ -9775,7 +9841,7 @@ def _user_startup_state_dir() -> Path:
 
 
 STARTUP_HEALTH_FILE = _user_startup_state_dir() / "startup_health.json"
-_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial",)
+_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial", "psutil", "shiboken6", "PySide6", "platformio", "websockets")
 
 
 def _startup_app_fingerprint() -> str:
@@ -9810,6 +9876,16 @@ def _startup_installation_identity() -> str:
 def _startup_site_packages_dir() -> Path | None:
     """Resolve the current runtime or venv site-packages directory without importing it."""
     current = Path(sys.executable).resolve()
+
+    # Match _spawn_main_gui's preferred runtime. A healthy private Python may
+    # launch the installed venv; validating the unused site's packages would
+    # incorrectly force setup on every launch after a move or repair.
+    venv_dir = SCRIPT_DIR / "env"
+    venv_site = venv_dir / "Lib" / "site-packages"
+    if sys.platform == "win32" and venv_site.is_dir() and any(
+        (venv_dir / "Scripts" / name).is_file() for name in ("pythonw.exe", "python.exe")
+    ):
+        return venv_site
     
     # 1. Check current runtime directory (e.g. src/_python/Lib/site-packages)
     runtime_site = current.parent / "Lib" / "site-packages"
@@ -9835,8 +9911,17 @@ def _startup_required_paths() -> list[Path]:
     """Return only files needed to construct the current main GUI shell."""
     site = _startup_site_packages_dir()
     paths = [Path(sys.executable), GUI_SCRIPT]
+    paths.extend(SCRIPT_DIR / name for name in (
+        "src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js",
+        "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
+    ))
     if site is not None:
         paths.extend(site / name for name in _STARTUP_REQUIRED_PACKAGE_DIRS)
+        if sys.platform == "win32":
+            paths.extend(site / "PySide6" / name for name in (
+                "QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtWebChannel.pyd", "QtWebEngineCore.pyd", "QtWebEngineWidgets.pyd",
+            ))
+            paths.append(site / "winpty")
     return paths
 
 
@@ -9908,7 +9993,7 @@ def _write_startup_health_snapshot() -> bool:
 
 def _explicit_setup_requested() -> bool:
     """Return true when the caller intentionally requested repair/setup."""
-    requested = {"--repair", "--setup", "--force-setup", "--force-repair"}
+    requested = {"--repair", "--setup", "--force-setup", "--force-repair", "--reinstall"}
     if any(str(arg).lower() in requested for arg in sys.argv[1:]):
         return True
     return (SCRIPT_DIR / ".force_rebuild").exists()
@@ -10019,19 +10104,8 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             launch_env["PATH"] = str(venv_scripts) + os.pathsep + cur_path
             launch_env["VIRTUAL_ENV"] = str(venv_dir)
 
-        # Disable Chromium WebEngine background throttling on hidden/occluded/pre-warmed views
-        _existing_flags = launch_env.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-        _no_throttle_flags = [
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-features=CalculateNativeWinOcclusion",
-        ]
-        _merged_flags = _existing_flags
-        for _f in _no_throttle_flags:
-            if _f not in _merged_flags:
-                _merged_flags = f"{_merged_flags} {_f}".strip()
-        launch_env["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
+        # The GUI applies the detected CPU/RAM policy before loading WebEngine.
+        # Preserve the caller's flags; hidden views may throttle on small PCs.
 
         try:
             popen_func = getattr(sp, "_orig_popen", sp.Popen)
@@ -10071,11 +10145,26 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
 
 
 def _try_fast_normal_launch() -> bool:
-    """Bootstrap verification is mandatory and must not be bypassed on initial startup.
-    Full verification runs on the initial launch before the main GUI opens.
-    Bootstrap bypass only applies when another main GUI window is already active
-    (second window launch via _is_main_gui_running).
-    """
+    """Launch a verified installation locally; fall back to repair on failure."""
+    if _explicit_setup_requested() or _read_startup_health_snapshot() is None:
+        return False
+    try:
+        from crash_detector import detect_previous_crash
+        if detect_previous_crash().get("crashed"):
+            return False
+        proc, _log = _spawn_main_gui()
+        if proc is None:
+            return False
+        try:
+            exit_code = proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return True
+        if exit_code == 0:
+            return True  # A user may close the picker immediately.
+        STARTUP_HEALTH_FILE.unlink(missing_ok=True)
+        _record_bootstrap_log("RECOVERY", f"Warm launch exited with code {exit_code}; running dependency repair.")
+    except Exception as exc:
+        _record_bootstrap_log("WARN", f"Warm launch unavailable: {exc}")
     return False
 
 
@@ -11219,7 +11308,7 @@ def main():
         )
 
     # ── Launch Bootstrap GUI Window ─────────────────────────────────
-    # Bootstrap setup is mandatory and runs its verification checks before launching the main GUI.
+    # Cold/invalid/crashed installations run verification before launching the GUI.
     import threading
 
     gui = BootstrapGUI()

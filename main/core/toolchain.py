@@ -22,6 +22,9 @@ _PIO_EXECUTABLE_CACHE: list[str] | None = None
 def _get_bootstrap() -> Any:
     """Import (once) and cache the bootstrap module, or return None on failure."""
     global _bootstrap_module
+    if sys.platform.startswith("linux"):
+        # The Windows installer/bootstrap is never a Linux dependency.
+        return None
     if _bootstrap_module is None:
         try:
             # pyrefly: ignore [missing-import]
@@ -40,6 +43,9 @@ def ensure_platformio_penv_with_hook(*args, **kwargs):
 
 
 def _bootstrap_find_arduino_cli():
+    if sys.platform.startswith("linux"):
+        import shutil
+        return shutil.which("arduino-cli")
     b = _get_bootstrap()
     if b is None:
         return None
@@ -47,6 +53,8 @@ def _bootstrap_find_arduino_cli():
 
 
 def _bootstrap_ensure_arduino_cli():
+    if sys.platform.startswith("linux"):
+        return _bootstrap_find_arduino_cli()
     b = _get_bootstrap()
     if b is None:
         return None
@@ -86,6 +94,13 @@ def prepare_platformio_board_toolchain(
     **callbacks,
 ):
     """Delegate on-demand board preparation to the shared bootstrap runner."""
+    if sys.platform.startswith("linux"):
+        # pio run installs native platform/framework packages using its own
+        # resolver. Do not reuse or unzip Windows toolchains on Ubuntu.
+        status = callbacks.get("on_status")
+        if status:
+            status("PlatformIO will resolve native Linux packages during the build.")
+        return find_pio_executable() is not None
     b = _get_bootstrap()
     if b is None:
         return False
@@ -111,6 +126,10 @@ def ensure_scons_ready(core_dir: str | Path | None = None) -> bool:
     avoids mid-compile "Preparing required core framework" console noise.
     """
     import json
+
+    if sys.platform.startswith("linux"):
+        # Let PlatformIO verify package manifests rather than fabricating .piopm.
+        return find_pio_executable() is not None
 
     if core_dir is None:
         core_dir = os.environ.get("PLATFORMIO_CORE_DIR", "")
@@ -470,6 +489,9 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     this exact project-local store. Any inherited path resolving somewhere else
     is ignored; it is never adopted, migrated, or treated as related state.
     """
+    if sys.platform.startswith("linux"):
+        from src.modules.platform_runtime import native_platformio_dir
+        return str(native_platformio_dir())
     target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -513,6 +535,8 @@ def _neutralize_conflicting_global_platformio_config() -> None:
     We only ever comment out a conflicting core_dir line -- we never delete
     the old store itself, so nothing another tool relies on there is lost.
     """
+    if sys.platform.startswith("linux"):
+        return
     try:
         global_ini = Path.home() / ".platformio" / "platformio.ini"
         if not global_ini.is_file():
@@ -658,6 +682,11 @@ def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple
     fallback if Windows refuses the junction operation.
     """
     _ensure_platformio_environment_for_build(script_dir)
+    if sys.platform.startswith("linux"):
+        native = Path(_get_safe_platformio_core_dir(script_dir))
+        native.mkdir(parents=True, exist_ok=True)
+        os.environ["PLATFORMIO_CORE_DIR"] = str(native)
+        return native, False
     target_dir = Path(script_dir) / "src" / ".platformio-mcu-gui"
     configured_raw = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
     configured_valid = False
@@ -740,7 +769,7 @@ def _available_memory_gb() -> float | None:
 def _system_reserved_cpu_count(total_cpus: int) -> int:
     """Reserve more UI/system headroom on midrange and faster processors."""
     total_cpus = max(1, int(total_cpus or 1))
-    if total_cpus >= 8:
+    if total_cpus >= 4:
         return 2
     if total_cpus > 1:
         return 1
@@ -748,18 +777,26 @@ def _system_reserved_cpu_count(total_cpus: int) -> int:
 
 
 def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = None,
-                                available_gb: float | None = None) -> int:
+                                available_gb: float | None = None,
+                                physical_cpus: int | None = None) -> int:
     """Return a build/background concurrency level that will not swamp small PCs.
 
     Compiler processes are memory-heavy, so CPU count alone is not a safe
-    multiplier. Reserve one logical CPU on low-end/midrange systems or two on systems
-    with 8+ logical CPUs for Tk/WebView/serial handling, then cap workers by
+    multiplier. Reserve two logical CPUs on systems with 4+ logical CPUs
+    for the editor, terminal, serial monitor and OS, then cap workers by
     currently available RAM (~300-350 MB per compiler job).
     When ample RAM (>=4GB free) is available, scale workers up to full CPU capacity.
     """
-    cpus = max(1, int(total_cpus or os.cpu_count() or 2))
+    from src.modules.runtime_resources import logical_cpu_count, physical_cpu_count
+    cpus = max(1, int(total_cpus or logical_cpu_count() or 1))
     memory_gb = _available_memory_gb() if available_gb is None else available_gb
     cpu_budget = max(1, cpus - _system_reserved_cpu_count(cpus))
+    if physical_cpus is None and (total_cpus is None or total_cpus == logical_cpu_count()):
+        physical_cpus = physical_cpu_count()
+    if physical_cpus:
+        # SMT siblings share execution resources. Small physical CPUs need
+        # headroom even when they advertise 8 or 12 logical threads.
+        cpu_budget = min(cpu_budget, max(1, physical_cpus))
     if memory_gb is not None:
         if memory_gb < 0.5:
             memory_budget = 1
@@ -921,7 +958,7 @@ def ensure_platformio() -> list[str] | None:
     try:
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "platformio"],
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     except Exception as e:
         print(f"[MCU Flasher] pip install platformio failed: {e}")
@@ -935,6 +972,10 @@ def ensure_platformio() -> list[str] | None:
 def find_arduino_cli_executable() -> str | None:
     """Locate the arduino-cli executable."""
     import shutil
+
+    if sys.platform != "win32":
+        # Never execute a copied Windows CLI or rewrite its Windows path cache.
+        return shutil.which("arduino-cli")
 
     # Check cached path file first
     script_dir = SCRIPT_DIR

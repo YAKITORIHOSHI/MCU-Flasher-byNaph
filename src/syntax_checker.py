@@ -7,11 +7,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 # ── CPU & Memory Optimization Engine ──────────────────────────────────────────
-# Freely utilize available CPU cores and RAM for high-throughput syntax checks.
+# Regex parsing is CPU bound under the GIL. Keep background workers small so
+# compilation, serial I/O and the UI retain CPU time on four/six-core systems.
 def get_optimal_worker_count() -> int:
-    """Detect available CPU cores and allocate optimal parallel threads freely."""
-    cpus = os.cpu_count() or 4
-    return min(32, max(4, cpus * 2))
+    """Use one background parser on constrained hardware, two otherwise."""
+    from src.modules.runtime_resources import performance_profile
+    return 1 if performance_profile().constrained else 2
 
 _SYNTAX_EXECUTOR = None
 _SYNTAX_EXECUTOR_LOCK = threading.Lock()
@@ -31,7 +32,20 @@ def get_syntax_executor() -> ThreadPoolExecutor:
 _CACHE_LOCK = threading.Lock()
 _SYNTAX_CODE_CACHE: dict[tuple[int, int, str], list[dict]] = {}
 _SYNTAX_FILE_CACHE: dict[tuple[str, int, int], list[dict]] = {}
-_MAX_CACHE_ENTRIES = 2048
+_MAX_CACHE_ENTRIES = 64
+_MAX_CACHE_DIAGNOSTICS = 8192
+
+
+def _remember_diagnostics(cache, key, errors):
+    """Bound both revision count and retained diagnostic objects under the lock."""
+    if len(errors) > _MAX_CACHE_DIAGNOSTICS:
+        return
+    cache.pop(key, None)
+    cache[key] = errors
+    total = sum(len(value) for value in cache.values())
+    while len(cache) > _MAX_CACHE_ENTRIES or total > _MAX_CACHE_DIAGNOSTICS:
+        old = cache.pop(next(iter(cache)))
+        total -= len(old)
 
 def clear_syntax_cache():
     """Clear all in-memory syntax check caches."""
@@ -781,9 +795,7 @@ def analyze_cpp_syntax(
 
     errors.sort(key=lambda x: (x["line"], x["col"]))
     with _CACHE_LOCK:
-        if len(_SYNTAX_CODE_CACHE) >= _MAX_CACHE_ENTRIES:
-            _SYNTAX_CODE_CACHE.clear()
-        _SYNTAX_CODE_CACHE[cache_key] = errors
+        _remember_diagnostics(_SYNTAX_CODE_CACHE, cache_key, errors)
     return errors
 
 
@@ -796,7 +808,7 @@ def analyze_file_syntax(
     file_path: Path | str,
     all_defined_functions: set[str] | None = None
 ) -> list[dict]:
-    """Analyze a single file with in-memory stat caching for zero-overhead rechecks."""
+    """Analyze one source file with a bounded cache keyed by its stat signature."""
     fp = Path(file_path) if not isinstance(file_path, Path) else file_path
     try:
         st = fp.stat()
@@ -816,9 +828,7 @@ def analyze_file_syntax(
         errors = []
 
     with _CACHE_LOCK:
-        if len(_SYNTAX_FILE_CACHE) >= _MAX_CACHE_ENTRIES:
-            _SYNTAX_FILE_CACHE.clear()
-        _SYNTAX_FILE_CACHE[file_key] = errors
+        _remember_diagnostics(_SYNTAX_FILE_CACHE, file_key, errors)
 
     return errors
 
@@ -828,19 +838,20 @@ def analyze_files_parallel(
     all_defined_functions: set[str] | None = None,
     max_workers: int | None = None
 ) -> list[dict]:
-    """Analyze multiple C++/Arduino files in parallel across all CPU cores."""
+    """Analyze root sources using the small shared background parser pool."""
     if not files:
         return []
+    if max_workers == 1:
+        results = [diag for f in files for diag in analyze_file_syntax(f, all_defined_functions)]
+        return sorted(results, key=lambda x: (x.get("file", ""), x.get("line", 0)))
     executor = get_syntax_executor()
-    futures = [
-        executor.submit(analyze_file_syntax, f, all_defined_functions)
-        for f in files
-    ]
     all_errors = []
-    for fut in futures:
-        try:
-            all_errors.extend(fut.result())
-        except Exception:
-            pass
+    for start in range(0, len(files), 16):
+        futures = [executor.submit(analyze_file_syntax, f, all_defined_functions) for f in files[start:start + 16]]
+        for fut in futures:
+            try:
+                all_errors.extend(fut.result())
+            except Exception:
+                pass
     all_errors.sort(key=lambda x: (x.get("file", ""), x.get("line", 0)))
     return all_errors

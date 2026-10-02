@@ -1,0 +1,84 @@
+name: Desktop compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Linux desktop libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0
+          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
+            sudo apt-get install -y libasound2t64
+          else
+            sudo apt-get install -y libasound2
+          fi
+      - name: Linux runtime and verification
+        if: runner.os == 'Linux'
+        run: |
+          bash -n direct/runThisOnUbuntu.sh
+          # Verification may run on a runner below the desktop's CPU minimum.
+          python -m venv .venv-linux
+          .venv-linux/bin/python -m pip install -r direct/requirements-ubuntu.txt
+          .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility
+          .venv-linux/bin/python -B direct/verify_performance.py
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_controls.py --render-dir temp/audit/compatibility
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_browser_loading.py
+          for scale in 1 1.25 1.5 2; do
+            xvfb-run -a env QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=$scale .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/compatibility/scale-$scale
+          done
+      - name: Windows runtime and verification
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv env
+          & env/Scripts/python.exe -m pip install 'PySide6>=6.7,<7' 'pyserial>=3.5,<4' 'psutil>=5.9,<8' 'platformio>=6.1,<7' 'requests>=2.31,<3' pywinpty websockets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_runtime.py --render-dir temp/audit/compatibility
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_terminal.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_performance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:QT_QPA_PLATFORM = 'windows'
+          & env/Scripts/python.exe -B direct/verify_controls.py --render-dir temp/audit/compatibility
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_browser_loading.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($scale in '1', '1.25', '1.5', '2') {
+            $env:QT_SCALE_FACTOR = $scale
+            & env/Scripts/python.exe -B direct/verify_responsive.py --render-dir "temp/audit/compatibility/scale-$scale"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          exit $LASTEXITCODE
+      - name: Desktop previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: temp/audit/compatibility/**/*.png
+          if-no-files-found: ignore

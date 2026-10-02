@@ -21,47 +21,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Disable Chromium WebEngine background throttling on hidden/occluded/pre-warmed views
-_existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-_no_throttle_flags = [
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding",
-    "--disable-features=CalculateNativeWinOcclusion",
-]
-_merged_flags = _existing_flags
-for _f in _no_throttle_flags:
-    if _f not in _merged_flags:
-        _merged_flags = f"{_merged_flags} {_f}".strip()
-
-# Low-end & HDD flags for Chromium WebEngine
-try:
-    import psutil
-    _mem_total = psutil.virtual_memory().total
-    _cpu_count = os.cpu_count() or 2
-    if (_mem_total < 5.5 * 1024 ** 3) or (_cpu_count <= 2):
-        _low_flags = [
-            "--enable-low-end-device-mode",
-            "--disable-gpu-watchdog",
-            "--num-raster-threads=1",
-            "--disable-gpu-shader-disk-cache",
-            "--disk-cache-size=1",
-            "--disable-component-update",
-        ]
-        for _f in _low_flags:
-            if _f not in _merged_flags:
-                _merged_flags = f"{_merged_flags} {_f}".strip()
-except Exception:
-    pass
-
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
-
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
-
-# Add src/modules to sys.path
 modules_path = SCRIPT_DIR / "src" / "modules"
-if str(modules_path) not in sys.path:
-    sys.path.insert(0, str(modules_path))
+for path in (SCRIPT_DIR, modules_path):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from src.modules.runtime_resources import enforce_minimum_cpu_requirement, configure_webengine_environment
+if not enforce_minimum_cpu_requirement():
+    raise SystemExit(1)
+configure_webengine_environment()
 
 # Strict enforcement: NEVER run with system/desktop Python
 from private_python_guard import enforce_private_python
@@ -83,38 +52,7 @@ def _user_state_dir() -> Path:
 
 _USER_STATE_DIR = _user_state_dir()
 
-_MINIMUM_LOGICAL_CORES = 4
-
-
-def _enforce_minimum_cpu_requirement() -> bool:
-    """Reject unsupported low-core systems before bootstrap work begins."""
-    try:
-        logical_cores = os.cpu_count()
-    except Exception:
-        logical_cores = None
-
-    if logical_cores is None or logical_cores >= _MINIMUM_LOGICAL_CORES:
-        return True
-
-    message = (
-        "MCU Flasher by Naph cannot run reliably on this computer.\n\n"
-        f"Detected logical CPU cores/threads: {logical_cores}\n"
-        f"Minimum required: {_MINIMUM_LOGICAL_CORES}\n\n"
-        "The editor, serial monitor, toolchain, and background services "
-        "require at least 4 logical CPU cores/threads.\n"
-        "Please enable more CPU cores or use a computer that meets the "
-        "minimum requirement, then start the app again."
-    )
-    try:
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            message,
-            "MCU Flasher by Naph — Unsupported Hardware",
-            0x10,  # MB_ICONERROR
-        )
-    except Exception:
-        pass
-    return False
+_enforce_minimum_cpu_requirement = enforce_minimum_cpu_requirement
 
 # Normal startup intentionally stays unelevated.  Bootstrap performs any
 # required machine-level operation through its own narrowly scoped UAC helper;
@@ -302,7 +240,7 @@ if __name__ == "__main__":
     if sys.platform != "win32":
         raise SystemExit("MCU Flasher launcher requires Windows 10 or newer.")
     if not _enforce_minimum_cpu_requirement():
-        sys.exit(0)
+        sys.exit(1)
 
     # Fast collision check: if opening an active project, switch to that window immediately
     try:

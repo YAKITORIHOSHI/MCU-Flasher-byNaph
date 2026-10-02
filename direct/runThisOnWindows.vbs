@@ -11,6 +11,44 @@ Dim fso, shell, scriptDir
 Set fso   = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 
+' Reject unsupported hardware before bootstrap, cleanup, or runtime repair.
+Dim logicalCores
+logicalCores = shell.Environment("PROCESS")("NUMBER_OF_PROCESSORS")
+If Not IsNumeric(logicalCores) Then
+    MsgBox "MCU Flasher cannot determine this computer's CPU thread count." & vbCrLf & _
+           "At least four logical CPU threads are required. Check Windows hardware information and restart.", _
+           vbCritical, "MCU Flasher - Incompatible Hardware"
+    WScript.Quit 1
+End If
+If CLng(logicalCores) < 4 Then
+    MsgBox "MCU Flasher cannot start on this computer." & vbCrLf & vbCrLf & _
+           "Detected logical CPU threads: " & logicalCores & vbCrLf & _
+           "Minimum required: 4", vbCritical, "MCU Flasher - Incompatible Hardware"
+    WScript.Quit 1
+End If
+
+' Use physical cores when Windows exposes them, including SMT processors.
+Dim physicalCores, cpuService, processors, processor
+physicalCores = 0
+On Error Resume Next
+Set cpuService = GetObject("winmgmts:\\.\root\cimv2")
+If Err.Number = 0 Then
+    Set processors = cpuService.ExecQuery("SELECT NumberOfCores FROM Win32_Processor")
+    For Each processor In processors
+        physicalCores = physicalCores + CLng(processor.NumberOfCores)
+    Next
+End If
+If Err.Number <> 0 Then physicalCores = 0
+Err.Clear
+On Error GoTo 0
+If physicalCores > 0 And physicalCores < 4 Then
+    MsgBox "MCU Flasher cannot start on this computer." & vbCrLf & vbCrLf & _
+           "Detected physical CPU cores: " & physicalCores & vbCrLf & _
+           "Detected logical threads: " & logicalCores & vbCrLf & _
+           "Minimum required: 4 CPU cores", vbCritical, "MCU Flasher - Incompatible Hardware"
+    WScript.Quit 1
+End If
+
 ' ── Locate the project root directory (supports running from direct\ or project root) ──
 Dim currentFolder
 currentFolder = fso.GetParentFolderName(WScript.ScriptFullName)

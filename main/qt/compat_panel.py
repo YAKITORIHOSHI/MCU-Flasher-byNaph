@@ -15,8 +15,9 @@ from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
-    QPushButton, QLabel, QLineEdit, QFrame,
+    QPushButton, QLabel, QLineEdit, QFrame, QSizePolicy,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 _TAG_COLORS: dict[str, str] = {
     "system":  "#56cfbf",
@@ -50,6 +51,7 @@ class CompatPanel(QWidget):
         # ── Header ───────────────────────────────────────────────────────────
         header = QWidget()
         header.setObjectName("compat-header")
+        header.setFixedHeight(34)
         h = QHBoxLayout(header)
         h.setContentsMargins(10, 4, 10, 4)
         h.setSpacing(8)
@@ -96,6 +98,8 @@ class CompatPanel(QWidget):
         # ── Output View ───────────────────────────────────────────────────────
         self._output = QPlainTextEdit()
         self._output.setReadOnly(True)
+        self._output.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._output.setMinimumHeight(24)
         self._output.setFont(_MONO_FONT)
         self._output.setObjectName("compat-console")
 

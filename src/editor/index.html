@@ -37,15 +37,18 @@
     }
 
     :root, body.theme-default {
-      --bg-darkest: #151922;
-      --bg-dark: #0f121a;
-      --bg-tab-hover: #171c28;
-      --border: #222938;
-      --border-tab: #1c212e;
-      --text: #e0e6ed;
-      --text-dim: #7f8c8d;
-      --accent: #00d2ff;
+      --bg-darkest: #101b2a;
+      --bg-dark: #18283b;
+      --bg-tab-hover: #2a415a;
+      --border: #425e79;
+      --border-tab: #324e69;
+      --text: #e3edf6;
+      --text-dim: #adc0d3;
+      --accent: #80d9ce;
       --dirty-dot: #ff9f00;
+      --tab-rim: rgba(227, 237, 246, 0.2);
+      --tab-selected: #29475a;
+      --tab-sheen: rgba(227, 237, 246, 0.055);
       --hover-bg: #161d27;
       --hover-code-bg: #0f121a;
       --hover-border: #2a3545;
@@ -77,6 +80,9 @@
       --text-dim: #57606a;
       --accent: #0969da;
       --dirty-dot: #bc4c00;
+      --tab-rim: #c2cdd8;
+      --tab-selected: #e2efff;
+      --tab-sheen: rgba(255, 255, 255, 0.6);
       --hover-bg: #ffffff;
       --hover-code-bg: #f6f8fa;
       --hover-border: #d0d7de;
@@ -108,6 +114,9 @@
       --text-dim: #8fa1b3;
       --accent: #39c5bb;
       --dirty-dot: #b58900;
+      --tab-rim: #285361;
+      --tab-selected: #0d414b;
+      --tab-sheen: rgba(255, 255, 255, 0.04);
       --hover-bg: #002b36;
       --hover-code-bg: #00212b;
       --hover-border: #094250;
@@ -149,11 +158,14 @@
     #tab-bar {
       display: flex;
       align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
       background: var(--bg-dark);
       border-bottom: 1px solid var(--border);
       overflow-x: auto;
       overflow-y: hidden;
-      height: 35px;
+      min-height: 46px;
+      padding: 6px 8px;
       box-sizing: border-box;
     }
 
@@ -169,15 +181,16 @@
       overflow-x: auto;
     }
 
-    #detached-action-bar.visible {
-      display: flex;
+    button:focus-visible, .tab:focus-visible, a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
     }
 
-    #detached-action-bar .toolbar-label {
-      color: var(--text-dim);
-      font-size: 11px;
-      font-weight: 700;
-      margin-right: 3px;
+    #detached-action-bar.visible {
+      display: flex;
     }
 
     #detached-action-bar .toolbar-divider {
@@ -189,9 +202,13 @@
     }
 
     #detached-action-bar button {
-      color: #f4f7fb;
-      border: 0;
-      padding: 5px 10px;
+      flex: 0 0 auto;
+      color: var(--text);
+      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
+      border: 1px solid var(--tab-rim);
+      border-radius: 8px;
+      min-height: 30px;
+      padding: 5px 12px;
       font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
       cursor: pointer;
     }
@@ -200,40 +217,18 @@
       opacity: 0.38;
       cursor: not-allowed;
       pointer-events: none;
-      filter: grayscale(0.5);
     }
 
     #detached-action-bar button:hover {
-      filter: brightness(1.18);
+      background: var(--bg-tab-hover);
+      border-color: var(--accent);
     }
 
-    #detached-action-bar .compile {
-      background: #2d7d46;
-    }
-
-    #detached-action-bar .upload {
-      background: #2077b0;
-    }
-
-    #detached-action-bar .stop {
-      background: #a03030;
-    }
-
-    #detached-action-bar .clean,
-    #detached-action-bar .reload {
-      background: #3a4555;
-    }
-
-    #detached-action-bar .save {
-      background: #2d7d46;
-    }
-
-    #detached-action-bar .save-all {
-      background: #8244a0;
-    }
-
-    #detached-action-bar .modify {
-      background: #1a7a70;
+    #detached-action-bar .compile:enabled,
+    #detached-action-bar .upload:enabled,
+    #detached-action-bar .save:enabled,
+    #detached-action-bar .save-all:enabled {
+      border-color: var(--accent);
     }
 
     #tab-bar::-webkit-scrollbar {
@@ -290,11 +285,14 @@
     .tab {
       display: flex;
       align-items: center;
+      flex: 0 0 auto;
       gap: 8px;
-      padding: 0 16px;
-      height: 100%;
-      background: var(--bg-dark);
-      border-right: 1px solid var(--border-tab);
+      padding: 0 11px;
+      min-height: 30px;
+      max-width: 260px;
+      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
+      border: 1px solid var(--tab-rim);
+      border-radius: 8px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 500;
@@ -302,7 +300,21 @@
       color: var(--text-dim);
       box-sizing: border-box;
       position: relative;
-      transition: all 0.2s ease;
+    }
+
+    .tab::before {
+      content: '';
+      flex: 0 0 14px;
+      height: 16px;
+      background: currentColor;
+      opacity: 0.85;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 18'%3E%3Cpath d='M3 1h6l4 4v12H3zM9 1v4h4M5 9h6M5 12h4' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+
+    .tab > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .tab:hover {
@@ -311,24 +323,19 @@
     }
 
     .tab.active {
-      background: var(--bg-darkest);
-      color: var(--accent);
+      background: linear-gradient(var(--tab-sheen), transparent), var(--tab-selected);
+      color: var(--text);
+      border-color: var(--accent);
+      box-shadow: inset 0 -2px 0 var(--accent);
       font-weight: 600;
     }
 
-    .tab.active::after {
-      content: '';
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background: var(--accent);
-    }
+    .tab.active::before { background: var(--accent); opacity: 1; }
 
     .tab .dirty-dot {
       width: 6px;
       height: 6px;
+      flex: 0 0 6px;
       background: var(--dirty-dot);
       border-radius: 50%;
       display: inline-block;
@@ -1005,6 +1012,8 @@
         opacity: 1;
       }
     }
+    .resource-constrained *, .resource-constrained *::before,
+    .resource-constrained *::after { animation: none !important; transition: none !important; }
   </style>
 </head>
 
@@ -1012,7 +1021,6 @@
 
   <div id="app-container">
     <div id="detached-action-bar" aria-label="Detached editor actions">
-      <span class="toolbar-label">ACTIONS</span>
       <button class="compile" data-action="compile">Compile</button>
       <button class="upload" data-action="upload">Upload</button>
       <button class="stop" data-action="stop">Stop</button>
@@ -1023,8 +1031,8 @@
       <button class="reload" data-action="reload">Reload</button>
       <button class="modify" data-action="modify">Modify</button>
     </div>
-    <div id="tab-bar"></div>
-    <div id="editor-container">
+    <div id="tab-bar" role="tablist" aria-label="Source files"></div>
+    <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
         <span id="ai-review-title" class="review-title">⚡ AI Review</span>
@@ -1049,6 +1057,27 @@
   <!-- Expose Monaco globally so themes and models can be managed dynamically -->
   <script>
     window.MonacoEnvironment = { globalAPI: true };
+    // Native Windows paths are case-insensitive; Linux source paths are not.
+    // Sharing this key avoids merging distinct Ubuntu files in tab/review logic.
+    window.projectPathKey = function (path) {
+      const key = String(path || '').replace(/\\/g, '/');
+      return /^[a-z]:\//i.test(key) || key.startsWith('//') ? key.toLowerCase() : key;
+    };
+    window.setPerformanceMode = function (constrained) {
+      document.documentElement.classList.toggle('resource-constrained', constrained);
+      let attempts = 0;
+      function apply() {
+        if (window.editorInstance) {
+          if (constrained) window.editorInstance.updateOptions({
+            minimap: {enabled: false}, smoothScrolling: false,
+            cursorBlinking: 'solid', cursorSmoothCaretAnimation: 'off'
+          });
+        } else if (++attempts < 30) {
+          setTimeout(apply, 100);
+        }
+      }
+      apply();
+    };
   </script>
   <!-- QWebChannel bridge for Qt / PySide6 embedded environment -->
   <script src="qwebchannel.js"></script>
@@ -1083,6 +1112,12 @@
               }
             })
           };
+          // The bundle also registers its raw loader for this event. Route
+          // startup through the coalesced loader so it cannot build duplicate
+          // models alongside the host's loadFinished refresh.
+          if (typeof window.loadProject === 'function') {
+            window.removeEventListener('pywebviewready', window.loadProject);
+          }
           window.dispatchEvent(new Event('pywebviewready'));
           if (typeof window.safeLoadProject === 'function') {
             window.safeLoadProject();
@@ -1091,7 +1126,13 @@
           }
         });
       }
-      initQtWebChannel();
+      // Let the bundle create its editor and startup listener before publishing
+      // the Qt API. Otherwise its DOMContentLoaded loader bypasses coalescing.
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(initQtWebChannel, 0), {once: true});
+      } else {
+        initQtWebChannel();
+      }
       window.__initQtWebChannel = initQtWebChannel;
     })();
   </script>
@@ -1112,21 +1153,38 @@
         if (projectLoadInFlight) return projectLoadInFlight;
         if (typeof originalLoadProject !== 'function') return Promise.resolve();
         projectLoadInFlight = Promise.resolve(originalLoadProject())
+          .then(async () => {
+            const api = window.pywebview && window.pywebview.api;
+            if (!api || !api.get_recovery_buffers) return;
+            const snapshots = await api.get_recovery_buffers();
+            const active = document.querySelector('#tab-bar .tab.active');
+            const activePath = active && active._filePath;
+            for (const [path, content] of Object.entries(snapshots || {})) {
+              if (!window.activateProjectFile || !window.activateProjectFile(path)) continue;
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              const model = window.editorInstance && window.editorInstance.getModel();
+              // Load disk content first so setValue marks the restored buffer
+              // as dirty through the bundle's normal edit/save lifecycle.
+              if (model && model.getValue() !== content) model.setValue(content);
+            }
+            if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
+            if (api.recovery_complete) await api.recovery_complete();
+          })
           .finally(() => { projectLoadInFlight = null; });
         return projectLoadInFlight;
       };
 
       function dedupeProjectTabs() {
-        const seen = new Set();
+        const seen = new Map();
         document.querySelectorAll('#tab-bar .tab').forEach((tab) => {
           const rawKey = tab._filePath || tab.getAttribute('data-file-path') || tab.id;
-          const key = String(rawKey || '').replace(/\\/g, '/').toLowerCase();
+          const key = window.projectPathKey(rawKey);
           if (!key || !seen.has(key)) {
-            if (key) seen.add(key);
+            if (key) seen.set(key, tab);
             return;
           }
           if (tab.classList.contains('active')) {
-            const first = document.querySelector('#tab-bar .tab');
+            const first = seen.get(key);
             if (first && first !== tab) first.click();
           }
           tab.remove();
@@ -1137,6 +1195,48 @@
       const projectTabBar = document.getElementById('tab-bar');
       if (projectTabBar) {
         new MutationObserver(dedupeProjectTabs).observe(projectTabBar, { childList: true });
+
+        // Enhance the offline bundle's native file tabs without replacing its
+        // models, dirty state or drag ordering. One selected tab enters the
+        // keyboard sequence; arrows/Home/End activate neighbouring files.
+        function syncProjectTabState() {
+          const tabs = Array.from(projectTabBar.querySelectorAll('.tab'));
+          const active = tabs.find(tab => tab.classList.contains('active')) || tabs[0];
+          for (const tab of tabs) {
+            const selected = tab === active;
+            const label = tab.querySelector('span:first-child')?.textContent || 'Source file';
+            const dot = tab.querySelector('.dirty-dot');
+            const dirty = Boolean(dot && dot.style.display !== 'none');
+            tab.setAttribute('role', 'tab');
+            tab.setAttribute('aria-controls', 'editor-container');
+            tab.setAttribute('aria-selected', String(selected));
+            tab.setAttribute('aria-label', label + (dirty ? ', unsaved changes' : ''));
+            tab.tabIndex = selected ? 0 : -1;
+            const title = (tab._filePath || label) + (dirty ? '\nUnsaved changes' : '');
+            if (tab.title !== title) tab.title = title;
+          }
+        }
+        new MutationObserver(syncProjectTabState).observe(projectTabBar, {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ['class', 'style', 'data-file-path']
+        });
+        projectTabBar.addEventListener('keydown', event => {
+          const tab = event.target.closest('.tab');
+          if (!tab || event.altKey || event.ctrlKey || event.metaKey) return;
+          const tabs = Array.from(projectTabBar.querySelectorAll('.tab'));
+          let index = tabs.indexOf(tab);
+          if (event.key === 'ArrowRight') index = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length;
+          else if (event.key === 'Home') index = 0;
+          else if (event.key === 'End') index = tabs.length - 1;
+          else if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          tabs[index].click();
+          if (tabs[index].classList.contains('active')) {
+            tabs[index].focus();
+            tabs[index].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          }
+        });
       }
 
       // ── Instant Unhide & Resize Observers ──────────────────────────────────
@@ -1218,30 +1318,18 @@
             fileList = Array.isArray(files) ? files : [];
             window.projectFileList = fileList;
             const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
-            const validPaths = new Set(fileList.map((file) =>
-              String(file.path || '').replace(/\\/g, '/').toLowerCase()
-            ));
-            const mappedPaths = tabs.map((tab) =>
-              String(tab._filePath || '').replace(/\\/g, '/').toLowerCase()
-            );
-            const needsFullMap = mappedPaths.some((path) => !path || !validPaths.has(path)) ||
-              new Set(mappedPaths.filter(Boolean)).size !== mappedPaths.filter(Boolean).length;
-
-            // Bundle tab IDs are sanitized and can collide. The bundle creates
-            // tabs in exactly get_project_files() order, so a stateless index
-            // map is collision-free during initial/incremental construction.
-            // Once every tab has a unique path, preserve it across drag moves.
-            if (needsFullMap) {
-              tabs.forEach((tab, index) => {
-                const file = fileList[index];
-                if (!file) return;
-                tab._filePath = file.path;
-                tab.setAttribute('data-file-path', file.path);
-                tab.setAttribute('draggable', 'true');
-              });
-            } else {
-              tabs.forEach((tab) => tab.setAttribute('draggable', 'true'));
-            }
+            // Root filenames uniquely identify sources. Async construction and
+            // drag ordering can change DOM positions, so never map by index.
+            // Wrong paths corrupt dirty snapshots and cross-file review routing.
+            const filesByName = new Map(fileList.map(file => [file.name, file]));
+            tabs.forEach(tab => {
+              const label = tab.querySelector('span:first-child')?.textContent;
+              const file = filesByName.get(label);
+              if (!file) return;
+              tab._filePath = file.path;
+              tab.setAttribute('data-file-path', file.path);
+              tab.setAttribute('draggable', 'true');
+            });
             dedupeProjectTabs();
             return fileList;
           })
@@ -1281,6 +1369,7 @@
 
       tabBar.addEventListener('dragover', (e) => {
         e.preventDefault();
+        if (!dragSrcEl || !tabBar.contains(dragSrcEl)) return;
         const tab = e.target.closest('.tab');
         if (!tab || tab === dragSrcEl) return;
 
@@ -1486,6 +1575,7 @@
       };
 
       let lastCheckedContent = "";
+      let lastCheckedPath = "";
       let syntaxCheckTimeout = null;
 
       function runMonacoSyntaxCheck() {
@@ -1505,12 +1595,15 @@
         }
 
         const content = model.getValue();
-        if (content === lastCheckedContent) return;
+        if (content === lastCheckedContent && filePath === lastCheckedPath) return;
         lastCheckedContent = content;
+        lastCheckedPath = filePath;
 
         if (window.pywebview && window.pywebview.api) {
           window.pywebview.api.realtime_check_syntax(filePath, content).then(errorsJsonStr => {
-            window.setEditorMarkers(errorsJsonStr);
+            if (errorsJsonStr && errorsJsonStr !== "null" && model === window.editorInstance.getModel() && model.getValue() === content) {
+              window.setEditorMarkers(errorsJsonStr);
+            }
           }).catch(err => console.error(err));
         } else {
           console.warn("Detached mode: pywebview API not available. Realtime syntax disabled.");
@@ -1589,6 +1682,9 @@
               if (filePath && window.pywebview.api.mark_modified) {
                 window.pywebview.api.mark_modified(filePath, true);
               }
+              if (filePath && window.pywebview.api.snapshot_buffer) {
+                window.pywebview.api.snapshot_buffer(filePath, window.editorInstance.getValue());
+              }
               if (window.pywebview.api.on_editor_content_change) {
                 window.pywebview.api.on_editor_content_change();
               }
@@ -1637,7 +1733,7 @@
       let historyBusy = false;
 
       function normalizePath(path) {
-        return String(path || '').replace(/\\/g, '/').toLowerCase();
+        return window.projectPathKey(path);
       }
 
       function bridgeApi() {
@@ -3803,20 +3899,20 @@
             base: 'vs-dark',
             inherit: true,
             rules: [
-              { token: '', foreground: 'e0e6ed', background: '151922' },
-              { token: 'comment', foreground: '718294', fontStyle: 'italic' },
-              { token: 'keyword', foreground: '00d2ff', fontStyle: 'bold' },
+              { token: '', foreground: 'e3edf6', background: '101b2a' },
+              { token: 'comment', foreground: 'adc0d3', fontStyle: 'italic' },
+              { token: 'keyword', foreground: '80d9ce', fontStyle: 'bold' },
               { token: 'string', foreground: '98c379' },
               { token: 'number', foreground: 'd19a66' }
             ],
             colors: {
-              'editor.background': '#151922',
-              'editor.foreground': '#ffffff',
+              'editor.background': '#101b2a',
+              'editor.foreground': '#e3edf6',
               'editorLineNumber.foreground': '#6b7d94',
-              'editorLineNumber.activeForeground': '#00d2ff',
-              'editor.lineHighlightBackground': '#1e2430',
-              'editor.selectionBackground': '#2c3748',
-              'editorGutter.background': '#151922'
+              'editorLineNumber.activeForeground': '#80d9ce',
+              'editor.lineHighlightBackground': '#18283b',
+              'editor.selectionBackground': '#324e69',
+              'editorGutter.background': '#101b2a'
             }
           });
         } catch (e) {

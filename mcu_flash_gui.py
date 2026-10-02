@@ -20,8 +20,14 @@ for _p in (_ROOT, _MAIN_DIR, _MODULES_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-if _ENV_SITE.is_dir() and str(_ENV_SITE) not in sys.path:
+if sys.platform == "win32" and _ENV_SITE.is_dir() and str(_ENV_SITE) not in sys.path:
     sys.path.insert(0, str(_ENV_SITE))
+
+# Check hardware before runtime handoff or importing any GUI/backend services.
+from src.modules.runtime_resources import enforce_minimum_cpu_requirement
+
+if not enforce_minimum_cpu_requirement():
+    raise SystemExit(1)
 
 # Strict enforcement: NEVER run with system/desktop Python
 from src.modules.private_python_guard import enforce_private_python

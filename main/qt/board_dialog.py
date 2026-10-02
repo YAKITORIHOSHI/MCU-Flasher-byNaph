@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -42,7 +43,9 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
     QButtonGroup,
+    QComboBox,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import load_recent_boards, add_recent_board, get_theme_mode
@@ -639,11 +642,11 @@ class BoardSearchDialog(QDialog):
         on_select_callback: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("🔍 Search & Select MCU Board")
+        self.setWindowTitle("Select MCU board")
         self.setModal(True)
-        # Fixed width and height with ample room for long board names and hardware details
-        self.setFixedSize(860, 580)
-        self.setSizeGripEnabled(False)
+        from main.qt.responsive import fit_dialog, ScreenWatcher
+        fit_dialog(self, (800, 600), (360, 280))
+        self.setSizeGripEnabled(True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowMaximizeButtonHint)
 
         self.on_select_callback = on_select_callback
@@ -671,6 +674,7 @@ class BoardSearchDialog(QDialog):
         )
 
         self._build_ui()
+        self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_layout())
         self._apply_dialog_theme()
         self._apply_filter("")
 
@@ -794,7 +798,7 @@ class BoardSearchDialog(QDialog):
         hdr_layout = QHBoxLayout(self.hdr_frame)
         hdr_layout.setContentsMargins(14, 8, 14, 8)
 
-        self.lbl_hdr = QLabel("🔍 Search MCU Board")
+        self.lbl_hdr = QLabel("Choose your board")
         hdr_layout.addWidget(self.lbl_hdr)
 
         hdr_layout.addStretch()
@@ -826,11 +830,16 @@ class BoardSearchDialog(QDialog):
         self.search_ent.textChanged.connect(self._on_search_text_changed)
         self.search_ent.returnPressed.connect(self._confirm_selection)
         search_layout.addWidget(self.search_ent)
+        self.btn_refresh = QPushButton("Refresh boards")
+        self.btn_refresh.setToolTip("Refresh available PlatformIO boards and installed board definitions")
+        self.btn_refresh.clicked.connect(self._request_catalog_refresh)
+        search_layout.addWidget(self.btn_refresh)
         root.addWidget(self.search_frame)
 
         # ── Category Quick Filter Chips ───────────────────────────────────────
         self.chips_frame = QFrame()
-        chips_layout = QHBoxLayout(self.chips_frame)
+        chips_layout = QGridLayout(self.chips_frame)
+        self._chips_layout = chips_layout
         chips_layout.setContentsMargins(14, 2, 14, 6)
         chips_layout.setSpacing(6)
 
@@ -856,9 +865,8 @@ class BoardSearchDialog(QDialog):
             btn.clicked.connect(lambda checked, c=cat_id: self._on_chip_clicked(c))
             self._chip_group.addButton(btn)
             self._chip_buttons[cat_id] = btn
-            chips_layout.addWidget(btn)
+            chips_layout.addWidget(btn, 0, len(self._chip_buttons) - 1)
 
-        chips_layout.addStretch()
         root.addWidget(self.chips_frame)
 
         # ── Listbox Container ─────────────────────────────────────────────────
@@ -873,27 +881,37 @@ class BoardSearchDialog(QDialog):
 
         # ── Action Buttons Footer ─────────────────────────────────────────────
         self.btn_frame = QFrame()
-        btn_layout = QHBoxLayout(self.btn_frame)
+        btn_layout = QGridLayout(self.btn_frame)
+        self._footer_grid = btn_layout
         btn_layout.setContentsMargins(14, 10, 14, 12)
         btn_layout.setSpacing(8)
 
         self.lbl_count = QLabel(f"{len(self.all_boards)} boards available")
-        btn_layout.addWidget(self.lbl_count)
-
-        btn_layout.addStretch()
+        self._framework_label = QLabel("Framework")
+        self._framework_row = QHBoxLayout()
+        self._framework_row.addWidget(self._framework_label)
+        self.framework_combo = QComboBox()
+        self.framework_combo.setToolTip("Choose the framework your source files use. Arduino .ino sketches need Arduino.")
+        self._framework_row.addWidget(self.framework_combo)
+        self.listbox.currentItemChanged.connect(self._update_frameworks)
 
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setFixedSize(85, 30)
         self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
-        btn_layout.addWidget(self.btn_cancel)
+        self._actions_row = QHBoxLayout()
+        self._actions_row.addStretch()
+        self._actions_row.addWidget(self.btn_cancel)
 
         self.btn_select = QPushButton("Select Board")
         self.btn_select.setFixedSize(110, 30)
         self.btn_select.setEnabled(False)
         self.btn_select.setCursor(Qt.CursorShape.ArrowCursor)
         self.btn_select.clicked.connect(self._confirm_selection)
-        btn_layout.addWidget(self.btn_select)
+        self._actions_row.addWidget(self.btn_select)
+        self._layout_mode = None
+        self._chip_columns = None
+        self._adapt_layout()
 
         root.addWidget(self.btn_frame)
 
@@ -901,6 +919,70 @@ class BoardSearchDialog(QDialog):
         QShortcut(QKeySequence("Escape"), self, activated=self._on_escape_pressed)
         QShortcut(QKeySequence("Return"), self, activated=self._confirm_selection)
         QShortcut(QKeySequence("Enter"), self, activated=self._confirm_selection)
+        from main.qt.signals import signals
+        signals.board_catalog_updated.connect(self._catalog_updated)
+        QTimer.singleShot(0, self._request_catalog_refresh)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_footer_grid"):
+            self._adapt_layout()
+
+    def _adapt_layout(self) -> None:
+        buttons = list(self._chip_buttons.values())
+        button_width = max(btn.minimumSizeHint().width() for btn in buttons) + 6
+        cols = max(1, min(len(buttons), (self.width() - 28) // button_width))
+        if cols != self._chip_columns:
+            for index, btn in enumerate(buttons):
+                self._chips_layout.removeWidget(btn)
+                self._chips_layout.addWidget(btn, index // cols, index % cols)
+            self._chip_columns = cols
+        narrow = self.width() < (self.lbl_count.minimumSizeHint().width() +
+                                 self._framework_row.minimumSize().width() +
+                                 self._actions_row.minimumSize().width() + 52)
+        if narrow != self._layout_mode:
+            grid = self._footer_grid
+            grid.removeWidget(self.lbl_count)
+            for row in (self._framework_row, self._actions_row):
+                grid.removeItem(row)
+            grid.addWidget(self.lbl_count, 0, 0)
+            grid.addLayout(self._framework_row, 0 if not narrow else 1, 1 if not narrow else 0)
+            grid.addLayout(self._actions_row, 0 if not narrow else 1, 2 if not narrow else 1)
+            grid.setColumnStretch(0, 1)
+            self._layout_mode = narrow
+        self.btn_refresh.setText("Refresh" if self.width() < 550 else "Refresh boards")
+
+    def _request_catalog_refresh(self):
+        backend = getattr(self.parent(), "_backend", None)
+        if backend:
+            self.btn_refresh.setEnabled(False)
+            self.btn_refresh.setText("Refreshing…")
+            backend.refresh_board_catalog(include_registry=True)
+
+    def _catalog_updated(self, data):
+        self.btn_refresh.setEnabled(True)
+        self.btn_refresh.setText("Refresh boards")
+        if "error" in data:
+            self.lbl_count.setText(f"Refresh failed: {data['error']}")
+            return
+        self.all_boards = sorted(SUPPORTED_BOARDS.keys())
+        self._search_index = BoardSearchIndex(SUPPORTED_BOARDS, recent_boards=self.recent_boards)
+        self._apply_filter(self.search_ent.text())
+        if data.get("warning"):
+            self.lbl_count.setToolTip(data["warning"])
+
+    def _update_frameworks(self, current, previous=None):
+        name = current.data(Qt.ItemDataRole.UserRole) if current else ""
+        info = SUPPORTED_BOARDS.get(name, {})
+        self.framework_combo.clear()
+        allowed = sorted(info.get("frameworks") or ([info["framework"]] if info.get("framework") else []))
+        self.framework_combo.addItems(allowed)
+        backend = getattr(self.parent(), "_backend", None)
+        selected = backend._resolve_board_info(name).get("framework") if backend and name else ""
+        if selected in allowed:
+            self.framework_combo.setCurrentText(selected)
+        elif "arduino" in allowed:
+            self.framework_combo.setCurrentText("arduino")
 
     def _update_chip_styles(self) -> None:
         pal = getattr(self, "_pal", {})
@@ -979,6 +1061,11 @@ class BoardSearchDialog(QDialog):
             meta = index_by_name.get(name, {})
             family = meta.get("display_family", "MCU")
             sub_info = meta.get("sub_info", "")
+            from main.core.target_profile import target_problem
+            problem = target_problem(SUPPORTED_BOARDS.get(name, {}))
+            if problem:
+                sub_info = "Definition required • " + sub_info
+                item.setToolTip(problem)
             is_rec = name in self.recent_boards
 
             item.setData(Qt.ItemDataRole.UserRole + 2, family)
@@ -1041,6 +1128,9 @@ class BoardSearchDialog(QDialog):
             if not raw_name:
                 raw_name = curr.text().replace("★", "").replace("⚡", "").strip()
             self.result_board = raw_name
+            backend = getattr(self.parent(), "_backend", None)
+            if backend and self.framework_combo.currentText():
+                backend.set_board_framework(raw_name, self.framework_combo.currentText())
             add_recent_board(self.result_board)
             if self.on_select_callback:
                 self.on_select_callback(self.result_board)

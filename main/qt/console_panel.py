@@ -18,8 +18,9 @@ from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
-    QPushButton, QCheckBox, QLabel, QFrame,
+    QPushButton, QCheckBox, QLabel, QFrame, QSizePolicy,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 # Tag → QColor mapping (mirrors the Tkinter tag_configure calls in ui_layout_mixin)
 _TAG_COLORS: dict[str, str] = {
@@ -136,7 +137,7 @@ class ConsolePanelHeader(QWidget):
         self._header_layout = layout
 
         # Title
-        title = QLabel("⚙ BUILD CONSOLE")
+        title = QLabel("Build output")
         title.setProperty("role", "dim")
         self._title_lbl = title
         layout.addWidget(title)
@@ -202,7 +203,7 @@ class ConsolePanelHeader(QWidget):
         self._current_responsive_width = width
         if width >= 1100:
             self._is_ultra_compact = False
-            self._title_lbl.setText("⚙ BUILD CONSOLE")
+            self._title_lbl.setText("Build output")
             self.cb_auto_clear.setText("Clear on Action")
             self.cb_auto_clear_serial.setText("Clear Serial on Action")
             self.cb_autoscroll.setText("Auto-scroll")
@@ -213,7 +214,7 @@ class ConsolePanelHeader(QWidget):
                 self._header_layout.setContentsMargins(10, 4, 10, 4)
         elif width >= 850:
             self._is_ultra_compact = False
-            self._title_lbl.setText("⚙ Build Console")
+            self._title_lbl.setText("Build output")
             self.cb_auto_clear.setText("Clr Action")
             self.cb_auto_clear_serial.setText("Clr Serial")
             self.cb_autoscroll.setText("Auto")
@@ -224,7 +225,7 @@ class ConsolePanelHeader(QWidget):
                 self._header_layout.setContentsMargins(6, 4, 6, 4)
         else:
             self._is_ultra_compact = True
-            self._title_lbl.setText("⚙")
+            self._title_lbl.setText("Build")
             self.cb_auto_clear.setText("Clr Act")
             self.cb_auto_clear_serial.setText("Clr Ser")
             self.cb_autoscroll.setText("Auto")
@@ -330,7 +331,16 @@ class ConsolePanel(QPlainTextEdit):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setReadOnly(True)
-        self.setMaximumBlockCount(8000)  # prevent runaway memory growth
+        # Output may shrink on short screens; keep header controls reachable.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.setMinimumHeight(24)
+        self.setUndoRedoEnabled(False)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        from src.modules.runtime_resources import performance_profile
+        from main.qt.log_buffer import LogBuffer
+        profile = performance_profile()
+        self._history_limit = 512_000 if profile.constrained else 2_000_000
+        self.setMaximumBlockCount(profile.terminal_scrollback)
         from main.core.config import get_monitor_font_size, load_gui_config
         init_font_size = get_monitor_font_size()
         self.set_font_size(init_font_size)
@@ -352,15 +362,16 @@ class ConsolePanel(QPlainTextEdit):
 
         cfg = load_gui_config()
         self._timestamp_enabled: bool = bool(cfg.get("timestamp_enabled", False))
-        self._entries: list[dict] = []
+        self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda entry: entry["text"])
 
         from main.core.config import get_hide_build_console_warnings
         self._hide_warnings: bool = bool(get_hide_build_console_warnings())
 
-        # In-RAM batch queue and 25ms (~40 FPS) flush timer to eliminate UI stutter during parallel compiles
-        self._queue: deque[tuple[str, str, bool, str | None, str]] = deque()
+        # Bounded queue with small, demand-driven render batches.
+        self._queue = LogBuffer(256_000 if profile.constrained else 1_000_000, 2000, lambda item: item[0])
         self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(25)
+        from src.modules.runtime_resources import performance_profile
+        self._flush_timer.setInterval(performance_profile().terminal_interval_ms)
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
@@ -517,6 +528,8 @@ class ConsolePanel(QPlainTextEdit):
             first = False
 
         cursor.endEditBlock()
+        from main.qt.log_buffer import trim_document
+        trim_document(self, self._history_limit)
 
         if (self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up) or was_at_bottom:
             self.setTextCursor(cursor)
@@ -530,7 +543,8 @@ class ConsolePanel(QPlainTextEdit):
         tag: str = payload.get("tag", "normal")
         if getattr(self, "_hide_warnings", False) and tag == "warning":
             return
-        text: str  = payload.get("text", "")
+        from main.qt.log_buffer import display_text
+        text: str = display_text(payload.get("text", ""))
         newline: bool = payload.get("newline", True)
         replace_pattern: str | None = payload.get("replace_pattern")
         ts: str = payload.get("timestamp") or time.strftime("[%H:%M:%S]")
@@ -548,18 +562,17 @@ class ConsolePanel(QPlainTextEdit):
                 self._flush_timer.stop()
             return
 
-        # Drain up to 800 items per tick
-        items: list[tuple[str, str, bool, str | None, str]] = []
-        count = 0
-        while self._queue and count < 800:
-            items.append(self._queue.popleft())
-            count += 1
+        items = self._queue.drain()
+        notice = self._queue.take_notice()
+        if notice:
+            items.insert(0, (notice + "\n", "warning", True, None, ""))
 
         if not items:
             return
 
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.beginEditBlock()
 
         first = True
         ts_fmt = QTextCharFormat()
@@ -576,7 +589,10 @@ class ConsolePanel(QPlainTextEdit):
 
             replaced = False
             if replace_pattern:
-                pat = re.compile(replace_pattern, re.IGNORECASE)
+                try:
+                    pat = re.compile(replace_pattern, re.IGNORECASE)
+                except (re.error, TypeError):
+                    pat = re.compile(r"(?!)")  # Display malformed progress as a normal line.
                 doc = self.document()
                 block = doc.lastBlock()
                 scan_limit = 250
@@ -594,6 +610,7 @@ class ConsolePanel(QPlainTextEdit):
                                 entry["text"] = text
                                 entry["tag"] = tag
                                 entry["ts"] = ts
+                                self._entries.recount()
                                 break
 
                         cur.beginEditBlock()
@@ -613,9 +630,6 @@ class ConsolePanel(QPlainTextEdit):
                     "newline": newline,
                     "ts": ts,
                 })
-                if len(self._entries) > 8000:
-                    self._entries.pop(0)
-
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 if newline and (self.document().characterCount() > 1 or not first):
                     cursor.insertText("\n", QTextCharFormat())
@@ -623,6 +637,10 @@ class ConsolePanel(QPlainTextEdit):
                     cursor.insertText(f"{ts} ", ts_fmt)
                 _insert_with_bar_styling(cursor, text, fmt)
                 first = False
+
+        cursor.endEditBlock()
+        from main.qt.log_buffer import trim_document
+        trim_document(self, self._history_limit)
 
         if self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up:
             self.setTextCursor(cursor)

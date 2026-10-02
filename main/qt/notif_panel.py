@@ -9,14 +9,16 @@ clipboard copying, and database clearing.
 from __future__ import annotations
 
 from typing import Optional
+from html import escape
 
 # pyrefly: ignore [missing-import]
 from PySide6.QtCore import Slot, QTimer
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QTextBrowser, QFrame, QApplication
+    QComboBox, QTextBrowser, QFrame, QApplication, QSizePolicy
 )
+from main.qt.icons import ActionButton as QPushButton
 
 from src.dbs import dbs_read, dbs_delete
 
@@ -90,6 +92,10 @@ class NotifPanel(QWidget):
 
         # ── Notification View ─────────────────────────────────────────────────
         self._browser = QTextBrowser()
+        self._browser.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._browser.setMinimumHeight(24)
+        self._browser.setUndoRedoEnabled(False)
+        self._browser.document().setMaximumBlockCount(1000)
         self._browser.setObjectName("notif-browser")
         self._browser.setOpenExternalLinks(False)
         layout.addWidget(self._browser)
@@ -197,12 +203,13 @@ class NotifPanel(QWidget):
             "info": "#7dcfff",
         }
         color = color_map.get(lvl, "#7aa2f7")
-        badge = lvl.upper()
-        title = r.get("title", "")
-        message = r.get("message", "")
+        badge = escape(lvl.upper())
+        from main.qt.log_buffer import display_text
+        title = escape(display_text(r.get("title", ""), 1024))
+        message = escape(display_text(r.get("message", "")))
         date_str = r.get("date", "")
         time_str = r.get("time", "")
-        timestamp = f"{date_str} {time_str}".strip()
+        timestamp = escape(f"{date_str} {time_str}".strip())
 
         return (
             f"<div style='margin-bottom: 8px; padding: 6px 10px; background: #1a1e2a; border-left: 3px solid {color}; border-radius: 4px;'>"
@@ -227,6 +234,8 @@ class NotifPanel(QWidget):
         }
         card_html = self._format_record_html(record)
         self._browser.append(card_html)
+        from main.qt.log_buffer import trim_document
+        trim_document(self._browser, 256_000)
 
     def _clear_notifications(self) -> None:
         """Clear database records and reset UI view."""

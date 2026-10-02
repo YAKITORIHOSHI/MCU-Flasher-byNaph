@@ -18,13 +18,13 @@ if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QCursor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
     QLineEdit, QFileDialog, QComboBox, QCheckBox, QGroupBox, QFormLayout,
     QFrame, QApplication, QMessageBox,
 )
+from main.qt.icons import ActionButton as QPushButton
 
 from main.core.constants import is_application_codebase_dir
 
@@ -84,29 +84,14 @@ class ProjectDialog(QDialog):
 
         self._start_dir = candidate_start or default_user_dir
 
-        self.setWindowTitle("⚡ MCU Flasher by Naph — Select Project")
+        self.setWindowTitle("MCU Flasher by Naph — Select Project")
 
-        # Dynamic size clamped to available screen work area
-        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else None
-        avail_w = avail.width() if avail else 1280
-        avail_h = avail.height() if avail else 720
-
-        target_w = min(720, max(580, int(avail_w * 0.85)))
-        target_h = min(560, max(460, int(avail_h * 0.85)))
-        target_w = min(target_w, avail_w)
-        target_h = min(target_h, avail_h)
-
-        self.setMinimumSize(min(600, target_w), min(480, target_h))
-        self.resize(target_w, target_h)
+        from main.qt.responsive import fit_dialog, ScreenWatcher
+        fit_dialog(self, (680, 540), (400, 300))
         self.setModal(True)
 
-        if avail:
-            x = avail.x() + max(0, (avail_w - target_w) // 2)
-            y = avail.y() + max(0, (avail_h - target_h) // 2)
-            self.move(x, y)
-
         self._setup_ui()
+        self._screen_watcher = ScreenWatcher(self)
         self._load_recents()
 
         # Update initial folder preview
@@ -138,7 +123,8 @@ class ProjectDialog(QDialog):
         # Ensure centered on active screen work area on initial show
         if not getattr(self, "_centered", False):
             self._centered = True
-            screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+            from main.qt.responsive import active_screen
+            screen = active_screen(self)
             if screen:
                 avail = screen.availableGeometry()
                 x = avail.x() + max(0, (avail.width() - self.width()) // 2)
@@ -174,7 +160,7 @@ class ProjectDialog(QDialog):
         hl.setContentsMargins(0, 0, 0, 4)
         hl.setSpacing(2)
 
-        self._title_lbl = QLabel("⚡ MCU Flasher by Naph")
+        self._title_lbl = QLabel("MCU Flasher by Naph")
         self._sub_lbl = QLabel("Open an existing sketch project, or create a new one")
 
         hl.addWidget(self._title_lbl)

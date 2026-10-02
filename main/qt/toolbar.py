@@ -3,8 +3,8 @@
 """
 main.qt.toolbar — Top toolbar and secondary controls bar for MCU Flasher.
 
-Replaces the Tkinter title_frame + inner_actions + ctrl_frame sections
-from UILayoutMixin._build_ui().
+Native widgets stay owned by the toolbar or its compact popup. Resizing must
+never expose an unparented label or action as an independent desktop window.
 
 Structure:
   1. Primary Toolbar (QToolBar) — logo, action buttons (Compile, Upload,
@@ -30,16 +30,17 @@ from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSize, QPoint
 from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
-    QToolBar, QWidget, QHBoxLayout, QVBoxLayout,
+    QToolBar, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QPushButton, QLabel, QComboBox, QCheckBox,
     QSizePolicy, QFrame, QStyleOptionComboBox, QStylePainter, QStyle,
-    QMessageBox, QApplication,
+    QMessageBox, QApplication, QScrollArea,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (mirror main.core.constants defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 from main.core.constants import MAX_BAUD_RATE
+from main.qt.icons import ActionButton as QPushButton, icon
 
 DEFAULT_BAUD          = 115200
 DEFAULT_UPLOAD_SPEED  = 460800
@@ -72,6 +73,7 @@ class CompactDropdownPopup(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         from main.core.theme import Theme
         self.setStyleSheet(
             f"CompactDropdownPopup {{"
@@ -80,9 +82,18 @@ class CompactDropdownPopup(QWidget):
             f"  border-radius: 6px;"
             f"}}"
         )
-        self._layout = QVBoxLayout(self)
+        body = QWidget(self)
+        self._layout = QVBoxLayout(body)
         self._layout.setContentsMargins(6, 6, 6, 6)
         self._layout.setSpacing(4)
+        self._scroll = QScrollArea(self)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setWidget(body)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._scroll)
 
     def add_button(
         self,
@@ -106,10 +117,11 @@ class CompactDropdownPopup(QWidget):
         if custom_style:
             btn.setStyleSheet(custom_style)
         else:
+            from src.modules.ui_palette import readable_foreground
             style = (
                 f"QPushButton {{"
                 f"  background-color: {normal_bg};"
-                f"  color: {Theme.TEXT_BRIGHT};"
+                f"  color: {readable_foreground(normal_bg)};"
                 f"  border: 1px solid {Theme.BORDER};"
                 f"  border-radius: 4px;"
                 f"  padding: 3px 12px;"
@@ -120,10 +132,11 @@ class CompactDropdownPopup(QWidget):
                 f"QPushButton:hover {{"
                 f"  background-color: {hover_bg};"
                 f"  border: 1px solid {Theme.CYAN};"
-                f"  color: #ffffff;"
+                f"  color: {readable_foreground(hover_bg)};"
                 f"}}"
                 f"QPushButton:pressed {{"
                 f"  background-color: {Theme.BG_DARK};"
+                f"  color: {Theme.TEXT_BRIGHT};"
                 f"  border: 1px solid {Theme.CYAN};"
                 f"}}"
                 f"QPushButton:disabled {{"
@@ -149,8 +162,8 @@ class CompactDropdownPopup(QWidget):
         alignment: str = "left",
     ) -> None:
         self.adjustSize()
-        req_w = max(min_width, self.sizeHint().width())
-        req_h = self.sizeHint().height()
+        req_w = max(min_width, self._layout.sizeHint().width() + 16)
+        req_h = self._layout.sizeHint().height()
 
         anchor_pos = anchor_widget.mapToGlobal(QPoint(0, 0))
         anchor_w = anchor_widget.width()
@@ -179,18 +192,12 @@ class CompactDropdownPopup(QWidget):
             if x < win_left + 6:
                 x = win_left + 6
 
-        # 2. Constrain within physical screen geometry
-        screen = anchor_widget.screen() or QGuiApplication.primaryScreen()
-        if screen:
-            geom = screen.availableGeometry()
-            if x + req_w > geom.right() - 8:
-                x = max(geom.left() + 8, geom.right() - req_w - 8)
-            if x < geom.left() + 8:
-                x = geom.left() + 8
-            if y + req_h > geom.bottom() - 8:
-                y = anchor_pos.y() - req_h - 2
-
-        self.setGeometry(x, y, req_w, req_h)
+        from main.qt.responsive import work_area
+        from src.modules.ui_metrics import fit_rect
+        area = work_area(anchor_widget)
+        if y + req_h > area.y + area.height - 8:
+            y = anchor_pos.y() - req_h - 2
+        self.setGeometry(*fit_rect(x, y, req_w, req_h, area, margin=8))
         self.show()
         self.raise_()
         self.activateWindow()
@@ -209,6 +216,7 @@ class PrimaryToolbar(QToolBar):
     def __init__(self, backend: "MCUWebBackendAPI", parent: QWidget | None = None):
         super().__init__("Primary Actions", parent)
         self._backend = backend
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setMovable(False)
         self.setFloatable(False)
         self.setIconSize(__import__("PySide6.QtCore", fromlist=["QSize"]).QSize(16, 16))
@@ -223,9 +231,9 @@ class PrimaryToolbar(QToolBar):
 
     def _setup_widgets(self) -> None:
         # ── 1. Left: Logo / Title (Stealth trigger: exactly 5 clicks opens owner portal) ──
-        self.logo = QLabel("⚡ MCU Flasher by Naph")
+        self.logo = QLabel("MCU Flasher by Naph")
         self.logo.setStyleSheet(
-            "color: #56cfbf; font-size: 15px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
+            "color: #56cfbf; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
         )
         self.logo.setCursor(Qt.CursorShape.ArrowCursor)
         self.logo.mousePressEvent = self._on_logo_mouse_press
@@ -244,11 +252,6 @@ class PrimaryToolbar(QToolBar):
         ac_layout.setContentsMargins(0, 0, 0, 0)
         ac_layout.setSpacing(4)
 
-        # ACTIONS section label
-        self.lbl_actions = QLabel("ACTIONS")
-        self.lbl_actions.setProperty("role", "dim")
-        self.lbl_actions.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; padding: 0 4px; letter-spacing: 0.8px;")
-        ac_layout.addWidget(self.lbl_actions)
 
         # Compile (Green)
         self.btn_compile = _make_action_btn("⚙ Compile", "Compile sketch (Ctrl+R)", "btn-compile",
@@ -337,7 +340,8 @@ class PrimaryToolbar(QToolBar):
         rc_layout.setSpacing(4)
 
         # Sketch path label
-        self.lbl_sketch_icon = QLabel("📁")
+        self.lbl_sketch_icon = QLabel()
+        self.lbl_sketch_icon.setPixmap(icon("project").pixmap(16, 16))
         self.lbl_sketch_icon.setStyleSheet("color: #56cfbf; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;")
         self.lbl_sketch_icon.setToolTip("Click to select or create a project")
         self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -424,7 +428,7 @@ class PrimaryToolbar(QToolBar):
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _do_compile(self) -> None:
-        if self._backend and not self._backend.is_busy:
+        if self._backend and not self._is_busy():
             mw = self.window()
             if hasattr(mw, "_editor_panel") and mw._editor_panel:
                 mw._editor_panel.trigger_save_all(callback=self._backend.compile_sketch)
@@ -432,7 +436,7 @@ class PrimaryToolbar(QToolBar):
                 self._backend.compile_sketch()
 
     def _do_upload(self) -> None:
-        if self._backend and not self._backend.is_busy:
+        if self._backend and not self._is_busy():
             mw = self.window()
             if hasattr(mw, "_editor_panel") and mw._editor_panel:
                 mw._editor_panel.trigger_save_all(callback=self._backend.upload_sketch)
@@ -450,7 +454,7 @@ class PrimaryToolbar(QToolBar):
             self._backend.stop_operation()
 
     def _do_clean(self) -> None:
-        if not self._backend or self._backend.is_busy:
+        if not self._backend or self._is_busy():
             return
         from PySide6.QtWidgets import QMessageBox
         ret = QMessageBox.question(
@@ -599,6 +603,7 @@ class PrimaryToolbar(QToolBar):
         from main.qt.project_dialog import ProjectDialog
         dlg = ProjectDialog(self._backend, parent=self.window())
         dlg.exec()
+        dlg.deleteLater()
 
     def _open_download_manager(self) -> None:
         from main.qt.download_dialog import launch_download_manager
@@ -723,8 +728,17 @@ class PrimaryToolbar(QToolBar):
         if self._backend and self._backend.is_busy:
             return  # operation state machine owns buttons right now
 
-        board_selected = bool(self._backend.current_board) if self._backend else False
+        from main.core.target_profile import target_problem, requires_upload_port
+        problem = target_problem(self._backend._resolve_board_info()) if self._backend else "Select a board first."
+        board_selected = bool(self._backend and self._backend.current_board and not problem)
         port_selected = bool(self._backend.current_port) if self._backend else False
+        if self._backend and not requires_upload_port(self._backend._resolve_board_info()):
+            port_selected = True
+
+        self.btn_compile.setToolTip(problem if problem else "Compile sketch (Ctrl+R)")
+        self.btn_upload.setToolTip(problem if problem else (
+            "Compile & upload (Ctrl+U)" if port_selected else "Select a serial port to upload."
+        ))
 
         self.btn_compile.setEnabled(board_selected)
         self.btn_compile.setCursor(Qt.CursorShape.PointingHandCursor if board_selected else Qt.CursorShape.ArrowCursor)
@@ -741,12 +755,15 @@ class PrimaryToolbar(QToolBar):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     def apply_theme(self, theme_name: str) -> None:
+        for button in self.findChildren(QPushButton):
+            button.refresh_icon()
         from main.core.theme import Theme
         if hasattr(self, "logo"):
             self.logo.setStyleSheet(
-                f"color: {Theme.CYAN}; font-size: 15px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
+                f"color: {Theme.CYAN}; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
             )
         if hasattr(self, "lbl_sketch_icon"):
+            self.lbl_sketch_icon.setPixmap(icon("project").pixmap(16, 16))
             self.lbl_sketch_icon.setStyleSheet(
                 f"color: {Theme.CYAN}; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;"
             )
@@ -774,8 +791,6 @@ class PrimaryToolbar(QToolBar):
 
         self._is_compact = compact
         if compact:
-            if hasattr(self, "lbl_actions"):
-                self.lbl_actions.setVisible(False)
             self.btn_stop.setVisible(False)
             self.btn_clean.setVisible(False)
             if hasattr(self, "_action_sep"):
@@ -792,28 +807,26 @@ class PrimaryToolbar(QToolBar):
                 self.btn_download.setToolTip("Download Boards and Libraries")
                 self.btn_download.setFixedWidth(28)
                 if width < 520:
-                    self.logo.setText("⚡ MCU")
+                    self.logo.setText("MCU")
                 elif width < 680:
-                    self.logo.setText("⚡ MCU Flasher")
+                    self.logo.setText("MCU Flasher")
                 else:
-                    self.logo.setText("⚡ MCU Flasher by Naph")
+                    self.logo.setText("MCU Flasher by Naph")
             elif width < 1250:
                 self.lbl_sketch.setVisible(True)
                 self.btn_download.setText("⬇ Download")
                 self.btn_download.setToolTip("Download boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
-                self.logo.setText("⚡ MCU Flasher by Naph")
+                self.logo.setText("MCU Flasher by Naph")
             else:
                 self.lbl_sketch.setVisible(True)
                 self.btn_download.setText("⬇ Download Boards/Libraries")
                 self.btn_download.setToolTip("Download boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
-                self.logo.setText("⚡ MCU Flasher by Naph")
+                self.logo.setText("MCU Flasher by Naph")
         else:
-            if hasattr(self, "lbl_actions"):
-                self.lbl_actions.setVisible(True)
             self.btn_stop.setVisible(True)
             self.btn_clean.setVisible(True)
             if hasattr(self, "_action_sep"):
@@ -832,8 +845,18 @@ class PrimaryToolbar(QToolBar):
             self.btn_download.setToolTip("Download boards and libraries")
             self.btn_download.setMinimumWidth(0)
             self.btn_download.setMaximumWidth(16777215)
-            self.logo.setText("⚡ MCU Flasher by Naph")
+            self.logo.setText("MCU Flasher by Naph")
 
+        # Keep Project and Download directly reachable on very narrow screens.
+        tiny = width < 560
+        for button, label in ((self.btn_compile, "Compile"), (self.btn_upload, "Upload"),
+                              (self.btn_project, "Project")):
+            desired = "" if tiny else label
+            if button.text() != desired:
+                button.setText(desired)
+            button.setMinimumWidth(30 if tiny else 0)
+            button.setMaximumWidth(30 if tiny else 16777215)
+        self.lbl_sketch_icon.setVisible(width >= 680)
         self._balance_spacers()
 
     def _toggle_actions_menu(self) -> None:
@@ -844,12 +867,16 @@ class PrimaryToolbar(QToolBar):
             return
 
         popup = CompactDropdownPopup(self)
+        # Qt owns the popup; discard the Python reference after outside-click
+        # dismissal too, so reopening cannot retain hidden native windows.
+        popup.destroyed.connect(lambda: setattr(self, "_actions_popup", None)
+                                if getattr(self, "_actions_popup", None) is popup else None)
         from main.core.theme import Theme
 
         # Stop (Red)
         popup.add_button(
             self.btn_stop.text() or "■ Stop",
-            self._do_stop,
+            self.btn_stop.click,
             Theme.BTN_STOP,
             Theme.BTN_STOP_H,
             enabled=self.btn_stop.isEnabled(),
@@ -857,7 +884,7 @@ class PrimaryToolbar(QToolBar):
         # Clean (Dark Gray)
         popup.add_button(
             "🧹 Clean",
-            self._do_clean,
+            self.btn_clean.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=self.btn_clean.isEnabled(),
@@ -865,7 +892,7 @@ class PrimaryToolbar(QToolBar):
         # Save (Green)
         popup.add_button(
             "💾 Save",
-            self._do_save,
+            self.btn_save.click,
             Theme.BTN_COMPILE,
             Theme.BTN_COMPILE_H,
             enabled=self.btn_save.isEnabled(),
@@ -873,7 +900,7 @@ class PrimaryToolbar(QToolBar):
         # Save All (Blue)
         popup.add_button(
             "💾 Save All",
-            self._do_save_all,
+            self.btn_save_all.click,
             Theme.BTN_UPLOAD,
             Theme.BTN_UPLOAD_H,
             enabled=self.btn_save_all.isEnabled(),
@@ -881,7 +908,7 @@ class PrimaryToolbar(QToolBar):
         # Reload (Dark Gray)
         popup.add_button(
             "↺ Reload",
-            self._do_reload,
+            self.btn_reload.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=self.btn_reload.isEnabled(),
@@ -889,7 +916,7 @@ class PrimaryToolbar(QToolBar):
         # Modify (Teal)
         popup.add_button(
             "🛠 Modify",
-            self._do_modify,
+            self.btn_modify.click,
             Theme.BTN_MONITOR,
             Theme.BTN_MONITOR_H,
             enabled=self.btn_modify.isEnabled(),
@@ -1143,42 +1170,10 @@ class MarqueeBoardSelector(QWidget):
         return self._text
 
     def _get_adaptive_width(self) -> int:
-        """Calculate optimal width based on screen dimensions and DPI scaling."""
-        screen_w = 1920
-        dpi_scale = 1.0
-        try:
-            screen = self.screen() or QGuiApplication.primaryScreen()
-            if screen:
-                geom = screen.availableGeometry()
-                if geom.width() > 1000:
-                    screen_w = geom.width()
-                dpi = screen.logicalDotsPerInch()
-                if dpi > 0:
-                    dpi_scale = max(1.0, dpi / 96.0)
-        except Exception:
-            pass
-
-        if screen_w <= 1000 and sys.platform == "win32":
-            try:
-                import ctypes
-                w = ctypes.windll.user32.GetSystemMetrics(0)
-                if w > 1000:
-                    screen_w = w
-            except Exception:
-                pass
-
-        if screen_w >= 2560:
-            base_w = 250
-        elif screen_w >= 1920:
-            base_w = 215
-        elif screen_w >= 1600:
-            base_w = 195
-        elif screen_w >= 1366:
-            base_w = 180
-        else:
-            base_w = 160
-
-        return int(base_w * dpi_scale)
+        """Choose a modest width from the actual logical screen, without DPR multiplication."""
+        from main.qt.responsive import work_area
+        width = work_area(self).width
+        return max(140, min(210, round(width * .11)))
 
     def sizeHint(self) -> QSize:
         return QSize(self._get_adaptive_width(), 28)
@@ -1290,19 +1285,21 @@ class ControlsBar(QWidget):
         super().__init__(parent)
         self._backend = backend
         self.setObjectName("controls-bar")
-        self.setFixedHeight(64)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._setup_ui()
         self._populate_initial()
+        self.set_responsive_width(self.width())
 
     def _setup_ui(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
+        layout = QGridLayout(self)
+        self._grid = layout
+        layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(6)
 
         # ── Board group ───────────────────────────────────────────────────────
         board_group = QVBoxLayout()
         board_group.setSpacing(1)
-        lbl_board = QLabel("BOARD")
+        lbl_board = QLabel("Board")
         lbl_board.setProperty("role", "dim")
         lbl_board.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
 
@@ -1327,7 +1324,7 @@ class ControlsBar(QWidget):
 
         board_group.addWidget(lbl_board)
         board_group.addLayout(board_row)
-        layout.addLayout(board_group)
+        layout.addLayout(board_group, 0, 0)
 
         # Backward compatibility alias
         self.board_combo = self.board_selector
@@ -1335,26 +1332,26 @@ class ControlsBar(QWidget):
         # ── Port group ────────────────────────────────────────────────────────
         port_group = QVBoxLayout()
         port_group.setSpacing(1)
-        lbl_port = QLabel("PORT")
+        lbl_port = QLabel("Serial port")
         lbl_port.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
         port_row = QHBoxLayout()
         port_row.setSpacing(4)
         self.port_combo = MarqueeComboBox(self)
         self.port_combo.setMinimumWidth(180)
         self.port_combo.setMaximumWidth(420)
-        self.port_combo.setToolTip("Serial COM port for upload and monitor")
-        self.port_combo.setPlaceholderText("Select COM Port")
+        self.port_combo.setToolTip("Serial port for upload and monitoring")
+        self.port_combo.setPlaceholderText("Select serial port")
         self.port_combo.showPopup = self._refresh_ports_and_show  # type: ignore
         self.port_combo.currentIndexChanged.connect(self._on_port_changed)
         port_row.addWidget(self.port_combo)
         port_group.addWidget(lbl_port)
         port_group.addLayout(port_row)
-        layout.addLayout(port_group)
+        layout.addLayout(port_group, 0, 1)
 
         # ── Upload speed group ────────────────────────────────────────────────
         spd_group = QVBoxLayout()
         spd_group.setSpacing(1)
-        self.lbl_spd = QLabel("UPLOAD SPD")
+        self.lbl_spd = QLabel("Upload speed")
         self.lbl_spd.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
         self.upload_speed_combo = QComboBox()
         self.upload_speed_combo.addItems([str(s) for s in UPLOAD_SPEEDS])
@@ -1364,20 +1361,17 @@ class ControlsBar(QWidget):
         self.upload_speed_combo.currentTextChanged.connect(self._on_upload_speed_changed)
         spd_group.addWidget(self.lbl_spd)
         spd_group.addWidget(self.upload_speed_combo)
-        layout.addLayout(spd_group)
-
-        # ── Spacer ────────────────────────────────────────────────────────────
-        layout.addStretch()
+        layout.addLayout(spd_group, 0, 2)
 
         # ── OPTIONS section ───────────────────────────────────────────────────
         opt_group = QVBoxLayout()
         opt_group.setSpacing(2)
-        lbl_opt = QLabel("OPTIONS")
+        lbl_opt = QLabel("Workspace")
         lbl_opt.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
         opt_row = QHBoxLayout()
         opt_row.setSpacing(3)
 
-        self.cb_timestamp = QCheckBox("Time Stamp")
+        self.cb_timestamp = QCheckBox("Timestamps")
         self.cb_timestamp.setToolTip("Show timestamps in console and monitor output")
         from main.core.config import load_gui_config
         init_ts = bool(getattr(self._backend, "timestamp_enabled", False)) if (self._backend and hasattr(self._backend, "timestamp_enabled")) else bool(load_gui_config().get("timestamp_enabled", False))
@@ -1386,7 +1380,7 @@ class ControlsBar(QWidget):
         opt_row.addWidget(self.cb_timestamp)
 
         self.cb_skip_compile = QCheckBox("Skip Compile")
-        self.cb_skip_compile.setToolTip("Upload without recompiling (use cached firmware)")
+        self.cb_skip_compile.setToolTip("Reuse firmware only when sources and the selected target still match the last build")
         self.cb_skip_compile.setEnabled(False)
         self.cb_skip_compile.stateChanged.connect(self._on_skip_compile_changed)
         opt_row.addWidget(self.cb_skip_compile)
@@ -1445,7 +1439,9 @@ class ControlsBar(QWidget):
 
         opt_group.addWidget(lbl_opt, alignment=Qt.AlignmentFlag.AlignHCenter)
         opt_group.addLayout(opt_row)
-        layout.addLayout(opt_group)
+        layout.addLayout(opt_group, 0, 3)
+        self._groups = (board_group, port_group, spd_group, opt_group)
+        self._row_mode = None
 
     def _populate_initial(self) -> None:
         """Populate board and port combos from backend initial state.
@@ -1558,7 +1554,9 @@ class ControlsBar(QWidget):
     def _refresh_ports(self) -> None:
         if not self._backend:
             return
-        ports = self._backend._scan_ports()
+        ports = getattr(self._backend, "_last_known_ports", [])
+        if not isinstance(ports, list):
+            ports = []
         self.on_ports_updated(ports)
 
     def _refresh_ports_and_show(self) -> None:
@@ -1795,6 +1793,8 @@ class ControlsBar(QWidget):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     def apply_theme(self, theme_name: str) -> None:
+        for button in self.findChildren(QPushButton):
+            button.refresh_icon()
         if hasattr(self, "board_selector"):
             self.board_selector.update()
         if hasattr(self, "port_combo"):
@@ -1802,47 +1802,51 @@ class ControlsBar(QWidget):
         self.update()
 
     def _get_adaptive_upload_speed_width(self, width: int | None = None) -> int:
-        """Calculate responsive width for upload speed combobox considering screen dimension, font metrics, and DPI scale."""
-        w = width if width is not None else getattr(self, "_current_width", self.width())
+        """Reserve text and arrow space in Qt logical pixels."""
         try:
             fm = self.upload_speed_combo.fontMetrics()
             text_w = max(fm.horizontalAdvance(str(s)) for s in UPLOAD_SPEEDS)
         except Exception:
             text_w = 48
 
-        if w >= 1500:
-            extra = 58
-            floor = 104
-        elif w >= 1200:
-            extra = 50
-            floor = 96
-        elif w >= 950:
-            extra = 44
-            floor = 90
-        else:
-            extra = 38
-            floor = 84
-
-        dpi_scale = 1.0
-        try:
-            screen = self.screen() or (QApplication.primaryScreen() if QApplication.instance() else None)
-            if screen:
-                dpi_scale = max(1.0, screen.logicalDotsPerInch() / 96.0)
-        except Exception:
-            dpi_scale = 1.0
-
-        computed = int((text_w + extra) * min(1.25, max(1.0, dpi_scale ** 0.5)))
-        return max(floor, computed)
+        return max(86, text_w + 44)
 
     def update_adaptive_sizing(self) -> None:
-        """Refresh adaptive sizing when screen resolution or DPI scaling changes."""
-        if hasattr(self, "board_selector") and hasattr(self.board_selector, "_get_adaptive_width"):
-            adaptive_w = self.board_selector._get_adaptive_width()
-            self.board_selector.setMinimumWidth(max(160, int(adaptive_w * 0.85)))
-            self.board_selector.setMaximumWidth(max(360, int(adaptive_w * 1.5)))
-            self.board_selector.updateGeometry()
-        if hasattr(self, "upload_speed_combo") and hasattr(self, "_get_adaptive_upload_speed_width"):
-            self.upload_speed_combo.setFixedWidth(self._get_adaptive_upload_speed_width())
+        """Recalculate from the current window after a screen or font change."""
+        self.set_responsive_width(self.width())
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_groups"):
+            self.set_responsive_width(event.size().width())
+
+    def _reflow(self, width: int) -> None:
+        # Use actual content hints so translated labels and system fonts fit too.
+        groups = self._groups
+        required = sum(group.minimumSize().width() for group in groups) + 38
+        mode = 1 if width >= required else (2 if width >= 520 else 3)
+        if mode != self._row_mode:
+            for group in groups:
+                self._grid.removeItem(group)
+            for col in range(4):
+                self._grid.setColumnStretch(col, 0)
+            if mode == 1:
+                for col, group in enumerate(groups):
+                    self._grid.addLayout(group, 0, col)
+                self._grid.setColumnStretch(3, 1)
+            elif mode == 2:
+                for col, group in enumerate(groups[:3]):
+                    self._grid.addLayout(group, 0, col)
+                self._grid.addLayout(groups[3], 1, 0, 1, 3)
+                self._grid.setColumnStretch(1, 1)
+            else:
+                self._grid.addLayout(groups[0], 0, 0, 1, 2)
+                self._grid.addLayout(groups[1], 1, 0)
+                self._grid.addLayout(groups[2], 1, 1)
+                self._grid.addLayout(groups[3], 2, 0, 1, 2)
+                self._grid.setColumnStretch(0, 1)
+            self._row_mode = mode
+        self.setFixedHeight(max(54, self._grid.sizeHint().height()))
 
     def is_compact(self) -> bool:
         return getattr(self, "_is_compact", False)
@@ -1882,15 +1886,15 @@ class ControlsBar(QWidget):
             if hasattr(self, "lbl_spd"):
                 self.lbl_spd.setText("SPD")
         elif width < 1350:
-            self.cb_timestamp.setText("Time Stamp")
+            self.cb_timestamp.setText("Timestamps")
             self.cb_skip_compile.setText("Skip")
             if hasattr(self, "lbl_spd"):
-                self.lbl_spd.setText("UPLOAD SPD")
+                self.lbl_spd.setText("Upload speed")
         else:
-            self.cb_timestamp.setText("Time Stamp")
+            self.cb_timestamp.setText("Timestamps")
             self.cb_skip_compile.setText("Skip Compile")
             if hasattr(self, "lbl_spd"):
-                self.lbl_spd.setText("UPLOAD SPD")
+                self.lbl_spd.setText("Upload speed")
 
         # Board and port adaptive widths
         if hasattr(self, "board_selector") and hasattr(self.board_selector, "_get_adaptive_width"):
@@ -1908,6 +1912,8 @@ class ControlsBar(QWidget):
                 self.board_selector.setMinimumWidth(max(175, adaptive_w))
                 self.port_combo.setMinimumWidth(230)
 
+        self._reflow(width)
+
     def _toggle_options_menu(self) -> None:
         """Show popup containing option buttons that are collapsed in compact mode."""
         if hasattr(self, "_opt_popup") and self._opt_popup and self._opt_popup.isVisible():
@@ -1916,6 +1922,8 @@ class ControlsBar(QWidget):
             return
 
         popup = CompactDropdownPopup(self)
+        popup.destroyed.connect(lambda: setattr(self, "_opt_popup", None)
+                                if getattr(self, "_opt_popup", None) is popup else None)
         from main.core.theme import Theme
         mw = self.window()
 
@@ -1926,7 +1934,7 @@ class ControlsBar(QWidget):
         det_hover = "#d35400" if detached else "#38a058"
         popup.add_button(
             det_text,
-            self._toggle_editor_detachment,
+            self.btn_detach_editor.click,
             det_bg,
             det_hover,
             enabled=self.btn_detach_editor.isEnabled(),
@@ -1937,7 +1945,7 @@ class ControlsBar(QWidget):
         ed_text = "Hide Editor" if editor_visible else "Show Editor"
         popup.add_button(
             ed_text,
-            self._toggle_editor_pane,
+            self.btn_toggle_editor.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=self.btn_toggle_editor.isEnabled(),
@@ -1948,7 +1956,7 @@ class ControlsBar(QWidget):
         mon_text = "Hide Monitors" if monitors_visible else "Show Monitors"
         popup.add_button(
             mon_text,
-            self._toggle_monitors_pane,
+            self.btn_toggle_monitors.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=self.btn_toggle_monitors.isEnabled(),
@@ -1957,7 +1965,7 @@ class ControlsBar(QWidget):
         # 4. Settings
         popup.add_button(
             "⚙ Settings",
-            self._open_settings,
+            self.btn_settings.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=True,
@@ -1970,7 +1978,7 @@ class ControlsBar(QWidget):
         ai_hover = Theme.CYAN if ai_active else Theme.BTN_CLEAR_H
         popup.add_button(
             ai_text,
-            lambda: self._toggle_ai_panel(not ai_active),
+            self.btn_ai.click,
             ai_bg,
             ai_hover,
             enabled=True,

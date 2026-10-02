@@ -25,8 +25,17 @@ for _p in (_project_root, _modules_path, _main_path):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-if _env_site.is_dir() and str(_env_site) not in sys.path:
+if sys.platform == "win32" and _env_site.is_dir() and str(_env_site) not in sys.path:
     sys.path.insert(0, str(_env_site))
+
+from src.modules.runtime_resources import (
+    MINIMUM_LOGICAL_CORES, enforce_minimum_cpu_requirement,
+    configure_webengine_environment,
+)
+
+if not enforce_minimum_cpu_requirement():
+    raise SystemExit(1)
+configure_webengine_environment()
 
 # Strict enforcement: NEVER run under desktop/system Python
 from src.modules.private_python_guard import enforce_private_python
@@ -42,7 +51,6 @@ if sys.platform == "win32":
         pass
 
 SCRIPT_DIR = _project_root
-MINIMUM_LOGICAL_CORES = 4
 
 from main.core.constants import is_application_codebase_dir
 from main.core.config import (
@@ -71,44 +79,6 @@ except ImportError:
         def mark_session_clean_exit(pid: int | None = None) -> None: pass
         def record_crash_event(*args: Any, **kwargs: Any) -> None: pass
 
-# ── Disable Chromium WebEngine background throttling on hidden/occluded/pre-warmed views ──
-_existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-_no_throttle_flags = [
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding",
-    "--disable-features=CalculateNativeWinOcclusion",
-]
-_merged_flags = _existing_flags
-for _f in _no_throttle_flags:
-    if _f not in _merged_flags:
-        _merged_flags = f"{_merged_flags} {_f}".strip()
-
-# Dynamic low-end / HDD hardware optimization flags for Chromium WebEngine
-try:
-    import psutil
-    from main.core.file_utils import is_drive_hdd
-    _mem_total = psutil.virtual_memory().total
-    _cpu_count = os.cpu_count() or 2
-    _is_low_end = (_mem_total < 5.5 * 1024 ** 3) or (_cpu_count <= 2) or is_drive_hdd()
-except Exception:
-    _is_low_end = False
-
-if _is_low_end:
-    _low_end_flags = [
-        "--enable-low-end-device-mode",
-        "--disable-gpu-watchdog",
-        "--num-raster-threads=1",
-        "--disable-gpu-shader-disk-cache",
-        "--disk-cache-size=1",
-        "--disable-component-update",
-    ]
-    for _f in _low_end_flags:
-        if _f not in _merged_flags:
-            _merged_flags = f"{_merged_flags} {_f}".strip()
-
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _merged_flags
-
 # ── PySide6 GUI Components ───────────────────────────────────────────────────
 try:
     # pyrefly: ignore [missing-import]
@@ -135,32 +105,7 @@ except ImportError:
     _PYSIDE6_AVAILABLE = False
 
 
-def _enforce_minimum_cpu_requirement() -> bool:
-    """Enforce minimum 4 logical cores requirement per project specification."""
-    try:
-        cores = os.cpu_count()
-    except Exception:
-        cores = None
-
-    if cores is None or cores >= MINIMUM_LOGICAL_CORES:
-        return True
-
-    msg = (
-        "MCU Flasher by Naph cannot run reliably on this computer.\n\n"
-        f"Detected logical CPU cores/threads: {cores}\n"
-        f"Minimum required: {MINIMUM_LOGICAL_CORES}\n\n"
-        "The editor, serial monitor, toolchain, and background services "
-        "require at least 4 logical CPU cores/threads."
-    )
-    if sys.platform == "win32":
-        try:
-            ctypes.windll.user32.MessageBoxW(
-                0, msg, "MCU Flasher by Naph — Unsupported Hardware", 0x10
-            )
-        except Exception:
-            pass
-    print(msg, file=sys.stderr)
-    return False
+_enforce_minimum_cpu_requirement = enforce_minimum_cpu_requirement
 
 
 def _configure_windows_environment() -> None:
@@ -232,7 +177,9 @@ def main() -> int:
             record_crash_event("missing_dependency", "PySide6 is not installed", exc_type="ImportError", pid=os.getpid())
             msg = (
                 "MCU Flasher error: PySide6 is not installed.\n\n"
-                "Please run bootstrap or runThisOnWindows.vbs to install all dependencies."
+                + ("Run python3 direct/setup_ubuntu.py to repair dependencies."
+                   if sys.platform.startswith("linux") else
+                   "Please run bootstrap or runThisOnWindows.vbs to install all dependencies.")
             )
             if sys.platform == "win32":
                 try:
@@ -264,6 +211,7 @@ def main() -> int:
             app_font.setStyleHint(QFont.StyleHint.SansSerif)
             app.setFont(app_font)
         app.setStyleSheet(build_stylesheet(active_theme))
+        app.setProperty("mcuAppliedTheme", active_theme)
 
         # ── Application icon ──────────────────────────────────────────────────
         icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
@@ -272,13 +220,6 @@ def main() -> int:
 
         # ── Create backend ────────────────────────────────────────────────────
         api = MCUWebBackendAPI()
-
-        # Enforce codebase internal metadata hiding on startup
-        try:
-            from main.core.file_utils import hide_internal_project_metadata
-            hide_internal_project_metadata(SCRIPT_DIR)
-        except Exception:
-            pass
 
         # ── Handle project command-line argument or startup selector ──────────
         proj_arg: Optional[str] = None
@@ -298,9 +239,6 @@ def main() -> int:
                     if candidate.exists() and not is_application_codebase_dir(candidate):
                         proj_arg = str(candidate)
                         break
-
-        # Pre-warm holder for main window
-        window_holder: dict[str, Any] = {"window": None}
 
         if proj_arg:
             try:
@@ -358,37 +296,13 @@ def main() -> int:
                 QTimer.singleShot(150, _assert_dlg_foreground)
                 QTimer.singleShot(350, _assert_dlg_foreground)
 
-            def _prewarm_main_window():
-                if window_holder["window"] is None and not dlg.isHidden():
-                    try:
-                        win = MCUMainWindow(backend=api)
-                        win.hide()
-                        window_holder["window"] = win
-                        if not dlg.isHidden():
-                            _assert_dlg_foreground()
-                    except Exception:
-                        pass
-
-            # Pre-warm MCUMainWindow in background during idle time after dialog is established
-            if QTimer is not None:
-                QTimer.singleShot(600, _prewarm_main_window)
-
             if dlg.exec() != QDialog.DialogCode.Accepted or not api.sketch_dir_path:
                 # User cancelled project selection -> clean exit
-                if window_holder["window"] is not None:
-                    try:
-                        window_holder["window"].close()
-                    except Exception:
-                        pass
                 mark_session_clean_exit(os.getpid())
                 return 0
 
         # ── Main window ───────────────────────────────────────────────────────
-        window = window_holder.get("window")
-        if window is None:
-            window = MCUMainWindow(backend=api)
-        window._on_startup()
-
+        window = MCUMainWindow(backend=api)
         window.show()
         window.raise_()
         window.activateWindow()

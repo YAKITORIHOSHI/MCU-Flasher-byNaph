@@ -10,7 +10,7 @@ Features
 * Tabbed interface: Libraries tab + Boards tab + Installed tab.
 * Correct flat-list JSON parsing for both indexes.
 * Local file cache so indexes are only fetched once per 24 hours.
-* All network I/O runs in background threads — the GUI never freezes.
+* Cache-first loading, bounded disk/network workers and queued Tk updates.
 * Split-pane layout: list on the left, detail panel on the right.
 * Version dropdown to pick any release.
 * Progress bar for index loading and package archive downloads.
@@ -18,19 +18,22 @@ Features
 * Installed tab shows all downloaded items with **available update** indicators.
 * User-configurable additional board manager indexes, including multiple
   comma-separated vendor URLs.
+* Static glass cards and keyboard-accessible tabs share Glass, Frosted Light
+  and Solarized Dark palettes with the main workspace.
 """
 
 from __future__ import annotations
 import json
 import hashlib
 import os
-import socket
 import re
 import sys
 import subprocess
 import threading
 import time
 import importlib.util
+from collections import OrderedDict
+from functools import lru_cache
 from typing import Optional, Any
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -59,24 +62,6 @@ DEFAULT_HEADERS = {
 }
 
 
-def check_internet_connection(timeout: float = 1.0) -> bool:
-    """Fast socket check for active internet connection using standard HTTP/HTTPS ports."""
-    test_targets = [
-        ("1.1.1.1", 443),
-        ("8.8.8.8", 443),
-        ("1.1.1.1", 80),
-        ("8.8.8.8", 53),
-        ("downloads.arduino.cc", 443),
-        ("www.google.com", 80),
-    ]
-    for host, port in test_targets:
-        try:
-            sock = socket.create_connection((host, port), timeout=timeout)
-            sock.close()
-            return True
-        except Exception:
-            continue
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -221,8 +206,8 @@ def _validate_index_payload(data, expected_key: str) -> dict:
     return data
 
 
-# Process-wide RAM cache for parsed library & board index JSONs (up to 59+ MB on disk)
-_INDEX_JSON_RAM_CACHE: dict[str, tuple[float, int, dict]] = {}
+# Keep only small raw indexes. Large catalogs retain grouped metadata instead.
+_INDEX_JSON_RAM_CACHE = OrderedDict()
 _INDEX_JSON_RAM_LOCK = threading.Lock()
 
 
@@ -231,13 +216,19 @@ def _read_index_cache(cache_file: str, expected_key: str) -> dict | None:
         st = os.stat(cache_file)
         with _INDEX_JSON_RAM_LOCK:
             cached = _INDEX_JSON_RAM_CACHE.get(cache_file)
-            if cached is not None and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                return cached[2]
+            if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+                _INDEX_JSON_RAM_CACHE.move_to_end(cache_file)
+                return _validate_index_payload(cached[2], expected_key)
+            _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
 
         with open(cache_file, "r", encoding="utf-8-sig") as fh:
             data = _validate_index_payload(json.load(fh), expected_key)
             with _INDEX_JSON_RAM_LOCK:
-                _INDEX_JSON_RAM_CACHE[cache_file] = (st.st_mtime, st.st_size, data)
+                if st.st_size <= 1_000_000:
+                    _INDEX_JSON_RAM_CACHE[cache_file] = (st.st_mtime_ns, st.st_size, data)
+                    while (len(_INDEX_JSON_RAM_CACHE) > 4 or
+                           sum(entry[1] for entry in _INDEX_JSON_RAM_CACHE.values()) > 2_000_000):
+                        _INDEX_JSON_RAM_CACHE.popitem(last=False)
             return data
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -435,7 +426,7 @@ class Theme:
     @classmethod
     def apply_theme(cls, mode: str = "default") -> str:
         mode_key = (mode or "default").lower().strip()
-        if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+        if mode_key in ("solarized", "solarize", "solarized-dark", "solarized_dark", "solarize_dark"):
             mode_key = "solarized_dark"
         elif mode_key not in cls.PALETTES:
             mode_key = "default"
@@ -446,7 +437,18 @@ class Theme:
         return mode_key
 
 
+try:
+    from main.core.theme import Theme as _SharedTheme
+    Theme.PALETTES = _SharedTheme.PALETTES
+    Theme.apply_theme("default")
+except ImportError:
+    pass
+
+
 def _detect_system_theme() -> str:
+    if sys.platform.startswith("linux"):
+        from main.core.config import _detect_system_theme as detect
+        return detect()
     try:
         import winreg
         key = winreg.OpenKey(
@@ -461,19 +463,26 @@ def _detect_system_theme() -> str:
 
 
 def _resolve_lib_req_theme() -> str:
+    # Use the same per-user precedence, legacy migration and OS following as
+    # the workspace. Portable standalone copies retain the fallback below.
+    try:
+        from main.core.config import get_theme_mode
+        return get_theme_mode()
+    except ImportError:
+        pass
     for cfg in (
-        os.path.join(SCRIPT_DIR, "src", "gui_config.json"),
-        os.path.join(os.path.expanduser("~"), ".mcu_gui_config.json")
+        os.path.join(os.path.expanduser("~"), ".mcu_gui_config.json"),
+        os.path.join(SCRIPT_DIR, "src", "gui_config.json")
     ):
         try:
             if os.path.exists(cfg):
                 with open(cfg, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                shared = data.get("shared", {})
+                shared = data.get("shared", data)
                 if shared.get("theme_follow_system", False):
                     return _detect_system_theme()
-                m = shared.get("theme_mode", "default")
-                if m in Theme.PALETTES or m in ("solarized", "solarize", "solarized_dark", "solarize_dark"):
+                m = str(shared.get("theme_mode", "default")).strip().lower()
+                if m in Theme.PALETTES or m in ("solarized", "solarize", "solarized-dark", "solarized_dark", "solarize_dark"):
                     return m
         except Exception:
             pass
@@ -483,24 +492,33 @@ Theme.apply_theme(_resolve_lib_req_theme())
 
 
 def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9, "bold")) -> tk.Button:
+    from src.modules.tk_glass import readable_foreground
     btn = tk.Button(
         parent, text=text, command=command,
-        font=font, fg=Theme.TEXT_BRIGHT, bg=bg,
-        activebackground=bg_hover, activeforeground=Theme.TEXT_BRIGHT,
+        font=font, fg=readable_foreground(bg), bg=bg,
+        activebackground=bg_hover, activeforeground=readable_foreground(bg_hover),
         disabledforeground=Theme.TEXT_DIM,
-        relief=tk.FLAT, borderwidth=0, padx=14, pady=4, cursor="hand2"
+        relief=tk.FLAT, borderwidth=0, padx=12, pady=6, cursor="hand2",
+        highlightthickness=1, highlightbackground=Theme.BORDER, highlightcolor=Theme.CYAN
     )
-    btn.bind("<Enter>", lambda e, b=btn, h=bg_hover: b.configure(bg=h, cursor="hand2") if str(b["state"]) != "disabled" else b.configure(cursor="arrow"))
-    btn.bind("<Leave>", lambda e, b=btn, n=bg: b.configure(bg=n) if str(b["state"]) != "disabled" else None)
+    btn._normal_bg, btn._hover_bg = bg, bg_hover
+    btn._bg_token = next((key for key in ("BTN_CLEAR", "BTN_MONITOR", "BTN_COMPILE", "BTN_STOP", "BTN_UPLOAD", "BTN_FULL", "BTN_DIM")
+                          if getattr(Theme, key) == bg), None)
+    btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=b._hover_bg, fg=readable_foreground(b._hover_bg), cursor="hand2") if str(b["state"]) != "disabled" else b.configure(cursor="arrow"))
+    btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=b._normal_bg, fg=readable_foreground(b._normal_bg)))
     return btn
 
 
 class CircularLoadingOverlay(tk.Frame):
     """Circular arc loading spinner overlay matching the AI Assistant loading animation."""
 
-    def __init__(self, parent, bg_color=Theme.BG_DARKEST, spinner_color=Theme.CYAN,
+    def __init__(self, parent, bg_color=None, spinner_color=None,
                  title="Loading Arduino Indexes...", subtitle="Downloading & scanning packages in background thread..."):
+        bg_color = bg_color or Theme.BG_DARKEST
+        spinner_color = spinner_color or Theme.CYAN
         super().__init__(parent, bg=bg_color)
+        from src.modules.runtime_resources import performance_profile
+        self._frame_interval = 180 if performance_profile().constrained else 100
         self.bg_color = bg_color
         self.spinner_color = spinner_color
         self.angle = 0
@@ -561,7 +579,7 @@ class CircularLoadingOverlay(tk.Frame):
                 width=4
             )
             self.angle = (self.angle + 12) % 360
-            self._after_id = self.after(30, self._draw_spinner)
+            self._after_id = self.after(self._frame_interval, self._draw_spinner)
         except Exception:
             pass
 
@@ -882,11 +900,12 @@ _VERSION_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=512)
 def _version_key(version_str: str):
     """Return a sort key that orders semantic versions correctly."""
     m = _VERSION_RE.match(version_str.strip())
     if not m:
-        return (0, 0, 0, 0, [(1, version_str)])
+        return (0, 0, 0, 0, ((1, version_str),))
 
     major = int(m.group(1))
     minor = int(m.group(2)) if m.group(2) else 0
@@ -903,7 +922,7 @@ def _version_key(version_str: str):
             else:
                 pre_key.append((1, part))
 
-    return (major, minor, patch, is_release, pre_key)
+    return (major, minor, patch, is_release, tuple(pre_key))
 
 
 def _archive_filename(url: str, archive_file_name: str = "") -> str:
@@ -1192,19 +1211,21 @@ def _group_libraries(raw_list: list[dict]) -> dict[str, dict]:
     """Group the flat release list by library name."""
     by_name: dict[str, list[dict]] = {}
     for entry in raw_list:
+        if not isinstance(entry, dict) or not isinstance(entry.get('name'), str) or not entry['name'].strip():
+            continue
         name = entry.get("name", "")
         by_name.setdefault(name, []).append(entry)
 
     result: dict[str, dict] = {}
     for name, entries in by_name.items():
-        entries.sort(key=lambda e: _version_key(e.get("version", "0")),
+        entries.sort(key=lambda e: _version_key(str(e.get("version", "0"))),
                      reverse=True)
         latest = entries[0]
         versions = []
         for e in entries:
             versions.append({
-                "version": e.get("version", "?"),
-                "url": e.get("url", ""),
+                "version": str(e.get("version", "?")),
+                "url": str(e.get("url") or ""),
                 "size": e.get("size", 0),
                 "checksum": e.get("checksum", ""),
                 "archiveFileName": e.get("archiveFileName", ""),
@@ -1289,13 +1310,15 @@ def _group_boards(packages: list[dict]) -> dict[str, dict]:
         used_names.add(display_name.casefold())
 
         boards_list: list[str] = []
+        board_names = set()
         for platform, _pkg in records:
             for board in platform.get("boards", []) or []:
                 if not isinstance(board, dict):
                     continue
                 board_name = str(board.get("name", "")).strip()
-                if board_name and board_name not in boards_list:
+                if board_name and board_name not in board_names:
                     boards_list.append(board_name)
+                    board_names.add(board_name)
 
         versions = []
         seen_versions: set[tuple[str, str]] = set()
@@ -1346,6 +1369,33 @@ def _group_boards(packages: list[dict]) -> dict[str, dict]:
     return result
 
 
+def _read_library_catalog(cache_file=LIBRARY_CACHE_FILE, data=None):
+    from src.modules.browser_loading import load_catalog
+    def build():
+        raw = data if data is not None else _read_index_cache(cache_file, 'libraries')
+        return _group_libraries(raw['libraries']) if raw is not None else None
+    if data is not None and data.get('_browser_cache_written') is False:
+        return build()  # Fresh network data remains usable on a read-only cache.
+    return load_catalog(cache_file + '.catalog-v1.json', [cache_file], build)
+
+
+def _read_board_catalog(paths, fresh=None):
+    from src.modules.browser_loading import load_catalog
+    def build():
+        packages, loaded = [], False
+        for path in paths:
+            raw = (fresh or {}).get(path)
+            if raw is None:
+                raw = _read_index_cache(path, 'packages')
+            if raw is not None:
+                loaded = True
+                packages.extend(raw['packages'])
+        return _group_boards(packages) if loaded else None
+    if fresh and any(raw.get('_browser_cache_written') is False for raw in fresh.values()):
+        return build()
+    return load_catalog(os.path.join(INDEX_CACHE_DIR, 'browser_boards_catalog-v1.json'), paths, build)
+
+
 # ---------------------------------------------------------------------------
 # Reusable browsing tab
 # ---------------------------------------------------------------------------
@@ -1394,6 +1444,15 @@ class BrowseTab:
 
         self._build(parent)
 
+        def cancel_callbacks(event):
+            if event.widget is parent:
+                for name in ('_search_after_id', '_load_more_after_id'):
+                    timer = getattr(self, name, None)
+                    if timer is not None:
+                        self.app.root.after_cancel(timer)
+                        setattr(self, name, None)
+        parent.bind('<Destroy>', cancel_callbacks, add='+')
+
     def _build(self, parent: ttk.Frame):
         # Search bar
         top = tk.Frame(parent, bg=Theme.BG_DARKEST, pady=4)
@@ -1409,7 +1468,7 @@ class BrowseTab:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER
         )
-        self.search_entry.pack(side="left", padx=(8, 10))
+        self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
 
         self.lbl_search_status = tk.Label(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
@@ -1426,7 +1485,7 @@ class BrowseTab:
         self.listbox = tk.Listbox(
             left, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
-            selectbackground=Theme.BORDER_LIT, selectforeground=Theme.TEXT_BRIGHT,
+            selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
             borderwidth=1, relief=tk.FLAT,
             activestyle="none",
@@ -1442,6 +1501,8 @@ class BrowseTab:
         # --- Right: detail panel ---
         self.detail_frame = tk.Frame(pane, bg=Theme.BG_DARKEST)
         pane.add(self.detail_frame, minsize=350)
+        from src.modules.tk_glass import ResponsivePanes
+        self._responsive_panes = ResponsivePanes(pane, left, self.detail_frame)
 
         # Placeholder
         self.lbl_placeholder = tk.Label(
@@ -1489,7 +1550,7 @@ class BrowseTab:
 
         def _on_content_configure(event=None):
             self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
-            self.detail_canvas.after_idle(_sync_detail_scrollbar)
+            _sync_detail_scrollbar()
 
         def _on_mousewheel(event):
             if self._scroll_state["visible"]:
@@ -1517,6 +1578,8 @@ class BrowseTab:
         self._detail_builder(self)
 
     def populate(self, items: dict[str, dict]):
+        if self.all_items is items:
+            return
         self.all_items = items
         self.sorted_names = sorted(items.keys(), key=str.lower)
         self.name_tuples = [(n, n.lower()) for n in self.sorted_names]
@@ -1527,7 +1590,7 @@ class BrowseTab:
             self.detail_scroll.pack_forget()
             self._scroll_state["visible"] = False
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
-        self._populate_listbox()
+        self._execute_search()
 
     def _populate_listbox(self):
         _load_more_after_id = getattr(self, "_load_more_after_id", None)
@@ -1612,7 +1675,7 @@ class BrowseTab:
 
         self._on_select_handler(self, item)
         self.detail_canvas.yview_moveto(0)
-        self.detail_canvas.after_idle(self._sync_detail_scrollbar)
+        self._sync_detail_scrollbar()
 
 
 # ---------------------------------------------------------------------------
@@ -1642,8 +1705,20 @@ class InstalledTab:
         self._all_boards = []
         self._select_req_id: int = 0
         self._loading_complete_req_id: int = 0
+        self._animation_after_id = None
+        from src.modules.browser_loading import LatestScan, scan_package_details
+        self._detail_worker = LatestScan(app._tasks, scan_package_details)
 
         self._build(parent)
+        def cancel_callbacks(event):
+            if event.widget is parent:
+                self._select_req_id += 1
+                self._detail_worker.cancel()
+                self._stop_loading_animation()
+                if self._search_after_id is not None:
+                    self.app.root.after_cancel(self._search_after_id)
+                    self._search_after_id = None
+        parent.bind('<Destroy>', cancel_callbacks, add='+')
 
     def _build(self, parent: ttk.Frame):
         # Search bar
@@ -1651,6 +1726,9 @@ class InstalledTab:
         top.pack(fill="x")
 
         tk.Label(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
+        # Reserve the count before the expanding entry so it stays readable.
+        self.lbl_search_status = tk.Label(top, text="0 installed", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        self.lbl_search_status.pack(side="right", padx=(8, 0))
         self.search_var = tk.StringVar()
         self.search_entry = tk.Entry(
             top, textvariable=self.search_var,
@@ -1660,11 +1738,8 @@ class InstalledTab:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER
         )
-        self.search_entry.pack(side="left", padx=(8, 10))
+        self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
-
-        self.lbl_search_status = tk.Label(top, text="Found 0 installed item(s)", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
-        self.lbl_search_status.pack(side="left", padx=(10, 0))
 
         # Paned window: list | detail
         pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BORDER, sashwidth=2, sashrelief=tk.FLAT, bd=0)
@@ -1677,7 +1752,7 @@ class InstalledTab:
         self.listbox = tk.Listbox(
             left, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
-            selectbackground=Theme.BORDER_LIT, selectforeground=Theme.TEXT_BRIGHT,
+            selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
             borderwidth=1, relief=tk.FLAT,
             activestyle="none",
@@ -1700,9 +1775,13 @@ class InstalledTab:
             font=("Montserrat", 13), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="center"
         )
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
+        from src.modules.tk_glass import ResponsivePanes
+        self._responsive_panes = ResponsivePanes(pane, left, self.detail_frame)
 
-        # Responsive detail content frame that stretches to fill all available space
-        self._detail_content = tk.Frame(self.detail_frame, bg=Theme.BG_DARKEST)
+        # Metadata and example controls remain reachable on short detail panes.
+        from src.modules.tk_glass import ScrollBody
+        self._details_view = ScrollBody(self.detail_frame, Theme.BG_DARKEST)
+        self._detail_content = self._details_view.body
 
         def _on_detail_configure(event):
             pad = 30
@@ -1824,7 +1903,7 @@ class InstalledTab:
         self.examples_listbox = tk.Listbox(
             examples_wrap, font=("Consolas", 9),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
-            selectbackground=Theme.BORDER_LIT, selectforeground=Theme.TEXT_BRIGHT,
+            selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
             borderwidth=1, relief=tk.FLAT, activestyle="none", exportselection=False
         )
@@ -1893,6 +1972,7 @@ class InstalledTab:
     _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def _start_loading_animation(self, req_id: int, frame_idx: int = 0):
+        self._animation_after_id = None
         if getattr(self, "_select_req_id", 0) != req_id:
             return
         if getattr(self, "_loading_complete_req_id", None) == req_id:
@@ -1908,49 +1988,30 @@ class InstalledTab:
 
         next_idx = (frame_idx + 1) % len(self._SPINNER_FRAMES)
         try:
-            self.app.root.after(80, lambda: self._start_loading_animation(req_id, next_idx))
+            self._animation_after_id = self.app.root.after(180, lambda: self._start_loading_animation(req_id, next_idx))
         except Exception:
             pass
 
     def _load_details_async_worker(self, item: dict, req_id: int):
-        path = item.get("path", "")
-        item_type = item.get("type", "Library")
-
-        # Perform heavy disk I/O scanning on background thread
-        size_bytes = self._get_dir_size(path)
-
-        if item_type == "Library":
-            examples = self._find_examples(path)
-            boards = []
-        else:
-            examples = []
-            boards = self._find_boards(path)
-
-        # Post results back to main thread safely
-        def _on_complete():
-            if getattr(self, "_select_req_id", 0) != req_id:
+        """Submit one latest scan rather than creating a thread per selection."""
+        def completed(result, error):
+            if self._select_req_id != req_id:
                 return
-
             self._loading_complete_req_id = req_id
-
-            if size_bytes > 1024 * 1024:
-                self.lbl_size.config(text=f"Size on Disk: {size_bytes / (1024 * 1024):.1f} MB")
-            else:
-                self.lbl_size.config(text=f"Size on Disk: {size_bytes / 1024:.0f} KB")
-
-            if item_type == "Library":
-                self._all_examples = examples
-            else:
-                self._all_boards = boards
-
+            self._stop_loading_animation()
+            if error or result is None:
+                self.lbl_size.config(text='Size on Disk: unavailable')
+                self._clear_examples(f'(scan unavailable: {error or "cancelled"})')
+                return
+            size, self._all_examples, self._all_boards = result
+            label = f'{size / (1024 * 1024):.1f} MB' if size > 1024 * 1024 else f'{size / 1024:.0f} KB'
+            self.lbl_size.config(text=f'Size on Disk: {label}')
             self._filter_and_render_list(item_override=item)
-
-        try:
-            self.app.root.after(0, _on_complete)
-        except Exception:
-            pass
+        self._detail_worker.submit(item, completed)
 
     def _on_examples_search_change(self, *args):
+        if self._loading_complete_req_id != self._select_req_id:
+            return
         self._filter_and_render_list()
 
     def _filter_and_render_list(self, item_override=None):
@@ -1968,6 +2029,7 @@ class InstalledTab:
 
         if item_type == "Library":
             self._current_examples = []
+            labels = []
             if not getattr(self, "_all_examples", None):
                 self.examples_listbox.insert(tk.END, "(no sample sketches found)")
                 self.examples_listbox.config(state=tk.DISABLED)
@@ -1977,8 +2039,11 @@ class InstalledTab:
                 sketch_folder = os.path.basename(os.path.dirname(path))
                 display_name = f"{sketch_folder} / {os.path.basename(path)}"
                 if not query or query in display_name.lower():
-                    self.examples_listbox.insert(tk.END, display_name)
+                    labels.append(display_name)
                     self._current_examples.append(path)
+
+            if labels:
+                self.examples_listbox.insert(tk.END, *labels)
 
             if not self._current_examples:
                 self.examples_listbox.insert(tk.END, "(no matching sample sketches found)")
@@ -1990,13 +2055,10 @@ class InstalledTab:
                 self.examples_listbox.config(state=tk.DISABLED)
                 return
 
-            matched_count = 0
-            for board in self._all_boards:
-                if not query or query in board.lower():
-                    self.examples_listbox.insert(tk.END, f"  •  {board}")
-                    matched_count += 1
-
-            if matched_count == 0:
+            labels = [f"  •  {board}" for board in self._all_boards if not query or query in board.lower()]
+            if labels:
+                self.examples_listbox.insert(tk.END, *labels)
+            else:
                 self.examples_listbox.insert(tk.END, "(no matching board definitions found)")
                 self.examples_listbox.config(state=tk.DISABLED)
 
@@ -2037,6 +2099,8 @@ class InstalledTab:
 
     def populate(self, installed_items: list[dict]):
         """Replace the internal installed items list and refresh UI."""
+        if self.installed_items is installed_items:
+            return
         self.installed_items = installed_items
         self._execute_search()
 
@@ -2047,11 +2111,14 @@ class InstalledTab:
 
     def _execute_search(self):
         self._search_after_id = None
+        self._select_req_id += 1
+        self._detail_worker.cancel()
+        self._stop_loading_animation()
         query = self.search_var.get().lower().strip()
-        selected_name = None
+        selected_path = None
         sel = self.listbox.curselection()
         if sel and sel[0] < len(self.filtered_items):
-            selected_name = self.filtered_items[sel[0]]["name"]
+            selected_path = self.filtered_items[sel[0]]["path"]
 
         if not query:
             self.filtered_items = list(self.installed_items)
@@ -2066,27 +2133,25 @@ class InstalledTab:
                     contains.append(item)
             self.filtered_items = starts + contains
 
-        self.lbl_search_status.config(text=f"Found {len(self.filtered_items)} installed item(s)")
+        self.lbl_search_status.config(text=f"{len(self.filtered_items)} installed")
 
         self.listbox.delete(0, tk.END)
-        for item in self.filtered_items:
-            up_prefix = "⬆ " if item.get("update_available") else ""
-            self.listbox.insert(
-                tk.END,
-                f"{up_prefix}{self._display_item_name(item)} ({item['installed_version']})",
-            )
+        labels = [f"{'⬆ ' if item.get('update_available') else ''}{self._display_item_name(item)} ({item['installed_version']})"
+                  for item in self.filtered_items]
+        if labels:
+            self.listbox.insert(tk.END, *labels)
 
-        if selected_name:
+        if selected_path:
             for i, item in enumerate(self.filtered_items):
-                if item["name"] == selected_name:
+                if item["path"] == selected_path:
                     self.listbox.selection_set(i)
                     self.listbox.see(i)
                     self._on_select()
                     return
 
         # Hide detail if nothing
-        if hasattr(self, "_detail_content"):
-            self._detail_content.pack_forget()
+        if hasattr(self, "_details_view"):
+            self._details_view.pack_forget()
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._clear_examples()
         self._set_update_btn_state(False)
@@ -2135,13 +2200,17 @@ class InstalledTab:
             self._set_update_btn_state(False)
             return
         item = self.filtered_items[idx]
+        self._stop_loading_animation()
+        # Invalidate earlier samples before changing traced filter variables.
+        self._select_req_id += 1
+        req_id = self._select_req_id
 
         if hasattr(self, "examples_search_var"):
             self.examples_search_var.set("")
 
         self.lbl_placeholder.pack_forget()
-        if hasattr(self, "_detail_content") and not self._detail_content.winfo_ismapped():
-            self._detail_content.pack(side=tk.LEFT, fill="both", expand=True, padx=10, pady=8)
+        if not self._details_view.winfo_ismapped():
+            self._details_view.pack(fill="both", expand=True, padx=10, pady=8)
 
         self.lbl_name.config(text=self._display_item_name(item))
         self.lbl_type.config(text=f"Type: {item['type']}")
@@ -2168,10 +2237,6 @@ class InstalledTab:
             self.lbl_examples_header.config(text="Available Boards:")
             self.lbl_examples_hint.config(text="Supported microcontrollers inside this downloaded platform package")
 
-        # Increment select request ID for async thread cancellation/validation
-        self._select_req_id = getattr(self, "_select_req_id", 0) + 1
-        req_id = self._select_req_id
-
         # Show immediate loading state with animated spinner
         self.lbl_size.config(text="Size on Disk: Calculating ⠋...")
         self.examples_listbox.config(state=tk.NORMAL)
@@ -2182,12 +2247,13 @@ class InstalledTab:
         # Start loading animation spinner
         self._start_loading_animation(req_id)
 
-        # Launch background thread worker for disk I/O scanning!
-        threading.Thread(
-            target=self._load_details_async_worker,
-            args=(item, req_id),
-            daemon=True
-        ).start()
+        # Reuse one cancellable worker for the latest detail selection.
+        self._load_details_async_worker(item, req_id)
+
+    def _stop_loading_animation(self):
+        if self._animation_after_id is not None:
+            self.app.root.after_cancel(self._animation_after_id)
+            self._animation_after_id = None
 
     def _open_folder(self):
         sel = self.listbox.curselection()
@@ -2202,7 +2268,7 @@ class InstalledTab:
                 webbrowser.open("file://" + path)
         else:
             messagebox.showerror("Error", "Folder does not exist or has been deleted outside this browser.")
-            self.app._compute_installed_items()  # refresh
+            self.app._compute_installed_items_async()  # refresh
             self.populate(self.app._installed_items)
 
     def _update_item(self):
@@ -2213,13 +2279,6 @@ class InstalledTab:
         item = self.filtered_items[sel[0]]
         if not item.get("update_available"):
             self._set_update_btn_state(False)
-            return
-        if not check_internet_connection(timeout=0.6):
-            messagebox.showwarning(
-                "Offline Mode",
-                "Downloading package updates requires an active internet connection.\n\nPlease connect to the internet to update this item.",
-                parent=self.app.root,
-            )
             return
         is_board = item["type"] == "Board Platform"
         old_path = item.get("path", "")
@@ -2254,7 +2313,7 @@ class InstalledTab:
 
             messagebox.showinfo("Deleted", f"Successfully deleted '{name}'.")
             # Recompute and refresh everything
-            self.app._compute_installed_items()
+            self.app._compute_installed_items_async()
             self.populate(self.app._installed_items)
             self.app._update_version_status(self.app.lib_tab)
             self.app._update_version_status(self.app.board_tab)
@@ -2299,7 +2358,7 @@ class ArduinoBrowser:
             except Exception:
                 pass
 
-        # Calculate dynamic window geometry: 50% width and 70% height with Windows DPI & Work Area awareness
+        # Tk uses native screen units; its fonts independently follow point scaling.
         work_w, work_h = 1280, 720
         start_x, start_y = 0, 0
         if sys.platform == "win32":
@@ -2318,34 +2377,36 @@ class ArduinoBrowser:
                 rect = _WorkAreaRect()
                 SPI_GETWORKAREA = 0x0030
                 if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-                    work_w = max(800, rect.right - rect.left)
-                    work_h = max(600, rect.bottom - rect.top)
+                    work_w = max(1, rect.right - rect.left)
+                    work_h = max(1, rect.bottom - rect.top)
                     start_x = rect.left
                     start_y = rect.top
                 else:
-                    work_w = max(800, self.root.winfo_screenwidth())
-                    work_h = max(600, self.root.winfo_screenheight())
+                    work_w = max(1, self.root.winfo_screenwidth())
+                    work_h = max(1, self.root.winfo_screenheight())
             except Exception:
-                work_w = max(800, self.root.winfo_screenwidth())
-                work_h = max(600, self.root.winfo_screenheight())
+                work_w = max(1, self.root.winfo_screenwidth())
+                work_h = max(1, self.root.winfo_screenheight())
         else:
-            work_w = max(800, self.root.winfo_screenwidth())
-            work_h = max(600, self.root.winfo_screenheight())
+            work_w = max(1, self.root.winfo_screenwidth())
+            work_h = max(1, self.root.winfo_screenheight())
 
-        target_w = max(860, int(work_w * 0.50))
-        target_h = max(620, int(work_h * 0.70))
+        from src.modules.tk_glass import ui_scale
+        scale = ui_scale(self.root)
+        target_w = min(round(1040 * scale), int(work_w * .88))
+        target_h = min(round(740 * scale), int(work_h * .88))
         # Ensure target does not exceed usable work area
-        target_w = min(target_w, work_w)
-        target_h = min(target_h, work_h)
+        target_w = min(target_w, max(1, work_w - 24))
+        target_h = min(target_h, max(1, work_h - 48))
 
         pos_x = start_x + (work_w - target_w) // 2
         pos_y = start_y + (work_h - target_h) // 2
 
         self.root.geometry(f"{target_w}x{target_h}+{pos_x}+{pos_y}")
 
-        # Set minimum allowable window dimensions (50% width, 70% height) to prevent clipping
-        min_w = min(target_w, max(800, int(work_w * 0.50)))
-        min_h = min(target_h, max(580, int(work_h * 0.70)))
+        # Lists and details stack vertically below the horizontal content budget.
+        min_w = min(target_w, round(480 * scale))
+        min_h = min(target_h, round(400 * scale))
         self.root.minsize(min_w, min_h)
 
         self._busy = False
@@ -2424,10 +2485,11 @@ class ArduinoBrowser:
             except Exception:
                 pass
             self._unhide_window()
-        self.root.after(250, self._check_show_trigger)
+        self.root.after(1000 if self._is_hidden else 500, self._check_show_trigger)
 
     def _unhide_window(self):
         """Instantly restore window from memory without reloading JSON indexes."""
+        self._apply_current_theme()
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -2440,14 +2502,49 @@ class ArduinoBrowser:
                 ctypes.windll.user32.SetForegroundWindow(hwnd)
             except Exception:
                 pass
-        threading.Thread(target=self._wake_sync, daemon=True).start()
+        self._wake_sync()
+
+    def _apply_current_theme(self):
+        """Recolor a sleeping downloader without losing search or download state."""
+        from src.modules.tk_glass import readable_foreground
+        mode = _resolve_lib_req_theme()
+        old = Theme.PALETTES[getattr(self, "_rendered_theme", Theme.active_theme)]
+        Theme.apply_theme(mode)
+        new = Theme.PALETTES[Theme.active_theme]
+        self._rendered_theme = Theme.active_theme
+        if old is new:
+            return
+        colors = {}
+        for key, color in old.items():
+            if key in new:
+                colors.setdefault(color, new[key])
+
+        def recolor(widget):
+            for option in ("background", "foreground", "activebackground", "activeforeground",
+                           "disabledforeground", "insertbackground", "highlightbackground",
+                           "highlightcolor", "selectbackground", "selectforeground"):
+                try:
+                    value = str(widget.cget(option))
+                    if value in colors:
+                        widget.configure(**{option: colors[value]})
+                except tk.TclError:
+                    pass  # ttk delegates these colors to named styles below.
+            if hasattr(widget, "_normal_bg"):
+                token = getattr(widget, "_bg_token", None)
+                widget._normal_bg = new.get(token, colors.get(widget._normal_bg, widget._normal_bg))
+                widget._hover_bg = new.get(token + "_H" if token else "", colors.get(widget._hover_bg, widget._hover_bg))
+                widget.configure(bg=widget._normal_bg, fg=readable_foreground(widget._normal_bg),
+                                 activebackground=widget._hover_bg, activeforeground=readable_foreground(widget._hover_bg))
+            if hasattr(widget, "_schedule"):
+                widget._schedule()
+            for child in widget.winfo_children():
+                recolor(child)
+
+        recolor(self.root)
+        self._configure_styles()
 
     def _wake_sync(self):
-        self._compute_installed_items()
-        try:
-            self.root.after(0, lambda: self.installed_tab.populate(self._installed_items) if hasattr(self, "installed_tab") else None)
-        except Exception:
-            pass
+        self._compute_installed_items_async()
 
     def _force_exit(self):
         """Permanently close process and purge memory."""
@@ -2468,31 +2565,34 @@ class ArduinoBrowser:
     # UI construction
     # ------------------------------------------------------------------
 
-    def _build_ui(self):
-        self.root.configure(bg=Theme.BG_DARKEST)
-
+    def _configure_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
 
         # Configure frames and general layouts
         style.configure("TFrame", background=Theme.BG_DARKEST)
         style.configure("TLabel", background=Theme.BG_DARKEST, foreground=Theme.TEXT)
-        style.configure("TNotebook", background=Theme.BG_DARKEST, borderwidth=0)
-        style.configure("TNotebook.Tab", background=Theme.BG_MID, foreground=Theme.TEXT_DIM, borderwidth=0, padding=(12, 4))
-        style.map("TNotebook.Tab", background=[("selected", Theme.BG_LIGHT)], foreground=[("selected", Theme.TEXT_BRIGHT)])
+        style.configure("TNotebook", background=Theme.BG_DARKEST, borderwidth=0, tabmargins=(0, 0, 0, 8),
+                        lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, bordercolor=Theme.BORDER)
+        style.configure("TNotebook.Tab", font=("Montserrat", 10, "bold"), background=Theme.BG_MID,
+                        foreground=Theme.TEXT_DIM, borderwidth=1, bordercolor=Theme.BORDER,
+                        lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, padding=(16, 7))
+        style.map("TNotebook.Tab", background=[("selected", Theme.BG_LIGHT), ("active", Theme.BG_HOVER)],
+                  foreground=[("selected", Theme.TEXT_BRIGHT), ("active", Theme.TEXT_BRIGHT)],
+                  bordercolor=[("selected", Theme.CYAN)], padding=[("selected", (16, 7)), ("!selected", (16, 7))])
 
         style.configure("TCombobox",
                          fieldbackground=Theme.BG_LIGHT,
                          background=Theme.BG_HOVER,
                          foreground=Theme.TEXT_BRIGHT,
                          selectbackground=Theme.CYAN_DIM,
-                         selectforeground=Theme.TEXT_BRIGHT,
+                         selectforeground="#ffffff",
                          bordercolor=Theme.BORDER,
                          arrowcolor=Theme.TEXT_DIM)
         style.map("TCombobox",
                    fieldbackground=[("readonly", Theme.BG_LIGHT)],
                    selectbackground=[("readonly", Theme.CYAN_DIM)],
-                   selectforeground=[("readonly", Theme.TEXT_BRIGHT)])
+                   selectforeground=[("readonly", "#ffffff")])
 
         self.root.option_add("*TCombobox*Listbox.background", Theme.BG_LIGHT)
         self.root.option_add("*TCombobox*Listbox.foreground", Theme.TEXT_BRIGHT)
@@ -2524,31 +2624,67 @@ class ArduinoBrowser:
                         lightcolor=Theme.CYAN,
                         darkcolor=Theme.CYAN)
 
-        # Top bar with title + refresh
-        top_bar = tk.Frame(self.root, bg=Theme.BG_DARK, pady=6, padx=10)
-        top_bar.pack(fill="x")
-        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill="x")
 
-        tk.Label(top_bar, text="Arduino Library & Board Browser",
-                 font=("Montserrat", 12, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARK).pack(side="left")
+    def _build_ui(self):
+        from src.modules.browser_loading import TkTasks, LatestScan
+        if not hasattr(self, '_tasks'):
+            self._tasks = TkTasks(self.root)
+            self._inventory_worker = LatestScan(self._tasks, self._scan_inventory_request)
+            self._inventory_request_id = 0
+            self._catalog_revision = 0
+        self._rendered_theme = Theme.active_theme
+        from src.modules.tk_glass import GlassCard
+        from src.modules.runtime_resources import performance_profile
+        self._progress_interval = 120 if performance_profile().constrained else 80
+        self.root.configure(bg=Theme.BG_DARKEST)
+
+        self._configure_styles()
+
+        # Static glass header; content stays opaque for legibility.
+        header = GlassCard(self.root, Theme)
+        header.pack(fill="x", padx=12, pady=(12, 8))
+        top_bar = header.body
+        title_col = tk.Frame(top_bar, bg=Theme.BG_MID)
+        title_col.grid(row=0, column=0, sticky="ew")
+        top_bar.grid_columnconfigure(0, weight=1)
+        actions = tk.Frame(top_bar, bg=Theme.BG_MID)
+        actions.grid(row=0, column=1, sticky="e")
+        tk.Label(title_col, text="Libraries & boards", anchor="w",
+                 font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID).pack(fill="x")
+        tk.Label(title_col, text="MCU Flasher by Naph · Arduino packages", anchor="w",
+                 font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(fill="x", pady=(3, 0))
 
         self.quit_btn = make_flat_button(
-            top_bar, "✖ Quit & Purge", self._force_exit,
+            actions, "Quit", self._force_exit,
             Theme.BTN_STOP, Theme.BTN_STOP_H
         )
-        self.quit_btn.config(fg=Theme.TEXT_BRIGHT)
         self.quit_btn.pack(side="right", padx=(6, 0))
 
         self.refresh_btn = make_flat_button(
-            top_bar, "⟳ Refresh All", self._refresh_all,
+            actions, "Refresh indexes", self._refresh_all,
             Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
         )
         self.refresh_btn.pack(side="right")
+        self.sources_btn = make_flat_button(actions, "Board indexes", self._toggle_sources,
+                                            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
+        self.sources_btn.pack(side="right", padx=(6, 6))
+        self._header_stacked = None
+
+        def reflow_header(event):
+            if event.widget is not top_bar:
+                return
+            stacked = event.width < title_col.winfo_reqwidth() + actions.winfo_reqwidth() + 16
+            if stacked != self._header_stacked:
+                actions.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
+                                       columnspan=2 if stacked else 1, sticky="e", pady=(6, 0) if stacked else 0)
+                self._header_stacked = stacked
+                header._schedule()
+        top_bar.bind("<Configure>", reflow_header)
 
         # Download folder bar
-        folder_bar = tk.Frame(self.root, bg=Theme.BG_MID, pady=8, padx=10)
-        folder_bar.pack(fill="x")
-        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill="x")
+        folder_card = GlassCard(self.root, Theme, padding=10)
+        folder_card.pack(fill="x", padx=12, pady=(0, 8))
+        folder_bar = folder_card.body
 
         tk.Label(folder_bar, text="Download folder:",
                  font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(side="left")
@@ -2566,7 +2702,7 @@ class ArduinoBrowser:
         self.folder_entry.bind("<FocusOut>", lambda e: self._apply_folder_entry())
 
         self.browse_btn = make_flat_button(
-            folder_bar, "📂 Browse…", self._choose_download_dir,
+            folder_bar, "Browse…", self._choose_download_dir,
             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
         self.browse_btn.pack(side="right")
@@ -2574,12 +2710,13 @@ class ArduinoBrowser:
         # Additional board manager indexes. The default Arduino index is
         # always loaded; this field lets users add vendor indexes such as the
         # ESP8266 package index without editing Arduino-CLI files manually.
-        board_url_bar = tk.Frame(self.root, bg=Theme.BG_MID, pady=6, padx=10)
+        self._sources_card = GlassCard(self.root, Theme, padding=10)
+        self._sources_open = False
+        board_url_bar = tk.Frame(self._sources_card.body, bg=Theme.BG_MID)
         board_url_bar.pack(fill="x")
-        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(fill="x")
 
         tk.Label(
-            board_url_bar, text="Additional board manager URLs:",
+            board_url_bar, text="Vendor URLs:",
             font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
         ).pack(side="left")
 
@@ -2595,16 +2732,16 @@ class ArduinoBrowser:
         self.board_urls_entry.bind("<Return>", lambda e: self._apply_board_urls())
 
         self.board_urls_apply_btn = make_flat_button(
-            board_url_bar, "⟳ Apply & Refresh", self._apply_board_urls,
+            board_url_bar, "Apply & refresh", self._apply_board_urls,
             Theme.BTN_MONITOR, Theme.BTN_MONITOR_H,
         )
         self.board_urls_apply_btn.pack(side="right")
 
         tk.Label(
-            self.root,
+            self._sources_card.body,
             text="Separate multiple URLs with commas. The default Arduino index is included automatically.",
             font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
-            anchor="w", padx=10,
+            anchor="w", pady=4,
         ).pack(fill="x")
 
         third_party_boards_url = (
@@ -2612,8 +2749,8 @@ class ArduinoBrowser:
             "Unofficial-list-of-3rd-party-boards-support-urls"
         )
         third_party_boards_link = tk.Label(
-            self.root,
-            text="• Unofficial list of 3rd party boards support URLs",
+            self._sources_card.body,
+            text="Find third-party board index URLs ↗",
             font=("Montserrat", 8, "underline"),
             fg=Theme.BLUE, bg=Theme.BG_MID, cursor="hand2",
             anchor="w", padx=10,
@@ -2634,11 +2771,12 @@ class ArduinoBrowser:
 
         # Notebook (tabs)
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.notebook.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+        self.notebook.enable_traversal()
 
         # --- Libraries tab ---
         lib_frame = ttk.Frame(self.notebook, padding=4)
-        self.notebook.add(lib_frame, text="  📚 Libraries  ")
+        self.notebook.add(lib_frame, text="Libraries", underline=0)
         self.lib_tab = BrowseTab(
             lib_frame, self,
             detail_builder=self._build_library_detail,
@@ -2647,7 +2785,7 @@ class ArduinoBrowser:
 
         # --- Boards tab ---
         board_frame = ttk.Frame(self.notebook, padding=4)
-        self.notebook.add(board_frame, text="  🔌 Boards  ")
+        self.notebook.add(board_frame, text="Boards", underline=0)
         self.board_tab = BrowseTab(
             board_frame, self,
             detail_builder=self._build_board_detail,
@@ -2656,23 +2794,32 @@ class ArduinoBrowser:
 
         # --- Installed tab ---
         installed_frame = ttk.Frame(self.notebook, padding=4)
-        self.notebook.add(installed_frame, text="  💾 Installed  ")
+        self.notebook.add(installed_frame, text="Installed", underline=0)
         self.installed_tab = InstalledTab(installed_frame, self)
 
         # Bind tab selection to recompute installed items when entering the tab
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # Bottom bar: progress + status
-        bottom = tk.Frame(self.root, bg=Theme.BG_DARK, pady=6, padx=10)
-        bottom.pack(fill="x")
-        tk.Frame(self.root, bg=Theme.BORDER, height=1).pack(side="bottom", fill="x")
+        bottom_card = GlassCard(self.root, Theme, padding=10)
+        bottom_card.pack(side="bottom", fill="x", padx=12, pady=(0, 12), before=self.notebook)
+        bottom = bottom_card.body
 
-        self.progress = ttk.Progressbar(bottom, style="Horizontal.TProgressbar", length=200)
+        self.progress = ttk.Progressbar(bottom, style="Horizontal.TProgressbar", length=140)
         self.progress.pack(side="left")
 
         self.status_var = tk.StringVar(value="Starting…")
         tk.Label(bottom, textvariable=self.status_var, font=("Montserrat", 9),
-                 fg=Theme.TEXT_DIM, bg=Theme.BG_DARK).pack(side="left", padx=10)
+                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(side="left", padx=10)
+
+    def _toggle_sources(self):
+        """Keep advanced vendor indexes available without occupying list space."""
+        self._sources_open = not self._sources_open
+        if self._sources_open:
+            self._sources_card.pack(fill="x", padx=12, pady=(0, 8), before=self.notebook)
+        else:
+            self._sources_card.pack_forget()
+        self.sources_btn.configure(text="Hide indexes" if self._sources_open else "Board indexes")
 
     def _on_tab_changed(self, event=None):
         try:
@@ -2683,30 +2830,44 @@ class ArduinoBrowser:
             pass
 
     def _compute_installed_items_async(self):
-        self._set_status("Scanning installed libraries & cores ⠋...")
-        try:
-            self.progress.start(10)
-        except Exception:
-            pass
+        """Coalesce scans; publish only results for the current folder/catalog."""
+        self._inventory_request_id += 1
+        request_id = self._inventory_request_id
+        revision = self._catalog_revision
+        folder = self._download_dir
+        request = (folder, self.lib_tab.all_items, self.board_tab.all_items, self._is_online)
+        def completed(items, error):
+            if request_id != self._inventory_request_id or revision != self._catalog_revision or folder != self._download_dir:
+                return
+            if error:
+                self._set_status(f'Installed packages could not be scanned: {error}')
+                return
+            if items is None:
+                return
+            self._installed_items = items
+            if self.notebook.index(self.notebook.select()) == 2:
+                self.installed_tab.populate(items)
+            if not self._busy and self.notebook.index(self.notebook.select()) == 2:
+                self._set_status(f'{len(items)} installed package(s)')
+        self._inventory_worker.submit(request, completed)
 
-        def _worker():
-            self._compute_installed_items()
+    def _scan_inventory_request(self, request, cancel):
+        folder, libraries, boards, online = request
+        return self._compute_installed_items(download_dir=folder, libraries=libraries,
+                                             boards=boards, online=online, cancel=cancel)
 
-            def _ui_done():
-                try:
-                    self.progress.stop()
-                except Exception:
-                    pass
-                self._set_status("Ready")
-                if hasattr(self, "installed_tab"):
-                    self.installed_tab.populate(self._installed_items)
+    def _post_ui(self, callback, *args):
+        key = 'download-progress' if getattr(callback, '__name__', '') == '_update_progress' else None
+        self._tasks.post(callback, *args, key=key)
 
-            try:
-                self.root.after(0, _ui_done)
-            except Exception:
-                pass
-
-        threading.Thread(target=_worker, daemon=True).start()
+    def _publish_catalogs(self, libraries, boards):
+        changed = False
+        for tab, items in ((self.lib_tab, libraries), (self.board_tab, boards)):
+            if items is not None and tab.all_items is not items:
+                tab.populate(items)
+                changed = True
+        if changed:
+            self._catalog_revision += 1
 
     def _choose_download_dir(self):
         chosen = filedialog.askdirectory(
@@ -2721,6 +2882,10 @@ class ArduinoBrowser:
         self._apply_folder_entry()
 
     def _apply_folder_entry(self):
+        if self._busy:
+            self.folder_var.set(self._download_dir)
+            self._set_status("Wait for the current download before changing folders")
+            return
         new_path = self.folder_var.get().strip()
         if not new_path:
             self.folder_var.set(self._download_dir)
@@ -2741,8 +2906,7 @@ class ArduinoBrowser:
         _save_settings(settings)
         self._set_status(f"Download folder set to {new_path}")
         # Refresh everything that depends on the download path
-        self._compute_installed_items()
-        self.installed_tab.populate(self._installed_items)
+        self._compute_installed_items_async()
         self._update_version_status(self.lib_tab)
         self._update_version_status(self.board_tab)
 
@@ -2773,14 +2937,6 @@ class ArduinoBrowser:
         settings["additional_board_urls"] = urls
         _save_settings(settings)
 
-        if not check_internet_connection(timeout=0.6):
-            self._set_status("Board manager URLs saved. (Indexes will download when online)")
-            messagebox.showinfo(
-                "Offline Mode",
-                "Board manager URLs saved.\n\nSince you are currently offline, the new board indexes will be downloaded when an internet connection is available.",
-                parent=self.root,
-            )
-            return
 
         self._set_status("Board manager URLs saved — refreshing indexes…")
         self._refresh_all()
@@ -3066,15 +3222,19 @@ class ArduinoBrowser:
     # Installed items computation (update detection)
     # ------------------------------------------------------------------
 
-    def _compute_installed_items(self):
-        """Scan download folders in fast O(1) time against loaded indexes to determine what is
-        installed and whether an update is available without freezing Tkinter."""
+    def _compute_installed_items(self, *, download_dir=None, libraries=None, boards=None, online=None, cancel=None):
+        """Scan local entries in the worker; reuse unchanged inventories briefly."""
+        download_dir = self._download_dir if download_dir is None else download_dir
+        libraries = self.lib_tab.all_items if libraries is None else libraries
+        boards = self.board_tab.all_items if boards is None else boards
+        online = self._is_online if online is None else online
+        cancel = cancel or threading.Event()
         items = []
         seen_paths = set()
 
         # Fast disk inventory: read local Libs and Boards directories directly
-        libs_dir = os.path.join(self._download_dir, "Libs")
-        boards_dir = os.path.join(self._download_dir, "Boards")
+        libs_dir = os.path.join(download_dir, "Libs")
+        boards_dir = os.path.join(download_dir, "Boards")
 
         local_libs = set()
         if os.path.isdir(libs_dir):
@@ -3090,6 +3250,21 @@ class ArduinoBrowser:
             except Exception:
                 local_boards = set()
 
+        stamps = []
+        for directory, entries in ((libs_dir, local_libs), (boards_dir, local_boards)):
+            for name in sorted(entries):
+                if cancel.is_set():
+                    return None
+                try:
+                    stat = os.stat(os.path.join(directory, name))
+                    stamps.append((directory, name, stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    continue
+        signature = (download_dir, id(libraries), id(boards), online, tuple(stamps))
+        memo = getattr(self, '_inventory_memo', None)
+        if memo and memo[0] == signature and time.monotonic() - memo[1] < 5:
+            return memo[2]
+
         matched_lib_folders = set()
         matched_lib_archives = set()
         matched_board_folders = set()
@@ -3097,10 +3272,14 @@ class ArduinoBrowser:
 
         # Helper: check an index item against the pre-scanned directory contents
         def check_index_item(name: str, index_entry: dict, local_set: set, subfolder_name: str, type_label: str):
-            dest_dir = os.path.join(self._download_dir, subfolder_name)
+            dest_dir = os.path.join(download_dir, subfolder_name)
+            if not index_entry.get("versions"):
+                return
             latest_version = index_entry["versions"][0]["version"]  # sorted newest first
 
             for ver_entry in index_entry["versions"]:
+                if cancel.is_set():
+                    return
                 archive = _archive_filename(ver_entry["url"], ver_entry.get("archiveFileName", ""))
                 folder_name = _get_folder_name(archive)
 
@@ -3111,15 +3290,15 @@ class ArduinoBrowser:
                 if has_folder or has_archive:
                     installed_version = ver_entry["version"]
                     path = os.path.join(dest_dir, folder_name) if has_folder else os.path.join(dest_dir, archive)
-                    update_available = (_version_key(latest_version) > _version_key(installed_version)) if getattr(self, "_is_online", True) else False
-                    norm_p = os.path.normpath(path).lower()
+                    update_available = (_version_key(latest_version) > _version_key(installed_version)) if online else False
+                    norm_p = os.path.normcase(os.path.normpath(path))
                     if norm_p not in seen_paths:
                         seen_paths.add(norm_p)
                         items.append({
                             "type": type_label,
                             "name": name,
                             "installed_version": installed_version,
-                            "latest_version": latest_version if getattr(self, "_is_online", True) else installed_version,
+                            "latest_version": latest_version if online else installed_version,
                             "update_available": update_available,
                             "path": path,
                             "archive": archive,
@@ -3137,18 +3316,24 @@ class ArduinoBrowser:
                     break  # only report the newest installed version
 
         # Libraries from catalog index
-        if self.lib_tab.all_items and local_libs:
-            for name, entry in self.lib_tab.all_items.items():
+        if libraries and local_libs:
+            for name, entry in libraries.items():
+                if cancel.is_set():
+                    return None
                 check_index_item(name, entry, local_libs, "Libs", "Library")
 
         # Boards from catalog index
-        if self.board_tab.all_items and local_boards:
-            for name, entry in self.board_tab.all_items.items():
+        if boards and local_boards:
+            for name, entry in boards.items():
+                if cancel.is_set():
+                    return None
                 check_index_item(name, entry, local_boards, "Boards", "Board Platform")
 
         # --- Direct Filesystem Discovery: Unmatched / Offline Local Libraries ---
         if os.path.isdir(libs_dir):
             for entry in sorted(local_libs, key=str.lower):
+                if cancel.is_set():
+                    return None
                 if entry in matched_lib_folders or entry in matched_lib_archives:
                     continue
                 if entry.startswith(".") or entry.endswith((".part", ".tmp")):
@@ -3193,14 +3378,14 @@ class ArduinoBrowser:
                 else:
                     continue
 
-                norm_p = os.path.normpath(entry_path).lower()
+                norm_p = os.path.normcase(os.path.normpath(entry_path))
                 if norm_p not in seen_paths:
                     seen_paths.add(norm_p)
                     items.append({
                         "type": "Library",
                         "name": lib_name,
                         "installed_version": lib_ver,
-                        "latest_version": lib_ver if not getattr(self, "_is_online", True) else "—",
+                        "latest_version": lib_ver if not online else "—",
                         "update_available": False,
                         "path": entry_path,
                         "archive": archive_name,
@@ -3209,6 +3394,8 @@ class ArduinoBrowser:
         # --- Direct Filesystem Discovery: Unmatched / Offline Local Boards ---
         if os.path.isdir(boards_dir):
             for entry in sorted(local_boards, key=str.lower):
+                if cancel.is_set():
+                    return None
                 if entry in matched_board_folders or entry in matched_board_archives:
                     continue
                 if entry.startswith(".") or entry.endswith((".part", ".tmp")):
@@ -3219,6 +3406,8 @@ class ArduinoBrowser:
 
                 if os.path.isdir(entry_path):
                     for root, dirs, files in os.walk(entry_path):
+                        if cancel.is_set():
+                            return None
                         if "platform.txt" in files:
                             try:
                                 with open(os.path.join(root, "platform.txt"), "r", encoding="utf-8", errors="replace") as pf:
@@ -3254,14 +3443,14 @@ class ArduinoBrowser:
                 else:
                     continue
 
-                norm_p = os.path.normpath(entry_path).lower()
+                norm_p = os.path.normcase(os.path.normpath(entry_path))
                 if norm_p not in seen_paths:
                     seen_paths.add(norm_p)
                     items.append({
                         "type": "Board Platform",
                         "name": board_name,
                         "installed_version": board_ver,
-                        "latest_version": board_ver if not getattr(self, "_is_online", True) else "—",
+                        "latest_version": board_ver if not online else "—",
                         "update_available": False,
                         "path": entry_path,
                         "archive": archive_name,
@@ -3269,39 +3458,26 @@ class ArduinoBrowser:
 
         # Sort alphabetically
         items.sort(key=lambda x: x["name"].lower())
-        self._installed_items = items
+        if cancel.is_set():
+            return None
+        self._inventory_memo = signature, time.monotonic(), items
+        return items
 
     # ------------------------------------------------------------------
     # Data loading
     # ------------------------------------------------------------------
 
     def _initial_load(self):
-        """Called once on startup. Checks network connectivity and loads indexes or offline mode."""
+        """Load local catalogs first, then fetch missing or stale sources."""
+        if self._busy:
+            return
         self._set_status("Initializing package manager…")
         self._start_thread(self._load_both)
 
     def _refresh_all(self):
         if self._busy:
             return
-        if not check_internet_connection(timeout=0.6):
-            messagebox.showwarning(
-                "Offline Mode",
-                "Cannot refresh catalog indexes while offline.\n\nPlease connect to the internet to check for updates.",
-                parent=self.root,
-            )
-            return
-        self._is_online = True
-        self._set_status("Refreshing all indexes…")
-        if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
-            try:
-                self._loading_overlay = CircularLoadingOverlay(
-                    self.notebook,
-                    title="Refreshing All Indexes...",
-                    subtitle="Downloading newest library & board definitions..."
-                )
-                self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            except Exception:
-                pass
+        self._set_status('Refreshing catalog indexes…')
         self._start_thread(lambda: self._load_both(force_refresh=True))
 
     def _cache_is_fresh(self, cache_file: str) -> bool:
@@ -3311,204 +3487,65 @@ class ArduinoBrowser:
         return age < CACHE_MAX_AGE_SECONDS
 
     def _start_thread(self, target):
+        if self._busy:
+            return
         self._busy = True
-        self.refresh_btn.config(state="disabled")
-        self.progress.config(mode="indeterminate")
-        self.progress.start(12)
-        t = threading.Thread(target=target, daemon=True)
-        t.start()
+        self.refresh_btn.config(state='disabled')
+        self.progress.config(mode='indeterminate')
+        self.progress.start(self._progress_interval)
+        self._tasks.start(target, failed=lambda error: self._finish_load(f'Catalog load failed: {error}'))
 
     def _load_both(self, force_refresh=False):
-        """Load both library and board indexes (runs in worker thread)."""
-        online = check_internet_connection(timeout=0.6)
-        self._is_online = online
-
-        libs = {}
-        boards = {}
-        board_sources_loaded = 0
-        failed_additional_urls: list[str] = []
-
-        if not online:
-            # -------------------------------------------------------------
-            # OFFLINE MODE: Load cached indexes from disk if available,
-            # but NEVER attempt network I/O or freeze on timeouts.
-            # -------------------------------------------------------------
-            self.root.after(0, self._set_status, "Offline Mode: Loading local package caches…")
-
-            # Try to read library index cache from disk (regardless of age)
-            lib_data = None
-            if os.path.isfile(LIBRARY_CACHE_FILE):
-                lib_data = _read_index_cache(LIBRARY_CACHE_FILE, "libraries")
-
-            if lib_data is not None:
-                libs = _group_libraries(lib_data.get("libraries", []))
-                self.root.after(0, self.lib_tab.populate, libs)
-                self.root.after(0, lambda: self.lib_tab.lbl_search_status.config(
-                    text=f"Offline Mode: Showing {len(libs)} cached libraries (Internet required to download)"
-                ))
-            else:
-                self.root.after(0, self.lib_tab.populate, {})
-                self.root.after(0, lambda: self.lib_tab.lbl_search_status.config(
-                    text="⚠ Offline Mode: No internet connection"
-                ))
-                self.root.after(0, lambda: self.lib_tab.lbl_placeholder.config(
-                    text="⚠ Offline Mode\n\nInternet connection required to search and download new libraries.\nPlease switch to the 'Installed' tab to view local items."
-                ))
-
-            # Try to read board index caches from disk
-            settings = _load_settings()
-            additional_urls = parse_additional_board_urls(
-                settings.get("additional_board_urls", [])
-            )
-            board_urls = [BOARD_INDEX_URL, *additional_urls]
-            board_indexes = []
-
-            for index_num, board_url in enumerate(board_urls):
-                is_default = index_num == 0
-                cache_file = (
-                    BOARD_CACHE_FILE
-                    if is_default
-                    else _board_index_cache_file(board_url)
-                )
-                if os.path.isfile(cache_file):
-                    bdata = _read_index_cache(cache_file, "packages")
-                    if bdata is not None:
-                        board_indexes.append((index_num, bdata))
-                        board_sources_loaded += 1
-
-            if board_indexes:
-                board_indexes.sort(key=lambda item: item[0])
-                packages = []
-                for _index_num, board_data in board_indexes:
-                    source_packages = board_data.get("packages", [])
-                    if isinstance(source_packages, list):
-                        packages.extend(source_packages)
-                boards = _group_boards(packages)
-                self.root.after(0, self.board_tab.populate, boards)
-                self.root.after(0, lambda: self.board_tab.lbl_search_status.config(
-                    text=f"Offline Mode: Showing {len(boards)} cached board platforms (Internet required to download)"
-                ))
-            else:
-                self.root.after(0, self.board_tab.populate, {})
-                self.root.after(0, lambda: self.board_tab.lbl_search_status.config(
-                    text="⚠ Offline Mode: No internet connection"
-                ))
-                self.root.after(0, lambda: self.board_tab.lbl_placeholder.config(
-                    text="⚠ Offline Mode\n\nInternet connection required to search and download new board platforms.\nPlease switch to the 'Installed' tab to view local items."
-                ))
-
-            # Recompute installed items directly from disk and indexes
-            self._compute_installed_items()
-
-            # In offline mode, switch automatically to the Installed tab!
-            def _finish_offline():
-                if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
-                    try:
-                        self._loading_overlay.stop_and_destroy()
-                    except Exception:
-                        pass
-                    self._loading_overlay = None
-                self.progress.stop()
-                self.progress.config(mode="determinate", value=0)
-                self._busy = False
-                self.refresh_btn.config(state="normal")
-                try:
-                    self.notebook.select(2)  # Focus on Installed tab
-                except Exception:
-                    pass
-                self.installed_tab.populate(self._installed_items)
-                self._set_status(f"Offline Mode — {len(self._installed_items)} installed package(s) available")
-
-            self.root.after(0, _finish_offline)
-            return
-
-        # -----------------------------------------------------------------
-        # ONLINE MODE: Download/refresh newest indexes with overlay feedback
-        # -----------------------------------------------------------------
-        def _show_online_overlay():
-            if not hasattr(self, "_loading_overlay") or not self._loading_overlay or not self._loading_overlay.winfo_exists():
-                try:
-                    self._loading_overlay = CircularLoadingOverlay(
-                        self.notebook,
-                        title="Loading Arduino Library & Board Indexes...",
-                        subtitle="Downloading & parsing package definitions on background thread..."
-                    )
-                    self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-                except Exception:
-                    pass
-        self.root.after(0, _show_online_overlay)
-
-        # --- Libraries ---
-        lib_data = self._load_index(
-            LIBRARY_INDEX_URL, LIBRARY_CACHE_FILE, force_refresh, "library"
-        )
-        if lib_data is not None:
-            libs = _group_libraries(lib_data.get("libraries", []))
-            self.root.after(0, self.lib_tab.populate, libs)
-
-        # --- Boards ---
-        settings = _load_settings()
-        additional_urls = parse_additional_board_urls(
-            settings.get("additional_board_urls", [])
-        )
-        board_urls = [BOARD_INDEX_URL, *additional_urls]
-        board_indexes = []
-
-        def _load_board_source(index_num: int, board_url: str):
-            is_default = index_num == 0
-            cache_file = (
-                BOARD_CACHE_FILE
-                if is_default
-                else _board_index_cache_file(board_url)
-            )
-            label = "board" if is_default else f"additional board {index_num}"
-            try:
-                data = self._load_index(
-                    board_url, cache_file, force_refresh, label
-                )
-            except Exception as exc:
-                self.root.after(0, self._set_status, f"Failed to load {label} index: {exc}")
-                data = None
-            return index_num, board_url, data
-
+        """Publish cached catalogs before HTTP requests; bound refresh concurrency."""
         from concurrent.futures import ThreadPoolExecutor
-        worker_count = min(8, max(1, len(board_urls)))
-        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="BoardIndex") as executor:
-            futures = [
-                executor.submit(_load_board_source, index_num, board_url)
-                for index_num, board_url in enumerate(board_urls)
-            ]
-            loaded_sources = [future.result() for future in futures]
-
-        for index_num, board_url, board_data in loaded_sources:
-            if board_data is not None:
-                board_indexes.append((index_num, board_data))
-                board_sources_loaded += 1
-            elif index_num != 0:
-                failed_additional_urls.append(board_url)
-        board_indexes.sort(key=lambda item: item[0])
-
-        if board_indexes:
-            packages = []
-            for _index_num, board_data in board_indexes:
-                source_packages = board_data.get("packages", [])
-                if isinstance(source_packages, list):
-                    packages.extend(source_packages)
-            boards = _group_boards(packages)
-            self.root.after(0, self.board_tab.populate, boards)
-
-        # Final status and installed recompute
-        lib_count = len(libs) if lib_data else 0
-        board_count = len(boards) if board_sources_loaded else 0
-        status_msg = f"{lib_count} libraries, {board_count} board platforms loaded"
-        if not lib_count and not board_count:
-            status_msg = "No indexes loaded — check the network or configured board manager URLs"
-        if failed_additional_urls:
-            status_msg += (
-                f"; {len(failed_additional_urls)} additional board index"
-                f"{'es' if len(failed_additional_urls) != 1 else ''} could not be loaded"
-            )
-        self.root.after(0, self._finish_load, status_msg)
+        from src.modules.runtime_resources import performance_profile
+        urls = [BOARD_INDEX_URL, *self._additional_board_urls]
+        paths = [BOARD_CACHE_FILE if index == 0 else _board_index_cache_file(url)
+                 for index, url in enumerate(urls)]
+        libs = _read_library_catalog(LIBRARY_CACHE_FILE)
+        boards = _read_board_catalog(paths)
+        self._post_ui(self._publish_catalogs, libs, boards)
+        needed = [(index, url, cache) for index, (url, cache) in enumerate(zip(urls, paths))
+                  if force_refresh or not self._cache_is_fresh(cache) or _read_index_cache(cache, 'packages') is None]
+        need_libraries = force_refresh or libs is None or not self._cache_is_fresh(LIBRARY_CACHE_FILE)
+        if not needed and not need_libraries:
+            self._post_ui(self._finish_load, f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded from cache')
+            return
+        self._index_fetch_succeeded = threading.Event()
+        self._catalog_memory_only = False
+        # A failed prior refresh must not prevent a later explicit reconnect.
+        self._is_online = True
+        # Cached lists remain interactive while stale sources refresh in the worker.
+        if need_libraries:
+            data = self._load_index(LIBRARY_INDEX_URL, LIBRARY_CACHE_FILE, True, 'library')
+            if data is not None:
+                libs = _read_library_catalog(LIBRARY_CACHE_FILE, data)
+                self._post_ui(self._publish_catalogs, libs, None)
+            del data
+        fresh, failed = {}, []
+        def fetch(index, url, cache):
+            return index, url, cache, self._load_index(url, cache, True, 'board' if index == 0 else f'additional board {index}')
+        workers = 2 if performance_profile().constrained else 4
+        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(needed))), thread_name_prefix='BoardIndex') as pool:
+            futures = [pool.submit(fetch, *entry) for entry in needed]
+            for future in futures:
+                index, url, cache, data = future.result()
+                if data is not None:
+                    fresh[cache] = data
+                elif index:
+                    failed.append(url)
+        if needed:
+            boards = _read_board_catalog(paths, fresh)
+        self._is_online = self._index_fetch_succeeded.is_set()
+        self._post_ui(self._publish_catalogs, libs, boards)
+        message = f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded'
+        if not self._is_online:
+            message += ' — offline/unavailable; using local caches'
+        if failed:
+            message += f'; {len(failed)} additional index(es) unavailable'
+        if self._catalog_memory_only:
+            message += '; cache storage unavailable — downloaded data kept in memory'
+        self._post_ui(self._finish_load, message)
 
     def _load_index(self, url: str, cache_file: str,
                     force_refresh: bool, label: str) -> dict | None:
@@ -3538,7 +3575,7 @@ class ArduinoBrowser:
                     subtitle="Downloading index from Arduino servers on background thread..."
                 )
 
-        self.root.after(0, _update_overlay)
+        self._post_ui(_update_overlay)
         normalized_url = _normalize_board_manager_url(url) or str(url).strip()
         data = None
         raw_text = None
@@ -3549,8 +3586,9 @@ class ArduinoBrowser:
             return _validate_index_payload(json.loads(text), expected_key), text
 
         if requests is not None:
+            resp = None
             try:
-                resp = requests.get(normalized_url, timeout=(10, 30), headers=DEFAULT_HEADERS)
+                resp = requests.get(normalized_url, timeout=(5, 12), headers=DEFAULT_HEADERS)
                 resp.raise_for_status()
                 response_bytes = getattr(resp, "content", b"")
                 if not response_bytes:
@@ -3559,53 +3597,51 @@ class ArduinoBrowser:
             except Exception as exc:
                 errors.append(str(exc))
                 data = None
+            finally:
+                if resp is not None:
+                    resp.close()
 
         if data is None:
             try:
                 import urllib.request
                 req = urllib.request.Request(normalized_url, headers=DEFAULT_HEADERS)
-                with urllib.request.urlopen(req, timeout=30) as uresp:
+                with urllib.request.urlopen(req, timeout=12) as uresp:
                     data, raw_text = _parse_response(uresp.read())
             except Exception as e:
                 errors.append(str(e))
 
         if data is not None and raw_text is not None:
+            if hasattr(self, '_index_fetch_succeeded'):
+                self._index_fetch_succeeded.set()
             try:
                 _write_index_cache(cache_file, raw_text)
             except OSError:
-                pass
+                data['_browser_cache_written'] = False
+                self._catalog_memory_only = True
             return data
 
         # A failed refresh must not throw away the last known-good index.
         stale = _read_index_cache(cache_file, expected_key)
         if stale is not None:
-            self.root.after(0, self._set_status, f"Offline/unavailable: loaded cached {label} index")
+            self._post_ui(self._set_status, f"Offline/unavailable: loaded cached {label} index")
             return stale
 
         detail = next((error for error in errors if error), "invalid index response")
-        self.root.after(0, self._set_status, f"Failed to download {label} index: {detail}")
+        self._post_ui(self._set_status, f"Failed to download {label} index: {detail}")
         return None
 
     def _finish_load(self, msg: str):
-        if hasattr(self, "_loading_overlay") and self._loading_overlay and self._loading_overlay.winfo_exists():
-            try:
-                self._loading_overlay.stop_and_destroy()
-            except Exception:
-                pass
+        if getattr(self, '_loading_overlay', None):
+            self._loading_overlay.stop_and_destroy()
             self._loading_overlay = None
-
         self.progress.stop()
-        self.progress.config(mode="determinate", value=0)
+        self.progress.config(mode='determinate', value=0)
         self._set_status(msg)
         self._busy = False
-        self.refresh_btn.config(state="normal")
-        # Update installed items and refresh installed tab if it's visible
-        self._compute_installed_items()
-        try:
-            if self.notebook.index(self.notebook.select()) == 2:
-                self.installed_tab.populate(self._installed_items)
-        except Exception:
-            pass
+        self.refresh_btn.config(state='normal')
+        self._update_version_status(self.lib_tab)
+        self._update_version_status(self.board_tab)
+        self._compute_installed_items_async()
 
     # ------------------------------------------------------------------
     # Download
@@ -3669,13 +3705,6 @@ class ArduinoBrowser:
         sel = tab.listbox.curselection()
         if not sel or self._busy:
             return
-        if not check_internet_connection(timeout=0.6):
-            messagebox.showwarning(
-                "Offline Mode",
-                "Downloading packages requires an active internet connection.\n\nPlease connect to the internet and try again.",
-                parent=self.root,
-            )
-            return
         name = tab.filtered_names[sel[0]]
         item = tab.all_items[name]
         ver = tab.version_var.get()
@@ -3708,11 +3737,10 @@ class ArduinoBrowser:
         tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
         self._set_status(f"Downloading {archive}…")
         self.progress.config(mode="indeterminate")
-        self.progress.start(12)
+        self.progress.start(self._progress_interval)
 
-        t = threading.Thread(target=self._download_worker,
-                             args=(tab, url, archive, dest_dir, download_option, None, target_version), daemon=True)
-        t.start()
+        self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
+                          download_option, None, target_version)
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):
         if self._busy:
@@ -3756,14 +3784,10 @@ class ArduinoBrowser:
 
         self._set_status(f"Downloading update {archive}…")
         self.progress.config(mode="indeterminate")
-        self.progress.start(12)
+        self.progress.start(self._progress_interval)
 
-        t = threading.Thread(
-            target=self._download_worker,
-            args=(tab, url, archive, dest_dir, download_option, (old_path, old_archive), target_version),
-            daemon=True
-        )
-        t.start()
+        self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
+                          download_option, (old_path, old_archive), target_version)
 
     def _download_worker(
         self,
@@ -3780,6 +3804,7 @@ class ArduinoBrowser:
         folder_path = os.path.join(dest_dir, _get_folder_name(archive))
         partial_path = f"{filepath}.part"
         extraction_path = f"{folder_path}.part-{os.getpid()}-{threading.get_ident()}"
+        resp = None
         try:
             os.makedirs(dest_dir, exist_ok=True)
 
@@ -3789,6 +3814,8 @@ class ArduinoBrowser:
                     resp = requests.get(url, stream=True, timeout=(15, 120), headers=DEFAULT_HEADERS, allow_redirects=True)
                     resp.raise_for_status()
                 except Exception:
+                    if resp is not None:
+                        resp.close()
                     resp = None
 
             if resp is not None:
@@ -3796,7 +3823,7 @@ class ArduinoBrowser:
                 downloaded = 0
 
                 if total:
-                    self.root.after(0, self._set_progress_determinate, total)
+                    self._post_ui(self._set_progress_determinate, total)
 
                 with open(partial_path, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=16384):
@@ -3807,14 +3834,14 @@ class ArduinoBrowser:
                                     os.remove(partial_path)
                             except OSError:
                                 pass
-                            self.root.after(0, self._download_cancelled, tab)
+                            self._post_ui(self._download_cancelled, tab)
                             return
 
                         if chunk:
                             fh.write(chunk)
                             downloaded += len(chunk)
                             if total:
-                                self.root.after(0, self._update_progress,
+                                self._post_ui(self._update_progress,
                                                 downloaded, total)
             else:
                 import urllib.request
@@ -3823,7 +3850,7 @@ class ArduinoBrowser:
                     total = int(uresp.headers.get("Content-Length", 0))
                     downloaded = 0
                     if total:
-                        self.root.after(0, self._set_progress_determinate, total)
+                        self._post_ui(self._set_progress_determinate, total)
                     with open(partial_path, "wb") as fh:
                         while True:
                             if self._cancel_event.is_set():
@@ -3833,7 +3860,7 @@ class ArduinoBrowser:
                                         os.remove(partial_path)
                                 except OSError:
                                     pass
-                                self.root.after(0, self._download_cancelled, tab)
+                                self._post_ui(self._download_cancelled, tab)
                                 return
                             chunk = uresp.read(16384)
                             if not chunk:
@@ -3841,7 +3868,7 @@ class ArduinoBrowser:
                             fh.write(chunk)
                             downloaded += len(chunk)
                             if total:
-                                self.root.after(0, self._update_progress, downloaded, total)
+                                self._post_ui(self._update_progress, downloaded, total)
 
             _verify_download(
                 partial_path,
@@ -3852,7 +3879,7 @@ class ArduinoBrowser:
             os.replace(partial_path, filepath)
 
             if download_option in ("folder", "both"):
-                self.root.after(0, self._set_status, "Extracting files…")
+                self._post_ui(self._set_status, "Extracting files…")
                 if os.path.isdir(extraction_path):
                     shutil.rmtree(extraction_path, ignore_errors=True)
                 _extract_archive(filepath, extraction_path)
@@ -3892,21 +3919,23 @@ class ArduinoBrowser:
                         except Exception:
                             pass
 
-            self.root.after(0, self._download_done, tab, filepath if download_option != "folder" else folder_path)
+            self._post_ui(self._download_done, tab, filepath if download_option != "folder" else folder_path)
 
         except OSError as e:
             if self._cancel_event.is_set():
-                self.root.after(0, self._download_cancelled, tab)
+                self._post_ui(self._download_cancelled, tab)
             else:
-                self.root.after(0, self._download_error, tab,
+                self._post_ui(self._download_error, tab,
                                f"File/download error:\n{e}")
         except Exception as e:
             if self._cancel_event.is_set():
-                self.root.after(0, self._download_cancelled, tab)
+                self._post_ui(self._download_cancelled, tab)
             else:
-                self.root.after(0, self._download_error, tab,
+                self._post_ui(self._download_error, tab,
                                f"Download failed:\n{e}")
         finally:
+            if resp is not None:
+                resp.close()
             for leftover in (partial_path, extraction_path):
                 try:
                     if os.path.isfile(leftover):
@@ -3921,6 +3950,8 @@ class ArduinoBrowser:
         self.progress.config(mode="determinate", maximum=total, value=0)
 
     def _update_progress(self, downloaded, total):
+        if not self._busy or self._active_download_tab is None:
+            return
         self.progress.config(value=downloaded)
         pct = int(downloaded / total * 100) if total else 0
         self._set_status(f"Downloading… {pct}%")
@@ -3941,7 +3972,7 @@ class ArduinoBrowser:
         self._update_version_status(self.lib_tab)
         self._update_version_status(self.board_tab)
         # Refresh installed list
-        self._compute_installed_items()
+        self._compute_installed_items_async()
         try:
             if self.notebook.index(self.notebook.select()) == 2:
                 self.installed_tab.populate(self._installed_items)
@@ -4001,5 +4032,8 @@ class ArduinoBrowser:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from src.modules.runtime_resources import enforce_minimum_cpu_requirement
+    if not enforce_minimum_cpu_requirement():
+        raise SystemExit(2)
     app = ArduinoBrowser()
     app.run()
