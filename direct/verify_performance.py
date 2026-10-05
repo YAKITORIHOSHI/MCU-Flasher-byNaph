@@ -48,6 +48,99 @@ class PerformanceChecks(unittest.TestCase):
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)
 
+    def test_build_queue_retains_diagnostics_and_event_order(self):
+        from main.qt.log_buffer import DiagnosticLogBuffer, LogBuffer
+        queue = DiagnosticLogBuffer(400, 4, lambda item: item["text"])
+        events = [
+            {"text": "first error", "tag": "error"},
+            {"text": "compile 1", "tag": "info"},
+            {"text": "warning context", "tag": "warning"},
+            {"text": "compile 2", "tag": "info"},
+            {"text": "write failed", "tag": "severe_alert"},
+            {"text": "compile 3", "tag": "info"},
+        ]
+        for event in events:
+            queue.append(event)
+        self.assertEqual(list(queue), [events[0], events[2], events[4], events[5]])
+        self.assertEqual(list(reversed(queue)), [events[5], events[4], events[2], events[0]])
+        self.assertEqual(queue.dropped, 2)
+        self.assertLessEqual(queue.chars, queue.max_chars)
+        self.assertEqual(queue.drain(max_items=2), [events[0], events[2]])
+        self.assertEqual(list(queue), [events[4], events[5]])
+        self.assertEqual(queue.chars, sum(len(item["text"]) + 32 for item in queue))
+        self.assertIn("2 older entries omitted", queue.take_notice())
+        self.assertEqual(queue.take_notice(), "")
+        queue.clear()
+        self.assertEqual(queue.chars, 0)
+        self.assertFalse(queue)
+        # Serial keeps its existing newest-output FIFO policy.
+        serial = LogBuffer(400, 4, lambda item: item["text"])
+        for event in events:
+            serial.append(event)
+        self.assertEqual(list(serial), events[-4:])
+
+    def test_build_queue_all_diagnostic_and_character_overflow_remain_bounded(self):
+        from main.qt.log_buffer import DiagnosticLogBuffer
+        queue = DiagnosticLogBuffer(300, 100, lambda item: item[0])
+        for number in range(10000):
+            queue.append((f"failure {number}: " + "x" * 60, "error", True, None, ""))
+            self.assertLessEqual(queue.chars, queue.max_chars)
+            self.assertLessEqual(len(queue), queue.max_items)
+        retained = list(queue)
+        self.assertIn("failure 9999", retained[-1][0])
+        self.assertEqual(queue.dropped + len(queue), 10000)
+        self.assertIn("older entries omitted", queue.take_notice())
+        # An ordinary burst cannot remove those retained failures.
+        for number in range(10000):
+            queue.append((f"ordinary {number}", "info", True, None, ""))
+        self.assertEqual([item for item in queue if item[1] == "error"], retained)
+        self.assertLessEqual(queue.chars, queue.max_chars)
+        # Oversized diagnostics cannot escape the character bound.
+        queue.append(("y" * 1000, "warning", True, None, ""))
+        self.assertFalse(queue)
+        self.assertEqual(queue.chars, 0)
+        self.assertIn("older entries omitted", queue.take_notice())
+
+    def test_retained_log_size_updates_apply_bounds_incrementally(self):
+        from main.qt.log_buffer import LogBuffer
+        history = LogBuffer(140, 10, lambda entry: entry["text"])
+        older, current = {"text": "older"}, {"text": "start"}
+        history.append(older)
+        history.append(current)
+        before = len(current["text"])
+        current["text"] = "x" * 100
+        with patch.object(history, "recount", side_effect=AssertionError("whole-history scan")):
+            history.adjust_size(current, before)
+        self.assertEqual(list(history), [current])
+        self.assertEqual(history.chars, 132)
+        self.assertEqual(history.dropped, 1)
+        before = len(current["text"])
+        current["text"] = "ok"
+        history.adjust_size(current, before)
+        self.assertEqual(history.chars, 34)
+        history.append({"text": "next"})
+        self.assertEqual(history.chars, sum(len(item["text"]) + 32 for item in history))
+
+    def test_progress_coalescing_preserves_diagnostics_and_message_barriers(self):
+        from main.qt.log_buffer import coalesce_progress
+        def event(text, tag="info", newline=True, pattern=r"Writing \[firmware\]"):
+            return (text, tag, newline, pattern, "[12:00:00]")
+        items = [
+            event("Writing [firmware] 0%"), event("Writing [firmware] 50%"),
+            event("source diagnostic context", pattern=None),
+            event("Writing [firmware] 60%"), event("warning one", tag="warning"),
+            event("warning two", tag="warning"), event("error one", tag="error"),
+            event("error two", tag="error"), event("severe one", tag="severe_alert"),
+            event("severe two", tag="severe_alert"), event("Writing [firmware] 70%", newline=False),
+            event("Writing [firmware] 80%"), event("Writing [firmware] 90%"),
+            event("Unpacking 1%", pattern="Unpacking"),
+            event("Writing [firmware] 100%", tag="success"),
+        ]
+        self.assertEqual(coalesce_progress(items), [items[1], *items[2:11], items[12], *items[13:]])
+        invalid = [event("invalid first", pattern="[invalid"), event("invalid second", pattern="[invalid")]
+        self.assertEqual(coalesce_progress(invalid), invalid)
+        self.assertEqual(coalesce_progress([]), [])
+
     def test_streaming_display_memory_and_no_newline(self):
         from main.qt.console_panel import ConsolePanel
         from main.qt.serial_panel import SerialOutputView
@@ -315,6 +408,7 @@ class PerformanceChecks(unittest.TestCase):
         wakeups = []
         bus._logs_ready.connect(lambda: wakeups.append(1))
         def producer():
+            bus.queue_log("console", {"text": "early fatal build diagnostic", "tag": "error"})
             for i in range(30000):
                 bus.queue_log("console", {"text": str(i) + "x" * 1000})
         worker = threading.Thread(target=producer)
@@ -329,7 +423,9 @@ class PerformanceChecks(unittest.TestCase):
         while buffer:
             bus._flush_log_signals()
         self.assertIn("29999", received[-1]["text"])
+        self.assertTrue(any(r["text"] == "early fatal build diagnostic" for r in received))
         self.assertTrue(any("older entries omitted" in r["text"] for r in received))
+        self.assertTrue(all(r["tag"] == "system" for r in received if "older entries omitted" in r["text"]))
         self.assertFalse(bus._log_timer.isActive())
         bus.deleteLater()
 

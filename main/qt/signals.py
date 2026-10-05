@@ -28,11 +28,15 @@ class MCUSignals(QObject):
 
     def __init__(self):
         super().__init__()
-        from main.qt.log_buffer import LogBuffer
+        from main.qt.log_buffer import DiagnosticLogBuffer, LogBuffer
         from src.modules.runtime_resources import performance_profile
         self._log_interval = performance_profile().terminal_interval_ms
         limit = 256_000 if performance_profile().constrained else 1_000_000
-        self._pending_logs = {name: LogBuffer(limit, 2000, lambda item: item.get("text", "")) for name in ("console", "serial")}
+        text_of = lambda item: item.get("text", "")
+        self._pending_logs = {
+            "console": DiagnosticLogBuffer(limit, 2000, text_of),
+            "serial": LogBuffer(limit, 2000, text_of),
+        }
         self._log_lock = threading.Lock()
         self._log_wake_pending = False
         self._log_timer = None
@@ -78,7 +82,7 @@ class MCUSignals(QObject):
                 batch = buffer.drain(max_items=64, max_chars=16384)
                 notice = buffer.take_notice()
                 if notice:
-                    batch.insert(0, {"text": notice, "tag": "warning", "newline": True})
+                    batch.insert(0, {"text": notice, "tag": "system" if stream == "console" else "warning", "newline": True})
                 batches[stream] = batch
             empty = not any(self._pending_logs.values())
             if empty:

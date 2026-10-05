@@ -11,7 +11,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -25,7 +25,8 @@ from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixt
 from PySide6.QtCore import QRect, QPoint, QObject, Signal, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
-                              QLineEdit, QToolButton, QStyle, QStyleOptionToolButton)
+                              QLineEdit, QToolButton, QStyle, QStyleOptionToolButton,
+                              QApplication)
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
 from main.qt.theme import build_stylesheet, register_fonts
@@ -288,6 +289,145 @@ class QtResponsiveChecks(ControlChecks):
         new_calls = [call for call in sent.call_args_list if call.args[0] == 'new']
         self.assertEqual(len(new_calls), 3)
         self.assertTrue(all(call.kwargs['extra']['kind'] == 'pwsh' for call in new_calls))
+
+    def test_build_console_header_and_views_preserve_saved_fonts(self):
+        from main.core import config
+        from main.core.theme import Theme
+        from main.qt.console_panel import ConsolePanelContainer
+        self.addCleanup(Theme.apply_theme, Theme.active_theme)
+
+        cfg = {'timestamp_enabled': False, 'clear_console_on_action': True,
+               'clear_serial_on_action': False}
+        self.stack.enter_context(patch.object(config, 'load_gui_config', return_value=cfg))
+        saved = self.stack.enter_context(patch.object(config, 'save_gui_config', return_value=True))
+        theme_mode = self.stack.enter_context(patch.object(config, 'get_theme_mode', return_value='default'))
+        self.stack.enter_context(patch.object(config, 'get_hide_build_console_warnings', return_value=False))
+        clipboard = Mock()
+        self.stack.enter_context(patch.object(QApplication, 'clipboard', return_value=clipboard))
+        fixture = [
+            ('═' * 50, 'header'),
+            ('⚙ COMPILING (PlatformIO)', 'header'),
+            ('Sketch: isolated responsiveness fixture', 'normal'),
+            ('Target: fixture:board (Arduino)', 'normal'),
+            ('⚡ Running Parallel Compilation on 4 Logical Processors', 'header'),
+            *[(f'⚙ Compiling source{number}.cpp.o...', 'info') for number in range(12)],
+            ('⚠ Warning at sketch.cpp:12:3', 'warning'),
+            ('  12 | lookup("building / looking for");', 'warning'),
+            ('       ^~~~~~', 'warning'),
+            ('⚙ Compiling sketch.cpp.o...', 'info'),
+            ('🔗 Linking...', 'dim'),
+            ('📏 Checking firmware size...', 'dim'),
+            ('RAM: 8.5% (used 28012 bytes from 327680 bytes)', 'success'),
+            ('Flash: 26.3% (used 344969 bytes from 1310720 bytes)', 'success'),
+            ('Binary artifact: firmware.bin (337.2 KB) ready for upload', 'success'),
+            ('╔══════════════════════════════╗', 'purple_header'),
+            ('║ Compilation Time Breakdown ║', 'purple_header'),
+            ('╠══════════════════════════════╣', 'purple_header'),
+            ('║ Code Build & Compilation : 2.6s ║', 'purple_header'),
+            ('║ Total Elapsed Time : 3.2s ║', 'purple_header'),
+            ('╚══════════════════════════════╝', 'purple_header'),
+            ('Compilation successful! (3.2s)', 'success'),
+        ]
+
+        def check_header(container):
+            header = container.header
+            for control in (header._btn_details, header._btn_copy, header._btn_clear,
+                            header.cb_autoscroll, header._btn_options,
+                            header.cb_auto_clear, header.cb_auto_clear_serial):
+                if control.isVisible():
+                    self.contained(control, header)
+                    self.assertTrue(control.visibleRegion().contains(control.rect().center()),
+                                    f'Build header control clipped: {control.text()}')
+                    self.assertFalse(control.isWindow())
+            self.assertTrue(header._btn_details.isVisible())
+            self.assertTrue(header._btn_copy.isVisible())
+            self.assertTrue(header._btn_clear.isVisible())
+            self.assertTrue(header.cb_autoscroll.isVisible())
+            compact = header.width() < 850
+            self.assertEqual(header._btn_options.isVisible(), compact)
+            self.assertEqual(header.cb_auto_clear.isVisible(), not compact)
+            self.assertEqual(header.cb_auto_clear_serial.isVisible(), not compact)
+            if compact:
+                options = header._btn_options.menu().actions()
+                self.assertEqual(len(options), 2)
+                self.assertEqual(options[0].isChecked(), header.cb_auto_clear.isChecked())
+                self.assertEqual(options[1].isChecked(), header.cb_auto_clear_serial.isChecked())
+
+        for point_size in (11, 18):
+            with patch.object(config, 'get_monitor_font_size', return_value=point_size):
+                container = self.own(ConsolePanelContainer(self.backend))
+            container.setObjectName('build-console-fixture')
+            console, header = container.console, container.header
+            container.resize(1920, 520)
+            container.show()
+            pump()
+            content_font = console.font()
+            self.assertEqual(content_font.pointSize(), point_size)
+            for mode in ('default', 'light', 'solarized_dark'):
+                from main.qt.theme import get_palette
+                theme_mode.return_value = mode
+                Theme.apply_theme(mode)
+                # Standalone fixtures need the workspace's reading surface
+                # behind translucent glass, rather than a native black window.
+                background = get_palette(mode)['BG_DARKEST']
+                APP.setStyleSheet(build_stylesheet(mode) +
+                                 f'QWidget#build-console-fixture {{ background: {background}; }}')
+                container.apply_theme(mode)
+                console.clear()
+                console.set_details_visible(False)
+                for text, tag in fixture:
+                    console.append_log({'text': text, 'tag': tag, 'newline': True,
+                                        'timestamp': '[12:34:56]'})
+                while console._queue:
+                    console._flush_queue()
+                for width in (320, 400, 480, 640, 850, 1100, 1920, 480, 1920):
+                    for details in (False, True):
+                        with self.subTest(theme=mode, font=point_size, width=width, details=details):
+                            container.resize(width, 520)
+                            if header._btn_details.isChecked() != details:
+                                header._btn_details.click()
+                            pump()
+                            self.assertLessEqual(container.width(), width,
+                                                 'Build header size hints must not force a wider window')
+                            self.assertEqual(console._details_visible, details)
+                            self.assertEqual(header._btn_details.isChecked(), details)
+                            self.assertEqual(console.font(), content_font)
+                            self.assertEqual(console.document().defaultFont().pointSize(), point_size)
+                            self.assertGreaterEqual(console.viewport().height(), console.fontMetrics().lineSpacing())
+                            self.contained(header, container)
+                            check_header(container)
+                            text = console.toPlainText()
+                            self.assertIn('lookup("building / looking for")', text)
+                            self.assertIn('Compilation successful!', text)
+                            self.assertIn('3.2s', text)
+                            if details:
+                                self.assertIn('⚙ Compiling source11.cpp.o...', text)
+                            else:
+                                self.assertIn('12 processed', text)
+                                self.assertNotIn('⚙ Compiling source11.cpp.o...', text)
+                            if width in (320, 1100):
+                                # Exercise the real Copy callback without changing
+                                # the user's clipboard or leaving a delayed UI callback.
+                                with patch('main.qt.console_panel.QTimer.singleShot') as later:
+                                    header._btn_copy.click()
+                                    pump()
+                                    copied = clipboard.setText.call_args.args[0]
+                                    self.assertIn('⚙ Compiling source11.cpp.o...', copied)
+                                    check_header(container)
+                                    later.call_args.args[1]()
+                            if width in (480, 1920):
+                                capture(container, f'build-{mode}-{point_size}pt-{width}-'
+                                                   + ('details' if details else 'activity'))
+                header.cb_autoscroll.setChecked(False)
+                self.assertFalse(console._autoscroll)
+                header.cb_autoscroll.setChecked(True)
+                self.assertTrue(console._autoscroll)
+            header._btn_clear.click()
+            self.assertEqual(console.toPlainText(), '')
+            self.assertEqual(console.get_content_for_clipboard(), '')
+            self.assertEqual(console.font(), content_font)
+            container.hide()
+        saved.assert_not_called()
 
     def test_settings_and_setup_small_workareas(self):
         for width, height in ((1280, 720), (800, 600), (640, 480), (480, 640)):

@@ -3,83 +3,26 @@
 """
 main.qt.console_panel — Build Console panel for MCU Flasher by Naph.
 
-Replaces the Tkinter ``tk.Text`` build console widget.
-Displays PlatformIO compiler output with ANSI-style color tags rendered
-as QTextCharFormat.  Autoscroll, copy, and clear controls are built in.
+Presents bounded build events as compact Activity or retained Details.
+Semantic colors, autoscroll, full retained-log copy and clear are built in.
 """
 from __future__ import annotations
 
 import re
 import time
+from itertools import islice
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QTimer, Slot, Qt
+from PySide6.QtCore import QTimer, Signal, Slot, Qt
 # pyrefly: ignore [missing-import]
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QTextBlockUserData
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
-    QPushButton, QCheckBox, QLabel, QFrame, QSizePolicy,
+    QPushButton, QCheckBox, QLabel, QFrame, QSizePolicy, QMenu,
 )
 from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_follow import LogFollow, preserve_log_view
-
-_ANSI_REGEX = re.compile(r"\x1b\[([0-9;]*)m")
-
-
-class AnsiColorParser:
-    """Parses standard ANSI escape codes and appends formatted text to QPlainTextEdit."""
-
-    def __init__(self, default_color: str | None = None):
-        from main.core.config import get_theme_mode
-        from main.qt.log_colors import themed_ansi_colors, themed_log_colors
-        theme_name = get_theme_mode()
-        self.default_color = default_color or themed_log_colors(theme_name)["normal"]
-        self._current_color = self.default_color
-        self._is_bold = False
-        self._color_map = themed_ansi_colors(theme_name)
-
-    def set_theme(self, theme_name: str) -> None:
-        from main.qt.log_colors import themed_ansi_colors, themed_log_colors
-        self._color_map = themed_ansi_colors(theme_name)
-        self.default_color = themed_log_colors(theme_name)["normal"]
-        self._current_color = self.default_color
-
-    def append_ansi_text(self, editor: QPlainTextEdit, cursor: QTextCursor, text: str) -> None:
-        last_end = 0
-        for match in _ANSI_REGEX.finditer(text):
-            chunk = text[last_end:match.start()]
-            if chunk:
-                fmt = QTextCharFormat()
-                fmt.setForeground(QColor(self._current_color))
-                if self._is_bold:
-                    fmt.setFontWeight(QFont.Weight.Bold)
-                cursor.insertText(chunk, fmt)
-
-            codes = match.group(1).split(";") if match.group(1) else ["0"]
-            for c in codes:
-                val = int(c) if c.isdigit() else 0
-                if val == 0:
-                    self._current_color = self.default_color
-                    self._is_bold = False
-                elif val == 1:
-                    self._is_bold = True
-                elif val == 22:
-                    self._is_bold = False
-                elif val in self._color_map:
-                    self._current_color = self._color_map[val]
-                elif val == 39:
-                    self._current_color = self.default_color
-
-            last_end = match.end()
-
-        remaining = text[last_end:]
-        if remaining:
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(self._current_color))
-            if self._is_bold:
-                fmt.setFontWeight(QFont.Weight.Bold)
-            cursor.insertText(remaining, fmt)
 
 
 class ConsolePanelHeader(QWidget):
@@ -90,6 +33,7 @@ class ConsolePanelHeader(QWidget):
         self._console = console
         self._backend = backend
         self.setObjectName("console-header")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(36)
 
         layout = QHBoxLayout(self)
@@ -98,10 +42,17 @@ class ConsolePanelHeader(QWidget):
         self._header_layout = layout
 
         # Title
-        title = QLabel("Build output")
+        title = QLabel("Build activity", self)
         title.setProperty("role", "dim")
         self._title_lbl = title
         layout.addWidget(title)
+        self._btn_details = QPushButton("Details", self)
+        self._btn_details.setCheckable(True)
+        self._btn_details.setFixedHeight(26)
+        self._btn_details.setToolTip("Show retained build messages, including individual compilation units")
+        self._btn_details.toggled.connect(console.set_details_visible)
+        console.details_changed.connect(self._sync_details)
+        layout.addWidget(self._btn_details)
         layout.addStretch()
 
         from main.core.config import load_gui_config, save_gui_config
@@ -111,7 +62,7 @@ class ConsolePanelHeader(QWidget):
 
         # Auto-clear on action checkbox
         init_clear = bool(cfg.get("clear_console_on_action", True))
-        self.cb_auto_clear = QCheckBox("Clear on Action")
+        self.cb_auto_clear = QCheckBox("Clear on Action", self)
         self.cb_auto_clear.setChecked(init_clear)
         self.cb_auto_clear.setToolTip("Clear build console before each compile/upload/clean/reset action")
         self.cb_auto_clear.stateChanged.connect(self._on_auto_clear_changed)
@@ -121,7 +72,7 @@ class ConsolePanelHeader(QWidget):
 
         # Auto-clear serial on action checkbox
         init_clear_serial = bool(cfg.get("clear_serial_on_action", False))
-        self.cb_auto_clear_serial = QCheckBox("Clear Serial on Action")
+        self.cb_auto_clear_serial = QCheckBox("Clear Serial on Action", self)
         self.cb_auto_clear_serial.setChecked(init_clear_serial)
         self.cb_auto_clear_serial.setToolTip("Clear serial monitor before each compile/upload/reset action")
         self.cb_auto_clear_serial.stateChanged.connect(self._on_auto_clear_serial_changed)
@@ -130,23 +81,40 @@ class ConsolePanelHeader(QWidget):
             self._backend.clear_serial_on_action = init_clear_serial
 
         # Autoscroll
-        self.cb_autoscroll = QCheckBox("Auto-scroll")
+        self.cb_autoscroll = QCheckBox("Auto-scroll", self)
         self.cb_autoscroll.setChecked(True)
         self.cb_autoscroll.setToolTip("Auto-scroll console output to bottom")
         layout.addWidget(self.cb_autoscroll)
 
+        self._btn_options = QPushButton("Options", self)
+        self._btn_options.setFixedHeight(26)
+        self._btn_options.setToolTip("Build and serial clear-on-action preferences")
+        menu = QMenu(self._btn_options)
+        self._clear_actions = []
+        for checkbox, label in ((self.cb_auto_clear, "Clear build console on action"),
+                                (self.cb_auto_clear_serial, "Clear serial monitor on action")):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(checkbox.isChecked())
+            action.toggled.connect(checkbox.setChecked)
+            checkbox.toggled.connect(action.setChecked)
+            self._clear_actions.append(action)
+        self._btn_options.setMenu(menu)
+        layout.addWidget(self._btn_options)
+        self._btn_options.hide()
+
         # Copy button
-        btn_copy = QPushButton("⧉ Copy")
+        btn_copy = QPushButton("⧉ Copy", self)
         btn_copy.setObjectName("btn-copy-console")
         btn_copy.setFixedHeight(26)
-        btn_copy.setToolTip("Copy build console output to clipboard")
+        btn_copy.setToolTip("Copy all retained build messages, including Details and hidden warnings")
         btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_copy.clicked.connect(self._copy_console)
         self._btn_copy = btn_copy
         layout.addWidget(btn_copy)
 
         # Clear button
-        btn_clear = QPushButton("🗑 Clear")
+        btn_clear = QPushButton("🗑 Clear", self)
         btn_clear.setObjectName("btn-clear-console")
         btn_clear.setFixedHeight(26)
         btn_clear.setToolTip("Clear build console output buffer")
@@ -162,9 +130,15 @@ class ConsolePanelHeader(QWidget):
     def set_responsive_width(self, width: int) -> None:
         """Dynamically adapt header checkboxes, labels, and buttons based on width."""
         self._current_responsive_width = width
+        compact_options = width < 850
+        self.cb_auto_clear.setVisible(not compact_options)
+        self.cb_auto_clear_serial.setVisible(not compact_options)
+        self._btn_options.setVisible(compact_options)
+        self._title_lbl.setVisible(width >= 400)
+        self._btn_details.setText("Details")
         if width >= 1100:
             self._is_ultra_compact = False
-            self._title_lbl.setText("Build output")
+            self._title_lbl.setText("Build details" if self._console._details_visible else "Build activity")
             self.cb_auto_clear.setText("Clear on Action")
             self.cb_auto_clear_serial.setText("Clear Serial on Action")
             self.cb_autoscroll.setText("Auto-scroll")
@@ -175,7 +149,7 @@ class ConsolePanelHeader(QWidget):
                 self._header_layout.setContentsMargins(10, 4, 10, 4)
         elif width >= 850:
             self._is_ultra_compact = False
-            self._title_lbl.setText("Build output")
+            self._title_lbl.setText("Build details" if self._console._details_visible else "Build activity")
             self.cb_auto_clear.setText("Clr Action")
             self.cb_auto_clear_serial.setText("Clr Serial")
             self.cb_autoscroll.setText("Auto")
@@ -195,6 +169,10 @@ class ConsolePanelHeader(QWidget):
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
                 self._header_layout.setContentsMargins(4, 4, 4, 4)
+
+    def _sync_details(self, checked: bool) -> None:
+        self._btn_details.setChecked(checked)
+        self.set_responsive_width(self.width())
 
     def _on_timestamp_changed(self, state: int) -> None:
         is_checked = bool(state)
@@ -245,12 +223,14 @@ class ConsolePanelHeader(QWidget):
             self.cb_auto_clear.blockSignals(True)
             self.cb_auto_clear.setChecked(checked)
             self.cb_auto_clear.blockSignals(False)
+        self._clear_actions[0].setChecked(checked)
 
     def sync_clear_serial_on_action(self, checked: bool) -> None:
         if self.cb_auto_clear_serial.isChecked() != checked:
             self.cb_auto_clear_serial.blockSignals(True)
             self.cb_auto_clear_serial.setChecked(checked)
             self.cb_auto_clear_serial.blockSignals(False)
+        self._clear_actions[1].setChecked(checked)
 
     def _copy_console(self) -> None:
         include_ts = self._console._timestamp_enabled if hasattr(self._console, "_timestamp_enabled") else False
@@ -258,7 +238,7 @@ class ConsolePanelHeader(QWidget):
         # pyrefly: ignore [missing-import]
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(text)
-        self._btn_copy.setText("✔ Copied!")
+        self._btn_copy.setText("✔" if getattr(self, "_is_ultra_compact", False) else "✔ Copied!")
         def _restore_btn_copy():
             self._btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
         QTimer.singleShot(1500, _restore_btn_copy)
@@ -270,7 +250,6 @@ def _insert_with_bar_styling(cursor: QTextCursor, text: str, default_fmt: QTextC
         return
     bar_fmt = QTextCharFormat(default_fmt)
     bar_fmt.setFontFamilies(["Segoe UI Symbol", "Segoe UI Variable Static Display", "Consolas", "monospace"])
-    bar_fmt.setFontPointSize(12.0)
     bar_fmt.setFontWeight(QFont.Weight.Bold)
     for part in re.split(r"([▰▱]+)", text):
         if not part:
@@ -282,290 +261,298 @@ def _insert_with_bar_styling(cursor: QTextCursor, text: str, default_fmt: QTextC
 
 
 class ConsolePanel(QPlainTextEdit):
-    """
-    Read-only build console widget.
+    """Bounded build event history with compact Activity and retained Details."""
 
-    Appends log lines as ``{text, tag, newline}`` dicts from the
-    ``signals.console_log`` signal.  Color is applied via QTextCharFormat.
-    """
+    details_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setReadOnly(True)
-        # Output may shrink on short screens; keep header controls reachable.
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.setMinimumHeight(24)
         self.setUndoRedoEnabled(False)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.setObjectName("build-console")
         from src.modules.runtime_resources import performance_profile
-        from main.qt.log_buffer import LogBuffer
+        from main.qt.log_buffer import LogBuffer, DiagnosticLogBuffer
+        from main.core.build_output import BuildOutputPresenter
+        from main.core.console_text import ConsoleTextCleaner
+        from main.core.config import get_monitor_font_size, load_gui_config, get_hide_build_console_warnings, get_theme_mode
         profile = performance_profile()
         self._history_limit = 512_000 if profile.constrained else 2_000_000
         self.setMaximumBlockCount(profile.terminal_scrollback)
-        from main.core.config import get_monitor_font_size, load_gui_config
-        init_font_size = get_monitor_font_size()
-        self.set_font_size(init_font_size)
-        self.setObjectName("build-console")
-
-        from main.core.config import get_theme_mode
-        self.apply_theme(get_theme_mode())
-
-        # Autoscroll flag — controlled by the header checkbox
+        self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda entry: entry["text"])
+        self._activity_entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda entry: entry["text"])
+        self._queue = DiagnosticLogBuffer(256_000 if profile.constrained else 1_000_000, 2000, lambda item: item[0])
+        self._presenter = BuildOutputPresenter()
+        self._cleaner = ConsoleTextCleaner()
+        self._details_visible = False
+        self._entry_number = 0
+        self._formats = {}
+        self._patterns = {}
+        self._progress_blocks = {}
         self._autoscroll = True
         self._follow = LogFollow(self)
-
-        cfg = load_gui_config()
-        self._timestamp_enabled: bool = bool(cfg.get("timestamp_enabled", False))
-        self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda entry: entry["text"])
-
-        from main.core.config import get_hide_build_console_warnings
-        self._hide_warnings: bool = bool(get_hide_build_console_warnings())
-
-        # Bounded queue with small, demand-driven render batches.
-        self._queue = LogBuffer(256_000 if profile.constrained else 1_000_000, 2000, lambda item: item[0])
+        self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
+        self._hide_warnings = bool(get_hide_build_console_warnings())
+        self.set_font_size(get_monitor_font_size())
+        self.apply_theme(get_theme_mode())
         self._flush_timer = QTimer(self)
-        from src.modules.runtime_resources import performance_profile
-        self._flush_timer.setInterval(performance_profile().terminal_interval_ms)
+        self._flush_timer.setInterval(profile.terminal_interval_ms)
         self._flush_timer.timeout.connect(self._flush_queue)
-        # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
     def set_hide_warnings(self, enabled: bool) -> None:
-        self._hide_warnings = bool(enabled)
+        if self._hide_warnings != bool(enabled):
+            self._hide_warnings = bool(enabled)
+            self._rebuild_document()
+
+    def set_details_visible(self, enabled: bool) -> None:
+        if self._details_visible != bool(enabled):
+            self._details_visible = bool(enabled)
+            self._rebuild_document()
+            self.details_changed.emit(self._details_visible)
 
     def set_font_size(self, size: int) -> None:
-        """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
         try:
-            sz = int(size)
+            size = int(size)
         except (ValueError, TypeError):
-            sz = 11
-        font = QFont("Consolas", sz)
+            size = 11
+        font = QFont("Consolas", size)
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setFixedPitch(True)
         self.setFont(font)
+        # The workspace's universal px rule otherwise overrides saved content
+        # fonts when Qt polishes the widget. Points are logical Qt units.
+        self.setStyleSheet(f"QPlainTextEdit#build-console {{ font-family: Consolas; font-size: {size}pt; }}")
         self.document().setDefaultFont(font)
+        self._formats.clear()
+        if hasattr(self, "_tag_colors"):
+            self._rebuild_document()
 
     def apply_theme(self, theme_name: str) -> None:
-        """Apply active theme palette to build console base colors and ANSI default."""
         from main.qt.theme import get_palette
         from main.qt.log_colors import themed_log_colors
         pal = get_palette(theme_name)
-        bg = pal.get("BG_DARKEST", "#0a0e14")
-        fg = pal.get("TEXT", "#e0e6ed")
         self._tag_colors = themed_log_colors(theme_name)
         self._theme_name = theme_name
+        self._formats.clear()
         palette = self.palette()
-        palette.setColor(palette.ColorRole.Base, QColor(bg))
-        palette.setColor(palette.ColorRole.Text, QColor(fg))
+        palette.setColor(palette.ColorRole.Base, QColor(pal.get("BG_DARKEST", "#0a0e14")))
+        palette.setColor(palette.ColorRole.Text, QColor(pal.get("TEXT", "#e0e6ed")))
         self.setPalette(palette)
-        if hasattr(self, "_ansi_parser") and self._ansi_parser:
-            self._ansi_parser.set_theme(theme_name)
-        if hasattr(self, "_entries"):
-            self._rebuild_document()
+        self._rebuild_document()
 
     def set_autoscroll(self, enabled: bool) -> None:
         self._autoscroll = enabled
         self._follow.set_enabled(enabled)
 
     def set_timestamp_enabled(self, enabled: bool) -> None:
-        """Dynamically toggle timestamps across the entire console."""
-        if self._timestamp_enabled == enabled:
-            return
-        self._timestamp_enabled = enabled
-        self._rebuild_document()
+        if self._timestamp_enabled != bool(enabled):
+            self._timestamp_enabled = bool(enabled)
+            self._rebuild_document()
 
     def get_content_for_clipboard(self, include_timestamp: bool | None = None) -> str:
-        """Return console text formatted for clipboard copying.
-
-        If include_timestamp is False, any leading timestamps ([HH:MM:SS]) are
-        strictly stripped from all lines, guaranteeing clean code/log output.
-        """
+        """Copy retained events regardless of Activity/Details or warning filter."""
+        while self._queue:
+            self._flush_queue()
         if include_timestamp is None:
             include_timestamp = self._timestamp_enabled
-
-        if include_timestamp:
-            return self.toPlainText()
-
-        raw_text = self.toPlainText()
-        clean_lines = [
-            re.sub(r"^\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]\s*", "", line)
-            for line in raw_text.splitlines()
-        ]
-        return "\n".join(clean_lines)
+        parts = []
+        if self._entries.dropped:
+            parts.append(f"[Retained history: {self._entries.dropped} older entries expired]\n")
+        for entry in self._entries:
+            if entry["newline"] and parts:
+                parts.append("\n")
+            if include_timestamp and entry["ts"]:
+                parts.append(entry["ts"] + " ")
+            parts.append(entry["text"])
+        return "".join(parts)
 
     def copy(self) -> None:
-        """Custom clipboard copy respecting timestamp toggle."""
         cursor = self.textCursor()
-        if not cursor.hasSelection():
+        if cursor.hasSelection():
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(cursor.selectedText().replace("\u2029", "\n"))
+
+    def _format(self, tag):
+        tag = tag if tag in self._tag_colors else "normal"
+        if tag not in self._formats:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
+            if tag in ("bold", "header", "severe_alert", "success_bold_lg", "magenta_bold_lg", "purple_header"):
+                fmt.setFontWeight(QFont.Weight.Bold)
+            if tag in ("header", "purple_header") and not self._details_visible:
+                fmt.setFontPointSize(self.font().pointSizeF() + 1)
+            self._formats[tag] = fmt
+        return self._formats[tag]
+
+    def _render_entry(self, cursor, entry, replace=False):
+        if self._hide_warnings and entry["tag"] == "warning":
             return
-        selected_text = cursor.selectedText().replace("\u2029", "\n")
-        if not self._timestamp_enabled:
-            selected_text = "\n".join(
-                re.sub(r"^\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]\s*", "", line)
-                for line in selected_text.splitlines()
-            )
-        from PySide6.QtWidgets import QApplication
-        QApplication.clipboard().setText(selected_text)
+        block = self._progress_blocks.get(entry["id"]) if replace else None
+        if replace and block is None:
+            # The small cache may expire before the bounded lookup horizon.
+            # Match a verified progress identity, never diagnostic/source text.
+            candidate = self.document().lastBlock()
+            for _ in range(250):
+                if not candidate.isValid():
+                    break
+                data = candidate.userData()
+                if data is not None and data.entry_id == entry["id"]:
+                    block = candidate
+                    break
+                candidate = candidate.previous()
+        if block is not None and block.isValid() and block.userData() is not None and block.userData().entry_id == entry["id"]:
+            cursor = QTextCursor(block)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            if entry["newline"] and self.document().characterCount() > 1:
+                # Space phase headings, keeping compiler source/caret rows intact.
+                section = not self._details_visible and entry["tag"] in ("header", "purple_header")
+                extra = section and bool(cursor.block().text())
+                cursor.insertText("\n\n" if extra else "\n", QTextCharFormat())
+        if self._timestamp_enabled and entry["ts"]:
+            cursor.insertText(entry["ts"] + " ", self._format("timestamp"))
+        _insert_with_bar_styling(cursor, entry["text"], self._format(entry["tag"]))
+        if entry.get("replace_key") or entry.get("replace_pattern"):
+            if "\n" not in entry["text"] and entry["newline"]:
+                data = _ProgressBlockData(entry["id"])
+                cursor.block().setUserData(data)
+                self._progress_blocks[entry["id"]] = cursor.block()
+                if len(self._progress_blocks) > 128:
+                    self._progress_blocks.pop(next(iter(self._progress_blocks)))
 
     @preserve_log_view(rebuild=True)
     def _rebuild_document(self) -> None:
-        """Re-render the entire console document with/without timestamps."""
+        self._progress_blocks.clear()
+        self._formats.clear()
         cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         cursor.select(QTextCursor.SelectionType.Document)
         cursor.removeSelectedText()
-
-        first = True
-        ts_fmt = QTextCharFormat()
-        ts_fmt.setForeground(QColor(self._tag_colors["timestamp"]))
-
-        for entry in self._entries:
-            text = entry.get("text", "")
-            tag = entry.get("tag", "normal")
-            newline = entry.get("newline", True)
-            ts = entry.get("ts", "")
-
-            color_hex = self._tag_colors.get(tag, self._tag_colors["normal"])
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(color_hex))
-            if tag in ("bold", "header", "severe_alert", "success_bold_lg", "magenta_bold_lg", "purple_header"):
-                fmt.setFontWeight(QFont.Weight.Bold)
-
-            if newline and (self.document().characterCount() > 1 or not first):
-                cursor.insertText("\n", QTextCharFormat())
-
-            if self._timestamp_enabled and ts:
-                cursor.insertText(f"{ts} ", ts_fmt)
-
-            cursor.insertText(text, fmt)
-            first = False
-
+        entries = self._entries if self._details_visible else self._activity_entries
+        for entry in entries:
+            self._render_entry(cursor, entry)
         cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
+        # Qt may defer its scrollbar range after replacing the whole document.
+        # Refresh it synchronously before LogFollow restores the reading anchor.
+        layout = self.document().documentLayout()
+        layout.documentSizeChanged.emit(layout.documentSize())
+
+    def _store_entry(self, history, record):
+        """Update one bounded progress record without recounting history."""
+        from main.qt.log_buffer import DIAGNOSTIC_TAGS
+        match = None
+        key = record.get("replace_key")
+        pattern = record.get("replace_pattern")
+        if key:
+            last = next(reversed(history), None)
+            if last and last.get("replace_key") == key:
+                match = last
+        elif pattern and record["newline"] and record["tag"] not in DIAGNOSTIC_TAGS and "\n" not in record["text"]:
+            if pattern not in self._patterns:
+                try:
+                    self._patterns[pattern] = re.compile(pattern, re.IGNORECASE)
+                except (re.error, TypeError):
+                    self._patterns[pattern] = None
+                if len(self._patterns) > 128:
+                    self._patterns.pop(next(iter(self._patterns)))
+            compiled = self._patterns[pattern]
+            if compiled is not None:
+                for candidate in islice(reversed(history), 250):
+                    if candidate["tag"] in DIAGNOSTIC_TAGS or not candidate["newline"] or not candidate.get("replace_pattern"):
+                        break
+                    if candidate.get("replace_pattern") == pattern and "\n" not in candidate["text"] and compiled.search(candidate["text"]):
+                        match = candidate
+                        break
+        if match is not None:
+            old_length = len(match["text"])
+            entry_id = match["id"]
+            match.update(record, id=entry_id)
+            history.adjust_size(match, old_length)
+            return match, True
+        self._entry_number += 1
+        record = dict(record, id=self._entry_number)
+        history.append(record)
+        return record, False
 
     @Slot(dict)
     def append_log(self, payload: dict) -> None:
-        """Enqueue one log entry from the console:log signal payload for buffered RAM flush."""
-        tag: str = payload.get("tag", "normal")
-        if getattr(self, "_hide_warnings", False) and tag == "warning":
-            return
         from main.qt.log_buffer import display_text
-        text: str = display_text(payload.get("text", ""))
-        newline: bool = payload.get("newline", True)
-        replace_pattern: str | None = payload.get("replace_pattern")
-        ts: str = payload.get("timestamp") or time.strftime("[%H:%M:%S]")
-        m = re.match(r"^(\[\d+:\d+:\d+\])\s*(.*)$", text)
-        if m:
-            ts = m.group(1)
-            text = m.group(2)
-        self._queue.append((text, tag, newline, replace_pattern, ts))
+        original = display_text(payload.get("text", ""))
+        text = self._cleaner.clean(original)
+        if original and not text:
+            return
+        ts = payload.get("timestamp") or payload.get("ts") or time.strftime("[%H:%M:%S]")
+        stamp = re.match(r"^(\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\])\s?([\s\S]*)$", text)
+        if stamp:
+            ts, text = stamp.groups()
+        pattern = payload.get("replace_pattern")
+        self._queue.append((text, payload.get("tag", "normal"), payload.get("newline", True), pattern if isinstance(pattern, str) else None, ts))
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
     @preserve_log_view()
     def _flush_queue(self) -> None:
-        if not self._queue:
-            if self._flush_timer.isActive():
-                self._flush_timer.stop()
-            return
-
-        items = self._queue.drain()
+        from main.qt.log_buffer import coalesce_progress, trim_document
+        items = coalesce_progress(self._queue.drain())
         notice = self._queue.take_notice()
         if notice:
-            items.insert(0, (notice + "\n", "warning", True, None, ""))
-
-        if not items:
-            return
-
+            items.insert(0, (notice + "\n", "system", True, None, ""))
         cursor = QTextCursor(self.document())
-        cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.beginEditBlock()
-
-        first = True
-        ts_fmt = QTextCharFormat()
-        ts_fmt.setForeground(QColor(self._tag_colors["timestamp"]))
-
-        for text, tag, newline, replace_pattern, ts in items:
-            if getattr(self, "_hide_warnings", False) and tag == "warning":
-                continue
-            color_hex = self._tag_colors.get(tag, self._tag_colors["normal"])
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(color_hex))
-            if tag in ("bold", "header", "severe_alert", "success_bold_lg", "magenta_bold_lg", "purple_header"):
-                fmt.setFontWeight(QFont.Weight.Bold)
-
-            replaced = False
-            if replace_pattern:
-                try:
-                    pat = re.compile(replace_pattern, re.IGNORECASE)
-                except (re.error, TypeError):
-                    pat = re.compile(r"(?!)")  # Display malformed progress as a normal line.
-                doc = self.document()
-                block = doc.lastBlock()
-                scan_limit = 250
-                while block.isValid() and scan_limit > 0:
-                    b_text = block.text()
-                    clean_b_text = re.sub(r"^\[\d+:\d+:\d+\]\s*", "", b_text)
-                    if pat.search(b_text) or pat.search(clean_b_text):
-                        cur = QTextCursor(block)
-                        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-
-                        # Update matching entry in self._entries
-                        for entry in reversed(self._entries):
-                            if pat.search(entry["text"]):
-                                entry["text"] = text
-                                entry["tag"] = tag
-                                entry["ts"] = ts
-                                self._entries.recount()
-                                break
-
-                        cur.beginEditBlock()
-                        if self._timestamp_enabled and ts:
-                            cur.insertText(f"{ts} ", ts_fmt)
-                        _insert_with_bar_styling(cur, text, fmt)
-                        cur.endEditBlock()
-                        replaced = True
-                        break
-                    block = block.previous()
-                    scan_limit -= 1
-
-            if not replaced:
-                self._entries.append({
-                    "text": text,
-                    "tag": tag,
-                    "newline": newline,
-                    "ts": ts,
-                })
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                if newline and (self.document().characterCount() > 1 or not first):
-                    cursor.insertText("\n", QTextCharFormat())
-                if self._timestamp_enabled and ts:
-                    cursor.insertText(f"{ts} ", ts_fmt)
-                _insert_with_bar_styling(cursor, text, fmt)
-                first = False
-
+        pending_render = []
+        for text, tag, newline, pattern, ts in items:
+            record = dict(text=text, tag=tag, newline=newline, replace_pattern=pattern, ts=ts)
+            raw, raw_replaced = self._store_entry(self._entries, record)
+            activity = self._presenter.present(record)
+            rendered = None
+            if activity is not None:
+                activity, activity_replaced = self._store_entry(self._activity_entries, activity)
+                if not self._details_visible:
+                    rendered = activity, activity_replaced
+            if self._details_visible:
+                rendered = raw, raw_replaced
+            if rendered:
+                # Retain every unit in Details; paint the latest Activity row
+                # once per batch instead of reshaping it for every source unit.
+                if pending_render and pending_render[-1][0]["id"] == rendered[0]["id"]:
+                    pending_render[-1] = rendered
+                else:
+                    pending_render.append(rendered)
+        for rendered in pending_render:
+            self._render_entry(cursor, *rendered)
         cursor.endEditBlock()
-        from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
-
-        if not self._queue and self._flush_timer.isActive():
+        if not self._queue:
             self._flush_timer.stop()
 
     @Slot(dict)
     def update_progress(self, payload: dict) -> None:
-        """Handle console:progress signals (reserved for status bar integration)."""
-        pass  # Handled by the main window's status bar / progress widget
+        pass  # Main window owns the operation status/progress indicator.
 
     @Slot()
     def clear(self) -> None:
-        """Clear all console content and in-RAM queue."""
         self._entries.clear()
+        self._activity_entries.clear()
         self._queue.clear()
-        if self._flush_timer.isActive():
-            self._flush_timer.stop()
+        self._presenter.reset()
+        self._cleaner.reset()
+        self._progress_blocks.clear()
+        self._patterns.clear()
+        self._entry_number = 0
+        self._flush_timer.stop()
         super().clear()
         self._follow.reset()
+
+
+class _ProgressBlockData(QTextBlockUserData):
+    def __init__(self, entry_id):
+        super().__init__()
+        self.entry_id = entry_id
 
 
 class ConsolePanelContainer(QWidget):
@@ -573,6 +560,7 @@ class ConsolePanelContainer(QWidget):
 
     def __init__(self, backend=None, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)

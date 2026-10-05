@@ -3678,6 +3678,58 @@ class MCUWebBackendAPI:
             _tool_dl_start: list[float | None] = [None]
             _tool_dl_total: list[float] = [0.0]
             _build_start: list[float | None] = [None]
+            # Match complete PlatformIO records, never words in diagnostic or
+            # source excerpts (for example, a function named "building").
+            _build_progress_pattern = re.compile(
+                r"^(?P<action>Compiling|Archiving|Linking|Building|Checking size|"
+                r"Retrieving maximum program size)\s+(?P<target>.+)$",
+                re.IGNORECASE,
+            )
+            _build_artifact_suffixes = {
+                "compiling": (".o", ".obj"),
+                "archiving": (".a", ".lib"),
+                "linking": (".elf", ".axf", ".out", ".exe"),
+                "building": (".bin", ".hex", ".uf2", ".elf"),
+                "checking size": (".elf", ".axf", ".out", ".exe"),
+                "retrieving maximum program size": (".elf", ".axf", ".out", ".exe"),
+            }
+            _build_metadata_pattern = re.compile(
+                r"^(?:Platform|Hardware|Packages?|Embedded|Configuration|SDK|Debug|RAM|Flash)\s*:",
+                re.IGNORECASE,
+            )
+            _build_summary_pattern = re.compile(
+                r"^=+\s*\[(?:SUCCESS|FAILED)\]\s+Took\b.*=+\s*$",
+                re.IGNORECASE,
+            )
+            _build_promotion_pattern = re.compile(
+                r"^(?:Looking for\s+.*\blibrar(?:y|ies)\b|Check our library registry|"
+                r"\*\s+(?:CLI|WEB)\s*>|If you like PlatformIO|Star it on GitHub|"
+                r"Follow us on LinkedIn|Try PlatformIO IDE|Please wait while upgrading|"
+                r"Successfully upgraded)(?=\W|$)",
+                re.IGNORECASE,
+            )
+
+            def _match_build_progress(raw_line: str) -> tuple[str, str] | None:
+                match = _build_progress_pattern.match(raw_line)
+                if match is None:
+                    return None
+                action = match.group("action").lower()
+                target = match.group("target")
+                if action == "building":
+                    target = re.sub(r'\s+with\s+action:?.*$', '', target, flags=re.IGNORECASE)
+                quoted = target.startswith('"') and target.endswith('"')
+                target = (target[1:-1] if quoted else target).replace("\\", "/")
+                filename = target.rsplit("/", 1)[-1]
+                if not any(filename.lower().endswith(suffix) and len(filename) > len(suffix)
+                           for suffix in _build_artifact_suffixes[action]):
+                    return None
+                # Relative artifact names have no spaces unless quoted. Native
+                # absolute paths and .pio/build paths may contain user folders
+                # with spaces. A sentence ending in "target .o" is not a path.
+                if not (quoted or re.match(r'^(?:[a-z]:/|/|(?:\./)?\.pio/build/)', target, re.IGNORECASE)
+                        or not re.search(r'\s', target)):
+                    return None
+                return action, target
 
             def _ensure_post_deps_divider() -> None:
                 if _deps_content_printed[0] and not _second_divider_printed[0]:
@@ -3688,6 +3740,8 @@ class MCUWebBackendAPI:
                 value = str(raw_path).strip().strip('"').replace("\\", "/")
                 lowered = value.lower()
                 for marker in ("/src/", "/lib/", "/include/"):
+                    if lowered.startswith(marker.lstrip("/")):
+                        return value
                     marker_pos = lowered.rfind(marker)
                     if marker_pos >= 0:
                         return value[marker_pos + 1:]
@@ -3695,7 +3749,7 @@ class MCUWebBackendAPI:
 
             def _format_gcc_diagnostic(raw_line: str):
                 diagnostic = re.match(
-                    r"^(?P<file>.+?):(?P<line>\d+):(?P<column>\d+):\s*"
+                    r"^(?P<file>.+?):(?P<line>\d+)(?::(?P<column>\d+))?:\s*"
                     r"(?P<kind>fatal error|error|warning|note)\s*:\s*(?P<message>.*)$",
                     raw_line,
                     re.IGNORECASE,
@@ -3711,8 +3765,11 @@ class MCUWebBackendAPI:
                     tag = "warning" if kind == "warning" else "info" if kind == "note" else "error"
                     icon = "⚠" if kind == "warning" else "ℹ" if kind == "note" else "✖"
                     location = _diagnostic_location(diagnostic.group("file"))
+                    location += f":{diagnostic.group('line')}"
+                    if diagnostic.group("column"):
+                        location += f":{diagnostic.group('column')}"
                     self.emit("console:log", {
-                        "text": f"  {icon} {label} at {location}:{diagnostic.group('line')}:{diagnostic.group('column')}",
+                        "text": f"  {icon} {label} at {location}",
                         "tag": tag,
                         "newline": True
                     })
@@ -3771,35 +3828,22 @@ class MCUWebBackendAPI:
                     "overflowed by",
                     "will not fit in region",
                     "relocation truncated",
-                    "ld.exe:",
-                    "ld:",
                     "section `",
                     "region `",
                 )
-                is_linker_error = any(hint in low for hint in LINKER_ERROR_HINTS)
-                is_gcc_diagnostic = bool(re.search(r':\d+:\d+:\s+(fatal\s+error|error|warning|note)\s*:', low))
-                is_scons_wrapper = bool(re.search(r'^\*\*\*\s+\[', line_clean))
-
-                is_scons_progress = (
-                    "compiling" in low or
-                    "archiving" in low or
-                    "linking" in low or
-                    "building" in low or
-                    "checking size" in low or
-                    "retrieving maximum" in low or
-                    "took" in low or
-                    low.startswith("platform:") or
-                    low.startswith("hardware:") or
-                    low.startswith("package") or
-                    low.startswith("embedded") or
-                    low.startswith("configuration") or
-                    low.startswith("sdk") or
-                    "ram:" in low or
-                    "flash:" in low or
-                    line_clean.startswith("===") or
-                    line_clean.startswith("---") or
-                    is_scons_wrapper
+                is_source_excerpt = bool(re.match(r'^\s*(?:\d+\s*\||\|)', line_clean))
+                is_linker_error = not is_source_excerpt and (
+                    any(hint in low for hint in LINKER_ERROR_HINTS)
+                    or bool(re.search(r'(?:^|[\\/])(?:[\w.+-]*-)?ld(?:\.exe)?:', low))
                 )
+                is_gcc_diagnostic = not is_source_excerpt and bool(re.search(r':\d+(?::\d+)?:\s*(fatal\s+error|error|warning|note)\s*:', low))
+                is_scons_wrapper = bool(re.search(r'^\*\*\*\s+\[', line_clean))
+                build_progress = _match_build_progress(line_clean)
+                is_scons_progress = build_progress is not None
+                is_build_mode = bool(re.fullmatch(r'Building in (?:release|debug) mode(?:\.{3})?', line_clean, re.IGNORECASE))
+                is_build_metadata = bool(_build_metadata_pattern.match(line_clean))
+                is_build_summary = bool(_build_summary_pattern.match(line_clean))
+                is_build_decoration = bool(re.fullmatch(r'[-=*]{3,}\s*', line_clean)) or line_clean == "*"
 
                 is_context_header = (
                     "in function" in low or
@@ -3812,10 +3856,10 @@ class MCUWebBackendAPI:
                     low.startswith("in file included")
                 )
 
-                if is_scons_progress or "has been installed" in low:
+                if is_scons_progress or is_build_mode or is_build_metadata or is_build_summary or re.match(r'^(?:tool|platform|library) manager:.*has been installed!?$', low):
                     _in_error_block[0] = False
 
-                if any(kw in low for kw in ("compiling", "archiving", "linking", "building", "creating", "created", "checking size", "took")):
+                if is_scons_progress or is_build_mode:
                     if _tool_dl_start[0] is not None:
                         _tool_dl_total[0] += time.time() - _tool_dl_start[0]
                         _tool_dl_start[0] = None
@@ -3837,12 +3881,11 @@ class MCUWebBackendAPI:
                 if pct_match:
                     self.emit("console:progress", {"action": "Compiling"})
 
-                # Swallow promotional registry noise and decoration lines
-                if any(kw in low for kw in (
-                    "looking for ", "check our library registry", "* cli  >", "* web  >",
-                    "if you like platformio", "star it on github", "follow us on linkedin",
-                    "try platformio ide", "please wait while upgrading", "successfully upgraded"
-                )) or line_clean.strip().startswith("*****") or line_clean.strip() == "*":
+                # Suppress only known banners outside diagnostic context. A
+                # source string or custom builder status remains useful output.
+                if not (is_linker_error or is_gcc_diagnostic or is_context_header or _in_error_block[0]) and (
+                    _build_promotion_pattern.match(line_clean) or is_build_decoration
+                ):
                     continue
 
                 # Route line display
@@ -3855,24 +3898,39 @@ class MCUWebBackendAPI:
                     if _format_gcc_diagnostic(line_clean) is None:
                         prefix = "    " if is_context_header else "      "
                         self.emit("console:log", {"text": f"{prefix}{line_clean}", "tag": _error_block_type[0], "newline": True})
+                elif is_scons_wrapper:
+                    _ensure_post_deps_divider()
+                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
+                    _in_error_block[0] = False
                 elif _in_error_block[0]:
                     prefix = "    " if is_context_header else "      "
                     self.emit("console:log", {"text": f"{prefix}{line_clean}", "tag": _error_block_type[0], "newline": True})
                     if "compilation terminated" in low:
                         _in_error_block[0] = False
-                elif is_scons_wrapper:
-                    pass  # Swallow SCons wrapper noise
-                elif line_clean.startswith("Processing") or ("processing " in low and "(" in low):
+                elif is_build_metadata or is_build_summary:
+                    pass  # Standard metadata/outcome is summarized after exit.
+                elif is_build_mode:
+                    self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
+                elif "error:" in low and "werror" not in low:
+                    _ensure_post_deps_divider()
+                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
+                elif "warning:" in low:
+                    _ensure_post_deps_divider()
+                    self.emit("console:log", {"text": f"  ⚠ {line_clean}", "tag": "warning", "newline": True})
+                elif re.match(r'^Processing\s+\S+\s*\(', line_clean, re.IGNORECASE):
                     self.emit("console:log", {"text": f"    {line_clean}", "tag": "purple", "newline": True})
                     if not _first_divider_printed[0]:
                         _first_divider_printed[0] = True
                         self.emit("console:log", {"text": "  ──────────────────────────────────────────────────", "tag": "purple_dim", "newline": True})
-                elif "tool manager:" in low or "platform manager:" in low or "tool-manager:" in low or "platform-manager:" in low:
+                elif re.match(r'^(?:tool|platform)[\s-]manager:', low):
                     item = re.sub(r'^(?:tool|platform)[\s-]manager:\s*', '', line_clean, flags=re.IGNORECASE).strip()
                     item = re.sub(r'^(?:installing|downloading|unpacking)\s+', '', item, flags=re.IGNORECASE).strip()
                     item = re.split(r'\s+has been installed!?$', item, flags=re.IGNORECASE)[0].strip()
-                    if "tool-scons" in item.lower() or "tool-scons" in low:
-                        continue  # SCons is the internal build engine — never expose as a user-facing toolchain check
+                    if "tool-scons" in low and (
+                        re.match(r'^(?:tool|platform)[\s-]manager:\s*(?:installing|downloading|unpacking)\b', low)
+                        or re.search(r'\bhas been installed!?$', low)
+                    ):
+                        continue  # Routine internal engine checks; failures still remain visible.
                     manager_kind = "Toolchain/Tool" if ("tool" in low) else "Platform/Framework"
                     _current_framework_item[0] = item
                     if "installing" in low:
@@ -3893,7 +3951,9 @@ class MCUWebBackendAPI:
                             })
                             self.emit("console:log", {"text": f"  ✔ Installed {manager_kind}: {item}", "tag": "success", "newline": True})
                             _deps_content_printed[0] = True
-                elif "library manager:" in low:
+                    else:
+                        self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
+                elif low.startswith("library manager:"):
                     if not _first_divider_printed[0]:
                         _first_divider_printed[0] = True
                         self.emit("console:log", {"text": "  ──────────────────────────────────────────────────", "tag": "purple_dim", "newline": True})
@@ -3904,7 +3964,7 @@ class MCUWebBackendAPI:
                     formatted_lib_line = re.sub(r'\bInstalled\b', 'Linked', formatted_lib_line)
                     self.emit("console:log", {"text": f"    {formatted_lib_line}", "tag": "info", "newline": True})
                     _deps_content_printed[0] = True
-                elif "downloading" in low or "unpacking" in low:
+                elif re.match(r'^(?:downloading|unpacking)\b', low):
                     if _tool_dl_start[0] is None:
                         _tool_dl_start[0] = time.time()
                     if not _framework_banner_shown[0]:
@@ -3933,59 +3993,47 @@ class MCUWebBackendAPI:
                             "replace_pattern": rf"(?:Downloading|Unpacking)\s+\[{re.escape(item_label)}\]",
                             "newline": True
                         })
+                    else:
+                        self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
                 elif is_scons_progress:
+                    progress_action, progress_target = build_progress
                     _prog_text = None
                     _prog_tag = "dim"
-                    if "linking" in low:
+                    if progress_action == "linking":
                         _prog_text, _prog_tag = "  🔗 Linking...", "dim"
-                    elif "checking size" in low or "retrieving maximum" in low:
+                    elif progress_action in ("checking size", "retrieving maximum program size"):
                         _prog_text, _prog_tag = "  📏 Checking firmware size...", "dim"
-                    elif "compiling" in low:
-                        match = re.search(r'compiling\s+(.+)$', low)
-                        if match:
-                            filename = Path(match.group(1)).name
-                            _prog_text = f"  ⚙ Compiling {filename}..."
-                            _prog_tag = "info"
-                        else:
-                            _prog_text = f"  ⚙ {line_clean}"
-                            _prog_tag = "info"
-                    elif "archiving" in low:
+                    elif progress_action == "compiling":
+                        filename = progress_target.rsplit("/", 1)[-1]
+                        _prog_text = f"  ⚙ Compiling {filename}..."
+                        _prog_tag = "info"
+                    elif progress_action == "archiving":
                         _prog_text, _prog_tag = "  📦 Archiving...", "dim"
-                    elif "building" in low:
-                        match = re.search(r'building\s+(.+)$', line_clean, re.IGNORECASE)
-                        if match:
-                            raw_target = re.sub(r'\s+with\s+action:?.*$', '', match.group(1).strip(), flags=re.IGNORECASE)
-                            target_name = Path(raw_target.strip().strip('"')).name
-                            if target_name:
-                                if "bootloader" in target_name.lower():
-                                    _prog_text = f"  ⚡ Building bootloader image ({target_name})..."
-                                    _prog_tag = "info"
-                                elif "partition" in target_name.lower():
-                                    _prog_text = f"  ⚡ Building partition table ({target_name})..."
-                                    _prog_tag = "info"
-                                elif "firmware" in target_name.lower() or target_name.endswith((".bin", ".hex")):
-                                    _prog_text = f"  ⚡ Building firmware image ({target_name})..."
-                                    _prog_tag = "info"
-                                else:
-                                    _prog_text = f"  ⚙ Building {target_name}..."
-                                    _prog_tag = "info"
-                            else:
-                                _prog_text = "  ⚙ Building..."
-                                _prog_tag = "info"
+                    elif progress_action == "building":
+                        target_name = progress_target.rsplit("/", 1)[-1]
+                        if "bootloader" in target_name.lower():
+                            _prog_text = f"  ⚡ Building bootloader image ({target_name})..."
+                            _prog_tag = "info"
+                        elif "partition" in target_name.lower():
+                            _prog_text = f"  ⚡ Building partition table ({target_name})..."
+                            _prog_tag = "info"
+                        elif "firmware" in target_name.lower() or target_name.endswith((".bin", ".hex")):
+                            _prog_text = f"  ⚡ Building firmware image ({target_name})..."
+                            _prog_tag = "info"
                         else:
-                            _prog_text = "  ⚙ Building..."
+                            _prog_text = f"  ⚙ Building {target_name}..."
                             _prog_tag = "info"
 
                     if _prog_text and _prog_text != _last_progress_text[0]:
                         _ensure_post_deps_divider()
                         _last_progress_text[0] = _prog_text
                         self.emit("console:log", {"text": _prog_text, "tag": _prog_tag, "newline": True})
-                elif "error:" in low and "werror" not in low:
-                    _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
-                elif "warning:" in low:
-                    _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ⚠ {line_clean}", "tag": "warning", "newline": True})
+                    elif not _prog_text:
+                        self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
+                else:
+                    # Frameworks and custom builders can emit useful diagnostics
+                    # outside GCC's syntax. Do not silently lose unknown stdout.
+                    self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
 
             self._active_process.stdout.close()
             rc = self._active_process.wait()

@@ -309,6 +309,21 @@ readable semantic colors against their actual surfaces in the active theme.
 Retained output is recolored when the theme changes. Terminals also enforce a
 4.5:1 minimum contrast for CLI truecolor and indexed colors. Each workspace
 propagates a theme change once to each panel, including a detached editor.
+Build Console opens in Activity: phase headings have clear spacing, decorative
+ASCII frames are removed, and consecutive compilation units share one live
+count/latest-file row. Warnings, errors, source excerpts and unfamiliar output
+remain visible. Details shows individual retained build messages; Copy includes
+those messages even from Activity or when warnings are hidden. Selection copy
+copies the selected visible text. Saved content fonts and timestamp preferences
+apply to both views. On narrow windows, Options holds the clear-on-action
+preferences so Details, Auto-scroll, Copy and Clear remain reachable.
+Build delivery queues discard ordinary chatter before diagnostics under overload
+and report omissions. Both views retain bounded history; Copy reports expired
+history. Repeated valid progress updates are coalesced in small render batches,
+and individual progress rows update without scanning the entire history.
+Terminal control sequences are removed from displayed and copied build text,
+including fragmented ANSI sequences. Unknown framework/custom-builder output,
+compiler notes and SCons failures are preserved by the build-output router.
 Bootstrap, build output, serial logs and
 notifications preserve the visible text, selection and horizontal position
 while output arrives. Bootstrap
@@ -852,6 +867,9 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
+& src/_python/python.exe -B direct/verify_build_output.py
+& src/_python/python.exe -B direct/verify_build_log_routing.py
+& src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py
 & src/_python/python.exe -B direct/verify_offline.py
 & src/_python/python.exe -B direct/verify_bootstrap_seed.py
