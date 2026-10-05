@@ -22,8 +22,10 @@ os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
 if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
-from PySide6.QtCore import QRect, QPoint, QObject, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QAbstractButton, QLineEdit
+from PySide6.QtCore import QRect, QPoint, QObject, Signal, Qt, QTimer
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
+                              QLineEdit, QToolButton, QStyle, QStyleOptionToolButton)
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
 from main.qt.theme import build_stylesheet, register_fonts
@@ -55,6 +57,15 @@ class QtResponsiveChecks(ControlChecks):
         self.assertTrue(parent.rect().contains(rect),
                         f'{widget.objectName() or type(widget).__name__} {rect} outside {parent.rect()}')
 
+    def terminal(self, parent=None):
+        from main.qt.terminal_panel import TerminalPanel
+        panel = self.own(TerminalPanel(self.backend, parent))
+        for name in ('ensure_started', 'refresh_terminal', 'focus_terminal',
+                     '_resize_embedded_terminal'):
+            self.stack.enter_context(patch.object(panel, name))
+        sent = self.stack.enter_context(patch.object(panel, '_send_control'))
+        return panel, sent
+
     def test_coordinate_bounds(self):
         for area in (WorkArea(0, 0, 640, 480), WorkArea(-1280, 40, 1280, 680), WorkArea(1920, -900, 900, 900)):
             x, y, w, h = fit_rect(-4000, -4000, 4000, 4000, area, 8)
@@ -85,7 +96,7 @@ class QtResponsiveChecks(ControlChecks):
         layout.addWidget(controls)
         layout.addWidget(serial)
         host.show()
-        for width in (1920, 1366, 1024, 800, 640, 480, 464, 320, 800, 1920):
+        for width in (1920, 1366, 1372, 1371, 1350, 1349, 1024, 800, 640, 480, 464, 320, 800, 1920):
             host.resize(width, 620)
             toolbar.set_responsive_width(width)
             pump()
@@ -104,6 +115,22 @@ class QtResponsiveChecks(ControlChecks):
                 self.assertLessEqual(checkbox_gap, 8, 'Timestamp and Skip Compile should read as one option group')
             if controls.is_compact():
                 self.contained(controls.btn_opt_dropdown, controls)
+            workspace_actions = [button for button in (
+                controls.btn_detach_editor, controls.btn_toggle_editor,
+                controls.btn_toggle_monitors, controls.btn_settings,
+                controls.btn_ai, controls.btn_opt_dropdown) if button.isVisible()]
+            for button in workspace_actions:
+                self.contained(button, controls)
+            workspace_label = controls._group_labels[3]
+            if workspace_label.isVisible():
+                self.contained(workspace_label, controls)
+                first_action = workspace_actions[0]
+                heading_rect = QRect(workspace_label.mapTo(controls, QPoint()), workspace_label.size())
+                action_rect = QRect(first_action.mapTo(controls, QPoint()), first_action.size())
+                self.assertEqual(heading_rect.left(), action_rect.left(),
+                                 'Workspace heading must align with its actions at every width')
+                self.assertLess(heading_rect.bottom(), action_rect.top(),
+                                'Workspace heading must stay above its actions')
             for button in (toolbar.btn_compile, toolbar.btn_upload, toolbar.btn_actions_dropdown,
                            toolbar.btn_project, toolbar.btn_download):
                 if button.isVisible():
@@ -152,6 +179,115 @@ class QtResponsiveChecks(ControlChecks):
         pump()
         self.assertTrue(all(label.isVisible() for label in controls._group_labels))
         self.assertEqual(serial._output.font(), content_font)
+
+    def test_terminal_add_button_alignment_and_shell_choices(self):
+        host = self.own(QWidget())
+        layout = QVBoxLayout(host)
+        panel, sent = self.terminal(host)
+        layout.addWidget(panel)
+        # Keep the initial fixture empty; real add_session remains enabled for
+        # the subsequent mouse clicks, with only process/IPC work mocked.
+        with patch.object(panel, 'add_session'):
+            host.show()
+            pump()
+        button = panel._btn_add_tab
+        self.assertIsInstance(button, QToolButton)
+        self.assertEqual(button.popupMode(), QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.assertIs(button.menu(), panel._add_menu)
+        cmd_action = next(action for action in panel._add_menu.actions() if 'cmd' in action.text().lower())
+
+        def new_payload():
+            calls = [call for call in sent.call_args_list if call.args[0] == 'new']
+            self.assertTrue(calls, 'A shell choice must issue a new-session control')
+            call = calls[-1]
+            self.assertIn(call.args[1], panel._sessions_meta)
+            return call.kwargs['extra']
+
+        for mode in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(mode))
+            panel.apply_theme(mode)
+            for width in (1920, 800, 480, 320, 800, 1920):
+                with self.subTest(theme=mode, width=width):
+                    host.resize(width, 240)
+                    pump()
+                    self.assertLessEqual(host.width(), width)
+                    self.assertTrue(panel._tab_bar.isHidden())
+                    self.assertEqual(button.mapTo(panel._header, QPoint()).x(),
+                                     panel._header_layout.contentsMargins().left(),
+                                     'An empty terminal must put + at the header left edge')
+                    self.contained(button, panel._header)
+                    self.assertIsNone(panel.findChild(QAbstractButton, 'btn-terminal-fullscreen'))
+                    for control in panel._header.findChildren(QAbstractButton):
+                        if control.isVisible():
+                            self.contained(control, panel._header)
+                            self.assertNotIn('Full', control.text())
+                            self.assertNotIn('Restore', control.text())
+                    if width in (1920, 480):
+                        capture(host, f'terminal-{mode}-{width}-empty')
+
+                    option = QStyleOptionToolButton()
+                    button.initStyleOption(option)
+                    arrow_rect = button.style().subControlRect(
+                        QStyle.ComplexControl.CC_ToolButton, option,
+                        QStyle.SubControl.SC_ToolButtonMenu, button)
+                    main_point = QPoint(max(1, arrow_rect.left() // 2), button.rect().center().y())
+                    self.assertFalse(arrow_rect.contains(main_point))
+                    sent.reset_mock()
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=main_point)
+                    pump()
+                    self.assertEqual(new_payload()['kind'], 'pwsh',
+                                     'The main + click must open PowerShell directly')
+                    self.assertEqual(panel._tab_bar.count(), 1)
+                    self.assertTrue(panel._tab_bar.isVisible())
+                    tab_rect = QRect(panel._tab_bar.mapTo(panel._header, QPoint()), panel._tab_bar.size())
+                    gap = button.mapTo(panel._header, QPoint()).x() - tab_rect.right() - 1
+                    self.assertGreaterEqual(gap, 0)
+                    self.assertLessEqual(gap, panel._header_layout.spacing(),
+                                         '+ must follow the session tabs without consuming spare width')
+
+                    menu_was_visible = []
+                    def choose_cmd():
+                        menu_was_visible.append(panel._add_menu.isVisible())
+                        cmd_action.trigger()
+                        panel._add_menu.close()
+                    # QToolButton runs the arrow menu's event loop during the
+                    # click. Choose CMD there instead of starting a real shell.
+                    QTimer.singleShot(0, choose_cmd)
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=arrow_rect.center())
+                    pump()
+                    self.assertEqual(menu_was_visible, [True], 'The arrow click must open the shell menu')
+                    self.assertEqual(new_payload()['kind'], 'cmd')
+                    self.assertEqual(panel._tab_bar.count(), 2)
+                    self.contained(panel._tab_bar, panel._header)
+                    self.contained(button, panel._header)
+                    if width in (1920, 480):
+                        capture(host, f'terminal-{mode}-{width}-sessions')
+
+                    while panel._tab_bar.count():
+                        panel._on_tab_close_requested(0)
+                    pump()
+                    self.assertTrue(panel._tab_bar.isHidden())
+                    self.assertEqual(button.mapTo(panel._header, QPoint()).x(),
+                                     panel._header_layout.contentsMargins().left(),
+                                     '+ must return to the left edge after the last session closes')
+                    self.assertFalse(panel._btn_clear.isEnabled())
+                    self.assertFalse(panel._btn_kill.isEnabled())
+
+    def test_terminal_show_reveal_and_project_reset_default_to_powershell(self):
+        panel, sent = self.terminal()
+        panel.resize(800, 240)
+        panel.show()
+        pump()
+        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
+        panel._on_tab_close_requested(0)
+        panel._on_tab_revealed()
+        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
+        panel.reset_for_project(str(ROOT / 'temp/audit/terminal-default'))
+        self.assertEqual(panel._tab_bar.count(), 1)
+        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
+        new_calls = [call for call in sent.call_args_list if call.args[0] == 'new']
+        self.assertEqual(len(new_calls), 3)
+        self.assertTrue(all(call.kwargs['extra']['kind'] == 'pwsh' for call in new_calls))
 
     def test_settings_and_setup_small_workareas(self):
         for width, height in ((1280, 720), (800, 600), (640, 480), (480, 640)):

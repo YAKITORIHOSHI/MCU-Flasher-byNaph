@@ -53,7 +53,9 @@ switch files when the tab row has focus. Long filenames truncate with full-path
 tooltips and horizontal scrolling.
 Toolbar buttons, tab padding and workspace gaps are slightly smaller; saved
 editor and terminal font sizes are preserved. Controls reflow into additional
-rows as the window narrows. Settings fields stack above their inputs when
+rows as the window narrows. The Workspace heading stays aligned above its
+action buttons or compact Options menu; Timestamps and Skip Compile stay together.
+Settings fields stack above their inputs when
 needed, board filters wrap, and short detail panes scroll. The downloader moves
 its header actions below the title and stacks package lists above details.
 On short screens, the editor/tool splitter reserves space for the selected
@@ -663,10 +665,11 @@ MCU Flasher by Naph/
 ### 8. Multi-Session Project Terminal
 - Click **Terminal** in the bottom dock.
 - **Session management**:
-  - **`[▾]` New Shell Selector**: Choose between **PowerShell (`pwsh`)** and **Command Prompt (`cmd`)** to spawn a new shell.
+  - **`[+]` New Terminal**: A click opens **PowerShell (`pwsh`)**. Use the adjacent arrow to choose PowerShell or **Command Prompt (`cmd`)** explicitly. With no session tabs, the button sits at the header's left edge; it follows the tabs when sessions are open.
   - **Dynamic Session Tab Bar**: Tab chips for every active terminal session with active state highlighting and individual close buttons (**`✕`**).
   - **Clear**: Clears the active terminal display and retained display history without sending a command to a shell or coding CLI.
   - **`[🗑 Kill]`**: Destroys the active terminal session, terminating the background PTY worker.
+  - Resize the terminal with the workspace splitter; the terminal header has no Full/Restore toggle.
 - **Zero-Session Idle State**: Starts cleanly with zero open sessions and seamlessly transitions to an idle placeholder when all sessions are closed.
 - **Windows**: PowerShell/CMD use real ConPTY sessions (`pywinpty`) in an isolated child process with WebView2/xterm.js rendering. Each session receives its own window dimensions.
 - **Ubuntu**: Bash uses native PTYs with Qt WebEngine and offline xterm.js. The terminal preserves PATH so installed coding CLIs can run.

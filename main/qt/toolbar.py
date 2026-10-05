@@ -1377,6 +1377,8 @@ class ControlsBar(QWidget):
         opt_group.setSpacing(2)
         lbl_opt = QLabel("Workspace")
         lbl_opt.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
+        checkbox_row = QHBoxLayout()
+        checkbox_row.setSpacing(3)
         opt_row = QHBoxLayout()
         opt_row.setSpacing(3)
 
@@ -1387,17 +1389,14 @@ class ControlsBar(QWidget):
         init_ts = bool(getattr(self._backend, "timestamp_enabled", False)) if (self._backend and hasattr(self._backend, "timestamp_enabled")) else bool(load_gui_config().get("timestamp_enabled", False))
         self.cb_timestamp.setChecked(init_ts)
         self.cb_timestamp.stateChanged.connect(self._on_timestamp_changed)
-        opt_row.addWidget(self.cb_timestamp)
+        checkbox_row.addWidget(self.cb_timestamp)
 
         self.cb_skip_compile = QCheckBox("Skip Compile")
         self.cb_skip_compile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.cb_skip_compile.setToolTip("Reuse firmware only when sources and the selected target still match the last build")
         self.cb_skip_compile.setEnabled(False)
         self.cb_skip_compile.stateChanged.connect(self._on_skip_compile_changed)
-        opt_row.addWidget(self.cb_skip_compile)
-        # Keep the two independent toggles grouped at their natural label
-        # widths; the remaining room belongs between them and workspace actions.
-        opt_row.addStretch(1)
+        checkbox_row.addWidget(self.cb_skip_compile)
 
         self.btn_detach_editor = QPushButton("Detach Editor")
         self.btn_detach_editor.setFixedHeight(26)
@@ -1451,8 +1450,18 @@ class ControlsBar(QWidget):
         self._opt_popup = None
         self._is_compact = False
 
-        opt_group.addWidget(lbl_opt, alignment=Qt.AlignmentFlag.AlignHCenter)
-        opt_group.addLayout(opt_row)
+        # Keep the caption in the actions column so spare width never separates
+        # it from Detach Editor (or Options in compact layouts). The checkboxes
+        # share the buttons' row and stay together at their natural widths.
+        workspace_grid = QGridLayout()
+        workspace_grid.setContentsMargins(0, 0, 0, 0)
+        workspace_grid.setHorizontalSpacing(3)
+        workspace_grid.setVerticalSpacing(2)
+        workspace_grid.addLayout(checkbox_row, 1, 0)
+        workspace_grid.setColumnStretch(1, 1)
+        workspace_grid.addWidget(lbl_opt, 0, 2, alignment=Qt.AlignmentFlag.AlignLeft)
+        workspace_grid.addLayout(opt_row, 1, 2)
+        opt_group.addLayout(workspace_grid)
         layout.addLayout(opt_group, 0, 3)
         self._groups = (board_group, port_group, spd_group, opt_group)
         self._group_labels = (lbl_board, lbl_port, self.lbl_spd, lbl_opt)
