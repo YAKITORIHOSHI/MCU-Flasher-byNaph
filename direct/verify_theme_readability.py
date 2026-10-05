@@ -58,6 +58,11 @@ class ThemeReadabilityChecks(unittest.TestCase):
             colors = themed_log_colors(mode)
             serial.apply_theme(mode)
             console.apply_theme(mode)
+            serial_style = serial.styleSheet()
+            self.assertIn("QPlainTextEdit#serial-console", serial_style)
+            self.assertIn(f"color: {get_palette(mode)['TEXT']}", serial_style)
+            self.assertEqual(serial.palette().color(serial.palette().ColorRole.Text).name(),
+                             get_palette(mode)["TEXT"])
             for widget in (serial, console):
                 self.assertEqual(rendered_color(widget, "Palette readable fixture"), colors["normal"])
                 self.assertEqual(rendered_color(widget, "Palette system fixture"), colors["system"])

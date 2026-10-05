@@ -55,6 +55,7 @@ class SerialOutputView(QPlainTextEdit):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setObjectName("serial-console")
         self.setReadOnly(True)
         self.setUndoRedoEnabled(False)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -107,6 +108,14 @@ class SerialOutputView(QPlainTextEdit):
         fg = pal.get("TEXT", "#e0e6ed")
         self._tag_colors = themed_log_colors(theme_name)
         self._theme_name = theme_name
+        hover = pal.get("BG_HOVER", bg)
+        bright = pal.get("TEXT_BRIGHT", fg)
+        self.setStyleSheet(
+            "QPlainTextEdit#serial-console { "
+            f"background-color: {bg}; color: {fg}; "
+            f"selection-background-color: {hover}; selection-color: {bright}; "
+            "border: none; }"
+        )
         palette = self.palette()
         palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
