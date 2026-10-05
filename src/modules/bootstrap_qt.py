@@ -7,12 +7,79 @@ from pathlib import Path
 from typing import Optional
 from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QProgressBar, QPlainTextEdit, QCheckBox, QFrame, QSizePolicy, QPushButton, QStackedWidget, QWidget)
-from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+from PySide6.QtCore import Qt, QTimer, Slot, QPointF
+from PySide6.QtGui import (QIcon, QTextCursor, QTextCharFormat, QColor, QFont,
+    QTextBlockUserData, QPainter, QPainterPath, QPen, QLinearGradient)
 from main.qt.log_follow import LogFollow, preserve_log_view
 from main.qt.icons import icon
 from main.qt.setup_components import GlassCard, VectorGlyph, StatusChip, SetupProgressRow
 from src.modules.bootstrap_presentation import BootstrapPresentation, concise_status
+from src.modules.ui_palette import setup_text_palette
+
+
+class _SetupHeading(QTextBlockUserData):
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+
+
+class SetupActivityEdit(QPlainTextEdit):
+    """Selectable journal text with static, viewport-sized circuit dividers."""
+
+    def mark_heading(self, block, kind):
+        if block.isValid() and block.text():
+            block.setUserData(_SetupHeading(kind))
+
+    def heading_dividers(self):
+        """Only visible headings need painting, regardless of history size."""
+        block = self.firstVisibleBlock()
+        offset = self.contentOffset()
+        while block.isValid():
+            bounds = self.blockBoundingGeometry(block).translated(offset)
+            if bounds.top() > self.viewport().height():
+                break
+            marker = block.userData()
+            previous = block.previous()
+            if (block.isVisible() and isinstance(marker, _SetupHeading)
+                    and previous.isValid() and not previous.text()):
+                gap = self.blockBoundingGeometry(previous).translated(offset)
+                y = gap.center().y()
+                if y >= 0:
+                    fragment = block.begin().fragment()
+                    color = fragment.charFormat().foreground().color()
+                    right = self.viewport().width() - 10
+                    if marker.kind == "subsection":
+                        right = min(right, self.viewport().width() * .65)
+                    if right > 44:
+                        yield block.blockNumber(), y, right, color, marker.kind
+            block = block.next()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for _, y, right, color, kind in self.heading_dividers():
+            ink = QColor(color)
+            ink.setAlpha(150 if kind == "section" else 95)
+            rim = QColor(color)
+            rim.setAlpha(70 if kind == "section" else 45)
+            fade = QColor(color)
+            fade.setAlpha(0)
+            gradient = QLinearGradient(34, y, right, y)
+            gradient.setColorAt(0, rim)
+            gradient.setColorAt(1, fade)
+            painter.setPen(QPen(gradient, 1))
+            painter.drawLine(QPointF(34, y), QPointF(right, y))
+            # A small etched trace echoes the app's original circuit-chip mark.
+            trace = QPainterPath(QPointF(4, y))
+            trace.lineTo(17, y)
+            trace.lineTo(21, y - 3)
+            trace.lineTo(29, y - 3)
+            trace.lineTo(33, y)
+            painter.setPen(QPen(ink, 1.25))
+            painter.drawPath(trace)
+        painter.end()
+
 
 class BootstrapDialog(QDialog):
     SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -69,6 +136,7 @@ class BootstrapDialog(QDialog):
         icon_checked_dim = (icons_dir / "checkbox_checked_disabled.svg").as_posix()
 
         pal, mode = self._context.resolve_theme()
+        pal = setup_text_palette(pal, glass=True)
         self._theme_pal = pal
         self._theme_mode = mode
 
@@ -296,7 +364,7 @@ class BootstrapDialog(QDialog):
             }}
             QPlainTextEdit#summaryEdit, QPlainTextEdit#logEdit {{
                 background: transparent; border: none; padding: 2px 0px;
-                color: {text}; selection-background-color: {bg_hover};
+                color: {text}; selection-background-color: {bg_hover}; selection-color: {text_bright};
             }}
             QPlainTextEdit#summaryEdit {{ font-family: 'Montserrat', 'Segoe UI'; font-size: 12px; }}
             QLabel#activityLabel {{ color: {text_bright}; font-size: 12px; font-weight: 600; }}
@@ -364,7 +432,7 @@ class BootstrapDialog(QDialog):
         activity_layout.addWidget(self.package_panel)
 
         self.log_stack = QStackedWidget(activity)
-        self.summary_edit = QPlainTextEdit(self.log_stack)
+        self.summary_edit = SetupActivityEdit(self.log_stack)
         self.summary_edit.setObjectName("summaryEdit")
         self.summary_edit.setReadOnly(True)
         self.summary_edit.setMaximumBlockCount(700)
@@ -505,7 +573,7 @@ class BootstrapDialog(QDialog):
     def _summary_format(self, tag, failed=False):
         palette = self._theme_pal
         keys = {"ok": "T_GREEN", "warn": "T_YELLOW", "fail": "T_RED",
-                "failed_step": "T_RED", "section": "T_CYAN", "subsection": "T_TEXT_BRIGHT", "dim": "T_TEXT_DIM",
+                "failed_step": "T_RED", "section": "T_CYAN", "subsection": "T_CYAN", "dim": "T_TEXT_DIM",
                 "update": "T_MAGENTA", "normal": "T_TEXT"}
         fmt = QTextCharFormat()
         fmt.setFontFamilies(["Montserrat", "Segoe UI", "sans-serif"])
@@ -522,22 +590,29 @@ class BootstrapDialog(QDialog):
             for event in events:
                 cursor = QTextCursor(doc)
                 cursor.movePosition(QTextCursor.MoveOperation.End)
-                if event.tag == "section":
+                if event.tag in ("section", "subsection"):
                     if not doc.isEmpty() and cursor.block().previous().text():
                         cursor.insertText("\n", self._summary_format("dim"))
+                if event.tag == "section":
                     self._summary_failed = False
                     self._summary_step_start = QTextCursor(cursor)
                     self._summary_step_start.setKeepPositionOnInsert(True)
                 elif event.tag == "fail":
                     self._summary_failed = True
-                    recolor = QTextCursor(self._summary_step_start)
+                    recolor = QTextCursor(doc)
+                    # The tracking cursor's anchor can advance with appended
+                    # text; start a collapsed selection at its stable position.
+                    recolor.setPosition(max(0, min(self._summary_step_start.position(), doc.characterCount() - 1)))
                     recolor.setPosition(doc.characterCount() - 1, QTextCursor.MoveMode.KeepAnchor)
                     failed = QTextCharFormat()
                     failed.setForeground(QColor(palette["T_RED"]))
                     failed.setFontWeight(QFont.Weight.DemiBold)
                     recolor.mergeCharFormat(failed)
                 prefix = "" if event.tag in ("section", "subsection") else "  "
+                heading = cursor.block()
                 cursor.insertText(prefix + event.text + "\n", self._summary_format(event.tag, self._summary_failed))
+                if event.tag in ("section", "subsection"):
+                    self.summary_edit.mark_heading(heading, event.tag)
             excess = doc.characterCount() - BootstrapPresentation.MAX_CHARS - 1
             if excess > 0:
                 cursor = QTextCursor(doc)
@@ -561,7 +636,13 @@ class BootstrapDialog(QDialog):
             tags = run.get("tags", [])
             tag = next((value for value in reversed(tags) if value in keys and value != "failed_step"), "normal")
             fmt = self._summary_format(tag, "failed_step" in tags)
+            start = cursor.position()
             cursor.insertText(run["text"], fmt)
+            if tag in ("section", "subsection"):
+                block = doc.findBlock(start)
+                while block.isValid() and block.position() < cursor.position():
+                    self.summary_edit.mark_heading(block, tag)
+                    block = block.next()
         removed = max(0, len(raw.encode("utf-16-le")) // 2 - doc.characterCount() + 1)
         def position(offset):
             return max(0, min(len(raw[:offset].encode("utf-16-le")) // 2 - removed, doc.characterCount() - 1))

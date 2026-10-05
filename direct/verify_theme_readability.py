@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -146,7 +147,9 @@ class ThemeReadabilityChecks(unittest.TestCase):
         self.assertEqual(window._status_label.text(), "⚙ Compiling…")
         self.assertEqual(window._status_label.styleSheet(), "")
         window._on_notification({"message": "Compiling diagnostic"})
-        QTest.qWait(120)
+        deadline = time.monotonic() + 1.0
+        while window._status_label.text() != "⚙ Compiling…" and time.monotonic() < deadline:
+            QTest.qWait(10)
         self.assertEqual(window._status_label.text(), "⚙ Compiling…")
 
     def test_temporary_action_cannot_clear_a_new_notification(self):

@@ -90,6 +90,18 @@ connectivity probe. Installed-package and detail scans run in bounded workers;
 rapid selections cancel older scans. Unchanged inventories reuse a five-second
 snapshot, and download progress updates are coalesced. Network concurrency is
 limited to two board-index requests on constrained PCs and four otherwise.
+Library samples open in a separate read-only viewer with the selected theme and
+saved content font. Its tabs, syntax, selection, line numbers and scrollbars
+follow Glass, Frosted Light and Solarized palettes. The complete window frame
+fits the monitor's logical work area, including compact and portrait displays.
+Interpreter probes run off the Tk thread with one active and one latest request;
+superseded or closed-window results never open another viewer. Missing viewer
+dependencies direct users to Bootstrap. Viewing samples never installs packages
+or writes sample files/settings. Verify with `direct/verify_library_samples.py`
+in a separate process from the PySide6 checks.
+If a browser worker cannot start, it reports the failure on the Tk thread and
+restores Download/Update controls and progress. Pending work is not replayed;
+the next explicit click retries normally.
 The editor engine is offline Monaco with automatic resource settings; Settings
 does not offer the unused legacy lightweight-engine selector.
 
@@ -281,6 +293,13 @@ confirms unpacking is complete even when PlatformIO omits its final percentage.
 When a setup step fails, its entire retained output turns red, including its
 subsections and subsequent progress. Earlier successful steps keep their colors.
 Plain terminal output cannot recolor already printed scrollback.
+Setup activity headings use subtle circuit dividers that resize with the reading
+pane and stay out of copied log text. Major stages and nested checks retain a
+clear hierarchy; update checking starts its own stage for enabled, skipped and
+offline outcomes. The divider follows the stage's failure color.
+Setup text retains its semantic hues with at least 4.5:1 contrast across the
+static glass reading surfaces and solid native fallback, including Solarized
+failures and selected log text. These derived inks leave the shared palette intact.
 
 Build, serial and compatibility logs, syntax diagnostics, notification cards,
 terminal ANSI colors, connection states and transient status messages use
@@ -906,6 +925,9 @@ filter/refresh behavior across all three palettes. Notification persistence
 checks in `direct/verify_notification_persistence.py` and
 `direct/verify_notification_writes.py` use explicit temporary databases to verify
 successful writes, denied replacements and preservation of existing history.
+`direct/verify_bootstrap_headers.py` checks journal dividers, narrow-screen header
+wrapping, failed-stage colors and restored native reading selection. Its optional
+`--render-dir temp/audit/bootstrap-headers` produces dark/light/Solarized previews.
 The runtime preview also checks all six tool panels in a 640-pixel workspace at the half-screen minimum,
 including control visibility and the serial send bar. Its terminal layout probe
 does not start a shell; `verify_terminal.py` checks the actual PTY separately.

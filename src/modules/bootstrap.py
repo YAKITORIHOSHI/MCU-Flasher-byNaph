@@ -1345,8 +1345,9 @@ class BootstrapGUI:
                 _record_bootstrap_exception(f"Bootstrap Qt view could not open: {error}")
         if self._app is None:
             from src.modules.bootstrap_native import NativeBootstrapWindow
+            from src.modules.ui_palette import setup_text_palette
             self._native_window = NativeBootstrapWindow(
-                self, _T_PALETTE, load_bootstrap_config, save_bootstrap_config,
+                self, setup_text_palette(_T_PALETTE), load_bootstrap_config, save_bootstrap_config,
                 _record_bootstrap_exception, dispatcher=self._signals,
             )
             self._window = self._native_window
@@ -2017,14 +2018,19 @@ def run_update_checks(auto_update: bool = False):
     """
     Check all managed utilities for updates, using a small bounded worker pool.
 
-    Startup calls this only when the Skip Updates checkbox is clear. The work
-    uses at most three network threads and reads the target environment's fresh
-    metadata in process, without importing its packages or spawning a process
-    for every version check.
+    Startup enters a distinct update stage and then honors the Skip Updates
+    policy. The work uses at most three network threads and reads the target
+    environment's fresh metadata in process, without importing its packages or
+    spawning a process for every version check.
 
     If auto_update=True, upgrade pip packages automatically (arduino-cli
     requires a manual MSI re-run, so we only notify for that one).
     """
+    if _gui:
+        _gui.root.after(0, _gui.log_section, "Checking for updates")
+    else:
+        section("Checking for updates")
+
     skip_reason = _update_check_skip_reason()
     if skip_reason:
         warn(f"Online update checks skipped: {skip_reason}.")
@@ -2034,7 +2040,6 @@ def run_update_checks(auto_update: bool = False):
         )
         return "skipped"
 
-    section("Checking for updates")
     status("Update checks enabled. Querying PyPI, GitHub, and winget...", DIM)
     dim(f"Update target: {_get_target_python()}")
 

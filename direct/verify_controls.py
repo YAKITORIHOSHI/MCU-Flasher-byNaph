@@ -511,7 +511,7 @@ class ControlChecks(unittest.TestCase):
             self.assertEqual(text.count("PACKAGE"), 1)
             cursor = QTextCursor(dialog.log_edit.document())
             cursor.setPosition(dialog._live_block_start + 1)
-            self.assertEqual(cursor.charFormat().foreground().color().name(), Theme.PALETTES[mode]["CYAN"])
+            self.assertEqual(cursor.charFormat().foreground().color().name(), dialog._theme_pal["T_CYAN"])
             dialog._on_clear_block()
             self.assertNotIn("PACKAGE", dialog.log_edit.toPlainText())
             self.assertIn("Line 29", dialog.log_edit.toPlainText())
@@ -520,7 +520,7 @@ class ControlChecks(unittest.TestCase):
             dialog._on_progress(-5)
             self.assertEqual(dialog.prog_bar.value(), 0)
             dialog._on_stop_spinner("Ready", True)
-            self.assertEqual(dialog.spin_lbl._color, Theme.PALETTES[mode]["GREEN"])
+            self.assertEqual(dialog.spin_lbl._color, dialog._theme_pal["T_GREEN"])
             self.assertEqual(dialog.spin_lbl.accessibleName(), "Check")
 
     def test_bootstrap_display_character_budget(self):
@@ -715,11 +715,11 @@ class ControlChecks(unittest.TestCase):
             dialog._on_log("Nested package phase", "subsection")
             dialog._on_log("Last diagnostic", "warn")
             dialog._on_log("Download failed", "fail")
-            red = Theme.PALETTES[mode]["RED"]
+            red = dialog._theme_pal["T_RED"]
             for text in ("Failed step begins", "First diagnostic", "Nested package phase", "Last diagnostic"):
                 self.assertEqual(view.document().find(text).charFormat().foreground().color().name(), red)
             self.assertEqual(view.document().find("Completed previous stage").charFormat().foreground().color().name(),
-                             Theme.PALETTES[mode]["GREEN"])
+                             dialog._theme_pal["T_GREEN"])
             view.setMaximumBlockCount(8)
             dialog._display_char_limit = 150
             dialog._on_log("Long failed step", "section")
@@ -740,7 +740,7 @@ class ControlChecks(unittest.TestCase):
             dialog._on_log("Next step", "section")
             dialog._on_log("Normal again", "normal")
             self.assertEqual(view.document().find("Normal again").charFormat().foreground().color().name(),
-                             Theme.PALETTES[mode]["TEXT"])
+                             dialog._theme_pal["T_TEXT"])
 
     def test_bootstrap_console_failure_colors_future_output_without_replay(self):
         import io

@@ -32,7 +32,13 @@ Solarized; reflections must not lower text contrast. Share the original vector
 family with workspace actions. Preserve both journal views' reading state
 through the native-to-Qt handoff; use no decorative animation or blur effects.
 Make each setup stage a larger, bold header with a gap before the group and
-indented results. Keep the editor and every workspace tool pane flush to the
+indented results. Use static circuit dividers sized to the visible journal pane,
+without inserting decorative glyphs into copied text. Preserve header markers
+through native-to-Qt restoration and make failed-stage dividers follow red text.
+Derive setup reading inks against gradient/reflection bounds and selection
+surfaces, retaining semantic hues and at least 4.5:1 contrast. Keep the shared
+workspace palette and static glass geometry intact.
+Keep the editor and every workspace tool pane flush to the
 available central area: outer content margins and pane borders stay zero.
 Keep inner toolbar/control and reading padding, tab focus and splitter handles.
 Check selected-tab and button contrast in all three palettes, including after

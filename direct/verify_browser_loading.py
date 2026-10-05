@@ -197,6 +197,112 @@ class BrowserLoadingChecks(DownloaderChecks):
             self.app._start_thread(self.app._load_both)
             self.until(lambda: not self.app._busy and self.app._tasks._timer is None)
 
+    def test_task_launch_failures_queue_errors_balance_slots_and_allow_retry(self):
+        tasks = self.app._tasks
+        ui_thread = threading.get_ident()
+        for stage in ('create', 'start'):
+            with self.subTest(stage=stage):
+                target, errors = Mock(), []
+                failed = lambda error: errors.append((error, threading.get_ident()))
+                failure = RuntimeError(f'Cannot {stage} fixture worker')
+                factory = Mock(side_effect=failure) if stage == 'create' else Mock(
+                    return_value=SimpleNamespace(start=Mock(side_effect=failure)))
+                with patch.object(loading.threading, 'Thread', factory):
+                    self.assertFalse(tasks.start(target, failed=failed))
+                    self.assertEqual(tasks._active, 0)
+                    self.assertEqual(errors, [], 'Failure callback ran outside the Tk queue')
+                self.until(lambda: errors and tasks._timer is None)
+                target.assert_not_called()
+                self.assertEqual(errors, [(str(failure), ui_thread)])
+                done = threading.Event()
+                self.assertTrue(tasks.start(done.set))
+                self.until(lambda: done.is_set() and tasks._timer is None)
+                self.assertEqual(tasks._active, 0)
+
+    def test_task_launch_rollback_cannot_race_a_worker(self):
+        tasks = self.app._tasks
+        real_thread = threading.Thread
+        for entered_before_error in (False, True):
+            with self.subTest(entered_before_error=entered_before_error):
+                release, entered = threading.Event(), threading.Event()
+                calls, errors, threads = [], [], []
+                self.addCleanup(release.set)
+
+                def target():
+                    calls.append('entered')
+                    entered.set()
+                    release.wait(2)
+
+                def factory(**kwargs):
+                    def run():
+                        if not entered_before_error:
+                            release.wait(2)
+                        kwargs['target']()
+
+                    def start():
+                        thread = real_thread(target=run, daemon=True)
+                        threads.append(thread)
+                        thread.start()
+                        if entered_before_error:
+                            self.assertTrue(entered.wait(2))
+                        raise RuntimeError('Failure after native startup')
+                    return SimpleNamespace(start=start)
+
+                with patch.object(loading.threading, 'Thread', side_effect=factory):
+                    self.assertEqual(tasks.start(target, failed=errors.append), entered_before_error)
+                self.assertEqual(tasks._active, int(entered_before_error))
+                release.set()
+                threads[0].join(2)
+                self.assertFalse(threads[0].is_alive())
+                self.until(lambda: tasks._timer is None)
+                self.assertEqual(tasks._active, 0)
+                self.assertEqual(calls, ['entered'] if entered_before_error else [])
+                self.assertEqual(errors, [] if entered_before_error else ['Failure after native startup'])
+
+    def test_latest_scan_launch_failure_reports_latest_without_replay_and_retries(self):
+        tasks = self.app._tasks
+        for stage in ('create', 'start'):
+            with self.subTest(stage=stage):
+                scan = Mock(side_effect=lambda value, cancel: value)
+                worker = loading.LatestScan(tasks, scan)
+                initial, received = Mock(), []
+                ui_thread = threading.get_ident()
+                completed = lambda value, error: received.append((value, error, threading.get_ident()))
+                failure = RuntimeError(f'Cannot {stage} detail worker')
+                factory = Mock(side_effect=failure) if stage == 'create' else Mock(
+                    return_value=SimpleNamespace(start=Mock(side_effect=failure)))
+                with patch.object(loading.threading, 'Thread', factory):
+                    worker.submit('initial', initial)
+                    worker.submit('latest', completed)
+                    factory.assert_called_once()
+                    self.assertEqual(received, [])
+                self.until(lambda: received and tasks._timer is None)
+                self.assertEqual(received, [(None, str(failure), ui_thread)])
+                initial.assert_not_called()
+                scan.assert_not_called()
+                self.assertFalse(worker._running)
+                self.assertIsNone(worker._pending)
+                self.assertIsNone(worker._cancel)
+                worker.submit('retry', completed)
+                self.until(lambda: len(received) == 2 and tasks._timer is None)
+                self.assertEqual(received[-1], ('retry', None, ui_thread))
+                scan.assert_called_once()
+                self.assertEqual(tasks._active, 0)
+                self.assertFalse(worker._running)
+
+    def test_catalog_launch_failure_restores_busy_controls_and_status(self):
+        app = self.app
+        target = Mock()
+        with patch.object(loading.threading, 'Thread', side_effect=RuntimeError('Worker budget exhausted')):
+            app._start_thread(target)
+            self.assertTrue(app._busy)
+            self.assertEqual(str(app.refresh_btn.cget('state')), 'disabled')
+        self.until(lambda: not app._busy and app._tasks._timer is None)
+        target.assert_not_called()
+        self.assertEqual(str(app.refresh_btn.cget('state')), 'normal')
+        self.assertEqual(app.status_var.get(), 'Catalog load failed: Worker budget exhausted')
+        self.assertEqual(app._tasks._active, 0)
+
     def test_latest_scan_bounds_work_and_idle_timer_stops(self):
         active, peak, calls, received = [0], [0], [], []
         started = threading.Event()
@@ -287,6 +393,100 @@ class BrowserLoadingChecks(DownloaderChecks):
                 response.close.assert_called_once()
                 self.assertFalse((Path(destination) / 'sensor.zip.part').exists())
         self.assertEqual((Path(destination) / 'sensor.zip').read_bytes(), data)
+
+    def _assert_download_launch_recovers(self, updating):
+        app = self.app
+        app._cancel_event = threading.Event()
+        app._active_download_tab = app._downloading_item_name = None
+        for is_board in (False, True):
+            for stage in ('create', 'start'):
+                with self.subTest(updating=updating, is_board=is_board, stage=stage):
+                    kind = 'Board Platform' if is_board else 'Library'
+                    name = f'Fixture {kind} {stage}'
+                    app._download_dir = str(self.folder / f'{int(updating)}-{int(is_board)}-{stage}')
+                    destination = Path(app._download_dir) / ('Boards' if is_board else 'Libs')
+                    destination.mkdir(parents=True)
+                    old_path, old_archive = destination / 'old-payload', destination / 'old.zip'
+                    old_path.mkdir()
+                    (old_path / 'keep.txt').write_bytes(b'Previous installed payload')
+                    old_archive.write_bytes(b'Previous archive')
+                    payload = io.BytesIO()
+                    with zipfile.ZipFile(payload, 'w') as archive:
+                        archive.writestr('boards.txt' if is_board else 'library.properties', 'fixture=2.0.0\n')
+                    data = payload.getvalue()
+                    release = dict(version='2.0.0', url='https://example.invalid/fixture.zip',
+                                   archiveFileName='fixture.zip', size=len(data),
+                                   checksum='SHA-256:' + hashlib.sha256(data).hexdigest())
+                    tab = app.board_tab if is_board else app.lib_tab
+                    tab.populate({name: dict(name=name, versions=[release])})
+                    tab.listbox.selection_set(0)
+                    tab.version_var.set(release['version'])
+                    tab.download_btn.config(state='normal')
+                    installed = app.installed_tab
+                    installed.populate([dict(name=name, type=kind, path=str(old_path), archive=old_archive.name,
+                                             installed_version='1.0.0', latest_version='2.0.0', update_available=True)])
+                    installed.listbox.selection_set(0)
+                    installed.refresh_update_button_state()
+                    button = installed.update_btn if updating else tab.download_btn
+                    failure = RuntimeError(f'Cannot {stage} download worker')
+                    factory = Mock(side_effect=failure) if stage == 'create' else Mock(
+                        return_value=SimpleNamespace(start=Mock(side_effect=failure)))
+                    response = Mock(headers={'content-length': str(len(data))}, raise_for_status=Mock(),
+                                    iter_content=Mock(return_value=iter([data])), close=Mock())
+                    with patch.object(app, '_prompt_download_option', return_value='zip'), \
+                            patch.object(browser.requests, 'get', return_value=response) as get, \
+                            patch('urllib.request.urlopen', side_effect=AssertionError('Live transfer attempted')), \
+                            patch.object(browser.messagebox, 'showerror') as show_error, \
+                            patch.object(browser.messagebox, 'showinfo') as show_info:
+                        with patch.object(loading.threading, 'Thread', factory):
+                            button.invoke()
+                            self.assertTrue(app._busy)
+                            self.assertIn('Cancel', tab.download_btn.cget('text'))
+                            if updating:
+                                self.assertIn('Cancel', installed.update_btn.cget('text'))
+                            get.assert_not_called()
+                            show_error.assert_not_called()
+                        self.until(lambda: not app._busy and app._tasks._timer is None)
+                        prefix = 'Unable to start download update:' if updating else 'Unable to start download:'
+                        show_error.assert_called_once_with('Download Error', f'{prefix}\n{failure}', parent=self.root)
+                        self.assertEqual(app.status_var.get(), 'Download failed')
+                        self.assertIsNone(app._active_download_tab)
+                        self.assertIsNone(app._downloading_item_name)
+                        self.assertIn('Download', tab.download_btn.cget('text'))
+                        self.assertIn('Update', installed.update_btn.cget('text'))
+                        self.assertEqual(str(button.cget('state')), 'normal')
+                        self.assertEqual(str(app.progress.cget('mode')), 'determinate')
+                        self.assertEqual(float(app.progress.cget('value')), 0)
+                        self.assertEqual(app._tasks._active, 0)
+                        self.assertFalse((destination / 'fixture.zip').exists())
+                        self.assertEqual((old_path / 'keep.txt').read_bytes(), b'Previous installed payload')
+                        self.assertEqual(old_archive.read_bytes(), b'Previous archive')
+                        get.assert_not_called()
+                        show_info.assert_not_called()
+                        # The next explicit click reaches the real worker, using fixture HTTP bytes only.
+                        button.invoke()
+                        self.assertTrue(app._busy)
+                        self.until(lambda: not app._busy and app._tasks._timer is None)
+                        get.assert_called_once()
+                        response.close.assert_called_once()
+                        self.assertEqual((destination / 'fixture.zip').read_bytes(), data)
+                        self.assertEqual(app.status_var.get(), 'Download complete')
+                        self.assertEqual(app._tasks._active, 0)
+                        show_error.assert_called_once()
+                        show_info.assert_called_once()
+                        self.assertFalse((destination / 'fixture.zip.part').exists())
+                        if updating:
+                            self.assertFalse(old_path.exists())
+                            self.assertFalse(old_archive.exists())
+                        else:
+                            self.assertTrue(old_path.exists())
+                            self.assertTrue(old_archive.exists())
+
+    def test_download_button_launch_failure_restores_controls_and_explicit_retry(self):
+        self._assert_download_launch_recovers(updating=False)
+
+    def test_update_button_launch_failure_preserves_old_payload_and_explicit_retry(self):
+        self._assert_download_launch_recovers(updating=True)
 
     def test_detail_filter_does_not_revive_old_scan_and_preserves_path_selection(self):
         detail = self.app.installed_tab

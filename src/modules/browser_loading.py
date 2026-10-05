@@ -144,16 +144,43 @@ class TkTasks:
 
     def start(self, target, *args, failed=None):
         if not self.begin():
-            return
+            return False
+        launch_lock = threading.Lock()
+        entered = released = False
+
         def run():
+            nonlocal entered, released
+            with launch_lock:
+                if released:
+                    return
+                entered = True
             try:
                 target(*args)
             except Exception as error:
                 if failed:
                     self.post(failed, str(error))
             finally:
+                with launch_lock:
+                    release = not released
+                    released = True
+                if release:
+                    self.end()
+
+        try:
+            threading.Thread(target=run, daemon=True, name='BrowserTask').start()
+        except Exception as error:
+            with launch_lock:
+                # A worker that already entered owns its slot and completion.
+                # A delayed worker must not begin after startup was rolled back.
+                release = not entered and not released
+                if release:
+                    released = True
+            if release:
                 self.end()
-        threading.Thread(target=run, daemon=True, name='BrowserTask').start()
+                if failed:
+                    self.post(failed, str(error))
+                return False
+        return True
 
     def _drain(self):
         self._timer = None
@@ -219,7 +246,23 @@ class LatestScan:
             if self._running:
                 return
             self._running = True
-        self.tasks.start(self._run)
+        started = self.tasks.start(self._run, failed=self._failed)
+        if not started and self.tasks.closed:
+            with self._lock:
+                self._running = False
+                self._pending = None
+                self._cancel = None
+
+    def _failed(self, error):
+        with self._lock:
+            pending, self._pending = self._pending, None
+            self._running = False
+            if self._cancel:
+                self._cancel.set()
+            self._cancel = None
+        if pending is not None and not self.tasks.closed:
+            _request, completed = pending
+            completed(None, error)
 
     def _run(self):
         while not self.tasks.closed:

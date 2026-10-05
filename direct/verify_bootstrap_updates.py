@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -164,6 +165,51 @@ class UpdateChecks(unittest.TestCase):
         self.assertTrue(any("incomplete for websockets" in message for _, message in self.messages))
         self.assertFalse(any("All utilities are up to date" in message for _, message in self.messages))
         namespace["_pip_upgrade"].assert_not_called()
+
+    def update_stage_fixture(self, gui, *, skip=None, online=False):
+        summary = Mock(return_value=[])
+        reachable = Mock(return_value=online)
+        checks = Mock(return_value={"update_available": False, "error": None})
+        namespace = self.functions
+        namespace.update(_gui=gui, _update_check_skip_reason=lambda: skip,
+                         section=Mock(), status=Mock(), dim=Mock(), warn=Mock(), ok=Mock(), DIM="",
+                         _is_network_reachable=reachable, _render_update_summary_block=summary,
+                         check_python_update=checks, check_pio_update=checks,
+                         check_arduino_cli_update=checks, check_pip_package_update=checks)
+        return namespace, reachable, checks, summary
+
+    def test_gui_update_stage_is_top_level_once_for_enabled_skipped_and_offline(self):
+        for skip, online, expected in (("Skip Updates enabled", False, "skipped"),
+                                       (None, False, "offline"), (None, True, "up_to_date")):
+            with self.subTest(result=expected):
+                callbacks = []
+                gui = SimpleNamespace(log_section=Mock(), log_subsection=Mock(),
+                                      root=SimpleNamespace(after=lambda delay, callback, *args:
+                                                           callbacks.append((delay, callback, args))))
+                namespace, reachable, checks, summary = self.update_stage_fixture(gui, skip=skip, online=online)
+                self.assertEqual(namespace["run_update_checks"](), expected)
+                self.assertEqual(len(callbacks), 1)
+                self.assertEqual(callbacks[0][0], 0)
+                gui.log_section.assert_not_called()
+                callbacks[0][1](*callbacks[0][2])
+                gui.log_section.assert_called_once_with("Checking for updates")
+                gui.log_subsection.assert_not_called()
+                namespace["section"].assert_not_called()
+                if skip:
+                    reachable.assert_not_called()
+                    checks.assert_not_called()
+                elif not online:
+                    reachable.assert_called_once_with(timeout=2.0)
+                    checks.assert_not_called()
+                summary.assert_called_once()
+                namespace["_pip_upgrade"].assert_not_called()
+
+    def test_console_update_stage_has_one_heading_even_when_skipped(self):
+        namespace, reachable, checks, _summary = self.update_stage_fixture(None, skip="Skip Updates enabled")
+        self.assertEqual(namespace["run_update_checks"](), "skipped")
+        namespace["section"].assert_called_once_with("Checking for updates")
+        reachable.assert_not_called()
+        checks.assert_not_called()
 
 
 if __name__ == "__main__":

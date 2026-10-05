@@ -31,7 +31,6 @@ import sys
 import subprocess
 import threading
 import time
-import importlib.util
 from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional, Any
@@ -272,7 +271,6 @@ DEFAULT_DOWNLOAD_DIR = os.path.join(
     os.path.expanduser("~"), "Documents", "_MCUFlasherByNaph_src"
 )
 
-_QSCINTILLA_INSTALL_LOCK = threading.Lock()
 
 
 class Theme:
@@ -605,21 +603,28 @@ class CircularLoadingOverlay(tk.Frame):
             pass
 
 
-def _find_code_viewer_python() -> Optional[str]:
+def _find_code_viewer_python(cancel=None) -> Optional[str]:
     """Find a Python executable that has PyQt5 and QScintilla available."""
-    candidates = [
-        Path(sys.executable),
-        Path(SCRIPT_DIR) / "env" / "Scripts" / "pythonw.exe",
-        Path(SCRIPT_DIR) / "env" / "Scripts" / "python.exe",
-        Path(SCRIPT_DIR) / "src" / "_python" / "pythonw.exe",
-        Path(SCRIPT_DIR) / "src" / "_python" / "python.exe",
-    ]
+    if sys.platform == "win32":
+        prepared = [Path(SCRIPT_DIR) / "env" / "Scripts" / name
+                    for name in ("pythonw.exe", "python.exe")]
+        prepared += [Path(SCRIPT_DIR) / "src" / "_python" / name
+                     for name in ("pythonw.exe", "python.exe")]
+    else:
+        prepared = [Path(SCRIPT_DIR) / directory / "bin" / "python"
+                    for directory in (".venv-linux", "env")]
+    candidates = [Path(sys.executable), *prepared]
     seen = set()
     for cand in candidates:
-        cand_str = str(cand.resolve()) if cand.is_file() else ""
-        if not cand_str or cand_str.lower() in seen:
+        if cancel is not None and cancel.is_set():
+            return None
+        # A venv's python is normally a symlink on Ubuntu. Keep that spelling
+        # so Python finds its pyvenv.cfg and the prepared environment packages.
+        cand_str = os.path.abspath(cand) if cand.is_file() else ""
+        identity = os.path.normcase(cand_str)
+        if not cand_str or identity in seen:
             continue
-        seen.add(cand_str.lower())
+        seen.add(identity)
         try:
             res = subprocess.run(
                 [cand_str, "-c", "import PyQt5.QtWidgets, PyQt5.Qsci"],
@@ -656,208 +661,69 @@ def _open_fallback_editor(file_path: str, parent=None, reason: Optional[str] = N
     return False
 
 
-def _qscintilla_available() -> bool:
-    """Return whether the standalone code viewer can start."""
-    try:
-        if (
-            importlib.util.find_spec("PyQt5.QtWidgets") is not None
-            and importlib.util.find_spec("PyQt5.Qsci") is not None
-        ):
-            return True
-    except Exception:
-        pass
-    # Also check env site-packages if present
-    env_sp = Path(SCRIPT_DIR) / "env" / "Lib" / "site-packages"
-    if env_sp.is_dir() and str(env_sp) not in sys.path:
-        sys.path.append(str(env_sp))
-        try:
-            if (
-                importlib.util.find_spec("PyQt5.QtWidgets") is not None
-                and importlib.util.find_spec("PyQt5.Qsci") is not None
-            ):
-                return True
-        except Exception:
-            pass
-    return _find_code_viewer_python() is not None
-
-
-def _launch_code_viewer(file_path, all_paths=None, parent=None):
+def _launch_code_viewer(file_path, all_paths=None, parent=None, *, python_exe=None,
+                        theme_mode=None, font_size=None):
     viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
     if not os.path.exists(viewer_script):
         _open_fallback_editor(file_path, parent=parent, reason=f"Viewer script not found:\n{viewer_script}")
         return
 
-    py_exe = _find_code_viewer_python() or sys.executable
+    py_exe = python_exe or _find_code_viewer_python() or sys.executable
     try:
         cmd = [str(py_exe), viewer_script, file_path]
         if all_paths:
             cmd.extend(all_paths)
+        environment = os.environ.copy()
+        if theme_mode is not None:
+            environment["MCU_FLASHER_VIEWER_THEME"] = str(theme_mode)
+        if font_size is not None:
+            environment["MCU_FLASHER_VIEWER_FONT_SIZE"] = str(font_size)
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        subprocess.Popen(cmd, creationflags=creationflags)
+        subprocess.Popen(cmd, creationflags=creationflags, env=environment)
     except Exception as e:
         _open_fallback_editor(file_path, parent=parent, reason=f"Failed to launch QScintilla viewer:\n{e}")
 
 
-def _install_qscintilla_on_demand(file_path, all_paths=None, parent=None):
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
-        messagebox.showinfo("Bootstrap required", "Prepare the code viewer dependencies in bootstrap. The workspace does not install packages.", parent=parent)
-        return
-    """Install PyQt5/QScintilla on first use, then launch the viewer.
+def _open_code_viewer(file_path, all_paths=None, parent=None, *, is_current=None):
+    """Probe the prepared viewer off Tk, then open the latest valid selection."""
+    if parent is None:
+        return _open_fallback_editor(file_path)
+    from src.modules.browser_loading import TkTasks, LatestScan
+    tasks = getattr(parent, "_mcu_code_viewer_tasks", None)
+    if tasks is None or tasks.closed:
+        tasks = parent._mcu_code_viewer_tasks = TkTasks(parent)
 
-    Called from a background thread.  GUI updates are marshalled to the
-    Tk thread via ``root.after()``.  Uses the module-level
-    ``_QSCINTILLA_INSTALL_LOCK`` to prevent concurrent install attempts
-    from multiple "View Source" clicks.
-    """
-    root = parent
-    progress_win = None
-    progress_label = None
+        def probe(_request, cancel):
+            from main.core.config import get_monitor_font_size
+            interpreter = _find_code_viewer_python(cancel)
+            return interpreter, get_monitor_font_size()
 
-    def _create_progress():
-        nonlocal progress_win, progress_label
-        try:
-            progress_win = tk.Toplevel(root) if root else tk.Tk()
-            progress_win.title("Installing Code Viewer")
-            progress_win.configure(bg=Theme.BG_DARKEST)
-            progress_win.resizable(False, False)
-            progress_win.attributes("-topmost", True)
-            progress_win.geometry("420x120")
-            try:
-                progress_win.update_idletasks()
-                sw = progress_win.winfo_screenwidth()
-                sh = progress_win.winfo_screenheight()
-                x = (sw - 420) // 2
-                y = (sh - 120) // 2
-                progress_win.geometry(f"420x120+{x}+{y}")
-            except Exception:
-                pass
-            tk.Label(
-                progress_win,
-                text="Installing QScintilla Code Viewer…",
-                font=("Montserrat", 11, "bold"),
-                fg=Theme.TEXT_BRIGHT,
-                bg=Theme.BG_DARKEST,
-            ).pack(pady=(18, 4))
-            progress_label = tk.Label(
-                progress_win,
-                text="Downloading PyQt5 & QScintilla (this is a one-time setup)…",
-                font=("Montserrat", 9),
-                fg=Theme.TEXT_DIM,
-                bg=Theme.BG_DARKEST,
-            )
-            progress_label.pack(pady=(0, 12))
-            progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
-        except Exception:
-            pass
+        parent._mcu_code_viewer_scan = LatestScan(tasks, probe)
+    paths = tuple(all_paths or (file_path,))
+    request_id = getattr(parent, "_mcu_code_viewer_request", 0) + 1
+    parent._mcu_code_viewer_request = request_id
 
-    def _close_progress():
-        nonlocal progress_win
-        try:
-            if progress_win:
-                progress_win.destroy()
-                progress_win = None
-        except Exception:
-            pass
+    def completed(result, error):
+        if (tasks.closed or request_id != parent._mcu_code_viewer_request
+                or (is_current is not None and not is_current())
+                or parent.state() == "withdrawn"):
+            return
+        if not os.path.isfile(file_path):
+            messagebox.showerror("Code Viewer", "Sample file no longer exists on disk.", parent=parent)
+            return
+        interpreter, font_size = result if result is not None else (None, 12)
+        if error:
+            messagebox.showerror("Code Viewer", f"Unable to prepare the sample viewer:\n{error}", parent=parent)
+            return
+        if interpreter is None:
+            messagebox.showinfo("Bootstrap required",
+                                "Prepare the code viewer dependencies in Bootstrap, then reopen this sample.",
+                                parent=parent)
+            return
+        _launch_code_viewer(file_path, paths, parent=parent, python_exe=interpreter,
+                            theme_mode=Theme.active_theme, font_size=font_size)
 
-    def _update_progress(msg):
-        try:
-            if progress_label and progress_label.winfo_exists():
-                progress_label.configure(text=msg)
-        except Exception:
-            pass
-
-    # Show progress dialog on the Tk thread
-    target = None
-    try:
-        target = root if root else (parent or None)
-        if target and hasattr(target, "after"):
-            target.after(0, _create_progress)
-        else:
-            _create_progress()
-    except Exception:
-        _create_progress()
-
-    # Brief pause to let the progress window render
-    import time as _time
-    _time.sleep(0.3)
-
-    installed = False
-    with _QSCINTILLA_INSTALL_LOCK:
-        # Re-check after acquiring lock — another thread may have installed it
-        if _qscintilla_available():
-            installed = True
-        else:
-            try:
-                # Import bootstrap's on-demand feature installer
-                modules_dir = os.path.join(SCRIPT_DIR, "src", "modules")
-                if modules_dir not in sys.path:
-                    sys.path.insert(0, modules_dir)
-                from bootstrap import ensure_optional_pip_feature
-                installed = ensure_optional_pip_feature("qscintilla_viewer")
-            except ImportError:
-                # Bootstrap not available — try direct pip install as fallback
-                try:
-                    if target and hasattr(target, "after"):
-                        target.after(0, lambda: _update_progress("Installing via pip…"))
-                    subprocess.run(
-                        [sys.executable, "-m", "pip", "install",
-                         "PyQt5", "QScintilla",
-                         "--disable-pip-version-check", "--prefer-binary",
-                         "--progress-bar", "off", "--no-input"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=300,
-                        creationflags=(subprocess.CREATE_NO_WINDOW
-                                       if sys.platform == "win32" else 0),
-                    )
-                    installed = _qscintilla_available()
-                except Exception:
-                    installed = False
-            except Exception:
-                installed = False
-
-    # Close the progress dialog and launch the viewer
-    def _finish():
-        _close_progress()
-        if (installed or _qscintilla_available()) and _qscintilla_available():
-            _launch_code_viewer(file_path, all_paths, parent=parent)
-        else:
-            _open_fallback_editor(
-                file_path,
-                parent=parent,
-                reason="QScintilla Code Viewer (PyQt5 & QScintilla) is not available. Opening in default editor.",
-            )
-
-    try:
-        target = root if root else (parent or None)
-        if target and hasattr(target, "after"):
-            target.after(0, _finish)
-        else:
-            _finish()
-    except Exception:
-        _finish()
-
-
-def _open_code_viewer(file_path, all_paths=None, parent=None):
-    """Open the QScintilla code viewer.
-    Installed library sample files are viewable through the dedicated viewer.
-
-    If QScintilla is not yet installed, a one-time background install is
-    triggered with a progress dialog, and the viewer opens once installed.
-    """
-    if _qscintilla_available():
-        _launch_code_viewer(file_path, all_paths, parent=parent)
-        return
-
-    # QScintilla not available — install it on first use in a background thread
-    # so the Tk event loop stays responsive during the pip download.
-    install_thread = threading.Thread(
-        target=_install_qscintilla_on_demand,
-        args=(file_path, all_paths, parent),
-        daemon=True,
-        name="QScintillaInstall",
-    )
-    install_thread.start()
+    parent._mcu_code_viewer_scan.submit((file_path, paths), completed)
 
 
 def _load_settings() -> dict:
@@ -2084,7 +1950,12 @@ class InstalledTab:
         if not os.path.exists(path):
             messagebox.showerror("Error", "Sample file no longer exists on disk.")
             return
-        _open_code_viewer(path, self._current_examples, parent=self.app.root)
+        paths = tuple(self._current_examples)
+        def is_current():
+            selection = self.examples_listbox.curselection()
+            return (tuple(self._current_examples) == paths and bool(selection)
+                    and selection[0] < len(paths) and paths[selection[0]] == path)
+        _open_code_viewer(path, paths, parent=self.app.root, is_current=is_current)
 
     def _get_dir_size(self, path: str) -> int:
         if os.path.isfile(path):
@@ -3743,7 +3614,8 @@ class ArduinoBrowser:
         self.progress.start(self._progress_interval)
 
         self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
-                          download_option, None, target_version)
+                          download_option, None, target_version,
+                          failed=lambda error: self._download_error(tab, f"Unable to start download:\n{error}"))
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):
         if self._busy:
@@ -3790,7 +3662,8 @@ class ArduinoBrowser:
         self.progress.start(self._progress_interval)
 
         self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
-                          download_option, (old_path, old_archive), target_version)
+                          download_option, (old_path, old_archive), target_version,
+                          failed=lambda error: self._download_error(tab, f"Unable to start download update:\n{error}"))
 
     def _download_worker(
         self,

@@ -11,6 +11,7 @@ and "light" (Glass Frosted Light), with static glass tab surfaces.
 from __future__ import annotations
 
 from pathlib import Path
+from main.core.theme import get_palette
 
 # Resolve project root for font paths
 _this_file = Path(__file__).resolve()
@@ -19,19 +20,6 @@ _icons_dir = _project_root / "src" / "assets" / "icons"
 _icon_checked = (_icons_dir / "checkbox_checked.svg").as_posix()
 _icon_checked_dim = (_icons_dir / "checkbox_checked_disabled.svg").as_posix()
 _icon_arrow = (_icons_dir / "chevron-down.svg").as_posix()
-
-
-def get_palette(theme_mode: str = "default") -> dict[str, str]:
-    """Return dictionary of theme color hex strings for the requested theme mode."""
-    from main.core.theme import Theme
-    mode_key = (theme_mode or "default").lower().strip()
-    if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
-        mode_key = "solarized_dark"
-    elif mode_key in ("light", "clean"):
-        mode_key = "light"
-    elif mode_key not in Theme.PALETTES:
-        mode_key = "default"
-    return dict(Theme.PALETTES[mode_key])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

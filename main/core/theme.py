@@ -200,6 +200,18 @@ class Theme:
 Theme.apply_theme("default")
 
 
+def get_palette(theme_mode: str = "default") -> dict[str, str]:
+    """Return a copy of the requested palette without importing a UI framework."""
+    mode_key = (theme_mode or "default").lower().strip()
+    if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
+        mode_key = "solarized_dark"
+    elif mode_key in ("light", "clean"):
+        mode_key = "light"
+    elif mode_key not in Theme.PALETTES:
+        mode_key = "default"
+    return dict(Theme.PALETTES[mode_key])
+
+
 def get_theme_mode() -> str:
     """Return the active theme mode preference."""
     from main.core.config import get_theme_mode as _gtm
@@ -220,6 +232,7 @@ def get_theme_settings() -> tuple:
 
 __all__ = [
     "Theme",
+    "get_palette",
     "get_theme_mode",
     "set_theme_mode",
     "get_theme_settings",
