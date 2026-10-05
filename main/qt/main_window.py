@@ -38,8 +38,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Slot, QRect, QEvent
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import (
-    QIcon, QKeySequence, QShortcut, QCloseEvent,
+    QKeySequence, QShortcut, QCloseEvent,
     QGuiApplication, QScreen, QCursor, QFont,
+    QFontMetrics,
 )
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
@@ -149,10 +150,13 @@ class MCUMainWindow(QMainWindow):
         initial_geom = self._calculate_optimal_geometry(screen)
         self.setGeometry(initial_geom)
 
-        # Application icon
-        icon_path = _project_root / "src" / "assets" / "mcu_icon.ico"
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+        self._refresh_window_icon()
+
+    def _refresh_window_icon(self) -> None:
+        """Use the same app-owned circuit mark as setup and workspace actions."""
+        from main.core.theme import Theme
+        from main.qt.icons import icon
+        self.setWindowIcon(icon("brand", Theme.CYAN, size=32))
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -177,11 +181,48 @@ class MCUMainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "_controls_bar"):
+            self._controls_bar.set_responsive_height(event.size().height())
+        tight = event.size().height() < 350
+        if tight != getattr(self, "_short_screen", None):
+            self._short_screen = tight
+            for name in ("primary-toolbar", "controls-toolbar"):
+                toolbar = self.findChild(QWidget, name)
+                if toolbar is not None:
+                    if not hasattr(toolbar, "_full_height_margins"):
+                        toolbar._full_height_margins = toolbar.contentsMargins()
+                    margins = toolbar._full_height_margins
+                    toolbar.setProperty("shortScreen", tight)
+                    toolbar.style().unpolish(toolbar)
+                    toolbar.style().polish(toolbar)
+                    toolbar.setContentsMargins(margins.left(), 0 if tight else margins.top(),
+                                               margins.right(), 0 if tight else margins.bottom())
+                    toolbar_layout = toolbar.layout()
+                    if toolbar_layout is not None:
+                        if not hasattr(toolbar, "_full_height_layout_margins"):
+                            toolbar._full_height_layout_margins = toolbar_layout.contentsMargins()
+                        margins = toolbar._full_height_layout_margins
+                        toolbar_layout.setContentsMargins(margins.left(), 0 if tight else margins.top(),
+                                                          margins.right(), 0 if tight else margins.bottom())
+                    toolbar.updateGeometry()
         self._apply_responsive_layout(event.size().width())
         self._layout_timer.start()
 
     def _settle_embedded_layout(self) -> None:
         """Fit embedded views once after a burst of resize/state events."""
+        # Initial/deferred stylesheet polish can reset QToolBarLayout margins
+        # after the resize handler. Apply the height budget to polished bars.
+        for name in ("primary-toolbar", "controls-toolbar"):
+            toolbar = self.findChild(QWidget, name)
+            if toolbar is not None and hasattr(toolbar, "_full_height_layout_margins"):
+                toolbar.ensurePolished()
+                margins = toolbar._full_height_layout_margins
+                if self._short_screen:
+                    toolbar.layout().setContentsMargins(0, 0, 0, 0)
+                else:
+                    toolbar.layout().setContentsMargins(margins)
+                toolbar.layout().invalidate()
+                toolbar.layout().activate()
         self._fit_panes_for_height()
         if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
             if hasattr(self._editor_panel, "force_layout"):
@@ -200,6 +241,14 @@ class MCUMainWindow(QMainWindow):
         if available <= 0:
             return
         panel = self._bottom_tabs.currentWidget()
+        output = (getattr(self, "_console_panel", None) if panel is getattr(self, "_console_container", None) else
+                  getattr(getattr(self, "_serial_panel", None), "_output", None)
+                  if panel is getattr(self, "_serial_panel", None) else None)
+        if output is not None:
+            metrics = QFontMetrics(output.document().defaultFont())
+            chrome = max(0, output.height() - output.viewport().height())
+            reading_pad = int(output.document().documentMargin())
+            output.setMinimumHeight(max(24, metrics.lineSpacing() + reading_pad + chrome + 1))
         # Reserve tab navigation, fixed header/send rows, and one output line.
         required = self._bottom_tabs.tabBar().sizeHint().height()
         required += max(24, panel.minimumSizeHint().height() if panel else 24)
@@ -248,16 +297,23 @@ class MCUMainWindow(QMainWindow):
                 "Syntax",
                 "Terminal",
             ]
-        from main.qt.icons import icon
-        names = ("console", "serial", "devices", "alerts", "search", "console")
+        if not getattr(self, "_tab_icons_initialized", False):
+            from main.qt.icons import icon
+            names = ("console", "serial", "devices", "alerts", "search", "console")
+            for i, name in enumerate(names):
+                if i < self._bottom_tabs.count():
+                    self._bottom_tabs.setTabIcon(i, icon(name))
+            self._tab_icons_initialized = True
         for i, title in enumerate(titles):
             if i < self._bottom_tabs.count():
-                self._bottom_tabs.setTabIcon(i, icon(names[i]))
                 if self._bottom_tabs.tabText(i) != title:
                     self._bottom_tabs.setTabText(i, title)
 
     def _apply_responsive_layout(self, w: int) -> None:
         """Propagate responsive width changes to all window components and child panels."""
+        if getattr(self, "_last_responsive_width", None) == w:
+            return
+        self._last_responsive_width = w
         if hasattr(self, "_primary_toolbar") and self._primary_toolbar:
             self._primary_toolbar.set_responsive_width(w)
         if hasattr(self, "_controls_bar") and self._controls_bar:
@@ -359,8 +415,10 @@ class MCUMainWindow(QMainWindow):
         central = GlassWorkspace()
         self.setCentralWidget(central)
         central_layout = QVBoxLayout(central)
-        central_layout.setContentsMargins(10, 8, 10, 8)
-        central_layout.setSpacing(8)
+        # The editor and every tool tab share the complete workspace bounds.
+        # Reading/control padding belongs inside the panels, not around them.
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
 
         # ── Horizontal splitter: main area | AI side panel ────────────────────
         from main.core.config import _load_raw_config
@@ -525,10 +583,17 @@ class MCUMainWindow(QMainWindow):
         from main.core.theme import Theme
         from main.qt.theme import build_stylesheet
         Theme.apply_theme(theme_name)
+        self._refresh_window_icon()
+        self._tab_icons_initialized = False
+        central = self.centralWidget()
+        if hasattr(central, "invalidate_cache"):
+            central.invalidate_cache()
         self._update_tab_titles_responsive(self.width())
         app = QApplication.instance()
         if app:
             app.setStyleSheet(build_stylesheet(theme_name))
+        if getattr(self, "_notification_type", None):
+            self._apply_notification_color(self._notification_type)
         from main.qt.icons import ActionButton
         for button in self.findChildren(ActionButton):
             button.refresh_icon()
@@ -553,6 +618,7 @@ class MCUMainWindow(QMainWindow):
         if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
             self._notif_panel.apply_theme(theme_name)
         self._apply_responsive_layout(self.width())
+        self._layout_timer.start()
 
     def _build_status_bar(self) -> None:
         sb = QStatusBar()
@@ -564,6 +630,7 @@ class MCUMainWindow(QMainWindow):
         self._status_label.setWordWrap(False)
         self._status_label.setFixedHeight(18)
         sb.addWidget(self._status_label, stretch=1)
+        self._notification_type = None
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setFixedWidth(180)
@@ -616,8 +683,13 @@ class MCUMainWindow(QMainWindow):
 
         # Settings and theme signals
         sig_bus.theme_changed.connect(self._on_theme_changed)
+        sig_bus.font_size_changed.connect(self._on_content_font_changed)
         if hasattr(sig_bus, "graphics_accel_changed"):
             sig_bus.graphics_accel_changed.connect(self._on_graphics_accel_changed)
+
+    @Slot(int)
+    def _on_content_font_changed(self, _size: int) -> None:
+        self._layout_timer.start()
 
     @Slot(dict)
     def _on_catalog_updated(self, data):
@@ -778,7 +850,7 @@ class MCUMainWindow(QMainWindow):
             # After an upload/flash or soft reset, once the Serial Monitor tab is focused, issue
             # a silent DTR pulse to reboot the MCU so its boot logs and sketch
             # output appear immediately — no manual Reset button press needed.
-            if prev_op in ("upload", "flash", "soft_reset") and is_success:
+            if prev_op in ("upload", "flash") and is_success:
                 QTimer.singleShot(700, self._post_upload_dtr_pulse)
 
     def _focus_serial_monitor(self) -> None:
@@ -809,6 +881,10 @@ class MCUMainWindow(QMainWindow):
     @Slot(dict)
     def _on_console_progress(self, payload: dict) -> None:
         action = payload.get("action", "")
+        if action.lower() in ("failed", "error", "cancelled"):
+            self._status_label.setText(action)
+            self._progress_bar.setVisible(False)
+            return
         if action.lower() in ("completed", "ready", "idle", "done", "success"):
             if not getattr(self, "_active_operation", None) or getattr(self, "_active_operation", None) in ("clean", "reset", "soft_reset", "hard_reset", "syntax"):
                 self._status_label.setText("Ready")
@@ -872,14 +948,8 @@ class MCUMainWindow(QMainWindow):
         title = payload.get("title", "")
         msg   = payload.get("message", "")
         ntype = payload.get("type", "info")
-        colors = {
-            "success": "#4ec994",
-            "error":   "#e74c3c",
-            "warning": "#f1c40f",
-            "info":    "#5ca4f0",
-        }
-        color = colors.get(ntype, "#cdd6f4")
-        self._status_label.setStyleSheet(f"color: {color};")
+        self._notification_type = ntype
+        self._apply_notification_color(ntype)
 
         # Guard against multi-line text expanding status bar
         if "\n" in msg:
@@ -889,10 +959,19 @@ class MCUMainWindow(QMainWindow):
             display_text = msg or title
 
         self._status_label.setText(display_text)
-        QTimer.singleShot(5000, lambda: (
-            self._status_label.setStyleSheet(""),
-            self._status_label.setText("Ready")
-        ))
+        QTimer.singleShot(5000, self._clear_notification_status)
+
+    def _apply_notification_color(self, notification_type: str) -> None:
+        from main.core.theme import Theme
+        from main.qt.log_colors import themed_log_colors
+        tag = notification_type if notification_type in ("success", "error", "warning") else "info"
+        color = themed_log_colors(Theme.active_theme)[tag]
+        self._status_label.setStyleSheet(f"color: {color};")
+
+    def _clear_notification_status(self) -> None:
+        self._notification_type = None
+        self._status_label.setStyleSheet("")
+        self._status_label.setText("Ready")
 
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:
@@ -959,7 +1038,7 @@ class MCUMainWindow(QMainWindow):
 
     def _shortcut_reload_file(self) -> None:
         """Reload the active file in the editor from disk."""
-        self._trigger_temporary_action("Reloading", 700)
+        self._on_console_progress({"action": "Reloading"})
         self._editor_panel.trigger_reload()
 
     # ─────────────────────────────────────────────────────────────────────────

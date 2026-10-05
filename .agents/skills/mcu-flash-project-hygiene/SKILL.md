@@ -45,10 +45,17 @@ Classify paths before changing attributes or deleting anything:
 - Call `ensure_file_writable(path)` before overwriting or atomically replacing
   generated files. It clears read-only without removing hidden/system bits, so
   files remain out of Explorer while the app updates them.
+- Use `write_generated_text(path, content)` for generated text/JSON metadata.
+  It prepares a hidden sibling and atomically replaces the target, avoiding
+  Windows hidden-file truncation errors and keeping repeated updates hidden.
 - Use `unhide_hidden_attribute(path)` to repair any real user file hidden by an
   older app version.
 - Keep `hide_internal_project_metadata(project)` idempotent and shallow. It
   should reconcile known root metadata without scanning build trees.
+- Hide generic root instructions and IDE configurations only with an MCU Flasher
+  signature/path. Preserve user-authored AGENTS and ignore rules when generating
+  instructions. First-use sentinels have the explicit `.pio_bootstrap_first_use_*`
+  prefix. Use `direct/verify_hygiene.py` for isolated native attribute checks.
 - Schedule startup reconciliation after the workspace is shown and execute it
   in a background worker. Do not repeat the same reconciliation synchronously
   while constructing the project selector. Mock it in all Qt startup verifiers.

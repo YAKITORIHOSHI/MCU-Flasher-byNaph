@@ -48,7 +48,9 @@ def main(argv=None) -> int:
         subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check",
                         "--prefer-binary", "-r", str(ROOT / "direct/ubuntu/requirements.txt")], check=True, env=env)
         subprocess.run([str(python), "-c",
-                        "import PySide6.QtWebEngineWidgets, serial, psutil, platformio, ptyprocess"], check=True, env=env)
+                        "import PySide6.QtWebEngineWidgets, serial, psutil, platformio, ptyprocess; "
+                        "from src.modules.mbed_compat import prepare_dependencies; prepare_dependencies()"],
+                       check=True, env=env, cwd=ROOT)
         command = [str(python), "-B", str(ROOT / "src/modules/offline_bootstrap.py"),
                    "--core", str(native_platformio_dir())]
         if args.plan:

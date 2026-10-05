@@ -8,8 +8,9 @@ installed and verified before launching the main GUI. Online version checks
 are kept out of this short-lived launcher process so a slow network cannot
 leave child interpreters behind.
 
-Called by MCU-Flash-GUI.vbs. On a fresh system this runs
-once with a visible console window showing progress.
+Called by MCU-Flash-GUI.vbs. A fresh private Python uses its bundled Tk setup
+window while Python dependencies install, then opens the original Qt setup
+view before board-tool preparation. Prepared environments use Qt immediately.
 Verified warm launches use a local health snapshot. First runs, changed
 installations, explicit repair and recorded crashes run dependency verification.
 """
@@ -873,13 +874,25 @@ def _configure_platformio_environment(script_dir: Path) -> str:
         os.environ["PLATFORMIO_CACHE_DIR"] = str(cache_dir)
         os.environ["PLATFORMIO_BUILD_CACHE_DIR"] = str(cache_dir / "build")
         os.environ["PLATFORMIO_GLOBALLIB_DIR"] = str(lib_dir)
-        os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+        os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         os.environ["PLATFORMIO_DISABLE_PROMPTS"] = "1"
         os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
+        os.environ["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
         os.environ["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         os.environ["TMP"] = str(tmp_dir)
         os.environ["TEMP"] = str(tmp_dir)
         os.environ["TMPDIR"] = str(tmp_dir)
+        # A junction expands back to the long install folder inside setuptools.
+        # Pip's sdist extraction cannot safely use an extended-path TEMP either
+        # because archive member names retain forward slashes. Give Python
+        # installers a separate, ordinary short folder in the app namespace.
+        namespace = _mcuflasher_app_root(c_path) if sys.platform == "win32" else None
+        if namespace is not None:
+            import hashlib
+            identity = hashlib.sha256(str(script_dir.resolve()).casefold().encode("utf-8")).hexdigest()[:8]
+            pip_temp = namespace / ".pip-temp" / identity
+            pip_temp.mkdir(parents=True, exist_ok=True)
+            os.environ["MCU_FLASHER_PIP_TEMP_DIR"] = str(pip_temp)
     except Exception:
         pass
     return core_dir
@@ -889,18 +902,18 @@ def _configure_platformio_environment(script_dir: Path) -> str:
 # Instead of waiting for PlatformIO to download/unpack/install all board
 # toolchains from scratch on first run (easily 10–30+ minutes), a pre-built
 # snapshot of .platformio-mcu-gui is hosted as a release asset. When the
-# local store is empty, bootstrap downloads and extracts the snapshot so
-# PlatformIO finds an already-populated core directory. GitHub Releases
+# configured store is incomplete, bootstrap imports only missing snapshot
+# packages and preserves existing versions. GitHub Releases
 # provides a CDN-backed, resumable asset download. This is intentionally the
-# only source: a failed or unavailable release must be reported rather than
-# silently switching to a slower or different host.
+# only snapshot source; normal PlatformIO installs resolve missing items that
+# are not supplied by the snapshot. Failed artifacts remain available.
 _PLATFORMIO_PREBUILT_ZIP_NAME = "platformio-mcu-gui-prebuilt.zip"
 _PLATFORMIO_PREBUILT_GITHUB_URL = (
     "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/download/"
     "v1.0.0-assets/platformio-mcu-gui.zip"
 )
 # Metadata for the GitHub Release asset. The local destination keeps the
-# historical name above so existing cleanup/resume behavior is unchanged.
+# historical name above so existing resumable artifacts can be reused.
 _PLATFORMIO_PREBUILT_EXPECTED_SIZE = 1785358455
 _PLATFORMIO_PREBUILT_EXPECTED_SHA256 = (
     "b284708a25c46143827b94ec423d7fe4242729d5c39e4c3324556b9b7af8b7c2"
@@ -908,208 +921,108 @@ _PLATFORMIO_PREBUILT_EXPECTED_SHA256 = (
 
 
 def _platformio_core_is_populated(script_dir: Path) -> bool:
-    """Return True when the PlatformIO core store already has platform/package content.
-
-    This is deliberately a shallow check: if the directories exist and contain
-    at least one child entry, we treat the store as populated.  PlatformIO's own
-    platform/package integrity checks will repair anything missing later.
-    """
-    pio_dir = script_dir / "src" / ".platformio-mcu-gui"
-    if not pio_dir.is_dir():
-        return False
-    packages = pio_dir / "packages"
-    platforms = pio_dir / "platforms"
+    """Verify configured local package readiness without installers/network."""
+    from src.modules.bootstrap_seed import missing_packages
+    from src.modules.offline_bootstrap import requested_plan
     try:
-        has_packages = packages.is_dir() and any(packages.iterdir())
-        has_platforms = platforms.is_dir() and any(platforms.iterdir())
-        return has_packages and has_platforms
+        plan, _ = requested_plan()
+        missing = missing_packages(Path(script_dir) / "src" / ".platformio-mcu-gui", plan)
+        return not any(missing.values())
     except Exception:
         return False
 
 
-def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None) -> bool:
-    """Download and extract the pre-built PlatformIO core directory if empty.
+def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
+                                    script_dir=None, plan=None, seed_url=None,
+                                    attempts=3) -> bool:
+    """Prefer the verified release for missing groups; preserve existing data.
 
-    This seeds ``src/.platformio-mcu-gui`` from a release-hosted zip so that
-    PlatformIO finds an already-populated core store on first launch.  If the
-    store already contains packages and platforms, this is a no-op.
-
-    The zip is treated as a baseline: future ``pio platform install`` calls
-    will add new boards into the same directory without conflict.
-
-    Returns True if the store is populated (either already or after extraction),
-    False if the GitHub download or extraction failed. The caller treats this
-    as fatal so PlatformIO never silently switches to a second bootstrap source.
+    Complete configured stores bypass the release download. Missing packages
+    absent from the release are resolved by normal PlatformIO setup afterwards.
+    Invalid existing destinations remain untouched and fail with diagnostics.
+    Optional arguments support retained, hardware-free seed fixtures.
     """
-    import zipfile
-
-    if _platformio_core_is_populated(SCRIPT_DIR):
-        ok("Pre-built PlatformIO core already populated.")
+    from src.modules.bootstrap_seed import missing_packages, import_missing, reject_unresolved_collisions
+    from src.modules.offline_bootstrap import requested_plan
+    if sys.platform != "win32":
+        raise RuntimeError("The prebuilt seed contains Windows packages; Ubuntu uses native package setup.")
+    root = Path(script_dir or SCRIPT_DIR)
+    if plan is None:
+        plan, _ = requested_plan()
+    core = root / "src" / ".platformio-mcu-gui"
+    missing = missing_packages(core, plan)
+    if not any(missing.values()):
+        ok("Configured PlatformIO packages are verified locally; release seed download skipped.")
         return True
-
-    if not _is_network_reachable(timeout=2.0):
-        warn("PlatformIO core toolchains are not yet installed and cannot be downloaded while offline.")
-        return False
-
-    pio_dir = SCRIPT_DIR / "src" / ".platformio-mcu-gui"
-    zip_dest = SCRIPT_DIR / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
-
-    # ── Step 1: Download ────────────────────────────────────────────
-    status("Downloading pre-built PlatformIO toolchains...")
-    if gui:
-        gui.set_status("Downloading pre-built PlatformIO toolchains...")
-
-    try:
-        # GitHub Releases is the only source. Its asset CDN supports HTTP
-        # Range requests, so an existing .part file can continue safely.
-        status(f"Downloading {zip_dest.name} from GitHub Releases...")
-        _download_file(
-            _PLATFORMIO_PREBUILT_GITHUB_URL,
-            zip_dest,
-            timeout=120,
-            attempts=3,
-            expected_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE,
-            expected_sha256=_PLATFORMIO_PREBUILT_EXPECTED_SHA256,
-        )
-    except Exception as exc:
-        _record_bootstrap_exception("Pre-built PlatformIO zip download failed")
-        warn(f"Could not download pre-built PlatformIO zip: {exc}")
-        warn("Pre-built archive unavailable; setup will install toolchains directly via PlatformIO.")
-        safe_unlink(zip_dest)
-        safe_unlink(zip_dest.with_name(zip_dest.name + ".part"))
-        safe_rmtree(zip_dest.with_name(zip_dest.name + ".part.parts"))
-        return False
-
-    if not zip_dest.is_file() or zip_dest.stat().st_size < 1024:
-        warn("GitHub archive is missing or incomplete; setup will install toolchains directly via PlatformIO.")
-        safe_unlink(zip_dest)
-        safe_unlink(zip_dest.with_name(zip_dest.name + ".part"))
-        safe_rmtree(zip_dest.with_name(zip_dest.name + ".part.parts"))
-        return False
-
-    # ── Step 2: Extract ─────────────────────────────────────────────
-    status("Extracting pre-built PlatformIO toolchains...")
-    if gui:
-        gui.set_status("Extracting pre-built PlatformIO toolchains...")
-        gui.set_progress_percent(0)
-
-    try:
-        pio_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(str(zip_dest), "r") as zf:
-            infos = zf.infolist()
-            total_files = len(infos)
-            if total_files == 0:
-                raise RuntimeError("Zip archive is empty")
-
-            total_uncompressed_bytes = sum(info.file_size for info in infos)
-
-            # Detect whether the zip has a top-level directory wrapper.
-            # e.g. all members start with ".platformio-mcu-gui/" — strip it
-            # so we extract directly into pio_dir.
-            first_parts = {info.filename.split("/", 1)[0] for info in infos if "/" in info.filename}
-            has_wrapper = (
-                len(first_parts) == 1
-                and first_parts.pop().replace(".", "").replace("-", "").replace("_", "").lower()
-                in (
-                    "platformiomcugui",
-                    "platformiomcuguiprebuilt",
-                )
-            )
-
-            last_extract_time = 0.0
-            extracted_bytes = 0
-
-            for idx, info in enumerate(infos, 1):
-                member = info.filename
-                extracted_bytes += info.file_size
-
-                # Skip directory entries (they're created implicitly).
-                if member.endswith("/"):
-                    if gui and total_files > 0:
-                        gui.set_progress_percent(min(99, int(idx * 100 / total_files)))
-                    continue
-
-                if has_wrapper:
-                    # Strip the top-level wrapper directory from the path.
-                    _, _, relative = member.partition("/")
-                    if not relative:
-                        continue
-                    target = pio_dir / relative
-                else:
-                    target = pio_dir / member
-
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-
-                now = time.time()
-                if gui and total_files > 0 and (now - last_extract_time >= 0.15 or idx == total_files):
-                    last_extract_time = now
-                    pct = min(99.0, (idx / total_files) * 100.0)
-                    filled = int(pct / 100.0 * 50)
-                    bar = "▰" * filled + "▱" * (50 - filled)
-
-                    ext_mb = extracted_bytes / (1024 * 1024)
-                    tot_mb = total_uncompressed_bytes / (1024 * 1024)
-                    size_info = f"{ext_mb:.1f}/{tot_mb:.1f} MB" if total_uncompressed_bytes > 0 else f"{idx}/{total_files} files"
-
-                    extract_block = (
-                        f"  Extracting {zip_dest.name}...\n"
-                        f"  {bar}  {pct:5.1f}% ({idx}/{total_files} files • {size_info})"
-                    )
-                    gui.update_platformio_progress_block(extract_block)
-                    gui.set_status(f"Extracting {zip_dest.name}... {idx}/{total_files} files ({pct:.1f}%)")
-                    gui.set_progress_percent(pct)
-
-        # Do not report the step as complete until the extracted store has
-        # passed the same readiness check used by the caller.  The live row is
-        # deliberately capped at 99% while files are being written, so the
-        # final UI update must be issued after extraction *and* verification.
-        core_ready = _platformio_core_is_populated(SCRIPT_DIR)
-        if not core_ready:
-            raise RuntimeError("Extracted PlatformIO core failed readiness verification")
-
-        # Immediately guarantee tool-scons has valid .piopm metadata so PlatformIO
-        # Core recognizes SCons as installed on the very first compile.
-        try:
-            scons_manifest = pio_dir / "packages" / "tool-scons" / "package.json"
-            scons_piopm = pio_dir / "packages" / "tool-scons" / ".piopm"
-            if scons_manifest.is_file() and not scons_piopm.is_file():
-                manifest_data = json.loads(scons_manifest.read_text(encoding="utf-8"))
-                version = str(manifest_data.get("version", "4.41101.0")).strip()
-                piopm_data = {
-                    "type": "tool",
-                    "name": "tool-scons",
-                    "version": version,
-                    "spec": {
-                        "owner": "platformio",
-                        "id": 8192,
-                        "name": "tool-scons",
-                        "requirements": None,
-                        "uri": None,
-                    },
-                }
-                scons_piopm.write_text(json.dumps(piopm_data), encoding="utf-8")
-        except Exception:
-            pass
-
+    for kind, specs in missing.items():
+        if specs:
+            status(f"Release-first check: {len(specs)} missing {kind}: "
+                   + ", ".join(spec.humanize() for spec in specs))
+    zip_dest = root / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
+    verified = False
+    if zip_dest.is_file():
+        verified, reason = _download_matches_expectations(
+            zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
+        if not verified:
+            raise RuntimeError(f"Existing release archive was retained because verification failed: {zip_dest}: {reason}")
+    if verified:
+        status(f"Using verified cached release seed ({zip_dest.stat().st_size / 1048576:.1f} MiB): {zip_dest}")
+    else:
+        if seed_url is None and not _is_network_reachable(timeout=2.0):
+            reject_unresolved_collisions(core, missing)
+            warn("Release seed unavailable while offline; cached/partial files were retained. Missing-package setup must still succeed.")
+            return False
+        status(f"Downloading release seed first ({_PLATFORMIO_PREBUILT_EXPECTED_SIZE / 1048576:.1f} MiB)...")
         if gui:
-            gui.clear_platformio_progress_block()
-            gui.set_progress_percent(100)
-            gui.set_status("PlatformIO toolchains ready.")
-        ok("Pre-built PlatformIO core extracted successfully.")
-    except Exception as exc:
-        _record_bootstrap_exception("Pre-built PlatformIO zip extraction failed")
-        warn(f"Failed to extract pre-built PlatformIO zip: {exc}")
-        warn("GitHub archive extraction is required; bootstrap cannot continue.")
-        return False
+            gui.set_status("Downloading pre-built PlatformIO toolchains...")
+        try:
+            _download_file(seed_url or _PLATFORMIO_PREBUILT_GITHUB_URL, zip_dest,
+                           timeout=120, attempts=attempts,
+                           expected_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE,
+                           expected_sha256=_PLATFORMIO_PREBUILT_EXPECTED_SHA256,
+                           preserve_failed=True)
+        except Exception as exc:
+            _record_bootstrap_exception("Release seed download failed; artifacts retained")
+            warn(f"Release seed download failed: {exc}. Archive/partial checkpoints were retained; normal setup will resolve missing packages.")
+            reject_unresolved_collisions(core, missing)
+            return False
+    verified, reason = _download_matches_expectations(
+        zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
+    if not verified:
+        raise RuntimeError(f"Release seed verification failed; archive retained at {zip_dest}: {reason}")
+    status("Importing only missing package groups from the verified release...")
+    last_update = 0.0
+
+    def progress(copied, member):
+        nonlocal last_update
+        now = time.monotonic()
+        if gui and now - last_update >= 0.15:
+            last_update = now
+            gui.set_status(f"Importing release seed... {copied / 1048576:.1f} MiB")
+            gui.update_platformio_progress_block(
+                f"  Importing missing release packages...\n  {copied / 1048576:.1f} MiB copied • {member}")
+
+    try:
+        result = import_missing(zip_dest, core, missing,
+                                staging_parent=root / "temp" / "audit" / "asset-seed",
+                                log=status, progress=progress)
+        if missing["platforms"] and result["imported"]:
+            # Newly imported platform definitions reveal their exact selected
+            # board/framework variants. Offer those missing packages the same
+            # verified seed before any online manager fallback.
+            discovered = missing_packages(core, plan)
+            second = import_missing(zip_dest, core, discovered,
+                                    staging_parent=root / "temp" / "audit" / "asset-seed",
+                                    log=status, progress=progress)
+            result["imported"].extend(second["imported"])
     finally:
         if gui:
             gui.clear_platformio_progress_block()
-        # ── Step 3: Clean up the zip ────────────────────────────────
-        safe_unlink(zip_dest)
-
-    return _platformio_core_is_populated(SCRIPT_DIR)
+    remaining = missing_packages(core, plan)
+    reject_unresolved_collisions(core, remaining)
+    remaining_count = sum(len(specs) for specs in remaining.values())
+    ok(f"Release seed checked: {len(result['imported'])} groups imported; {remaining_count} missing items remain for normal package setup. Archive retained.")
+    return True
 
 
 # One store only: Bootstrap and every GUI subprocess must resolve the same core_dir.
@@ -1289,687 +1202,79 @@ BOOTSTRAP_CLOSE_DELAY_S: float = 2.5
 # Matches MCU Flash Precision Design System
 # ─────────────────────────────────────────────────────────────
 
-try:
-    # pyrefly: ignore [missing-import]
-    from PySide6.QtWidgets import (
-        QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-        QProgressBar, QPlainTextEdit, QCheckBox, QFrame,
-    )
-    # pyrefly: ignore [missing-import]
-    from PySide6.QtCore import Qt, QObject, Signal, QTimer, Slot
-    # pyrefly: ignore [missing-import]
-    from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-    HAS_PYSIDE6_BOOTSTRAP = True
-except ImportError:
-    _env_site_packages = SCRIPT_DIR / "env" / "Lib" / "site-packages"
-    if _env_site_packages.is_dir() and str(_env_site_packages) not in sys.path:
-        sys.path.append(str(_env_site_packages))
-        try:
-            from PySide6.QtWidgets import (
-                QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                QProgressBar, QPlainTextEdit, QCheckBox, QFrame,
-            )
-            from PySide6.QtCore import Qt, QObject, Signal, QTimer, Slot
-            from PySide6.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-            HAS_PYSIDE6_BOOTSTRAP = True
-        except ImportError:
-            HAS_PYSIDE6_BOOTSTRAP = False
-    else:
-        HAS_PYSIDE6_BOOTSTRAP = False
+def _prepare_bootstrap_qt_path():
+    """Prefer the target environment and refuse a foreign loaded Qt DLL graph."""
+    if globals().get("_BOOTSTRAP_QT_PARTIAL_NATIVE", False):
+        raise ImportError("A failed Qt import already loaded native modules in this process; setup keeps its native view and the verified environment is used on the next launch")
+    target_site = SCRIPT_DIR / "env" / "Lib" / "site-packages"
+    if not (target_site / "PySide6").is_dir():
+        return
+    target_site = target_site.resolve()
 
+    def target_package_loaded(name):
+        origin = getattr(sys.modules.get(name), "__file__", None)
+        return bool(origin and Path(origin).is_absolute()
+                    and Path(origin).resolve().is_relative_to(target_site))
 
-class _BootstrapSignals(QObject if HAS_PYSIDE6_BOOTSTRAP else object):
-    """Thread-safe signal dispatcher from worker thread to Qt main loop."""
-    if HAS_PYSIDE6_BOOTSTRAP:
-        sig_log = Signal(str, str)
-        sig_status = Signal(str)
-        sig_progress = Signal(float)
-        sig_stop_spinner = Signal(str, bool)
-        sig_update_block = Signal(str, str)
-        sig_commit_block = Signal()
-        sig_clear_block = Signal()
-        sig_close = Signal()
-        sig_hide = Signal()
-        sig_call = Signal(object, tuple)
-
-
-if HAS_PYSIDE6_BOOTSTRAP:
-    class _BootstrapDialog(QDialog):
-        SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-        def __init__(self, gui: "BootstrapGUI"):
-            super().__init__()
-            self._gui = gui
-            self._allow_close = False
-            self._live_block_start: Optional[int] = None
-            self._live_block_len: int = 0
-            self._live_block_type: Optional[str] = None
-            self.setWindowTitle("MCU Flasher by Naph — Setup")
-            self.setObjectName("BootstrapDialog")
-            try:
-                from main.qt.theme import register_fonts
-                register_fonts()
-            except ImportError:
-                pass  # Standalone setup can still use the system UI font.
-            self.setFont(QFont("Montserrat", 10))
-
-            # Qt geometry is already scaled to logical pixels.
-            from main.qt.responsive import fit_dialog, ScreenWatcher
-            fit_dialog(self, (900, 660), (340, 300))
-            self._screen_watcher = ScreenWatcher(self)
-            self.setSizeGripEnabled(True)
-            from src.modules.runtime_resources import performance_profile
-            self._constrained = performance_profile().constrained
-            self._display_char_limit = 256000 if self._constrained else 1000000
-
-            # Window icon
-            try:
-                icon_path = SCRIPT_DIR / "src" / "assets" / "mcu_icon.ico"
-                if not icon_path.exists():
-                    icon_path = SCRIPT_DIR / "src" / "mcu_icon.ico"
-                if icon_path.exists():
-                    self.setWindowIcon(QIcon(str(icon_path)))
-            except Exception:
-                pass
-
-            # Initial 1-second topmost elevation
-            try:
-                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-                QTimer.singleShot(1000, self._unset_topmost)
-            except Exception:
-                pass
-
-            # Checkbox checkmark icons (dynamic multi-user discovery)
-            icons_dir = SCRIPT_DIR / "src" / "assets" / "icons"
-            if not (icons_dir / "checkbox_checked.svg").exists():
-                icons_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
-            icon_checked = (icons_dir / "checkbox_checked.svg").as_posix()
-            icon_checked_dim = (icons_dir / "checkbox_checked_disabled.svg").as_posix()
-
-            pal, mode = _resolve_bootstrap_theme()
-            self._theme_pal = pal
-            self._theme_mode = mode
-
-            bg_darkest  = pal["T_BG_DARKEST"]
-            bg_dark     = pal["T_BG_DARK"]
-            bg_mid      = pal["T_BG_MID"]
-            bg_light    = pal["T_BG_LIGHT"]
-            bg_hover    = pal["T_BG_HOVER"]
-            border      = pal["T_BORDER"]
-            border_lit  = pal.get("T_BORDER_LIT", pal["T_CYAN"])
-            text        = pal["T_TEXT"]
-            text_dim    = pal["T_TEXT_DIM"]
-            text_bright = pal["T_TEXT_BRIGHT"]
-            cyan        = pal["T_CYAN"]
-            green       = pal["T_GREEN"]
-            yellow      = pal["T_YELLOW"]
-            red         = pal["T_RED"]
-            magenta     = pal["T_MAGENTA"]
-
-            base_style = f"""
-                QDialog#BootstrapDialog {{
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_mid}, stop:1 {bg_darkest});
-                    color: {text};
-                    font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
-                }}
-                QFrame#setupHeader, QFrame#setupFooter {{
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {bg_light}, stop:1 {bg_dark});
-                    border: 1px solid {border};
-                    border-top: 1px solid {border_lit};
-                    border-radius: 12px;
-                }}
-                QLabel {{ background: transparent; border: none; color: {text}; }}
-                QLabel#titleLabel {{
-                    color: {text_bright};
-                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-size: 17px;
-                    font-weight: bold;
-                    letter-spacing: 0.5px;
-                }}
-                QLabel#subLabel {{
-                    color: {text_dim};
-                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-size: 11px;
-                }}
-                QLabel#timerLabel {{
-                    color: {cyan};
-                    font-family: 'Consolas', monospace;
-                    font-size: 12px;
-                    font-weight: bold;
-                    background: {bg_darkest};
-                    border: 1px solid {border};
-                    border-radius: 8px;
-                    padding: 8px 12px;
-                }}
-                QLabel#spinLabel {{
-                    color: {cyan};
-                    font-size: 13px;
-                    font-weight: bold;
-                }}
-                QLabel#statusLabel {{
-                    color: {text_bright};
-                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-size: 12px;
-                    font-weight: 600;
-                }}
-                QLabel#pctLabel {{
-                    color: {cyan};
-                    font-size: 12px;
-                    font-weight: bold;
-                    font-family: 'Consolas', monospace;
-                }}
-                QProgressBar {{
-                    background-color: {bg_mid};
-                    border: 1px solid {border};
-                    border-radius: 2px;
-                    height: 6px;
-                    text-align: right;
-                }}
-                QProgressBar::chunk {{
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {cyan}, stop:1 {border_lit});
-                    border-radius: 2px;
-                }}
-                QPlainTextEdit#logEdit {{
-                    background-color: {bg_darkest};
-                    border: 1px solid {border};
-                    border-radius: 12px;
-                    color: {text};
-                    font-family: 'Consolas', 'Cascadia Code', monospace;
-                    font-size: 12px;
-                    padding: 12px;
-                }}
-                /* ── High-Visibility Modern Pill ScrollBars ────────── */
-                QScrollBar:vertical {{
-                    background: {bg_darkest};
-                    width: 13px;
-                    margin: 0px;
-                    border: none;
-                    border-left: 1px solid {border};
-                }}
-                QScrollBar::handle:vertical {{
-                    background: {border};
-                    min-height: 26px;
-                    border-radius: 4px;
-                    margin: 2px 2px 2px 2px;
-                }}
-                QScrollBar::handle:vertical:hover {{
-                    background: {cyan};
-                }}
-                QScrollBar::handle:vertical:pressed {{
-                    background: {border_lit};
-                }}
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                    height: 0px;
-                    background: none;
-                    border: none;
-                }}
-                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                    background: none;
-                }}
-                QScrollBar:horizontal {{
-                    background: {bg_darkest};
-                    height: 13px;
-                    margin: 0px;
-                    border: none;
-                    border-top: 1px solid {border};
-                }}
-                QScrollBar::handle:horizontal {{
-                    background: {border};
-                    min-width: 26px;
-                    border-radius: 4px;
-                    margin: 2px 2px 2px 2px;
-                }}
-                QScrollBar::handle:horizontal:hover {{
-                    background: {cyan};
-                }}
-                QScrollBar::handle:horizontal:pressed {{
-                    background: {border_lit};
-                }}
-                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                    width: 0px;
-                    background: none;
-                    border: none;
-                }}
-                QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-                    background: none;
-                }}
-                /* ── High-Visibility CheckBoxes with Vector Checkmark ─ */
-                QCheckBox {{
-                    background: transparent;
-                    color: {text};
-                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-size: 11px;
-                    font-weight: 500;
-                    spacing: 8px;
-                }}
-                QCheckBox:hover {{
-                    color: {text_bright};
-                }}
-                QCheckBox:focus {{
-                    color: {cyan};
-                }}
-                QCheckBox::indicator {{
-                    width: 15px;
-                    height: 15px;
-                    border-radius: 4px;
-                    border: 1px solid {border};
-                    background-color: {bg_darkest};
-                }}
-                QCheckBox::indicator:hover {{
-                    border-color: {cyan};
-                    background-color: {bg_hover};
-                }}
-                QCheckBox::indicator:pressed {{
-                    background-color: {bg_mid};
-                    border-color: {border_lit};
-                }}
-                QCheckBox::indicator:checked {{
-                    background-color: {cyan};
-                    border: 1px solid {border_lit};
-                    image: url("ICON_CHECKED");
-                }}
-                QCheckBox::indicator:checked:hover {{
-                    background-color: {border_lit};
-                    border-color: {cyan};
-                    image: url("ICON_CHECKED");
-                }}
-                QCheckBox::indicator:checked:pressed {{
-                    background-color: {cyan};
-                    border-color: {border_lit};
-                    image: url("ICON_CHECKED");
-                }}
-                QCheckBox::indicator:disabled {{
-                    border-color: {border};
-                    background-color: {bg_dark};
-                }}
-                QCheckBox::indicator:checked:disabled {{
-                    background-color: {bg_mid};
-                    border-color: {border};
-                    image: url("ICON_CHECKED_DIM");
-                }}
-                QPushButton {{
-                    background-color: {bg_mid};
-                    color: {text_bright};
-                    border: 1px solid {border};
-                    border-radius: 4px;
-                    padding: 4px 10px;
-                    font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{
-                    background-color: {bg_hover};
-                    border: 1px solid {border_lit};
-                    color: {text_bright};
-                }}
-            """
-            self.setStyleSheet(
-                base_style.replace("ICON_CHECKED_DIM", icon_checked_dim).replace("ICON_CHECKED", icon_checked)
-            )
-
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(14, 14, 14, 10)
-            layout.setSpacing(10)
-
-            # ── Header row ────────────────────────────────────────────────────
-            header = QFrame(self)
-            header.setObjectName("setupHeader")
-            header_layout = QHBoxLayout(header)
-            header_layout.setContentsMargins(14, 12, 14, 12)
-            title_col = QVBoxLayout()
-            title_col.setSpacing(2)
-
-            self.title_lbl = QLabel("Runtime setup", self)
-            self.title_lbl.setObjectName("titleLabel")
-            self.sub_lbl = QLabel("MCU Flasher by Naph · Verify dependencies and prepare board tools", self)
-            self.sub_lbl.setWordWrap(True)
-            self.sub_lbl.setObjectName("subLabel")
-            title_col.addWidget(self.title_lbl)
-            title_col.addWidget(self.sub_lbl)
-            header_layout.addLayout(title_col, stretch=1)
-
-            self.timer_lbl = QLabel("⏱ 00:00", self)
-            self.timer_lbl.setObjectName("timerLabel")
-            self.timer_lbl.setFixedWidth(96)
-            header_layout.addWidget(self.timer_lbl)
-            layout.addWidget(header)
-
-            # ── Log edit ──────────────────────────────────────────────────────
-            self.log_edit = QPlainTextEdit(self)
-            self.log_edit.setObjectName("logEdit")
-            self.log_edit.setReadOnly(True)
-            self.log_edit.setMaximumBlockCount(1000 if self._constrained else 4000)
-            self.log_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-            layout.addWidget(self.log_edit, stretch=1)
-
-            # Status and preferences occupy separate rows at compact widths.
-            footer = QFrame(self)
-            footer.setObjectName("setupFooter")
-            footer_layout = QVBoxLayout(footer)
-            footer_layout.setContentsMargins(14, 12, 14, 12)
-            footer_layout.setSpacing(10)
-            status_row = QHBoxLayout()
-            status_row.setContentsMargins(0, 2, 0, 4)
-            status_row.setSpacing(10)
-
-            self.spin_lbl = QLabel("⠋", self)
-            self.spin_lbl.setObjectName("spinLabel")
-            status_row.addWidget(self.spin_lbl)
-
-            self.status_lbl = QLabel(gui._status_text, self)
-            self.status_lbl.setObjectName("statusLabel")
-            self.status_lbl.setWordWrap(True)
-            status_row.addWidget(self.status_lbl, stretch=1)
-
-            options_row = QHBoxLayout()
-            options_row.setSpacing(12)
-
-            # Skip Updates checkbox
-            self.skip_cb = QCheckBox("Skip Updates", self)
-            self.skip_cb.setChecked(bool(gui._skip_updates))
-            self.skip_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.skip_cb.setToolTip("Skip optional online updates. Missing or broken required dependencies are still repaired.")
-            self.skip_cb.toggled.connect(self._on_skip_toggled)
-            options_row.addWidget(self.skip_cb)
-
-            # Auto-Scroll checkbox (default checked)
-            self.auto_scroll_cb = QCheckBox("Auto-Scroll", self)
-            self.auto_scroll_cb.setChecked(True)
-            self.auto_scroll_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.auto_scroll_cb.setToolTip("Keep the setup log scrolled to the latest output")
-            options_row.addWidget(self.auto_scroll_cb)
-            options_row.addStretch()
-
-            # Percentage label
-            self.pct_lbl = QLabel("0%", self)
-            self.pct_lbl.setObjectName("pctLabel")
-            status_row.addWidget(self.pct_lbl)
-
-            footer_layout.addLayout(status_row)
-
-            # ── Progress bar (at the very bottom, full width edge-to-edge) ───
-            self.prog_bar = QProgressBar(self)
-            self.prog_bar.setRange(0, 100)
-            self.prog_bar.setValue(0)
-            self.prog_bar.setTextVisible(False)
-            self.prog_bar.setFixedHeight(6)
-            footer_layout.addWidget(self.prog_bar)
-            footer_layout.addLayout(options_row)
-            layout.addWidget(footer)
-
-            # Timers for elapsed timer and animated spinner
-            self._spin_idx = 0
-            self._spinner_timer = QTimer(self)
-            self._spinner_timer.timeout.connect(self._tick_spinner)
-            self._spinner_timer.start(180 if self._constrained else 100)
-
-            self._clock_timer = QTimer(self)
-            self._clock_timer.timeout.connect(self._tick_clock)
-            self._clock_timer.start(1000)
-
-            # Connect signals
-            if gui._signals:
-                gui._signals.sig_log.connect(self._on_log)
-                gui._signals.sig_status.connect(self._on_status)
-                gui._signals.sig_progress.connect(self._on_progress)
-                gui._signals.sig_stop_spinner.connect(self._on_stop_spinner)
-                gui._signals.sig_update_block.connect(self._on_update_block)
-                gui._signals.sig_commit_block.connect(self._on_commit_block)
-                gui._signals.sig_clear_block.connect(self._on_clear_block)
-                gui._signals.sig_close.connect(self._on_close)
-                gui._signals.sig_hide.connect(self.hide)
-                gui._signals.sig_call.connect(self._on_call)
-
-        def _unset_topmost(self):
-            try:
-                visible = self.isVisible() and not getattr(self._gui, "_closed", False)
-                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
-                if visible:
-                    self.show()
-            except Exception:
-                pass
-
-        def _tick_clock(self):
-            elapsed = int(time.time() - self._gui._start_time)
-            m, s = divmod(elapsed, 60)
-            h, m = divmod(m, 60)
-            if h > 0:
-                t_str = f"⏱ {h:02d}:{m:02d}:{s:02d}"
-            else:
-                t_str = f"⏱ {m:02d}:{s:02d}"
-            self.timer_lbl.setText(t_str)
-
-        def _tick_spinner(self):
-            if self.isVisible() and getattr(self._gui, "_spinning", True):
-                self.spin_lbl.setText(_BootstrapDialog.SPINNER[self._spin_idx % len(_BootstrapDialog.SPINNER)])
-                self._spin_idx += 1
-
-        def _on_skip_toggled(self, checked: bool):
-            previous = self._gui._skip_updates
-            self._gui._skip_updates = checked
-            try:
-                c = load_bootstrap_config()
-                c["skip_updates"] = checked
-                if not save_bootstrap_config(c):
-                    raise OSError("Configuration is not writable")
-            except (OSError, TypeError, ValueError) as error:
-                self._gui._skip_updates = previous
-                self.skip_cb.blockSignals(True)
-                self.skip_cb.setChecked(previous)
-                self.skip_cb.blockSignals(False)
-                self._on_log(f"Skip Updates was not saved: {error}. Check folder permissions and try again.", "warn")
-
-        def _insert_with_bar_styling(self, cursor: QTextCursor, text: str, default_fmt: QTextCharFormat, color: Optional[str] = None):
-            """Insert text with enlarged, bold glyph formatting for any progress bar characters."""
-            if "▰" not in text and "▱" not in text:
-                cursor.insertText(text, default_fmt)
-                return
-            bar_fmt = QTextCharFormat()
-            bar_fmt.setForeground(QColor(color or self._theme_pal["T_CYAN"]))
-            bar_fmt.setFontFamilies(["Segoe UI Symbol", "Segoe UI Variable Static Display", "Consolas", "monospace"])
-            bar_fmt.setFontPointSize(12.0)
-            bar_fmt.setFontWeight(QFont.Weight.Bold)
-
-            for part in re.split(r"([▰▱]+)", text):
-                if not part:
+    embedded_support_owned = all(target_package_loaded(name)
+                                 for name in ("PySide6", "shiboken6"))
+    for name, module in tuple(sys.modules.items()):
+        if name == "PySide6" or name.startswith("PySide6.") or name == "shiboken6" or name.startswith("shiboken6."):
+            origin = getattr(module, "__file__", None)
+            if origin:
+                origin_path = Path(origin)
+                loader_type = type(getattr(module, "__loader__", None))
+                # Qt's native provider embeds these Python support files in a
+                # ZIP. Their relative __file__ labels are not filesystem paths.
+                # Trust them only alongside both verified target packages;
+                # all physical package/extension origins remain checked below.
+                if (embedded_support_owned
+                        and (name.startswith("PySide6.support.") or name == "shiboken6._feature")
+                        and not origin_path.is_absolute()
+                        and str(origin).replace("\\", "/").startswith("shibokensupport/")
+                        and origin_path.suffix == ".py" and ".." not in origin_path.parts
+                        and getattr(getattr(module, "__spec__", None), "origin", None) is None
+                        and loader_type.__module__ == "signature_bootstrap"
+                        and loader_type.__name__ == "EmbeddableZipImporter"):
                     continue
-                if part[0] in ("▰", "▱"):
-                    cursor.insertText(part, bar_fmt)
-                else:
-                    cursor.insertText(part, default_fmt)
+            if origin and (not origin_path.is_absolute()
+                           or not origin_path.resolve().is_relative_to(target_site)):
+                raise ImportError(f"Qt is already loaded from another environment ({origin}); its native modules will not be unloaded during setup")
+    sys.path[:] = [value for value in sys.path if not value or Path(value).resolve() != target_site]
+    sys.path.insert(0, str(target_site))
+    importlib.invalidate_caches()
 
-        @Slot(str, str)
-        def _on_log(self, text: str, tag: str):
-            self._sync_live_block()
-            if len(text) > 8192:
-                text = text[:8192] + " … [display shortened; full output retained in the setup log]"
-            pal = getattr(self, "_theme_pal", _T_PALETTE)
-            green    = pal.get("T_GREEN", "#10b981")
-            yellow   = pal.get("T_YELLOW", "#f59e0b")
-            red      = pal.get("T_RED", "#ef4444")
-            cyan     = pal.get("T_CYAN", "#00e5ff")
-            text_dim = pal.get("T_TEXT_DIM", "#64748b")
-            magenta  = pal.get("T_MAGENTA", "#c084fc")
-            text_c   = pal.get("T_TEXT", "#cbd5e1")
-            color_map = {
-                "ok": green,
-                "warn": yellow,
-                "fail": red,
-                "section": cyan,
-                "dim": text_dim,
-                "update": magenta,
-                "normal": text_c,
-                "pip_row": cyan,
-            }
-            color = color_map.get(tag, text_c)
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(color))
-            if tag in ("section", "ok", "fail"):
-                fmt.setFontWeight(QFont.Weight.Bold)
-            fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
 
-            doc = self.log_edit.document()
-            msg = text + "\n"
+def _load_bootstrap_qt():
+    _prepare_bootstrap_qt_path()
+    from PySide6.QtWidgets import QApplication
+    from src.modules.bootstrap_qt import BootstrapDialog
+    return QApplication, BootstrapDialog
 
-            if (
-                self._live_block_start is not None
-                and self._live_block_len > 0
-                and self._live_block_start < doc.characterCount()
-            ):
-                cursor = QTextCursor(doc)
-                pos = min(self._live_block_start, max(0, doc.characterCount() - 1))
-                cursor.setPosition(pos)
-                self._insert_with_bar_styling(cursor, msg, fmt, color)
-            else:
-                cursor = QTextCursor(doc)
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                self._insert_with_bar_styling(cursor, msg, fmt, color)
 
-            self._sync_live_block()
+def _bootstrap_qt_context():
+    from types import SimpleNamespace
+    return SimpleNamespace(root=SCRIPT_DIR, palette=_T_PALETTE,
+                           resolve_theme=_resolve_bootstrap_theme,
+                           load_config=load_bootstrap_config,
+                           save_config=save_bootstrap_config,
+                           record_exception=_record_bootstrap_exception)
 
-            self._trim_display()
-            if self.auto_scroll_cb.isChecked():
-                sb = self.log_edit.verticalScrollBar()
-                sb.setValue(sb.maximum())
 
-        @Slot(str, str)
-        def _on_update_block(self, block_type: str, table_text: str):
-            self._sync_live_block()
-            table_text = table_text[:65536]
-            if not table_text.strip():
-                return
-            doc = self.log_edit.document()
-
-            if self._live_block_type is not None and self._live_block_type != block_type:
-                self._live_block_start = None
-                self._live_block_len = 0
-            self._live_block_type = block_type
-
-            fmt = QTextCharFormat()
-            cyan = self._theme_pal["T_CYAN"]
-            fmt.setForeground(QColor(cyan))
-            fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
-
-            cursor = QTextCursor(doc)
-            if (
-                self._live_block_start is not None
-                and self._live_block_len > 0
-                and self._live_block_start < doc.characterCount()
-            ):
-                cursor.setPosition(self._live_block_start)
-                end_pos = min(self._live_block_start + self._live_block_len, doc.characterCount() - 1)
-                cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
-                cursor.removeSelectedText()
-            else:
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                self._live_block_start = cursor.position()
-
-            start_pos = cursor.position()
-            self._insert_with_bar_styling(cursor, table_text, fmt, cyan)
-            # Persistent cursors follow insertion and removal of old log lines.
-            # Integer offsets alone become stale when maximumBlockCount trims.
-            self._live_end_cursor = QTextCursor(cursor)
-            self._live_start_cursor = QTextCursor(doc)
-            self._live_start_cursor.setPosition(max(0, cursor.position() - len(table_text.encode("utf-16-le")) // 2))
-            self._sync_live_block()
-
-            self._trim_display()
-            if self.auto_scroll_cb.isChecked():
-                sb = self.log_edit.verticalScrollBar()
-                sb.setValue(sb.maximum())
-
-        def _sync_live_block(self):
-            start = getattr(self, "_live_start_cursor", None)
-            end = getattr(self, "_live_end_cursor", None)
-            if start is not None and end is not None:
-                self._live_block_start = start.position()
-                self._live_block_len = max(0, end.position() - start.position())
-
-        def _trim_display(self):
-            doc = self.log_edit.document()
-            excess = doc.characterCount() - self._display_char_limit - 1
-            if excess > 0:
-                cursor = QTextCursor(doc)
-                cursor.setPosition(0)
-                cursor.setPosition(excess, QTextCursor.MoveMode.KeepAnchor)
-                cursor.removeSelectedText()
-                self._sync_live_block()
-
-        def _forget_live_block(self):
-            self._live_start_cursor = self._live_end_cursor = None
-            self._live_block_start = None
-            self._live_block_len = 0
-            self._live_block_type = None
-
-        @Slot()
-        def _on_commit_block(self):
-            self._forget_live_block()
-            doc = self.log_edit.document()
-            cursor = QTextCursor(doc)
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.insertText("\n")
-
-        @Slot()
-        def _on_clear_block(self):
-            self._sync_live_block()
-            if self._live_block_start is not None and self._live_block_len > 0:
-                doc = self.log_edit.document()
-                if self._live_block_start < doc.characterCount():
-                    cursor = QTextCursor(doc)
-                    cursor.setPosition(self._live_block_start)
-                    end_pos = min(self._live_block_start + self._live_block_len, doc.characterCount() - 1)
-                    cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
-                    cursor.removeSelectedText()
-            self._forget_live_block()
-
-        @Slot(str)
-        def _on_status(self, text: str):
-            self.status_lbl.setText(text)
-
-        @Slot(float)
-        def _on_progress(self, val: float):
-            v = max(0, min(100, int(round(val))))
-            self.prog_bar.setValue(v)
-            self.pct_lbl.setText(f"{v}%")
-
-        @Slot(str, bool)
-        def _on_stop_spinner(self, done_text: str, ok: bool):
-            self._spinner_timer.stop()
-            self.spin_lbl.setText("✔" if ok else "✖")
-            color = self._theme_pal["T_GREEN" if ok else "T_RED"]
-            self.spin_lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold;")
-            self.status_lbl.setText(done_text)
-
-        @Slot(object, tuple)
-        def _on_call(self, func, args):
-            try:
-                func(*args)
-            except Exception as e:
-                _record_bootstrap_exception(f"Bootstrap callback error: {e}")
-
-        def closeEvent(self, event):
-            if getattr(self, "_allow_close", False) or getattr(self._gui, "_closed", False):
-                event.accept()
-            else:
-                event.ignore()
-                if sys.platform == "win32":
-                    try:
-                        import ctypes
-                        ctypes.windll.user32.MessageBoxW(
-                            int(self.winId()),
-                            "The setup process is running and cannot be closed.\n\n"
-                            "Please wait for it to complete.",
-                            "Setup in Progress",
-                            0x30,  # MB_ICONWARNING
-                        )
-                    except Exception:
-                        pass
-
-        @Slot()
-        def _on_close(self):
-            self._allow_close = True
-            self._spinner_timer.stop()
-            self._clock_timer.stop()
-            self.close()
+_BOOTSTRAP_QT_IMPORT_ERROR = ""
+_BOOTSTRAP_QT_PARTIAL_NATIVE = False
+try:
+    _prepare_bootstrap_qt_path()
+    from PySide6.QtWidgets import QApplication
+    HAS_PYSIDE6_BOOTSTRAP = True
+except (ImportError, OSError) as _qt_import_error:
+    HAS_PYSIDE6_BOOTSTRAP = False
+    _BOOTSTRAP_QT_IMPORT_ERROR = str(_qt_import_error)
+    _BOOTSTRAP_QT_PARTIAL_NATIVE = any(
+        (name.startswith("PySide6.") or name == "shiboken6" or name.startswith("shiboken6."))
+        and str(getattr(module, "__file__", "")).lower().endswith((".pyd", ".so"))
+        for name, module in tuple(sys.modules.items())
+    )
 
 
 class _BootstrapRootProxy:
@@ -2002,7 +1307,7 @@ class _BootstrapRootProxy:
 class BootstrapGUI:
     """
     Displays bootstrap progress in a native PySide6 (Qt for Python) window.
-    Falls back gracefully to console output if PySide6 is not yet available.
+    Uses a standard-library Tk window before PySide6 has been installed.
     All methods are safe to call from worker threads.
     """
     TOTAL_STEPS = 9
@@ -2018,33 +1323,121 @@ class BootstrapGUI:
         self._spinning = True
         self._log_history: list[dict] = []
         self._log_history_chars = 0
+        self._console_step_failed = False
         self._theme_mode = _BOOTSTRAP_THEME_MODE
 
         cfg = load_bootstrap_config()
         self._skip_updates = cfg.get("skip_updates", DEFAULT_SKIP_UPDATES)
 
-        self._signals = _BootstrapSignals() if HAS_PYSIDE6_BOOTSTRAP else None
+        from src.modules.bootstrap_dispatch import BootstrapDispatcher
+        self._signals = BootstrapDispatcher()
         self.root = _BootstrapRootProxy(self)
         self._app: Optional[Any] = None
         self._window: Optional[Any] = None
+        self._native_window: Optional[Any] = None
         self._done_event = threading.Event()
 
+        self._qt_promotion_request = None
         if HAS_PYSIDE6_BOOTSTRAP:
-            app = QApplication.instance()
-            if app is None:
-                app = QApplication(sys.argv if sys.argv else [""])
             try:
-                from PySide6.QtGui import QFont
-                from main.qt.theme import register_fonts
-                register_fonts()
-                app_font = QFont("Montserrat", 10)
-                app_font.setStyleHint(QFont.StyleHint.SansSerif)
-                app.setFont(app_font)
-            except Exception:
-                pass
-            self._app = app
-            self._window = _BootstrapDialog(self)
-            self._window.show()
+                self._open_qt_view()
+            except Exception as error:
+                _record_bootstrap_exception(f"Bootstrap Qt view could not open: {error}")
+        if self._app is None:
+            from src.modules.bootstrap_native import NativeBootstrapWindow
+            self._native_window = NativeBootstrapWindow(
+                self, _T_PALETTE, load_bootstrap_config, save_bootstrap_config,
+                _record_bootstrap_exception, dispatcher=self._signals,
+            )
+            self._window = self._native_window
+            detail = globals().get("_BOOTSTRAP_QT_IMPORT_ERROR", "")
+            if detail:
+                _record_bootstrap_log("QT_FALLBACK", detail)
+
+    def _open_qt_view(self, snapshot=None):
+        global HAS_PYSIDE6_BOOTSTRAP, _BOOTSTRAP_QT_IMPORT_ERROR
+        QApplication, BootstrapDialog = _load_bootstrap_qt()
+        app = QApplication.instance() or QApplication(sys.argv if sys.argv else [""])
+        window = None
+        try:
+            from PySide6.QtGui import QFont
+            from main.qt.theme import register_fonts
+            register_fonts()
+            app_font = QFont("Montserrat", 10)
+            app_font.setStyleHint(QFont.StyleHint.SansSerif)
+            app.setFont(app_font)
+            window = BootstrapDialog(self, _bootstrap_qt_context())
+            if snapshot is not None:
+                window.restore_snapshot(snapshot)
+            window.show()
+            app.processEvents()
+            window.bind_dispatcher()
+        except Exception:
+            if window is not None:
+                window._allow_close = True
+                window.close()
+                window.deleteLater()
+                app.processEvents()
+            raise
+        self._app, self._window = app, window
+        HAS_PYSIDE6_BOOTSTRAP = True
+        _BOOTSTRAP_QT_IMPORT_ERROR = ""
+
+    def request_qt_promotion(self, timeout=10.0):
+        """Keep this setup worker; ask its creating thread to replace only the view."""
+        if self._app is not None:
+            return True
+        if self._closed or self._native_window is None:
+            return False
+        request = {"event": threading.Event(), "ok": False}
+        self._qt_promotion_request = request
+        self._signals.sig_call.emit(self._promote_to_qt, (request,))
+        if threading.get_ident() == self._signals.thread_id:
+            # The event is acknowledged only after the Qt event loop starts;
+            # the creating thread must return to mainloop_until_done first.
+            return request["ok"]
+        request["event"].wait(max(0.0, min(30.0, float(timeout))))
+        return request["ok"]
+
+    def _promote_to_qt(self, request):
+        if self._closed or self._app is not None or self._native_window is None:
+            request["ok"] = self._app is not None
+            request["event"].set()
+            return
+        native = self._native_window
+        if native.held:
+            # Preserve the current pointer grab and reading position. The
+            # worker's bounded wait can expire while this safe UI retry stays
+            # pending; releasing the thumb then allows the same handoff.
+            native._later(100, lambda: self._promote_to_qt(request))
+            return
+        try:
+            snapshot = native.snapshot()
+            self._open_qt_view(snapshot)
+            from PySide6.QtCore import QTimer
+            try:
+                native.retire()
+            except Exception as error:
+                # The Qt view is already shown and owns the queue. A native
+                # cleanup error must not roll back to a partly retired view.
+                _record_bootstrap_exception(f"Native setup view retirement error: {error}")
+                try:
+                    native.root.quit()
+                except Exception:
+                    pass  # A destroyed Tcl root already returns from mainloop.
+            self._native_window = None
+            _record_bootstrap_log("UI_SWITCH", "Python dependencies verified; original Qt setup window opened. Setup worker, elapsed time and log retained.")
+            def active():
+                request["ok"] = not self._closed
+                request["event"].set()
+            QTimer.singleShot(0, active)
+        except Exception as error:
+            self._app = None
+            self._window = native
+            self._signals.attach(native.dispatch)
+            _record_bootstrap_exception(f"Original Qt setup window could not open; native setup continues: {error}")
+            self.log_warn("Could not open the original setup view; setup continues in this window. See the setup log for details.")
+            request["event"].set()
 
     def _append(self, text: str, tag: str = "normal"):
         _record_bootstrap_log(tag.upper(), text)
@@ -2057,7 +1450,13 @@ class BootstrapGUI:
         if self._signals:
             self._signals.sig_log.emit(shown, tag)
         else:
-            print(text)
+            if tag == "section":
+                self._console_step_failed = False
+            elif tag == "fail":
+                self._console_step_failed = True
+            color_capable = (getattr(sys.stdout, "isatty", lambda: False)()
+                             and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb")
+            print(f"{RED}{text}{RESET}" if color_capable and self._console_step_failed else text)
 
     def set_status(self, text: str):
         self._status_text = text
@@ -2077,7 +1476,7 @@ class BootstrapGUI:
         self.set_progress_percent(0)
 
     def log_subsection(self, title: str):
-        self._append(f"\n── {title} ──", "section")
+        self._append(f"\n── {title} ──", "subsection")
         self.set_status(title)
 
     def log_pip_line(self, line: str):
@@ -2213,14 +1612,23 @@ class BootstrapGUI:
     def pump(self):
         if self._app:
             self._app.processEvents()
+        elif self._native_window:
+            self._native_window.pump()
 
     def mainloop_until_done(self):
-        if self._app and self._window:
+        # Tk quits during a successful view promotion. The same creating
+        # thread then owns Qt's event loop while the setup worker continues.
+        if self._native_window is not None and self._app is None:
+            try:
+                self._native_window.mainloop()
+            except Exception as exc:
+                _record_bootstrap_exception(f"Bootstrap native mainloop error: {exc}")
+        if self._app is not None and self._window is not None and not self._closed:
             try:
                 self._app.exec()
             except Exception as exc:
                 _record_bootstrap_exception(f"Bootstrap Qt mainloop error: {exc}")
-        else:
+        elif self._native_window is None and self._app is None:
             self._done_event.wait()
 
     def hide(self):
@@ -2242,8 +1650,6 @@ class BootstrapGUI:
             self._done_event.set()
             if self._signals:
                 self._signals.sig_close.emit()
-            if self._app:
-                QTimer.singleShot(50, self._app.quit)
 
 
 
@@ -2349,13 +1755,9 @@ def _is_network_reachable(timeout: float = 2.0) -> bool:
 
 
 def _pip_installed_version(pkg_import: str, pkg_name: str) -> str | None:
-    """Return a package version without starting another Python process."""
-    try:
-        from importlib import metadata
-        return metadata.version(pkg_name)
-    except Exception:
-        pass
-    return None
+    """Read fresh metadata from the exact environment pip will update."""
+    from src.modules.bootstrap_updates import installed_version
+    return installed_version(_get_target_python(), pkg_name)
 
 
 def _pip_latest_version(pkg_name: str) -> str | None:
@@ -2376,15 +1778,14 @@ def _pip_upgrade(pkg_name: str) -> bool:
 
 
 
-def _version_tuple(v: str) -> tuple:
-    """Convert '1.2.3' to (1, 2, 3) for comparison, ignoring non-numeric parts."""
-    parts = []
-    for p in v.split("."):
-        try:
-            parts.append(int(p))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts)
+def _version_tuple(v: str):
+    """Compare release, prerelease and postrelease versions consistently."""
+    try:
+        from packaging.version import Version
+    except ImportError:
+        # pip is already a required setup dependency and bundles this parser.
+        from pip._vendor.packaging.version import Version
+    return Version(v)
 
 
 def check_pip_package_update(pkg_name: str, pkg_import: str | None = None) -> dict:
@@ -2503,49 +1904,12 @@ def check_arduino_cli_update() -> dict:
 
 def _pio_installed_version() -> str | None:
     """Return the installed platformio version string, e.g. '6.1.16'."""
-    try:
-        from importlib import metadata
-        return metadata.version("platformio")
-    except Exception:
-        pass
-
-    pio = find_pio()
-    if not pio:
-        return None
-    try:
-        cmd = list(pio)
-        cmd.append("--version")
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=8,
-            encoding="utf-8", errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        import re
-        m = re.search(r"version\s*([\d.]+)", result.stdout, re.IGNORECASE)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return None
+    return _pip_installed_version("platformio", "platformio")
 
 
 def _pio_upgrade() -> bool:
-    """Upgrade PlatformIO Core using its built-in upgrade command."""
-    pio = find_pio()
-    if not pio:
-        return False
-    try:
-        cmd = list(pio)
-        cmd.append("upgrade")
-        subprocess.check_call(
-            cmd,
-            stdout=sys.stdout, stderr=sys.stderr,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        return True
-    except Exception:
-        return False
+    """Update the same target environment used by version detection."""
+    return _pip_upgrade("platformio")
 
 
 def check_pio_update() -> dict:
@@ -2654,8 +2018,9 @@ def run_update_checks(auto_update: bool = False):
     Check all managed utilities for updates, using a small bounded worker pool.
 
     Startup calls this only when the Skip Updates checkbox is clear. The work
-    uses at most three network threads and reads installed package versions in
-    process, so it does not recreate the older many-python-process problem.
+    uses at most three network threads and reads the target environment's fresh
+    metadata in process, without importing its packages or spawning a process
+    for every version check.
 
     If auto_update=True, upgrade pip packages automatically (arduino-cli
     requires a manual MSI re-run, so we only notify for that one).
@@ -2671,6 +2036,7 @@ def run_update_checks(auto_update: bool = False):
 
     section("Checking for updates")
     status("Update checks enabled. Querying PyPI, GitHub, and winget...", DIM)
+    dim(f"Update target: {_get_target_python()}")
 
     # Fast offline check: if we can't even reach pypi.org:443 in 2 seconds,
     # every probe below will just sit in its socket timeout (8-20s each).
@@ -2727,6 +2093,11 @@ def run_update_checks(auto_update: bool = False):
     updates_found = _render_update_summary_block(results)
 
     if not updates_found:
+        unverified = [key for key, result in results.items() if result.get("error")]
+        if unverified:
+            warn("Update checks incomplete for " + ", ".join(sorted(unverified))
+                 + "; see the diagnostics above.")
+            return "incomplete"
         ok("All utilities are up to date.")
         return "up_to_date"
 
@@ -2767,18 +2138,20 @@ def run_update_checks(auto_update: bool = False):
 
     if answer == "y":
         for r in pip_updates:
-            if r["name"] == "platformio":
-                status(f"Upgrading platformio {r['installed']} → {r['latest']}...")
-                if _pio_upgrade():
-                    ok(f"platformio upgraded to {r['latest']}")
+            status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
+            if _pip_upgrade(r["name"]):
+                try:
+                    actual = _pip_installed_version(r["name"], r["name"])
+                    verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
+                except Exception as exc:
+                    actual, verified = None, False
+                    warn(f"Could not verify {r['name']} after update: {exc}")
+                if verified:
+                    ok(f"{r['name']} upgraded and verified at {actual}")
                 else:
-                    warn("Failed to upgrade platformio — continuing")
+                    warn(f"{r['name']} update was not verified in {_get_target_python()} (found {actual or 'no version'}); continuing")
             else:
-                status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
-                if _pip_upgrade(r["name"]):
-                    ok(f"{r['name']} upgraded to {r['latest']}")
-                else:
-                    warn(f"Failed to upgrade {r['name']} — continuing")
+                warn(f"Failed to upgrade {r['name']} — continuing")
 
         if python_updates:
             r = python_updates[0]
@@ -3148,8 +2521,22 @@ def _get_target_python() -> Path:
     vroot = _get_target_venv_dir()
     py = vroot / "Scripts" / "python.exe" if sys.platform == "win32" else vroot / "bin" / "python"
     if py.is_file():
-        return py
-    return Path(sys.executable).resolve()
+        from src.modules.windows_tool_paths import python_install_path
+        spelling = python_install_path(py)
+        if sys.platform == "win32" and (str(spelling).startswith("\\\\?\\") or len(str(spelling.parent.parent)) > 110):
+            # Volumes can disable 8.3 names. A unique app-owned env junction
+            # keeps pip's normal path syntax and Qt wheel destination short.
+            namespace = _mcuflasher_app_root(vroot)
+            if namespace is not None:
+                import hashlib
+                identity = hashlib.sha256(str(vroot.resolve()).casefold().encode("utf-8")).hexdigest()[:12]
+                alias = _ensure_junction(namespace / (".python-env-" + identity), vroot)
+                candidate = Path(alias) / "Scripts/python.exe" if alias else None
+                if candidate is not None and candidate.is_file() and candidate.samefile(py):
+                    return candidate
+        return spelling
+    from src.modules.windows_tool_paths import python_install_path
+    return python_install_path(Path(sys.executable).resolve())
 
 
 def _ensure_pywin32_system32_dlls(target_venv: Optional[Path] = None) -> None:
@@ -3191,92 +2578,15 @@ def _ensure_pywin32_system32_dlls(target_venv: Optional[Path] = None) -> None:
 
 
 def _preseed_venv_site_packages(venv_dir: Path) -> int:
-    """Pre-seed all available packages from base Python into target venv site-packages.
-    Returns the count of copied packages.
+    """Leave distribution installation to the target interpreter's normal pip.
+
+    Copying individual missing trees can mix old metadata with newer payloads
+    and carry console scripts bound to the base interpreter. The base runtime
+    can itself contain conflicting versions, so no unverified files are seeded
+    into either fresh or existing environments. Dependency checks below install
+    missing distributions through pip without merging host metadata or scripts.
     """
-    copied = 0
-    try:
-        base_prefix = Path(getattr(sys, "base_prefix", sys.prefix)).resolve()
-        private_src = (SCRIPT_DIR / "src" / "_python").resolve()
-        if private_src.is_dir() and (private_src / "Lib" / "site-packages").is_dir():
-            base_prefix = private_src
-
-        if sys.platform == "win32":
-            base_site = base_prefix / "Lib" / "site-packages"
-            venv_site = venv_dir / "Lib" / "site-packages"
-        else:
-            base_site = base_prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-            venv_site = venv_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-
-        if not base_site.is_dir() or not venv_site.is_dir():
-            return 0
-        if base_site.resolve() == venv_site.resolve():
-            return 0
-
-        for item in base_site.glob("*"):
-            if item.name == "__pycache__":
-                continue
-            target = venv_site / item.name
-            if not target.exists():
-                try:
-                    if item.is_dir():
-                        shutil.copytree(item, target, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(item, target)
-                    copied += 1
-                except Exception:
-                    pass
-
-        # Stage system32 DLLs and .pth for pywin32
-        _ensure_pywin32_system32_dlls(venv_dir)
-
-        # Pre-seed Scripts if available (e.g. pio.exe, esptool.exe)
-        base_scripts = base_prefix / "Scripts"
-        venv_scripts = venv_dir / "Scripts"
-        if sys.platform == "win32" and base_scripts.is_dir() and venv_scripts.is_dir():
-            for s_item in base_scripts.glob("*"):
-                s_target = venv_scripts / s_item.name
-                if not s_target.exists() and s_item.is_file():
-                    try:
-                        shutil.copy2(s_item, s_target)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-    return copied
-
-
-def _sync_venv_to_base_python(venv_dir: Path) -> int:
-    """Synchronize all packages from venv site-packages back into base Python (src/_python).
-    Ensures the base runtime always stays complete, robust, and self-contained."""
-    copied = 0
-    try:
-        private_src = (SCRIPT_DIR / "src" / "_python").resolve()
-        if not private_src.is_dir():
-            return 0
-        venv_site = venv_dir / "Lib" / "site-packages"
-        base_site = private_src / "Lib" / "site-packages"
-        if not venv_site.is_dir():
-            return 0
-        if base_site.resolve() == venv_site.resolve():
-            return 0
-        base_site.mkdir(parents=True, exist_ok=True)
-        for item in venv_site.glob("*"):
-            if item.name == "__pycache__":
-                continue
-            target = base_site / item.name
-            if not target.exists():
-                try:
-                    if item.is_dir():
-                        shutil.copytree(item, target, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(item, target)
-                    copied += 1
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return copied
+    return 0
 
 
 def _get_target_site_packages_dirs() -> list[str]:
@@ -3410,7 +2720,33 @@ def _check_import_requests() -> bool:
 def _check_import_filetype() -> bool:
     return _check_spec("filetype")
 
+
+def _check_import_mbed_python() -> bool:
+    """Verify the pinned Mbed providers and their real APIs in the target Python."""
+    if not all(_check_spec(name) for name in ("setuptools", "future", "past")):
+        return False
+    try:
+        result = subprocess.run(
+            [str(_get_target_python()), "-B", "-c",
+             "from src.modules.mbed_compat import prepare_dependencies; prepare_dependencies()"],
+            cwd=SCRIPT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+from src.modules.mbed_compat import REQUIREMENTS as _MBED_PYTHON_REQUIREMENTS
+
 PIP_PACKAGES_SPEC = [
+    {
+        "id": "mbed_python",
+        "name": "Mbed Python compatibility",
+        "check": _check_import_mbed_python,
+        "pip_args": list(_MBED_PYTHON_REQUIREMENTS),
+        "critical": True,
+    },
     {
         "id": "pyserial",
         "name": "pyserial",
@@ -3799,8 +3135,10 @@ def ensure_pip_packages_parallel(
             phase_events = 0
             proc = None
             try:
+                from src.modules.windows_tool_paths import pip_environment
                 proc = subprocess.Popen(
                     cmd,
+                    env=pip_environment(),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -4191,31 +3529,14 @@ def ensure_pip_packages_parallel(
 
 
 def _sync_private_python_site_packages() -> None:
-    """Ensure src/_python has PySide6, PyQt5, and QScintilla if the private runtime folder is present."""
-    if sys.platform != "win32":
-        return
-    try:
-        private_py = SCRIPT_DIR / "src" / "_python" / "python.exe"
-        if not private_py.is_file():
-            return
-        res = subprocess.run(
-            [str(private_py), "-c", "import PySide6.QtWidgets; import PyQt5.QtWidgets; import PyQt5.Qsci"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            timeout=10,
-        )
-        if res.returncode != 0:
-            subprocess.run(
-                [str(private_py), "-m", "pip", "install", "PySide6", "PyQt5", "QScintilla",
-                 "--prefer-binary", "--disable-pip-version-check", "--no-input"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                timeout=180,
-            )
-    except Exception:
-        pass
+    """Compatibility hook: application dependencies remain in the target env.
+
+    Bootstrap already imports Qt from env when the base runtime has none, and
+    application children run with that env. Installing Qt into the base again
+    duplicates its large payload and bypasses target-environment verification.
+    Existing base packages are preserved; no host package is removed or copied.
+    """
+    return None
 
 
 # Feature-triggered package groups — these are all critical packages; this
@@ -4448,91 +3769,18 @@ def ensure_platformio_scons(
     *,
     gui: "BootstrapGUI | None" = None,
 ) -> bool:
-    """Ensure PlatformIO's tool-scons package is present in packages/tool-scons.
-
-    SCons is PlatformIO's core build system engine. Seeding or verifying it
-    during bootstrap prevents unexpected 'Tool Manager: Installing platformio/tool-scons'
-    downloads from popping up in the GUI console when compiling sketches.
-    """
-    if not pio_core_dir:
-        pio_core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or str(_get_safe_platformio_core_dir(SCRIPT_DIR))
-    core_path = Path(pio_core_dir)
-    os.environ["PLATFORMIO_CORE_DIR"] = str(core_path)
-
-    # Ensure .piopm is seeded directly if package.json is present on disk
-    real_packages = SCRIPT_DIR / "src" / ".platformio-mcu-gui" / "packages"
-    for base in [core_path / "packages", real_packages]:
-        s_pkg = base / "tool-scons"
-        s_m = s_pkg / "package.json"
-        s_p = s_pkg / ".piopm"
-        if s_m.is_file() and not s_p.is_file():
-            try:
-                m_data = json.loads(s_m.read_text(encoding="utf-8"))
-                ver = str(m_data.get("version", "4.41101.0")).strip()
-                p_data = {
-                    "type": "tool",
-                    "name": "tool-scons",
-                    "version": ver,
-                    "spec": {
-                        "owner": "platformio",
-                        "id": 8192,
-                        "name": "tool-scons",
-                        "requirements": None,
-                        "uri": None,
-                    },
-                }
-                s_p.write_text(json.dumps(p_data), encoding="utf-8")
-            except Exception:
-                pass
-
-    scons_manifest = core_path / "packages" / "tool-scons" / "package.json"
-    scons_piopm = core_path / "packages" / "tool-scons" / ".piopm"
-    if scons_manifest.is_file() and scons_piopm.is_file():
-        try:
-            data = json.loads(scons_piopm.read_text(encoding="utf-8"))
-            spec = data.get("spec", {})
-            if spec.get("owner") == "platformio" and str(data.get("version", "")).startswith("4."):
-                return True
-        except Exception:
-            pass
-
-    if not pio:
-        pio = find_pio()
-    if not pio:
-        return False
-
-    status("Ensuring PlatformIO SCons build engine is installed (tool-scons@~4.41101.0)...")
-    if gui:
-        try:
-            gui.set_status("Installing PlatformIO SCons build engine...")
-        except Exception:
-            pass
-
-    env = os.environ.copy()
-    env["PLATFORMIO_CORE_DIR"] = str(core_path)
-    env["PLATFORMIO_NO_TELEMETRY"] = "1"
-    env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
-    env["PYTHONUNBUFFERED"] = "1"
-    _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    """Resolve/install genuine SCons metadata without pruning existing packages."""
+    from src.modules.bootstrap_seed import prepare_scons
+    core = Path(pio_core_dir or os.environ.get("PLATFORMIO_CORE_DIR")
+                or _get_safe_platformio_core_dir(SCRIPT_DIR))
+    os.environ["PLATFORMIO_CORE_DIR"] = str(core)
     try:
-        cmd = list(pio) + ["pkg", "install", "-g", "-t", "platformio/tool-scons@~4.41101.0"]
-        proc = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180,
-            creationflags=_cf,
-        )
-        if (scons_manifest.is_file() and scons_piopm.is_file()) or proc.returncode == 0:
-            ok("PlatformIO SCons build engine is ready.")
-            return True
-        warn(f"PlatformIO SCons install warning: {proc.stderr or proc.stdout}")
-        return scons_manifest.is_file() and scons_piopm.is_file()
+        if gui:
+            gui.set_status("Checking PlatformIO SCons build engine...")
+        prepare_scons(core, log=status)
+        return True
     except Exception as exc:
-        warn(f"Could not verify PlatformIO SCons package: {exc}")
+        warn(f"Could not prepare PlatformIO SCons package: {exc}")
         return False
 
 
@@ -4542,16 +3790,14 @@ def ensure_platformio(gui: Optional["BootstrapGUI"] = None) -> bool:
     pio = find_pio()
     if pio:
         ok("PlatformIO Core is already installed")
-        ensure_platformio_scons(pio, safe_core, gui=gui)
-        return True
+        return ensure_platformio_scons(pio, safe_core, gui=gui)
 
     status("PlatformIO not found, installing via pip...")
     status("This may take a few minutes on first run...")
 
     if _run_pip_install(["platformio"], timeout=300):
         ok("PlatformIO Core installed successfully")
-        ensure_platformio_scons(find_pio(), safe_core, gui=gui)
-        return True
+        return ensure_platformio_scons(find_pio(), safe_core, gui=gui)
     else:
         fail("Failed to install PlatformIO Core")
         return False
@@ -6157,6 +5403,7 @@ def ensure_board_toolchains() -> bool:
         env = os.environ.copy()
         env["PLATFORMIO_CORE_DIR"] = pio_core_dir
         env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
         env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
         env["PLATFORMIO_UNBUFFERED"] = "1"
@@ -6177,7 +5424,7 @@ def ensure_board_toolchains() -> bool:
             safe_jobs = str(max(1, min(cpu_count - 1, 4)))
         env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
         env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
-        env.setdefault("PLATFORMIO_DISABLE_UPGRADE_CHECK", "1")
+        env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
         env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
 
@@ -6313,6 +5560,7 @@ def prepare_platformio_board_toolchain(
         env = os.environ.copy()
         env["PLATFORMIO_CORE_DIR"] = pio_core_dir
         env["PLATFORMIO_NO_TELEMETRY"] = "1"
+        env["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
         env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
         env["PYTHONWARNINGS"] = "ignore"
         env["PYTHONUNBUFFERED"] = "1"
@@ -6334,7 +5582,7 @@ def prepare_platformio_board_toolchain(
             safe_jobs = str(max(1, min(cpu_count - 1, 4)))
         env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
         env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
-        env.setdefault("PLATFORMIO_DISABLE_UPGRADE_CHECK", "1")
+        env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
         env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
 
@@ -7255,6 +6503,7 @@ def _download_file(
     attempts: int = 3,
     expected_size: int | str | None = None,
     expected_sha256: str | None = None,
+    preserve_failed: bool = False,
 ):
     """Download atomically, resumably, and (when metadata exists) cryptographically verify it.
 
@@ -7276,6 +6525,9 @@ def _download_file(
     partial = dest.with_name(dest.name + ".part")
     last_error = None
 
+    class RetainedDownloadError(OSError):
+        pass
+
     # Reuse an already completed file only when it passes the same validation
     # that a new network transfer would receive.
     if dest.is_file():
@@ -7285,9 +6537,13 @@ def _download_file(
             if _gui:
                 _gui.set_progress_percent(100)
             return
+        if preserve_failed:
+            raise RetainedDownloadError(f"Existing archive retained at {dest}: {reason}")
         safe_unlink(dest)
 
     if partial.is_file() and expected_size_i and partial.stat().st_size > expected_size_i:
+        if preserve_failed:
+            raise RetainedDownloadError(f"Oversized partial download retained at {partial}")
         safe_unlink(partial)
 
     if _gui:
@@ -7298,7 +6554,7 @@ def _download_file(
     # large CPU, memory, or connection burden.  The normal resumable stream
     # below remains available when a CDN/proxy does not honor ranges.
     parallel_parts = partial.with_name(partial.name + ".parts")
-    if expected_size_i >= 256 * 1024 * 1024 and "github.com" in url.lower():
+    if not preserve_failed and expected_size_i >= 256 * 1024 * 1024 and "github.com" in url.lower():
         try:
             status(f"Downloading {dest.name} from GitHub using parallel ranges...")
             _parallel_range_download(
@@ -7369,6 +6625,8 @@ def _download_file(
                     # local partial length. If a CDN ignores Range (HTTP 200),
                     # safely restart this response from byte zero instead.
                     write_mode = "ab" if resume_from > 0 and status_code == 206 else "wb"
+                    if preserve_failed and resume_from > 0 and write_mode == "wb":
+                        raise RetainedDownloadError(f"Server ignored resume; existing partial retained at {partial}")
                     base_received = resume_from if write_mode == "ab" else 0
                     if write_mode == "ab":
                         match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
@@ -7477,12 +6735,15 @@ def _download_file(
                     # A hash mismatch is not resumable: the accumulated bytes
                     # are wrong, so discard them and retry cleanly.
                     if "SHA-256 mismatch" in reason:
+                        if preserve_failed:
+                            raise RetainedDownloadError(f"Invalid partial retained at {partial}: {reason}")
                         safe_unlink(partial)
                     raise OSError(reason)
 
                 if not safe_replace_file(partial, dest):
                     raise OSError(f"Could not replace '{partial}' with '{dest}'")
-                safe_rmtree(parallel_parts)
+                if not preserve_failed:
+                    safe_rmtree(parallel_parts)
                 if _gui:
                     _gui.clear_platformio_progress_block()
                     _gui.set_progress_percent(100)
@@ -7491,6 +6752,7 @@ def _download_file(
 
             except urllib.error.HTTPError as exc:
                 last_error = exc
+                exc.close()
                 # HTTP 416 can mean the partial already reached the expected
                 # length. Verify before throwing away potentially complete data.
                 if exc.code == 416 and partial.is_file():
@@ -7498,13 +6760,18 @@ def _download_file(
                     if verified:
                         if not safe_replace_file(partial, dest):
                             raise OSError(f"Could not replace '{partial}' with '{dest}'")
-                        safe_rmtree(parallel_parts)
+                        if not preserve_failed:
+                            safe_rmtree(parallel_parts)
                         if _gui:
                             _gui.clear_platformio_progress_block()
                             _gui.set_progress_percent(100)
                         ok(f"Saved and verified {dest.name}")
                         return
+                    if preserve_failed:
+                        raise RetainedDownloadError(f"Unusable resume data retained at {partial}")
                     safe_unlink(partial)
+            except RetainedDownloadError:
+                raise
             except Exception as exc:
                 last_error = exc
 
@@ -7513,6 +6780,9 @@ def _download_file(
                 # to recover without making the bootstrap spin aggressively.
                 delay = min(12, (2 ** attempt) - 1)
                 time.sleep(delay)
+
+        if preserve_failed:
+            raise RuntimeError(f"Download failed after resumable retries; partial/checkpoint files retained: {partial}: {last_error}")
 
         # urllib is the most portable path, but Windows ships curl on supported
         # releases. A second HTTP/TLS implementation handles machines where
@@ -7608,9 +6878,11 @@ def _run_pip_install(
 
     try:
         import queue as _queue
+        from src.modules.windows_tool_paths import pip_environment
 
         proc = subprocess.Popen(
             cmd,
+            env=pip_environment(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -9824,7 +9096,7 @@ def _is_env_healthy() -> bool:
 # changed app/runtime fingerprint, or unreadable snapshot falls back to the
 # existing setup UI.  No network, installer, or optional-package import is
 # performed while deciding the normal path.
-STARTUP_HEALTH_SCHEMA = 3
+STARTUP_HEALTH_SCHEMA = 4
 
 
 def _user_startup_state_dir() -> Path:
@@ -9848,7 +9120,9 @@ def _user_startup_state_dir() -> Path:
 
 
 STARTUP_HEALTH_FILE = _user_startup_state_dir() / "startup_health.json"
-_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial", "psutil", "shiboken6", "PySide6", "platformio", "websockets")
+_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial", "psutil", "shiboken6", "PySide6", "platformio", "websockets",
+                                  "setuptools", "future", "past")
+from src.modules.mbed_compat import REQUIRED_FILES as _STARTUP_REQUIRED_PACKAGE_FILES
 
 
 def _startup_app_fingerprint() -> str:
@@ -9859,10 +9133,25 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "mcu_flash_gui.py",
         SCRIPT_DIR / "main" / "web_bridge.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_native.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_qt.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_presentation.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_dispatch.py",
+        SCRIPT_DIR / "main" / "qt" / "setup_components.py",
+        SCRIPT_DIR / "main" / "qt" / "icons.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
         SCRIPT_DIR / "src" / "modules" / "offline_bootstrap.py",
         SCRIPT_DIR / "src" / "modules" / "offline_runtime.py",
         SCRIPT_DIR / "src" / "modules" / "offline_platformio.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_platformio.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_seed.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_updates.py",
+        SCRIPT_DIR / "src" / "modules" / "windows_tool_paths.py",
+        SCRIPT_DIR / "src" / "modules" / "mbed_compat.py",
+        SCRIPT_DIR / "src" / "modules" / "zephyr_compat.py",
+        SCRIPT_DIR / "src" / "modules" / "zephyr_board_aliases.cmake",
+        SCRIPT_DIR / "main" / "core" / "board_catalog.py",
+        SCRIPT_DIR / "main" / "core" / "target_profile.py",
         SCRIPT_DIR / "direct" / "offline-packages.json",
         SCRIPT_DIR / "src" / "modules" / "crash_detector.py",
     )
@@ -9874,6 +9163,19 @@ def _startup_app_fingerprint() -> str:
         except OSError:
             rows.append((str(path.relative_to(SCRIPT_DIR)), None, None))
     return json.dumps(rows, separators=(",", ":"), sort_keys=True)
+
+
+def _startup_compatibility_fingerprint() -> str:
+    """Detect changed compatibility providers without importing them on warm launch."""
+    site = _startup_site_packages_dir()
+    rows = []
+    for name in _STARTUP_REQUIRED_PACKAGE_FILES:
+        try:
+            stat = (site / name).stat() if site is not None else None
+            rows.append((name, stat.st_size, stat.st_mtime_ns) if stat else (name, None, None))
+        except OSError:
+            rows.append((name, None, None))
+    return json.dumps(rows, separators=(",", ":"))
 
 
 def _startup_installation_identity() -> str:
@@ -9919,15 +9221,19 @@ def _startup_site_packages_dir() -> Path | None:
 
 
 def _startup_required_paths() -> list[Path]:
-    """Return only files needed to construct the current main GUI shell."""
+    """Return files needed for the prepared workspace and its offline builders."""
     site = _startup_site_packages_dir()
     paths = [Path(sys.executable), GUI_SCRIPT]
+    paths.extend(SCRIPT_DIR / name for name in (
+        "src/modules/mbed_compat.py", "src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake",
+    ))
     paths.extend(SCRIPT_DIR / name for name in (
         "src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js",
         "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
     ))
     if site is not None:
         paths.extend(site / name for name in _STARTUP_REQUIRED_PACKAGE_DIRS)
+        paths.extend(site / name for name in _STARTUP_REQUIRED_PACKAGE_FILES)
         if sys.platform == "win32":
             paths.extend(site / "PySide6" / name for name in (
                 "QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtWebChannel.pyd", "QtWebEngineCore.pyd", "QtWebEngineWidgets.pyd",
@@ -9951,6 +9257,8 @@ def _read_startup_health_snapshot() -> dict | None:
         if data.get("python_executable") != str(Path(sys.executable).resolve()).casefold():
             return None
         if data.get("app_fingerprint") != _startup_app_fingerprint():
+            return None
+        if data.get("compatibility_fingerprint") != _startup_compatibility_fingerprint():
             return None
         current_python_version = ".".join(str(x) for x in sys.version_info[:3])
         if data.get("python_version") != current_python_version:
@@ -9982,6 +9290,7 @@ def _write_startup_health_snapshot() -> bool:
             "installation_root": _startup_installation_identity(),
             "python_executable": str(Path(sys.executable).resolve()).casefold(),
             "app_fingerprint": _startup_app_fingerprint(),
+            "compatibility_fingerprint": _startup_compatibility_fingerprint(),
             "python_version": ".".join(str(x) for x in sys.version_info[:3]),
             "python_executable_name": Path(sys.executable).name,
             "critical_ready": all(path.exists() for path in _startup_required_paths()),
@@ -10556,8 +9865,9 @@ def _activate_bootstrap_venv(venv_dir: Path, venv_python: Path) -> bool:
 
 
 def _stream_offline_setup_output(gui, process):
-    """Bound pending Qt callbacks and progress text before GUI delivery."""
+    """Parse live package progress and bound events before Qt delivery."""
     from collections import deque
+    from src.modules.bootstrap_output import PackageOutput, output_chunks
     pending = deque(maxlen=64)
     lock = threading.Lock()
     scheduled = False
@@ -10568,18 +9878,35 @@ def _stream_offline_setup_output(gui, process):
             batch = tuple(pending)
             pending.clear()
             scheduled = False
-        for text in batch:
-            gui.log_dim(text)
+        for kind, text in batch:
+            if kind == "progress":
+                gui.update_platformio_progress_block(text)
+                gui.set_status(text.splitlines()[0].strip())
+            elif kind == "clear":
+                gui.clear_platformio_progress_block()
+            elif kind == "status":
+                gui.set_status(text)
+            else:
+                getattr(gui, "log_" + kind)(text)
 
-    for line in process.stdout:
-        _record_bootstrap_log("OFFLINE", line.rstrip())
-        text = line.rstrip()[:3000]
+    def enqueue(kind, text):
+        nonlocal scheduled
         with lock:
-            pending.append(text)
-            enqueue = not scheduled
+            if kind == "progress" and pending and pending[-1][0] == "progress":
+                pending[-1] = (kind, text)
+            else:
+                pending.append((kind, text))
+            schedule = not scheduled
             scheduled = True
-        if enqueue:
+        if schedule:
             gui.root.after(0, flush)
+
+    output = PackageOutput(enqueue)
+    for chunk in output_chunks(process.stdout):
+        if chunk:
+            _record_bootstrap_log("OFFLINE", chunk.rstrip())
+            output.feed(chunk)
+    output.finish()
 
 
 def _run_setup_in_thread(gui: BootstrapGUI):
@@ -10802,10 +10129,12 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         gui.root.after(0, lambda: gui.log_ok(
             "All core and application dependencies verified."
         ))
-        try:
-            _sync_venv_to_base_python(venv_dir)
-        except Exception:
-            pass
+        # The first-run native window stays visible during pip. Once Qt is
+        # verified, switch its view before the larger board-tool preparation.
+        gui.request_qt_promotion()
+        # Keep the application environment separate from the bootstrap host.
+        # Copying only absent venv files back to the base combines new metadata
+        # with older package code and can leave several versions advertised.
 
         # ── Monaco runtime (required for the selected editor) ──────────
         gui.root.after(0, lambda: gui.log_section("Checking Microsoft Edge WebView2 Runtime"))
@@ -10833,11 +10162,16 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # ── PlatformIO + Board Toolchains (combined step) ───────────────
         gui.root.after(0, lambda: gui.log_section("Checking PlatformIO & Board Toolchains"))
 
-        # Seed the PlatformIO core directory from a pre-built zip if it's
-        # empty.  This avoids the very long first-run download/unpack/install
-        # wait by providing a ready-made baseline that PlatformIO will accept
-        # and incrementally update when new boards are added later.
-        if not _ensure_platformio_core_prebuilt(gui):
+        # Offer configured missing packages the verified release before normal
+        # package setup; complete stores skip it. Invalid existing data stops
+        # this step rather than allowing a fallback to replace those files.
+        try:
+            seeded = _ensure_platformio_core_prebuilt(gui)
+        except Exception as exc:
+            _record_bootstrap_exception("PlatformIO release seed preparation failed")
+            _fail_and_exit("PlatformIO release seed", str(exc))
+            return
+        if not seeded:
             gui.root.after(0, lambda: gui.log_warn(
                 "Pre-built toolchains archive not used; continuing with direct PlatformIO toolchain setup."
             ))
@@ -10868,8 +10202,13 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         offline_core = Path(os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR))
         offline_plan, offline_plan_path = requested_plan()
         if not ready(offline_core, offline_plan if offline_plan_path else None):
+            try:
+                from main.core.build_resources import get_optimal_compiler_jobs
+                opt_jobs = get_optimal_compiler_jobs()
+            except Exception:
+                opt_jobs = max(1, min(os.cpu_count() or 4, 8))
             command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),
-                       "--core", str(offline_core)]
+                       "--core", str(offline_core), "--jobs", str(opt_jobs)]
             if offline_plan_path:
                 command += ["--plan", str(offline_plan_path)]
             gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))

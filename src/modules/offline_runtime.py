@@ -44,6 +44,13 @@ def _audit(event, args):
         raise OfflineDependencyError(bootstrap_instruction("Online lookup is disabled in the workspace"))
     if event == "subprocess.Popen":
         command = args[1]
+        from src.modules.windows_tool_paths import zephyr_cmake_environment
+        environment = args[3]
+        normalized = zephyr_cmake_environment(command, environment)
+        if normalized is not environment:
+            for name in ("ZEPHYR_BASE", "ZEPHYR_BOARD_ALIASES"):
+                if name in normalized:
+                    environment[name] = normalized[name]
         parts = [str(item).lower() for item in command] if isinstance(command, (list, tuple)) else str(command).lower().split()
         # User-owned terminal commands run in their PTY process, outside this
         # app-owned dependency boundary. Never rewrite/replay those commands.
@@ -61,6 +68,10 @@ def activate():
     os.environ["PIP_NO_INDEX"] = "1"
     os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
     os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
+    from src.modules.windows_tool_paths import install_espidf_component_relpaths
+    from src.modules.mbed_compat import install_mbed_compat
+    install_espidf_component_relpaths()
+    install_mbed_compat()
     sys.addaudithook(_audit)
     _enabled = True
 

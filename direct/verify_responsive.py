@@ -16,6 +16,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
+# Tk captures and negative monitor coordinates require the native Windows
+# plugin; Qt's offscreen plugin offsets negative frame origins by its margins.
+# Preserve an explicit platform choice for headless fixture runs.
+if sys.platform == 'win32':
+    os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
 from PySide6.QtCore import QRect, QPoint, QObject, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QAbstractButton, QLineEdit
@@ -88,6 +93,15 @@ class QtResponsiveChecks(ControlChecks):
             for field in (controls.board_selector, controls.btn_search_board, controls.port_combo,
                           controls.upload_speed_combo, controls.cb_timestamp, controls.cb_skip_compile):
                 self.contained(field, controls)
+            if controls.cb_timestamp.isVisible() and controls.cb_skip_compile.isVisible():
+                timestamp_right = controls.cb_timestamp.geometry().right()
+                checkbox_gap = controls.cb_skip_compile.geometry().left() - timestamp_right - 1
+                self.assertLessEqual(controls.cb_timestamp.width(), controls.cb_timestamp.sizeHint().width() + 2,
+                                     'Timestamp checkbox must not stretch away from its label')
+                self.assertLessEqual(controls.cb_skip_compile.width(), controls.cb_skip_compile.sizeHint().width() + 2,
+                                     'Skip Compile checkbox must stay compact')
+                self.assertGreaterEqual(checkbox_gap, 0)
+                self.assertLessEqual(checkbox_gap, 8, 'Timestamp and Skip Compile should read as one option group')
             if controls.is_compact():
                 self.contained(controls.btn_opt_dropdown, controls)
             for button in (toolbar.btn_compile, toolbar.btn_upload, toolbar.btn_actions_dropdown,
@@ -110,6 +124,34 @@ class QtResponsiveChecks(ControlChecks):
                 capture(host, f'controls-{width}')
         self.assertEqual(controls._row_mode, 1)
         self.assertFalse(serial._header_stacked)
+        content_font = serial._output.font()
+        controls.set_responsive_height(420)
+        host.resize(320, 620)
+        pump()
+        self.assertLessEqual(controls.height(), 80, 'Short-window chrome must leave room for tool controls')
+        for field in (controls.board_selector, controls.btn_search_board, controls.port_combo,
+                      controls.upload_speed_combo, controls.cb_timestamp, controls.cb_skip_compile,
+                      controls.btn_opt_dropdown):
+            self.assertTrue(field.isVisible())
+            self.contained(field, controls)
+        controls.set_responsive_height(312)
+        pump()
+        self.assertLessEqual(controls.height(), 42)
+        for field in (controls.board_selector, controls.port_combo, controls.upload_speed_combo,
+                      controls.btn_opt_dropdown):
+            self.assertTrue(field.isVisible())
+            self.contained(field, controls)
+        controls._toggle_options_menu()
+        pump()
+        option_labels = [button.text() for button in controls._opt_popup.findChildren(QAbstractButton)]
+        self.assertTrue(any('Timestamps' in text for text in option_labels))
+        self.assertTrue(any('Skip Compile' in text for text in option_labels))
+        controls._opt_popup.close()
+        controls.set_responsive_height(620)
+        host.resize(1920, 620)
+        pump()
+        self.assertTrue(all(label.isVisible() for label in controls._group_labels))
+        self.assertEqual(serial._output.font(), content_font)
 
     def test_settings_and_setup_small_workareas(self):
         for width, height in ((1280, 720), (800, 600), (640, 480), (480, 640)):
@@ -131,10 +173,89 @@ class QtResponsiveChecks(ControlChecks):
                 for field in (settings.cpu_combo, settings.theme_combo, settings.autosave_spin):
                     self.contained(field, field.parentWidget())
                     self.assertGreaterEqual(field.width(), field.minimumSizeHint().width())
+                setup._on_status("Preparing the selected board tools")
+                setup._on_log("✔ Private Python runtime ready", "ok")
+                setup._on_log("✔ Tool Manager: framework-arduino-avr-attiny@1.5.2 has been installed!", "ok")
+                setup._on_log("– Preparing platformio/framework-arduino-avr-megacore @ ~3.1.0", "info")
+                setup._on_update_block("package_progress", "  – Unpacking 60%\n")
+                setup._on_progress(60)
+                pump()
+                for field in (setup.timer_lbl, setup.status_lbl, setup.skip_cb, setup.auto_scroll_cb, setup.pct_lbl, setup.prog_bar):
+                    self.contained(field, setup)
+                self.assertGreater(setup.summary_edit.height(), 40)
+                self.contained(setup.details_btn, setup)
+                for row in setup.package_rows:
+                    if row.isVisible():
+                        self.contained(row, setup)
                 capture(settings, f'settings-{width}x{height}')
                 capture(setup, f'setup-{width}x{height}')
+                setup._set_details_expanded(True)
+                pump()
+                self.assertGreater(setup.log_edit.height(), 40)
+                self.contained(setup.log_edit, setup)
+                capture(setup, f'setup-details-{width}x{height}')
                 settings.hide()
                 setup.hide()
+
+    def test_setup_keeps_reading_space_on_high_scale_laptop_workareas(self):
+        class Screen(QObject):
+            availableGeometryChanged = Signal(QRect)
+            logicalDotsPerInchChanged = Signal(float)
+
+            def __init__(self, width, height):
+                super().__init__()
+                self.area = QRect(0, 0, width, height)
+
+            def geometry(self):
+                return QRect(0, 0, self.area.width(), self.area.height() + 48)
+
+            def availableGeometry(self):
+                return self.area
+
+        # Physical 1366x768 and 1280x720 at 200%, with a 48 logical-pixel
+        # taskbar. The fresh-process scale sweep exercises native DPR separately.
+        for width, height in ((683, 336), (640, 312)):
+            area = WorkArea(0, 0, width, height)
+            screen = Screen(width, height)
+            for mode in ('default', 'light', 'solarized_dark'):
+                with self.subTest(area=(width, height), theme=mode), \
+                     patch('main.qt.responsive.work_area', return_value=area), \
+                     patch('main.qt.responsive.active_screen', return_value=screen):
+                    setup, gui, namespace = bootstrap_fixture(mode)
+                    self.own(setup)
+                    setup._on_log('Python dependencies', 'section')
+                    setup._on_update_block('pip', '\n'.join(
+                        f'fixture-package-{i}    Downloading\n▰▱▱▱ 25%\n' for i in range(14)))
+                    setup._on_status('Preparing board and library tools for the offline workspace')
+                    gui._start_time = time.time() - 36001
+                    setup._tick_clock()
+                    setup.show()
+                    pump()
+                    clamp_window(setup)
+                    pump()
+                    font = setup.summary_edit.font()
+                    for details in (False, True):
+                        setup._set_details_expanded(details)
+                        pump()
+                        self.assertTrue(screen.area.contains(setup.frameGeometry()))
+                        view = setup.log_edit if details else setup.summary_edit
+                        self.assertGreaterEqual(view.viewport().height(), view.fontMetrics().lineSpacing() * 2)
+                        for field in (setup.title_lbl, setup.timer_chip, setup.details_btn, setup.status_lbl,
+                                      setup.pct_lbl, setup.prog_bar, setup.skip_cb, setup.auto_scroll_cb, view):
+                            self.contained(field, setup)
+                        for row in setup.package_rows:
+                            if row.isVisible():
+                                self.contained(row, setup)
+                                self.contained(row, row.parentWidget())
+                        for row in [setup.overall_row] + [row for row in setup.package_rows if row.isVisible()]:
+                            for label in (row.status_lbl, row.pct_lbl):
+                                self.assertGreaterEqual(label.height(), max(label.fontMetrics().height(),
+                                                                            label.heightForWidth(label.width())))
+                            self.contained(row.progress_bar, row)
+                        self.assertEqual(setup.summary_edit.font(), font)
+                        capture(setup, f'setup-short-{width}x{height}-{mode}-{details}')
+                    namespace['save_bootstrap_config'].assert_not_called()
+                    setup.hide()
 
     def test_picker_and_modify_fit_narrow_workarea(self):
         from main.qt.board_dialog import BoardSearchDialog

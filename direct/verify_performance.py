@@ -95,6 +95,220 @@ class PerformanceChecks(unittest.TestCase):
         self.assertIn("compile error", widget.toPlainText())
         widget.deleteLater()
 
+    def test_log_follow_wheel_hold_off_and_return_to_bottom(self):
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        from main.qt.console_panel import ConsolePanel
+        from main.qt.serial_panel import SerialOutputView
+        for cls in (ConsolePanel, SerialOutputView):
+            widget = cls()
+            widget.resize(360, 160)
+            widget.show()
+            try:
+                for number in range(100):
+                    widget.append_log({"text": f"Row {number:03d}"})
+                while widget._queue:
+                    widget._flush_queue()
+                APP.processEvents()
+                bar = widget.verticalScrollBar()
+                self.assertFalse(widget.textCursor().hasSelection())
+                self.assertEqual(bar.value(), bar.maximum())
+                point = QPointF(40, 40)
+                wheel = QWheelEvent(point, point, QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton,
+                                    Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+                APP.sendEvent(widget.viewport(), wheel)
+                visible = widget.firstVisibleBlock().text()
+                widget.append_log({"text": "Output during wheel scroll"})
+                widget._flush_queue()
+                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                self.assertLess(bar.value(), bar.maximum())
+                bar.setSliderDown(True)
+                bar.setSliderPosition(bar.maximum())
+                visible = widget.firstVisibleBlock().text()
+                widget.append_log({"text": "Output while scrollbar is held"})
+                widget._flush_queue()
+                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                bar.setSliderDown(False)
+                bar.setValue(bar.maximum())
+                widget.append_log({"text": "Output after returning to bottom"})
+                widget._flush_queue()
+                self.assertEqual(bar.value(), bar.maximum())
+                widget.set_autoscroll(False)
+                visible = widget.firstVisibleBlock().text()
+                widget.append_log({"text": "Auto is off at the former bottom"})
+                widget._flush_queue()
+                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                widget.set_autoscroll(True)
+                widget.append_log({"text": "Enabling Auto while reading does not jump"})
+                widget._flush_queue()
+                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                bar.setValue(bar.maximum())
+                widget.append_log({"text": "Following resumes at the actual bottom"})
+                widget._flush_queue()
+                self.assertEqual(bar.value(), bar.maximum())
+            finally:
+                widget.close()
+                widget.deleteLater()
+
+    def test_log_follow_retained_anchor_selection_and_eviction(self):
+        from main.qt.console_panel import ConsolePanel
+        from main.qt.serial_panel import SerialOutputView
+        for cls in (ConsolePanel, SerialOutputView):
+            widget = cls()
+            widget.resize(360, 160)
+            widget.setMaximumBlockCount(80)
+            widget.show()
+            try:
+                for number in range(70):
+                    widget.append_log({"text": f"Row {number:03d} " + "x" * 100})
+                while widget._queue:
+                    widget._flush_queue()
+                APP.processEvents()
+                widget.set_autoscroll(False)
+                widget.setTextCursor(widget.document().find("Row 040"))
+                widget.setFocus()
+                bar = widget.verticalScrollBar()
+                bar.setValue(35)
+                widget.horizontalScrollBar().setValue(50)
+                visible = widget.firstVisibleBlock().text()
+                horizontal = widget.horizontalScrollBar().value()
+                for number in range(70, 90):
+                    widget.append_log({"text": f"Row {number:03d} " + "x" * 100})
+                widget._flush_queue()
+                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                self.assertEqual(widget.textCursor().selectedText(), "Row 040")
+                self.assertEqual(widget.horizontalScrollBar().value(), horizontal)
+                self.assertTrue(widget.hasFocus())
+                widget.set_timestamp_enabled(True)
+                self.assertEqual(widget.textCursor().selectedText(), "Row 040")
+                self.assertTrue(widget.firstVisibleBlock().text().endswith(visible))
+                widget.set_timestamp_enabled(False)
+                self.assertEqual(widget.textCursor().selectedText(), "Row 040")
+                for number in range(90, 180):
+                    widget.append_log({"text": f"Row {number:03d}"})
+                while widget._queue:
+                    widget._flush_queue()
+                self.assertEqual(bar.value(), 0)  # The old visible text itself was evicted.
+                self.assertLess(bar.value(), bar.maximum())
+                self.assertLessEqual(widget.blockCount(), 80)
+            finally:
+                widget.close()
+                widget.deleteLater()
+
+    def test_notification_updates_preserve_reading_anchor_and_scrollbar_hold(self):
+        from PySide6.QtCore import QPoint
+        from main.qt.notif_panel import NotifPanel
+        with patch("src.dbs.dbs_read.get_notifications", return_value=[]):
+            panel = NotifPanel()
+        panel.resize(480, 240)
+        panel.show()
+        try:
+            view = panel._browser
+            view.document().setMaximumBlockCount(120)
+            for number in range(45):
+                panel._append_notification_card({"title": f"Notice {number:03d}", "message": "Fixture message"})
+            APP.processEvents()
+            bar = view.verticalScrollBar()
+            view.setTextCursor(view.document().find("Notice 040"))
+            view.setFocus()
+            bar.setValue(bar.maximum() // 2)
+            anchor = view.cursorForPosition(QPoint(1, 1))
+            text, y = anchor.block().text(), view.cursorRect(anchor).top()
+            for number in range(45, 65):
+                panel._append_notification_card({"title": f"Notice {number:03d}", "message": "Fixture message"})
+            self.assertEqual(anchor.block().text(), text)
+            self.assertLessEqual(abs(view.cursorRect(anchor).top() - y), 1)
+            self.assertEqual(view.textCursor().selectedText(), "Notice 040")
+            self.assertTrue(view.hasFocus())
+            bar.setValue(bar.maximum())
+            bar.setSliderDown(True)
+            anchor = view.cursorForPosition(QPoint(1, 1))
+            text, y = anchor.block().text(), view.cursorRect(anchor).top()
+            panel._append_notification_card({"title": "Held scrollbar", "message": "Fixture message"})
+            self.assertEqual(anchor.block().text(), text)
+            self.assertLessEqual(abs(view.cursorRect(anchor).top() - y), 1)
+            bar.setSliderDown(False)
+        finally:
+            panel.close()
+            panel.deleteLater()
+
+    def test_ai_html_fallback_retains_scroll_selection_and_input_focus(self):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        tree = ast.parse((ROOT / "src/modules/dedicated_AI.py").read_text(encoding="utf-8-sig"))
+        template = next(ast.literal_eval(node.value) for node in tree.body
+                        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                        and target.id == "HTML_CONTENT_TEMPLATE" for target in node.targets))
+        helper = template[template.index("let fallbackPointerHeld = false;"):
+                          template.index("function enableFallback()")]
+        strip_ansi = template[template.index("function stripAnsi(str)"):
+                              template.index("socket.onmessage =")]
+        html = ('<style>#fallback-output {height:120px;overflow:auto;white-space:pre;}</style>'
+                '<div id="fallback-output"></div><input id="input">'
+                '<script>const fallbackOutput=document.getElementById("fallback-output");'
+                + helper + strip_ansi + '</script>')
+        view = QWebEngineView()
+        view.resize(400, 180)
+        loaded = []
+        view.loadFinished.connect(loaded.append)
+        view.setHtml(html)
+        view.show()
+        try:
+            wait_until(lambda: bool(loaded), 8)
+            self.assertTrue(loaded[0])
+            results = []
+            view.page().runJavaScript(r'''(() => {
+                const out = fallbackOutput, checks = [];
+                appendFallbackOutput(Array.from({length:100},(_,i)=>`Row ${i}\n`).join(''));
+                checks.push(out.scrollTop === out.scrollHeight - out.clientHeight);
+                out.scrollTop = 200;
+                const range = document.createRange();
+                range.setStart(out.firstChild, 0); range.setEnd(out.firstChild, 5);
+                const selection = window.getSelection();
+                selection.removeAllRanges(); selection.addRange(range);
+                document.getElementById('input').focus();
+                const selected = selection.toString(), top = out.scrollTop;
+                appendFallbackOutput('\x1b[31mMore output\x1b[0m\n');
+                checks.push(out.scrollTop === top, selection.toString() === selected,
+                            document.activeElement.id === 'input', !out.textContent.includes('\x1b'));
+                out.scrollTop = out.scrollHeight;
+                out.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
+                const heldTop = out.scrollTop;
+                appendFallbackOutput('Output during pointer hold\n');
+                checks.push(out.scrollTop === heldTop);
+                window.dispatchEvent(new PointerEvent('pointerup'));
+                out.scrollTop = out.scrollHeight;
+                appendFallbackOutput('Output after return to bottom\n');
+                checks.push(out.scrollTop === out.scrollHeight - out.clientHeight);
+                return JSON.stringify(checks);
+            })()''', results.append)
+            wait_until(lambda: bool(results), 3)
+            self.assertEqual(json.loads(results[0]), [True] * 7)
+            def js(source):
+                values = []
+                view.page().runJavaScript(source, values.append)
+                wait_until(lambda: bool(values), 3)
+                return values[0]
+            geometry = json.loads(js('JSON.stringify((()=>{const r=fallbackOutput.getBoundingClientRect();'
+                'return {x:r.right-(fallbackOutput.offsetWidth-fallbackOutput.clientWidth)/2,y:r.bottom-8};})())'))
+            thumb = QPoint(round(geometry["x"]), round(geometry["y"]))
+            QTest.mousePress(view.focusProxy(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, thumb)
+            QTest.qWait(30)
+            self.assertTrue(js('fallbackPointerHeld'))
+            self.assertTrue(js("(()=>{const top=fallbackOutput.scrollTop;appendFallbackOutput('Held native thumb\\n');"
+                               "return fallbackOutput.scrollTop===top;})()"))
+            QTest.mouseMove(view.focusProxy(), QPoint(thumb.x(), 60))
+            QTest.qWait(30)
+            self.assertTrue(js("(()=>{const top=fallbackOutput.scrollTop;appendFallbackOutput('During native drag\\n');"
+                               "return fallbackOutput.scrollTop===top;})()"))
+            QTest.mouseRelease(view.focusProxy(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                               QPoint(thumb.x(), 60))
+            QTest.qWait(30)
+            self.assertFalse(js('fallbackPointerHeld'))
+        finally:
+            view.close()
+            view.deleteLater()
+
     def test_worker_logs_are_bounded_before_qt_event_delivery(self):
         from main.qt.signals import MCUSignals
         bus = MCUSignals()
@@ -289,7 +503,7 @@ class PerformanceChecks(unittest.TestCase):
 
     def test_warm_launch_health_and_failed_child_fallback(self):
         # Load only the pure health helpers: never execute bootstrap/setup.
-        names = {"_startup_app_fingerprint", "_startup_installation_identity", "_startup_required_paths", "_read_startup_health_snapshot", "_write_startup_health_snapshot", "_explicit_setup_requested", "_try_fast_normal_launch"}
+        names = {"_startup_app_fingerprint", "_startup_compatibility_fingerprint", "_startup_installation_identity", "_startup_required_paths", "_read_startup_health_snapshot", "_write_startup_health_snapshot", "_explicit_setup_requested", "_try_fast_normal_launch"}
         tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
         helpers = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[])
         scratch = ROOT / "temp/scratch"
@@ -307,13 +521,24 @@ class PerformanceChecks(unittest.TestCase):
             for name in ("QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtWebChannel.pyd", "QtWebEngineCore.pyd", "QtWebEngineWidgets.pyd"):
                 (qt / name).write_text("fixture presence only", encoding="utf-8")
             (site / "winpty").mkdir()
+            from src.modules.mbed_compat import REQUIRED_FILES
+            for name in REQUIRED_FILES:
+                provider = site / name
+                provider.parent.mkdir(parents=True, exist_ok=True)
+                provider.write_text("isolated compatibility presence fixture", encoding="utf-8")
             for name in ("src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js", "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css"):
                 asset = fixture / name
                 asset.parent.mkdir(parents=True, exist_ok=True)
                 asset.write_text("offline asset fixture", encoding="utf-8")
+            adapter = fixture / "src/modules/mbed_compat.py"
+            adapter.parent.mkdir(parents=True, exist_ok=True)
+            adapter.write_text("# isolated compatibility selector fixture", encoding="utf-8")
+            for name in ("zephyr_compat.py", "zephyr_board_aliases.cmake"):
+                (adapter.parent / name).write_text("# isolated Zephyr compatibility fixture", encoding="utf-8")
             scope = {"Path": Path, "sys": sys, "os": os, "time": time, "json": json, "subprocess": subprocess,
                      "SCRIPT_DIR": fixture, "GUI_SCRIPT": gui, "STARTUP_HEALTH_FILE": fixture / "health.json",
-                     "STARTUP_HEALTH_SCHEMA": 3, "_STARTUP_REQUIRED_PACKAGE_DIRS": ("serial",),
+                     "STARTUP_HEALTH_SCHEMA": 4, "_STARTUP_REQUIRED_PACKAGE_DIRS": ("serial",),
+                     "_STARTUP_REQUIRED_PACKAGE_FILES": REQUIRED_FILES,
                      "_startup_site_packages_dir": lambda: site, "_record_bootstrap_log": Mock()}
             exec(compile(helpers, "<isolated bootstrap helpers>", "exec"), scope)
             from src.modules import offline_bootstrap
@@ -342,6 +567,15 @@ class PerformanceChecks(unittest.TestCase):
                 self.assertTrue(scope["_write_startup_health_snapshot"]())
                 gui.write_text("# changed fixture", encoding="utf-8")
                 self.assertIsNone(scope["_read_startup_health_snapshot"]())
+                self.assertTrue(scope["_write_startup_health_snapshot"]())
+                provider = site / "past/builtins/misc.py"
+                provider.write_text("changed provider fixture", encoding="utf-8")
+                self.assertIsNone(scope["_read_startup_health_snapshot"]())
+                self.assertTrue(scope["_write_startup_health_snapshot"]())
+                provider.unlink()
+                self.assertIsNone(scope["_read_startup_health_snapshot"]())
+                self.assertFalse(scope["_write_startup_health_snapshot"]())
+                provider.write_text("restored provider fixture", encoding="utf-8")
                 self.assertTrue(scope["_write_startup_health_snapshot"]())
                 dep.rmdir()
                 self.assertIsNone(scope["_read_startup_health_snapshot"]())

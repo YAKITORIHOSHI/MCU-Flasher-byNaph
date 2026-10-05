@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import tempfile
@@ -118,6 +119,207 @@ class BoardFamilyChecks(unittest.TestCase):
             fresh = board_catalog.load_dynamic_boards(seed)
         self.assertEqual(fresh["Fixture native"]["upload_speed"], 57600)
         self.assertFalse(fresh["Fixture native"]["require_upload_port"])
+
+    def prepared_fixture(self, board_id="ebyte_e77_dev", unavailable="zephyr"):
+        core = self.root / "prepared-core"
+        manifests = core / "platforms/ststm32/boards"
+        manifests.mkdir(parents=True)
+        frameworks = (["arduino", "zephyr"] if unavailable == "zephyr" else
+                      ["arduino", "cmsis", "libopencm3", "mbed", "spl", "stm32cube"])
+        manifest = manifests / f"{board_id}.json"
+        manifest.write_text(json.dumps({
+            "name": "Fixture E77", "frameworks": frameworks,
+            "build": {"mcu": "stm32wle5cc", "variant": "fixture_variant"},
+            "upload": {"protocol": "stlink", "require_upload_port": False},
+        }), encoding="utf-8")
+        (manifests.parent / "platform.json").write_text(json.dumps({"version": "20.0.0"}), encoding="utf-8")
+        provider = "framework-" + unavailable
+        version = "3.40402.0" if unavailable == "zephyr" else "6.61700.231105"
+        framework = core / "packages" / provider
+        framework.mkdir(parents=True)
+        (framework / "package.json").write_text(json.dumps({"name": provider, "version": version}), encoding="utf-8")
+        reason = f"Installed {unavailable} has no board definition for {board_id}."
+        row = {"platform": "ststm32", "id": board_id, "name": "Fixture E77",
+               "declared_frameworks": frameworks, "frameworks": [value for value in frameworks if value != unavailable],
+               "unavailable_frameworks": {unavailable: reason},
+               "unavailability_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+               "unavailability_platform_version": "20.0.0", "unavailability_framework_versions": {unavailable: version}}
+        snapshot = core / ".mcu-offline-catalog.json"
+        snapshot.write_text(json.dumps([row]), encoding="utf-8")
+        return core, snapshot, row
+
+    def test_prepared_unavailable_framework_preserves_exact_board_and_supported_choices(self):
+        core, _, row = self.prepared_fixture()
+        records = board_catalog._load_platformio_board_catalog(core)
+        prepared = records[0]
+        self.assertEqual((prepared["platform"], prepared["id"]), ("ststm32", "ebyte_e77_dev"))
+        self.assertEqual(prepared["frameworks"], {"arduino"})
+        self.assertEqual(prepared["declared_frameworks"], ["arduino", "zephyr"])
+        self.assertEqual(prepared["unavailable_frameworks"], row["unavailable_frameworks"])
+        self.assertEqual(prepared["variant"], "fixture_variant")
+        self.assertEqual(prepared["upload_protocol"], "stlink")
+        seed = {"Cached E77": dict(platform="ststm32", board="ebyte_e77_dev", framework="zephyr")}
+        resolved = board_catalog.resolve_board_definition("Cached E77", seed["Cached E77"], records)
+        self.assertEqual(resolved["framework"], "arduino")
+        self.assertEqual(resolved["unavailable_frameworks"], row["unavailable_frameworks"])
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=records), \
+                patch.object(board_catalog, "_get_arduino_board_search_roots", return_value=[]), \
+                patch.object(board_catalog, "_save_board_catalog_cache"):
+            for initial in (seed, {}):
+                refreshed = board_catalog.load_dynamic_boards(initial)
+                self.assertEqual(len(refreshed), 1)
+                info = next(iter(refreshed.values()))
+                self.assertEqual(info["frameworks"], ["arduino"])
+                self.assertEqual(info["unavailable_frameworks"], row["unavailable_frameworks"])
+        with patch.object(web_bridge, "SUPPORTED_BOARDS", {"Fixture": resolved}), \
+                patch.object(web_bridge, "load_gui_config", return_value={}), \
+                patch.object(web_bridge, "save_gui_config") as save:
+            self.api._board_frameworks = {"Fixture": "zephyr"}
+            self.assertEqual(self.api._resolve_board_info()["framework"], "arduino")
+            self.assertFalse(self.api.set_board_framework("Fixture", "zephyr"))
+            save.assert_not_called()
+
+    def test_exact_olimex_mbed_exclusion_keeps_all_other_frameworks_and_board_identity(self):
+        core, snapshot, row = self.prepared_fixture("olimex_f103", "mbed")
+        records = board_catalog._load_platformio_board_catalog(core)
+        expected = {"arduino", "cmsis", "libopencm3", "spl", "stm32cube"}
+        self.assertEqual(records[0]["frameworks"], expected)
+        self.assertEqual(records[0]["unavailable_frameworks"], row["unavailable_frameworks"])
+        resolved = board_catalog.resolve_board_definition("Olimex STM32-H103",
+                    dict(platform="ststm32", board="olimex_f103", framework="mbed"), records)
+        self.assertEqual(resolved["board"], "olimex_f103")
+        self.assertEqual(resolved["framework"], "arduino")
+        for framework in expected:
+            self.assertEqual(target_problem(dict(resolved, framework=framework)), "")
+        self.assertIn(row["unavailable_frameworks"]["mbed"], target_problem(dict(resolved, framework="mbed")))
+        manifest = core / "platforms/ststm32/boards/olimex_f103.json"
+        # The same manifest and provider do not authorize filtering a new board.
+        manifest.rename(manifest.with_name("future_mbed_board.json"))
+        snapshot.write_text(json.dumps([dict(row, id="future_mbed_board")]), encoding="utf-8")
+        self.assertIn("mbed", board_catalog._load_platformio_board_catalog(core)[0]["frameworks"])
+
+    def test_cached_mbed_exclusion_is_removed_after_provider_changes_or_disappears(self):
+        core, _, row = self.prepared_fixture("olimex_f103", "mbed")
+        package = core / "packages/framework-mbed/package.json"
+        with patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=str(core)), \
+                patch.object(board_catalog, "_board_catalog_cache_path", return_value=self.root / "board-catalog.json"), \
+                patch.object(board_catalog, "_BOARD_CATALOG_CACHE_RAM", None), \
+                patch.object(board_catalog, "_PIO_BOARD_CATALOG_RAM_CACHE", {}):
+            prepared = board_catalog._load_platformio_board_catalog(core)[0]
+            self.assertNotIn("mbed", prepared["frameworks"])
+            board_catalog._save_board_catalog_cache({"Fixture": dict(platform="ststm32", board="olimex_f103", framework="arduino")})
+            self.assertIsNotNone(board_catalog._load_board_catalog_cache())
+            package.write_text(json.dumps({"name": "framework-mbed", "version": "7.00000.0"}), encoding="utf-8")
+            self.assertIsNone(board_catalog._load_board_catalog_cache())
+            raw = board_catalog._load_platformio_board_catalog(core)[0]
+            self.assertEqual(raw["frameworks"], set(row["declared_frameworks"]))
+            self.assertFalse(raw.get("unavailable_frameworks"))
+            self.assertIn("mbed", board_catalog.load_registry_board_catalog()[0]["frameworks"])
+            package.unlink()
+            self.assertIn("mbed", board_catalog._load_platformio_board_catalog(core)[0]["frameworks"])
+
+    def test_unavailable_framework_reports_reason_even_with_stale_or_empty_allowed_list(self):
+        reason = "Installed framework has no definition for this exact target."
+        info = dict(platform="ststm32", board="ebyte_e77_dev", framework="zephyr",
+                    frameworks=["arduino", "zephyr"], unavailable_frameworks={"zephyr": reason})
+        for available in (["arduino", "zephyr"], ["arduino"], []):
+            problem = target_problem(dict(info, frameworks=available))
+            self.assertIn("ststm32:ebyte_e77_dev", problem)
+            self.assertIn(reason, problem)
+        self.assertEqual(target_problem(dict(info, framework="arduino")), "")
+
+    def test_invalid_or_ambiguous_prepared_exclusions_retain_upstream_declarations(self):
+        core, snapshot, row = self.prepared_fixture()
+        cases = [
+            [dict(row, unavailable_frameworks={"zephyr": ""})],
+            [dict(row, unavailable_frameworks={"zephyr": "x" * 2049})],
+            [dict(row, unavailable_frameworks={"missing": "No definition"})],
+            [dict(row, frameworks=["arduino", "zephyr"])],
+            [dict(row, declared_frameworks=["arduino"])],
+            [dict(row, declared_frameworks="arduino,zephyr")],
+            [dict(row, platform="other_platform")],
+            [dict(row, id="we_oceanus1ev")],
+            [dict(row, unavailability_manifest_sha256="0" * 64)],
+            [dict(row, unavailability_manifest_sha256=None)],
+            [dict(row, unavailability_platform_version="21.0.0")],
+            [dict(row, unavailability_framework_versions={"zephyr": "3.50000.0"})],
+            [row, row],
+            [row, dict(row, frameworks=["zephyr"])],
+        ]
+        for records in cases:
+            with self.subTest(records=records):
+                snapshot.write_text(json.dumps(records), encoding="utf-8")
+                with patch.object(board_catalog, "_PIO_BOARD_CATALOG_RAM_CACHE", {}):
+                    raw = board_catalog._load_platformio_board_catalog(core)[0]
+                self.assertEqual(raw["frameworks"], {"arduino", "zephyr"})
+                self.assertFalse(raw.get("unavailable_frameworks"))
+        for invalid in ("{broken", "{}"):
+            snapshot.write_text(invalid, encoding="utf-8")
+            with patch.object(board_catalog, "_PIO_BOARD_CATALOG_RAM_CACHE", {}):
+                self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+
+    def test_changed_same_board_manifest_or_framework_version_retains_normal_preparation(self):
+        core, _, _ = self.prepared_fixture()
+        manifest = core / "platforms/ststm32/boards/ebyte_e77_dev.json"
+        original = manifest.read_text(encoding="utf-8")
+        for changes in ({"mcu": "stm32different"}, {"zephyr": {"variant": "new_same_hardware_target"}}):
+            board = json.loads(original)
+            board["build"].update(changes)
+            manifest.write_text(json.dumps(board), encoding="utf-8")
+            self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+        manifest.write_text(original, encoding="utf-8")
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino"})
+        package = core / "packages/framework-zephyr/package.json"
+        package.write_text(json.dumps({"name": "framework-zephyr", "version": "3.50000.0"}), encoding="utf-8")
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+        package.unlink()
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+        package.write_text(json.dumps({"name": "framework-zephyr", "version": "3.40402.0"}), encoding="utf-8")
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino"})
+        platform = core / "platforms/ststm32/platform.json"
+        platform.write_text(json.dumps({"version": "21.0.0"}), encoding="utf-8")
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+        with patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=str(core)):
+            self.assertEqual(board_catalog.load_registry_board_catalog()[0]["frameworks"], {"arduino", "zephyr"})
+        platform.unlink()
+        self.assertEqual(board_catalog._load_platformio_board_catalog(core)[0]["frameworks"], {"arduino", "zephyr"})
+
+    def test_prepared_catalog_replacement_invalidates_ram_and_saved_framework_choices(self):
+        core, snapshot, _ = self.prepared_fixture()
+        with patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=str(core)), \
+                patch.object(board_catalog, "_board_catalog_cache_path", return_value=self.root / "board-catalog.json"), \
+                patch.object(board_catalog, "_BOARD_CATALOG_CACHE_RAM", None), \
+                patch.object(board_catalog, "_PIO_BOARD_CATALOG_RAM_CACHE", {}):
+            prepared = board_catalog._load_platformio_board_catalog(core)
+            self.assertEqual(prepared[0]["frameworks"], {"arduino"})
+            board_catalog._save_board_catalog_cache({"Fixture": dict(platform="ststm32", board="ebyte_e77_dev", framework="arduino")})
+            self.assertIsNotNone(board_catalog._load_board_catalog_cache())
+            snapshot.unlink()
+            self.assertIsNone(board_catalog._load_board_catalog_cache())
+            with patch.object(board_catalog, "_BOARD_CATALOG_CACHE_RAM", None):
+                self.assertIsNone(board_catalog._load_board_catalog_cache())
+            raw = board_catalog._load_platformio_board_catalog(core)
+            self.assertEqual(raw[0]["frameworks"], {"arduino", "zephyr"})
+            stale = dict(platform="ststm32", board="ebyte_e77_dev", framework="arduino",
+                         unavailable_frameworks={"zephyr": "stale"}, declared_frameworks=["arduino", "zephyr"])
+            repaired = board_catalog.resolve_board_definition("Fixture", stale, raw)
+            self.assertEqual(repaired["unavailable_frameworks"], {})
+
+    def test_prepared_registry_and_arduino_alias_keep_availability_metadata(self):
+        core, _, row = self.prepared_fixture()
+        with patch.object(board_catalog, "_get_safe_platformio_core_dir", return_value=str(core)):
+            registry = board_catalog.load_registry_board_catalog()
+        self.assertEqual(registry[0]["unavailable_frameworks"], row["unavailable_frameworks"])
+        records = board_catalog._load_platformio_board_catalog(core)
+        alias = dict(name="Arduino E77 alias", arduino_id="e77", source_file="fixture/boards.txt",
+                     source_core="fixture", mcu="stm32wle5cc", variant="fixture_variant")
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=records), \
+                patch.object(board_catalog, "_get_arduino_board_search_roots", return_value=[self.root]), \
+                patch.object(board_catalog, "_parse_downloaded_arduino_board_files", return_value=[alias]), \
+                patch.object(board_catalog, "_save_board_catalog_cache"):
+            aliases = board_catalog.load_dynamic_boards({})
+        self.assertEqual(aliases["Arduino E77 alias"]["unavailable_frameworks"], row["unavailable_frameworks"])
+        self.assertEqual(aliases["Arduino E77 alias"]["frameworks"], ["arduino"])
 
     def test_native_upload_uses_exact_protocol_and_only_serial_gets_port(self):
         for row in TARGETS[3:]:

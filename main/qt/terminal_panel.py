@@ -297,6 +297,8 @@ class TerminalPanel(QWidget):
 
         # ── Stacked View (Loader, Embedded Container, Empty Placeholder) ─────
         self._stack = QStackedWidget(self)
+        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._stack.setMinimumHeight(36)
 
         # 0. Loading View
         self._loader_card = QFrame()
@@ -333,12 +335,14 @@ class TerminalPanel(QWidget):
         self._empty_card = QFrame()
         self._empty_card.setStyleSheet("QFrame { background: #0a0e14; border: none; }")
         el = QVBoxLayout(self._empty_card)
+        el.setContentsMargins(8, 4, 8, 4)
         el.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        el.setSpacing(10)
+        el.setSpacing(4)
 
         self._lbl_no_term = QLabel("No active terminal sessions")
         lbl_no_term = self._lbl_no_term
         lbl_no_term.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 600;")
+        lbl_no_term.setWordWrap(True)
         el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
 
         btn_row = QHBoxLayout()
@@ -450,6 +454,13 @@ class TerminalPanel(QWidget):
             self._btn_clear.setText("⌧ Clear")
             self._btn_kill.setText("🗑 Kill")
             self._btn_fullscreen.setText("⛶ Restore" if getattr(self, "_is_fullscreen", False) else "⛶ Full")
+        if width < 480:
+            self._btn_open_pwsh.setText("+ PowerShell")
+            self._btn_open_cmd.setText("+ CMD")
+        else:
+            self._btn_open_pwsh.setText("+ PowerShell (pwsh)")
+            self._btn_open_cmd.setText("+ Command Prompt (cmd)")
+        self._lbl_no_term.setVisible(self._stack.height() >= 60)
 
     def _tick_spinner(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)

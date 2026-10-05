@@ -1,0 +1,174 @@
+"""Hardware-free action regression checks; execute backend methods without startup."""
+from __future__ import annotations
+
+import ast
+import io
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from main.core.constants import board_reset_capabilities
+
+
+class ActionChecks(unittest.TestCase):
+    def setUp(self):
+        audit = ROOT / "temp/audit/actions"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=audit)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        methods = {"_start_reset_worker", "hard_reset", "soft_reset", "clean_cache", "_new_upload_progress_state"}
+        tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
+        cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in methods]
+        cls.bases = []
+        self.pending = []
+        self.ns = dict(Path=Path, os=os, sys=sys, time=SimpleNamespace(sleep=lambda _: None),
+                       threading=SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: self.pending.append(kw["target"]))),
+                       board_reset_capabilities=board_reset_capabilities, load_gui_config=lambda: {},
+                       port_occupied_owner=lambda _: None, _try_acquire_reset_cache_lock=lambda: object(),
+                       _release_reset_cache_lock=Mock(), SCRIPT_DIR=self.root,
+                       get_project_build_cache_root=lambda *a, **k: self.root / ".mcu_flasher_build_cache",
+                       robust_rmtree=shutil.rmtree, _sketch_ram_cache=SimpleNamespace(invalidate=Mock()),
+                       subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, CREATE_NO_WINDOW=0))
+        exec(compile(ast.Module(body=[cls], type_ignores=[]), "isolated_backend", "exec"), self.ns)
+        self.api = self.ns["MCUWebBackendAPI"]()
+        b = self.api
+        b.is_busy = False
+        b.active_operation = None
+        b.current_board, b.current_port = "Demo", "COM99"
+        b.sketch_dir_path = self.root
+        b.emit = Mock()
+        self.info = dict(platform="espressif32", board="esp32dev", framework="arduino")
+        b._resolve_board_info = lambda *a: self.info
+        b._check_target = lambda *a: True
+        b._stop_serial_monitor = Mock()
+        b._start_serial_monitor = Mock()
+        b._remote_workspace_root = lambda _: None
+
+    def run_worker(self):
+        self.pending.pop(0)()
+
+    def test_reset_reserves_before_thread_and_clears_stale_stop(self):
+        b = self.api
+        b._stop_requested = True
+        job = Mock()
+        self.assertTrue(b._start_reset_worker("soft", job))
+        self.assertTrue(b.is_busy)
+        self.assertFalse(b._stop_requested)
+        self.assertFalse(b._start_reset_worker("hard", job))
+        self.run_worker()
+        job.assert_called_once()
+        self.assertFalse(b.is_busy)
+        self.assertIsNone(b.active_operation)
+
+    def test_reset_early_lock_failure_releases_busy(self):
+        self.ns["_try_acquire_reset_cache_lock"] = lambda: None
+        self.api.soft_reset()
+        self.run_worker()
+        self.assertFalse(self.api.is_busy)
+        self.api._stop_serial_monitor.assert_not_called()
+
+    def test_worker_start_failure_releases_busy(self):
+        self.ns["threading"].Thread = Mock(side_effect=RuntimeError("No worker available"))
+        self.assertFalse(self.api._start_reset_worker("soft", Mock()))
+        self.assertFalse(self.api.is_busy)
+        self.api.clean_cache()
+        self.assertFalse(self.api.is_busy)
+
+    def test_clean_deletion_failure_is_reported(self):
+        cache = self.root / ".mcu_flasher_build_cache"
+        (cache / "boards").mkdir(parents=True)
+        self.ns["robust_rmtree"] = Mock(side_effect=PermissionError("Locked"))
+        self.api.clean_cache()
+        self.run_worker()
+        idle = [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"][-1]
+        self.assertFalse(idle["success"])
+        self.assertTrue((cache / "boards").exists())
+
+    def test_reset_monitor_failure_releases_lock(self):
+        self.api._stop_serial_monitor.side_effect = RuntimeError("serial failure")
+        self.api.soft_reset()
+        self.run_worker()
+        self.ns["_release_reset_cache_lock"].assert_called_once()
+        self.assertFalse(self.api.is_busy)
+
+    def prepare_hard(self, erase_code=0, write_ok=True):
+        b = self.api
+        images = {"bootloader": self.root / "bootloader.bin", "partitions": self.root / "partitions.bin"}
+        boot = self.root / "boot_app0.bin"
+        boot.write_bytes(b"fixture")
+        b._locate_hard_reset_recovery_images = Mock(return_value=(images, ""))
+        b._build_hard_reset_recovery_images = Mock(return_value=(None, "build failed"))
+        b._locate_esp32_boot_app0 = lambda: boot
+        b._esptool_target = lambda *a: ("esp32", "0x1000")
+        b._is_native_usb_port = lambda _: False
+        b._emit_boot_connection_progress = Mock()
+        b._get_esptool_cmd = lambda: ["fixture-esptool"]
+        b._write_esptool_connect_config = lambda *a: None
+        b._soft_reset_esptool_write = Mock(return_value=(write_ok, "write failed", 1))
+        b._trigger_actual_board_reset = Mock()
+        self.process = Mock(stdout=io.StringIO(""), returncode=erase_code)
+        self.ns["subprocess"].Popen = Mock(return_value=self.process)
+
+    def test_hard_prepares_before_erase_and_uses_captured_target(self):
+        self.prepare_hard()
+        b = self.api
+        b.hard_reset()
+        b.current_board, b.current_port = "Changed", "COM100"
+        self.run_worker()
+        cmd = self.ns["subprocess"].Popen.call_args.args[0]
+        self.assertIn("COM99", cmd)
+        bins, port = b._soft_reset_esptool_write.call_args.args
+        self.assertTrue(bins["recovery_only"])
+        self.assertEqual((bins["board_name"], port), ("Demo", "COM99"))
+        self.assertEqual(len(b._new_upload_progress_state(bins)["stages"]), 3)
+        b._start_serial_monitor.assert_not_called()
+
+    def test_failed_preparation_never_erases(self):
+        self.prepare_hard()
+        self.api._locate_hard_reset_recovery_images.return_value = None, "missing"
+        self.api.hard_reset()
+        self.run_worker()
+        self.ns["subprocess"].Popen.assert_not_called()
+        self.assertFalse(self.api.is_busy)
+
+    def test_failed_erase_never_writes_recovery(self):
+        self.prepare_hard(erase_code=1)
+        self.api.hard_reset()
+        self.run_worker()
+        self.api._soft_reset_esptool_write.assert_not_called()
+
+    def test_failed_recovery_does_not_report_success(self):
+        self.prepare_hard(write_ok=False)
+        self.api.hard_reset()
+        self.run_worker()
+        idle = [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"][-1]
+        self.assertFalse(idle["success"])
+
+    def test_clean_preserves_sources_settings_and_journal(self):
+        cache = self.root / ".mcu_flasher_build_cache"
+        keep = [self.root / "src/user.cpp", self.root / "platformio.ini",
+                cache / ".mcu_ai_edits/session/edit.txt", cache / "project_state.json"]
+        for path in keep:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("keep", encoding="utf-8")
+        (cache / "boards").mkdir()
+        (cache / "boards/object.o").write_bytes(b"object")
+        self.api.clean_cache()
+        self.run_worker()
+        self.assertFalse((cache / "boards").exists())
+        for path in keep:
+            self.assertEqual(path.read_text(encoding="utf-8"), "keep")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -23,13 +23,27 @@ selection opens a separate sketch window; show full paths for running projects
 and preserve the current project's dirty buffers, focus and terminal sessions.
 Carry the same palette into native setup and the Tk downloader. Keep utility
 screens focused on logs or package lists; advanced index URLs can be collapsed.
+Setup uses the app's original circuit-chip mark and static glass reflections
+with visible rims and depth. Keep a clean activity journal as the default,
+technical installer output behind an explicit disclosure, and real package
+progress in compact components. Retain readable surfaces in dark, light and
+Solarized; reflections must not lower text contrast. Share the original vector
+family with workspace actions. Preserve both journal views' reading state
+through the native-to-Qt handoff; use no decorative animation or blur effects.
+Make each setup stage a larger, bold header with a gap before the group and
+indented results. Keep the editor and every workspace tool pane flush to the
+available central area: outer content margins and pane borders stay zero.
+Keep inner toolbar/control and reading padding, tab focus and splitter handles.
 Check selected-tab and button contrast in all three palettes, including after
 a sleeping downloader is reopened. Coalesce static card redraws on resize.
 Use Qt logical coordinates without multiplying by DPI or devicePixelRatio;
 Tk uses native pixel/point metrics. Reduce chrome spacing before reducing text.
 Preserve saved content fonts, reflow rows from their content budgets, and fit
 complete window frames to the current monitor's work area. Check at 100–200%
-scaling with `direct/verify_responsive.py`; scroll short dialogs and details.
+scaling with `direct/verify_responsive.py`; couple physical resolution with the
+scale and work-area reservation. Check rendered content fonts and text clipping,
+including 175% and portrait screens; scroll short dialogs and details. Compact
+setup chrome and package rows before spending the last two reading lines.
 Reserve short-screen height for tool navigation and the active panel's controls;
 let scrollable output shrink before headers. Review every tool tab, not only
 Build and Serial.

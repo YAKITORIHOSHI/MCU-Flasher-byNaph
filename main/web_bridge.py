@@ -53,7 +53,7 @@ from main.core.config import (
 )
 from main.core.file_utils import (
     get_sketch_files_fast, ensure_file_writable, get_project_build_cache_root,
-    ensure_hidden_read_first_md, hide_generated_directory, hide_hidden_attribute,
+    ensure_hidden_read_first_md, hide_generated_directory, hide_hidden_attribute, write_generated_text,
     hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
@@ -329,6 +329,7 @@ class MCUWebBackendAPI:
         self._services_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
         self._catalog_refresh_running = False
+        self._catalog_refreshed_once = False
         self._skip_compile_check_lock = threading.Lock()
         self._skip_compile_check_gen = 0
         self._skip_compile_check_running = False
@@ -431,11 +432,12 @@ class MCUWebBackendAPI:
                 warning = ""
                 if include_registry:
                     warning = "Offline workspace: refreshed local board packs. Add or update packs in bootstrap."
-                catalog = load_dynamic_boards(seed, registry_catalog=registry)
+                catalog = load_dynamic_boards(seed, prefer_cache=not include_registry, registry_catalog=registry)
                 usb_ids = load_downloaded_board_usb_ids(catalog)
                 if not self._stop_port_monitor.is_set():
                     DOWNLOADED_BOARD_USB_IDS.clear()
                     DOWNLOADED_BOARD_USB_IDS.update(usb_ids)
+                    self._catalog_refreshed_once = True
                     self.emit("boards:updated", {"boards": catalog, "warning": warning})
             except Exception as exc:
                 if not self._stop_port_monitor.is_set():
@@ -809,7 +811,7 @@ class MCUWebBackendAPI:
         try:
             cache_dir = get_project_build_cache_root(self.sketch_dir_path)
             order_file = cache_dir / ".mcu_flash_tab_order.json"
-            order_file.write_text(json.dumps(paths), encoding="utf-8")
+            write_generated_text(order_file, json.dumps(paths))
         except Exception:
             pass
 
@@ -1172,9 +1174,7 @@ class MCUWebBackendAPI:
             data["build_metadata"] = getattr(self, "_build_metadata_by_board", {})
             data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
-            ensure_file_writable(cache_file)
-            cache_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            hide_hidden_attribute(cache_file)
+            write_generated_text(cache_file, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
             # Also persist remembered board for this project directory
             if self.sketch_dir_path:
@@ -1889,9 +1889,7 @@ class MCUWebBackendAPI:
                 "reasons": list(reasons),
                 "updated_at": datetime.now().strftime("%H:%M:%S"),
             }
-            ensure_file_writable(path)
-            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            hide_hidden_attribute(path)
+            write_generated_text(path, json.dumps(payload, indent=2))
         except Exception:
             pass
 
@@ -2821,8 +2819,7 @@ class MCUWebBackendAPI:
                 try:
                     cache_dir.mkdir(parents=True, exist_ok=True)
                     hide_generated_directory(cache_dir)
-                    ensure_file_writable(state_file)
-                    state_file.write_text(payload_text, encoding="utf-8")
+                    write_generated_text(state_file, payload_text)
                     ensure_hidden_read_first_md(sketch_dir)
                     hide_internal_project_metadata(sketch_dir)
                 except Exception:
@@ -4485,6 +4482,8 @@ class MCUWebBackendAPI:
         )
         stages = []
         for key, label in definitions:
+            if key == "firmware" and (fast_bins or {}).get("recovery_only"):
+                continue
             path_value = (fast_bins or {}).get(key)
             path_obj = Path(path_value) if path_value else None
             stages.append({
@@ -4861,8 +4860,8 @@ class MCUWebBackendAPI:
         DTR/RTS reset pulse for physical BOOT button boards. Returns (ok, err_msg, attempts_used).
         """
         esptool_cmd_base = self._get_esptool_cmd()
-        board_name = self.current_board or ""
-        board_info = dict(self._resolve_board_info(board_name) or {})
+        board_name = fast_bins.get("board_name") or self.current_board or ""
+        board_info = dict(fast_bins.get("board_info") or self._resolve_board_info(board_name) or {})
         chip_name, _bootloader_address = self._esptool_target(
             board_name, board_info
         )
@@ -4887,8 +4886,9 @@ class MCUWebBackendAPI:
                 str(fast_bins["bootloader_addr"]), str(fast_bins["bootloader"]),
                 "0x8000", str(fast_bins["partitions"]),
                 "0xe000", str(fast_bins["boot_app0"]),
-                "0x10000", str(fast_bins["firmware"]),
             ]
+            if not fast_bins.get("recovery_only"):
+                write_cmd += ["0x10000", str(fast_bins["firmware"])]
         else:
             write_cmd += ["0x0", str(fast_bins["firmware"])]
 
@@ -5257,6 +5257,7 @@ class MCUWebBackendAPI:
                     and not all_images_verified
                 )
                 if (rc != 0 and attempt_connected
+                        and getattr(self, "active_operation", None) != "reset"
                         and not flash_retry_used
                         and post_connect_transport_failure
                         and not getattr(self, "_stop_requested", False)):
@@ -5566,8 +5567,7 @@ class MCUWebBackendAPI:
                 "newline": True
             })
 
-        ensure_file_writable(ini_file)
-        ini_file.write_text(ini_content, encoding="utf-8")
+        write_generated_text(ini_file, ini_content)
 
         if ("upload_protocol = esptool" in ini_content and "upload_protocol = esptool" not in old_content) or (
             old_content and f"platform = {platform}" not in old_content
@@ -5905,8 +5905,32 @@ class MCUWebBackendAPI:
             name,
             binfo.get("framework", ""),
         )
-        base = "soft_reset_project_uno" if capabilities.get("family") == "atmelavr" else "soft_reset_project"
-        return SCRIPT_DIR / "soft_reset" / base / "boards" / self._board_cache_key(name)
+        family = str(capabilities.get("family") or binfo.get("platform") or "").lower()
+        family_map = {
+            "atmelavr": "soft_reset_project_uno",
+            "avr": "soft_reset_project_uno",
+            "espressif8266": "soft_reset_project_esp8266",
+            "ststm32": "soft_reset_project_stm32",
+            "stm32": "soft_reset_project_stm32",
+            "raspberrypi": "soft_reset_project_rp2040",
+            "rp2040": "soft_reset_project_rp2040",
+            "atmelsam": "soft_reset_project_samd",
+            "samd": "soft_reset_project_samd",
+            "teensy": "soft_reset_project_teensy",
+            "nordicnrf52": "soft_reset_project_nrf52",
+            "nrf52": "soft_reset_project_nrf52",
+            "renesas-ra": "soft_reset_project_renesas",
+            "renesas": "soft_reset_project_renesas",
+            "espressif32": "soft_reset_project",
+            "esp32": "soft_reset_project",
+        }
+        base = family_map.get(family, "soft_reset_project")
+        board_key = self._board_cache_key(name)
+        target_dir = SCRIPT_DIR / "soft_reset" / base / "boards" / board_key
+        legacy_dir = SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards" / board_key
+        if not target_dir.exists() and legacy_dir.exists():
+            return legacy_dir
+        return target_dir
 
     def _reset_project_contents(self, board_name: str, board_info: dict) -> tuple[str, str, str]:
         info = dict(board_info or self._resolve_board_info(board_name))
@@ -5917,16 +5941,19 @@ class MCUWebBackendAPI:
             platform, board_id, board_name, framework
         )
         reset_family = str(reset_capabilities.get("family") or platform).lower()
-        is_avr = reset_family == "atmelavr"
-        is_esp32 = reset_family == "espressif32"
+        is_avr = reset_family in ("atmelavr", "avr")
+        is_esp32 = reset_family in ("espressif32", "esp32")
         is_esp8266 = (
-            reset_family == "espressif8266"
+            reset_family in ("espressif8266", "esp8266")
             or "esp8266" in board_name.lower()
             or "nodemcu" in board_name.lower()
             or "node" in board_name.lower()
         )
         is_s3 = is_s3_board(board_id)
-        is_native = bool(is_s3 and self._is_native_usb_port(getattr(self, "current_port", None)))
+        is_native = bool(
+            (is_s3 or "s2" in board_id.lower() or "c3" in board_id.lower() or "c6" in board_id.lower() or "h2" in board_id.lower())
+            and self._is_native_usb_port(getattr(self, "current_port", None))
+        )
         flash_size, has_psram = normalized_board_memory_options(info)
         memory_type = normalized_board_memory_type(info)
         flash_mode = normalized_board_flash_mode(info)
@@ -5982,9 +6009,14 @@ class MCUWebBackendAPI:
             "#include <Arduino.h>\n"
             "void setup() {\n"
             f"  Serial.begin({monitor_speed});\n"
+            "  unsigned long _start = millis();\n"
+            "  while (!Serial && (millis() - _start < 1500)) {\n"
+            "    delay(10);\n"
+            "  }\n"
             "  Serial.println(\">>> ----- <<<\");\n"
             "}\n"
             "void loop() {\n"
+            "  delay(1000);\n"
             "}\n"
         )
         return ini_content, cpp_content, monitor_speed
@@ -6022,7 +6054,7 @@ class MCUWebBackendAPI:
         }
         manifest_path = Path(project_dir) / "hard_reset_manifest.json"
         try:
-            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            write_generated_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
             hide_hidden_attribute(manifest_path)
             return True, ""
         except Exception as exc:
@@ -6219,6 +6251,8 @@ class MCUWebBackendAPI:
 
     def _trigger_actual_board_reset(self, port: str, board_name: str | None = None, board_info: dict | None = None) -> bool:
         """Open serial port and perform architecture-correct hardware reset pulse."""
+        if not port:
+            return True
         owner_pid = port_occupied_owner(port)
         if owner_pid:
             self.emit("console:log", {"text": f"  ⚠ Reset(DTR/RTS) blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "tag": "warning", "newline": True})
@@ -6387,6 +6421,7 @@ class MCUWebBackendAPI:
 
         # ── Smart compile check: auto-skip when binary is cached and sources unchanged ──
         need_compile = True
+        skip_comp = bool(getattr(self, "skip_compile", False)) or bool(can_skip)
         skip_reason_msg: str | None = None  # message to show after console clear
         bin_file = self._find_cached_firmware_binary(self.current_board)
         has_prior_build = (bin_file is not None) or self._has_prior_build(self.current_board)
@@ -6586,7 +6621,7 @@ class MCUWebBackendAPI:
                     str(binfo.get("platform", "")).lower(),
                     env_name="mcu_env",
                     upload_speed=upload_speed,
-                    skip_mtime_check=bool(skip_comp or can_skip),
+                    skip_mtime_check=bool(skip_comp or can_skip or not need_compile),
                 )
 
             if fast_bins is not None:
@@ -7412,9 +7447,52 @@ class MCUWebBackendAPI:
 
         threading.Thread(target=_worker, name="MCU_ResetPulse", daemon=True).start()
 
+    def _start_reset_worker(self, kind, worker):
+        """Reserve the operation before dispatch, including early failure cleanup."""
+        if self.is_busy or self.active_operation:
+            return False
+        self.is_busy = True
+        self.active_operation = "reset"
+        self._active_reset_kind = kind
+        self._current_op_phase = "resetting"
+        self._stop_requested = False
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        reset_session = self._op_session_id
+        self.emit("operation:phase", {"phase": "reset", "is_busy": True, "can_stop": False, "op": kind + "_reset"})
+        self.emit("window:closable", {"closable": False})
+
+        def run():
+            try:
+                worker()
+            except Exception as exc:
+                self.emit("console:log", {"text": f"Reset failed: {exc}", "tag": "error", "newline": True})
+            finally:
+                if self.active_operation == "reset" and self._op_session_id == reset_session:
+                    self._active_reset_kind = None
+                    self._active_process = None
+                    self.is_busy = False
+                    self.active_operation = None
+                    self._current_op_phase = None
+                    self.emit("operation:phase", {"phase": "idle", "is_busy": False, "op": kind + "_reset", "success": False})
+                    self.emit("window:closable", {"closable": True})
+                    self.emit("console:progress", {"action": "Failed"})
+
+        try:
+            threading.Thread(target=run, name="MCU_" + kind.title() + "Reset", daemon=True).start()
+        except Exception as exc:
+            self.is_busy = False
+            self.active_operation = None
+            self._active_reset_kind = None
+            self._current_op_phase = None
+            self.emit("operation:phase", {"phase": "idle", "is_busy": False, "op": kind + "_reset", "success": False})
+            self.emit("window:closable", {"closable": True})
+            self.emit("console:log", {"text": f"Cannot start reset: {exc}", "tag": "error", "newline": True})
+            return False
+        return True
+
     def hard_reset(self, erase_flash: bool = False):
         """Perform a safe board-specific hard reset matching LATEST-WORKING-MCU- FLASHER."""
-        if self.is_busy:
+        if self.is_busy or self.active_operation:
             self.emit("console:log", {"text": "Busy — wait for the current operation before resetting.", "tag": "warning", "newline": True})
             return
         if not self._check_target("Hard reset"):
@@ -7433,10 +7511,14 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "✖ Hard Reset error: No COM port selected.", "tag": "error", "newline": True})
             return
 
+        port, board_name = self.current_port, self.current_board
+        binfo = dict(self._resolve_board_info(board_name))
+        caps = board_reset_capabilities(binfo.get("platform"), binfo.get("board"), board_name, binfo.get("framework"))
+        if not caps["hard_reset_ui"]:
+            self.emit("console:log", {"text": "Hard Reset is unavailable for this target.", "tag": "error", "newline": True})
+            return False
+
         def _worker():
-            port = self.current_port
-            board_name = self.current_board
-            binfo = self._resolve_board_info(board_name)
             plat = str(binfo.get("platform", "")).lower()
 
             owner_pid = port_occupied_owner(port)
@@ -7457,19 +7539,13 @@ class MCUWebBackendAPI:
                 })
                 return
 
-            self.is_busy = True
-            self.active_operation = "reset"
-            self._active_reset_kind = "hard"
-            self._current_op_phase = "resetting"
-            self.emit("operation:phase", {"phase": "reset", "is_busy": True, "can_stop": False, "op": "hard_reset"})
-            self.emit("window:closable", {"closable": False})
             self.emit("console:progress", {"action": "Resetting"})
             was_monitoring = getattr(self, "_serial_thread", None) is not None
-            self._stop_serial_monitor()
-            time.sleep(0.5)
             hard_reset_success = False
 
             try:
+                self._stop_serial_monitor()
+                time.sleep(0.5)
                 reset_caps = board_reset_capabilities(
                     plat, binfo.get("board", ""), board_name, binfo.get("framework", "")
                 )
@@ -7616,6 +7692,21 @@ class MCUWebBackendAPI:
                     return
 
                 elif reset_strategy == "esp32_recovery":
+                    images, error = self._locate_hard_reset_recovery_images(board_name, binfo)
+                    if images is None:
+                        images, error = self._build_hard_reset_recovery_images(board_name, binfo)
+                    if images is None:
+                        raise RuntimeError(error or "Recovery preparation failed; flash was not erased.")
+                    boot_app0 = self._locate_esp32_boot_app0()
+                    if boot_app0 is None or not Path(boot_app0).is_file():
+                        raise RuntimeError("boot_app0.bin is unavailable; flash was not erased.")
+                    chip, boot_address = self._esptool_target(board_name, binfo)
+                    if not chip or boot_address is None:
+                        raise RuntimeError("Cannot determine exact chip/bootloader address; flash was not erased.")
+                    recovery_bins = dict(images, platform="espressif32", boot_app0=boot_app0,
+                                         bootloader_addr=boot_address, recovery_only=True,
+                                         board_name=board_name, board_info=binfo,
+                                         upload_speed=getattr(self, "upload_speed", "460800"))
                     self.emit("console:progress", {"action": "Connecting to ESP32"})
                     is_native = bool(self._is_native_usb_port(port))
                     before_reset = "usb-reset" if is_native else "default-reset"
@@ -7633,7 +7724,7 @@ class MCUWebBackendAPI:
                         "--port", port,
                         "--baud", str(baud_rate),
                         "--before", before_reset,
-                        "--after", "hard_reset",
+                        "--after", "no-reset",
                         "--connect-attempts", "30",
                         "erase_flash",
                     ]
@@ -7713,9 +7804,14 @@ class MCUWebBackendAPI:
                         return
 
                     self.emit("console:log", {"text": "  ✔ ESP32 flash erased completely.", "tag": "success", "newline": True})
-                    self.emit("console:log", {"text": "  ℹ Flash is now blank. Board shows 'invalid header: 0xffffffff' on boot — this is expected.", "tag": "info", "newline": True})
-                    self.emit("console:log", {"text": "  ℹ Use Upload to install your sketch.", "tag": "info", "newline": True})
-                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 flash fully erased. Use Upload to install a sketch.", "type": "success"})
+                    self.emit("console:progress", {"action": "Writing recovery bootloader"})
+                    recovery_bins["before"] = before_reset
+                    restored, error, _attempts = self._soft_reset_esptool_write(recovery_bins, port)
+                    if not restored:
+                        raise RuntimeError(f"Flash erased, but bootloader recovery failed: {error}")
+                    self._trigger_actual_board_reset(port, board_name, binfo)
+                    self.emit("console:log", {"text": "  ✔ Recovery bootloader and partition metadata restored. Use Upload to install your sketch.", "tag": "success", "newline": True})
+                    self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and recovery bootloader restored. Ready for a fresh upload.", "type": "success"})
                     hard_reset_success = True
                 else:
                     # No hard reset strategy for this board — do NOT silently
@@ -7745,6 +7841,8 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": f"✖ Hard Reset error: {e}", "tag": "error", "newline": True})
             finally:
                 _release_reset_cache_lock(reset_cache_lock)
+                self._active_process = None
+                self._active_reset_kind = None
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None
@@ -7755,16 +7853,17 @@ class MCUWebBackendAPI:
                     "success": hard_reset_success,
                 })
                 self.emit("window:closable", {"closable": True})
-                self.emit("console:progress", {"action": "Completed"})
+                self.emit("console:progress", {"action": "Completed" if hard_reset_success else "Failed"})
                 if hard_reset_success or was_monitoring:
                     time.sleep(0.5)
-                    self._start_serial_monitor()
+                    if not self.is_busy and self.current_board == board_name and self.current_port == port:
+                        self._start_serial_monitor()
 
-        threading.Thread(target=_worker, name="MCU_HardReset", daemon=True).start()
+        return self._start_reset_worker("hard", _worker)
 
     def soft_reset(self):
         """Perform a soft reset by compiling and uploading the clean board-specific recovery sketch."""
-        if self.is_busy:
+        if self.is_busy or self.active_operation:
             self.emit("console:log", {"text": "Busy — wait for the current operation before resetting.", "tag": "warning", "newline": True})
             return
         if not self._check_target("Soft reset"):
@@ -7779,20 +7878,27 @@ class MCUWebBackendAPI:
         if not self.current_board:
             self.emit("console:log", {"text": "✖ Soft Reset error: No board selected.", "tag": "error", "newline": True})
             return
-        if not self.current_port:
+        binfo = dict(self._resolve_board_info(self.current_board))
+        from main.core.target_profile import requires_upload_port
+        needs_port = requires_upload_port(binfo)
+        if needs_port and not self.current_port:
             self.emit("console:log", {"text": "✖ Soft Reset error: No COM port selected.", "tag": "error", "newline": True})
             return
 
+        port = self.current_port or ""
+        board_name = self.current_board
+        caps = board_reset_capabilities(binfo.get("platform"), binfo.get("board"), board_name, binfo.get("framework"))
+        if not caps["soft_reset"]:
+            self.emit("console:log", {"text": "Soft Reset requires a supported Arduino target.", "tag": "error", "newline": True})
+            return False
+
         def _worker():
-            port = self.current_port
-            board_name = self.current_board
-            binfo = self._resolve_board_info(board_name)
 
             p_platform = binfo.get("platform", "")
             is_avr = (p_platform == "atmelavr")
             is_esp = p_platform in ("espressif32", "espressif8266")
 
-            owner_pid = port_occupied_owner(port)
+            owner_pid = port_occupied_owner(port) if port else None
             if owner_pid:
                 self.emit("console:log", {
                     "text": f"  ⚠ Soft reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
@@ -7810,36 +7916,33 @@ class MCUWebBackendAPI:
                 })
                 return
 
-            self.is_busy = True
-            self.active_operation = "reset"
-            self._active_reset_kind = "soft"
-            self._current_op_phase = "resetting"
-            self.emit("operation:phase", {"phase": "reset", "is_busy": True, "can_stop": False, "op": "soft_reset"})
-            self.emit("window:closable", {"closable": False})
             self.emit("console:progress", {"action": "Soft resetting"})
             self.emit("console:log", {"text": "", "newline": True})
             self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
             self.emit("console:log", {
-                "text": "  🔄 SOFT RESET (Arduino UNO Minimal Sketch)" if is_avr else f"  🔄 SOFT RESET ({board_name})",
+                "text": f"  🔄 SOFT RESET ({board_name})",
                 "tag": "header",
                 "newline": True
             })
             self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
-            self.emit("console:log", {"text": f"  Port  : {port}", "tag": "info", "newline": True})
+            port_label = port if port else "(Native Programmer Interface)"
+            self.emit("console:log", {"text": f"  Port  : {port_label}", "tag": "info", "newline": True})
             self.emit("console:log", {"text": f"  Board : {board_name}", "tag": "dim", "newline": True})
             if is_esp:
                 self.emit("console:log", {"text": "  💡 Tip: On Desktop PCs, some ESP modules may need BOOT held during connection.", "tag": "dim", "newline": True})
             elif is_avr:
-                self.emit("console:log", {"text": "  ℹ Arduino UNO uses automatic DTR reset; do not hold a BOOT button.", "tag": "dim", "newline": True})
+                self.emit("console:log", {"text": "  ℹ AVR reset/upload behavior follows the selected board and bootloader.", "tag": "dim", "newline": True})
+            elif not needs_port:
+                self.emit("console:log", {"text": "  ℹ Native programmer target (e.g. ST-Link / Picotool / J-Link).", "tag": "dim", "newline": True})
             self.emit("console:log", {"text": "", "newline": True})
 
             was_monitoring = getattr(self, "_serial_thread", None) is not None
-            self._stop_serial_monitor()
-            time.sleep(0.4)
             ok = False
             err_msg = ""
 
             try:
+                self._stop_serial_monitor()
+                time.sleep(0.4)
                 project_dir = self._soft_reset_project_dir(board_name, binfo)
                 project_dir.mkdir(parents=True, exist_ok=True)
                 hide_generated_directory(project_dir.parent.parent)
@@ -7901,6 +8004,7 @@ class MCUWebBackendAPI:
                 if fast_bins is not None:
                     self.emit("console:log", {"text": "  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "tag": "success", "newline": True})
                     self.emit("console:progress", {"action": "Flashing recovery sketch"})
+                    fast_bins.update(board_name=board_name, board_info=binfo, before="usb-reset" if self._is_native_usb_port(port) else "default-reset")
                     ok, err_msg, _attempts = self._soft_reset_esptool_write(fast_bins, port)
                 elif is_esp:
                     # ESP board without valid fast_bins: compile first so COM port is never touched during compilation!
@@ -8036,6 +8140,7 @@ class MCUWebBackendAPI:
                         )
                         if fast_bins:
                             self.emit("console:progress", {"action": "Flashing recovery sketch"})
+                            fast_bins.update(board_name=board_name, board_info=binfo, before="usb-reset" if self._is_native_usb_port(port) else "default-reset")
                             ok, err_msg, _attempts = self._soft_reset_esptool_write(fast_bins, port)
                         else:
                             ok = False
@@ -8050,7 +8155,7 @@ class MCUWebBackendAPI:
                     # Non-ESP (e.g. AVR/Arduino UNO): run PlatformIO upload
                     is_avr_target = (p_platform == "atmelavr" or "avr" in str(p_platform).lower())
                     # Arduino UNO/AVR has only a physical RESET button (no BOOT mode) — never loop 10 retries
-                    _MAX_CONNECT_RETRIES = 1 if is_avr_target else 10
+                    _MAX_CONNECT_RETRIES = 1
                     _connect_retry_count = 0
                     _CONNECT_FAIL_SIGNATURES = (
                         "wrong boot mode", "failed to connect",
@@ -8063,14 +8168,16 @@ class MCUWebBackendAPI:
                         "write timeout", "serial exception", "cannot configure port",
                         "clearcommerror", "setcommstate", "getcommstate",
                     )
-                    self.emit("console:log", {"text": f"  Executing soft reset upload on {port}...", "tag": "info", "newline": True})
+                    target_label = port if port else "native programmer"
+                    self.emit("console:log", {"text": f"  Executing soft reset upload on {target_label}...", "tag": "info", "newline": True})
 
                     while True:
                         cmd = pio_cmd + [
                             "run", "-e", "mcu_flash", "-t", "upload",
                             "-j", str(jobs),
-                            "--upload-port", port
                         ]
+                        if port and needs_port:
+                            cmd.extend(["--upload-port", port])
                         proc = subprocess.Popen(
                             cmd,
                             stdout=subprocess.PIPE,
@@ -8123,7 +8230,7 @@ class MCUWebBackendAPI:
                         is_conn_failure = (rc != 0 and any(sig in joined for sig in _CONNECT_FAIL_SIGNATURES))
 
                         if not is_avr_target and is_conn_failure and _connect_retry_count < _MAX_CONNECT_RETRIES - 1 and not getattr(self, "_stop_requested", False):
-                            if not self._is_port_present(port):
+                            if port and not self._is_port_present(port):
                                 if not self._wait_for_port_reconnect(port):
                                     err_msg = f"MCU disconnected during soft reset ({port} is no longer available)"
                                     ok = False
@@ -8142,14 +8249,15 @@ class MCUWebBackendAPI:
                                     "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
                                     "tag": "info",
                                     "newline": True,
-                                })
+                                    })
                         break
 
                 if ok:
                     if p_platform in ("espressif32", "espressif8266"):
                         self._write_reset_manifest(project_dir, board_name, binfo)
                     time.sleep(0.5)
-                    self._trigger_actual_board_reset(port, board_name, binfo)
+                    if port:
+                        self._trigger_actual_board_reset(port, board_name, binfo)
                     self.emit("console:log", {"text": "✔ Soft Reset successful! Board restored to clean recovery state.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Soft Reset Complete", "message": "Recovery sketch flashed successfully.", "type": "success"})
                 else:
@@ -8157,9 +8265,12 @@ class MCUWebBackendAPI:
                     self.emit("notification", {"title": "Soft Reset Failed", "message": err_msg or "Soft Reset failed", "type": "error"})
 
             except Exception as e:
+                ok = False
                 self.emit("console:log", {"text": f"✖ Soft Reset exception: {e}", "tag": "error", "newline": True})
             finally:
                 _release_reset_cache_lock(reset_cache_lock)
+                self._active_process = None
+                self._active_reset_kind = None
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None
@@ -8170,15 +8281,13 @@ class MCUWebBackendAPI:
                     "success": ok,
                 })
                 self.emit("window:closable", {"closable": True})
-                self.emit("console:progress", {"action": "Completed"})
+                self.emit("console:progress", {"action": "Completed" if ok else "Failed"})
                 if ok or was_monitoring:
                     time.sleep(0.5)
-                    self._start_serial_monitor()
-                    if ok:
-                        time.sleep(0.15)
-                        self.pulse_dtr_reset()
+                    if not self.is_busy and self.current_board == board_name and port and self.current_port == port:
+                        self._start_serial_monitor()
 
-        threading.Thread(target=_worker, name="MCU_SoftReset", daemon=True).start()
+        return self._start_reset_worker("soft", _worker)
 
 
     def clean_cache(self):
@@ -8187,6 +8296,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "⚠ Busy — stop the current operation first", "tag": "warning", "newline": True})
             return
 
+        sketch = self.sketch_dir_path
         self.is_busy = True
         self.active_operation = "clean"
         self._current_op_phase = "cleaning"
@@ -8201,48 +8311,57 @@ class MCUWebBackendAPI:
         self.emit("console:log", {"text": "🧹 Cleaning build cache...", "tag": "header", "newline": True})
 
         def _worker():
-            sketch = self.sketch_dir_path
             sketch_name = sketch.name if sketch else "Project"
+            reset_cache_lock = None
+            clean_success = False
             try:
+                reset_cache_lock = _try_acquire_reset_cache_lock()
+                if reset_cache_lock is None:
+                    raise RuntimeError("Another window is using the shared reset cache. Try Clean after it finishes.")
+                cache_root = get_project_build_cache_root(sketch, create=False)
                 targets = [
-                    (get_project_build_cache_root(sketch, create=False), "MCU Flasher project build cache"),
-                    (sketch / ".pio", "all cached board workspaces"),
-                    (sketch / "src", "generated build sources"),
-                    (sketch / "platformio.ini", "generated PlatformIO configuration"),
-                    (sketch / "build_artifacts", "board-specific binary archives"),
-                    (sketch / ".build_artifacts", "legacy binary archives"),
-                    (sketch / "compiled_builds", "legacy compiled binaries"),
-                    (sketch / ".mcu_gui_cache.json", "legacy compile metadata"),
-                    (get_project_build_cache_root(sketch, create=False) / ".mcu_gui_cache.json", "compile metadata"),
-                    (get_project_build_cache_root(sketch, create=False) / "compile_cache.json", "compile cache"),
-                    (get_project_build_cache_root(sketch, create=False) / ".mcu_flash_syntax_errors.json", "syntax metadata"),
-                    (sketch / ".mcu_flash_syntax_errors.json", "legacy syntax metadata"),
-                    (sketch / ".mcu_gui_compat_cache.json", "legacy compatible-devices metadata"),
-                    (sketch / ".mcu_flash_tab_order.json", "legacy editor tab order"),
-                    (sketch / ".mcu_ai_edits", "legacy AI edit backups"),
-                    (sketch / "MCU-FLASHER-SRC", "legacy generated source cache"),
-                    (sketch / ".ai_edit_signal", "generated editor signal"),
-                    (sketch / ".mcu_flasher_project_hardware.json", "legacy hardware metadata"),
-                    (sketch / ".ai_ready_signal", "stale AI ready signal"),
+                    (cache_root / "boards", "exact-board build workspaces"),
+                    (cache_root / ".pio", "legacy build workspace"),
+                    (cache_root / "src", "staged build sources"),
+                    (cache_root / "platformio.ini", "generated build configuration"),
+                    (cache_root / "build_artifacts", "compiled artifacts"),
+                    (cache_root / ".mcu_gui_cache.json", "compile metadata"),
+                    (cache_root / "compile_cache.json", "compile cache"),
+                    (cache_root / ".mcu_flash_syntax_errors.json", "syntax metadata"),
                     (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
                     (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
                     (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
                     (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / ".pio", "Arduino shared legacy cache"),
                 ]
+                soft_reset_dir = SCRIPT_DIR / "soft_reset"
+                if soft_reset_dir.is_dir():
+                    for sub in soft_reset_dir.iterdir():
+                        if sub.is_dir() and sub.name not in ("soft_reset_project", "soft_reset_project_uno"):
+                            b_dir = sub / "boards"
+                            if b_dir.exists():
+                                targets.append((b_dir, f"{sub.name} reset board caches"))
+                            p_dir = sub / ".pio"
+                            if p_dir.exists():
+                                targets.append((p_dir, f"{sub.name} shared cache"))
                 remote_root = self._remote_workspace_root(sketch)
                 if remote_root is not None:
                     targets.append((remote_root, "remote project local build workspace"))
                 removed = []
+                failures = []
                 for target, label in targets:
                     if target.exists():
                         try:
+                            # A redirected cache must never delete material outside its owner.
+                            owner = SCRIPT_DIR if target.is_relative_to(SCRIPT_DIR / "soft_reset") else (remote_root.parent if remote_root is not None and target == remote_root else cache_root)
+                            if not target.resolve().is_relative_to(owner.resolve()) or target.is_symlink() or getattr(target, "is_junction", lambda: False)():
+                                raise RuntimeError("Refusing redirected cache path")
                             if target.is_dir():
                                 robust_rmtree(target)
                             else:
                                 target.unlink(missing_ok=True)
                             removed.append(label)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            failures.append(f"{label}: {exc}")
 
                 # Invalidate all in-memory caches and reset compile tracking
                 self._last_source_hash = ""
@@ -8251,11 +8370,9 @@ class MCUWebBackendAPI:
                 self.emit("skip_compile:availability", False)
                 _sketch_ram_cache.invalidate()
 
-                # Recreate AGENTS.md / AI project state
-                try:
-                    self._sync_project_hardware_state(self.sketch_dir_path)
-                except Exception:
-                    pass
+                if failures:
+                    raise RuntimeError("Some cache items could not be removed: " + "; ".join(failures))
+                clean_success = True
 
                 if removed:
                     clean_msg = f"Clean completed successfully: removed {len(removed)} cached items."
@@ -8289,21 +8406,32 @@ class MCUWebBackendAPI:
                     "details": {"sketch": str(sketch), "error": str(e)},
                 })
             finally:
+                _release_reset_cache_lock(reset_cache_lock)
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None
-                self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+                self.emit("operation:phase", {"phase": "idle", "is_busy": False, "op": "clean", "success": clean_success})
                 self.emit("window:closable", {"closable": True})
-                self.emit("console:progress", {"action": "Completed"})
+                self.emit("console:progress", {"action": "Completed" if clean_success else "Failed"})
 
-        threading.Thread(target=_worker, name="MCU_CleanCache", daemon=True).start()
+        try:
+            threading.Thread(target=_worker, name="MCU_CleanCache", daemon=True).start()
+        except Exception as exc:
+            self.is_busy = False
+            self.active_operation = None
+            self._current_op_phase = None
+            self.emit("operation:phase", {"phase": "idle", "is_busy": False, "op": "clean", "success": False})
+            self.emit("console:progress", {"action": "Failed"})
+            self.emit("console:log", {"text": f"Cannot start Clean: {exc}", "tag": "error", "newline": True})
 
     def stop_operation(self):
         """Cancel the currently running compilation or building phase safely."""
         if getattr(self, "_framework_download_active", False):
             self.emit("console:log", {"text": "Wait for the native package installation to finish before stopping.", "tag": "warning", "newline": True})
             return
-        if getattr(self, "active_operation", None) in ("flash", "reset") or getattr(self, "_current_op_phase", None) in ("flashing", "writing", "resetting", "erasing"):
+        if getattr(self, "active_operation", None) == "clean":
+            return
+        if getattr(self, "active_operation", None) in ("flash", "reset", "hard_reset", "soft_reset") or getattr(self, "_current_op_phase", None) in ("flashing", "writing", "resetting", "erasing"):
             self.emit("console:log", {
                 "text": "  ⚠ Stop rejected: Firmware upload / flash write is currently in progress.\n    Interrupting flash writes can permanently brick or corrupt your MCU.",
                 "tag": "warning",

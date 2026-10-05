@@ -223,9 +223,12 @@ class SyntaxPanel(QWidget):
             sz = int(size)
         except (ValueError, TypeError):
             sz = 12
+        self._content_font_size = sz
         font = self._table.font()
         font.setPointSize(sz)
         self._table.setFont(font)
+        self._table.setStyleSheet(getattr(self, "_table_base_style", "") + f"QTableWidget {{ font-size: {sz}pt; }}")
+        self._table.resizeRowsToContents()
 
     def connect_signals(self, sig_bus) -> None:
         """Connect to global signal bus for real-time diagnostic updates."""
@@ -256,12 +259,13 @@ class SyntaxPanel(QWidget):
                 f"QLineEdit:focus {{ border: 1px solid {cyan}; }}"
             )
         if hasattr(self, "_table") and self._table:
-            self._table.setStyleSheet(
-                f"QTableWidget {{ background: {bg_darkest}; alternate-background-color: {bg_dark}; color: {text}; border: none; font-size: 12px; }}"
+            self._table_base_style = (
+                f"QTableWidget {{ background: {bg_darkest}; alternate-background-color: {bg_dark}; color: {text}; border: none; }}"
                 f"QTableWidget::item {{ padding: 4px 8px; }}"
                 f"QTableWidget::item:selected {{ background: {bg_hover}; color: {text_bright}; }}"
                 f"QHeaderView::section {{ background: {bg_mid}; color: {cyan}; font-weight: 600; font-size: 11px; padding: 4px 8px; border: none; border-bottom: 1px solid {border}; }}"
             )
+            self._table.setStyleSheet(self._table_base_style + f"QTableWidget {{ font-size: {getattr(self, '_content_font_size', 12)}pt; }}")
 
     @Slot(list)
     def _on_syntax_diagnostics(self, diagnostics: List[Dict[str, Any]]) -> None:
@@ -346,6 +350,7 @@ class SyntaxPanel(QWidget):
             self._table.setItem(row, 2, item_sev)
             self._table.setItem(row, 3, item_desc)
         self._table.setUpdatesEnabled(True)
+        self._table.resizeRowsToContents()
 
     def _on_row_double_clicked(self, item: QTableWidgetItem) -> None:
         """Navigate editor to target file and line on row double-click."""

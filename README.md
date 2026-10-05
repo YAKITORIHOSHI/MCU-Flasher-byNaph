@@ -46,6 +46,8 @@ The shared interface now uses translucent surfaces, subtle gradients, rounded
 panels, portable vector icons, and responsive action menus. Board and serial
 selection stay in the Controls row, with no target-board banner. Source and
 tool tabs use individual glass surfaces with clear selection and keyboard focus.
+The editor and every tool pane extend to the central workspace edges, while
+controls and text retain their inner reading padding and splitters remain usable.
 Source tabs retain dirty indicators and drag ordering; arrow keys, Home and End
 switch files when the tab row has focus. Long filenames truncate with full-path
 tooltips and horizontal scrolling.
@@ -57,10 +59,20 @@ its header actions below the title and stacks package lists above details.
 On short screens, the editor/tool splitter reserves space for the selected
 tool's header, search or send controls, and scrollable output. Tool navigation
 stays visible while the editor takes the remaining space.
+Narrow, short windows compact Controls into fewer rows; very short windows move
+Timestamps and Skip Compile into **Options**. Serial Monitor moves
+display options and Copy/Clear into **Options** when needed, keeping baud,
+Reset, Pause and Send reachable. Syntax Check uses the chosen content font.
 Qt sizing uses logical pixels and follows the window's current monitor and
 available work area, including taskbars and negative monitor coordinates.
 Qt applies display scaling once; Tk uses its own native font and pixel metrics.
 Monitor and resize changes are coalesced without an idle polling loop.
+Sketch projects keep app-generated build inputs and history in the hidden
+`.mcu_flasher_build_cache` container. On Windows, generated root instructions,
+ignore rules, proven MCU Flasher IDE metadata and first-use sentinels are hidden
+too. Metadata updates preserve hidden attributes and replace files atomically;
+user sources, documents and user-authored instructions/settings remain visible
+and are not overwritten by instruction generation.
 Each main window has a minimum width of half the current monitor's available
 width. It can resize wider and maximize normally; saved maximized state is
 restored. Minimum sizing follows the current monitor in Qt logical pixels.
@@ -82,7 +94,11 @@ The editor engine is offline Monaco with automatic resource settings; Settings
 does not offer the unused legacy lightweight-engine selector.
 
 The board picker refreshes locally prepared PlatformIO definitions and preserves
-installed/cache entries. It validates exact targets and exposes declared
+installed/cache entries. Discovery computes matching evidence once per refresh
+to avoid repeatedly normalizing each Arduino/PlatformIO pair. Matching scores,
+ambiguity rejection and unavailable framework guards retain their exact rules;
+a new refresh rebuilds the evidence from the current manifests. The picker
+validates exact targets and exposes declared
 framework choices. Future boards require compatible toolchain definitions;
 universal hardware support is not guaranteed. Firmware reuse is allowed only
 when source and target fingerprints match. Serial and editor failures use
@@ -134,11 +150,105 @@ Compiler concurrency also respects physical core count when the OS reports it.
 ### Startup and resource limits
 
 All application dependency downloads belong to bootstrap. The default package
-plan in [direct/offline-packages.json](direct/offline-packages.json) covers AVR,
-megaAVR, SAM/SAMD, ESP32, ESP8266, STM32, RP2040, nRF52 and Teensy, including their
-declared frameworks and optional upload/debug tools. Bootstrap checks each
-distinct builder environment before recording local readiness. Incomplete
-preparation stops launch; a deleted package requires bootstrap repair.
+plan in [direct/offline-packages.json](direct/offline-packages.json) prepares AVR
+and ESP32 with Arduino, including their required package variants and optional
+upload/debug tools. Add platform specifications for megaAVR, SAM/SAMD, ESP8266,
+STM32, RP2040, nRF52 or Teensy when needed. The optional `frameworks` list limits
+preparation to those declared frameworks; omit it to prepare every framework
+declared by the configured platforms. Bootstrap checks each distinct builder
+environment before recording local readiness. Readiness certifies the configured
+plan; installed boards outside that plan may need further preparation.
+Incomplete preparation stops launch; a deleted package requires bootstrap repair.
+
+On Windows, bootstrap omits the optional Unix-only Zephyr `tool-gperf` package
+when none of the platform's board/framework configurations requires it. All
+other declared package variants remain prepared, and required-package failures
+still stop setup. Rerunning setup reuses packages that are already installed.
+
+Windows setup checks the configured packages before fetching the pinned
+`v1.0.0-assets` release seed. It verifies the archive's exact size and SHA256,
+then imports only absent package groups with genuine PlatformIO metadata and
+compatible versions. Already complete stores skip this download. Missing
+packages are resolved normally afterwards; the release archive alone does not
+certify readiness. Cached archives and failed transfer checkpoints are retained.
+Publishing a verified release package retries only Windows access/sharing-lock
+errors, for at most six seconds. Every attempt refuses an existing destination,
+including a broken junction. Persistent denial retains the archive and extracted
+staging with its error; setup never changes permissions or replaces another tree.
+An incompatible existing destination stops with a repair diagnostic rather
+than overwriting its files. Ubuntu prepares native packages separately.
+
+Update detection and installation use the same target Python environment.
+Versions are read afresh from that environment's distribution metadata, and
+an upgrade is reported as verified only after the installed version is checked.
+The application environment is kept separate from the base runtime; copying
+individual package or metadata trees in either direction can cause recurring
+update prompts. Missing dependencies use the target environment's pip instead.
+Qt stays in that environment; setup does not download and install it again into
+the base Python runtime. Windows pip uses a verified short interpreter spelling
+and a short physical temporary folder to support wheel building and installation in
+deeply nested folders without changing Windows' global long-path settings.
+Incomplete checks report their diagnostics without an all-current summary.
+
+Package planning preserves each configured registry owner and primary version.
+When a framework changes a package's owner, an unqualified optional version
+uses that observed owner only when the version has one clear owner across all
+configurations. Explicit, ambiguous and unmatched variants remain declared;
+builder checks use the versions actually selected for their framework.
+
+Reviewed AVR/megaAVR Arduino builders share host preparation across MCUs with
+the same exact core and package versions. Bootstrap validates their source
+fingerprints first; unknown or modified builders keep separate MCU checks.
+This reduces the reviewed AVR and megaAVR packs from 177 builder checks to 19.
+
+Reviewed STM32 20.0.0 Arduino builders share preparation across boards using the
+same exact core and full package specifications. The platform builder,
+framework builder and nested variant script must match reviewed fingerprints.
+This reduces those Arduino checks from 163 to 7; every other STM32 framework
+keeps its distinct supported-target checks.
+
+Zephyr 4.4.2 preparation uses an app-owned CMake alias file for the verified
+STM32H747I Discovery M7, Nucleo H745ZI-Q M7 and Oceanus-I EV board renames.
+Version and installed target metadata must match before applying aliases;
+existing user aliases stay authoritative. Installed platform/framework files
+are unchanged. STM32 20.0.0 advertises Zephyr for Ebyte E77, SparkFun MicroMod
+STM32F405 and the Oceanus-I module, although that Zephyr package has no matching
+board definitions. Setup reports these three unavailable combinations and
+records the reasons in its prepared catalog. Their Arduino frameworks remain
+available, and the board picker does not offer the missing Zephyr targets.
+Unknown or changed definitions retain normal preparation and failure checks.
+The same guarded availability check reports Mbed for Olimex STM32-H103 as
+unavailable when Mbed 6.17 lacks its declared target. Its other frameworks
+remain available. These exclusions require matching platform/framework
+versions and an exact board-manifest fingerprint in the prepared catalog.
+
+Builder preparation shows the current check and count, streams dependency
+output, and reports elapsed time while a child is silent. Full output is kept
+under `logs/offline-builders-*/builder-*.log`, including failures before the
+bounded display tail. Environment dumps are omitted from these logs. Windows
+bootstrap children receive Git long-path support without changing global Git
+settings. A Zephyr module failure still stops setup and reports its full log.
+Concurrent checks require reviewed builders that do not modify shared framework
+state. Native and unknown builders run sequentially; separate temporary folders
+alone do not isolate framework virtual environments or generated package files.
+The reviewed AVR Arduino probes use the shared CPU/RAM/storage job budget.
+`offline_bootstrap.py --jobs N` can reduce concurrency; requests above the safe
+budget are capped. Each probe gets one compiler job to avoid nested job pools.
+Windows Zephyr CMake uses the canonical framework base so junction-expanded
+source paths produce consistent library names. Package and compiler arguments
+keep their short paths. This applies during bootstrap and offline builds.
+
+Windows ESP-IDF component objects use relative paths calculated from matching
+canonical source and component directories. This keeps application and
+bootloader objects in their separate build folders when the package store uses
+a junction. Framework, tool and build arguments retain their short spelling;
+installed framework scripts stay unchanged.
+
+Mbed 6.17 preparation on both hosts uses validated `setuptools==80.9.0` and
+`future==1.0.0` for its legacy Python APIs. The installed Mbed adapter selects
+these prepared providers before its older bundled dependencies take precedence.
+Setup validates their versions and imports; offline builds use them without
+installing packages. Missing or incompatible providers require bootstrap repair.
 
 The main app and its PlatformIO commands enforce offline operation. Missing
 packages report the bootstrap repair command, and **Refresh boards** reads local
@@ -149,9 +259,51 @@ the default library set includes Servo, ESP32Servo and ArduinoJson. An arbitrary
 new sketch may need additional libraries in that plan. Bootstrap must prepare
 them while online before the sketch can build offline.
 
-This comprehensive initial preparation can take substantial time and disk space.
+Expanding the configured platforms and frameworks can take substantial time and disk space.
 Subsequent launches verify local files without a network check. Windows and
 Ubuntu need their own native prepared stores.
+
+On a fresh Windows copy, Python's bundled Tk shows setup progress immediately
+while Python dependencies install. After Qt passes verification, setup opens
+the original Qt design before preparing board tools. The same worker, elapsed
+timer, log, progress, preferences and reading position continue through this
+change. Holding the scrollbar delays the switch until release. A display error
+keeps the native window working; it does not restart installation. Worker output
+uses one bounded queue through both views. Existing installations open the Qt
+setup window directly when verification is needed.
+
+The Windows bootstrap log shows Tool, Platform and Library Manager installation
+confirmations in green with a check mark. Downloading and unpacking use separate
+live progress rows, including updates emitted without a newline. Failed attempts
+retain their last reported percentage with an interruption notice; mirror
+warnings appear in yellow and final setup errors in red. Successful installation
+confirms unpacking is complete even when PlatformIO omits its final percentage.
+When a setup step fails, its entire retained output turns red, including its
+subsections and subsequent progress. Earlier successful steps keep their colors.
+Plain terminal output cannot recolor already printed scrollback.
+
+Build and serial log text, ANSI colors, connection states and transient status
+messages use readable semantic colors from the active theme; retained output is
+recolored when the theme changes. Bootstrap, build output, serial logs and
+notifications preserve the visible text, selection and horizontal position
+while output arrives. Bootstrap
+Auto-scroll pauses while the scrollbar is held or dragged, and releasing it
+resumes following the latest output even when released above the bottom.
+Checking Auto-scroll also resumes following; checking it while holding the
+scrollbar waits for release. Build output, serial logs and notifications keep
+a scrolled-up reading position until the reader returns to the bottom.
+Turning Auto-scroll off prevents forced following. If bounded history evicts
+the visible text, the view clamps to the remaining history. The HTML assistant
+fallback keeps its reading position; coding terminals retain their native
+xterm behavior.
+Windows bootstrap preserves the short package-store junction and uses extended
+paths for archive extraction and verification, including builder subprocesses,
+so deeply nested framework files can be prepared in long installation folders.
+Package installation also uses contained extended paths when copying unpacked
+archives and cleaning their staging directories. This preserves literal
+trailing-dot TAR entries in older Windows ARM toolchains. Canonical containment
+limits the adaptation to the configured store and staging directories; archive
+security and package version checks stay active.
 
 Windows installations save a per-user health snapshot after successful setup.
 Subsequent launches check local runtime paths and source fingerprints before
@@ -208,6 +360,13 @@ python mcu_flash_gui.py
 ```
 
 ### First-Run Auto-Bootstrap Pipeline
+
+Setup uses smoked glass cards, static reflections and an original circuit-chip icon family shared with the workspace. The first-run Tk view and the later Qt view both open with a clean activity summary. Larger, bold stage headers separate Python, board tools, drivers and update checks, with indented results beneath each header. Package progress occupies compact rows; completed groups collapse to a count. **Technical details** reveals the retained installer output, while the detailed run log keeps the full diagnostics. Resolver chatter and repeated success messages stay out of the default summary; warnings and failures remain visible. The status shows a short action or package count instead of a long dependency list.
+
+The display handoff preserves both logs, selections, reading positions, the details disclosure, progress and preferences without restarting setup. Auto-Scroll applies to both views: a held scrollbar pauses following, release resumes when enabled, and Auto OFF preserves the reading position. Glass painting is cached and changes only with size, palette or actual setup state.
+
+Setup starts at 70% of the active monitor's width and height. Qt logical sizing, preferred 520×420 floors and native frame fitting to the usable work area keep it usable on smaller displays; it remains resizable. Tk keeps its own native metrics.
+
 1. **Drive Storage Verification**: Inspects installation drive for storage speed and integrity.
 2. **Private Python Auto-Healing**: Verifies and heals the isolated portable Python 3 runtime at `src/_python/` using bundled offline installers in `installers/.handsoff/`.
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
@@ -222,7 +381,7 @@ python mcu_flash_gui.py
 > - **Release Package (`MCU_Flasher.exe`)**: Pre-built standalone release packages are completely self-contained — **no Python installation is required** on the machine.
 
 > [!NOTE]
-> **Storage Requirement**: The complete default offline plan can require substantial space and download time. Its size depends on the current platform/framework packages; the older 6 GB baseline covers only a limited toolchain set. Add custom libraries to `direct/offline-packages.json` before running bootstrap while online.
+> **Storage Requirement**: The configured offline plan can require substantial space and download time, especially with more platforms or native frameworks. Its size depends on the current packages; the older 6 GB baseline covers only a limited toolchain set. Add custom platforms, frameworks and libraries to `direct/offline-packages.json` before running bootstrap while online.
 
 > [!IMPORTANT]
 > **Hardware Requirement**: At least **4 CPU cores** are required. Startup checks physical cores when available and uses logical threads as a fallback when the OS cannot report physical topology. Unsupported systems receive an incompatibility notice before the application starts.
@@ -362,8 +521,15 @@ MCU Flasher by Naph/
 │   └── msys2-*.exe                  # Bundled MSYS2 build tools
 │
 ├── soft_reset/                      # App-Owned Reset Templates & Exact-Board Caches
-│   ├── soft_reset_project/          # Minimal PlatformIO reset template for ESP32 / non-AVR boards
-│   └── soft_reset_project_uno/      # Minimal PlatformIO reset template for Arduino Uno / AVR boards
+│   ├── soft_reset_project/          # Minimal PlatformIO reset template for ESP32 boards
+│   ├── soft_reset_project_uno/      # Minimal PlatformIO reset template for Arduino AVR boards
+│   ├── soft_reset_project_esp8266/  # Minimal PlatformIO reset template for ESP8266 boards
+│   ├── soft_reset_project_stm32/    # Minimal PlatformIO reset template for ST STM32 boards
+│   ├── soft_reset_project_rp2040/   # Minimal PlatformIO reset template for Raspberry Pi Pico / RP2040
+│   ├── soft_reset_project_samd/     # Minimal PlatformIO reset template for SAM / SAMD (Zero) boards
+│   ├── soft_reset_project_teensy/   # Minimal PlatformIO reset template for PJRC Teensy boards
+│   ├── soft_reset_project_nrf52/    # Minimal PlatformIO reset template for Nordic nRF52 boards
+│   └── soft_reset_project_renesas/  # Minimal PlatformIO reset template for Renesas RA (UNO R4) boards
 │
 ├── cleaner/                         # Maintenance Utilities
 │   ├── clean_fresh.bat              # Workspace refresh cleaner
@@ -391,10 +557,10 @@ MCU Flasher by Naph/
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
 
 ### 2. Opening, Selecting & Scaffolding Projects
-- Click **Project** or press **Ctrl+O** to open another sketch in its own window. The startup picker opens the first project. Each window keeps independent editor buffers, terminals, build output and board/port selections; additional windows start with hardware unselected.
+- Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Switching the current window prompts to save, discard or cancel when editor changes are unsaved. Choosing a new window keeps the current editor, terminal, build output and board/port state intact; new windows start with hardware unselected. The startup picker opens the first project directly.
 - **Open projects** lists running sketch windows and their folder paths. Use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
-- Right-click the project title or click its folder icon to reopen the picker. **Cancel** leaves the current editor and monitor sessions intact. Another project can be opened while the current one compiles; its active operation continues.
-- **New project** scaffolds a sketch with optional header/source files and opens it in another window. An existing folder is never overwritten; choose it through **Existing project** instead.
+- Right-click the project title or click its folder icon to reopen the picker. **Cancel** leaves the current editor and monitor sessions intact. Choose a new window to open another project while the current one compiles; choosing the current window is blocked while an action is in progress.
+- **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
 
 ### 3. Selecting Boards & COM Ports
@@ -477,7 +643,10 @@ MCU Flasher by Naph/
 
 ### 10. Soft Reset & Hard Reset Recovery Flashing
 - **Soft Reset**: Flashes a minimal Arduino routine through a resolved board definition that declares Arduino support. Other frameworks and unresolved targets receive an explanation. This writes firmware and is not a generic reset for arbitrary hardware.
-- **Hard Reset**: Executes board-family specific capability routines: ESP32 recovery images, ESP8266 full SPI-flash erase, or AVR bootloader recovery. Unsupported microcontrollers are refused safely.
+- **Hard Reset**: ESP32 validates/builds exact-board recovery images before erasing, then restores the bootloader, partitions and boot_app0 without application firmware. ESP8266 erases SPI flash and retains its ROM bootloader. Other targets, including AVR bootloader burning without a configured programmer workflow, are unavailable in Settings.
+- Reset confirmations recheck board, framework, port and busy state. Workers reserve the operation before starting, retain the confirmed target, and report preparation/erase/write failures. Reset writes are not automatically replayed after a connected write failure.
+- **Actions**: Save All acknowledges completed editor saves before Compile/Upload. Failed saves stop the action. Reload uses Monaco's reload and dirty-tab bookkeeping. Clean removes known generated build/reset caches while preserving source folders, project settings and AI edit history; locked or failed cleanup is reported.
+- Hardware-free reset/action regressions: `src/_python/python.exe -B direct/verify_actions.py` and `direct/verify_controls.py`. Physical reset/flash verification requires the selected board and port.
 
 ### 11. Remote Network Shares (UNC Paths)
 - Open and compile projects directly from Windows network storage (e.g. `\\server\share\sketch`).
@@ -572,7 +741,7 @@ MCU Flasher by Naph/
   - `arduino-cli.msi` — Arduino CLI installer.
   - `MicrosoftEdgeWebview2Setup.exe` — WebView2 installer.
   - `msys2-*.exe` — MSYS2 build tools.
-- **`soft_reset/`**: Pre-configured minimal PlatformIO workspaces (`soft_reset_project/` for ESP32/non-AVR and `soft_reset_project_uno/` for Arduino AVR).
+- **`soft_reset/`**: Pre-configured minimal PlatformIO workspaces and dynamic templates for every supported microcontroller family (`soft_reset_project/` for ESP32, `soft_reset_project_uno/` for AVR, along with dedicated templates for ESP8266, STM32, RP2040, SAM/SAMD, Teensy, nRF52, and Renesas RA).
 - **`.mcu_flasher_build_cache/`**: Generated build artifacts and isolated per-board workspaces (gitignored, hidden via Windows `attrib +h`).
 - **`logs/`**: Runtime crash and diagnostic logs.
 
@@ -643,6 +812,12 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_performance.py
 & src/_python/python.exe -B direct/verify_platforms.py
 & src/_python/python.exe -B direct/verify_offline.py
+& src/_python/python.exe -B direct/verify_bootstrap_seed.py
+& src/_python/python.exe -B direct/verify_bootstrap_updates.py
+& src/_python/python.exe -B direct/verify_bootstrap_download_failure.py
+& src/_python/python.exe -B direct/verify_bootstrap_native.py --report-dir temp/audit/bootstrap-cold
+& src/_python/python.exe -B direct/verify_bootstrap_promotion.py --report-dir temp/audit/bootstrap-promotion
+& src/_python/python.exe -B direct/verify_bootstrap_pip_paths.py
 & src/_python/python.exe -B direct/verify_controls.py
 & src/_python/python.exe -B direct/verify_board_search.py --render-dir temp/audit/board-search --benchmark temp/audit/board-search/timing.json
 & src/_python/python.exe -B direct/verify_target_resolution.py
@@ -651,6 +826,13 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_responsive.py
 & src/_python/python.exe -B direct/verify_projects.py --render-dir temp/audit/projects
 ```
+
+The cold-window and promotion checks use isolated configuration and simulated
+dependency availability. They verify the original Qt design, retained logs and
+reading position, held-scrollbar delay, warm startup and display-failure recovery
+without running setup or installing packages.
+Warm checks include Qt imported before window construction and retrying a
+recoverable view failure, while still rejecting Qt loaded from another environment.
 
 For an optional real ESP32 compile probe on Windows, use
 `direct/verify_target_resolution.py --compile-installed-esp32`. It copies the
@@ -681,11 +863,19 @@ For native setup/downloader screenshots, run the controls verifier with
 installation and launch code; downloader fixtures never start network workers
 or write live download settings. These checks cover all compact Actions,
 settings persistence/signals, reset gating, theme switching and log trimming.
+`direct/verify_hygiene.py` checks native Windows attributes, repeated hidden
+metadata writes, failed-update preservation and user-file ownership in isolated
+fixtures under `temp/`.
 The responsive verifier covers narrow/wide control rows, readable baud values,
 settings and setup on small work areas, wrapped board filters, popup scrolling,
 monitor-change coalescing and native Tk details. Start a fresh process for each
-`QT_SCALE_FACTOR` value (1, 1.25, 1.5 and 2); the Tk fixture also simulates its
-native point scaling. Use `--render-dir temp/audit/responsive` for previews.
+`QT_SCALE_FACTOR` value (1, 1.25, 1.5, 1.75 and 2); the Tk fixture also simulates its
+native point scaling. Couple physical screen dimensions to each scale, convert
+to Qt logical coordinates once, and subtract taskbar space. Include half-monitor
+and full-width workspaces, portrait screens and chosen content fonts; check the
+effective rendered font, complete frames and readable viewports. Short setup
+fixtures cover active packages, long statuses, hours on the clock and both logs.
+Use `--render-dir temp/audit/responsive` for previews.
 The project verifier checks competing processes, stale settings snapshots,
 exclusive project/port claims, independent opening during compile, existing
 folder protection and themed project-picker captures. It mocks GUI spawning
@@ -693,6 +883,13 @@ and metadata and writes only isolated fixtures under `temp/`.
 The runtime preview also checks all six tool panels in a 640-pixel workspace at the half-screen minimum,
 including control visibility and the serial send bar. Its terminal layout probe
 does not start a shell; `verify_terminal.py` checks the actual PTY separately.
+
+Seed and update verifiers use isolated package metadata and fake installers.
+The failed-download verifier uses an actual loopback HTTP 503 response and the
+real downloader/failure callback, with an explicitly required seed and no
+fallback installers. It captures whole-step red output and verifies that the
+partial checkpoint is retained. This fixture is separate from a complete
+production bootstrap run.
 
 Ubuntu uses `.venv-linux/bin/python -B direct/verify_runtime.py`; see
 [Ubuntu verification limits](direct/UBUNTU.md#verification-and-current-limits).

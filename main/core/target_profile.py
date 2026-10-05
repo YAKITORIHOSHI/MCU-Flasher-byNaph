@@ -19,6 +19,12 @@ def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
     if not framework or not all(_IDENTIFIER.fullmatch(f.strip()) for f in framework.split(",")):
         return "Select a framework supported by this board in the board picker. Arduino .ino projects require Arduino."
     selected = {f.strip().lower() for f in framework.split(",")}
+    unavailable = info.get("unavailable_frameworks")
+    if isinstance(unavailable, Mapping):
+        for name in sorted(selected):
+            reason = unavailable.get(name)
+            if isinstance(reason, str) and reason.strip():
+                return f"{name} is unavailable for {info.get('platform')}:{info.get('board')}: {reason.strip()}"
     declared = {str(f).lower() for f in (info.get("frameworks") or [])}
     if declared and not selected.issubset(declared):
         return "The selected framework is not supported by this board. Choose one of its declared frameworks."

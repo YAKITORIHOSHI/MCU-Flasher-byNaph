@@ -71,6 +71,7 @@ class EditorBridgeAPI(QObject):
     theme_changed  = Signal(str)               # (theme_name)
     request_save   = Signal()
     request_save_all = Signal()
+    save_finished = Signal(str, bool)
     _syntax_finished = Signal(dict)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
@@ -82,9 +83,21 @@ class EditorBridgeAPI(QObject):
         self._syntax_generation = 0
         self._syntax_running = False
         self._syntax_pending = None
+        self._save_failure_count = 0
         self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
 
     # ── Called FROM Monaco JS ─────────────────────────────────────────────
+
+    @Slot(bool)
+    def finish_reload_request(self, success: bool) -> None:
+        if self._backend:
+            self._backend.emit("console:progress", {"action": "Completed" if success else "Failed"})
+            if not success:
+                self._backend.emit("console:log", {"text": "Reload failed. The editor buffer was preserved.", "tag": "error", "newline": True})
+
+    @Slot(str, bool)
+    def finish_save_request(self, token: str, success: bool) -> None:
+        self.save_finished.emit(token, success)
 
     @Slot(result="QVariant")
     def get_project_files(self) -> list:
@@ -113,6 +126,8 @@ class EditorBridgeAPI(QObject):
             res = self._backend.save_file(file_path, content)
             if res.get("success"):
                 self._buffer_snapshots.pop(str(Path(file_path).resolve()), None)
+            else:
+                self._save_failure_count += 1
             if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
                 self._backend.ai_watcher.note_user_save(file_path, content)
             return res
@@ -129,6 +144,8 @@ class EditorBridgeAPI(QObject):
             except Exception:
                 pass
             res = self._backend.save_all_files()
+            if not res.get("success"):
+                self._save_failure_count += 1
             if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
                 for fp in getattr(self._backend, "modified_files", {}):
                     self._backend.ai_watcher.note_user_save(fp)
@@ -750,44 +767,59 @@ class MonacoEditorPanel(QWidget):
             "if (typeof window.saveActiveFile === 'function') { window.saveActiveFile(); }"
         )
 
-    def trigger_save_all(self, callback: Optional[Callable[[], None]] = None) -> None:
+    def trigger_save_all(
+        self,
+        callback: Optional[Callable[[], None]] = None,
+        failure_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
+        # runJavaScript returns before an async Promise resolves. A WebChannel
+        # acknowledgement is required before Compile/Upload can consume disk files.
+        if getattr(self, "_save_pending", None):
+            if failure_callback:
+                failure_callback()
+            return
+        import uuid
+        token = uuid.uuid4().hex
+        failures = self._bridge._save_failure_count
+        self._save_pending = token
+
+        def finished(received, success):
+            if received != token or self._save_pending != token:
+                return
+            self._save_pending = None
+            self._bridge.save_finished.disconnect(finished)
+            success = success and self._bridge._save_failure_count == failures
+            if success and callback:
+                callback()
+            elif not success and self._backend:
+                self._backend.emit("console:log", {"text": "Save All failed or timed out. Check the editor before compiling or uploading.", "tag": "error", "newline": True})
+            if not success and failure_callback:
+                failure_callback()
+
+        self._bridge.save_finished.connect(finished)
+        QTimer.singleShot(30000, self, lambda: finished(token, False))
         js = (
             "(async () => {"
+            " let ok = false; try {"
             "  if (typeof window.saveAllFilesSafe === 'function') { await window.saveAllFilesSafe(); }"
             "  else if (typeof window.saveAllFiles === 'function') { await window.saveAllFiles(); }"
-            "  if (typeof window.saveActiveFile === 'function') { await window.saveActiveFile(); }"
-            "  return true;"
+            "  else { throw new Error('Editor is not ready'); }"
+            "  ok = true; } catch (error) { console.error(error); }"
+            f" if (window.editorBridge) window.editorBridge.finish_save_request({json.dumps(token)}, ok);"
             "})()"
         )
-        if callback:
-            self._view.page().runJavaScript(js, lambda _: callback())
-        else:
-            self._view.page().runJavaScript(js)
+        self._view.page().runJavaScript(js)
 
     def trigger_reload(self) -> None:
-        """Reload the currently active file from disk into the editor."""
-        try:
-            from main.qt.signals import signals as sig_bus
-            sig_bus.console_progress.emit({"action": "Reloading"})
-            QTimer.singleShot(600, lambda: sig_bus.console_progress.emit({"action": "Completed"}))
-        except Exception:
-            pass
-        if self._backend and self._backend.active_file_path:
-            file_path = self._backend.active_file_path
-            try:
-                content = Path(file_path).read_text(encoding="utf-8", errors="replace")
-                path_json = json.dumps(str(file_path))
-                content_json = json.dumps(content)
-                js = (
-                    f"if (typeof window.setFileContent === 'function') {{"
-                    f"  window.setFileContent({path_json}, {content_json});"
-                    f"}} else if (typeof window.activateProjectFile === 'function') {{"
-                    f"  window.activateProjectFile({path_json});"
-                    f"}}"
-                )
-                self._view.page().runJavaScript(js)
-            except Exception:
-                pass
+        """Reload through Monaco's own model and dirty-tab bookkeeping."""
+        self._view.page().runJavaScript(
+            "(async () => { let ok = false; try {"
+            " if (typeof window.reloadActiveFile === 'function') {"
+            "   ok = (await window.reloadActiveFile()) === true; }"
+            " } catch (error) { console.error(error); }"
+            " if (window.editorBridge) window.editorBridge.finish_reload_request(ok);"
+            "})()"
+        )
 
     def _schedule_autosave(self) -> None:
         """Debounce auto-save when user edits text in Monaco."""

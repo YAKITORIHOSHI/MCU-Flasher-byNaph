@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import deque
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QTimer, Slot, Qt, QEvent
+from PySide6.QtCore import QTimer, Slot, Qt
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont
 # pyrefly: ignore [missing-import]
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton, QCheckBox, QLabel, QFrame, QSizePolicy,
 )
 from main.qt.icons import ActionButton as QPushButton
+from main.qt.log_follow import LogFollow, preserve_log_view
 
 # Tag → QColor mapping (mirrors the Tkinter tag_configure calls in ui_layout_mixin)
 _TAG_COLORS: dict[str, str] = {
@@ -79,10 +80,20 @@ _ANSI_CODE_MAP: dict[int, str] = {
 class AnsiColorParser:
     """Parses standard ANSI escape codes and appends formatted text to QPlainTextEdit."""
 
-    def __init__(self, default_color: str = _DEFAULT_COLOR):
-        self.default_color = default_color
-        self._current_color = default_color
+    def __init__(self, default_color: str | None = None):
+        from main.core.config import get_theme_mode
+        from main.qt.log_colors import themed_ansi_colors, themed_log_colors
+        theme_name = get_theme_mode()
+        self.default_color = default_color or themed_log_colors(theme_name)["normal"]
+        self._current_color = self.default_color
         self._is_bold = False
+        self._color_map = themed_ansi_colors(theme_name)
+
+    def set_theme(self, theme_name: str) -> None:
+        from main.qt.log_colors import themed_ansi_colors, themed_log_colors
+        self._color_map = themed_ansi_colors(theme_name)
+        self.default_color = themed_log_colors(theme_name)["normal"]
+        self._current_color = self.default_color
 
     def append_ansi_text(self, editor: QPlainTextEdit, cursor: QTextCursor, text: str) -> None:
         last_end = 0
@@ -105,8 +116,8 @@ class AnsiColorParser:
                     self._is_bold = True
                 elif val == 22:
                     self._is_bold = False
-                elif val in _ANSI_CODE_MAP:
-                    self._current_color = _ANSI_CODE_MAP[val]
+                elif val in self._color_map:
+                    self._current_color = self._color_map[val]
                 elif val == 39:
                     self._current_color = self.default_color
 
@@ -351,14 +362,7 @@ class ConsolePanel(QPlainTextEdit):
 
         # Autoscroll flag — controlled by the header checkbox
         self._autoscroll = True
-        self._scrollbar_held = False
-        self._user_scrolled_up = False
-
-        sb = self.verticalScrollBar()
-        sb.sliderPressed.connect(self._on_slider_pressed)
-        sb.sliderReleased.connect(self._on_slider_released)
-        sb.actionTriggered.connect(self._on_action_triggered)
-        sb.installEventFilter(self)
+        self._follow = LogFollow(self)
 
         cfg = load_gui_config()
         self._timestamp_enabled: bool = bool(cfg.get("timestamp_enabled", False))
@@ -374,45 +378,6 @@ class ConsolePanel(QPlainTextEdit):
         self._flush_timer.setInterval(performance_profile().terminal_interval_ms)
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
-
-    def _on_slider_pressed(self) -> None:
-        self._scrollbar_held = True
-
-    def _on_slider_released(self) -> None:
-        self._scrollbar_held = False
-        self._update_user_scrolled_state()
-
-    def _on_action_triggered(self, _action: int) -> None:
-        self._update_user_scrolled_state()
-
-    def _update_user_scrolled_state(self) -> None:
-        sb = self.verticalScrollBar()
-        if sb.maximum() - sb.value() <= 3:
-            self._user_scrolled_up = False
-        else:
-            self._user_scrolled_up = True
-
-    def _is_scroll_held(self) -> bool:
-        sb = self.verticalScrollBar()
-        if sb.isSliderDown():
-            return True
-        if getattr(self, "_scrollbar_held", False):
-            return True
-        return False
-
-    def eventFilter(self, obj, event):
-        if obj == self.verticalScrollBar():
-            etype = event.type()
-            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                self._scrollbar_held = True
-            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-                self._scrollbar_held = False
-                self._update_user_scrolled_state()
-        return super().eventFilter(obj, event)
-
-    def wheelEvent(self, event):
-        super().wheelEvent(event)
-        self._update_user_scrolled_state()
 
     def set_hide_warnings(self, enabled: bool) -> None:
         self._hide_warnings = bool(enabled)
@@ -432,23 +397,24 @@ class ConsolePanel(QPlainTextEdit):
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to build console base colors and ANSI default."""
         from main.qt.theme import get_palette
+        from main.qt.log_colors import themed_log_colors
         pal = get_palette(theme_name)
         bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
+        self._tag_colors = themed_log_colors(theme_name)
+        self._theme_name = theme_name
         palette = self.palette()
         palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
         self.setPalette(palette)
         if hasattr(self, "_ansi_parser") and self._ansi_parser:
-            self._ansi_parser.default_color = fg
-            self._ansi_parser._current_color = fg
+            self._ansi_parser.set_theme(theme_name)
+        if hasattr(self, "_entries"):
+            self._rebuild_document()
 
     def set_autoscroll(self, enabled: bool) -> None:
         self._autoscroll = enabled
-        if enabled:
-            self._user_scrolled_up = False
-            sb = self.verticalScrollBar()
-            sb.setValue(sb.maximum())
+        self._follow.set_enabled(enabled)
 
     def set_timestamp_enabled(self, enabled: bool) -> None:
         """Dynamically toggle timestamps across the entire console."""
@@ -490,21 +456,17 @@ class ConsolePanel(QPlainTextEdit):
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(selected_text)
 
+    @preserve_log_view(rebuild=True)
     def _rebuild_document(self) -> None:
         """Re-render the entire console document with/without timestamps."""
-        sb = self.verticalScrollBar()
-        saved_val = sb.value()
-        saved_max = sb.maximum()
-        was_at_bottom = (saved_val >= saved_max - 15)
-
-        cursor = self.textCursor()
+        cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         cursor.select(QTextCursor.SelectionType.Document)
         cursor.removeSelectedText()
 
         first = True
         ts_fmt = QTextCharFormat()
-        ts_fmt.setForeground(QColor(_TAG_COLORS.get("timestamp", "#6b7280")))
+        ts_fmt.setForeground(QColor(self._tag_colors["timestamp"]))
 
         for entry in self._entries:
             text = entry.get("text", "")
@@ -512,7 +474,7 @@ class ConsolePanel(QPlainTextEdit):
             newline = entry.get("newline", True)
             ts = entry.get("ts", "")
 
-            color_hex = _TAG_COLORS.get(tag, _DEFAULT_COLOR)
+            color_hex = self._tag_colors.get(tag, self._tag_colors["normal"])
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(color_hex))
             if tag in ("bold", "header", "severe_alert", "success_bold_lg", "magenta_bold_lg", "purple_header"):
@@ -530,12 +492,6 @@ class ConsolePanel(QPlainTextEdit):
         cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
-
-        if (self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up) or was_at_bottom:
-            self.setTextCursor(cursor)
-            sb.setValue(sb.maximum())
-        else:
-            sb.setValue(saved_val)
 
     @Slot(dict)
     def append_log(self, payload: dict) -> None:
@@ -556,6 +512,7 @@ class ConsolePanel(QPlainTextEdit):
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
+    @preserve_log_view()
     def _flush_queue(self) -> None:
         if not self._queue:
             if self._flush_timer.isActive():
@@ -570,18 +527,18 @@ class ConsolePanel(QPlainTextEdit):
         if not items:
             return
 
-        cursor = self.textCursor()
+        cursor = QTextCursor(self.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.beginEditBlock()
 
         first = True
         ts_fmt = QTextCharFormat()
-        ts_fmt.setForeground(QColor(_TAG_COLORS.get("timestamp", "#6b7280")))
+        ts_fmt.setForeground(QColor(self._tag_colors["timestamp"]))
 
         for text, tag, newline, replace_pattern, ts in items:
             if getattr(self, "_hide_warnings", False) and tag == "warning":
                 continue
-            color_hex = _TAG_COLORS.get(tag, _DEFAULT_COLOR)
+            color_hex = self._tag_colors.get(tag, self._tag_colors["normal"])
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(color_hex))
             if tag in ("bold", "header", "severe_alert", "success_bold_lg", "magenta_bold_lg", "purple_header"):
@@ -642,10 +599,6 @@ class ConsolePanel(QPlainTextEdit):
         from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
 
-        if self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up:
-            self.setTextCursor(cursor)
-            self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
-
         if not self._queue and self._flush_timer.isActive():
             self._flush_timer.stop()
 
@@ -659,11 +612,10 @@ class ConsolePanel(QPlainTextEdit):
         """Clear all console content and in-RAM queue."""
         self._entries.clear()
         self._queue.clear()
-        self._user_scrolled_up = False
-        self._scrollbar_held = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
         super().clear()
+        self._follow.reset()
 
 
 class ConsolePanelContainer(QWidget):

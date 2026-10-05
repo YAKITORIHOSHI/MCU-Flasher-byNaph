@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import re
 import difflib
 import threading
@@ -18,7 +19,7 @@ from main.core.constants import SCRIPT_DIR
 from main.core.toolchain import _get_safe_platformio_core_dir
 
 # Process-wide RAM caches for board catalogs and Arduino core parsing
-_BOARD_CATALOG_CACHE_RAM: tuple[int, int, dict] | None = None
+_BOARD_CATALOG_CACHE_RAM: tuple[int, int, tuple, dict] | None = None
 _BOARD_CATALOG_RAM_LOCK = threading.Lock()
 
 _PIO_BOARD_CATALOG_RAM_CACHE: dict[str, tuple[tuple, list[dict]]] = {}
@@ -254,7 +255,138 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
     return records
 
 
-_BOARD_CATALOG_CACHE_VERSION = 3
+_BOARD_CATALOG_CACHE_VERSION = 4
+_CATALOG_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_REVIEWED_UNAVAILABLE_PROVIDERS = {
+    "ebyte_e77_dev": ("zephyr", "framework-zephyr", "3.40402.0"),
+    "sparkfun_micromod_f405": ("zephyr", "framework-zephyr", "3.40402.0"),
+    "we_oceanus1": ("zephyr", "framework-zephyr", "3.40402.0"),
+    "olimex_f103": ("mbed", "framework-mbed", "6.61700.231105"),
+}
+
+
+def _prepared_catalog_fingerprint(core_dir: str | Path | None = None) -> tuple:
+    """Invalidate cached framework availability when bootstrap replaces its catalog."""
+    try:
+        root = Path(core_dir or _get_safe_platformio_core_dir(SCRIPT_DIR))
+        snapshot = root / ".mcu-offline-catalog.json"
+        stat = snapshot.stat()
+        fingerprint = [str(snapshot), stat.st_mtime_ns, stat.st_size]
+        for metadata in (root / "platforms/ststm32/platform.json",
+                         root / "packages/framework-zephyr/package.json",
+                         root / "packages/framework-zephyr@3.40402.0/package.json",
+                         root / "packages/framework-mbed/package.json",
+                         root / "packages/framework-mbed@6.61700.231105/package.json"):
+            try:
+                stat = metadata.stat()
+                fingerprint.extend((str(metadata), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                fingerprint.extend((str(metadata), 0, 0))
+        return tuple(fingerprint)
+    except (OSError, TypeError, ValueError):
+        return ()
+
+
+def _prepared_framework_availability(record: dict) -> dict | None:
+    """Accept explicit exclusions only with a complete, consistent framework list."""
+    declared, available = record.get("declared_frameworks"), record.get("frameworks")
+    unavailable = record.get("unavailable_frameworks")
+    if not isinstance(declared, list) or not isinstance(available, list) or not isinstance(unavailable, dict):
+        return None
+    if not 0 < len(declared) <= 64 or len(available) > 64 or len(unavailable) > 64:
+        return None
+    if not all(isinstance(value, str) and _CATALOG_IDENTIFIER.fullmatch(value)
+               for value in [*declared, *available, *unavailable]):
+        return None
+    declared_set = {value.lower() for value in declared}
+    available_set = {value.lower() for value in available}
+    excluded = {value.lower(): reason for value, reason in unavailable.items()}
+    if (len(declared_set) != len(declared) or len(available_set) != len(available)
+            or len(excluded) != len(unavailable)
+            or not all(isinstance(reason, str) and reason.strip() and len(reason) <= 2048
+                       for reason in excluded.values())
+            or not set(excluded).issubset(declared_set)
+            or available_set != declared_set - set(excluded)):
+        return None
+    return {"declared_frameworks": sorted(declared_set), "unavailable_frameworks": excluded}
+
+
+def _prepared_framework_overlay(root: Path) -> dict[tuple[str, str], dict]:
+    """Read bounded bootstrap results without changing raw board identities."""
+    try:
+        with (root / ".mcu-offline-catalog.json").open("rb") as stream:
+            payload = stream.read(32 * 1024 * 1024 + 1)
+        if len(payload) > 32 * 1024 * 1024:
+            return {}
+        records = json.loads(payload)
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(records, list):
+        return {}
+    overlay, seen = {}, set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        platform, board = record.get("platform"), record.get("id")
+        if not all(isinstance(value, str) and _CATALOG_IDENTIFIER.fullmatch(value)
+                   for value in (platform, board)):
+            continue
+        identity = (platform.lower(), board.lower())
+        if identity in seen:
+            overlay.pop(identity, None)
+            continue
+        seen.add(identity)
+        availability = _prepared_framework_availability(record)
+        if availability and availability["unavailable_frameworks"]:
+            availability.update({key: record.get(key) for key in (
+                "unavailability_manifest_sha256", "unavailability_platform_version", "unavailability_framework_versions",
+            )})
+            overlay[identity] = availability
+    return overlay
+
+
+def _prepared_overlay_matches(availability: dict, manifest: Path, root: Path) -> bool:
+    """Require the exact prepared manifest and installed platform/framework versions."""
+    digest = availability.get("unavailability_manifest_sha256")
+    version = availability.get("unavailability_platform_version")
+    framework_versions = availability.get("unavailability_framework_versions")
+    reviewed = _REVIEWED_UNAVAILABLE_PROVIDERS.get(manifest.stem)
+    if reviewed is None:
+        return False
+    framework, provider, provider_version = reviewed
+    if (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or version != "20.0.0" or framework_versions != {framework: provider_version}
+            or set(availability["unavailable_frameworks"]) != {framework}):
+        return False
+    try:
+        with manifest.open("rb") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536 or hashlib.sha256(raw).hexdigest() != digest:
+            return False
+        with (manifest.parent.parent / "platform.json").open("rb") as stream:
+            metadata = stream.read(16385)
+        if len(metadata) > 16384 or json.loads(metadata).get("version") != version:
+            return False
+        for folder in (provider, f"{provider}@{provider_version}"):
+            package = root / "packages" / folder / "package.json"
+            if not package.is_file():
+                continue
+            with package.open("rb") as stream:
+                metadata = stream.read(16385)
+            if len(metadata) > 16384:
+                return False
+            metadata = json.loads(metadata)
+            return metadata.get("name") == provider and metadata.get("version") == provider_version
+    except (OSError, AttributeError, TypeError, ValueError):
+        pass
+    return False
+
+
+def _framework_availability(record: dict) -> dict:
+    return {
+        "declared_frameworks": sorted(record.get("declared_frameworks") or record.get("frameworks") or []),
+        "unavailable_frameworks": dict(record.get("unavailable_frameworks") or {}),
+    }
 
 
 def _board_catalog_cache_path() -> Path:
@@ -280,14 +412,17 @@ def _load_board_catalog_cache() -> dict | None:
         if not path.is_file():
             return None
         st = path.stat()
+        prepared = _prepared_catalog_fingerprint()
         with _BOARD_CATALOG_RAM_LOCK:
             if _BOARD_CATALOG_CACHE_RAM is not None:
-                cached_mtime, cached_size, cached_dict = _BOARD_CATALOG_CACHE_RAM
-                if cached_mtime == st.st_mtime_ns and cached_size == st.st_size:
+                cached_mtime, cached_size, cached_prepared, cached_dict = _BOARD_CATALOG_CACHE_RAM
+                if cached_mtime == st.st_mtime_ns and cached_size == st.st_size and cached_prepared == prepared:
                     return {k: dict(v) for k, v in cached_dict.items()}
 
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != _BOARD_CATALOG_CACHE_VERSION:
+            return None
+        if payload.get("prepared_catalog") != list(prepared):
             return None
         boards = payload.get("boards")
         if not isinstance(boards, dict):
@@ -302,7 +437,7 @@ def _load_board_catalog_cache() -> dict | None:
             info["arduino_defines"] = set(info.get("arduino_defines", []))
 
         with _BOARD_CATALOG_RAM_LOCK:
-            _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, boards)
+            _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, prepared, boards)
         return {k: dict(v) for k, v in boards.items()}
     except Exception:
         return None
@@ -316,8 +451,10 @@ def _save_board_catalog_cache(boards: dict) -> None:
         path = _board_catalog_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
+        prepared = _prepared_catalog_fingerprint()
         payload = {
             "version": _BOARD_CATALOG_CACHE_VERSION,
+            "prepared_catalog": list(prepared),
             "boards": _json_safe_board_value(boards),
         }
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -325,7 +462,7 @@ def _save_board_catalog_cache(boards: dict) -> None:
         try:
             st = path.stat()
             with _BOARD_CATALOG_RAM_LOCK:
-                _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, boards)
+                _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, prepared, boards)
         except OSError:
             pass
     except Exception:
@@ -370,7 +507,11 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             for p in sorted(platforms_root.iterdir()):
                 if p.is_dir():
                     b = p / "boards"
-                    platform_st.append((p.name, p.stat().st_mtime_ns, b.stat().st_mtime_ns if b.is_dir() else 0))
+                    metadata = p / "platform.json"
+                    metadata_stat = metadata.stat() if metadata.is_file() else None
+                    platform_st.append((p.name, p.stat().st_mtime_ns, b.stat().st_mtime_ns if b.is_dir() else 0,
+                                        metadata_stat.st_mtime_ns if metadata_stat else 0,
+                                        metadata_stat.st_size if metadata_stat else 0))
         manifests = list(global_boards.glob("*.json")) if global_boards.is_dir() else []
         if platforms_root.is_dir():
             for platform_dir in platforms_root.iterdir():
@@ -381,7 +522,7 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         for path in sorted(manifests):
             stat = path.stat()
             manifest_stats.append((str(path), stat.st_size, stat.st_mtime_ns))
-        fp = (gb_mtime, pr_mtime, tuple(platform_st), tuple(manifest_stats))
+        fp = (gb_mtime, pr_mtime, tuple(platform_st), tuple(manifest_stats), _prepared_catalog_fingerprint(root))
     except Exception:
         fp = ()
 
@@ -407,6 +548,7 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         except OSError:
             pass
 
+    prepared_overlay = _prepared_framework_overlay(root)
     catalog: list[dict] = []
     for manifest_path, platform_hint in candidates:
         try:
@@ -451,7 +593,7 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             if match:
                 defines.add(_normalize_board_identity(match.group(1)))
 
-        catalog.append({
+        record = {
             "id": manifest_path.stem,
             "name": str(data.get("name") or manifest_path.stem),
             "vendor": str(data.get("vendor") or ""),
@@ -469,7 +611,16 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
             "hwids": hwids,
             "arduino_defines": defines,
             "manifest": str(manifest_path),
-        })
+        }
+        availability = prepared_overlay.get((record["platform"].lower(), record["id"].lower()))
+        # A changed upstream declaration must be prepared again, not inherit an
+        # exclusion from a different manifest or a guessed board substitute.
+        if (availability and record["platform"] == "ststm32"
+                and set(availability["declared_frameworks"]) == record["frameworks"]
+                and _prepared_overlay_matches(availability, manifest_path, root)):
+            record.update(_framework_availability(availability))
+            record["frameworks"] -= set(availability["unavailable_frameworks"])
+        catalog.append(record)
 
     with _BOARD_CATALOG_RAM_LOCK:
         _PIO_BOARD_CATALOG_RAM_CACHE[cache_key] = (fp, catalog)
@@ -477,27 +628,54 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
 
 
 
-def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, list[str]]:
+def _arduino_match_features(record: dict, *, candidate: bool = False) -> dict:
+    """Normalize matching evidence once for this discovery pass, never persist it."""
+    name = str(record.get("name") or "")
+    identifier = record.get("id" if candidate else "arduino_id")
+    mcu = str(record.get("mcu") or "").lower()
+    features = {
+        "mcu": mcu, "normalized_mcu": _normalize_board_identity(mcu),
+        "id": _normalize_board_identity(identifier),
+        "name": _normalize_board_identity(name),
+        "name_lower": name.lower(),
+        "variant": _normalize_board_identity(record.get("variant")),
+    }
+    if candidate:
+        features.update({
+            "name_without_vendor": _board_name_without_vendor(name, record.get("vendor")),
+            "defines": {_normalize_arduino_define(value) for value in record.get("arduino_defines") or ()},
+            "words": _board_name_tokens(f"{record.get('name','')} {record.get('id','')} {record.get('vendor','')}"),
+            # Reuse the unchanged candidate sequence's character index. The
+            # matcher is owned by this one pass, not shared across workers.
+            "similarity": difflib.SequenceMatcher(None, "", name.lower(), autojunk=False),
+        })
+    else:
+        features.update({
+            "build": _normalize_board_identity(record.get("build_board")),
+            "build_define": _normalize_arduino_define(record.get("build_board")),
+            "words": _board_name_tokens(f"{record.get('name','')} {record.get('arduino_id','')}"),
+        })
+    return features
+
+
+def _score_arduino_to_pio_board(record: dict, candidate: dict, *,
+                              record_features: dict | None = None,
+                              candidate_features: dict | None = None) -> tuple[float, list[str]]:
     """Score one Arduino board record against one canonical PlatformIO board."""
     frameworks = candidate.get("frameworks") or set()
     if frameworks and "arduino" not in frameworks:
         return -1.0, []
 
-    rec_mcu = str(record.get("mcu") or "").lower()
-    pio_mcu = str(candidate.get("mcu") or "").lower()
-    if rec_mcu and pio_mcu and _normalize_board_identity(rec_mcu) != _normalize_board_identity(pio_mcu):
+    rec = record_features or _arduino_match_features(record)
+    pio = candidate_features or _arduino_match_features(candidate, candidate=True)
+    rec_mcu, pio_mcu = rec["mcu"], pio["mcu"]
+    if rec_mcu and pio_mcu and rec["normalized_mcu"] != pio["normalized_mcu"]:
         return -1.0, []
 
     score = 0.0
     reasons: list[str] = []
-    rid = _normalize_board_identity(record.get("arduino_id"))
-    rname = _normalize_board_identity(record.get("name"))
-    rvariant = _normalize_board_identity(record.get("variant"))
-    rbuild = _normalize_board_identity(record.get("build_board"))
-    cid = _normalize_board_identity(candidate.get("id"))
-    cname = _normalize_board_identity(candidate.get("name"))
-    cname_without_vendor = _board_name_without_vendor(candidate.get("name"), candidate.get("vendor"))
-    cvariant = _normalize_board_identity(candidate.get("variant"))
+    rid, rname, rvariant, rbuild = rec["id"], rec["name"], rec["variant"], rec["build"]
+    cid, cname, cname_without_vendor, cvariant = pio["id"], pio["name"], pio["name_without_vendor"], pio["variant"]
 
     if rec_mcu and pio_mcu:
         score += 45
@@ -514,8 +692,8 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, l
     if record.get("hwids") and candidate.get("hwids") and (record["hwids"] & candidate["hwids"]):
         score += 185
         reasons.append("usb")
-    defines = {_normalize_arduino_define(value) for value in candidate.get("arduino_defines") or ()}
-    if rbuild and _normalize_arduino_define(rbuild) in defines:
+    defines = pio["defines"]
+    if rbuild and rec["build_define"] in defines:
         score += 135
         reasons.append("arduino-define")
     elif rid and rid in defines:
@@ -524,27 +702,28 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict) -> tuple[float, l
 
     # Token/name similarity is a secondary signal only. Strong identity fields
     # above (variant, USB IDs, Arduino define, exact name/id) dominate it.
-    rec_words = _board_name_tokens(f"{record.get('name','')} {record.get('arduino_id','')}")
-    pio_words = _board_name_tokens(f"{candidate.get('name','')} {candidate.get('id','')} {candidate.get('vendor','')}")
+    rec_words, pio_words = rec["words"], pio["words"]
     if rec_words and pio_words:
         overlap = len(rec_words & pio_words) / max(1, len(rec_words | pio_words))
         score += overlap * 70.0
-    similarity = difflib.SequenceMatcher(
-        None,
-        str(record.get("name") or "").lower(),
-        str(candidate.get("name") or "").lower(),
-        autojunk=False,
-    ).ratio()
+    matcher = pio["similarity"]
+    matcher.set_seq1(rec["name_lower"])
+    similarity = matcher.ratio()
     score += similarity * 45.0
 
     return score, reasons
 
 
-def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | None:
+def _resolve_arduino_board_record(record: dict, catalog: list[dict], *,
+                                  match_features: dict[int, dict] | None = None) -> dict | None:
     """Resolve an Arduino board to a PlatformIO board, rejecting ambiguous guesses."""
     ranked: list[tuple[float, dict, list[str]]] = []
+    record_features = _arduino_match_features(record)
     for candidate in catalog:
-        score, reasons = _score_arduino_to_pio_board(record, candidate)
+        features = match_features.get(id(candidate)) if match_features is not None else None
+        score, reasons = _score_arduino_to_pio_board(
+            record, candidate, record_features=record_features, candidate_features=features,
+        )
         if score >= 0:
             ranked.append((score, candidate, reasons))
     if not ranked:
@@ -564,7 +743,8 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict]) -> dict | N
     }
 
 
-def resolve_board_definition(display_name: str, info: dict, catalog: list[dict]) -> dict:
+def resolve_board_definition(display_name: str, info: dict, catalog: list[dict], *,
+                             match_features: dict[int, dict] | None = None) -> dict:
     """Repair one cached row using canonical definitions, without family guesses.
 
     This also works before downloaded-core discovery completes: the cached
@@ -584,7 +764,7 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict])
             "build_board": info.get("arduino_build_board"), "hwids": info.get("hwids") or set(),
         }
         candidates = [row for row in catalog if not platform or str(row.get("platform") or "").lower() == platform]
-        match = _resolve_arduino_board_record(record, candidates)
+        match = _resolve_arduino_board_record(record, candidates, match_features=match_features)
     if not match:
         return resolved
     frameworks = sorted(match.get("frameworks") or [])
@@ -594,7 +774,8 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict])
         "pio_name": str(match.get("name") or ""), "pio_vendor": str(match.get("vendor") or ""),
         "pio_match_score": match.get("match_score", 1000.0),
         "pio_match_reasons": list(match.get("match_reasons") or ["platformio-native-manifest"]),
-        "frameworks": frameworks, "upload_protocol": str(match.get("upload_protocol") or ""),
+        "frameworks": frameworks, **_framework_availability(match),
+        "upload_protocol": str(match.get("upload_protocol") or ""),
         "upload_speed": match.get("upload_speed"),
         "require_upload_port": match.get("require_upload_port"),
         "mcu": str(match.get("mcu") or info.get("mcu") or "").lower(),
@@ -701,7 +882,8 @@ def _fallback_board_id_for_platform(
 def load_registry_board_catalog() -> list[dict]:
     """Read the canonical catalog saved by bootstrap; never contact a registry."""
     from main.core.target_profile import target_problem
-    snapshot = Path(_get_safe_platformio_core_dir(SCRIPT_DIR)) / ".mcu-offline-catalog.json"
+    root = Path(_get_safe_platformio_core_dir(SCRIPT_DIR))
+    snapshot = root / ".mcu-offline-catalog.json"
     if not snapshot.is_file():
         return _load_platformio_board_catalog()
     records = json.loads(snapshot.read_text(encoding="utf-8"))
@@ -717,12 +899,22 @@ def load_registry_board_catalog() -> list[dict]:
         frameworks = record.get("frameworks") or []
         if not isinstance(frameworks, (list, tuple)):
             continue
+        availability = _prepared_framework_availability(record)
+        if availability and availability["unavailable_frameworks"]:
+            proof = {**record, **availability}
+            manifest = root / "platforms" / str(record["platform"]) / "boards" / f"{record['id']}.json"
+            if not _prepared_overlay_matches(proof, manifest, root):
+                frameworks = availability["declared_frameworks"]
+                availability["unavailable_frameworks"] = {}
         try:
             flash_size = f"{float(record.get('rom') or 0) / (1024 * 1024):g}MB"
         except (TypeError, ValueError, OverflowError):
             flash_size = "unknown"
         catalog.append({
             **record, "frameworks": {str(f).lower() for f in frameworks},
+            **(availability or {
+                "declared_frameworks": sorted({str(f).lower() for f in frameworks}), "unavailable_frameworks": {},
+            }),
             "flash_size": flash_size,
             "hwids": set(), "arduino_defines": set(), "manifest": "",
         })
@@ -754,14 +946,16 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
     if registry_catalog:
         installed = {(b["platform"], b["id"]) for b in catalog}
         catalog.extend(b for b in registry_catalog if (b["platform"], b["id"]) not in installed)
+    match_features = {id(candidate): _arduino_match_features(candidate, candidate=True)
+                      for candidate in catalog}
     # Empty board IDs in an older Arduino row cannot be refreshed by the
     # native (platform, board ID) merge below. Resolve their retained identity.
-    boards = {name: resolve_board_definition(name, info, catalog)
+    boards = {name: resolve_board_definition(name, info, catalog, match_features=match_features)
               if info.get("pio_resolved") is False or not info.get("board") else info
               for name, info in boards.items()}
 
     resolved_rows: list[tuple[dict, dict | None]] = [
-        (record, _resolve_arduino_board_record(record, catalog)) for record in records
+        (record, _resolve_arduino_board_record(record, catalog, match_features=match_features)) for record in records
     ]
 
     # Infer the PlatformIO platform for an entire downloaded Arduino core from
@@ -826,6 +1020,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "board": pio_id,
             "framework": "arduino",
             "frameworks": sorted((match or {}).get("frameworks") or ["arduino"]),
+            **_framework_availability(match or {}),
             "pio_resolved": pio_resolved,
             "pio_match_score": (match or {}).get("match_score", 0.0),
             "pio_match_reasons": list((match or {}).get("match_reasons") or []),
@@ -875,7 +1070,8 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             frameworks = sorted(pio_board.get("frameworks") or [])
             prior.update({
                 "pio_resolved": True, "pio_manifest": str(pio_board.get("manifest") or ""),
-                "frameworks": frameworks, "upload_protocol": str(pio_board.get("upload_protocol") or ""),
+                "frameworks": frameworks, **_framework_availability(pio_board),
+                "upload_protocol": str(pio_board.get("upload_protocol") or ""),
                 "upload_speed": pio_board.get("upload_speed"),
                 "require_upload_port": pio_board.get("require_upload_port"),
                 "has_psram": bool(pio_board.get("has_psram")),
@@ -906,6 +1102,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "board": b_id,
             "framework": framework,
             "frameworks": sorted(frameworks),
+            **_framework_availability(pio_board),
             "pio_resolved": True,
             "pio_match_score": 100.0,
             "pio_match_reasons": ["platformio-native-manifest"],

@@ -165,6 +165,12 @@ QToolBar#controls-toolbar {{
     padding: 0px;
 }}
 
+QToolBar#primary-toolbar[shortScreen="true"],
+QToolBar#controls-toolbar[shortScreen="true"] {{
+    padding-top: 0px;
+    padding-bottom: 0px;
+}}
+
 QWidget#controls-bar {{
     background-color: {glass};
     border-bottom: 1px solid {border};
@@ -200,7 +206,6 @@ QTableWidget#syntax-table {{
     alternate-background-color: {bg_dark};
     color: {text};
     border: none;
-    font-size: 12px;
 }}
 QTableWidget#syntax-table::item {{
     padding: 4px 8px;
@@ -967,7 +972,7 @@ QSizeGrip {{
 
 /* Portable glass surfaces. Reading panes stay opaque for stable contrast. */
 QWidget#monaco-editor-panel {{
-    background: {bg_darkest}; border: 1px solid {rim}; border-radius: 10px;
+    background: {bg_darkest}; border: none; border-radius: 0; margin: 0; padding: 0;
 }}
 QWidget#editor-detached-placeholder {{ background: {bg_darkest}; }}
 QLabel#detached-editor-description {{ color: {text_dim}; font-size: 12px; }}
@@ -977,8 +982,9 @@ QFrame#notif-header, QFrame#terminal-header, QFrame#syntax-header {{
     border-bottom: 1px solid {rim};
 }}
 QTabWidget#workspace-tabs {{ background: transparent; }}
-QTabWidget#workspace-tabs::pane {{
-    background: {bg_darkest}; border: 1px solid {rim}; border-radius: 10px;
+QTabWidget#workspace-tabs::pane,
+QTabWidget#workspace-tabs QTabWidget::pane {{
+    background: {bg_darkest}; border: none; border-radius: 0; margin: 0; padding: 0;
 }}
 QTabWidget#workspace-tabs QTabBar {{
     background: transparent; border: none;

@@ -321,6 +321,10 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             width: 0px !important;
             height: 0px !important;
         }
+        #fallback-output::-webkit-scrollbar {
+            display: block !important;
+            width: 8px !important;
+        }
     </style>
     <link rel="stylesheet" href="/xterm/xterm.css" />
     <script src="/xterm/xterm.js" onerror="window.xtermErr=true"></script>
@@ -342,6 +346,21 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         const fallbackContainer = document.getElementById('fallback-container');
         const fallbackOutput = document.getElementById('fallback-output');
         const fallbackInput = document.getElementById('fallback-input');
+        let fallbackPointerHeld = false;
+        fallbackOutput.addEventListener('pointerdown', () => { fallbackPointerHeld = true; });
+        const releaseFallbackPointer = () => { fallbackPointerHeld = false; };
+        window.addEventListener('pointerup', releaseFallbackPointer, true);
+        window.addEventListener('pointercancel', releaseFallbackPointer, true);
+        window.addEventListener('blur', releaseFallbackPointer);
+
+        function appendFallbackOutput(data) {
+            const top = fallbackOutput.scrollTop;
+            const following = !fallbackPointerHeld &&
+                fallbackOutput.scrollHeight - fallbackOutput.clientHeight - top <= 1;
+            // New text nodes retain any selection in older output.
+            fallbackOutput.appendChild(document.createTextNode(stripAnsi(data)));
+            fallbackOutput.scrollTop = following ? fallbackOutput.scrollHeight : top;
+        }
 
         function enableFallback() {
             useFallback = true;
@@ -404,15 +423,14 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             if (term) {
                 term.write(event.data);
             } else {
-                fallbackOutput.textContent += stripAnsi(event.data);
-                fallbackOutput.scrollTop = fallbackOutput.scrollHeight;
+                appendFallbackOutput(event.data);
             }
         };
 
         socket.onclose = () => {
             const msg = '\r\n[Terminal session closed]\r\n';
             if (term) term.write(msg);
-            else fallbackOutput.textContent += msg;
+            else appendFallbackOutput(msg);
         };
 
         if (term) {

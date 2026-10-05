@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QComboBox, QTextBrowser, QFrame, QApplication, QSizePolicy
 )
 from main.qt.icons import ActionButton as QPushButton
+from main.qt.log_follow import LogFollow, preserve_log_view
 
 from src.dbs import dbs_read, dbs_delete
 
@@ -32,6 +33,7 @@ class NotifPanel(QWidget):
         super().__init__(parent)
         self._backend = backend
         self._build_ui()
+        self._follow = LogFollow(self._browser)
         from main.core.config import get_theme_mode
         self.apply_theme(get_theme_mode())
         self._load_notifications("All")
@@ -221,6 +223,7 @@ class NotifPanel(QWidget):
             f"</div>"
         )
 
+    @preserve_log_view()
     def _append_notification_card(self, payload: dict) -> None:
         """Append one live notification directly to the bottom of the display."""
         title = payload.get("title", "Notice")

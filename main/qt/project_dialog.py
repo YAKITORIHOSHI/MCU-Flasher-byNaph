@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 import re
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
@@ -70,7 +70,10 @@ class ProjectDialog(QDialog):
     ):
         super().__init__(parent)
         self._backend = backend
-        self._open_in_new_window = open_in_new_window
+        # True means the dialog was opened from an existing workspace and
+        # should ask where each selected project belongs. Startup pickers have
+        # no active workspace to switch, so they keep the direct current path.
+        self._allow_window_choice = bool(open_in_new_window)
         self.selected_project: Optional[Path] = None
 
         # Determine start directory (NEVER the application codebase)
@@ -102,7 +105,7 @@ class ProjectDialog(QDialog):
             self._update_existing_preview(self._start_dir)
 
     def _is_busy(self) -> bool:
-        if self._open_in_new_window:
+        if self._allow_window_choice:
             return False
         if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
             return True
@@ -165,8 +168,11 @@ class ProjectDialog(QDialog):
         hl.setSpacing(2)
 
         self._title_lbl = QLabel("MCU Flasher by Naph")
-        self._sub_lbl = QLabel("Open each sketch in its own window" if self._open_in_new_window
-                              else "Open an existing sketch project, or create a new one")
+        self._sub_lbl = QLabel(
+            "Choose whether each project opens here or in a separate window"
+            if self._allow_window_choice
+            else "Open an existing sketch project, or create a new one"
+        )
 
         hl.addWidget(self._title_lbl)
         hl.addWidget(self._sub_lbl)
@@ -762,36 +768,13 @@ class ProjectDialog(QDialog):
             self._existing_status.setText("✖ The specified folder does not exist.")
             return
 
-        # Provide immediate visual feedback so UI never feels frozen
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.setEnabled(False)
-        QApplication.processEvents()
-
-        try:
-            if self._backend:
-                res = self._open_project(path)
-                if not res.get("success"):
-                    self.setEnabled(True)
-                    QApplication.restoreOverrideCursor()
-                    err_msg = res.get('error', 'Could not open project')
-                    self._existing_status.setStyleSheet("color: #e74c3c;")
-                    self._existing_status.setText(f"✖ {err_msg}")
-                    if res.get("already_open"):
-                        QMessageBox.information(
-                            self,
-                            "Project Already Open",
-                            f"The sketch project '{p.name}' is already open in another window.\n\n"
-                            "Switched focus to the active window.",
-                        )
-                    return
-
-            self.selected_project = p
-            self.hide()
-            QApplication.processEvents()
-            self.accept()
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.setEnabled(True)
+        self._dispatch_project_action(
+            path,
+            p.name,
+            lambda in_new_window: self._open_project(path, in_new_window),
+            lambda: self._accept_selected_project(p),
+            self._existing_status,
+        )
 
     def _create_project(self) -> None:
         if self._is_busy():
@@ -815,46 +798,23 @@ class ProjectDialog(QDialog):
             self._new_status.setText("✖ Cannot create sketch inside MCU Flasher application folder.")
             return
 
-        # Provide immediate visual feedback so UI never feels frozen
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.setEnabled(False)
-        QApplication.processEvents()
-
-        try:
-            tmpl = self._template_combo.currentData() or "standard"
-            if self._backend:
-                res = self._backend.create_project(
-                    parent_dir=parent,
-                    name=name,
-                    include_h=self._cb_include_h.isChecked(),
-                    include_cpp=self._cb_include_cpp.isChecked(),
-                    template_type=tmpl,
-                    open_in_new_window=self._open_in_new_window,
-                )
-                if not res.get("success"):
-                    self.setEnabled(True)
-                    QApplication.restoreOverrideCursor()
-                    err_msg = res.get('error', 'Failed to create project')
-                    self._new_status.setStyleSheet("color: #e74c3c;")
-                    self._new_status.setText(f"✖ {err_msg}")
-                    if res.get("already_open"):
-                        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
-                        QMessageBox.information(
-                            self,
-                            "Project Already Open",
-                            f"The sketch project '{clean_name}' is already open in another window.\n\n"
-                            "Switched focus to the active window.",
-                        )
-                    return
-
-            clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
-            self.selected_project = Path(parent) / clean_name
-            self.hide()
-            QApplication.processEvents()
-            self.accept()
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.setEnabled(True)
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+        target = Path(parent) / clean_name
+        tmpl = self._template_combo.currentData() or "standard"
+        self._dispatch_project_action(
+            str(target),
+            clean_name,
+            lambda in_new_window: self._backend.create_project(
+                parent_dir=parent,
+                name=name,
+                include_h=self._cb_include_h.isChecked(),
+                include_cpp=self._cb_include_cpp.isChecked(),
+                template_type=tmpl,
+                open_in_new_window=in_new_window,
+            ) if self._backend else {"success": True},
+            lambda: self._accept_selected_project(target),
+            self._new_status,
+        )
 
     def _load_recents(self) -> None:
         self._recent_list.clear()
@@ -932,34 +892,13 @@ class ProjectDialog(QDialog):
             self._recent_preview_lbl.setText("✖ The MCU Flasher application folder cannot be opened as a project.")
             return
 
-        # Provide immediate visual feedback so UI never feels frozen
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.setEnabled(False)
-        QApplication.processEvents()
-
-        try:
-            if self._backend:
-                res = self._open_project(path)
-                if not res.get("success"):
-                    self.setEnabled(True)
-                    QApplication.restoreOverrideCursor()
-                    err_msg = res.get('error', 'Could not open project')
-                    self._recent_preview_lbl.setText(f"✖ {err_msg}")
-                    if res.get("already_open"):
-                        QMessageBox.information(
-                            self,
-                            "Project Already Open",
-                            f"The sketch project '{p.name}' is already open in another window.\n\n"
-                            "Switched focus to the active window.",
-                        )
-                    return
-            self.selected_project = p
-            self.hide()
-            QApplication.processEvents()
-            self.accept()
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.setEnabled(True)
+        self._dispatch_project_action(
+            path,
+            p.name,
+            lambda in_new_window: self._open_project(path, in_new_window),
+            lambda: self._accept_selected_project(p),
+            self._recent_preview_lbl,
+        )
 
     def _clear_recents(self) -> None:
         if self._backend:
@@ -971,8 +910,207 @@ class ProjectDialog(QDialog):
         self._btn_clear_recents.setEnabled(False)
         self._btn_clear_recents.setCursor(Qt.CursorShape.ArrowCursor)
 
-    def _open_project(self, path: str) -> dict:
-        if self._open_in_new_window:
+    def _choose_project_window(self, project_name: str) -> bool | None:
+        """Ask whether this project belongs in this workspace or another."""
+        if not self._allow_window_choice:
+            return False
+
+        prompt = QMessageBox(self)
+        self._style_project_prompt(prompt)
+        prompt.setIcon(QMessageBox.Icon.Question)
+        prompt.setWindowTitle("Choose Project Window")
+        prompt.setText(f"Where would you like to open ‘{project_name}’?")
+        prompt.setInformativeText(
+            "Current window switches this workspace to the selected project. "
+            "New window keeps this project, editor and hardware selection open here."
+        )
+        current = prompt.addButton("This window", QMessageBox.ButtonRole.AcceptRole)
+        current.setAccessibleName("Open in current window")
+        new_window = prompt.addButton("New window", QMessageBox.ButtonRole.ActionRole)
+        new_window.setAccessibleName("Open in a new window")
+        cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(current)
+        prompt.setEscapeButton(cancel)
+        prompt.exec()
+        clicked = prompt.clickedButton()
+        if clicked is current:
+            return False
+        if clicked is new_window:
+            return True
+        return None
+
+    @staticmethod
+    def _style_project_prompt(prompt: QMessageBox) -> None:
+        """Keep native choice prompts readable and aligned with the active glass theme."""
+        try:
+            from main.core.config import get_theme_mode
+            from main.qt.theme import get_palette
+            pal = get_palette(get_theme_mode())
+        except Exception:
+            pal = {}
+        bg = pal.get("BG_DARK", "#151922")
+        surface = pal.get("BG_MID", "#1c2333")
+        hover = pal.get("BG_HOVER", "#2a3a55")
+        text = pal.get("TEXT", "#e0e6ed")
+        bright = pal.get("TEXT_BRIGHT", "#ffffff")
+        border = pal.get("BORDER", "#2d3748")
+        cyan = pal.get("CYAN", "#00d2ff")
+        prompt.setStyleSheet(f"""
+            QMessageBox {{ background-color: {bg}; color: {text}; }}
+            QMessageBox QLabel {{ color: {text}; background: transparent; font-size: 12px; }}
+            QMessageBox QPushButton {{
+                min-width: 88px; padding: 6px 12px; background-color: {surface};
+                color: {bright}; border: 1px solid {border}; border-radius: 6px;
+            }}
+            QMessageBox QPushButton:hover {{ background-color: {hover}; border-color: {cyan}; }}
+            QMessageBox QPushButton:pressed {{ background-color: {bg}; }}
+        """)
+
+    def _prepare_current_window_switch(
+        self,
+        target: str,
+        callback: Callable[[bool, str, bool], None],
+        on_wait: Callable[[], None] | None = None,
+    ) -> None:
+        """Protect the current editor before replacing its active project."""
+        backend = self._backend
+        parent = self.parent()
+        if (backend and (backend.is_busy or getattr(backend, "active_operation", None) is not None)) or \
+                (parent and getattr(parent, "_active_operation", None) is not None):
+            callback(False, "Changing project is not allowed while an action is in progress.", False)
+            return
+
+        try:
+            current_dir = Path(backend.sketch_dir_path).resolve() if backend else None
+            target_dir = Path(target).resolve()
+            if current_dir == target_dir:
+                callback(True, "", False)
+                return
+        except (OSError, TypeError, ValueError):
+            pass
+
+        dirty = bool(backend and any(getattr(backend, "modified_files", {}).values()))
+        if not dirty:
+            callback(True, "", False)
+            return
+
+        prompt = QMessageBox(self)
+        self._style_project_prompt(prompt)
+        prompt.setIcon(QMessageBox.Icon.Warning)
+        prompt.setWindowTitle("Unsaved Editor Changes")
+        prompt.setText("The current project has unsaved editor changes.")
+        prompt.setInformativeText(
+            "Save them before switching, discard them and continue, or cancel this project change."
+        )
+        save = prompt.addButton("Save All", QMessageBox.ButtonRole.AcceptRole)
+        save.setAccessibleName("Save all changes and continue")
+        discard = prompt.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        discard.setAccessibleName("Discard changes and continue")
+        cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(save)
+        prompt.setEscapeButton(cancel)
+        prompt.exec()
+        clicked = prompt.clickedButton()
+        if clicked is discard:
+            callback(True, "", False)
+            return
+        if clicked is not save:
+            callback(False, "", True)
+            return
+
+        editor = getattr(parent, "_editor_panel", None)
+        save_all = getattr(editor, "trigger_save_all", None)
+        if not callable(save_all):
+            callback(False, "The editor could not confirm that its changes were saved.", False)
+            return
+        if on_wait:
+            on_wait()
+        save_all(
+            callback=lambda: callback(True, "", False),
+            failure_callback=lambda: callback(False, "Save All failed or timed out; the project was left open.", False),
+        )
+
+    def _accept_selected_project(self, project: Path) -> None:
+        self.selected_project = project
+        self.hide()
+        QApplication.processEvents()
+        self.accept()
+
+    def _dispatch_project_action(
+        self,
+        target: str,
+        project_name: str,
+        action: Callable[[bool], dict],
+        on_success: Callable[[], None],
+        status_label: QLabel,
+    ) -> None:
+        in_new_window = self._choose_project_window(project_name)
+        if in_new_window is None:
+            return
+
+        state = {"finished": False, "waiting": False}
+
+        def begin_wait() -> None:
+            if state["waiting"]:
+                return
+            state["waiting"] = True
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.setEnabled(False)
+            QApplication.processEvents()
+
+        def end_wait() -> None:
+            if not state["waiting"]:
+                return
+            state["waiting"] = False
+            QApplication.restoreOverrideCursor()
+            self.setEnabled(True)
+
+        def finish(result: dict | None = None, error: str = "", cancelled: bool = False) -> None:
+            if state["finished"]:
+                return
+            if result is None and not error and cancelled:
+                state["finished"] = True
+                end_wait()
+                return
+            if result is not None and result.get("success"):
+                state["finished"] = True
+                end_wait()
+                on_success()
+                return
+
+            state["finished"] = True
+            end_wait()
+            message = error or (result or {}).get("error", "Could not open project")
+            status_label.setStyleSheet("color: #e74c3c;")
+            status_label.setText(f"✖ {message}")
+            if result and result.get("already_open"):
+                QMessageBox.information(
+                    self,
+                    "Project Already Open",
+                    f"The sketch project '{project_name}' is already open in another window.\n\n"
+                    "Switched focus to the active window.",
+                )
+
+        def perform() -> None:
+            begin_wait()
+            try:
+                finish(action(bool(in_new_window)))
+            except Exception as exc:
+                finish(error=str(exc))
+
+        if not in_new_window and self._allow_window_choice:
+            self._prepare_current_window_switch(
+                target,
+                lambda ready, error, cancelled: perform() if ready else finish(error=error, cancelled=cancelled),
+                on_wait=begin_wait,
+            )
+        else:
+            perform()
+
+    def _open_project(self, path: str, open_in_new_window: bool = False) -> dict:
+        if not self._backend:
+            return {"success": True}
+        if open_in_new_window:
             result = self._backend.open_project_window(path)
             if result.get("success") and result.get("already_open"):
                 from main.core.config import focus_project_window
@@ -981,12 +1119,21 @@ class ProjectDialog(QDialog):
                 hwnd, pid = result.get("owner_hwnd", 0), result.get("owner_pid", 0)
                 QTimer.singleShot(250, lambda: focus_project_window(hwnd, pid))
             return result
+        if self._backend:
+            try:
+                if Path(self._backend.sketch_dir_path).resolve() == Path(path).resolve():
+                    return {"success": True, "already_current": True}
+            except (OSError, TypeError, ValueError):
+                pass
         return self._backend.open_project(path)
 
     def _setup_open_projects_tab(self) -> None:
         tab = QWidget(self)
         layout = QVBoxLayout(tab)
-        hint = QLabel("Each window keeps its own editor, terminal and board/port selection.", tab)
+        hint = QLabel(
+            "Choose a window when opening a project. Each window keeps its own editor, terminal and board/port selection.",
+            tab,
+        )
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self._open_projects_list = QListWidget(tab)

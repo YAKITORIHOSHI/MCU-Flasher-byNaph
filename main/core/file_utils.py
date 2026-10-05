@@ -311,20 +311,44 @@ def _hide_junction(path) -> None:
         pass
 
 def ensure_file_writable(path) -> None:
-    """Ensure file is writable by clearing POSIX read-only flags and Windows
-    file attributes to FILE_ATTRIBUTE_NORMAL (0x80) to prevent Win32 CreateFile /
-    open('w') ERROR_ACCESS_DENIED ([Errno 13] Permission denied)."""
+    """Clear read-only protection while preserving hidden and system flags."""
     try:
         p = Path(path)
         if not p.exists():
             return
-        os.chmod(p, 0o666)
+        os.chmod(p, 0o777 if p.is_dir() else 0o666)
         if sys.platform == "win32":
             import ctypes
-            # 0x80 = FILE_ATTRIBUTE_NORMAL
-            ctypes.windll.kernel32.SetFileAttributesW(str(p), 0x80)
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
+            if attrs != -1:
+                desired = attrs & ~0x01
+                if not desired:
+                    desired = 0x80
+                if desired != attrs:
+                    _set_windows_file_attributes(p, desired)
     except Exception:
         pass
+
+
+def write_generated_text(path, content: str, *, encoding="utf-8") -> None:
+    """Publish app metadata atomically and hidden, including repeated writes.
+
+    Windows rejects truncation of some hidden files. Replacing a prepared
+    hidden sibling avoids exposing the target while updating its contents.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".mcu-generated-", suffix=".tmp", dir=target.parent)
+    temporary = Path(temporary_name)
+    try:
+        hide_hidden_attribute(temporary)
+        with os.fdopen(descriptor, "w", encoding=encoding, newline="") as stream:
+            stream.write(content)
+        ensure_file_writable(target)
+        retry_transient_file_operation(lambda: os.replace(temporary, target))
+        hide_hidden_attribute(target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def is_nonfatal_pio_clean_report(text: str) -> bool:
@@ -1273,9 +1297,9 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         )
         for ign_path in (s_dir / ".opencodeignore", cache_dir / ".opencodeignore"):
             try:
-                ensure_file_writable(ign_path)
-                ign_path.write_text(ignore_content, encoding="utf-8")
-                hide_hidden_attribute(ign_path)
+                if ign_path.is_file() and not _is_mcu_generated_instruction_file(ign_path):
+                    continue
+                write_generated_text(ign_path, ignore_content)
             except Exception:
                 pass
 
@@ -1364,10 +1388,12 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
 
         for ag_file in (s_dir / "AGENTS.md", cache_dir / "AGENTS.md", s_dir / ".opencode" / "AGENTS.md"):
             try:
+                if ag_file.is_file() and not _is_mcu_generated_instruction_file(ag_file):
+                    continue
                 ag_file.parent.mkdir(parents=True, exist_ok=True)
-                ensure_file_writable(ag_file)
-                ag_file.write_text(agents_content, encoding="utf-8")
-                hide_hidden_attribute(ag_file)
+                if ag_file.parent != s_dir:
+                    hide_generated_directory(ag_file.parent)
+                write_generated_text(ag_file, agents_content)
             except Exception:
                 pass
 
@@ -1430,16 +1456,12 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             workflow_dir = opencode_skills_base / "sketch-workflow"
             workflow_dir.mkdir(parents=True, exist_ok=True)
             workflow_file = workflow_dir / "SKILL.md"
-            ensure_file_writable(workflow_file)
-            workflow_file.write_text(workflow_skill_content, encoding="utf-8")
-            hide_hidden_attribute(workflow_file)
+            write_generated_text(workflow_file, workflow_skill_content)
 
             target_dir = opencode_skills_base / "mcu-sketch-target"
             target_dir.mkdir(parents=True, exist_ok=True)
             target_file = target_dir / "SKILL.md"
-            ensure_file_writable(target_file)
-            target_file.write_text(target_skill_content, encoding="utf-8")
-            hide_hidden_attribute(target_file)
+            write_generated_text(target_file, target_skill_content)
 
             hide_generated_directory(s_dir / ".opencode")
 
@@ -1448,16 +1470,12 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             a_wf_dir = agents_skills_base / "sketch-workflow"
             a_wf_dir.mkdir(parents=True, exist_ok=True)
             a_wf_file = a_wf_dir / "SKILL.md"
-            ensure_file_writable(a_wf_file)
-            a_wf_file.write_text(workflow_skill_content, encoding="utf-8")
-            hide_hidden_attribute(a_wf_file)
+            write_generated_text(a_wf_file, workflow_skill_content)
 
             a_tgt_dir = agents_skills_base / "mcu-sketch-target"
             a_tgt_dir.mkdir(parents=True, exist_ok=True)
             a_tgt_file = a_tgt_dir / "SKILL.md"
-            ensure_file_writable(a_tgt_file)
-            a_tgt_file.write_text(target_skill_content, encoding="utf-8")
-            hide_hidden_attribute(a_tgt_file)
+            write_generated_text(a_tgt_file, target_skill_content)
 
             hide_generated_directory(s_dir / ".agents")
             hide_generated_directory(cache_dir)
@@ -1560,6 +1578,23 @@ def get_mcu_flasher_src_dir(sketch_dir) -> Path:
     except Exception:
         return Path(sketch_dir)
 
+def _is_mcu_generated_ide_metadata(path) -> bool:
+    """Recognize legacy IDE files by MCU Flasher paths, not filename alone."""
+    try:
+        path = Path(path)
+        if not path.is_file():
+            return False
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            text = stream.read(65536).replace("\\", "/").lower()
+        return any(marker in text for marker in (
+            "generated automatically by mcu flash", "auto-generated by mcu flash",
+            PROJECT_BUILD_CACHE_DIR.lower(), "mcu-flasher-src", "mcu_flasher_src",
+            ".platformio-mcu-gui", "/.pio/build/mcu_env", "/.pio/build/mcu_flash",
+        ))
+    except OSError:
+        return False
+
+
 def hide_internal_project_metadata(sketch_dir) -> None:
     """Hide the explicit app-generated allowlist in Windows Explorer.
 
@@ -1609,6 +1644,7 @@ def hide_internal_project_metadata(sketch_dir) -> None:
             "compiled_builds", "build_artifacts", ".build_artifacts",
             ".mcu_gui_cache.json", ".mcu_flash_syntax_errors.json",
             ".mcu_gui_compat_cache.json", ".mcu_flash_tab_order.json",
+            ".mcu_flasher_project_hardware.json",
             ".ai_edit_signal", ".ai_ready_signal",
             ".pio_cache", ".mcu_ai_edits", ".opencode", ".agents",
         ]
@@ -1631,15 +1667,28 @@ def hide_internal_project_metadata(sketch_dir) -> None:
                 else:
                     hide_hidden_attribute(p)
 
-        # These standard filenames are hidden so Windows Explorer stays clean
-        # while AI assistants (OpenCode CLI, etc.) can read them natively.
+        # Generic instruction names can also belong to the user. Hide only
+        # files carrying the generator's signature, while keeping CLI access.
         for name in (
             ".opencodeignore", "AGENTS.md", "OPENCODE.md", ".ignore",
             "READ-FIRST.md", ".READ-FIRST.md", "SKILL.md", ".SKILL.md",
         ):
             p = s_dir / name
-            if p.exists():
+            if _is_mcu_generated_instruction_file(p):
                 hide_hidden_attribute(p)
+
+        for name in ("compile_commands.json", ".clangd", "platformio.ini"):
+            path = s_dir / name
+            if _is_mcu_generated_ide_metadata(path):
+                hide_hidden_attribute(path)
+        vscode = s_dir / ".vscode"
+        if any(_is_mcu_generated_ide_metadata(vscode / name) for name in ("c_cpp_properties.json", "settings.json")):
+            hide_generated_directory(vscode)
+
+        # First-use bootstrap sentinels are app-created; keep this shallow.
+        for path in s_dir.glob(".pio_bootstrap_first_use_*"):
+            if path.is_file():
+                hide_hidden_attribute(path)
 
         # The allowlist is authoritative.  Do not sweep and unhide unknown
         # entries: they may be user-hidden files, private assets, or files
@@ -1735,7 +1784,10 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
             for _i in range(6):
                 try:
                     ensure_file_writable(p)
-                    p.write_text(content, encoding="utf-8")
+                    if _is_mcu_generated_ide_metadata(p):
+                        write_generated_text(p, content)
+                    else:
+                        p.write_text(content, encoding="utf-8")
                     _write_ok = True
                     break
                 except Exception:
@@ -1743,7 +1795,7 @@ def heal_platformio_ini_symlinks_and_dirs(ini_path, sketch_dir=None) -> bool:
             if not _write_ok:
                 try:
                     _bak = p.with_suffix(p.suffix + ".locked")
-                    _bak.write_text(content, encoding="utf-8")
+                    write_generated_text(_bak, content)
                 except Exception:
                     pass
                 return False
@@ -1858,6 +1910,7 @@ __all__ = [
     "hide_generated_directory",
     "hide_hidden_attribute",
     "hide_internal_project_metadata",
+    "write_generated_text",
     "is_application_codebase_dir",
     "is_drive_hdd",
     "is_nonfatal_pio_clean_report",

@@ -19,27 +19,22 @@ import time
 from collections import deque
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Slot, Qt, QEvent
+from PySide6.QtCore import QTimer, Slot, Qt
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
-    QApplication, QSizePolicy,
+    QApplication, QSizePolicy, QToolButton, QMenu,
 )
 from main.qt.icons import ActionButton as QPushButton
+from main.qt.log_follow import LogFollow, preserve_log_view
 
 _TAG_COLORS: dict[str, str] = {
-    "info":    "#5ca4f0",
-    "success": "#4ec994",
-    "warning": "#f1c40f",
-    "error":   "#e74c3c",
-    "system":  "#56cfbf",
-    "dim":     "#6b7280",
-    "sent":    "#c678dd",
-    "normal":  "#cdd6f4",
+    "info": "#5ca4f0", "success": "#4ec994", "warning": "#f1c40f",
+    "error": "#e74c3c", "system": "#56cfbf", "dim": "#6b7280",
+    "sent": "#c678dd", "normal": "#cdd6f4",
 }
 _DEFAULT_COLOR = "#cdd6f4"
-_BG_COLOR      = "#0d1117"
 _MONO_FONT     = QFont("Consolas", 11)
 from main.core.constants import MAX_BAUD_RATE
 
@@ -74,14 +69,7 @@ class SerialOutputView(QPlainTextEdit):
         from main.core.config import get_theme_mode
         self.apply_theme(get_theme_mode())
         self._autoscroll = True
-        self._scrollbar_held = False
-        self._user_scrolled_up = False
-
-        sb = self.verticalScrollBar()
-        sb.sliderPressed.connect(self._on_slider_pressed)
-        sb.sliderReleased.connect(self._on_slider_released)
-        sb.actionTriggered.connect(self._on_action_triggered)
-        sb.installEventFilter(self)
+        self._follow = LogFollow(self)
 
         self._paused = False
         self._ansi_clear_enabled = True
@@ -98,45 +86,6 @@ class SerialOutputView(QPlainTextEdit):
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
 
-    def _on_slider_pressed(self) -> None:
-        self._scrollbar_held = True
-
-    def _on_slider_released(self) -> None:
-        self._scrollbar_held = False
-        self._update_user_scrolled_state()
-
-    def _on_action_triggered(self, _action: int) -> None:
-        self._update_user_scrolled_state()
-
-    def _update_user_scrolled_state(self) -> None:
-        sb = self.verticalScrollBar()
-        if sb.maximum() - sb.value() <= 3:
-            self._user_scrolled_up = False
-        else:
-            self._user_scrolled_up = True
-
-    def _is_scroll_held(self) -> bool:
-        sb = self.verticalScrollBar()
-        if sb.isSliderDown():
-            return True
-        if getattr(self, "_scrollbar_held", False):
-            return True
-        return False
-
-    def eventFilter(self, obj, event):
-        if obj == self.verticalScrollBar():
-            etype = event.type()
-            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                self._scrollbar_held = True
-            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-                self._scrollbar_held = False
-                self._update_user_scrolled_state()
-        return super().eventFilter(obj, event)
-
-    def wheelEvent(self, event):
-        super().wheelEvent(event)
-        self._update_user_scrolled_state()
-
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
         try:
@@ -152,20 +101,22 @@ class SerialOutputView(QPlainTextEdit):
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to serial output view base colors."""
         from main.qt.theme import get_palette
+        from main.qt.log_colors import themed_log_colors
         pal = get_palette(theme_name)
         bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
+        self._tag_colors = themed_log_colors(theme_name)
+        self._theme_name = theme_name
         palette = self.palette()
         palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
         self.setPalette(palette)
+        if hasattr(self, "_entries"):
+            self._rebuild_document()
 
     def set_autoscroll(self, enabled: bool) -> None:
         self._autoscroll = enabled
-        if enabled:
-            self._user_scrolled_up = False
-            sb = self.verticalScrollBar()
-            sb.setValue(sb.maximum())
+        self._follow.set_enabled(enabled)
 
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
@@ -212,13 +163,9 @@ class SerialOutputView(QPlainTextEdit):
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(selected_text)
 
+    @preserve_log_view(rebuild=True)
     def _rebuild_document(self) -> None:
-        sb = self.verticalScrollBar()
-        saved_val = sb.value()
-        saved_max = sb.maximum()
-        was_at_bottom = (saved_val >= saved_max - 15)
-
-        cursor = self.textCursor()
+        cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         cursor.select(QTextCursor.SelectionType.Document)
         cursor.removeSelectedText()
@@ -253,18 +200,12 @@ class SerialOutputView(QPlainTextEdit):
 
         for text_chunk, tag in coalesced_chunks:
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor(_TAG_COLORS.get(tag, _DEFAULT_COLOR)))
+            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
             cursor.insertText(text_chunk, fmt)
 
         cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
-
-        if (self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up) or was_at_bottom:
-            self.setTextCursor(cursor)
-            sb.setValue(sb.maximum())
-        else:
-            sb.setValue(saved_val)
 
     @Slot(dict)
     def append_log(self, payload: dict) -> None:
@@ -286,6 +227,7 @@ class SerialOutputView(QPlainTextEdit):
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
+    @preserve_log_view()
     def _flush_queue(self) -> None:
         if not self._queue:
             if self._flush_timer.isActive():
@@ -346,25 +288,18 @@ class SerialOutputView(QPlainTextEdit):
         if not coalesced_chunks:
             return
 
-        cursor = self.textCursor()
+        cursor = QTextCursor(self.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.beginEditBlock()
         try:
             for text_chunk, tag in coalesced_chunks:
                 fmt = QTextCharFormat()
-                fmt.setForeground(QColor(_TAG_COLORS.get(tag, _DEFAULT_COLOR)))
+                fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
                 cursor.insertText(text_chunk, fmt)
         finally:
             cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
         trim_document(self, self._history_limit)
-        if self._autoscroll and not self._is_scroll_held() and not self._user_scrolled_up:
-            self.setTextCursor(cursor)
-            now = time.monotonic()
-            if now - self._last_autoscroll >= 0.06:
-                self._last_autoscroll = now
-                self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
-
         if not self._queue and self._flush_timer.isActive():
             self._flush_timer.stop()
 
@@ -372,11 +307,10 @@ class SerialOutputView(QPlainTextEdit):
     def clear(self) -> None:
         self._entries.clear()
         self._queue.clear()
-        self._user_scrolled_up = False
-        self._scrollbar_held = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
         super().clear()
+        self._follow.reset()
 
 
 class SerialPanel(QWidget):
@@ -471,11 +405,8 @@ class SerialPanel(QWidget):
             initial_connected = True
 
         self.lbl_status = QLabel("● Connected" if initial_connected else "● Disconnected")
-        self.lbl_status.setStyleSheet(
-            "color: #4ec994; font-size: 12px; font-weight: 600;"
-            if initial_connected else
-            "color: #e74c3c; font-size: 12px; font-weight: 600;"
-        )
+        self._connection_text = self.lbl_status.text()
+        self._connection_color_tag = "success" if initial_connected else "error"
         h.addWidget(self.lbl_status, 0, 7)
 
         div2 = QFrame()
@@ -524,6 +455,27 @@ class SerialPanel(QWidget):
         h.addWidget(self.btn_clear, 0, 11)
 
         self._header_stacked = None
+        self._header_mode = None
+        self._header_row_layouts = (QHBoxLayout(), QHBoxLayout())
+        self._display_options = QToolButton(header)
+        self._display_options.setObjectName("serial-display-options")
+        self._display_options.setText("Options")
+        self._display_options.setAccessibleName("Serial display options")
+        self._display_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self._display_options)
+        self._display_option_actions = []
+        for label, checkbox in (("Auto-scroll", self.cb_autoscroll), ("Clear on Action", self.cb_auto_clear), ("Clear-screen", self.cb_ansi_clear)):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(checkbox.isChecked())
+            action.toggled.connect(checkbox.setChecked)
+            self._display_option_actions.append((action, checkbox))
+        menu.aboutToShow.connect(self._sync_display_options)
+        menu.addSeparator()
+        menu.addAction("Copy output", self._copy_output)
+        menu.addAction("Clear output", self._output_clear)
+        self._display_options.setMenu(menu)
+        self._display_options.hide()
         # ── Separator ────────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -544,12 +496,17 @@ class SerialPanel(QWidget):
         sb.setContentsMargins(10, 4, 10, 4)
         sb.setSpacing(8)
 
-        sb.addWidget(QLabel("Send >"))
+        self._send_layout = sb
+        self._send_bar = send_bar
+        self._send_label = QLabel("Send >")
+        sb.addWidget(self._send_label)
 
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Type command and press Enter…")
         self.input_field.returnPressed.connect(self._send_serial)
         self.input_field.setEnabled(initial_connected)
+        self.input_field.setMinimumWidth(0)
+        self.input_field.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         sb.addWidget(self.input_field, stretch=1)
 
         # Line ending selector
@@ -655,6 +612,20 @@ class SerialPanel(QWidget):
                 self._header_layout.setContentsMargins(4, 4, 4, 4)
 
         self._reflow_header(width)
+        compact_send = width < 420
+        self._send_label.setVisible(not compact_send)
+        self._send_layout.setContentsMargins(4 if compact_send else 10, 4, 4 if compact_send else 10, 4)
+        self._send_layout.setSpacing(4 if compact_send else 8)
+        short_panel = self.height() < 140
+        self.btn_send.setFixedHeight(26 if short_panel else 30)
+        self._send_bar.setFixedHeight(32 if short_panel else 40)
+        self._send_layout.setContentsMargins(4 if compact_send else 10, 2 if short_panel else 4, 4 if compact_send else 10, 2 if short_panel else 4)
+
+    def _sync_display_options(self) -> None:
+        for action, checkbox in self._display_option_actions:
+            action.blockSignals(True)
+            action.setChecked(checkbox.isChecked())
+            action.blockSignals(False)
 
     def _reflow_header(self, width: int) -> None:
         h = self._header_layout
@@ -663,27 +634,56 @@ class SerialPanel(QWidget):
         regular = (self._title_lbl, self.btn_reset, self.btn_pause, self.cb_autoscroll, self.cb_auto_clear,
                    self.cb_ansi_clear, self._div_sep, self.lbl_status, self._div2_sep,
                    self.baud_container, self.btn_copy, self.btn_clear)
+        self.lbl_status.setText(self._connection_text)
         required = sum(w.minimumSizeHint().width() for w in regular) + 60
-        stacked = width < required
-        if stacked != self._header_stacked:
-            for widget in regular:
+        row_required = max(sum(widget.minimumSizeHint().width() for widget in row) + h.spacing() * (len(row) - 1) for row in (first, second))
+        mode = "single" if width >= required else "stacked" if width >= row_required + 16 else "micro"
+        if self.height() < 140:
+            mode = "short"
+            h.setContentsMargins(4, 2, 4, 2)
+        compact_options = mode in ("micro", "short")
+        self.lbl_status.setText("●" if compact_options else self._connection_text)
+        self.lbl_status.setToolTip(self._connection_text)
+        self.lbl_status.setAccessibleName(self._connection_text)
+        if mode != self._header_mode:
+            for widget in (*regular, self._display_options):
                 h.removeWidget(widget)
+                for row in self._header_row_layouts:
+                    row.removeWidget(widget)
+            for row in self._header_row_layouts:
+                h.removeItem(row)
             for col in range(len(regular)):
                 h.setColumnStretch(col, 0)
-            self._div_sep.setVisible(not stacked)
-            self._div2_sep.setVisible(not stacked)
-            if stacked:
-                for col, widget in enumerate(first):
+            self._div_sep.setVisible(mode == "single")
+            self._div2_sep.setVisible(mode == "single")
+            self._display_options.setVisible(compact_options)
+            self._title_lbl.setVisible(mode != "short")
+            self.btn_copy.setVisible(mode != "short")
+            self.btn_clear.setVisible(mode != "short")
+            for checkbox in (self.cb_autoscroll, self.cb_auto_clear, self.cb_ansi_clear):
+                checkbox.setVisible(not compact_options)
+            if mode == "short":
+                for col, widget in enumerate((self.btn_reset, self.btn_pause, self.lbl_status, self.baud_container, self._display_options)):
                     h.addWidget(widget, 0, col)
-                for col, widget in enumerate(second):
-                    h.addWidget(widget, 1, col, 1, 3 if col == 3 else 1)
                 h.setColumnStretch(3, 1)
+            elif mode != "single":
+                top, bottom = self._header_row_layouts
+                for row in (top, bottom):
+                    row.setContentsMargins(0, 0, 0, 0)
+                    row.setSpacing(h.spacing())
+                for widget in first:
+                    top.addWidget(widget, 1 if widget is self.lbl_status else 0)
+                for widget in ((self.baud_container, self._display_options) if mode == "micro" else second):
+                    bottom.addWidget(widget, 1 if widget is self.baud_container else 0)
+                h.addLayout(top, 0, 0, 1, len(regular))
+                h.addLayout(bottom, 1, 0, 1, len(regular))
             else:
                 for col, widget in enumerate(regular):
                     h.addWidget(widget, 0, col)
                 h.setColumnStretch(3, 1)
-            self._header_stacked = stacked
-        self._header.setFixedHeight(max(36, h.sizeHint().height()))
+            self._header_mode = mode
+            self._header_stacked = mode not in ("single", "short")
+        self._header.setFixedHeight(max(30 if mode == "short" else 36, h.sizeHint().height()))
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -692,7 +692,7 @@ class SerialPanel(QWidget):
             self.btn_reset.setEnabled(False)
             self.btn_reset.setCursor(Qt.CursorShape.ArrowCursor)
             def _restore_reset():
-                if "Connected" in self.lbl_status.text():
+                if "Connected" in self._connection_text:
                     self.btn_reset.setEnabled(True)
                     self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
             QTimer.singleShot(1200, _restore_reset)
@@ -783,13 +783,16 @@ class SerialPanel(QWidget):
         is_conn = bool(connected or state == "connected")
         if is_conn:
             self.lbl_status.setText("● Connected")
-            self.lbl_status.setStyleSheet("color: #4ec994; font-size: 12px; font-weight: 600;")
+            self._connection_color_tag = "success"
         elif state == "reconnecting":
             self.lbl_status.setText("● Reconnecting...")
-            self.lbl_status.setStyleSheet("color: #f1c40f; font-size: 12px; font-weight: 600;")
+            self._connection_color_tag = "warning"
         else:
             self.lbl_status.setText("● Disconnected")
-            self.lbl_status.setStyleSheet("color: #e74c3c; font-size: 12px; font-weight: 600;")
+            self._connection_color_tag = "error"
+        self._apply_connection_color()
+        self._connection_text = self.lbl_status.text()
+        self._reflow_header(getattr(self, "_current_responsive_width", self.width()))
 
         self.btn_reset.setEnabled(is_conn)
         self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor if is_conn else Qt.CursorShape.ArrowCursor)
@@ -828,11 +831,19 @@ class SerialPanel(QWidget):
     def apply_theme(self, theme_name: str) -> None:
         """Update serial monitor child widgets to match active theme."""
         self._output.apply_theme(theme_name)
+        self._theme_name = theme_name
         from main.qt.theme import get_palette
         pal = get_palette(theme_name)
         cyan = pal.get("CYAN", "#00d2ff")
         border = pal.get("BORDER", "#2d3748")
         if hasattr(self, "_title_lbl") and self._title_lbl:
             self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: bold; font-size: 12px;")
+        self._apply_connection_color()
         if hasattr(self, "_div_sep") and self._div_sep:
             self._div_sep.setStyleSheet(f"color: {border};")
+
+    def _apply_connection_color(self) -> None:
+        from main.qt.log_colors import themed_log_colors
+        colors = themed_log_colors(getattr(self, "_theme_name", "default"))
+        color = colors.get(getattr(self, "_connection_color_tag", "error"), colors["normal"])
+        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")

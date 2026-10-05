@@ -155,6 +155,30 @@ class TargetResolutionChecks(unittest.TestCase):
         self.assertEqual(refreshed[NAME]["board"], "esp32dev")
         self.assertEqual(seed[NAME]["board"], "")
 
+    def test_batch_refresh_rechecks_changed_identity_and_ambiguity(self):
+        candidates = definitions()
+        candidates[0].update(id="alpha-id", name="Fixture Alpha", variant="alpha", arduino_defines=set())
+        candidates[1].update(id="beta-id", name="Fixture Beta", variant="beta", arduino_defines=set())
+        records = [dict(neutral_record(), name="Fixture Alpha", arduino_id="alpha-record", variant="alpha"),
+                   dict(neutral_record(), name="", arduino_id="not_a_boardid", variant="beta", build_board="")]
+        self.installed.return_value = candidates
+        with patch.object(catalog_module, "_get_arduino_board_search_roots", return_value=[self.sandbox]), \
+                patch.object(catalog_module, "_parse_downloaded_arduino_board_files", return_value=records):
+            first = catalog_module.load_dynamic_boards({})
+            self.assertEqual(first["Fixture Alpha"]["board"], "alpha-id")
+            self.assertEqual(first["not_a_boardid"]["board"], "beta-id")
+            # The same dictionaries can change after preparation. A new refresh
+            # must rebuild matching evidence, rather than reuse the old variant.
+            candidates[1]["variant"] = "different-variant"
+            changed = catalog_module.load_dynamic_boards({})
+            self.assertFalse(changed["not_a_boardid"]["pio_resolved"])
+            self.assertEqual(changed["not_a_boardid"]["board"], "")
+            candidates[1]["variant"] = "beta"
+            candidates.append(dict(candidates[1], id="second-beta-id"))
+            ambiguous = catalog_module.load_dynamic_boards({})
+            self.assertFalse(ambiguous["not_a_boardid"]["pio_resolved"])
+            self.assertEqual(ambiguous["not_a_boardid"]["board"], "")
+
     def test_unprepared_board_never_reaches_registry_or_build(self):
         self.installed.return_value = []
         invoked = []

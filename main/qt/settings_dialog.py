@@ -726,7 +726,7 @@ class SettingsDialog(QDialog):
         if not port or not info or target_problem(info) or not caps.get("hard_reset_ui" if hard else "soft_reset"):
             QMessageBox.warning(self, "Reset unavailable", "Select a resolved board and serial port with a supported reset strategy. Soft Reset requires the Arduino framework.")
             return None
-        return name, port, info, caps
+        return name, port, dict(info), caps
 
     def _run_hard_reset(self) -> None:
         target = self._reset_target(hard=True)
@@ -742,7 +742,7 @@ class SettingsDialog(QDialog):
                 "ESP32 flash, including the current application, NVS settings, OTA state, and filesystem data.\n\n"
                 "After erasing, it will write only bootloader.bin and partitions.bin from "
                 "the dedicated compiled recovery project, plus boot_app0. The board will be left in a clean, "
-                "bootable state ready for a fresh upload.\n\n"
+                "state ready for a fresh upload; no application will be installed.\n\n"
                 "After preparation, esptool will show a live BOOT connection indicator. "
                 "Press and HOLD BOOT until the indicator turns green, then release it.\n\n"
                 "Continue with the full erase?"
@@ -779,6 +779,8 @@ class SettingsDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if ret == QMessageBox.StandardButton.Yes and self._backend:
+            if self._reset_target(hard=True) != target:
+                return
             erase = strategy == "esp8266_erase"
             self._backend.hard_reset(erase_flash=erase)
             self.accept()
@@ -799,6 +801,8 @@ class SettingsDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if ret == QMessageBox.StandardButton.Yes and self._backend:
+            if self._reset_target() != target:
+                return
             self._backend.soft_reset()
             self.accept()
 

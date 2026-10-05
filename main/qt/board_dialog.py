@@ -53,6 +53,8 @@ from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import load_recent_boards, add_recent_board, get_theme_mode
 from main.qt.theme import get_palette
 
+_FRAMEWORK_TOOLTIP = "Choose the framework your source files use. Arduino .ino sketches need Arduino."
+
 
 # ── String & Token Helpers ───────────────────────────────────────────────────
 
@@ -611,6 +613,23 @@ class _BoardListModel(QAbstractListModel):
 
 # ── Custom Rich Item Delegate ────────────────────────────────────────────────
 
+_FAM_COLORS: dict[str, tuple[int, int, int]] = {
+    "ESP32": (0, 210, 255),       # cyan
+    "ESP32-S3": (0, 230, 180),    # teal
+    "ESP32-C3": (52, 152, 219),   # blue
+    "ESP32-S2": (155, 89, 182),   # purple
+    "ESP32-C6": (46, 204, 113),   # emerald
+    "ESP32-CAM": (230, 126, 34),  # orange
+    "ESP8266": (165, 105, 189),   # purple
+    "AVR": (243, 156, 18),        # amber/orange
+    "RP2040": (46, 204, 113),     # green
+    "STM32": (41, 128, 185),      # dark blue
+    "SAMD": (231, 76, 60),        # coral/red
+    "TEENSY": (26, 188, 156),     # turquoise
+}
+_DEFAULT_FAM_RGB: tuple[int, int, int] = (120, 140, 160)
+
+
 class BoardListItemDelegate(QStyledItemDelegate):
     """
     Renders each MCU board item with a bold title, gold star for recent boards,
@@ -620,9 +639,48 @@ class BoardListItemDelegate(QStyledItemDelegate):
     def __init__(self, parent: Optional[QWidget] = None, theme_pal: Optional[dict] = None):
         super().__init__(parent)
         self.pal = theme_pal or {}
+        self._f_title = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        self._f_title_bold = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        self._f_badge = QFont("Consolas", 8, QFont.Weight.Bold)
+        self._f_sub = QFont("Consolas", 8)
+        self._f_header = QFont("Segoe UI", 9, QFont.Weight.Bold)
+
+        self._fm_title = QFontMetrics(self._f_title)
+        self._fm_title_bold = QFontMetrics(self._f_title_bold)
+        self._fm_badge = QFontMetrics(self._f_badge)
+        self._fm_sub = QFontMetrics(self._f_sub)
+        self._star_width = self._fm_title.horizontalAdvance("★ ")
+        self._star_color = QColor("#f1c40f")
+
+        self._badge_cache: dict[tuple[str, bool], tuple[QBrush, QPen, QColor]] = {}
+        self._init_cached_colors()
 
     def set_palette(self, pal: dict) -> None:
         self.pal = pal
+        self._init_cached_colors()
+
+    def _init_cached_colors(self) -> None:
+        self._c_bg_darkest = QColor(self.pal.get("BG_DARKEST", "#0d1117"))
+        self._c_bg_mid = QColor(self.pal.get("BG_MID", "#1c2333"))
+        self._c_bg_hover = QColor(self.pal.get("BG_HOVER", "#2a3a55"))
+        border_col = QColor(self.pal.get("BORDER", "#2d3748"))
+        self._c_border_line = QColor(border_col.red(), border_col.green(), border_col.blue(), 50)
+        self._c_cyan = QColor(self.pal.get("CYAN", "#00d2ff"))
+        self._c_text_bright = QColor(self.pal.get("TEXT_BRIGHT", "#ffffff"))
+        self._c_text_dim = QColor(self.pal.get("TEXT_DIM", "#8fa1b3"))
+        self._badge_cache.clear()
+
+    def _get_badge_styling(self, family: str, is_selected: bool) -> tuple[QBrush, QPen, QColor]:
+        key = (family, is_selected)
+        cached = self._badge_cache.get(key)
+        if cached is None:
+            rgb = _FAM_COLORS.get(family, _DEFAULT_FAM_RGB)
+            badge_bg = QBrush(QColor(rgb[0], rgb[1], rgb[2], 70 if is_selected else 40))
+            badge_border = QPen(QColor(rgb[0], rgb[1], rgb[2], 220 if is_selected else 120), 1)
+            badge_fg = QColor(rgb[0], rgb[1], rgb[2])
+            cached = (badge_bg, badge_border, badge_fg)
+            self._badge_cache[key] = cached
+        return cached
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         view = self.parent()
@@ -642,11 +700,8 @@ class BoardListItemDelegate(QStyledItemDelegate):
         if is_header:
             # Section header
             text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
-            dim = QColor(self.pal.get("TEXT_DIM", "#8fa1b3"))
-            cyan = QColor(self.pal.get("CYAN", "#00d2ff"))
-            painter.setPen(cyan if "RECENT" in text else dim)
-            f = QFont("Segoe UI", 9, QFont.Weight.Bold)
-            painter.setFont(f)
+            painter.setPen(self._c_cyan if "RECENT" in text else self._c_text_dim)
+            painter.setFont(self._f_header)
             painter.drawText(rect.adjusted(12, 0, -12, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
             painter.restore()
             return
@@ -654,26 +709,18 @@ class BoardListItemDelegate(QStyledItemDelegate):
         is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
         is_hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
-        bg_darkest = QColor(self.pal.get("BG_DARKEST", "#0d1117"))
-        bg_mid = QColor(self.pal.get("BG_MID", "#1c2333"))
-        bg_hover = QColor(self.pal.get("BG_HOVER", "#2a3a55"))
-        border_col = QColor(self.pal.get("BORDER", "#2d3748"))
-        cyan_col = QColor(self.pal.get("CYAN", "#00d2ff"))
-        text_bright = QColor(self.pal.get("TEXT_BRIGHT", "#ffffff"))
-        text_dim = QColor(self.pal.get("TEXT_DIM", "#8fa1b3"))
-
         # Row Background
         if is_selected:
-            painter.fillRect(rect, bg_hover)
+            painter.fillRect(rect, self._c_bg_hover)
             # Left accent stripe
-            painter.fillRect(QRect(rect.left(), rect.top() + 2, 3, rect.height() - 4), cyan_col)
+            painter.fillRect(QRect(rect.left(), rect.top() + 2, 3, rect.height() - 4), self._c_cyan)
         elif is_hover:
-            painter.fillRect(rect, bg_mid)
+            painter.fillRect(rect, self._c_bg_mid)
         else:
-            painter.fillRect(rect, bg_darkest)
+            painter.fillRect(rect, self._c_bg_darkest)
 
         # Subtle bottom separator line
-        painter.setPen(QColor(border_col.red(), border_col.green(), border_col.blue(), 50))
+        painter.setPen(self._c_border_line)
         painter.drawLine(rect.left() + 8, rect.bottom(), rect.right() - 8, rect.bottom())
 
         # Extract item metadata
@@ -686,64 +733,43 @@ class BoardListItemDelegate(QStyledItemDelegate):
         left_margin = rect.left() + 14
         title_y = rect.top() + 19
 
-        title_font = QFont("Segoe UI", 10, QFont.Weight.Bold if is_selected else QFont.Weight.DemiBold)
+        title_font = self._f_title_bold if is_selected else self._f_title
+        fm_title = self._fm_title_bold if is_selected else self._fm_title
         painter.setFont(title_font)
-        painter.setPen(cyan_col if is_selected else text_bright)
+        painter.setPen(self._c_cyan if is_selected else self._c_text_bright)
 
         if is_recent:
-            painter.setPen(QColor("#f1c40f"))  # gold star
+            painter.setPen(self._star_color)
             painter.drawText(left_margin, title_y, "★ ")
-            star_width = QFontMetrics(title_font).horizontalAdvance("★ ")
-            left_margin += star_width
-            painter.setPen(cyan_col if is_selected else text_bright)
+            left_margin += self._star_width
+            painter.setPen(self._c_cyan if is_selected else self._c_text_bright)
 
         # Space for badge on right
         badge_text = f" {family} "
-        badge_font = QFont("Consolas", 8, QFont.Weight.Bold)
-        fm_badge = QFontMetrics(badge_font)
-        badge_w = fm_badge.horizontalAdvance(badge_text) + 12
+        badge_w = self._fm_badge.horizontalAdvance(badge_text) + 12
         badge_h = 18
 
         max_title_w = rect.width() - (left_margin - rect.left()) - badge_w - 20
-        elided_title = QFontMetrics(title_font).elidedText(name, Qt.TextElideMode.ElideRight, max(10, max_title_w))
+        elided_title = fm_title.elidedText(name, Qt.TextElideMode.ElideRight, max(10, max_title_w))
         painter.drawText(left_margin, title_y, elided_title)
 
         # Subtitle line
-        sub_font = QFont("Consolas", 8)
-        painter.setFont(sub_font)
-        painter.setPen(cyan_col if is_selected else text_dim)
+        painter.setFont(self._f_sub)
+        painter.setPen(self._c_cyan if is_selected else self._c_text_dim)
         sub_y = rect.top() + 37
         max_sub_w = rect.width() - 28
-        elided_sub = QFontMetrics(sub_font).elidedText(sub_info, Qt.TextElideMode.ElideRight, max(10, max_sub_w))
+        elided_sub = self._fm_sub.elidedText(sub_info, Qt.TextElideMode.ElideRight, max(10, max_sub_w))
         painter.drawText(rect.left() + 14, sub_y, elided_sub)
 
         # Draw Pill Badge on top-right
         badge_rect = QRect(rect.right() - badge_w - 14, rect.top() + 7, badge_w, badge_h)
+        badge_bg, badge_border, badge_fg = self._get_badge_styling(family, is_selected)
 
-        fam_colors: dict[str, tuple[int, int, int]] = {
-            "ESP32": (0, 210, 255),       # cyan
-            "ESP32-S3": (0, 230, 180),    # teal
-            "ESP32-C3": (52, 152, 219),   # blue
-            "ESP32-S2": (155, 89, 182),   # purple
-            "ESP32-C6": (46, 204, 113),   # emerald
-            "ESP32-CAM": (230, 126, 34),  # orange
-            "ESP8266": (165, 105, 189),   # purple
-            "AVR": (243, 156, 18),        # amber/orange
-            "RP2040": (46, 204, 113),     # green
-            "STM32": (41, 128, 185),      # dark blue
-            "SAMD": (231, 76, 60),        # coral/red
-            "TEENSY": (26, 188, 156),     # turquoise
-        }
-        rgb = fam_colors.get(family, (120, 140, 160))
-        badge_bg = QColor(rgb[0], rgb[1], rgb[2], 40 if not is_selected else 70)
-        badge_border = QColor(rgb[0], rgb[1], rgb[2], 120 if not is_selected else 220)
-        badge_fg = QColor(rgb[0], rgb[1], rgb[2])
-
-        painter.setBrush(QBrush(badge_bg))
-        painter.setPen(QPen(badge_border, 1))
+        painter.setBrush(badge_bg)
+        painter.setPen(badge_border)
         painter.drawRoundedRect(QRectF(badge_rect), 3.0, 3.0)
 
-        painter.setFont(badge_font)
+        painter.setFont(self._f_badge)
         painter.setPen(badge_fg)
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, family)
 
@@ -792,12 +818,15 @@ class BoardSearchDialog(QDialog):
     and rich hardware metadata.
     """
 
+    _local_catalog_ready = Signal(int, object)
+
     def __init__(
         self,
         parent: Optional[QWidget] = None,
         current_board: str = "",
         board_list: Optional[Sequence[str]] = None,
         on_select_callback: Optional[Callable[[str], None]] = None,
+        backend: Optional[Any] = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Select MCU board")
@@ -808,15 +837,20 @@ class BoardSearchDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowMaximizeButtonHint)
 
         self.on_select_callback = on_select_callback
-        self._board_subset = tuple(board_list) if board_list is not None else None
+        self._backend = backend
+        self._board_subset = tuple(board_list) if board_list else None
         self.current_board = current_board or ""
         self.result_board: Optional[str] = None
         self._active_category = "ALL"
         self._closed = False
+        self._local_refresh_generation = 0
+        self._local_refresh_running = False
+        self._local_catalog_ready.connect(self._local_catalog_finished, Qt.ConnectionType.QueuedConnection)
         self._generation = 0
         self._search_pending = False
         self._confirm_when_ready = False
         self._select_initial_board = True
+        self._pending_selection: Optional[str] = None
         self._search_index = None
         self._saved_recents = load_recent_boards()
         self._set_catalog_snapshot()
@@ -842,6 +876,14 @@ class BoardSearchDialog(QDialog):
 
         # Autofocus search entry immediately
         QTimer.singleShot(40, self.search_ent.setFocus)
+
+        # Auto-refresh board catalog only if catalog is currently empty and not restricted to a subset
+        if self._board_subset is None and not self.all_boards:
+            self.lbl_hdr_sub.setText("Loading definitions…")
+            self.lbl_count.setText("Auto-refreshing board catalog…")
+            self.btn_refresh.setEnabled(False)
+            self.btn_refresh.setText("Refreshing…")
+            QTimer.singleShot(0, self._auto_refresh_boards)
 
     def _set_catalog_snapshot(self, boards=None):
         if boards is not None:
@@ -1064,7 +1106,7 @@ class BoardSearchDialog(QDialog):
         self._framework_row = QHBoxLayout()
         self._framework_row.addWidget(self._framework_label)
         self.framework_combo = QComboBox()
-        self.framework_combo.setToolTip("Choose the framework your source files use. Arduino .ino sketches need Arduino.")
+        self.framework_combo.setToolTip(_FRAMEWORK_TOOLTIP)
         self._framework_row.addWidget(self.framework_combo)
         self.listbox.selectionModel().currentChanged.connect(self._update_frameworks)
 
@@ -1126,18 +1168,94 @@ class BoardSearchDialog(QDialog):
             self._layout_mode = narrow
         self.btn_refresh.setText("Refresh" if self.width() < 550 else "Refresh boards")
 
+    def _get_backend(self):
+        if self._backend is not None:
+            return self._backend
+        parent = self.parent()
+        if parent is not None:
+            backend = getattr(parent, "_backend", None)
+            if backend is not None:
+                return backend
+            window = getattr(parent, "window", lambda: None)()
+            if window is not None:
+                backend = getattr(window, "_backend", None)
+                if backend is not None:
+                    return backend
+        return None
+
+    def _auto_refresh_boards(self) -> None:
+        if self._closed or self._board_subset is not None:
+            return
+        if not self.all_boards:
+            self.lbl_hdr_sub.setText("Loading definitions…")
+            self.lbl_count.setText("Auto-refreshing board catalog…")
+            self.btn_refresh.setEnabled(False)
+            self.btn_refresh.setText("Refreshing…")
+        self._request_catalog_refresh()
+
+    def _on_auto_refresh_timer(self) -> None:
+        if self._closed or self._board_subset is not None:
+            return
+        backend = self._get_backend()
+        if backend and (getattr(backend, "is_busy", False) or getattr(backend, "_catalog_refresh_running", False)):
+            return
+        self._request_catalog_refresh()
+
     def _request_catalog_refresh(self):
         if self._closed:
             return
-        backend = getattr(self.parent(), "_backend", None)
-        if backend:
+        backend = self._get_backend()
+        if backend and hasattr(backend, "refresh_board_catalog"):
             self.btn_refresh.setEnabled(False)
             self.btn_refresh.setText("Refreshing…")
             backend.refresh_board_catalog(include_registry=True)
+        else:
+            self._async_local_refresh()
+
+    def _async_local_refresh(self):
+        if self._closed or self._local_refresh_running:
+            return
+        self._local_refresh_running = True
+        self._local_refresh_generation += 1
+        generation = self._local_refresh_generation
+        self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setText("Refreshing…")
+
+        def _worker():
+            try:
+                from main.core.board_catalog import load_dynamic_boards, SUPPORTED_BOARDS
+                boards = load_dynamic_boards(dict(SUPPORTED_BOARDS))
+                data = {"boards": boards}
+            except Exception as exc:
+                data = {"error": str(exc)}
+            try:
+                self._local_catalog_ready.emit(generation, data)
+            except RuntimeError:
+                pass  # The dialog may have been deleted during discovery.
+
+        try:
+            threading.Thread(target=_worker, name="MCU_LocalBoardRefresh", daemon=True).start()
+        except Exception as exc:
+            self._local_refresh_running = False
+            self._catalog_updated({"error": str(exc)})
+
+    @Slot(int, object)
+    def _local_catalog_finished(self, generation, data):
+        if self._closed:
+            return
+        self._local_refresh_running = False
+        if generation != self._local_refresh_generation:
+            return
+        if "boards" in data:
+            from main.core.board_catalog import SUPPORTED_BOARDS
+            SUPPORTED_BOARDS.replace(data["boards"])
+        self._catalog_updated(data)
 
     def _catalog_updated(self, data):
         if self._closed:
             return
+        # A newer catalog delivery invalidates a still-running local refresh.
+        self._local_refresh_generation += 1
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("Refresh boards")
         if "error" in data:
@@ -1155,8 +1273,13 @@ class BoardSearchDialog(QDialog):
         self.framework_combo.clear()
         allowed = sorted(info.get("frameworks") or ([info["framework"]] if info.get("framework") else []))
         self.framework_combo.addItems(allowed)
-        backend = getattr(self.parent(), "_backend", None)
-        selected = backend._resolve_board_info(name).get("framework") if backend and name else ""
+        unavailable = info.get("unavailable_frameworks")
+        unavailable = unavailable if isinstance(unavailable, dict) else {}
+        reasons = [f"{framework} unavailable: {reason}" for framework, reason in sorted(unavailable.items())
+                   if isinstance(framework, str) and isinstance(reason, str) and reason.strip()]
+        self.framework_combo.setToolTip("\n".join([_FRAMEWORK_TOOLTIP, *reasons]))
+        backend = self._get_backend()
+        selected = backend._resolve_board_info(name).get("framework") if backend and hasattr(backend, "_resolve_board_info") and name else ""
         if selected in allowed:
             self.framework_combo.setCurrentText(selected)
         elif "arduino" in allowed:
@@ -1225,6 +1348,11 @@ class BoardSearchDialog(QDialog):
                 break
 
     def _apply_filter(self, query: str) -> None:
+        curr = self.listbox.currentIndex()
+        if curr.isValid():
+            name = curr.data(Qt.ItemDataRole.UserRole)
+            if name:
+                self._pending_selection = name
         self._mark_search_pending()
         self._dispatch_search(query)
 
@@ -1257,8 +1385,12 @@ class BoardSearchDialog(QDialog):
                                f"{len(matches)} of {len(self.all_boards)} boards{suffix}")
         self.framework_combo.setEnabled(True)
         # Initial selection and arrow navigation still work with pinned headers.
+        prior = self._pending_selection
+        self._pending_selection = None
         select_name = matches[0] if matches else ""
-        if self._select_initial_board and not self.search_ent.text() and self.current_board in matches:
+        if prior and prior in matches:
+            select_name = prior
+        elif self._select_initial_board and not self.search_ent.text() and self.current_board in matches:
             select_name = self.current_board
         self._select_initial_board = False
         if select_name:
@@ -1278,14 +1410,14 @@ class BoardSearchDialog(QDialog):
             self._confirm_when_ready = True
             self._dispatch_search()
             return
-        backend = getattr(self.parent(), "_backend", None)
-        if backend and (backend.is_busy or getattr(backend, "active_operation", None) is not None):
+        backend = self._get_backend()
+        if backend and (getattr(backend, "is_busy", False) or getattr(backend, "active_operation", None) is not None):
             return
         curr = self.listbox.currentIndex()
         if curr.isValid() and (curr.flags() & Qt.ItemFlag.ItemIsSelectable):
             raw_name = curr.data(Qt.ItemDataRole.UserRole)
             self.result_board = raw_name
-            if backend and self.framework_combo.currentText():
+            if backend and hasattr(backend, "set_board_framework") and self.framework_combo.currentText():
                 backend.set_board_framework(raw_name, self.framework_combo.currentText())
             if self.on_select_callback:
                 self.on_select_callback(self.result_board)
@@ -1296,11 +1428,21 @@ class BoardSearchDialog(QDialog):
     def done(self, result):
         if not self._closed:
             self._closed = True
+            self._local_refresh_generation += 1
+            self._local_catalog_ready.disconnect(self._local_catalog_finished)
             self._search_timer.stop()
             self._worker.stop()
+            if hasattr(self, "_auto_refresh_timer"):
+                self._auto_refresh_timer.stop()
             from main.qt.signals import signals
-            signals.board_catalog_updated.disconnect(self._catalog_updated)
-            signals.theme_changed.disconnect(self._apply_dialog_theme)
+            try:
+                signals.board_catalog_updated.disconnect(self._catalog_updated)
+            except Exception:
+                pass
+            try:
+                signals.theme_changed.disconnect(self._apply_dialog_theme)
+            except Exception:
+                pass
         super().done(result)
 
     def selected_board(self) -> Optional[str]:

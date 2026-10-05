@@ -150,6 +150,9 @@ class PlatformChecks(unittest.TestCase):
         command = run.call_args_list[0].args[0]
         self.assertEqual(command[0], str(setup.ENV_DIR / "bin/python"))
         self.assertEqual(command[-1], str(self.root / "direct/ubuntu/requirements.txt"))
+        provider_check = run.call_args_list[1]
+        self.assertIn("prepare_dependencies()", provider_check.args[0][-1])
+        self.assertEqual(provider_check.kwargs["cwd"], self.root)
         self.assertEqual(launch.call_args.args[0][-3:], ["--project", "/fixture/Sketch With Spaces", "--new-window"])
 
     def test_ubuntu_bootstrap_from_workspace_relaunches_before_installing(self):

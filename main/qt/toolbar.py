@@ -30,7 +30,7 @@ from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSize, QPoint
 from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication, QIcon
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
-    QToolBar, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
+    QToolBar, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox,
     QSizePolicy, QFrame, QStyleOptionComboBox, QStylePainter, QStyle,
     QMessageBox, QApplication, QScrollArea,
@@ -343,20 +343,20 @@ class PrimaryToolbar(QToolBar):
         self.lbl_sketch_icon = QLabel()
         self.lbl_sketch_icon.setPixmap(icon("project").pixmap(16, 16))
         self.lbl_sketch_icon.setStyleSheet("color: #56cfbf; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;")
-        self.lbl_sketch_icon.setToolTip("Open another project window")
+        self.lbl_sketch_icon.setToolTip("Open a project in this window or a new window")
         self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sketch_icon.mousePressEvent = lambda e: self._on_new_project()
         rc_layout.addWidget(self.lbl_sketch_icon)
 
         self.lbl_sketch = QLabel("(no project)")
         self.lbl_sketch.setStyleSheet("color: #6b7280; font-size: 12px; font-family: Consolas; background: transparent;")
-        self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: open another project")
+        self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
         self.lbl_sketch.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_sketch.mousePressEvent = self._on_sketch_label_click
         rc_layout.addWidget(self.lbl_sketch)
 
         # Project
-        self.btn_project = _make_action_btn("📁 Project", "Open another project window (Ctrl+O)", "btn-project",
+        self.btn_project = _make_action_btn("📁 Project", "Choose where to open a project (Ctrl+O)", "btn-project",
                                             "#2d3748", "#3a4a60")
         self.btn_project.clicked.connect(self._on_new_project)
         rc_layout.addWidget(self.btn_project)
@@ -465,6 +465,7 @@ class PrimaryToolbar(QToolBar):
     def _do_clean(self) -> None:
         if not self._backend or self._is_busy():
             return
+        sketch = getattr(self._backend, "sketch_dir_path", None)
         from PySide6.QtWidgets import QMessageBox
         ret = QMessageBox.question(
             self.window(),
@@ -472,7 +473,7 @@ class PrimaryToolbar(QToolBar):
             "Clean will remove generated project configuration and ALL cached "
             "builds for every board used with this sketch.\n\n"
             "The app-wide Hard/Soft Reset board caches shared by all sketches "
-            "and windows, plus legacy compiled artifacts, will also be cleared. "
+            "and windows will also be cleared. "
             "The next Compile, Upload, Hard "
             "Reset, or Soft Reset for those boards may need a first-time rebuild.\n\n"
             "Your .ino/.cpp/.c/.h source files, other user files, and shared "
@@ -481,7 +482,8 @@ class PrimaryToolbar(QToolBar):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if ret == QMessageBox.StandardButton.Yes:
+        if (ret == QMessageBox.StandardButton.Yes and not self._is_busy()
+                and getattr(self._backend, "sketch_dir_path", None) == sketch):
             self._backend.clean_cache()
 
     def _do_reload(self) -> None:
@@ -610,9 +612,9 @@ class PrimaryToolbar(QToolBar):
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
         if self._is_busy():
-            self.lbl_sketch.setToolTip("Current sketch folder — right-click: open another project")
+            self.lbl_sketch.setToolTip("Current sketch folder — right-click: choose where a project opens")
         else:
-            self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: open another project" if path else "Current sketch folder — left-click: open in Explorer • right-click: open another project")
+            self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: choose where a project opens" if path else "Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
         self._balance_spacers()
 
     @Slot(dict)
@@ -640,12 +642,12 @@ class PrimaryToolbar(QToolBar):
             self.btn_modify.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_project.setEnabled(True)
             self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.btn_project.setToolTip("Open another project window (Ctrl+O)")
+            self.btn_project.setToolTip("Choose where to open a project (Ctrl+O)")
             self.lbl_sketch_icon.setEnabled(True)
             self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.lbl_sketch_icon.setToolTip("Open another project window")
+            self.lbl_sketch_icon.setToolTip("Open a project in this window or a new window")
             if hasattr(self, "lbl_sketch"):
-                self.lbl_sketch.setToolTip("Current sketch folder — right-click: open another project")
+                self.lbl_sketch.setToolTip("Current sketch folder — right-click: choose where a project opens")
 
             # STOP button: enabled during compile and build.
             # DISABLED during flash/reset (direct flash write — brick risk) and generic fallback.
@@ -698,16 +700,16 @@ class PrimaryToolbar(QToolBar):
             self.btn_modify.setCursor(Qt.CursorShape.PointingHandCursor)
             self.btn_project.setEnabled(True)
             self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.btn_project.setToolTip("Open another project window (Ctrl+O)")
+            self.btn_project.setToolTip("Choose where to open a project (Ctrl+O)")
             self.lbl_sketch_icon.setEnabled(True)
             self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.lbl_sketch_icon.setToolTip("Open another project window")
+            self.lbl_sketch_icon.setToolTip("Open a project in this window or a new window")
             if hasattr(self, "lbl_sketch"):
                 cur_path = getattr(self, "_current_sketch_path", "")
                 if cur_path:
-                    self.lbl_sketch.setToolTip(f"{cur_path} — left-click: open in Explorer • right-click: open another project")
+                    self.lbl_sketch.setToolTip(f"{cur_path} — left-click: open in Explorer • right-click: choose where a project opens")
                 else:
-                    self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: open another project")
+                    self.lbl_sketch.setToolTip("Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
             # Delegate to action button gating (board/port awareness)
             self._update_action_button_states()
 
@@ -1051,6 +1053,9 @@ class MarqueeComboBox(QComboBox):
     def _step(self) -> None:
         if self._is_popup_open or not self.isEnabled():
             return
+        if self._pause > 0:
+            self._pause -= 1
+            return
         opt = QStyleOptionComboBox()
         self.initStyleOption(opt)
         rect = self.style().subControlRect(
@@ -1070,10 +1075,6 @@ class MarqueeComboBox(QComboBox):
                 self.update()
             if self._timer.isActive():
                 self._timer.stop()
-            return
-
-        if self._pause > 0:
-            self._pause -= 1
             return
 
         self._offset += self._dir
@@ -1213,6 +1214,9 @@ class MarqueeBoardSelector(QWidget):
     def _step(self) -> None:
         if not self.isEnabled() or not self._text:
             return
+        if self._pause > 0:
+            self._pause -= 1
+            return
         fm = self.fontMetrics()
         text_w = fm.horizontalAdvance(self._text)
         avail = max(10, self.width() - 16)
@@ -1223,10 +1227,6 @@ class MarqueeBoardSelector(QWidget):
                 self.update()
             if self._timer.isActive():
                 self._timer.stop()
-            return
-
-        if self._pause > 0:
-            self._pause -= 1
             return
 
         self._offset += self._dir
@@ -1381,6 +1381,7 @@ class ControlsBar(QWidget):
         opt_row.setSpacing(3)
 
         self.cb_timestamp = QCheckBox("Timestamps")
+        self.cb_timestamp.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.cb_timestamp.setToolTip("Show timestamps in console and monitor output")
         from main.core.config import load_gui_config
         init_ts = bool(getattr(self._backend, "timestamp_enabled", False)) if (self._backend and hasattr(self._backend, "timestamp_enabled")) else bool(load_gui_config().get("timestamp_enabled", False))
@@ -1389,10 +1390,14 @@ class ControlsBar(QWidget):
         opt_row.addWidget(self.cb_timestamp)
 
         self.cb_skip_compile = QCheckBox("Skip Compile")
+        self.cb_skip_compile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.cb_skip_compile.setToolTip("Reuse firmware only when sources and the selected target still match the last build")
         self.cb_skip_compile.setEnabled(False)
         self.cb_skip_compile.stateChanged.connect(self._on_skip_compile_changed)
         opt_row.addWidget(self.cb_skip_compile)
+        # Keep the two independent toggles grouped at their natural label
+        # widths; the remaining room belongs between them and workspace actions.
+        opt_row.addStretch(1)
 
         self.btn_detach_editor = QPushButton("Detach Editor")
         self.btn_detach_editor.setFixedHeight(26)
@@ -1450,6 +1455,9 @@ class ControlsBar(QWidget):
         opt_group.addLayout(opt_row)
         layout.addLayout(opt_group, 0, 3)
         self._groups = (board_group, port_group, spd_group, opt_group)
+        self._group_labels = (lbl_board, lbl_port, self.lbl_spd, lbl_opt)
+        self._short_window = False
+        self._tiny_window = False
         self._row_mode = None
 
     def _populate_initial(self) -> None:
@@ -1494,14 +1502,14 @@ class ControlsBar(QWidget):
         if self._backend and self._backend.is_busy:
             return
         from main.qt.board_dialog import BoardSearchDialog
-        from main.core.board_catalog import SUPPORTED_BOARDS
 
         current = self.board_selector.text() or (self._backend.current_board if self._backend else "")
         dlg = BoardSearchDialog(
             parent=self.window(),
             current_board=current,
-            board_list=sorted(SUPPORTED_BOARDS.keys()),
+            board_list=None,
             on_select_callback=self._select_board_from_dialog,
+            backend=self._backend,
         )
         dlg.exec()
         dlg.deleteLater()
@@ -1792,11 +1800,8 @@ class ControlsBar(QWidget):
         self.board_selector.set_board(current)
         if current:
             self._update_hardware_defaults_for_board(current)
-        can_skip = self._backend.check_can_skip_compile()
-        self.cb_skip_compile.setEnabled(can_skip)
-        self.cb_skip_compile.setChecked(can_skip)
-        if self._backend:
-            self._backend.set_skip_compile(can_skip)
+        self.on_skip_compile_availability(False)
+        self._backend.update_skip_compile_availability()
         self._update_action_button_states_on_controls()
 
     def sync_timestamp(self, enabled: bool) -> None:
@@ -1850,30 +1855,62 @@ class ControlsBar(QWidget):
     def _reflow(self, width: int) -> None:
         # Use actual content hints so translated labels and system fonts fit too.
         groups = self._groups
+        tiny = self._tiny_window and width < 900
+        short = tiny or self._short_window and width < 520
+        for index, group in enumerate(groups):
+            group.setDirection(QBoxLayout.Direction.LeftToRight if short else QBoxLayout.Direction.TopToBottom)
+            self._group_labels[index].setVisible(not short or (index == 2 and not tiny))
+        self.btn_search_board.setVisible(not tiny)
+        self.cb_timestamp.setVisible(not tiny)
+        self.cb_skip_compile.setVisible(not tiny)
+        if tiny:
+            self.board_selector.setMinimumWidth(70)
+            self.port_combo.setMinimumWidth(100)
+        self._grid.setContentsMargins(*(8, 2, 8, 2) if short else (10, 4, 10, 4))
+        self._grid.setSpacing(3 if short else 6)
+        self.btn_opt_dropdown.setText("" if short else "Options ▾")
+        self.btn_opt_dropdown.setIcon(icon("settings") if short else QIcon())
+        self.btn_opt_dropdown.setAccessibleName("Workspace options")
+        self.btn_opt_dropdown.setMinimumWidth(30 if short else 0)
+        self.btn_opt_dropdown.setMaximumWidth(30 if short else 16777215)
         required = sum(group.minimumSize().width() for group in groups) + 38
-        mode = 1 if width >= required else (2 if width >= 520 else 3)
+        mode = 5 if tiny else 4 if short else 1 if width >= required else (2 if width >= 520 else 3)
         if mode != self._row_mode:
             for group in groups:
                 self._grid.removeItem(group)
             for col in range(4):
                 self._grid.setColumnStretch(col, 0)
-            if mode == 1:
+            if mode in (1, 5):
                 for col, group in enumerate(groups):
                     self._grid.addLayout(group, 0, col)
-                self._grid.setColumnStretch(3, 1)
+                self._grid.setColumnStretch(0 if mode == 5 else 3, 1)
             elif mode == 2:
                 for col, group in enumerate(groups[:3]):
                     self._grid.addLayout(group, 0, col)
                 self._grid.addLayout(groups[3], 1, 0, 1, 3)
                 self._grid.setColumnStretch(1, 1)
-            else:
+            elif mode == 3:
                 self._grid.addLayout(groups[0], 0, 0, 1, 2)
                 self._grid.addLayout(groups[1], 1, 0)
                 self._grid.addLayout(groups[2], 1, 1)
                 self._grid.addLayout(groups[3], 2, 0, 1, 2)
                 self._grid.setColumnStretch(0, 1)
+            else:
+                self._grid.addLayout(groups[0], 0, 0)
+                self._grid.addLayout(groups[3], 0, 1)
+                self._grid.addLayout(groups[1], 1, 0)
+                self._grid.addLayout(groups[2], 1, 1)
+                self._grid.setColumnStretch(0, 1)
             self._row_mode = mode
-        self.setFixedHeight(max(54, self._grid.sizeHint().height()))
+        self.setFixedHeight(max(30 if tiny else 54, self._grid.sizeHint().height()))
+
+    def set_responsive_height(self, height: int) -> None:
+        short = height < 500
+        tiny = height < 350
+        if (short, tiny) != (self._short_window, self._tiny_window):
+            self._short_window = short
+            self._tiny_window = tiny
+            self.set_responsive_width(self.width())
 
     def is_compact(self) -> bool:
         return getattr(self, "_is_compact", False)
@@ -1953,6 +1990,14 @@ class ControlsBar(QWidget):
                                 if getattr(self, "_opt_popup", None) is popup else None)
         from main.core.theme import Theme
         mw = self.window()
+
+        if self._row_mode == 5:
+            for label, checkbox in (("Timestamps", self.cb_timestamp), ("Skip Compile", self.cb_skip_compile)):
+                popup.add_button(
+                    ("✓ " if checkbox.isChecked() else "") + label,
+                    checkbox.click, Theme.BG_LIGHT, Theme.BG_HOVER,
+                    enabled=checkbox.isEnabled(),
+                )
 
         # 1. Detach / Attach Editor
         detached = getattr(mw, "_editor_detached", False) or (self.btn_detach_editor.text() == "Attach Editor")

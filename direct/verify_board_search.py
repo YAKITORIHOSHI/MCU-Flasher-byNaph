@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-from PySide6.QtCore import Qt, QTimer, QCoreApplication, QEvent
+from PySide6.QtCore import Qt, QTimer, QCoreApplication, QEvent, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QListView
 from main.qt import board_dialog as module
@@ -129,6 +129,24 @@ class BoardPickerChecks(unittest.TestCase):
         selected.assert_called_once()
         self.parent._backend.set_board_framework.assert_called_once_with("Raspberry Pi Pico", "arduino")
 
+    def test_prepared_unavailable_framework_has_reason_and_cannot_be_selected(self):
+        reason = "Installed Zephyr has no board definition for the exact E77 target."
+        self.boards["E77 fixture"] = dict(platform="ststm32", board="ebyte_e77_dev", framework="zephyr",
+                                           frameworks=["arduino"], declared_frameworks=["arduino", "zephyr"],
+                                           unavailable_frameworks={"zephyr": reason}, pio_resolved=True)
+        selected = Mock()
+        dialog = self.picker(current_board="E77 fixture", on_select_callback=selected)
+        self.assertEqual([dialog.framework_combo.itemText(index) for index in range(dialog.framework_combo.count())],
+                         ["arduino"])
+        self.assertEqual(dialog.framework_combo.currentText(), "arduino")
+        self.assertIn(reason, dialog.framework_combo.toolTip())
+        dialog._select_item_by_name("Arduino UNO")
+        self.assertNotIn(reason, dialog.framework_combo.toolTip())
+        dialog._select_item_by_name("E77 fixture")
+        dialog._confirm_selection()
+        selected.assert_called_once_with("E77 fixture")
+        self.parent._backend.set_board_framework.assert_called_once_with("E77 fixture", "arduino")
+
     def test_slow_superseded_search_and_catalog_refresh_discard_stale_results(self):
         dialog = self.picker()
         entered, release = threading.Event(), threading.Event()
@@ -161,6 +179,87 @@ class BoardPickerChecks(unittest.TestCase):
         generation = dialog._generation
         signals.board_catalog_updated.emit({"boards": self.boards})
         self.assertEqual(dialog._generation, generation)
+
+    def test_local_refresh_completion_is_queued_and_concurrent_requests_are_bounded(self):
+        from main.core import board_catalog
+        published = board_catalog.BoardCatalog(self.boards)
+        entered, release = threading.Event(), threading.Event()
+        replacement = {"Local UNO fixture": self.boards["Arduino UNO"]}
+        calls, delivery_threads = [], []
+        def discover(_seed):
+            calls.append(threading.get_ident())
+            entered.set()
+            release.wait(2)
+            return replacement
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", published), \
+                patch.object(board_catalog, "load_dynamic_boards", side_effect=discover):
+            dialog = self.picker()
+            original = dialog._catalog_updated
+            def delivered(data):
+                delivery_threads.append(QThread.currentThread())
+                original(data)
+            dialog._catalog_updated = delivered
+            try:
+                dialog._async_local_refresh()
+                wait_for(entered.is_set)
+                dialog._async_local_refresh()
+                self.assertEqual(len(calls), 1)
+                self.assertNotEqual(calls[0], threading.get_ident())
+                self.assertEqual(delivery_threads, [])
+                release.set()
+                wait_for(lambda: not dialog._local_refresh_running and not dialog._search_pending)
+                self.assertEqual(delivery_threads, [APP.thread()])
+                self.assertEqual(dialog.all_boards, ["Local UNO fixture"])
+                self.assertEqual(dict(published), replacement)
+            finally:
+                release.set()
+                dialog._catalog_updated = original
+
+    def test_local_refresh_does_not_publish_after_newer_catalog_or_close(self):
+        from main.core import board_catalog
+        for close_dialog in (False, True):
+            published = board_catalog.BoardCatalog(self.boards)
+            entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+            stale = {"Stale UNO fixture": self.boards["Arduino UNO"]}
+            newer = {"Newer Nano fixture": self.boards["Arduino Nano"]}
+            def discover(_seed):
+                entered.set()
+                release.wait(2)
+                finished.set()
+                return stale
+            with patch.object(board_catalog, "SUPPORTED_BOARDS", published), \
+                    patch.object(board_catalog, "load_dynamic_boards", side_effect=discover):
+                dialog = self.picker()
+                try:
+                    dialog._async_local_refresh()
+                    wait_for(entered.is_set)
+                    if close_dialog:
+                        dialog.close()
+                    else:
+                        published.replace(newer)
+                        dialog._catalog_updated({"boards": newer})
+                    generation = dialog._generation
+                    release.set()
+                    wait_for(finished.is_set)
+                    QTest.qWait(50)
+                    self.assertEqual(dialog._generation, generation)
+                    self.assertEqual(dict(published), self.boards if close_dialog else newer)
+                    if not close_dialog:
+                        self.assertFalse(dialog._local_refresh_running)
+                        self.assertEqual(dialog.all_boards, ["Newer Nano fixture"])
+                finally:
+                    release.set()
+
+    def test_local_refresh_error_releases_request_for_retry(self):
+        from main.core import board_catalog
+        with patch.object(board_catalog, "load_dynamic_boards", side_effect=OSError("fixture read failed")):
+            dialog = self.picker()
+            dialog._async_local_refresh()
+            wait_for(lambda: not dialog._local_refresh_running)
+            self.assertTrue(dialog.btn_refresh.isEnabled())
+            self.assertIn("fixture read failed", dialog.lbl_count.text())
+            dialog._async_local_refresh()
+            wait_for(lambda: not dialog._local_refresh_running)
 
     def test_reopening_reuses_index_without_rebuilding(self):
         first = self.picker()
@@ -203,6 +302,29 @@ class BoardPickerChecks(unittest.TestCase):
         if RENDER_DIR:
             QTest.qWait(100)
             self.assertTrue(dialog.grab().save(str(RENDER_DIR / "board-search-6000.png")))
+
+    def test_empty_catalog_triggers_auto_refresh_on_open(self):
+        with patch.object(module, "SUPPORTED_BOARDS", {}):
+            dialog = self.picker()
+            self.parent._backend.refresh_board_catalog.assert_called_with(include_registry=True)
+
+    def test_empty_subset_normalized_to_none_and_not_locked(self):
+        with patch.object(module, "SUPPORTED_BOARDS", {}):
+            dialog = self.picker(board_list=[])
+            self.assertIsNone(dialog._board_subset)
+            dialog._catalog_updated({"boards": self.boards})
+            wait_for(lambda: not dialog._search_pending)
+            self.assertEqual(len(dialog.all_boards), len(self.boards))
+
+    def test_selection_preserved_across_catalog_refresh(self):
+        dialog = self.picker()
+        dialog._select_item_by_name("Arduino Nano")
+        self.assertEqual(dialog.listbox.currentIndex().data(Qt.ItemDataRole.UserRole), "Arduino Nano")
+        updated_boards = dict(self.boards)
+        updated_boards["Brand New Target Board"] = dict(platform="espressif32", board="esp32", framework="arduino")
+        dialog._catalog_updated({"boards": updated_boards})
+        wait_for(lambda: not dialog._search_pending)
+        self.assertEqual(dialog.listbox.currentIndex().data(Qt.ItemDataRole.UserRole), "Arduino Nano")
 
 
 def benchmark(output):

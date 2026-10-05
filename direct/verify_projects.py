@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QRect, QTimer
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
 from main.qt.main_window import MCUMainWindow
@@ -243,7 +243,7 @@ class ProjectChecks(unittest.TestCase):
             process.side_effect = psutil.NoSuchProcess(202)
             self.assertFalse(REAL_INSTANCE_IS_ALIVE("202", {"create_time": 123}, {"101": 100}))
 
-    def test_picker_opens_new_window_and_lists_running_projects_in_all_themes(self):
+    def test_picker_routes_new_window_choice_and_lists_running_projects_in_all_themes(self):
         api = self.backend()
         api.get_recent_projects = Mock(return_value=[])
         api.open_project_window = Mock(return_value={"success": True})
@@ -262,9 +262,113 @@ class ProjectChecks(unittest.TestCase):
                 APP.processEvents()
                 if RENDER_DIR:
                     self.assertTrue(dialog.grab().save(str(RENDER_DIR / ("project-picker-" + theme + ".png"))))
-            dialog._open_existing()
+            with patch.object(dialog, "_choose_project_window", return_value=True):
+                dialog._open_existing()
             api.open_project_window.assert_called_once()
             api.open_project.assert_not_called()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_picker_routes_current_window_choice_after_switch_guard(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.modified_files.clear()
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project_window = Mock(return_value={"success": True})
+        api.open_project = Mock(return_value={"success": True})
+        parent = QWidget()
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), parent=parent, open_in_new_window=True)
+        guarded_targets = []
+        try:
+            dialog._prepare_current_window_switch = lambda target, done, on_wait=None: (guarded_targets.append(target), done(True, "", False))
+            with patch.object(dialog, "_choose_project_window", return_value=False):
+                dialog._open_existing()
+            self.assertEqual(guarded_targets, [str(self.folder / "sketch")])
+            api.open_project.assert_called_once_with(str(self.folder / "sketch"))
+            api.open_project_window.assert_not_called()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_new_project_honors_selected_window(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.modified_files.clear()
+        api.get_recent_projects = Mock(return_value=[])
+        api.create_project = Mock(return_value={"success": True})
+        parent = QWidget()
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        dialog._new_parent_edit.setText(str(self.folder))
+        dialog._new_name_edit.setText("new_project")
+        try:
+            with patch.object(dialog, "_choose_project_window", return_value=True):
+                dialog._create_project()
+            api.create_project.assert_called_once()
+            self.assertTrue(api.create_project.call_args.kwargs["open_in_new_window"])
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_destination_prompt_exposes_current_new_and_cancel_choices(self):
+        api = self.backend()
+        api.get_recent_projects = Mock(return_value=[])
+        parent = QWidget()
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        try:
+            def choose_current():
+                box = next(widget for widget in APP.topLevelWidgets() if isinstance(widget, QMessageBox))
+                labels = {button.text() for button in box.buttons()}
+                self.assertTrue({"This window", "New window", "Cancel"}.issubset(labels))
+                if RENDER_DIR:
+                    self.assertTrue(box.grab().save(str(RENDER_DIR / "project-window-choice.png")))
+                next(button for button in box.buttons() if button.text() == "This window").click()
+
+            QTimer.singleShot(0, choose_current)
+            self.assertFalse(dialog._choose_project_window("demo"))
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_current_window_save_choice_waits_for_save_ack_before_continue(self):
+        from types import SimpleNamespace
+
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_recent_projects = Mock(return_value=[])
+        parent = QWidget()
+        parent._active_operation = None
+        save_all = Mock(side_effect=lambda callback, failure_callback: callback())
+        parent._editor_panel = SimpleNamespace(trigger_save_all=save_all)
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        outcomes, waiting = [], []
+        try:
+            def choose_save():
+                box = next(widget for widget in APP.topLevelWidgets() if isinstance(widget, QMessageBox))
+                labels = {button.text() for button in box.buttons()}
+                self.assertIn("Save All", labels)
+                self.assertIn("Discard", labels)
+                if RENDER_DIR:
+                    self.assertTrue(box.grab().save(str(RENDER_DIR / "project-dirty-choice.png")))
+                next(button for button in box.buttons() if button.text() == "Save All").click()
+
+            QTimer.singleShot(0, choose_save)
+            dialog._prepare_current_window_switch(
+                str(self.folder / "sketch"),
+                lambda ready, error, cancelled: outcomes.append((ready, error, cancelled)),
+                on_wait=lambda: waiting.append(True),
+            )
+            self.assertEqual(outcomes, [(True, "", False)])
+            self.assertEqual(waiting, [True])
+            save_all.assert_called_once()
         finally:
             dialog.close()
             dialog.deleteLater()

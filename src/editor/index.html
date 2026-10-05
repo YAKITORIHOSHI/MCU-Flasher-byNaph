@@ -1100,6 +1100,14 @@
                     return new Promise((resolve, reject) => {
                       try {
                         target[prop](...args, function (res) {
+                          if (prop === 'read_file' && res?.success === false) {
+                            window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+                            reject(new Error(res.error || 'File could not be read'));
+                            return;
+                          }
+                          if ((prop === 'save_file' || prop === 'save_all_files') && !res?.success) {
+                            window._editorSaveFailures = (window._editorSaveFailures || 0) + 1;
+                          }
                           resolve(res);
                         });
                       } catch (err) {
@@ -1485,7 +1493,7 @@
               }
             };
             if (typeof window.saveAllFilesSafe === 'function') {
-              window.saveAllFilesSafe().then(doRun).catch(doRun);
+              window.saveAllFilesSafe().then(doRun).catch(error => console.error("Save failed; action cancelled:", error));
             } else {
               doRun();
             }
@@ -1498,7 +1506,7 @@
               }
             };
             if (typeof window.saveAllFilesSafe === 'function') {
-              window.saveAllFilesSafe().then(doRun).catch(doRun);
+              window.saveAllFilesSafe().then(doRun).catch(error => console.error("Save failed; action cancelled:", error));
             } else {
               doRun();
             }
@@ -1519,11 +1527,16 @@
       document.addEventListener('keydown', handleEditorShortcuts, true);
 
       window.saveAllFilesSafe = async function () {
+        const failures = window._editorSaveFailures || 0;
+        if (typeof window.saveAllFiles !== 'function' || !window.editorInstance || !window.pywebview?.api) {
+          throw new Error('Editor is not ready to save');
+        }
         if (typeof window.saveAllFiles === 'function') {
           try {
             await window.saveAllFiles();
           } catch (e) {
             console.error("saveAllFiles error:", e);
+            throw e;
           }
         }
         if (typeof window.saveActiveFile === 'function') {
@@ -1531,7 +1544,11 @@
             await window.saveActiveFile();
           } catch (e) {
             console.error("saveActiveFile error:", e);
+            throw e;
           }
+        }
+        if ((window._editorSaveFailures || 0) !== failures) {
+          throw new Error('One or more files could not be saved');
         }
         return true;
       };
@@ -2040,6 +2057,7 @@
 
       async function reloadThroughBundleOnce(expectedPath) {
         if (typeof bundledReloadActiveFile !== 'function') return false;
+        const failures = window._editorReadFailures || 0;
         const expected = normalizePath(expectedPath || activeEditorPath());
         if (expected && normalizePath(activeEditorPath()) !== expected) {
           throw new Error('The target editor tab is not active.');
@@ -2051,6 +2069,9 @@
         tabInteractionLocked = true;
         try {
           await bundledReloadActiveFile();
+          if ((window._editorReadFailures || 0) !== failures) {
+            throw new Error('File could not be reloaded');
+          }
           if (expected && normalizePath(activeEditorPath()) !== expected) {
             throw new Error('The active editor tab changed during reload.');
           }
