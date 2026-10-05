@@ -41,7 +41,9 @@ def update_notification(notif_id: str, updates: dict, db_path: str | Path | None
             temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, target_db)
+            if not _safe_replace_file(temp_path, target_db):
+                print(f"[dbs_update] Failed to update notification {notif_id} in {target_db}: file replacement failed")
+                return False
             return True
         except Exception as e:
             print(f"[dbs_update] Failed to update notification {notif_id} in {target_db}: {e}")

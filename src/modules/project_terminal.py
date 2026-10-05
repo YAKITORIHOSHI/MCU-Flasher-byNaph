@@ -309,6 +309,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     fontSize: currentFontSize,
                     fontFamily: 'Consolas, "Courier New", monospace',
                     scrollback: __SCROLLBACK__,
+                    minimumContrastRatio: 4.5,
                     overviewRulerWidth: 0,
                     theme: Object.assign({}, currentTheme)
                 });

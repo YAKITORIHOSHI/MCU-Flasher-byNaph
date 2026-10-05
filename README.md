@@ -282,9 +282,13 @@ When a setup step fails, its entire retained output turns red, including its
 subsections and subsequent progress. Earlier successful steps keep their colors.
 Plain terminal output cannot recolor already printed scrollback.
 
-Build and serial log text, ANSI colors, connection states and transient status
-messages use readable semantic colors from the active theme; retained output is
-recolored when the theme changes. Bootstrap, build output, serial logs and
+Build, serial and compatibility logs, syntax diagnostics, notification cards,
+terminal ANSI colors, connection states and transient status messages use
+readable semantic colors against their actual surfaces in the active theme.
+Retained output is recolored when the theme changes. Terminals also enforce a
+4.5:1 minimum contrast for CLI truecolor and indexed colors. Each workspace
+propagates a theme change once to each panel, including a detached editor.
+Bootstrap, build output, serial logs and
 notifications preserve the visible text, selection and horizontal position
 while output arrives. Bootstrap
 Auto-scroll pauses while the scrollbar is held or dragged, and releasing it
@@ -296,6 +300,19 @@ Turning Auto-scroll off prevents forced following. If bounded history evicts
 the visible text, the view clamps to the remaining history. The HTML assistant
 fallback keeps its reading position; coding terminals retain their native
 xterm behavior.
+Notification filters use bounded retained history without rereading the database
+for each selection. Revealing Notifications refreshes external activity in a
+background worker; stale results from another project are discarded. Live
+notifications follow the active filter, and failed Clear operations retain
+history and show an error. Failed history writes show a transient warning;
+notification replacement keeps the previous database intact on failure.
+Status timers belong to the
+window; older notifications and short actions cannot erase a newer action's
+status. Instance settings and shared theme preferences are saved in one
+transaction, with failed writes reported before applying changes. Successful
+project switches release discarded editor snapshots while retaining current
+dirty buffers and recovery state.
+
 Windows bootstrap preserves the short package-store junction and uses extended
 paths for archive extraction and verification, including builder subprocesses,
 so deeply nested framework files can be prepared in long installation folders.
@@ -304,6 +321,9 @@ archives and cleaning their staging directories. This preserves literal
 trailing-dot TAR entries in older Windows ARM toolchains. Canonical containment
 limits the adaptation to the configured store and staging directories; archive
 security and package version checks stay active.
+Bootstrap's bounded output queue retains warnings and errors during diagnostic
+bursts, coalesces progress, and uses background-worker backpressure when every
+queued event is critical. Closing setup releases a waiting worker.
 
 Windows installations save a per-user health snapshot after successful setup.
 Subsequent launches check local runtime paths and source fingerprints before
@@ -880,6 +900,12 @@ The project verifier checks competing processes, stale settings snapshots,
 exclusive project/port claims, independent opening during compile, existing
 folder protection and themed project-picker captures. It mocks GUI spawning
 and metadata and writes only isolated fixtures under `temp/`.
+`direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`
+check rendered text, retained output, terminal ANSI colors and notification
+filter/refresh behavior across all three palettes. Notification persistence
+checks in `direct/verify_notification_persistence.py` and
+`direct/verify_notification_writes.py` use explicit temporary databases to verify
+successful writes, denied replacements and preservation of existing history.
 The runtime preview also checks all six tool panels in a 640-pixel workspace at the half-screen minimum,
 including control visibility and the serial send bar. Its terminal layout probe
 does not start a shell; `verify_terminal.py` checks the actual PTY separately.

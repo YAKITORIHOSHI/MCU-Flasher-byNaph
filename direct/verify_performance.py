@@ -363,6 +363,51 @@ class PerformanceChecks(unittest.TestCase):
             self.assertNotIn("failed", panel._lbl_status.text())
             panel.deleteLater()
 
+    def test_project_switch_releases_discarded_buffers_and_preserves_current_recovery(self):
+        from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
+        scratch = ROOT / "temp/scratch"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            project = Path(directory) / "original"
+            path = str(project / "sample.ino")
+            backend = SimpleNamespace(sketch_dir_path=project, modified_files={path: True})
+            bridge = EditorBridgeAPI(backend)
+            panel = SimpleNamespace(_bridge=bridge, reload_project=Mock(), open_file=Mock())
+            content = "dirty original buffer" * 10000
+            bridge.snapshot_buffer(path, content)
+            # A previous project may be nested within the current folder or
+            # share its name prefix. Neither owns the current root's buffers.
+            for old_project in (project / "nested", project.with_name("original-copy")):
+                backend.sketch_dir_path = old_project
+                old_path = str(old_project / "sample.ino")
+                backend.modified_files[old_path] = True
+                bridge.snapshot_buffer(old_path, "discarded buffer")
+            backend.sketch_dir_path = project
+            bridge.begin_buffer_recovery()
+            MonacoEditorPanel._on_project_updated(panel, {"path": str(project), "active_file": path})
+            self.assertEqual(bridge._buffer_snapshots, {path: content})
+            self.assertEqual(bridge.get_recovery_buffers(), {path: content})
+            self.assertTrue(bridge._recovering_buffers)
+
+            # Successful switches publish the new backend root. Discarded
+            # buffers should not accumulate as more projects use this window.
+            for number in range(12):
+                project = Path(directory) / f"project-{number}"
+                path = str(project / "sample.ino")
+                content = f"current unsaved buffer {number}"
+                backend.sketch_dir_path = project
+                backend.modified_files = {path: True}
+                bridge.snapshot_buffer(path, content)
+                MonacoEditorPanel._on_project_updated(panel, {"path": str(project), "active_file": path})
+                self.assertEqual(bridge._buffer_snapshots, {path: content})
+                self.assertEqual(bridge._recovery_buffers, {})
+                self.assertFalse(bridge._recovering_buffers)
+                bridge.begin_buffer_recovery()
+                MonacoEditorPanel._on_project_updated(panel, {"path": str(project), "active_file": path})
+                self.assertEqual(bridge.get_recovery_buffers(), {path: content})
+                self.assertTrue(bridge._recovering_buffers)
+            bridge.deleteLater()
+
     def test_editor_only_parses_latest_pending_revision(self):
         from main.qt.editor_panel import EditorBridgeAPI
         from main.qt.signals import signals

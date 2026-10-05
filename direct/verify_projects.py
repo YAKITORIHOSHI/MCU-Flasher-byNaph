@@ -123,6 +123,67 @@ class ProjectChecks(unittest.TestCase):
             self.assertTrue(config.set_active_sketch_dir(str(self.folder / "sketch")))
             self.assertTrue(config.claim_serial_port("COM999"))
 
+    def test_settings_and_theme_share_one_transaction_without_overwriting_other_windows(self):
+        from main.core.theme import Theme
+        self.assertTrue(config._save_raw_config({
+            "instances": {"101": {"window_maximized": False}, "202": {"selected_port": "COM2"}},
+            "shared": {"monitor_font_size": 14, "theme_mode": "default"},
+        }))
+        config.load_gui_config()
+        api = self.backend()
+        original_theme = Theme.active_theme
+        self.addCleanup(Theme.apply_theme, original_theme)
+        with patch.object(config, "_save_raw_config", wraps=config._save_raw_config) as write:
+            result = api.save_settings({"window_maximized": True, "theme_mode": "light"})
+        self.assertTrue(result["success"])
+        write.assert_called_once()
+        current = config._load_raw_config(fresh=True)
+        self.assertTrue(current["instances"]["101"]["window_maximized"])
+        self.assertEqual(current["instances"]["202"], {"selected_port": "COM2"})
+        self.assertEqual(current["shared"]["monitor_font_size"], 14)
+        self.assertEqual(current["shared"]["theme_mode"], "light")
+        self.assertFalse(current["shared"]["theme_follow_system"])
+        self.assertEqual(Theme.active_theme, "light")
+
+    def test_failed_settings_transaction_preserves_theme_and_reports_failure(self):
+        from main.core.theme import Theme
+        config.load_gui_config()
+        api = self.backend()
+        original_theme = Theme.active_theme
+        before = config._load_raw_config(fresh=True)
+        with patch.object(config, "_save_raw_config", return_value=False) as write, \
+             patch.object(Theme, "apply_theme") as apply:
+            result = api.save_settings({"window_maximized": True, "theme_mode": "light"})
+        self.assertFalse(result["success"])
+        self.assertIn("could not be written", result["error"])
+        write.assert_called_once()
+        apply.assert_not_called()
+        self.assertEqual(Theme.active_theme, original_theme)
+        self.assertEqual(config._load_raw_config(fresh=True), before)
+        api.emit.assert_called_once()
+        self.assertEqual(api.emit.call_args.args[0], "notification")
+        self.assertEqual(api.emit.call_args.args[1]["type"], "error")
+
+    def test_notification_storage_failure_warns_once_without_recursion_and_recovers(self):
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        bus = Mock()
+        api._qt_signals, api._window = bus, None
+        notice = {"type": "info", "title": "Original notice", "message": "Still visible"}
+        with patch("src.dbs.dbs_create.add_notification", side_effect=[None, None, {"id": "stored"}, None]) as create:
+            for _ in range(4):
+                api.emit("notification", notice)
+        self.assertEqual(create.call_count, 4, "Warnings must never persist recursively")
+        delivered = [call.args[0] for call in bus.notification.emit.call_args_list]
+        original_notices = [payload for payload in delivered if payload.get("title") == notice["title"]]
+        self.assertEqual(len(original_notices), 4)
+        self.assertNotIn("id", notice, "Dispatch must not mutate the caller's event")
+        self.assertEqual(len({payload["id"] for payload in original_notices}), 4)
+        for payload, call in zip(original_notices, create.call_args_list):
+            self.assertEqual(payload["id"], call.kwargs["notification_id"])
+        warnings = [payload for payload in delivered if payload.get("type") == "warning"]
+        self.assertEqual(len(warnings), 2, "Warn once per outage, rearm after a successful write")
+        self.assertIn("Activity history", warnings[0]["title"])
+
     def simultaneous(self, operation):
         processes = []
         try:

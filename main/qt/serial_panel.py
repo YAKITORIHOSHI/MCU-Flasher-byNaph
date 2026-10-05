@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 import time
-from collections import deque
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Slot, Qt
@@ -29,13 +28,6 @@ from PySide6.QtWidgets import (
 from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_follow import LogFollow, preserve_log_view
 
-_TAG_COLORS: dict[str, str] = {
-    "info": "#5ca4f0", "success": "#4ec994", "warning": "#f1c40f",
-    "error": "#e74c3c", "system": "#56cfbf", "dim": "#6b7280",
-    "sent": "#c678dd", "normal": "#cdd6f4",
-}
-_DEFAULT_COLOR = "#cdd6f4"
-_MONO_FONT     = QFont("Consolas", 11)
 from main.core.constants import MAX_BAUD_RATE
 
 _BAUD_RATES = [b for b in ["9600", "19200", "38400", "57600", "74880", "115200",
@@ -821,7 +813,7 @@ class SerialPanel(QWidget):
         if hasattr(self, "input_field") and self.input_field:
             self.input_field.setEnabled(is_conn)
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         """Connect to the MCUSignals bus."""
         sig_bus.serial_log.connect(self._output.append_log)
         sig_bus.serial_status.connect(self.update_status)
@@ -832,7 +824,7 @@ class SerialPanel(QWidget):
             sig_bus.timestamp_toggled.connect(self.sync_timestamp)
         if hasattr(sig_bus, "font_size_changed"):
             sig_bus.font_size_changed.connect(self._output.set_font_size)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
         if self._backend and hasattr(self._backend, "timestamp_enabled"):
             self._output.set_timestamp_enabled(bool(self._backend.timestamp_enabled))

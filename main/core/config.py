@@ -630,8 +630,8 @@ def load_gui_config() -> dict:
     return ConfigSnapshot(res)
 
 
-def save_gui_config(config: dict):
-    """Persist this instance's config dict without touching other instances."""
+def save_gui_config(config: dict, shared_updates: dict | None = None):
+    """Persist instance values and optional shared preferences in one transaction."""
     if "last_sketch_dir" in config and is_application_codebase_dir(config["last_sketch_dir"]):
         config["last_sketch_dir"] = ""
 
@@ -652,6 +652,8 @@ def save_gui_config(config: dict):
         data["shared"]["selected_board"] = config["selected_board"]
         if config.get("last_sketch_dir"):
             data["shared"].setdefault("project_board_map", {})[config["last_sketch_dir"]] = config["selected_board"]
+    if shared_updates:
+        data["shared"].update(shared_updates)
         
     # Prune stale instance entries only when the table accumulates entries (> 5),
     # preventing expensive system-wide psutil process enumeration on every config save.

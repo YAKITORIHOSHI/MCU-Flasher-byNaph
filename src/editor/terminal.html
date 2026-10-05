@@ -23,6 +23,7 @@
         return;
       }
       const term = new Terminal({scrollback: 5000, fontFamily: 'Ubuntu Mono, DejaVu Sans Mono, monospace', fontSize: 14,
+        minimumContrastRatio: 4.5,
         theme: {background: '#101b2a', foreground: '#e3edf6', cursor: '#80d9ce'}});
       const fit = new FitAddon.FitAddon();
       term.loadAddon(fit);

@@ -231,7 +231,8 @@ class EditorBridgeAPI(QObject):
         if result["generation"] == self._syntax_generation and self._backend and str(self._backend.active_file_path) == result["path"]:
             from main.qt.signals import signals
             if "error" in result:
-                signals.notification.emit({"title": "Syntax check failed", "message": result["error"], "type": "warning"})
+                from uuid import uuid4
+                signals.notification.emit({"id": "notif_" + uuid4().hex, "title": "Syntax check failed", "message": result["error"], "type": "warning"})
             else:
                 signals.syntax_errors.emit(result["diagnostics"])
         self._start_syntax()
@@ -294,6 +295,22 @@ class EditorBridgeAPI(QObject):
     def recovery_complete(self):
         self._recovering_buffers = False
         self._recovery_buffers.clear()
+
+    def retain_current_project_buffers(self) -> None:
+        """Release discarded project snapshots after a confirmed project switch."""
+        if not self._backend or not self._backend.sketch_dir_path:
+            return
+        project = Path(self._backend.sketch_dir_path).resolve()
+        self._buffer_snapshots = {
+            path: content for path, content in self._buffer_snapshots.items()
+            if Path(path).parent == project
+        }
+        self._recovery_buffers = {
+            path: content for path, content in self._recovery_buffers.items()
+            if Path(path).parent == project
+        }
+        if not self._recovery_buffers:
+            self._recovering_buffers = False
 
     @Slot(str, result="QVariant")
     def run_action(self, action_name: str) -> dict:
@@ -845,7 +862,7 @@ class MonacoEditorPanel(QWidget):
         if not enabled and hasattr(self, "_autosave_timer"):
             self._autosave_timer.stop()
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         """Connect to global Qt signal bus."""
         sig_bus.editor_load_file.connect(self.open_file)
         sig_bus.editor_goto_line.connect(self.goto_line)
@@ -854,7 +871,7 @@ class MonacoEditorPanel(QWidget):
         sig_bus.project_updated.connect(self._on_project_updated)
         if hasattr(sig_bus, "font_size_changed"):
             sig_bus.font_size_changed.connect(self.set_font_size)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.set_theme)
         if hasattr(sig_bus, "autosave_settings_changed"):
             sig_bus.autosave_settings_changed.connect(self._on_autosave_settings_changed)
@@ -883,6 +900,7 @@ class MonacoEditorPanel(QWidget):
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:
         """Handle project folder change or new sketch creation."""
+        self._bridge.retain_current_project_buffers()
         self.reload_project()
         active = payload.get("active_file")
         if active:

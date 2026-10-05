@@ -18,9 +18,10 @@ indicators, drag order and buffer identity. Capture compact/wide and dark/light
 layouts, check native widget ownership, and verify only explicitly requested
 dialogs, explicit Project actions or Detach Editor actions open additional windows.
 Set main window minimum width to half the current monitor's work-area width;
-allow wider resizing and maximization. Project
-selection opens a separate sketch window; show full paths for running projects
-and preserve the current project's dirty buffers, focus and terminal sessions.
+allow wider resizing and maximization. Project selection asks whether to use
+the current window or a separate sketch window; show full paths for running
+projects. Keep the current project's buffers, focus and terminal sessions when
+opening another window, and resolve unsaved changes before switching projects.
 Carry the same palette into native setup and the Tk downloader. Keep utility
 screens focused on logs or package lists; advanced index URLs can be collapsed.
 Setup uses the app's original circuit-chip mark and static glass reflections

@@ -9865,19 +9865,27 @@ def _activate_bootstrap_venv(venv_dir: Path, venv_python: Path) -> bool:
 
 
 def _stream_offline_setup_output(gui, process):
-    """Parse live package progress and bound events before Qt delivery."""
+    """Read on the setup worker; preserve failures in bounded GUI delivery."""
     from collections import deque
     from src.modules.bootstrap_output import PackageOutput, output_chunks
-    pending = deque(maxlen=64)
-    lock = threading.Lock()
+    signals = getattr(gui, "_signals", None)
+    if threading.get_ident() == getattr(signals, "thread_id", None):
+        raise RuntimeError("Offline setup output must be read on the setup worker, not the GUI thread")
+    pending = deque()
+    condition = threading.Condition()
+    protected = {"fail", "warn", "clear"}
     scheduled = False
+
+    def closed():
+        return getattr(gui, "_closed", False) or getattr(signals, "_closed", False)
 
     def flush():
         nonlocal scheduled
-        with lock:
+        with condition:
             batch = tuple(pending)
             pending.clear()
             scheduled = False
+            condition.notify_all()
         for kind, text in batch:
             if kind == "progress":
                 gui.update_platformio_progress_block(text)
@@ -9891,10 +9899,25 @@ def _stream_offline_setup_output(gui, process):
 
     def enqueue(kind, text):
         nonlocal scheduled
-        with lock:
+        with condition:
+            if closed():
+                return
             if kind == "progress" and pending and pending[-1][0] == "progress":
                 pending[-1] = (kind, text)
             else:
+                while len(pending) >= 64:
+                    for index, (old_kind, _) in enumerate(pending):
+                        if old_kind not in protected:
+                            del pending[index]
+                            break
+                    else:
+                        if kind not in protected or closed():
+                            return
+                        # Only the setup worker waits. The GUI flush releases
+                        # this lock before rendering and never waits on output.
+                        condition.wait(0.05)
+                        continue
+                    break
                 pending.append((kind, text))
             schedule = not scheduled
             scheduled = True

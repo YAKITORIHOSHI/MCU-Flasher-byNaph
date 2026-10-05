@@ -551,7 +551,6 @@ class MCUMainWindow(QMainWindow):
 
         # ── Connect Global Signals ───────────────────────────────────────────
         from main.qt.signals import signals
-        signals.theme_changed.connect(self._on_theme_changed)
         if hasattr(signals, "compat_confirm_requested"):
             signals.compat_confirm_requested.connect(self._on_compat_confirm_requested)
 
@@ -592,8 +591,10 @@ class MCUMainWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             app.setStyleSheet(build_stylesheet(theme_name))
+            app.setProperty("mcuAppliedTheme", Theme.active_theme)
         if getattr(self, "_notification_type", None):
             self._apply_notification_color(self._notification_type)
+        self._apply_telemetry_color(theme_name)
         from main.qt.icons import ActionButton
         for button in self.findChildren(ActionButton):
             button.refresh_icon()
@@ -631,6 +632,14 @@ class MCUMainWindow(QMainWindow):
         self._status_label.setFixedHeight(18)
         sb.addWidget(self._status_label, stretch=1)
         self._notification_type = None
+        self._status_base_text = "Ready"
+        self._notification_timer = QTimer(self)
+        self._notification_timer.setSingleShot(True)
+        self._notification_timer.setInterval(5000)
+        self._notification_timer.timeout.connect(self._clear_notification_status)
+        self._temporary_status_timer = QTimer(self)
+        self._temporary_status_timer.setSingleShot(True)
+        self._temporary_status_timer.timeout.connect(self._finish_temporary_action)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setFixedWidth(180)
@@ -641,8 +650,27 @@ class MCUMainWindow(QMainWindow):
         sb.addPermanentWidget(self._progress_bar)
 
         self._lbl_telemetry = QLabel("CPU: --  RAM: -- GB free")
-        self._lbl_telemetry.setStyleSheet("color: #6b7280; font-size: 11px; margin-right: 8px;")
+        from main.core.theme import Theme
+        self._apply_telemetry_color(Theme.active_theme)
         sb.addPermanentWidget(self._lbl_telemetry)
+
+    def _apply_telemetry_color(self, theme_name: str) -> None:
+        from main.qt.log_colors import themed_log_colors
+        from main.qt.theme import get_palette
+        color = themed_log_colors(theme_name, background=get_palette(theme_name)["BG_DARK"])["dim"]
+        self._lbl_telemetry.setStyleSheet(f"color: {color}; font-size: 11px; margin-right: 8px;")
+
+    def _set_status_text(self, text: str, notification_type: str | None = None) -> None:
+        """Replace status text and invalidate older transient callbacks."""
+        self._notification_timer.stop()
+        self._temporary_status_timer.stop()
+        self._notification_type = notification_type
+        if notification_type:
+            self._apply_notification_color(notification_type)
+        else:
+            self._status_base_text = text
+            self._status_label.setStyleSheet("")
+        self._status_label.setText(text)
 
     def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._shortcut_compile)
@@ -667,15 +695,17 @@ class MCUMainWindow(QMainWindow):
         sig_bus.board_catalog_updated.connect(self._on_catalog_updated)
 
         # Connect child panels
-        self._console_container.connect_signals(sig_bus)
-        self._serial_panel.connect_signals(sig_bus)
-        self._notif_panel.connect_signals(sig_bus)
-        self._compat_panel.connect_signals(sig_bus)
-        self._syntax_panel.connect_signals(sig_bus)
-        self._terminal_panel.connect_signals(sig_bus)
-        self._editor_panel.connect_signals(sig_bus)
-        self._primary_toolbar.connect_signals(sig_bus)
-        self._controls_bar.connect_signals(sig_bus)
+        # The workspace owns one theme propagation pass. Standalone panels may
+        # still subscribe directly when they are not hosted in this window.
+        self._console_container.connect_signals(sig_bus, connect_theme=False)
+        self._serial_panel.connect_signals(sig_bus, connect_theme=False)
+        self._notif_panel.connect_signals(sig_bus, connect_theme=False)
+        self._compat_panel.connect_signals(sig_bus, connect_theme=False)
+        self._syntax_panel.connect_signals(sig_bus, connect_theme=False)
+        self._terminal_panel.connect_signals(sig_bus, connect_theme=False)
+        self._editor_panel.connect_signals(sig_bus, connect_theme=False)
+        self._primary_toolbar.connect_signals(sig_bus, connect_theme=False)
+        self._controls_bar.connect_signals(sig_bus, connect_theme=False)
 
         # Toolbar action signals
         sig_bus.file_reload_requested.connect(self._shortcut_reload_file)
@@ -697,7 +727,7 @@ class MCUMainWindow(QMainWindow):
             QTimer.singleShot(500, lambda: self._on_catalog_updated(data))
             return
         if "error" in data:
-            self._status_label.setText(f"Board catalog unavailable: {data['error']}")
+            self._set_status_text(f"Board catalog unavailable: {data['error']}")
             return
         from main.core.board_catalog import SUPPORTED_BOARDS
         SUPPORTED_BOARDS.replace(data.get("boards", {}))
@@ -705,7 +735,7 @@ class MCUMainWindow(QMainWindow):
         if self._backend and self._backend.current_board:
             self._controls_bar._update_hardware_defaults_for_board(self._backend.current_board, update_monitor=False)
         if data.get("warning"):
-            self._status_label.setText("Showing cached and installed boards; online refresh was unavailable.")
+            self._set_status_text("Showing cached and installed boards; online refresh was unavailable.")
             self._status_label.setToolTip(data["warning"])
 
     @Slot(bool)
@@ -785,7 +815,7 @@ class MCUMainWindow(QMainWindow):
             }
             effective_key = (op or phase).lower()
             display_phase = phase_map.get(effective_key, phase_map.get(phase.lower(), phase.replace("_", " ").title()))
-            self._status_label.setText(f"⚙ {display_phase}…")
+            self._set_status_text(f"⚙ {display_phase}…")
             self._progress_bar.setRange(0, 0)
             self._progress_bar.setTextVisible(False)
             self._progress_bar.setVisible(True)
@@ -828,7 +858,7 @@ class MCUMainWindow(QMainWindow):
                 if hasattr(self, "_serial_panel") and self._serial_panel:
                     self._serial_panel.setEnabled(True)
         else:
-            self._status_label.setText("Ready")
+            self._set_status_text("Ready")
             self._progress_bar.setVisible(False)
             self._progress_bar.setRange(0, 0)
             self._active_operation_started = False
@@ -882,12 +912,12 @@ class MCUMainWindow(QMainWindow):
     def _on_console_progress(self, payload: dict) -> None:
         action = payload.get("action", "")
         if action.lower() in ("failed", "error", "cancelled"):
-            self._status_label.setText(action)
+            self._set_status_text(action)
             self._progress_bar.setVisible(False)
             return
         if action.lower() in ("completed", "ready", "idle", "done", "success"):
             if not getattr(self, "_active_operation", None) or getattr(self, "_active_operation", None) in ("clean", "reset", "soft_reset", "hard_reset", "syntax"):
-                self._status_label.setText("Ready")
+                self._set_status_text("Ready")
                 self._progress_bar.setVisible(False)
                 self._progress_bar.setRange(0, 0)
             return
@@ -911,7 +941,7 @@ class MCUMainWindow(QMainWindow):
                 display_action = f"{display_action}…"
             if not display_action.startswith("⚙ "):
                 display_action = f"⚙ {display_action}"
-            self._status_label.setText(display_action)
+            self._set_status_text(display_action)
 
     def _trigger_temporary_action(self, action_name: str, duration_ms: int = 700) -> None:
         """Display an indeterminate circulation loading indicator for quick UI actions (e.g. Save, Reload)."""
@@ -924,18 +954,19 @@ class MCUMainWindow(QMainWindow):
         if not display_text.startswith("⚙ "):
             display_text = f"⚙ {display_text}"
 
-        self._status_label.setText(display_text)
+        self._set_status_text(display_text)
+        self._status_base_text = "Ready"
         self._progress_bar.setRange(0, 0)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setVisible(True)
 
-        def _finish():
-            if getattr(self, "_active_operation", None) is None:
-                self._progress_bar.setVisible(False)
-                self._progress_bar.setRange(0, 0)
-                self._status_label.setText("Ready")
+        self._temporary_status_timer.start(duration_ms)
 
-        QTimer.singleShot(duration_ms, _finish)
+    def _finish_temporary_action(self) -> None:
+        if self._active_operation is None:
+            self._progress_bar.setVisible(False)
+            self._progress_bar.setRange(0, 0)
+            self._set_status_text("Ready")
 
     @Slot(dict)
     def _on_telemetry(self, payload: dict) -> None:
@@ -947,9 +978,7 @@ class MCUMainWindow(QMainWindow):
     def _on_notification(self, payload: dict) -> None:
         title = payload.get("title", "")
         msg   = payload.get("message", "")
-        ntype = payload.get("type", "info")
-        self._notification_type = ntype
-        self._apply_notification_color(ntype)
+        ntype = payload.get("type") or "info"
 
         # Guard against multi-line text expanding status bar
         if "\n" in msg:
@@ -958,20 +987,22 @@ class MCUMainWindow(QMainWindow):
         else:
             display_text = msg or title
 
-        self._status_label.setText(display_text)
-        QTimer.singleShot(5000, self._clear_notification_status)
+        self._set_status_text(display_text, ntype)
+        if not self._active_operation:
+            self._progress_bar.setVisible(False)
+        self._notification_timer.start()
 
     def _apply_notification_color(self, notification_type: str) -> None:
         from main.core.theme import Theme
         from main.qt.log_colors import themed_log_colors
+        from main.qt.theme import get_palette
         tag = notification_type if notification_type in ("success", "error", "warning") else "info"
-        color = themed_log_colors(Theme.active_theme)[tag]
+        color = themed_log_colors(Theme.active_theme, background=get_palette(Theme.active_theme)["BG_DARK"])[tag]
         self._status_label.setStyleSheet(f"color: {color};")
 
     def _clear_notification_status(self) -> None:
-        self._notification_type = None
-        self._status_label.setStyleSheet("")
-        self._status_label.setText("Ready")
+        if self._notification_type is not None:
+            self._set_status_text(self._status_base_text)
 
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:

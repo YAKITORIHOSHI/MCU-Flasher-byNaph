@@ -13,7 +13,7 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel
 
-from main.qt.theme import get_palette
+from main.qt.log_colors import themed_terminal_colors
 from src.modules.runtime_resources import performance_profile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -177,8 +177,7 @@ class PosixTerminalPanel(QWidget):
         view.setUrl(QUrl.fromLocalFile(str(ROOT / "src" / "editor" / "terminal.html")))
 
     def _configure(self, view):
-        palette = get_palette(self._theme)
-        theme = {"background": palette["BG_DARKEST"], "foreground": palette["TEXT"], "cursor": palette["CYAN"], "selectionBackground": palette["BG_HOVER"]}
+        theme = themed_terminal_colors(self._theme)
         scrollback = performance_profile().terminal_scrollback
         view.page().runJavaScript(f"window.configureTerminal?.({json.dumps(theme)}, {self._font_size}, {scrollback})")
 
@@ -224,8 +223,9 @@ class PosixTerminalPanel(QWidget):
         for view in self._sessions:
             self._configure(view)
 
-    def connect_signals(self, bus):
-        bus.theme_changed.connect(self.apply_theme)
+    def connect_signals(self, bus, *, connect_theme=True):
+        if connect_theme:
+            bus.theme_changed.connect(self.apply_theme)
         if hasattr(bus, "font_size_changed"):
             bus.font_size_changed.connect(self.set_font_size)
 

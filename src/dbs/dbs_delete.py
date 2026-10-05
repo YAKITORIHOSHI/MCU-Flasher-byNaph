@@ -11,8 +11,7 @@ def clear_all_notifications(db_path: str | Path | None = None) -> bool:
             temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump([], f, indent=2)
-            _safe_replace_file(temp_path, target_db)
-            return True
+            return bool(_safe_replace_file(temp_path, target_db))
         except Exception as e:
             print(f"[dbs_delete] Failed to clear notifications from {target_db}: {e}")
             return False
@@ -39,8 +38,7 @@ def delete_notification(notif_id: str, db_path: str | Path | None = None) -> boo
             temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, target_db)
-            return True
+            return bool(_safe_replace_file(temp_path, target_db))
         except Exception as e:
             print(f"[dbs_delete] Failed to delete notification {notif_id} from {target_db}: {e}")
             return False
@@ -68,8 +66,7 @@ def delete_notifications_by_category(category: str, db_path: str | Path | None =
             temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(new_records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, target_db)
-            return removed_count
+            return removed_count if _safe_replace_file(temp_path, target_db) else 0
         except Exception as e:
             print(f"[dbs_delete] Failed to delete category {category} from {target_db}: {e}")
             return 0

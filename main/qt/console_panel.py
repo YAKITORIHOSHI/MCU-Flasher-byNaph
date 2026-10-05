@@ -9,7 +9,8 @@ as QTextCharFormat.  Autoscroll, copy, and clear controls are built in.
 """
 from __future__ import annotations
 
-from collections import deque
+import re
+import time
 
 # pyrefly: ignore [missing-import]
 from PySide6.QtCore import QTimer, Slot, Qt
@@ -23,58 +24,7 @@ from PySide6.QtWidgets import (
 from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_follow import LogFollow, preserve_log_view
 
-# Tag → QColor mapping (mirrors the Tkinter tag_configure calls in ui_layout_mixin)
-_TAG_COLORS: dict[str, str] = {
-    "info":          "#5ca4f0",   # BLUE
-    "success":       "#4ec994",   # GREEN
-    "warning":       "#f1c40f",   # YELLOW
-    "error":         "#e74c3c",   # RED
-    "system":        "#56cfbf",   # CYAN
-    "dim":           "#6b7280",   # TEXT_DIM
-    "magenta":       "#c678dd",   # MAGENTA
-    "connecting_magenta": "#c678dd",
-    "orange":        "#e67e22",   # ORANGE
-    "bold":          "#cdd6f4",   # TEXT (bold)
-    "port_highlight":"#ff3fa4",
-    "header":        "#56cfbf",   # CYAN header
-    "purple":        "#9b59b6",
-    "purple_dim":    "#7d3c98",
-    "purple_header": "#b07cc6",
-    "purple_info":   "#c678dd",
-    "purple_value":  "#ffffff",
-    "success_bold_lg": "#4ec994",
-    "magenta_bold_lg": "#c678dd",
-    "sent":          "#c678dd",   # MAGENTA
-    "severe_alert":  "#FF3355",
-    "timestamp":     "#6b7280",   # TEXT_DIM
-    "normal":        "#cdd6f4",   # TEXT
-}
-_DEFAULT_COLOR = "#cdd6f4"
-_BG_COLOR      = "#0d1117"
-_MONO_FONT     = QFont("Consolas", 11)
-
-import re
-import time
-
 _ANSI_REGEX = re.compile(r"\x1b\[([0-9;]*)m")
-_ANSI_CODE_MAP: dict[int, str] = {
-    30: "#000000",
-    31: "#e74c3c",  # Red
-    32: "#4ec994",  # Green
-    33: "#f1c40f",  # Yellow
-    34: "#5ca4f0",  # Blue
-    35: "#c678dd",  # Magenta
-    36: "#56cfbf",  # Cyan
-    37: "#cdd6f4",  # White
-    90: "#6b7280",  # Bright Black (Gray)
-    91: "#ff6b6b",  # Bright Red
-    92: "#51cf66",  # Bright Green
-    93: "#fcc419",  # Bright Yellow
-    94: "#74c0fc",  # Bright Blue
-    95: "#e599f7",  # Bright Magenta
-    96: "#63e6be",  # Bright Cyan
-    97: "#ffffff",  # Bright White
-}
 
 
 class AnsiColorParser:
@@ -644,7 +594,7 @@ class ConsolePanelContainer(QWidget):
         layout.addWidget(sep)
         layout.addWidget(self.console)
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         """Connect to the MCUSignals bus."""
         sig_bus.console_log.connect(self.console.append_log)
         sig_bus.console_progress.connect(self.console.update_progress)
@@ -657,7 +607,7 @@ class ConsolePanelContainer(QWidget):
             sig_bus.timestamp_toggled.connect(self.header.sync_timestamp)
         if hasattr(sig_bus, "font_size_changed"):
             sig_bus.font_size_changed.connect(self.console.set_font_size)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
         if hasattr(sig_bus, "hide_warnings_changed"):
             sig_bus.hide_warnings_changed.connect(self.console.set_hide_warnings)

@@ -18,6 +18,7 @@ import hashlib
 import textwrap
 import queue
 from datetime import datetime
+from uuid import uuid4
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,7 +44,7 @@ from main.core.constants import (
 )
 from main.core.config import (
     load_gui_config, save_gui_config, load_recent_projects, add_recent_project,
-    load_recent_boards, add_recent_board, get_theme_mode, set_theme_mode,
+    load_recent_boards, add_recent_board, get_theme_mode,
     _try_acquire_reset_cache_lock, _release_reset_cache_lock, port_occupied_owner,
     claim_serial_port,
     _load_raw_config, _save_raw_config,
@@ -496,6 +497,14 @@ class MCUWebBackendAPI:
         pywebview JS   — only when ``self._window`` is set (Monaco editor
                          iframe uses this channel for editor events).
         """
+        if event_name == "notification" and isinstance(data, dict):
+            data = dict(data)
+            data["category"] = data.get("category") or "system"
+            data["type"] = data.get("type") or "info"
+            data["title"] = data.get("title") or "Notification"
+            data["message"] = data.get("message") or ""
+            if not data.get("id"):
+                data["id"] = "notif_" + uuid4().hex
         # ── 1. Qt signal dispatch ──────────────────────────────────────────
         bus = self._get_qt_signals()
         if bus is not None:
@@ -554,17 +563,36 @@ class MCUWebBackendAPI:
 
         # Persistent notification storage
         if event_name == "notification" and isinstance(data, dict):
+            stored = None
             try:
                 from src.dbs import dbs_create
-                dbs_create.add_notification(
+                stored = dbs_create.add_notification(
                     category=data.get("category", "system"),
                     level=data.get("type", "info"),
                     title=data.get("title", "Notification"),
-                    message=data.get("message", ""),
+                    message=data.get("history_message", data["message"]),
                     details=data.get("details", {}),
+                    notification_id=data["id"],
                 )
             except Exception:
                 pass
+            if stored is None:
+                if not getattr(self, "_notification_storage_failed", False):
+                    self._notification_storage_failed = True
+                    if bus is not None:
+                        # Dispatch directly so a storage warning cannot try to
+                        # persist itself and recursively generate more warnings.
+                        try:
+                            bus.notification.emit({
+                                "category": "system", "type": "warning",
+                                "id": "notif_" + uuid4().hex,
+                                "title": "Activity history not saved",
+                                "message": "Notifications remain visible, but could not be saved to activity history. Check that the project folder is writable.",
+                            })
+                        except Exception:
+                            pass
+            else:
+                self._notification_storage_failed = False
 
         # ── 2. pywebview JS dispatch (Monaco editor iframe) ────────────────
         if not self._window:
@@ -8474,12 +8502,23 @@ class MCUWebBackendAPI:
     def get_settings(self) -> dict[str, Any]:
         return load_gui_config()
 
-    def save_settings(self, settings: dict[str, Any]):
+    def save_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         cfg = load_gui_config()
         cfg.update(settings)
-        save_gui_config(cfg)
+        shared_updates = None
         if "theme_mode" in settings:
-            set_theme_mode(settings["theme_mode"])
+            from main.core.theme import Theme
+            mode = settings["theme_mode"]
+            if mode not in Theme.PALETTES:
+                mode = "default"
+            shared_updates = {"theme_mode": mode, "theme_follow_system": False}
+        if save_gui_config(cfg, shared_updates=shared_updates) is False:
+            error = "The configuration files could not be written. Check that your settings folder is writable and try again."
+            self.emit("notification", {"title": "Settings not saved", "message": error, "type": "error"})
+            return {"success": False, "error": error}
+        if shared_updates is not None:
+            Theme.apply_theme(shared_updates["theme_mode"])
+        return {"success": True}
 
     def get_theme_mode(self) -> str:
         return get_theme_mode()

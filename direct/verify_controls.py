@@ -138,6 +138,20 @@ class ControlChecks(unittest.TestCase):
         self.backend.set_reset_on_baud_change.assert_not_called()
         QMessageBox.critical.assert_called_once()
 
+    def test_settings_history_failure_keeps_saved_preferences_and_reports_warning(self):
+        dialog = self.settings()
+        notice = Mock()
+        settings_module.signals.notification.connect(notice)
+        self.addCleanup(settings_module.signals.notification.disconnect, notice)
+        with patch("src.dbs.dbs_create.add_notification", return_value=None), \
+             patch.object(dialog, "accept") as accept:
+            dialog._save_and_apply()
+        self.save.assert_called_once()
+        accept.assert_called_once()
+        notice.assert_called_once()
+        self.assertEqual(notice.call_args.args[0]["type"], "warning")
+        self.assertIn("Preferences saved", notice.call_args.args[0]["message"])
+
     def test_settings_cancel_does_not_persist_and_live_signals_match_saved_values(self):
         dialog = self.settings()
         dialog.theme_combo.setCurrentText(dialog._theme_rev["light"])

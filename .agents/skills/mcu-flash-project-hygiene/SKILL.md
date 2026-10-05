@@ -48,6 +48,10 @@ Classify paths before changing attributes or deleting anything:
 - Use `write_generated_text(path, content)` for generated text/JSON metadata.
   It prepares a hidden sibling and atomically replaces the target, avoiding
   Windows hidden-file truncation errors and keeping repeated updates hidden.
+- Notification storage also prepares a hidden sibling before atomic replacement
+  and preserves existing history when replacement fails. Never fall back to
+  copying over the old database. Creation, updates and deletion must return the
+  actual persistence outcome; use the isolated notification write/delete verifiers.
 - Use `unhide_hidden_attribute(path)` to repair any real user file hidden by an
   older app version.
 - Keep `hide_internal_project_metadata(project)` idempotent and shallow. It

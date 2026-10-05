@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime
 import threading
+from uuid import uuid4
 from pathlib import Path
 
 _DB_LOCK = threading.Lock()
@@ -37,41 +38,54 @@ def _ensure_parent_dir(db_path: str) -> None:
         pass
 
 def _safe_replace_file(src: str, dst: str, max_retries: int = 5, backoff_ms: int = 50) -> bool:
-    for attempt in range(max_retries):
+    """Replace a prepared sibling atomically; never truncate the old database."""
+    source, target = Path(src), Path(dst)
+    attempts = max(1, min(5, int(max_retries)))
+    original_source_attrs = None
+    hide_target = False
+    if os.name == "nt":
+        from main.core.file_utils import ensure_file_writable, hide_hidden_attribute, _set_windows_file_attributes
         try:
-            if os.path.exists(dst) and os.name == "nt":
-                try:
-                    os.chmod(dst, 0o666)
-                except Exception:
-                    pass
-            os.replace(src, dst)
-            # Apply hidden attribute on Windows if in cache directory
-            if os.name == "nt" and (".mcu_flasher_build_cache" in dst or os.path.basename(dst).startswith(".")):
-                try:
-                    import ctypes
-                    ctypes.windll.kernel32.SetFileAttributesW(str(dst), 0x02)  # FILE_ATTRIBUTE_HIDDEN
-                except Exception:
-                    pass
-            return True
-        except (PermissionError, OSError):
-            if attempt < max_retries - 1:
-                time.sleep((backoff_ms * (2 ** attempt)) / 1000.0)
-            else:
-                try:
-                    import shutil
-                    shutil.copy2(src, dst)
-                    if os.path.exists(src):
-                        os.unlink(src)
-                    if os.name == "nt" and (".mcu_flasher_build_cache" in dst or os.path.basename(dst).startswith(".")):
-                        try:
-                            import ctypes
-                            ctypes.windll.kernel32.SetFileAttributesW(str(dst), 0x02)
-                        except Exception:
-                            pass
-                    return True
-                except Exception:
-                    return False
-    return False
+            original_source_attrs = source.stat().st_file_attributes
+        except OSError:
+            pass
+        try:
+            target_attrs = target.stat().st_file_attributes
+        except OSError:
+            target_attrs = 0
+        hide_target = bool(target_attrs & 0x02) or \
+            any(part.casefold() == ".mcu_flasher_build_cache" for part in target.parts) or target.name.startswith(".")
+        if hide_target:
+            hide_hidden_attribute(source)
+        # The replacement inherits its sibling's attributes. Keep the old
+        # hidden/system bits while leaving app-owned records writable.
+        if target_attrs & 0x04:
+            prepared_attrs = (original_source_attrs or 0x80) | (target_attrs & 0x06)
+            if hide_target:
+                prepared_attrs |= 0x02
+            _set_windows_file_attributes(source, prepared_attrs & ~0x01)
+
+    succeeded = False
+    try:
+        for attempt in range(attempts):
+            try:
+                if os.name == "nt":
+                    ensure_file_writable(target)
+                os.replace(src, dst)
+                succeeded = True
+                if os.name == "nt" and hide_target:
+                    hide_hidden_attribute(target)
+                return True
+            except (PermissionError, OSError):
+                if attempt < attempts - 1:
+                    time.sleep((max(0, backoff_ms) * (2 ** attempt)) / 1000.0)
+        return False
+    finally:
+        if not succeeded and original_source_attrs is not None:
+            # A fixed staging filename may be reused by the next write.
+            # Restore its original visibility after failed replacement so
+            # Windows permits truncating that staging file again.
+            _set_windows_file_attributes(source, (original_source_attrs & ~0x01) or 0x80)
 
 def add_notification(
     category: str = "system",
@@ -81,7 +95,8 @@ def add_notification(
     details: dict | None = None,
     max_records: int = 500,
     db_path: str | Path | None = None,
-) -> dict:
+    notification_id: str | None = None,
+) -> dict | None:
     """Create and persist a new notification record.
 
     Args:
@@ -93,15 +108,16 @@ def add_notification(
         max_records: Maximum historical records to retain (default: 500)
         db_path: Optional explicit path to the target dbs_notif.json file.
                  If None, uses current default/active project database.
+        notification_id: Optional unique ID shared with the live UI event.
 
     Returns:
-        The created notification dictionary object.
+        The persisted notification dictionary object, or None if saving fails.
     """
     now = datetime.now()
     ts_sec = int(time.time())
     ms = now.microsecond // 1000
 
-    notif_id = f"notif_{ts_sec}_{ms}"
+    notif_id = notification_id or f"notif_{ts_sec}_{ms}_{uuid4().hex}"
     record = {
         "id": notif_id,
         "timestamp": now.isoformat(timespec="seconds"),
@@ -138,8 +154,11 @@ def add_notification(
             temp_path = target_db + ".tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, indent=2, ensure_ascii=False)
-            _safe_replace_file(temp_path, target_db)
+            if not _safe_replace_file(temp_path, target_db):
+                print(f"[dbs_create] Failed to save notification to {target_db}: file replacement failed")
+                return None
         except Exception as e:
             print(f"[dbs_create] Failed to save notification to {target_db}: {e}")
+            return None
 
     return record

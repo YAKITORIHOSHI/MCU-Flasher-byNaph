@@ -589,6 +589,118 @@ class OfflineChecks(unittest.TestCase):
         self.assertTrue(shown[-1].startswith("9999:"))
         self.assertLessEqual(sum(map(len, shown)), 64 * 3000)
 
+    @staticmethod
+    def _isolated_setup_output():
+        import ast
+        import threading
+        tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
+        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef)
+                    and item.name == "_stream_offline_setup_output")
+        scope = {"threading": threading, "_record_bootstrap_log": lambda *args: None}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "<isolated setup output>", "exec"), scope)
+        return scope["_stream_offline_setup_output"]
+
+    def test_bootstrap_output_burst_retains_early_errors_and_warnings(self):
+        import io
+        callbacks, shown = [], []
+        gui = SimpleNamespace(root=SimpleNamespace(after=lambda delay, callback: callbacks.append(callback)),
+                              log_dim=Mock(), log_warn=lambda text: shown.append(("warn", text)),
+                              log_fail=lambda text: shown.append(("fail", text)), set_status=Mock())
+        lines = "Error: required package failed\nWarning: missing dependency\n"
+        lines += "".join(f"Diagnostic line {index}\n" for index in range(1000))
+        self._isolated_setup_output()(gui, SimpleNamespace(stdout=io.StringIO(lines)))
+        self.assertEqual(len(callbacks), 1)
+        callbacks.pop()()
+        self.assertEqual(shown, [("fail", "Error: required package failed"),
+                                 ("warn", "Warning: missing dependency")])
+        self.assertLessEqual(gui.log_dim.call_count + len(shown), 64)
+
+    def test_bootstrap_protected_output_burst_is_lossless_and_bounded(self):
+        import collections
+        import io
+        from queue import Empty, Queue
+        import threading
+        import time
+        callbacks, shown, errors = Queue(), [], []
+        peak = [0]
+        class ObservedDeque(collections.deque):
+            def append(self, value):
+                super().append(value)
+                peak[0] = max(peak[0], len(self))
+        gui = SimpleNamespace(root=SimpleNamespace(after=lambda delay, callback: callbacks.put(callback)),
+                              _signals=SimpleNamespace(thread_id=threading.get_ident(), _closed=False),
+                              _closed=False, log_warn=lambda text: shown.append(("warn", text)),
+                              log_fail=lambda text: shown.append(("fail", text)), set_status=Mock())
+        lines = "".join(f"Warning: fixture {index}\nError: fixture {index}\n" for index in range(140))
+        stream = self._isolated_setup_output()
+        def produce():
+            try:
+                stream(gui, SimpleNamespace(stdout=io.StringIO(lines)))
+            except Exception as error:
+                errors.append(error)
+        worker = threading.Thread(target=produce, daemon=True)
+        with patch.object(collections, "deque", ObservedDeque):
+            worker.start()
+            deadline = time.monotonic() + 5
+            try:
+                while (worker.is_alive() or not callbacks.empty()) and time.monotonic() < deadline:
+                    try:
+                        callbacks.get(timeout=0.1)()
+                    except Empty:
+                        pass
+            finally:
+                gui._closed = True
+                worker.join(2)
+        self.assertFalse(worker.is_alive(), "Protected-output backpressure did not finish")
+        self.assertEqual(errors, [])
+        self.assertLessEqual(peak[0], 64)
+        self.assertEqual(shown, [(kind, f"{prefix}: fixture {index}") for index in range(140)
+                                 for kind, prefix in (("warn", "Warning"), ("fail", "Error"))])
+
+    def test_bootstrap_output_shutdown_releases_backpressure(self):
+        import collections
+        import io
+        import threading
+        full, finished = threading.Event(), threading.Event()
+        class ObservedDeque(collections.deque):
+            def append(self, value):
+                super().append(value)
+                if len(self) == 64:
+                    full.set()
+        gui = SimpleNamespace(root=SimpleNamespace(after=Mock()), _closed=False)
+        stream = self._isolated_setup_output()
+        errors = []
+        def produce():
+            try:
+                stream(gui, SimpleNamespace(stdout=io.StringIO("Warning: fixture\n" * 100)))
+            except Exception as error:
+                errors.append(error)
+            finally:
+                finished.set()
+        worker = threading.Thread(target=produce, daemon=True)
+        with patch.object(collections, "deque", ObservedDeque):
+            worker.start()
+            try:
+                self.assertTrue(full.wait(2), "Fixture did not fill protected output")
+                self.assertFalse(finished.is_set(), "Fixture did not exercise backpressure")
+            finally:
+                gui._closed = True
+                worker.join(2)
+        self.assertFalse(worker.is_alive(), "Closed setup left its output worker waiting")
+        self.assertEqual(errors, [])
+
+    def test_bootstrap_output_refuses_gui_thread_and_failed_scheduler(self):
+        import io
+        import threading
+        stream = self._isolated_setup_output()
+        process = SimpleNamespace(stdout=io.StringIO("Warning: fixture\n"))
+        gui = SimpleNamespace(_signals=SimpleNamespace(thread_id=threading.get_ident()))
+        with self.assertRaisesRegex(RuntimeError, "not the GUI thread"):
+            stream(gui, process)
+        gui = SimpleNamespace(root=SimpleNamespace(after=Mock(side_effect=RuntimeError("Dispatcher closed"))))
+        with self.assertRaisesRegex(RuntimeError, "Dispatcher closed"):
+            stream(gui, process)
+
     def test_bootstrap_progress_is_live_without_a_newline(self):
         from src.modules.bootstrap_output import output_chunks, PackageOutput
         code = ("import sys; sys.stdout.write('Unpacking 50%'); sys.stdout.flush(); "

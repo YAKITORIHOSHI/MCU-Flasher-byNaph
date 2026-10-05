@@ -743,7 +743,7 @@ class PrimaryToolbar(QToolBar):
         self.btn_upload.setCursor(Qt.CursorShape.PointingHandCursor if upload_ready else Qt.CursorShape.ArrowCursor)
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor if self.btn_stop.isEnabled() else Qt.CursorShape.ArrowCursor)
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         sig_bus.operation_phase.connect(self.on_operation_phase)
         sig_bus.board_selected.connect(self._on_target_selection_changed)
         if hasattr(sig_bus, "port_selected"):
@@ -752,7 +752,7 @@ class PrimaryToolbar(QToolBar):
             lambda p: self.update_sketch_label(p.get("path", ""))
         )
         sig_bus.project_updated.connect(self._on_target_selection_changed)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     @Slot(dict)
@@ -1810,7 +1810,7 @@ class ControlsBar(QWidget):
             self.cb_timestamp.setChecked(enabled)
             self.cb_timestamp.blockSignals(False)
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         sig_bus.ports_updated.connect(self.on_ports_updated)
         if hasattr(sig_bus, "port_selected"):
             sig_bus.port_selected.connect(self.on_port_selected)
@@ -1821,7 +1821,7 @@ class ControlsBar(QWidget):
             sig_bus.skip_compile_availability_changed.connect(self.on_skip_compile_availability)
         if hasattr(sig_bus, "timestamp_toggled"):
             sig_bus.timestamp_toggled.connect(self.sync_timestamp)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     def apply_theme(self, theme_name: str) -> None:

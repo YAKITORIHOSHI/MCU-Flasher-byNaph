@@ -20,39 +20,41 @@ def contrast_ratio(foreground: str, background: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
-def themed_log_colors(theme_name: str = "default") -> dict[str, str]:
+def themed_log_colors(theme_name: str = "default", *, background: str | None = None) -> dict[str, str]:
     """Map log semantics to readable colors from the active workspace theme."""
     palette = get_palette(theme_name)
-    background = palette["BG_DARKEST"]
+    background = background or palette["BG_DARKEST"]
 
-    def readable(token: str, fallback: str) -> str:
-        color = palette[token]
-        return color if contrast_ratio(color, background) >= 4.5 else fallback
+    def readable(token: str, dark: str, light: str) -> str:
+        for color in (palette[token], dark, light, palette["TEXT"], "#000000", "#ffffff"):
+            if contrast_ratio(color, background) >= 4.5:
+                return color
+        return palette["TEXT"]
 
     colors = {
-        "normal": palette["TEXT"],
-        "bold": palette["TEXT_BRIGHT"],
-        "timestamp": palette["TEXT_DIM"],
-        "dim": palette["TEXT_DIM"],
-        "info": readable("BLUE", "#0969da"),
-        "success": readable("GREEN", "#1a7f37"),
-        "warning": readable("YELLOW", "#7d4e00"),
-        "error": readable("RED", "#ff7b75"),
-        "system": readable("CYAN", "#0969da"),
-        "header": readable("CYAN", "#0969da"),
-        "magenta": readable("MAGENTA", "#f05b9c"),
-        "connecting_magenta": readable("MAGENTA", "#f05b9c"),
-        "sent": readable("MAGENTA", "#f05b9c"),
-        "magenta_bold_lg": readable("MAGENTA", "#f05b9c"),
-        "purple_info": readable("MAGENTA", "#f05b9c"),
-        "orange": readable("ORANGE", "#ff8a54"),
-        "port_highlight": readable("MAGENTA", "#f05b9c"),
-        "purple": readable("PURPLE", "#aeb2ff"),
-        "purple_dim": readable("PURPLE_DIM", "#aeb2ff"),
-        "purple_header": readable("PURPLE", "#aeb2ff"),
-        "purple_value": palette["TEXT_BRIGHT"],
-        "success_bold_lg": readable("GREEN", "#1a7f37"),
-        "severe_alert": readable("RED", "#ff7b75"),
+        "normal": readable("TEXT", "#24292f", "#e3edf6"),
+        "bold": readable("TEXT_BRIGHT", "#1f2328", "#f6fbff"),
+        "timestamp": readable("TEXT_DIM", "#57606a", "#adc0d3"),
+        "dim": readable("TEXT_DIM", "#57606a", "#adc0d3"),
+        "info": readable("BLUE", "#0969da", "#61afef"),
+        "success": readable("GREEN", "#1a7f37", "#5ccc6e"),
+        "warning": readable("YELLOW", "#7d4e00", "#e8b83a"),
+        "error": readable("RED", "#cf222e", "#ff7b75"),
+        "system": readable("CYAN", "#0969da", "#80d9ce"),
+        "header": readable("CYAN", "#0969da", "#80d9ce"),
+        "magenta": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "connecting_magenta": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "sent": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "magenta_bold_lg": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "purple_info": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "orange": readable("ORANGE", "#bc4c00", "#ff8a54"),
+        "port_highlight": readable("MAGENTA", "#8250df", "#f05b9c"),
+        "purple": readable("PURPLE", "#6639ba", "#aeb2ff"),
+        "purple_dim": readable("PURPLE_DIM", "#542c9f", "#aeb2ff"),
+        "purple_header": readable("PURPLE", "#6639ba", "#aeb2ff"),
+        "purple_value": readable("TEXT_BRIGHT", "#1f2328", "#f6fbff"),
+        "success_bold_lg": readable("GREEN", "#1a7f37", "#5ccc6e"),
+        "severe_alert": readable("RED", "#cf222e", "#ff7b75"),
     }
     return colors
 
@@ -78,3 +80,21 @@ def themed_ansi_colors(theme_name: str = "default") -> dict[int, str]:
         96: colors["system"],
         97: colors["bold"],
     }
+
+
+def themed_terminal_colors(theme_name: str = "default") -> dict[str, str]:
+    """Share readable xterm colors between native Windows and POSIX panels."""
+    palette = get_palette(theme_name)
+    ansi = themed_ansi_colors(theme_name)
+    colors = {
+        "background": palette["BG_DARKEST"],
+        "foreground": themed_log_colors(theme_name)["normal"],
+        "cursor": palette["TEXT_BRIGHT"],
+        "cursorAccent": palette["BG_DARKEST"],
+        "selectionBackground": palette["BG_HOVER"],
+        "selectionForeground": themed_log_colors(theme_name, background=palette["BG_HOVER"])["bold"],
+    }
+    for index, name in enumerate(("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")):
+        colors[name] = ansi[30 + index]
+        colors["bright" + name.title()] = ansi[90 + index]
+    return colors

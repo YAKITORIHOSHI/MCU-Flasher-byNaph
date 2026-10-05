@@ -1027,34 +1027,8 @@ class TerminalPanel(QWidget):
 
     # ── Theme & Font Configuration ───────────────────────────────────────────
     def _build_terminal_theme_payload(self, theme_mode: str) -> dict:
-        from main.qt.theme import get_palette
-        pal = get_palette(theme_mode)
-        bg = pal.get("BG_DARKEST", "#0a0e14")
-        fg = pal.get("TEXT", "#e0e6ed")
-        cyan = pal.get("CYAN", "#00d2ff")
-        hover = pal.get("BG_HOVER", "#1c2636")
-        return {
-            "background": bg,
-            "foreground": fg,
-            "cursor": cyan,
-            "selectionBackground": hover,
-            "black": pal.get("TEXT_DIM", "#8fa1b3"),
-            "red": pal.get("BTN_STOP", "#f05050"),
-            "green": pal.get("BTN_COMPILE", "#5ccc6e"),
-            "yellow": "#e8b83a",
-            "blue": "#61afef",
-            "magenta": "#c678dd",
-            "cyan": cyan,
-            "white": pal.get("TEXT_BRIGHT", "#ffffff"),
-            "brightBlack": pal.get("TEXT_DIM", "#8fa1b3"),
-            "brightRed": pal.get("BTN_STOP_H", "#ff6b6b"),
-            "brightGreen": pal.get("BTN_COMPILE_H", "#69db7c"),
-            "brightYellow": "#ffd43b",
-            "brightBlue": "#74c0fc",
-            "brightMagenta": "#da77f2",
-            "brightCyan": cyan,
-            "brightWhite": "#ffffff",
-        }
+        from main.qt.log_colors import themed_terminal_colors
+        return themed_terminal_colors(theme_mode)
 
     def _apply_panel_theme(self, theme_mode: str) -> None:
         from main.qt.theme import get_palette
@@ -1166,10 +1140,10 @@ class TerminalPanel(QWidget):
             self._current_font_size = 14
         self._send_control("font", extra={"size": self._current_font_size})
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme=True) -> None:
         if hasattr(sig_bus, "font_size_changed"):
             sig_bus.font_size_changed.connect(self.set_font_size)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     # ── Project Realignment ──────────────────────────────────────────────────

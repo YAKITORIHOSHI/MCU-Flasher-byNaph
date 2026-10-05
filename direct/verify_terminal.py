@@ -124,6 +124,7 @@ def main() -> int:
         session = server.sessions["audit"]
         wait_until(lambda: session.ready and session.pty is not None, "PowerShell PTY did not start")
         wait_until(lambda: js("!!terminals.audit && !!terminals.audit.element"), "xterm did not initialize")
+        assert js("terminals.audit.options.minimumContrastRatio") >= 4.5, "ANSI terminal text lacks contrast correction"
         command = f"& '{node.replace(chr(39), chr(39)*2)}' '{str(probe).replace(chr(39), chr(39)*2)}'"
         js(f"terminals.audit.paste({json.dumps(command)}); true")
         session.pty.write("\r")

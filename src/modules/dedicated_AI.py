@@ -378,6 +378,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     cursorStyle: 'block',
                     fontSize: 14,
                     fontFamily: 'Consolas, "Courier New", monospace',
+                    minimumContrastRatio: 4.5,
                     overviewRulerWidth: 0,
                     theme: {
                         background: '__THEME_BG__',

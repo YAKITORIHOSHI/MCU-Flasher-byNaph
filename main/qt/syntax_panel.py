@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit
 )
 from main.qt.icons import ActionButton as QPushButton
+from main.qt.log_colors import contrast_ratio, themed_log_colors
 
 from src import syntax_checker
 from main.core.file_utils import get_sketch_files_fast
@@ -45,6 +46,7 @@ class SyntaxPanel(QWidget):
         self._all_diagnostics: List[Dict[str, Any]] = []
         self._last_mtimes: Dict[str, tuple[int, int]] = {}
         self._is_checking = False
+        self._status_kind = "dim"
         self._analysis_generation = 0
         self._analysis_finished.connect(self._finish_analysis, Qt.ConnectionType.QueuedConnection)
         sig_bus.project_updated.connect(self._on_project_updated)
@@ -230,12 +232,12 @@ class SyntaxPanel(QWidget):
         self._table.setStyleSheet(getattr(self, "_table_base_style", "") + f"QTableWidget {{ font-size: {sz}pt; }}")
         self._table.resizeRowsToContents()
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme=True) -> None:
         """Connect to global signal bus for real-time diagnostic updates."""
         sig_bus.syntax_errors.connect(self._on_syntax_diagnostics)
         if hasattr(sig_bus, "font_size_changed"):
             sig_bus.font_size_changed.connect(self.set_font_size)
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     def apply_theme(self, theme_name: str) -> None:
@@ -250,6 +252,26 @@ class SyntaxPanel(QWidget):
         border = pal.get("BORDER", "#2a3545")
         text = pal.get("TEXT", "#e0e6ed")
         text_bright = pal.get("TEXT_BRIGHT", "#ffffff")
+        # Diagnostics also occupy alternate rows and header/status surfaces.
+        reading_background = min((bg_darkest, bg_dark, bg_mid),
+                                 key=lambda background: contrast_ratio(text, background))
+        self._semantic_colors = themed_log_colors(theme_name, background=reading_background)
+        cyan = self._semantic_colors["system"]
+        dim = self._semantic_colors["dim"]
+        self._lbl_filter.setStyleSheet(f"color: {dim}; font-size: 11px; margin-left: 4px;")
+        self._refresh_status_color()
+        for badge, kind in ((self._badge_errors, "error"), (self._badge_warnings, "warning")):
+            color = self._semantic_colors[kind]
+            badge.setStyleSheet(
+                f"background: {bg_dark}; color: {color}; border: 1px solid {color}; "
+                "border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
+            )
+        for button in (self._btn_run, self._btn_clear):
+            button.setStyleSheet(
+                f"QPushButton {{ background: {bg_dark}; color: {text}; border: 1px solid {border}; "
+                "border-radius: 3px; font-size: 11px; padding: 1px 8px; }"
+                f"QPushButton:hover {{ background: {bg_hover}; color: {text_bright}; }}"
+            )
 
         if hasattr(self, "_title_lbl") and self._title_lbl:
             self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: 700; font-size: 11px;")
@@ -266,6 +288,22 @@ class SyntaxPanel(QWidget):
                 f"QHeaderView::section {{ background: {bg_mid}; color: {cyan}; font-weight: 600; font-size: 11px; padding: 4px 8px; border: none; border-bottom: 1px solid {border}; }}"
             )
             self._table.setStyleSheet(self._table_base_style + f"QTableWidget {{ font-size: {getattr(self, '_content_font_size', 12)}pt; }}")
+            # Update only the existing brushes so selection and row order survive.
+            for row in range(self._table.rowCount()):
+                item = self._table.item(row, 2)
+                if item:
+                    kind = self._severity_kind(item.text())
+                    item.setForeground(QBrush(QColor(self._semantic_colors[kind])))
+
+    @staticmethod
+    def _severity_kind(severity: str) -> str:
+        severity = severity.lower()
+        return "error" if "err" in severity else "warning" if "warn" in severity else "info"
+
+    def _refresh_status_color(self) -> None:
+        colors = getattr(self, "_semantic_colors", {})
+        color = colors.get(self._status_kind, colors.get("dim", "#57606a"))
+        self._lbl_status.setStyleSheet(f"color: {color}; font-size: 11px; font-family: monospace;")
 
     @Slot(list)
     def _on_syntax_diagnostics(self, diagnostics: List[Dict[str, Any]]) -> None:
@@ -283,10 +321,11 @@ class SyntaxPanel(QWidget):
 
         if not self._all_diagnostics:
             self._lbl_status.setText("Clean ✔")
-            self._lbl_status.setStyleSheet("color: #9ece6a; font-size: 11px; font-family: monospace;")
+            self._status_kind = "success"
         else:
             self._lbl_status.setText(f"{err_count} err, {warn_count} warn")
-            self._lbl_status.setStyleSheet("color: #f7768e; font-size: 11px; font-family: monospace;")
+            self._status_kind = "error" if err_count else "warning" if warn_count else "info"
+        self._refresh_status_color()
 
         self._apply_filters()
 
@@ -329,13 +368,11 @@ class SyntaxPanel(QWidget):
 
             if "err" in sev:
                 sev_text = "✖ Error"
-                sev_color = "#f7768e"
             elif "warn" in sev:
                 sev_text = "⚠ Warning"
-                sev_color = "#e0af68"
             else:
                 sev_text = "ℹ Note"
-                sev_color = "#7dcfff"
+            sev_color = self._semantic_colors[self._severity_kind(sev)]
 
             item_file = QTableWidgetItem(fname)
             item_file.setData(Qt.ItemDataRole.UserRole, fpath)
@@ -413,7 +450,8 @@ class SyntaxPanel(QWidget):
         generation = self._analysis_generation
         last_mtimes = dict(self._last_mtimes)
         self._lbl_status.setText("Checking…")
-        self._lbl_status.setStyleSheet("color: #7dcfff; font-size: 11px; font-family: monospace;")
+        self._status_kind = "info"
+        self._refresh_status_color()
         if is_manual:
             sig_bus.console_progress.emit({"action": "Checking Syntax"})
 
@@ -447,6 +485,8 @@ class SyntaxPanel(QWidget):
         if result.get("error"):
             self._lbl_status.setText("Check failed — retry available")
             self._lbl_status.setToolTip(result["error"])
+            self._status_kind = "error"
+            self._refresh_status_color()
         elif not result.get("unchanged"):
             self._last_mtimes = result["mtimes"]
             self.set_diagnostics(result.get("diagnostics", []))
@@ -469,5 +509,6 @@ class SyntaxPanel(QWidget):
         self._badge_errors.setText("✖ 0")
         self._badge_warnings.setText("⚠ 0")
         self._lbl_status.setText("Ready")
-        self._lbl_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-family: monospace;")
+        self._status_kind = "dim"
+        self._refresh_status_color()
         sig_bus.syntax_errors.emit([])

@@ -18,17 +18,9 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QFrame, QSizePolicy,
 )
 from main.qt.icons import ActionButton as QPushButton
+from main.qt.log_colors import themed_log_colors
+from main.qt.log_follow import LogFollow, preserve_log_view
 
-_TAG_COLORS: dict[str, str] = {
-    "system":  "#56cfbf",
-    "success": "#4ec994",
-    "error":   "#e74c3c",
-    "warning": "#f1c40f",
-    "dim":     "#6b7280",
-    "normal":  "#cdd6f4",
-}
-_DEFAULT_COLOR = "#cdd6f4"
-_BG_COLOR      = "#0d1117"
 _MONO_FONT     = QFont("Consolas", 11)
 
 
@@ -102,6 +94,7 @@ class CompatPanel(QWidget):
         self._output.setMinimumHeight(24)
         self._output.setFont(_MONO_FONT)
         self._output.setObjectName("compat-console")
+        self._follow = LogFollow(self._output, enabled=False)
 
         root.addWidget(header)
         root.addWidget(search_bar)
@@ -142,7 +135,7 @@ class CompatPanel(QWidget):
         self._full_text = entries
         self._apply_filter()
 
-    def _apply_filter(self) -> None:
+    def _apply_filter(self, _query: str | None = None) -> None:
         query = self.search_input.text().strip().lower()
         self._output.clear()
         cursor = self._output.textCursor()
@@ -153,15 +146,19 @@ class CompatPanel(QWidget):
             if query and query not in text.lower():
                 continue
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor(_TAG_COLORS.get(tag, _DEFAULT_COLOR)))
+            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
             cursor.insertText(text, fmt)
             cursor.insertText("\n")
             matched += 1
 
         if query and matched == 0:
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor("#6b7280"))
+            fmt.setForeground(QColor(self._tag_colors["dim"]))
             cursor.insertText(f"No devices match '{query}'", fmt)
+
+    @preserve_log_view(rebuild=True)
+    def _recolor_content(self) -> None:
+        self._apply_filter()
 
     def set_status(self, text: str) -> None:
         self.lbl_status.setText(text)
@@ -181,9 +178,9 @@ class CompatPanel(QWidget):
             self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
         QTimer.singleShot(1500, _restore_btn)
 
-    def connect_signals(self, sig_bus) -> None:
+    def connect_signals(self, sig_bus, *, connect_theme=True) -> None:
         """Connect to the MCUSignals bus."""
-        if hasattr(sig_bus, "theme_changed"):
+        if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
         if hasattr(sig_bus, "compat_devices_updated"):
             sig_bus.compat_devices_updated.connect(self._on_compat_updated)
@@ -206,6 +203,7 @@ class CompatPanel(QWidget):
         """Apply active theme palette to compatible devices panel."""
         from main.qt.theme import get_palette
         pal = get_palette(theme_name)
+        self._tag_colors = themed_log_colors(theme_name)
         bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
         border = pal.get("BORDER", "#2d3748")
@@ -213,5 +211,12 @@ class CompatPanel(QWidget):
         palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
         self._output.setPalette(palette)
+        self._output.setStyleSheet(
+            "QPlainTextEdit#compat-console { "
+            f"background-color: {bg}; color: {fg}; "
+            f"selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']}; "
+            "border: none; }"
+        )
         if hasattr(self, "_sep") and self._sep:
             self._sep.setStyleSheet(f"color: {border};")
+        self._recolor_content()

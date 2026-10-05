@@ -17,6 +17,7 @@ import os
 import copy
 from typing import Optional, TYPE_CHECKING
 from pathlib import Path
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
@@ -895,21 +896,27 @@ class SettingsDialog(QDialog):
             f"• Auto-Save: {autosave_str}\n"
             f"• Reset on Baud Change: {reset_baud_str}"
         )
+        history_saved = False
+        notification_id = "notif_" + uuid4().hex
         try:
             from src.dbs import dbs_create
-            dbs_create.add_notification(
+            history_saved = dbs_create.add_notification(
                 category="system",
                 level="success",
                 title="Settings Applied",
                 message=notif_msg,
-            )
+                notification_id=notification_id,
+            ) is not None
         except Exception:
             pass
 
         signals.notification.emit({
             "title": "Settings Applied",
-            "message": f"Preferences updated successfully ({new_font_size} pt font).",
-            "type": "success",
+            "id": notification_id,
+            "message": (f"Preferences updated successfully ({new_font_size} pt font)." if history_saved
+                        else "Preferences saved, but the notification could not be saved to activity history."),
+            "history_message": notif_msg if history_saved else "Preferences saved, but the notification could not be saved to activity history.",
+            "type": "success" if history_saved else "warning",
         })
 
         # Apply font size and theme live to child panels
