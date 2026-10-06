@@ -28,7 +28,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 from PySide6.QtCore import Qt, QTimer, QCoreApplication, QEvent, QThread
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget, QListView
+from PySide6.QtWidgets import QApplication, QWidget, QListView, QComboBox, QLabel
 from main.qt import board_dialog as module
 from main.qt.signals import signals
 
@@ -111,7 +111,8 @@ class BoardPickerChecks(unittest.TestCase):
         self.assertIsInstance(dialog.listbox, QListView)
         self.assertEqual(dialog.recent_boards, ["Arduino UNO"])
         self.assertEqual(dialog.listbox.currentIndex().data(Qt.ItemDataRole.UserRole), "Arduino Nano")
-        self.assertEqual(dialog.framework_combo.currentText(), "arduino")
+        self.assertFalse(dialog.findChildren(QComboBox), "Board picker must not contain a framework dropdown")
+        self.assertFalse(any(label.text() == "Framework" for label in dialog.findChildren(QLabel)))
         dialog._select_item_by_name("Arduino UNO")
         QTest.keyClick(dialog.search_ent, Qt.Key.Key_Down)
         self.assertEqual(dialog.listbox.currentIndex().data(Qt.ItemDataRole.UserRole), "Arduino Nano")
@@ -129,23 +130,64 @@ class BoardPickerChecks(unittest.TestCase):
         selected.assert_called_once()
         self.parent._backend.set_board_framework.assert_called_once_with("Raspberry Pi Pico", "arduino")
 
-    def test_prepared_unavailable_framework_has_reason_and_cannot_be_selected(self):
+    def test_prepared_unavailable_framework_falls_back_to_arduino(self):
         reason = "Installed Zephyr has no board definition for the exact E77 target."
         self.boards["E77 fixture"] = dict(platform="ststm32", board="ebyte_e77_dev", framework="zephyr",
                                            frameworks=["arduino"], declared_frameworks=["arduino", "zephyr"],
                                            unavailable_frameworks={"zephyr": reason}, pio_resolved=True)
         selected = Mock()
         dialog = self.picker(current_board="E77 fixture", on_select_callback=selected)
-        self.assertEqual([dialog.framework_combo.itemText(index) for index in range(dialog.framework_combo.count())],
-                         ["arduino"])
-        self.assertEqual(dialog.framework_combo.currentText(), "arduino")
-        self.assertIn(reason, dialog.framework_combo.toolTip())
         dialog._select_item_by_name("Arduino UNO")
-        self.assertNotIn(reason, dialog.framework_combo.toolTip())
         dialog._select_item_by_name("E77 fixture")
         dialog._confirm_selection()
         selected.assert_called_once_with("E77 fixture")
         self.parent._backend.set_board_framework.assert_called_once_with("E77 fixture", "arduino")
+
+    def test_confirm_preserves_valid_saved_native_framework(self):
+        name = "Saved native fixture"
+        info = dict(platform="ststm32", board="saved_native", framework="arduino",
+                    frameworks=["arduino", "cmsis"], pio_resolved=True)
+        self.boards[name] = info
+        self.parent._backend._resolve_board_info = lambda board: (
+            dict(info, framework="cmsis") if board == name else self.boards.get(board, {}))
+        selected = Mock()
+        dialog = self.picker(current_board=name, on_select_callback=selected)
+        self.parent._backend.set_board_framework.assert_not_called()
+        dialog._confirm_selection()
+        selected.assert_called_once_with(name)
+        self.parent._backend.set_board_framework.assert_called_once_with(name, "cmsis")
+
+    def test_confirm_selects_single_declared_native_framework(self):
+        name = "Single native fixture"
+        self.boards[name] = dict(platform="fixture", board="single_native", framework="",
+                                frameworks=["fixture_sdk"], pio_resolved=True)
+        selected = Mock()
+        dialog = self.picker(current_board=name, on_select_callback=selected)
+        self.parent._backend.set_board_framework.assert_not_called()
+        dialog._confirm_selection()
+        selected.assert_called_once_with(name)
+        self.parent._backend.set_board_framework.assert_called_once_with(name, "fixture_sdk")
+
+    def test_confirm_keeps_ambiguous_native_framework_unresolved(self):
+        name = "Ambiguous native fixture"
+        self.boards[name] = dict(platform="ststm32", board="ambiguous_native", framework="",
+                                frameworks=["cmsis", "zephyr"], pio_resolved=True)
+        selected = Mock()
+        dialog = self.picker(current_board=name, on_select_callback=selected)
+        dialog._confirm_selection()
+        selected.assert_called_once_with(name)
+        self.parent._backend.set_board_framework.assert_not_called()
+
+    def test_confirm_filters_unavailable_framework_from_stale_allowed_list(self):
+        name = "Stale availability fixture"
+        self.boards[name] = dict(platform="ststm32", board="stale_availability", framework="zephyr",
+                                frameworks=["cmsis", "zephyr"], pio_resolved=True,
+                                unavailable_frameworks={"zephyr": "Exact target definition is absent."})
+        selected = Mock()
+        dialog = self.picker(current_board=name, on_select_callback=selected)
+        dialog._confirm_selection()
+        selected.assert_called_once_with(name)
+        self.parent._backend.set_board_framework.assert_called_once_with(name, "cmsis")
 
     def test_slow_superseded_search_and_catalog_refresh_discard_stale_results(self):
         dialog = self.picker()

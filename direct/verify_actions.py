@@ -25,7 +25,8 @@ class ActionChecks(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=audit)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        methods = {"_start_reset_worker", "hard_reset", "soft_reset", "clean_cache", "_new_upload_progress_state"}
+        methods = {"_start_reset_worker", "hard_reset", "soft_reset", "clean_cache",
+                   "_new_upload_progress_state", "_fast_upload_retry_allowed"}
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in methods]
@@ -153,6 +154,27 @@ class ActionChecks(unittest.TestCase):
         self.run_worker()
         idle = [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"][-1]
         self.assertFalse(idle["success"])
+
+    def test_esptool_retry_is_forbidden_after_erase_or_write_starts(self):
+        retry = self.api._fast_upload_retry_allowed
+        common = dict(return_code=1, attempt_connected=True, all_images_verified=False,
+                      retry_used=False, operation="upload", stop_requested=False)
+        self.assertTrue(retry(**common, write_started=False))
+        self.assertFalse(retry(**common, write_started=True))
+        self.assertFalse(retry(**{**common, "stop_requested": True}, write_started=False))
+
+    def test_failed_upload_cleanup_does_not_reset_the_board(self):
+        tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
+        worker = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_upload_worker")
+        releases = [node for node in ast.walk(worker)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_release_port_lines"]
+        self.assertEqual(len(releases), 1)
+        reset = next((kw.value for kw in releases[0].keywords if kw.arg == "pulse_reset"), None)
+        self.assertIsInstance(reset, ast.Constant)
+        self.assertFalse(reset.value)
 
     def test_clean_preserves_sources_settings_and_journal(self):
         cache = self.root / ".mcu_flasher_build_cache"

@@ -1064,6 +1064,7 @@
       return /^[a-z]:\//i.test(key) || key.startsWith('//') ? key.toLowerCase() : key;
     };
     window.setPerformanceMode = function (constrained) {
+      window.__mcuResourceConstrained = Boolean(constrained);
       document.documentElement.classList.toggle('resource-constrained', constrained);
       let attempts = 0;
       function apply() {
@@ -1591,7 +1592,8 @@
         }
       };
 
-      let lastCheckedContent = "";
+      let lastCheckedModel = null;
+      let lastCheckedVersion = -1;
       let lastCheckedPath = "";
       let syntaxCheckTimeout = null;
 
@@ -1606,24 +1608,38 @@
         const filePath = activeTab ? activeTab._filePath : "";
         if (!filePath) return;
 
-        if (!filePath.endsWith('.ino') && !filePath.endsWith('.cpp') && !filePath.endsWith('.h')) {
+        if (!/\.(ino|cpp|c|h|hpp)$/i.test(filePath)) {
           window.setEditorMarkers("[]");
           return;
         }
 
-        const content = model.getValue();
-        if (content === lastCheckedContent && filePath === lastCheckedPath) return;
-        lastCheckedContent = content;
+        const version = model.getVersionId();
+        if (model === lastCheckedModel && version === lastCheckedVersion && filePath === lastCheckedPath) return;
+        lastCheckedModel = model;
+        lastCheckedVersion = version;
         lastCheckedPath = filePath;
-
-        if (window.pywebview && window.pywebview.api) {
-          window.pywebview.api.realtime_check_syntax(filePath, content).then(errorsJsonStr => {
-            if (errorsJsonStr && errorsJsonStr !== "null" && model === window.editorInstance.getModel() && model.getValue() === content) {
+        const api = window.pywebview.api;
+        const isCurrent = () => !model.isDisposed() && model === window.editorInstance.getModel() && model.getVersionId() === version;
+        const failed = err => {
+          if (isCurrent()) lastCheckedVersion = -1;
+          console.error(err);
+        };
+        const checkSource = () => {
+          if (!isCurrent()) return;
+          api.realtime_check_syntax(filePath, model.getValue()).then(errorsJsonStr => {
+            if (errorsJsonStr && errorsJsonStr !== "null" && isCurrent()) {
               window.setEditorMarkers(errorsJsonStr);
             }
-          }).catch(err => console.error(err));
+          }).catch(failed);
+        };
+        if (api.realtime_check_buffer) {
+          // Edits already sent the current text for crash recovery. A clean
+          // model falls back to one full transfer on its first syntax check.
+          api.realtime_check_buffer(filePath).then(handled => {
+            if (!handled) checkSource();
+          }).catch(failed);
         } else {
-          console.warn("Detached mode: pywebview API not available. Realtime syntax disabled.");
+          checkSource();
         }
       }
 
@@ -1631,7 +1647,7 @@
         if (syntaxCheckTimeout) {
           clearTimeout(syntaxCheckTimeout);
         }
-        syntaxCheckTimeout = setTimeout(runMonacoSyntaxCheck, 300);
+        syntaxCheckTimeout = setTimeout(runMonacoSyntaxCheck, window.__mcuResourceConstrained ? 600 : 300);
       }
 
       function syncModelLanguageForActiveTab() {
@@ -1679,12 +1695,8 @@
           return;
         }
 
-        const model = window.editorInstance.getModel();
-        if (!model) {
-          setTimeout(checkMonacoSyntaxRealtime, 500);
-          return;
-        }
-
+        // Register even for an empty project: onDidChangeModel will pick up
+        // its first file without keeping a polling timer alive.
         syncModelLanguageForActiveTab();
 
         if (!window.editorInstance._syntax_listener_added) {
@@ -1694,8 +1706,13 @@
             if (window._applyingAiReviewModelUpdate) return;
             scheduleSyntaxCheck();
             if (window.pywebview && window.pywebview.api) {
+              const api = window.pywebview.api;
               const activeTab = document.querySelector('.tab.active');
               const filePath = activeTab ? activeTab._filePath : "";
+              if (filePath && api.update_editor_buffer) {
+                api.update_editor_buffer(filePath, window.editorInstance.getValue());
+                return;
+              }
               if (filePath && window.pywebview.api.mark_modified) {
                 window.pywebview.api.mark_modified(filePath, true);
               }
@@ -1709,7 +1726,8 @@
           });
 
           window.editorInstance.onDidChangeModel(() => {
-            lastCheckedContent = ""; // Force recheck on tab switch
+            lastCheckedModel = null; // Force recheck on tab switch
+            lastCheckedVersion = -1;
             syncModelLanguageForActiveTab();
             scheduleSyntaxCheck();
           });
@@ -1717,7 +1735,7 @@
           scheduleSyntaxCheck();
         }
 
-        setTimeout(checkMonacoSyntaxRealtime, 2000);
+        // Model/content listeners take over once Monaco is ready; no idle poll.
       }
 
       const tabBarElem = document.getElementById('tab-bar');
@@ -4005,6 +4023,7 @@
           try {
             const sz = await window.pywebview.api.get_font_size();
             if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
+              monacoFontSize = Number(sz);
               window.editorInstance.updateOptions({ fontSize: Number(sz) });
             }
           } catch (e) {}

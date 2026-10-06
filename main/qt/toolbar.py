@@ -73,7 +73,6 @@ class CompactDropdownPopup(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         from main.core.theme import Theme
         self.setStyleSheet(
             f"CompactDropdownPopup {{"
@@ -362,8 +361,8 @@ class PrimaryToolbar(QToolBar):
         rc_layout.addWidget(self.btn_project)
 
         # Download Boards/Libs button
-        self.btn_download = _make_action_btn("⬇ Bootstrap",
-                                             "Prepare offline board/library packs in bootstrap",
+        self.btn_download = _make_action_btn("⬇ Boards & Libraries",
+                                             "Download and manage Arduino boards and libraries",
                                              "btn-download", "#2d3748", "#3a4a60")
         self.btn_download.clicked.connect(self._open_download_manager)
         rc_layout.addWidget(self.btn_download)
@@ -809,7 +808,7 @@ class PrimaryToolbar(QToolBar):
             if width < 1000:
                 self.lbl_sketch.setVisible(False)
                 self.btn_download.setText("⬇")
-                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
+                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setFixedWidth(28)
                 if width < 520:
                     self.logo.setText("MCU")
@@ -819,15 +818,15 @@ class PrimaryToolbar(QToolBar):
                     self.logo.setText("MCU Flasher by Naph")
             elif width < 1250:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Bootstrap")
-                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
+                self.btn_download.setText("⬇ Boards & Libraries")
+                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
                 self.logo.setText("MCU Flasher by Naph")
             else:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Bootstrap")
-                self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
+                self.btn_download.setText("⬇ Boards & Libraries")
+                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
                 self.logo.setText("MCU Flasher by Naph")
@@ -846,8 +845,8 @@ class PrimaryToolbar(QToolBar):
                 self._actions_popup = None
 
             self.lbl_sketch.setVisible(True)
-            self.btn_download.setText("⬇ Bootstrap")
-            self.btn_download.setToolTip("Prepare offline board/library packs in bootstrap")
+            self.btn_download.setText("⬇ Boards & Libraries")
+            self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
             self.btn_download.setMinimumWidth(0)
             self.btn_download.setMaximumWidth(16777215)
             self.logo.setText("MCU Flasher by Naph")

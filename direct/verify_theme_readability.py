@@ -24,7 +24,7 @@ from main.qt.console_panel import ConsolePanel
 from main.qt.log_colors import contrast_ratio, themed_ansi_colors, themed_log_colors, themed_terminal_colors
 from main.qt.main_window import MCUMainWindow
 from main.qt.serial_panel import SerialOutputView, SerialPanel
-from main.qt.theme import get_palette
+from main.qt.theme import build_stylesheet, get_palette, install_checkbox_focus_style
 from direct.verify_runtime import PreviewBackend
 
 APP = QApplication.instance() or QApplication([])
@@ -84,6 +84,17 @@ class ThemeReadabilityChecks(unittest.TestCase):
                 if name not in ("background", "cursorAccent", "selectionBackground", "selectionForeground"):
                     self.assertGreaterEqual(contrast_ratio(color, terminal["background"]), 4.5,
                                             f"{mode} terminal {name} is too faint")
+
+    def test_checkbox_focus_is_confined_to_indicator_in_every_theme(self):
+        install_checkbox_focus_style(APP)
+        self.assertTrue(APP.property("mcuCheckboxFocusStyleInstalled"))
+        for mode in ("default", "light", "solarized_dark"):
+            stylesheet = build_stylesheet(mode)
+            checkbox_focus = stylesheet.split("QCheckBox:focus {", 1)[1].split("}", 1)[0]
+            self.assertIn("border: none;", checkbox_focus, mode)
+            self.assertIn("QCheckBox::indicator:focus {", stylesheet, mode)
+            self.assertNotIn("QCheckBox:focus::indicator", stylesheet, mode)
+            self.assertNotIn("QCheckBox:focus,", stylesheet, mode)
 
     def test_existing_serial_and_build_output_recolors_with_theme(self):
         serial = self.make_widget(SerialOutputView())

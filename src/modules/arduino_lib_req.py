@@ -50,6 +50,10 @@ else:
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+# The Arduino Library & Board Browser is the package downloader; remove offline runtime limits
+for _barrier_var in ("MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
+    os.environ.pop(_barrier_var, None)
+
 try:
     import requests
 except ImportError:
@@ -1300,6 +1304,7 @@ class BrowseTab:
         self.lbl_paragraph: Any = None
         self.lbl_size: Any = None
         self.lbl_available: Any = None
+        self.lbl_status_badge: Any = None
         self.link_website: Any = None
         self.link_help: Any = None
         self.link_repo: Any = None
@@ -1461,6 +1466,30 @@ class BrowseTab:
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._execute_search()
 
+    def _display_item_name(self, name: str) -> str:
+        inst_map = getattr(self.app, "_installed_map", None)
+        if inst_map and name.lower() in inst_map:
+            inst = inst_map[name.lower()]
+            return f"⬆ {name}" if inst.get("update_available") else f"✔ {name}"
+        return name
+
+    def refresh_listbox_labels(self):
+        """Update visible labels in listbox with current installed/update badges."""
+        if not hasattr(self, "listbox") or not self.listbox.winfo_exists():
+            return
+        sel = self.listbox.curselection()
+        selected_idx = sel[0] if sel else None
+
+        yview = self.listbox.yview()
+        self.listbox.delete(0, tk.END)
+        labels = [self._display_item_name(n) for n in self.filtered_names[:self.loaded_count]]
+        if labels:
+            self.listbox.insert(tk.END, *labels)
+        if selected_idx is not None and selected_idx < len(self.filtered_names):
+            self.listbox.selection_set(selected_idx)
+        if yview:
+            self.listbox.yview_moveto(yview[0])
+
     def _populate_listbox(self):
         _load_more_after_id = getattr(self, "_load_more_after_id", None)
         if _load_more_after_id is not None:
@@ -1471,9 +1500,11 @@ class BrowseTab:
         self.listbox.delete(0, tk.END)
         total = len(self.filtered_names)
         self.loaded_count = min(250, total)
+        labels = [self._display_item_name(n) for n in self.filtered_names[:self.loaded_count]]
         if total > 250:
             self.lbl_search_status.config(text=f"Showing top {self.loaded_count} of {total} matches")
-            self.listbox.insert(tk.END, *self.filtered_names[:self.loaded_count])
+            if labels:
+                self.listbox.insert(tk.END, *labels)
         else:
             if total == 0:
                 if not getattr(self.app, "_is_online", True) and not self.all_items:
@@ -1482,8 +1513,8 @@ class BrowseTab:
                     self.lbl_search_status.config(text="No matches found")
             else:
                 self.lbl_search_status.config(text=f"Found {total} matches")
-            if self.filtered_names:
-                self.listbox.insert(tk.END, *self.filtered_names[:self.loaded_count])
+            if labels:
+                self.listbox.insert(tk.END, *labels)
 
     def _on_scroll(self, first, last):
         self.list_scroll.set(first, last)
@@ -1499,7 +1530,7 @@ class BrowseTab:
             total = len(self.filtered_names)
             next_count = min(self.loaded_count + 250, total)
             if next_count > self.loaded_count:
-                items_to_add = self.filtered_names[self.loaded_count:next_count]
+                items_to_add = [self._display_item_name(n) for n in self.filtered_names[self.loaded_count:next_count]]
                 self.listbox.insert(tk.END, *items_to_add)
                 self.loaded_count = next_count
                 self.lbl_search_status.config(text=f"Showing top {self.loaded_count} of {total} matches")
@@ -2719,6 +2750,13 @@ class ArduinoBrowser:
             if items is None:
                 return
             self._installed_items = items
+            self._installed_map = {item["name"].lower(): item for item in items}
+            if hasattr(self, "lib_tab") and hasattr(self.lib_tab, "refresh_listbox_labels"):
+                self.lib_tab.refresh_listbox_labels()
+            if hasattr(self, "board_tab") and hasattr(self.board_tab, "refresh_listbox_labels"):
+                self.board_tab.refresh_listbox_labels()
+            self._update_version_status(self.lib_tab)
+            self._update_version_status(self.board_tab)
             if self.notebook.index(self.notebook.select()) == 2:
                 self.installed_tab.populate(items)
             if not self._busy and self.notebook.index(self.notebook.select()) == 2:
@@ -2827,8 +2865,12 @@ class ArduinoBrowser:
         dc.configure(bg=Theme.BG_DARKEST)
 
         tab.lbl_name = tk.Label(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
-        tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 4))
+        tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
+
+        tab.lbl_status_badge = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
+        tab._wrapping_labels.append(tab.lbl_status_badge)
 
         tab.lbl_author = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_author.pack(anchor="w", fill="x")
@@ -2931,8 +2973,12 @@ class ArduinoBrowser:
         dc.configure(bg=Theme.BG_DARKEST)
 
         tab.lbl_name = tk.Label(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
-        tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 4))
+        tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
+
+        tab.lbl_status_badge = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
+        tab._wrapping_labels.append(tab.lbl_status_badge)
 
         tab.lbl_package = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_package.pack(anchor="w", fill="x")
@@ -3028,16 +3074,94 @@ class ArduinoBrowser:
     # Shared detail helpers
     # ------------------------------------------------------------------
 
+    def _get_installed_info(self, tab: BrowseTab, name: str, item: dict) -> dict | None:
+        """Find local installation metadata for the given item (board or library)."""
+        is_board = (tab == self.board_tab)
+        subfolder = "Boards" if is_board else "Libs"
+        dest_dir = os.path.join(self._download_dir, subfolder)
+        if not os.path.isdir(dest_dir):
+            return None
+
+        versions = item.get("versions", [])
+        if not versions:
+            return None
+
+        installed_versions = {}
+        for ver_entry in versions:
+            v_str = ver_entry.get("version", "")
+            if not v_str:
+                continue
+            v_url = ver_entry.get("url", "")
+            archive = _archive_filename(v_url, ver_entry.get("archiveFileName", ""))
+            folder_name = _get_folder_name(archive)
+
+            f_path = os.path.join(dest_dir, folder_name)
+            a_path = os.path.join(dest_dir, archive)
+            has_folder = os.path.isdir(f_path)
+            has_archive = os.path.isfile(a_path)
+
+            if has_folder or has_archive:
+                installed_versions[v_str] = {
+                    "version": v_str,
+                    "folder_path": f_path if has_folder else "",
+                    "archive_path": a_path if has_archive else "",
+                    "has_folder": has_folder,
+                    "has_archive": has_archive,
+                    "archive": archive,
+                    "folder_name": folder_name,
+                }
+
+        # Also fallback to check item name in self._installed_items if direct match wasn't in versions list
+        if not installed_versions and hasattr(self, "_installed_items") and self._installed_items:
+            expected_type = "Board Platform" if is_board else "Library"
+            for inst in self._installed_items:
+                if inst.get("type") == expected_type and inst.get("name", "").lower() == name.lower():
+                    inst_v = inst.get("installed_version", "")
+                    p = inst.get("path", "")
+                    has_folder = os.path.isdir(p)
+                    has_archive = os.path.isfile(p)
+                    installed_versions[inst_v] = {
+                        "version": inst_v,
+                        "folder_path": p if has_folder else "",
+                        "archive_path": p if has_archive else "",
+                        "has_folder": has_folder,
+                        "has_archive": has_archive,
+                        "archive": inst.get("archive", ""),
+                        "folder_name": os.path.basename(p),
+                    }
+                    break
+
+        if not installed_versions:
+            return None
+
+        best_ver = max(installed_versions.keys(), key=_version_key)
+        best_info = installed_versions[best_ver]
+        latest_catalog_ver = versions[0]["version"] if versions else best_ver
+        update_available = (_version_key(latest_catalog_ver) > _version_key(best_ver)) if self._is_online else False
+
+        return {
+            "installed_version": best_ver,
+            "latest_version": latest_catalog_ver,
+            "update_available": update_available,
+            "installed_versions": installed_versions,
+            "best_info": best_info,
+        }
+
     def _update_version_status(self, tab: BrowseTab):
         sel = tab.listbox.curselection()
         if not sel:
             return
-        name = tab.filtered_names[sel[0]]
-        item = tab.all_items[name]
+        idx = sel[0]
+        if idx >= len(tab.filtered_names):
+            return
+        name = tab.filtered_names[idx]
+        item = tab.all_items.get(name)
+        if not item:
+            return
         ver = tab.version_var.get()
 
         target_version = None
-        for v in item["versions"]:
+        for v in item.get("versions", []):
             if v["version"] == ver:
                 target_version = v
                 break
@@ -3045,7 +3169,7 @@ class ArduinoBrowser:
         if not target_version:
             return
 
-        size_val = target_version["size"]
+        size_val = target_version.get("size", 0)
         try:
             size_val = int(size_val)
         except (ValueError, TypeError):
@@ -3056,29 +3180,92 @@ class ArduinoBrowser:
         else:
             tab.lbl_size.config(text=f"Size: {size_kb:.0f} KB")
 
-        url = target_version["url"]
-        archive = _archive_filename(url, target_version.get("archiveFileName", ""))
-        subfolder = "Libs" if tab == self.lib_tab else "Boards"
-        dest_dir = os.path.join(self._download_dir, subfolder)
-        
-        filepath = os.path.join(dest_dir, archive)
-        folder_path = os.path.join(dest_dir, _get_folder_name(archive))
-        
-        is_available = os.path.isfile(filepath) or os.path.isdir(folder_path)
+        installed_info = self._get_installed_info(tab, name, item)
 
-        if self._busy and tab == self._active_download_tab and item["name"] == self._downloading_item_name:
+        if self._busy and tab == self._active_download_tab and item.get("name") == self._downloading_item_name:
             tab.lbl_available.config(text="")
+            if hasattr(tab, "lbl_status_badge"):
+                tab.lbl_status_badge.config(text="")
             tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
-        else:
-            if is_available:
-                tab.lbl_available.config(text="Already Available")
-                tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="disabled")
-            else:
-                tab.lbl_available.config(text="")
-                if self._busy:
-                    tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="disabled")
+            return
+
+        if installed_info is not None:
+            inst_ver = installed_info["installed_version"]
+            best_info = installed_info["best_info"]
+            all_inst_vers = installed_info["installed_versions"]
+
+            if ver in all_inst_vers:
+                curr_info = all_inst_vers[ver]
+                badge_text = f"✔ Already Available (v{ver})"
+                tab.lbl_available.config(text=badge_text, fg=Theme.GREEN)
+                if hasattr(tab, "lbl_status_badge"):
+                    tab.lbl_status_badge.config(text=badge_text, fg=Theme.GREEN)
+
+                if curr_info["has_folder"]:
+                    tab.download_btn.config(
+                        text="⬇ Download (ZIP)",
+                        command=lambda t=tab: self._download(t, already_available=True),
+                        state="normal",
+                        bg=Theme.BTN_CLEAR,
+                        activebackground=Theme.BTN_CLEAR_H,
+                        cursor="hand2",
+                    )
                 else:
-                    tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+                    tab.download_btn.config(
+                        text="⬇ Download",
+                        command=lambda t=tab: self._download(t, already_available=False),
+                        state="normal",
+                        bg=Theme.BTN_COMPILE,
+                        activebackground=Theme.BTN_COMPILE_H,
+                        cursor="hand2",
+                    )
+
+            elif _version_key(ver) > _version_key(inst_ver):
+                badge_text = f"⬆ Update Available (Installed: v{inst_ver})"
+                tab.lbl_available.config(text=badge_text, fg=Theme.YELLOW)
+                if hasattr(tab, "lbl_status_badge"):
+                    tab.lbl_status_badge.config(text=badge_text, fg=Theme.YELLOW)
+
+                cleanup_target = (
+                    best_info.get("folder_path") or best_info.get("archive_path"),
+                    best_info.get("archive") or os.path.basename(best_info.get("archive_path", "")),
+                )
+                tab.download_btn.config(
+                    text=f"⬆ Update to v{ver}",
+                    command=lambda t=tab, cl=cleanup_target: self._download(t, cleanup_old=cl, already_available=False),
+                    state="normal",
+                    bg=Theme.BTN_COMPILE,
+                    activebackground=Theme.BTN_COMPILE_H,
+                    cursor="hand2",
+                )
+
+            else:
+                badge_text = f"Installed: v{inst_ver} (Older v{ver} selected)"
+                tab.lbl_available.config(text=badge_text, fg=Theme.TEXT_DIM)
+                if hasattr(tab, "lbl_status_badge"):
+                    tab.lbl_status_badge.config(text=badge_text, fg=Theme.TEXT_DIM)
+
+                tab.download_btn.config(
+                    text=f"⬇ Download v{ver}",
+                    command=lambda t=tab: self._download(t, already_available=False),
+                    state="normal",
+                    bg=Theme.BTN_COMPILE,
+                    activebackground=Theme.BTN_COMPILE_H,
+                    cursor="hand2",
+                )
+        else:
+            tab.lbl_available.config(text="")
+            if hasattr(tab, "lbl_status_badge"):
+                tab.lbl_status_badge.config(text="")
+
+            tab.download_btn.config(
+                text="⬇ Download",
+                command=lambda t=tab: self._download(t, already_available=False),
+                state="normal",
+                bg=Theme.BTN_COMPILE,
+                activebackground=Theme.BTN_COMPILE_H,
+                cursor="hand2",
+            )
 
     def _open_link(self, tab: BrowseTab, link_type: str):
         if link_type == "website":
@@ -3521,7 +3708,7 @@ class ArduinoBrowser:
     # Download
     # ------------------------------------------------------------------
 
-    def _prompt_download_option(self, archive_name) -> str:
+    def _prompt_download_option(self, archive_name, already_available: bool = False) -> str:
         dialog = tk.Toplevel(self.root)
         dialog.title("Download Options")
         dialog.resizable(False, False)
@@ -3531,11 +3718,16 @@ class ArduinoBrowser:
 
         result = tk.StringVar(value="")
 
+        if already_available:
+            title_text = f"Choose format for:\n{archive_name}\n\n(Extracted files already exist locally — only Archive / ZIP download is available)"
+        else:
+            title_text = f"Choose format for:\n{archive_name}"
+
         lbl = tk.Label(
             dialog,
-            text=f"Choose format for:\n{archive_name}",
+            text=title_text,
             font=("Montserrat", 10), justify="center", anchor="center", wraplength=700,
-            fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST
+            fg=Theme.YELLOW if already_available else Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST
         )
         lbl.pack(pady=15)
 
@@ -3546,21 +3738,54 @@ class ArduinoBrowser:
             result.set(opt)
             dialog.destroy()
 
-        btn_folder = make_flat_button(btn_frame, "📁 Folder / Extracted (Default)", lambda: select_option("folder"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        btn_folder.pack(side="left", padx=8, expand=True, fill="x")
+        if already_available:
+            btn_folder = make_flat_button(
+                btn_frame, "̶📁̶ ̶E̶x̶t̶r̶a̶c̶t̶e̶d̶ (Already Available)",
+                lambda: None, Theme.BG_MID, Theme.BG_MID
+            )
+            btn_folder.config(state="disabled", cursor="arrow")
+            btn_folder.pack(side="left", padx=8, expand=True, fill="x")
 
-        btn_both = make_flat_button(btn_frame, "📦 Both (ZIP & Folder)", lambda: select_option("both"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
-        btn_both.pack(side="left", padx=8, expand=True, fill="x")
+            btn_both = make_flat_button(
+                btn_frame, "̶📦̶ ̶B̶o̶t̶h̶ (Already Available)",
+                lambda: None, Theme.BG_MID, Theme.BG_MID
+            )
+            btn_both.config(state="disabled", cursor="arrow")
+            btn_both.pack(side="left", padx=8, expand=True, fill="x")
 
-        btn_zip = make_flat_button(btn_frame, "🗜 Archive Only", lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
-        btn_zip.pack(side="left", padx=8, expand=True, fill="x")
+            btn_zip = make_flat_button(
+                btn_frame, "🗜 Archive Only (ZIP)",
+                lambda: select_option("zip"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
+            )
+            btn_zip.pack(side="left", padx=8, expand=True, fill="x")
+            btn_zip.focus_set()
+            dialog.bind("<Return>", lambda e: select_option("zip"))
+        else:
+            btn_folder = make_flat_button(
+                btn_frame, "📁 Folder / Extracted (Default)",
+                lambda: select_option("folder"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
+            )
+            btn_folder.pack(side="left", padx=8, expand=True, fill="x")
+
+            btn_both = make_flat_button(
+                btn_frame, "📦 Both (ZIP & Folder)",
+                lambda: select_option("both"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
+            )
+            btn_both.pack(side="left", padx=8, expand=True, fill="x")
+
+            btn_zip = make_flat_button(
+                btn_frame, "🗜 Archive Only",
+                lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
+            )
+            btn_zip.pack(side="left", padx=8, expand=True, fill="x")
+            btn_folder.focus_set()
+            dialog.bind("<Return>", lambda e: select_option("folder"))
 
         cancel_frame = tk.Frame(dialog, bg=Theme.BG_DARKEST)
         cancel_frame.pack(fill="x", pady=10)
         btn_cancel = make_flat_button(cancel_frame, "Cancel", dialog.destroy, Theme.BTN_STOP, Theme.BTN_STOP_H)
         btn_cancel.pack(pady=5)
 
-        dialog.bind("<Return>", lambda e: select_option("folder"))
         dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         dialog.update_idletasks()
@@ -3570,16 +3795,17 @@ class ArduinoBrowser:
         y = self.root.winfo_y() + (self.root.winfo_height() - req_h) // 2
         dialog.geometry(f"{req_w}x{req_h}+{x}+{y}")
 
-        btn_folder.focus_set()
-
         self.root.wait_window(dialog)
         return result.get()
 
-    def _download(self, tab: BrowseTab):
+    def _download(self, tab: BrowseTab, cleanup_old: tuple | None = None, already_available: bool = False):
         sel = tab.listbox.curselection()
         if not sel or self._busy:
             return
-        name = tab.filtered_names[sel[0]]
+        idx = sel[0]
+        if idx >= len(tab.filtered_names):
+            return
+        name = tab.filtered_names[idx]
         item = tab.all_items[name]
         ver = tab.version_var.get()
 
@@ -3600,7 +3826,7 @@ class ArduinoBrowser:
         dest_dir = os.path.join(self._download_dir, subfolder)
         os.makedirs(dest_dir, exist_ok=True)
 
-        download_option = self._prompt_download_option(archive)
+        download_option = self._prompt_download_option(archive, already_available=already_available)
         if not download_option:
             return
 
@@ -3609,12 +3835,13 @@ class ArduinoBrowser:
         self._downloading_item_name = name
         self._cancel_event.clear()
         tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
-        self._set_status(f"Downloading {archive}…")
+        status_action = "Updating" if cleanup_old else "Downloading"
+        self._set_status(f"{status_action} {archive}…")
         self.progress.config(mode="indeterminate")
         self.progress.start(self._progress_interval)
 
         self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
-                          download_option, None, target_version,
+                          download_option, cleanup_old, target_version,
                           failed=lambda error: self._download_error(tab, f"Unable to start download:\n{error}"))
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):

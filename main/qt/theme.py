@@ -22,6 +22,28 @@ _icon_checked_dim = (_icons_dir / "checkbox_checked_disabled.svg").as_posix()
 _icon_arrow = (_icons_dir / "chevron-down.svg").as_posix()
 
 
+def install_checkbox_focus_style(app=None) -> bool:
+    """Keep native checkbox focus feedback on the indicator, not its label."""
+    from PySide6.QtWidgets import QApplication, QCheckBox, QProxyStyle, QStyle
+
+    app = app or QApplication.instance()
+    if app is None or app.property("mcuCheckboxFocusStyleInstalled"):
+        return False
+
+    class CheckboxFocusStyle(QProxyStyle):
+        def drawPrimitive(self, element, option, painter, widget=None):
+            if (element == QStyle.PrimitiveElement.PE_FrameFocusRect
+                    and isinstance(widget, QCheckBox)):
+                return
+            super().drawPrimitive(element, option, painter, widget)
+
+    # Qt's platform style draws a focus rectangle around a checkbox's label.
+    # The stylesheet paints the focus border on ::indicator instead.
+    app.setStyle(CheckboxFocusStyle(app.style()))
+    app.setProperty("mcuCheckboxFocusStyleInstalled", True)
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Font registration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -803,6 +825,8 @@ QCheckBox::indicator:checked:disabled {{
     border-color: {border};
     image: url("{_icon_checked_dim}");
 }}
+QCheckBox:focus {{ border: none; }}
+QCheckBox::indicator:focus {{ border: 2px solid {cyan}; }}
 
 /* ── StatusBar ───────────────────────────────────────────────────────────── */
 QStatusBar {{
@@ -995,7 +1019,7 @@ QTabWidget#workspace-tabs QTabBar QToolButton {{
 }}
 QSplitter::handle {{ background: transparent; }}
 QSplitter::handle:hover {{ background: {selected}; }}
-QPushButton:focus, QToolButton:focus, QCheckBox:focus,
+QPushButton:focus, QToolButton:focus,
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 2px solid {cyan}; }}
 QPushButton#btn-compile:focus, QPushButton#btn-upload:focus,
 QPushButton#btn-stop:focus, QPushButton#btn-save:focus,

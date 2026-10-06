@@ -348,7 +348,7 @@ class SettingsDialog(QDialog):
 
         # Font size
         font_row = QHBoxLayout()
-        font_lbl = QLabel("Editor & Monitor font size:")
+        font_lbl = QLabel("Monitor font size:")
         font_lbl.setFixedWidth(158)
         font_row.addWidget(font_lbl)
 

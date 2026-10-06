@@ -176,6 +176,7 @@ class MCUSignals(QObject):
 
     # ── Display / Settings Signals ───────────────────────────────────────────
     font_size_changed = Signal(int)
+    editor_font_size_changed = Signal(int)
     theme_changed = Signal(str)
     hide_warnings_changed = Signal(bool)
     autosave_settings_changed = Signal(bool, int)

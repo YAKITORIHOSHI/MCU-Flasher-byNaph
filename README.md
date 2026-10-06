@@ -134,8 +134,10 @@ Clear clears the display without typing into the active CLI. See
 Devices with 4 or 6 physical cores (including CPUs with 8 or 12 SMT threads)
 or at most 6 logical CPU threads use reduced editor animation,
 background checking and terminal scrollback. Builds reserve two logical CPU
-threads for the interface and OS (up to 2 compiler jobs on 4 threads, up to
-4 on 6 threads, reduced further under RAM pressure). Saved job counts cannot
+threads for the interface and OS. Four physical cores allow up to 2 compiler
+jobs and six physical cores up to 4, including 8/12-thread SMT processors;
+RAM pressure or mechanical storage can reduce these limits further. This
+favors interactive responsiveness over maximum build throughput. Saved job counts cannot
 bypass this budget. Fewer than 4 physical cores blocks launch with an
 incompatibility notice before GUI initialization or runtime repair. Unknown
 logical CPU counts also stop startup with a diagnostic. When physical topology
@@ -314,6 +316,13 @@ banner, each individual compiling filename, and the boxed timing breakdown.
 All rows use the saved monospace content size so frames and columns stay aligned.
 Warnings, errors, source excerpts and unfamiliar build messages remain visible;
 routine PlatformIO promotional/status boilerplate stays out of the journal.
+Native PlatformIO uploads use the same bounded output reader and scan-noise
+filter as optimized Windows uploads. Dependency graphs and routine build scans
+stay hidden while programmer output, diagnostics and the final result remain
+visible; quiet upload phases receive a throttled waiting status.
+Stop remains available during scans and connection attempts, then disables
+when programmer output first indicates erase/write. A failed flash is never
+replayed automatically.
 Copy includes all retained messages, even when warnings are hidden. Selection
 copy copies the selected visible text. Saved timestamp preferences apply to the
 journal. On narrow windows, Options holds the clear-on-action preferences so
@@ -382,8 +391,22 @@ PTY/xterm backpressure. Clear also discards retained serial display history.
 
 Editor parsing runs off the UI thread and keeps only the latest pending revision.
 Syntax results return through queued Qt signals, so repeated checks recover
-after a transient failure. Resize events share a settling timer, fonts register
+after a transient failure. Each edit sends dirty state and its recovery snapshot
+in one host message; syntax checks reuse that snapshot instead of transferring
+the entire file again. An edit immediately invalidates older in-flight results.
+Constrained PCs debounce typing checks for 600 ms (300 ms otherwise), and editor
+initialization polling stops after event listeners are installed. Unchanged
+diagnostics retain their table rows, selection and scroll position. Resize events share a settling timer, fonts register
 once, and vector icons use a bounded cache.
+
+A separate isolated Windows fixture with 1,500 diagnostics and 20 identical
+updates measured **1.94 s before / 0.010 s after**, eliminating 20 redundant
+table rebuilds. The editor protocol fixture with a 1.1-million-character file
+and ten edits 400 ms apart reduced source-text transfers from **22.0 million
+to 11.0 million characters**, preserving every edit's recovery snapshot.
+These measure specific repeated operations, not total startup time or RAM.
+The protocol check runs inside `direct/verify_performance.py` when Node.js is
+available; it can also run directly with `node direct/verify_editor_resources.js`.
 
 A local Windows Qt benchmark with simulated project data measured the import
 phase at **3.78 s before / 0.24 s after**, the longest console flush at
@@ -487,7 +510,7 @@ MCU Flasher by Naph/
 │   │   ├── settings_dialog.py       # Preferences modal (themes, CPU jobs, auto-save, baud reset)
 │   │   ├── project_dialog.py        # Project selector & new project scaffolding wizard
 │   │   ├── modify_dialog.py         # Project sketch file management dialog (add, rename, delete)
-│   │   ├── download_dialog.py       # Explicit handoff to a separate bootstrap process
+│   │   ├── download_dialog.py       # Launcher for standalone Arduino Boards & Libraries Manager
 │   │   ├── theme.py                 # Multi-theme QSS stylesheet generator (Glass Dark, Glass Light, Solarized)
 │   │   └── signals.py               # Centralized QtSignalBus for thread-safe cross-thread event routing
 │   │
@@ -624,7 +647,7 @@ MCU Flasher by Naph/
 - **Manual Hardware Selection**: MCU Flasher opens with no board and no port pre-selected (`""`). You retain full control over target hardware, preventing unintentional flashing or port locking.
 - **Active COM Port Enumeration**: The port dropdown enumerates all active serial ports with hardware descriptions (e.g. `COM9 - USB-SERIAL CH340 (COM9)`). Selecting a port connects instantly.
 - **Zero-Reset ESP32 Protection**: Serial ports open with DTR and RTS explicitly de-asserted (`conn.dtr = False`, `conn.rts = False`). Background `esptool` probing is disabled, ensuring running firmware on an attached ESP32 continues running smoothly without an unintended reset.
-- **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards, framework selection and typo fallback remain available. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
+- **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards and typo fallback remain available. The footer shows the board count, **Cancel** and **Select Board**. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
 - **Additional board platforms and libraries**: Add their PlatformIO specifications to `direct/offline-packages.json`, then open **Bootstrap** or run the host setup command while online. The workspace never opens the network downloader.
 
 ### 4. Compiling & Flashing Code
@@ -633,6 +656,7 @@ MCU Flasher by Naph/
   - An older cached Arduino row with no PlatformIO board ID is repaired against this app's installed manifests before compilation. Matching recognizes the manifest's declared vendor prefix and Arduino build-define prefix, preserves the selected board name, and rejects ambiguous targets. Missing definitions require bootstrap preparation; runtime never queries the online registry.
   - Compiles the sketch using the PlatformIO SCons engine or Arduino CLI.
   - *Non-Blocking Execution*: The Serial Monitor remains active, streaming, and fully interactive during compilation!
+  - Build and upload output is drained off the UI thread. Quiet dependency scans or bootloader handoffs report elapsed silence honestly, and a silent build can be stopped without waiting for another output line.
   - Caches intermediate objects in `.mcu_flasher_build_cache/boards/<board-key>/` for near-instant incremental rebuilds.
   - **Offline Toolchain Preparation**: Add a board platform or library to `direct/offline-packages.json`, then run bootstrap while online. The main app blocks registry/VCS package installation and uses the prepared local store.
   - **Resource-Aware Throttling**: Checks physical RAM and logical CPU cores via `psutil`. Background subprocesses are scheduled with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`), ensuring the UI, Monaco editor, and serial monitor stay fully responsive even during heavy compiles.
@@ -642,7 +666,8 @@ MCU Flasher by Naph/
   - Features unit-aware byte parsing for modern `esptool` v5.4.0+ outputs.
   - Automatically pauses the Serial Monitor during the write phase to release port contention, then auto-resumes monitoring once flashing finishes.
   - Uses the exact board's declared protocol and bootloader speed. Nano ATmega328 keeps its 57600-baud default; Uno and Mega keep theirs. The speed control shows the board default or **Auto** on non-ESP boards. Native programmers never receive a serial-port argument, and hardware writes are never automatically replayed.
-- **Framework compatibility**: Select a framework declared by the board in the picker. `.ino` files require Arduino; native C/C++ projects can use other declared frameworks. First-use preparation resolves their own packages rather than compiling an Arduino placeholder. Framework and board-definition changes use distinct firmware/cache identities. BIN, HEX, UF2 and ELF artifacts are recognized. Exact PlatformIO definitions, compatible source/libraries, packages and hardware drivers remain required; arbitrary unsupported boards are not inferred from their family name.
+  - ESP bootloader connection may retry before flash erase/write begins. After erase/write starts, a dropped link stops the attempt without replaying the flash or pulsing reset; the console reports that the firmware may be partial. A local `Library Manager: Linking symlink://...` line means PlatformIO linked an already-installed local library into the build and is routine dependency setup.
+- **Framework compatibility**: Board selection preserves a valid saved framework, otherwise choosing Arduino when available or the sole supported native framework. Multiple native frameworks require an explicit saved choice in the `board_frameworks` configuration; no arbitrary framework is selected. Unavailable frameworks remain excluded. `.ino` files require Arduino; native C/C++ projects can use other declared frameworks. First-use preparation resolves their own packages rather than compiling an Arduino placeholder. Framework and board-definition changes use distinct firmware/cache identities. BIN, HEX, UF2 and ELF artifacts are recognized. Exact PlatformIO definitions, compatible source/libraries, packages and hardware drivers remain required; arbitrary unsupported boards are not inferred from their family name.
 - **Stop Operation (`🛑 Stop`)**: Cancels an active compilation, upload, or resets a hanging serial session.
 
 ### 5. Live Serial Monitor & Post-Upload Auto-Reset

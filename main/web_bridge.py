@@ -34,6 +34,128 @@ for _p in (_project_root, _modules_path, _main_path):
 
 SCRIPT_DIR = _project_root
 
+
+def _iter_process_output(process, stop_requested, stop_process, on_silence,
+                         *, poll_interval: float = 0.2,
+                         notice_after: float = 15.0,
+                         notice_every: float = 20.0):
+    """Yield child output without blocking cancellation or quiet-build reporting.
+
+    A reader thread drains the pipe into a bounded queue. The operation worker
+    polls that queue, so a quiet build scan or bootloader handoff cannot trap
+    the operation worker inside ``readline()`` and delay Stop or status updates.
+    """
+    stdout = getattr(process, "stdout", None)
+    if stdout is None:
+        return
+
+    records: queue.Queue = queue.Queue(maxsize=256)
+    finished = threading.Event()
+    sentinel = object()
+
+    def _read_pipe():
+        try:
+            for output_line in iter(stdout.readline, ""):
+                records.put(("line", output_line))
+        except Exception as exc:
+            records.put(("error", exc))
+        finally:
+            records.put(("eof", sentinel))
+            finished.set()
+
+    reader = threading.Thread(target=_read_pipe, name="MCU_BuildOutputReader", daemon=True)
+    reader.start()
+    last_output = time.monotonic()
+    next_notice = last_output + max(0.1, float(notice_after))
+    killed_for_stop = False
+    while True:
+        if stop_requested() and not killed_for_stop:
+            killed_for_stop = True
+            try:
+                stop_process()
+            except Exception:
+                pass
+
+        try:
+            kind, value = records.get(timeout=max(0.02, float(poll_interval)))
+        except queue.Empty:
+            now = time.monotonic()
+            if finished.is_set() and records.empty():
+                break
+            if now >= next_notice:
+                try:
+                    on_silence(max(1, int(now - last_output)))
+                except Exception:
+                    pass
+                next_notice = now + max(1.0, float(notice_every))
+            continue
+
+        if kind == "eof" and value is sentinel:
+            break
+        if kind == "error":
+            raise value
+        last_output = time.monotonic()
+        yield value
+
+    reader.join(timeout=1.0)
+
+
+def _classify_platformio_upload_line(raw_line: str) -> tuple[str, str | None]:
+    """Keep upload diagnostics/results while suppressing PlatformIO scan chatter."""
+    line_clean = raw_line.rstrip("\r\n")
+    low = line_clean.lower()
+    outcome = re.search(r"=+\s*\[(SUCCESS|FAILED)\]\s*Took\s*([\d.]+)\s*seconds", line_clean, re.IGNORECASE)
+    if outcome:
+        return "outcome", outcome.group(1).upper()
+
+    has_diagnostic = bool(re.search(
+        r"\b(?:fatal\s+error|error|warning|failed|failure|exception)\b", low
+    ))
+    stripped = line_clean.strip()
+    scan_line = stripped.lower()
+    if not has_diagnostic and (
+            scan_line.startswith((
+                "platform:", "hardware:", "packages:", "configuration:", "sdk:", "embedded:",
+                "compiling ", "archiving ", "linking ", "building ", "retrieving ",
+                "checking size", "retrieved ", "converting ", "ldf:", "ldf modes:",
+                "scanning dependencies", "dependency graph", "|--", "|   ",
+                "processing ",
+            ))
+            or re.match(r"^found\s+\d+\s+compatible\s+(?:libraries|library)\b", scan_line)
+        or "from cache" in low
+        or re.match(r"^\s+-\s+\S+\s+@\s+", line_clean)
+        or any(phrase in low for phrase in (
+            "verbose mode can be enabled", "building in release mode",
+            "advanced memory usage", "platformio home",
+        ))
+        or stripped.startswith(("---", "==="))
+    ):
+        return "suppress", None
+
+    if not has_diagnostic and (
+        any(phrase in low for phrase in (
+            "looking for ", "check our library registry", "* cli  >", "* web  >",
+            "if you like platformio", "star it on github", "follow us on linkedin",
+            "try platformio ide", "please wait while upgrading", "successfully upgraded",
+        ))
+        or stripped.startswith("*****")
+        or stripped == "*"
+    ):
+        return "suppress", None
+
+    return "show", None
+
+
+def _platformio_upload_write_started(raw_line: str) -> bool:
+    """Conservatively recognize programmer output that means flash writes began."""
+    low = raw_line.lower()
+    return bool(re.search(
+        r"\b(?:erasing|erase(?:\s+flash)?|writing\s+(?:at|to|flash|memory)|"
+        r"programming\s+(?:flash|memory)|flashing|downloading\s+element\s+to\s+address)\b"
+        r"|\bwriting\s*\||\bwill\s+be\s+erased\b",
+        low,
+    ))
+
 import serial
 import serial.tools.list_ports
 import psutil
@@ -432,7 +554,7 @@ class MCUWebBackendAPI:
                 registry = None
                 warning = ""
                 if include_registry:
-                    warning = "Offline workspace: refreshed local board packs. Add or update packs in bootstrap."
+                    warning = "Refreshed local board packs. Add or update packs in Boards & Libraries Manager."
                 catalog = load_dynamic_boards(seed, prefer_cache=not include_registry, registry_catalog=registry)
                 usb_ids = load_downloaded_board_usb_ids(catalog)
                 if not self._stop_port_monitor.is_set():
@@ -3384,7 +3506,17 @@ class MCUWebBackendAPI:
             self.emit("notification", {"title": "Build failed", "message": str(exc), "type": "error"})
             process = getattr(self, "_active_process", None)
             if process is not None and process.poll() is None:
-                process.wait()
+                self._kill_active_process_tree()
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             self._active_process = None
             self.is_busy = False
             self.active_operation = self._current_op_phase = None
@@ -3617,8 +3749,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "  ℹ Selected-board workspace is isolated from every other board.", "tag": "info", "newline": True})
             self.emit("console:log", {"text": "    PlatformIO will compile only missing or changed units.", "tag": "dim", "newline": True})
             self.emit("console:log", {"text": "", "newline": True})
-            self.emit("console:log", {"text": "  ⚙ Initializing PlatformIO build engine & dependency tree...", "tag": "purple", "newline": True})
-            self.emit("console:log", {"text": "    SCons is resolving header dependencies in memory (takes 15–30s on fresh build)...", "tag": "purple_dim", "newline": True})
+            self.emit("console:log", {"text": "  ⚙ Starting PlatformIO build process...", "tag": "purple", "newline": True})
 
             cmd = pio_cmd + ["run", "-j", str(jobs)]
 
@@ -3665,6 +3796,7 @@ class MCUWebBackendAPI:
             )
 
             output_lines: list[str] = []
+            _dependency_graph_active = [False]
             _in_error_block = [False]
             _error_block_type = ["error"]
             _last_progress_text: list[str | None] = [None]
@@ -3817,15 +3949,37 @@ class MCUWebBackendAPI:
                     return "info", True
                 return None
 
-            for line in iter(self._active_process.stdout.readline, ""):
-                if self._stop_requested:
-                    self._kill_active_process_tree()
-                    break
+            def _report_build_silence(seconds: int) -> None:
+                self.emit("console:log", {
+                    "text": f"  ℹ PlatformIO has not emitted build output for {seconds} seconds; dependency scanning can be quiet.",
+                    "tag": "dim",
+                    "replace_pattern": r"PlatformIO has not emitted build output for \d+ seconds",
+                    "newline": True,
+                })
+
+            for line in _iter_process_output(
+                self._active_process,
+                lambda: bool(self._stop_requested),
+                self._kill_active_process_tree,
+                _report_build_silence,
+            ):
                 line_clean = line.rstrip("\r\n")
                 if not line_clean:
                     continue
                 output_lines.append(line_clean)
                 low = line_clean.lower()
+
+                # PlatformIO's dependency tree is repetitive in the GUI log;
+                # hide only its heading and contiguous tree rows. The next
+                # non-tree line (including diagnostics and build status) still
+                # follows the normal routing path.
+                if _dependency_graph_active[0]:
+                    if line_clean.lstrip().startswith("|"):
+                        continue
+                    _dependency_graph_active[0] = False
+                if line_clean.strip().casefold() == "dependency graph":
+                    _dependency_graph_active[0] = True
+                    continue
 
                 # PlatformIO downloads native packages itself on Linux. Keep
                 # those installations protected just like Windows bootstrap.
@@ -4520,6 +4674,10 @@ class MCUWebBackendAPI:
                                     connected: bool = False, failed: bool = False):
         if failed:
             current = total
+        elif connected:
+            # A successful handshake is complete, regardless of how many
+            # polling rounds were needed to reach it.
+            current = total
         current = max(0, min(total, current))
         if total > 0:
             multiplier = max(1, round(bar_width / total))
@@ -4548,6 +4706,25 @@ class MCUWebBackendAPI:
             "newline": True
         })
 
+    @staticmethod
+    def _fast_upload_retry_allowed(*, return_code: int | None,
+                                   attempt_connected: bool,
+                                   write_started: bool,
+                                   all_images_verified: bool,
+                                   retry_used: bool,
+                                   operation: str | None,
+                                   stop_requested: bool) -> bool:
+        """Only retry a connected esptool attempt before erase/write begins."""
+        return bool(
+            return_code not in (None, 0)
+            and attempt_connected
+            and not write_started
+            and not all_images_verified
+            and operation != "reset"
+            and not retry_used
+            and not stop_requested
+        )
+
     def _append_upload_progress(self, label: str, stage: int, stage_total: int,
                                 percent: float, written: int | None = None,
                                 total: int | None = None,
@@ -4570,7 +4747,7 @@ class MCUWebBackendAPI:
         self.emit("console:log", {
             "text": progress_text,
             "tag": "success" if pct >= 100.0 else "info",
-            "replace_pattern": rf"(?:Flashing)\s+{re.escape(stage_str + label)}\s*\[" if not force_new else None,
+            "replace_pattern": rf"(?:Flashing)\s+{re.escape(stage_str + label)}\s*\[",
             "newline": True,
         })
         self.emit("console:progress", {"action": "Uploading"})
@@ -5024,6 +5201,7 @@ class MCUWebBackendAPI:
         connected_bar_flipped = False
         upload_started = time.perf_counter()
         self._last_fast_upload_failure_kind = ""
+        self._last_fast_upload_write_started = False
         connection_poll_count = [max(1, min(_MAX_CONNECT_RETRIES, start_attempt))]
         flash_retry_used = False
 
@@ -5110,7 +5288,7 @@ class MCUWebBackendAPI:
                     pass
 
         def _handle_fast_line(raw_line: str):
-            nonlocal attempt_connected, verified_images
+            nonlocal attempt_connected, verified_images, write_started
             stripped = raw_line.rstrip()
             if not stripped:
                 return
@@ -5142,8 +5320,9 @@ class MCUWebBackendAPI:
                 attempt_connected = True
                 _set_fast_phase("Connecting")
                 _flip_fast_connected_bar()
-            if "will be erased" in low or "erasing flash" in low:
+            if "will be erased" in low or "erasing" in low:
                 attempt_connected = True
+                write_started = True
                 _set_fast_phase("Erasing")
 
             wrote_event = _parse_esptool_wrote(stripped)
@@ -5158,6 +5337,7 @@ class MCUWebBackendAPI:
                 if stages:
                     completed_images.add(str(stages[idx].get("key") or idx))
                 attempt_connected = True
+                write_started = True
 
             if "hash of data verified" in low:
                 verified_images += 1
@@ -5167,6 +5347,8 @@ class MCUWebBackendAPI:
                     upload_progress_state, stripped,
                     before_progress=_before_fast_progress,
                     phase_callback=_set_fast_phase):
+                if upload_progress_state.get("stage_locked") or upload_progress_state.get("started"):
+                    write_started = True
                 return
             if "verifying written data" in low or "hash of data verified" in low:
                 _set_fast_phase("Verifying")
@@ -5180,6 +5362,7 @@ class MCUWebBackendAPI:
             output_lines = []
             upload_progress_state = self._new_upload_progress_state(fast_bins)
             attempt_connected = False
+            write_started = False
             completed_images: set[str] = set()
             verified_images = 0
             expected_image_count = len(upload_progress_state.get("stages") or [])
@@ -5353,29 +5536,35 @@ class MCUWebBackendAPI:
                         continue
                     connection_poll_count[0] = _MAX_CONNECT_RETRIES
 
-                # Retry at user's chosen speed: if upload failed after connecting
-                # (during stub baud switch or mid-flash write), retry once at the
-                # same selected speed — never silently downgrade baud.
+                # Retry a post-connect failure only while esptool has not begun
+                # erasing or writing flash. Never replay a hardware write.
                 writing_started = (
-                    bool(completed_images)
+                    write_started
+                    or bool(completed_images)
                     or bool(upload_progress_state.get("started"))
+                    or bool(upload_progress_state.get("stage_locked"))
                 )
                 post_connect_transport_failure = (
                     rc != 0
                     and attempt_connected
                     and not all_images_verified
                 )
-                if (rc != 0 and attempt_connected
-                        and getattr(self, "active_operation", None) != "reset"
-                        and not flash_retry_used
-                        and post_connect_transport_failure
-                        and not getattr(self, "_stop_requested", False)):
+                self._last_fast_upload_write_started = writing_started
+                if (post_connect_transport_failure and self._fast_upload_retry_allowed(
+                        return_code=rc,
+                        attempt_connected=attempt_connected,
+                        write_started=writing_started,
+                        all_images_verified=all_images_verified,
+                        retry_used=flash_retry_used,
+                        operation=getattr(self, "active_operation", None),
+                        stop_requested=bool(getattr(self, "_stop_requested", False)),
+                )):
                     if not self._is_port_present(port):
                         if not self._wait_for_port_reconnect(port):
                             error_message = (
                                 f"MCU disconnected during upload ({port} is no longer available)"
                             )
-                            self._last_fast_upload_failure_kind = "flash"
+                            self._last_fast_upload_failure_kind = "flash" if writing_started else "connection"
                             self._record_fast_upload_diagnostic(
                                 port, attempt_cmd, return_code=rc,
                                 output_lines=output_lines, error=error_message,
@@ -5437,6 +5626,9 @@ class MCUWebBackendAPI:
 
                 ok = (rc == 0)
                 if ok or all_images_verified:
+                    self._last_fast_upload_write_started = bool(
+                        writing_started or all_images_verified
+                    )
                     _flip_fast_connected_bar()
                     _show_fast_context(force=True)
                     _set_fast_phase("Done")
@@ -5464,6 +5656,18 @@ class MCUWebBackendAPI:
                     })
                     self._last_fast_upload_failure_kind = ""
                     return True, "", _connect_retry_count + 1
+
+                if attempt_connected and writing_started and not all_images_verified:
+                    self.emit("console:log", {
+                        "text": "  ⚠ Flash erase/write had begun before communication failed. Automatic retry was stopped to avoid replaying flash commands.",
+                        "tag": "warning",
+                        "newline": True,
+                    })
+                    self.emit("console:log", {
+                        "text": "  ℹ The firmware may be incomplete. Keep the board powered, reconnect it if needed, and retry Upload once the serial link is stable.",
+                        "tag": "info",
+                        "newline": True,
+                    })
 
                 detail = ""
                 # First pass: find explicit ERROR: / fatal error / Exception lines
@@ -5508,7 +5712,7 @@ class MCUWebBackendAPI:
 
                 if is_conn_failure:
                     self._last_fast_upload_failure_kind = "connection"
-                elif attempt_connected or completed_images:
+                elif writing_started or completed_images:
                     self._last_fast_upload_failure_kind = "flash"
                 elif not cli_syntax_error:
                     self._last_fast_upload_failure_kind = "connection"
@@ -5521,6 +5725,8 @@ class MCUWebBackendAPI:
                 )
                 return False, error_message, _connect_retry_count + 1
             except Exception as e:
+                self._last_fast_upload_write_started = bool(write_started)
+                self._last_fast_upload_failure_kind = "flash" if write_started else "connection"
                 self._record_fast_upload_diagnostic(
                     port, attempt_cmd, error=str(e),
                 )
@@ -5785,6 +5991,7 @@ class MCUWebBackendAPI:
         from main.core.target_profile import requires_upload_port
         monitor_port = str(self._active_port_label or "")
         monitor_paused = False
+        write_started = False
         try:
             owner = port_occupied_owner(monitor_port) if monitor_port else None
             if owner:
@@ -5809,8 +6016,8 @@ class MCUWebBackendAPI:
                 monitor_paused = True
             self.is_busy = True
             self.active_operation = "upload"
-            self._current_op_phase = "flashing"
-            self.emit("operation:phase", {"phase": "flash", "is_busy": True, "can_stop": False, "op": "upload"})
+            self._current_op_phase = "connecting"
+            self.emit("operation:phase", {"phase": "upload", "is_busy": True, "can_stop": True, "op": "upload"})
             self.emit("window:closable", {"closable": False})
             jobs = self._get_jobs()
             command += ["run", "-e", "mcu_env", "-t", "upload", "-j", str(jobs)]
@@ -5828,10 +6035,77 @@ class MCUWebBackendAPI:
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
-            for line in self._active_process.stdout:
-                self.emit("console:log", {"text": line.rstrip(), "newline": True})
+
+            def _report_upload_silence(seconds: int) -> None:
+                self.emit("console:log", {
+                    "text": f"  ℹ PlatformIO upload has not emitted output for {seconds} seconds; waiting for the current build or upload step.",
+                    "tag": "dim",
+                    "replace_pattern": r"PlatformIO upload has not emitted output for \d+ seconds",
+                    "newline": True,
+                })
+
+            def _stop_upload_if_safe() -> None:
+                if (self._current_op_phase not in ("flashing", "writing", "resetting", "erasing")
+                        and self.active_operation not in ("flash", "reset")):
+                    self._kill_active_process_tree()
+
+            for line in _iter_process_output(
+                self._active_process,
+                lambda: bool(self._stop_requested),
+                _stop_upload_if_safe,
+                _report_upload_silence,
+            ):
+                line_clean = line.rstrip("\r\n")
+                if not line_clean:
+                    continue
+                if not write_started and _platformio_upload_write_started(line_clean):
+                    write_started = True
+                    self._current_op_phase = "flashing"
+                    self.emit("operation:phase", {
+                        "phase": "flash", "is_busy": True,
+                        "can_stop": False, "op": "upload",
+                    })
+                action, verdict = _classify_platformio_upload_line(line_clean)
+                if action == "outcome":
+                    tag = "success" if verdict == "SUCCESS" else "error"
+                    self.emit("console:log", {
+                        "text": f"  {line_clean.strip()}", "tag": tag, "newline": True,
+                    })
+                    continue
+                if action == "suppress":
+                    continue
+
+                low = line_clean.lower()
+                tag = "error" if re.search(
+                    r"\b(?:fatal\s+error|error|failed|failure|exception|timed?\s*out|"
+                    r"permission\s+denied|no\s+device|cannot\s+open|can't\s+open)\b", low
+                ) else "warning" if "warning" in low else "info"
+                self.emit("console:log", {"text": line_clean, "tag": tag, "newline": True})
+            if self._active_process.stdout:
+                self._active_process.stdout.close()
             code = self._active_process.wait()
+            if self._stop_requested and not write_started:
+                self.emit("console:log", {
+                    "text": "Upload cancelled before flash erase/write began.",
+                    "tag": "warning", "newline": True,
+                })
+                self.emit("notification", {
+                    "title": "Upload cancelled",
+                    "message": "The programmer was stopped before flash erase/write began.",
+                    "type": "warning",
+                })
+                self.emit("console:progress", {"action": "Cancelled"})
+                return
             if code:
+                if write_started:
+                    self.emit("console:log", {
+                        "text": "  ⚠ Flash erase/write began before communication failed. The firmware may be incomplete; MCU Flasher did not replay the upload or reset the board.",
+                        "tag": "warning", "newline": True,
+                    })
+                    self.emit("console:log", {
+                        "text": "  ℹ Keep the board powered, stabilize the serial link, then retry Upload once. Lower Upload Speed if the connection remains unreliable.",
+                        "tag": "info", "newline": True,
+                    })
                 raise RuntimeError(f"PlatformIO upload exited with code {code}. Review the console for the programmer or device requirement.")
             self.emit("notification", {"title": "Upload completed", "message": "PlatformIO reported a successful upload.", "type": "success"})
             self.emit("console:progress", {"action": "Completed", "percent": 100})
@@ -6802,6 +7076,17 @@ class MCUWebBackendAPI:
                                 "newline": True,
                             })
                         self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
+                    elif failure_kind == "flash" and getattr(self, "_last_fast_upload_write_started", False):
+                        self.emit("console:log", {
+                            "text": "  ⚠ Flashing stopped after erase/write began. MCU Flasher did not restart the flash automatically.",
+                            "tag": "warning",
+                            "newline": True,
+                        })
+                        self.emit("console:log", {
+                            "text": "  💡 Reconnect the board, select a stable port, lower Upload Speed (try 115200), then click Upload once. Clean is not required.",
+                            "tag": "info",
+                            "newline": True,
+                        })
                     else:
                         self.emit("console:log", {"text": f"  ✖ Fast upload failed: {fast_error}", "tag": "error", "newline": True})
                         if str(upload_speed) in ("921600", "512000"):
@@ -6975,81 +7260,38 @@ class MCUWebBackendAPI:
 
             _fallback_upload_state = self._new_upload_progress_state()
 
-            for line in iter(self._active_process.stdout.readline, ""):
+            def _stop_cancellable_upload() -> None:
                 if (
-                    self._stop_requested
-                    and self._current_op_phase not in ("flashing", "writing", "resetting", "erasing")
+                    self._current_op_phase not in ("flashing", "writing", "resetting", "erasing")
                     and self.active_operation not in ("flash", "reset")
                 ):
-                    self._active_process.terminate()
-                    break
+                    self._kill_active_process_tree()
+
+            def _report_upload_silence(seconds: int) -> None:
+                self.emit("console:log", {
+                    "text": f"  ℹ PlatformIO upload has not emitted output for {seconds} seconds; waiting for the device or programmer.",
+                    "tag": "dim",
+                    "replace_pattern": r"PlatformIO upload has not emitted output for \d+ seconds",
+                    "newline": True,
+                })
+
+            for line in _iter_process_output(
+                self._active_process,
+                lambda: bool(self._stop_requested),
+                _stop_cancellable_upload,
+                _report_upload_silence,
+            ):
                 line_clean = line.rstrip("\r\n")
                 if not line_clean:
                     continue
                 low = line_clean.lower()
-
-                # ── Suppress ALL SCons / PIO build-scan boilerplate ─────
-                # PlatformIO's upload subprocess re-runs a lightweight dependency
-                # scan before invoking esptool.  All of that internal output
-                # (Retrieved from cache, Compiling, Archiving, LDF, Dependency
-                # Graph, etc.) is invisible noise during upload and must be fully
-                # swallowed.  Only esptool connection + flash lines should show.
                 _stripped = line_clean.strip()
-                if (
-                    # PIO environment / system headers
-                    low.startswith("platform:")
-                    or low.startswith("hardware:")
-                    or low.startswith("packages:")
-                    or low.startswith("configuration:")
-                    or low.startswith("sdk:")
-                    or low.startswith("embedded:")
-                    # SCons build-scan lines
-                    or low.startswith("compiling ")
-                    or low.startswith("archiving ")
-                    or low.startswith("linking ")
-                    or low.startswith("building ")
-                    or low.startswith("retrieving ")
-                    or low.startswith("checking size")
-                    or low.startswith("retrieved ")
-                    or low.startswith("converting ")
-                    or "from cache" in low
-                    # Dependency / library scan
-                    or low.startswith("ldf:")
-                    or low.startswith("ldf modes:")
-                    or low.startswith("found ")
-                    or low.startswith("scanning dependencies")
-                    or low.startswith("dependency graph")
-                    or low.startswith("|--")
-                    or low.startswith("|   ")
-                    or low.startswith("processing ")
-                    # Packages list items (lines like " - toolchain-xtensa @ …")
-                    or re.match(r"^\s+-\s+\S+\s+@\s+", line_clean)
-                    # PIO misc noise
-                    or "verbose mode can be enabled" in low
-                    or "building in release mode" in low
-                    or "advanced memory usage" in low
-                    or "platformio home" in low
-                    # Separator lines (--- and ===)
-                    or line_clean.startswith("---")
-                    or line_clean.startswith("===")
-                ):
-                    continue
-
-                # ── Swallow promotional / registry noise ────────────
-                if any(kw in low for kw in (
-                    "looking for ", "check our library registry", "* cli  >", "* web  >",
-                    "if you like platformio", "star it on github", "follow us on linkedin",
-                    "try platformio ide", "please wait while upgrading", "successfully upgraded"
-                )) or _stripped.startswith("*****") or _stripped == "*":
-                    continue
-
-
-                # ── PIO result line === [SUCCESS] Took X.XX seconds ===
-                pio_result = re.search(r'=+\s*\[(SUCCESS|FAILED)\]\s*Took\s*([\d.]+)\s*seconds', line_clean, re.IGNORECASE)
-                if pio_result:
-                    verdict = pio_result.group(1).upper()
+                upload_line_action, verdict = _classify_platformio_upload_line(line_clean)
+                if upload_line_action == "outcome":
                     tag = "success" if verdict == "SUCCESS" else "error"
                     self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": tag, "newline": True})
+                    continue
+                if upload_line_action == "suppress":
                     continue
 
                 # ── Chip-info capture from esptool ──────────────────
@@ -7402,8 +7644,9 @@ class MCUWebBackendAPI:
             })
             self.emit("window:closable", {"closable": True})
             if not is_success:
-                # Cleanly release serial control lines (DTR/RTS) so MCU returns to normal run mode and does not bootloop
-                self._release_port_lines(port, pulse_reset=True)
+                # Release DTR/RTS without resetting the board. A partial flash
+                # must not be rebooted automatically after a transport failure.
+                self._release_port_lines(port, pulse_reset=False)
             if is_success or was_monitoring:
                 time.sleep(0.5)
                 self._start_serial_monitor()

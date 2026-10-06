@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import ast
 import io
+import queue
 from pathlib import Path
 import re
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -48,13 +50,60 @@ def parser_fixture():
                 decorator_list=[],
             )
             module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
-            namespace = {"Path": Path, "re": re, "time": time}
+            namespace = {
+                "Path": Path, "re": re, "time": time,
+                "_iter_process_output": lambda process, *_args, **_kwargs: iter(process.stdout.readline, ""),
+            }
             exec(compile(module, str(source), "exec"), namespace)
             return namespace["route_fixture"]
     raise AssertionError("Compile output parser boundary was not found")
 
 
 ROUTE = parser_fixture()
+
+
+def process_output_fixture():
+    source = ROOT / "main/web_bridge.py"
+    tree = ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "_iter_process_output")
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    namespace = {"queue": queue, "threading": threading, "time": time}
+    exec(compile(module, str(source), "exec"), namespace)
+    return namespace["_iter_process_output"]
+
+
+ITER_PROCESS_OUTPUT = process_output_fixture()
+
+
+def upload_line_classifier_fixture():
+    source = ROOT / "main/web_bridge.py"
+    tree = ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "_classify_platformio_upload_line")
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    namespace = {"re": re}
+    exec(compile(module, str(source), "exec"), namespace)
+    return namespace["_classify_platformio_upload_line"]
+
+
+CLASSIFY_UPLOAD_LINE = upload_line_classifier_fixture()
+
+
+def upload_write_started_fixture():
+    source = ROOT / "main/web_bridge.py"
+    tree = ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "_platformio_upload_write_started")
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    namespace = {"re": re}
+    exec(compile(module, str(source), "exec"), namespace)
+    return namespace["_platformio_upload_write_started"]
+
+
+UPLOAD_WRITE_STARTED = upload_write_started_fixture()
 
 
 class ParserBackend:
@@ -194,6 +243,24 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "text": "  ⚙ Compiling Main.cpp.o...", "tag": "info", "newline": True,
         }])
 
+    def test_dependency_graph_is_hidden_and_following_build_status_is_kept(self):
+        records = self.route(
+            "Processing mcu_env (platform: espressif32; board: esp32dev; framework: arduino)",
+            "Dependency Graph",
+            "|-- ESP32Servo @ 3.2.1",
+            "|-- FastAccelStepper @ 1.2.7",
+            "|-- HX711 @ 0.6.4",
+            "  ──────────────────────────────────────────────────",
+            "Building in release mode...",
+        )
+        text = "\n".join(record["text"] for record in records)
+        self.assertNotIn("Dependency Graph", text)
+        self.assertNotIn("ESP32Servo @ 3.2.1", text)
+        self.assertNotIn("FastAccelStepper @ 1.2.7", text)
+        self.assertNotIn("HX711 @ 0.6.4", text)
+        self.assertIn("────────────────", text)
+        self.assertIn("  ⚙ Building in release mode...", text)
+
     def test_boilerplate_matching_is_narrow_and_diagnostic_context_wins(self):
         similar_custom_lines = (
             "Verbose mode can be enabled by editing the custom build script",
@@ -244,6 +311,15 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertEqual(texts.count("  ⚙ Compiling Main.cpp.o..."), 2)
         self.assertIn("  ⚡ Building partition table (partitions.bin)...", texts)
         self.assertEqual(texts[-1], "  🔗 Linking...")
+
+    def test_local_symlink_library_manager_messages_are_preserved_as_dependency_setup(self):
+        linked_path = "Library Manager: Linking symlink://C:/Users/example/Arduino/libraries/NimBLE-Arduino"
+        linked_version = "Library Manager: NimBLE-Arduino@2.5.1 has been linked!"
+        records = self.route(linked_path, linked_version)
+        texts = [record["text"] for record in records]
+        self.assertIn(f"    {linked_path}", texts)
+        self.assertIn(f"    {linked_version}", texts)
+        self.assertTrue(all(record["tag"] == "info" for record in records if record["text"].startswith("    Library Manager:")))
 
     def test_generic_severity_wins_over_routine_and_promotion_filters(self):
         lines = (
@@ -327,6 +403,111 @@ class BuildLogRoutingChecks(unittest.TestCase):
         )
         self.assertEqual([item["tag"] for item in records], ["error", "error", "dim", "dim"])
         self.assertEqual(records[-1]["text"], "custom builder saved world: done")
+
+    def test_platformio_upload_filter_hides_scan_and_keeps_outcomes_and_diagnostics(self):
+        self.assertEqual(
+            CLASSIFY_UPLOAD_LINE("================ [SUCCESS] Took 1.20 seconds ================"),
+            ("outcome", "SUCCESS"),
+        )
+        self.assertEqual(
+            CLASSIFY_UPLOAD_LINE("================ [FAILED] Took 1.20 seconds ================"),
+            ("outcome", "FAILED"),
+        )
+        for line in (
+            "Processing mcu_env (platform: espressif32; board: esp32dev)",
+            "Dependency Graph",
+            "|-- NimBLE-Arduino @ 2.5.1",
+            "Building in release mode...",
+            "Found 3 compatible libraries",
+            "Looking for a custom library",
+        ):
+            self.assertEqual(CLASSIFY_UPLOAD_LINE(line), ("suppress", None), line)
+        for line in (
+            "src/Main.cpp:4: error: missing symbol",
+            "warning: programmer firmware is outdated",
+            "Connecting to programmer: .",
+            'Found programmer: Id = "AVR ISP"',
+            "Found device: Signature = 0x1e950f",
+            "Writing at 0x00010000...",
+            "Library Manager: Linking symlink://local/library",
+        ):
+            self.assertEqual(CLASSIFY_UPLOAD_LINE(line), ("show", None), line)
+
+        tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8-sig"))
+        cls = next(node for node in tree.body
+                   if isinstance(node, ast.ClassDef) and node.name == "MCUWebBackendAPI")
+        for name in ("_upload_worker", "_native_upload_worker"):
+            worker = next(node for node in cls.body
+                          if isinstance(node, ast.FunctionDef) and node.name == name)
+            self.assertTrue(any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_classify_platformio_upload_line"
+                for node in ast.walk(worker)
+            ), f"{name} must share the PlatformIO output filter")
+
+    def test_upload_write_boundary_preserves_programmer_discovery_and_detects_writes(self):
+        for line in (
+            "Processing mcu_env (platform: atmelavr; board: uno)",
+            "Found 3 compatible libraries",
+            'Found programmer: Id = "AVR ISP"',
+            "Found device: Signature = 0x1e950f",
+            "Connecting to programmer: .",
+        ):
+            self.assertFalse(UPLOAD_WRITE_STARTED(line), line)
+        for line in (
+            "Erasing flash (this may take a while)...",
+            "Writing at 0x00010000...",
+            "Writing | ############################",
+            "Programming flash memory",
+            "Downloading element to address = 0x08000000",
+        ):
+            self.assertTrue(UPLOAD_WRITE_STARTED(line), line)
+
+    def test_process_output_reports_quiet_periods_without_losing_lines(self):
+        class DelayedStdout:
+            def __init__(self):
+                self.calls = 0
+
+            def readline(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return "Processing mcu_env (platform: native)\n"
+                time.sleep(0.15)
+                return ""
+
+        process = SimpleNamespace(stdout=DelayedStdout())
+        quiet = []
+        lines = list(ITER_PROCESS_OUTPUT(
+            process, lambda: False, lambda: self.fail("Unexpected process termination"),
+            quiet.append, poll_interval=0.005, notice_after=0.01, notice_every=0.01,
+        ))
+        self.assertEqual(lines, ["Processing mcu_env (platform: native)\n"])
+        self.assertTrue(quiet)
+
+    def test_process_output_stop_kills_silent_process_promptly(self):
+        released = threading.Event()
+        stop = threading.Event()
+        terminated = []
+
+        class BlockingStdout:
+            def readline(self):
+                released.wait(1.0)
+                return ""
+
+        timer = threading.Timer(0.03, stop.set)
+        timer.start()
+        try:
+            started = time.monotonic()
+            list(ITER_PROCESS_OUTPUT(
+                SimpleNamespace(stdout=BlockingStdout()), stop.is_set,
+                lambda: (terminated.append(True), released.set()), lambda _seconds: None,
+                poll_interval=0.005, notice_after=1.0,
+            ))
+        finally:
+            timer.cancel()
+        self.assertEqual(terminated, [True])
+        self.assertLess(time.monotonic() - started, 0.5)
 
 
 if __name__ == "__main__":

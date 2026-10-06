@@ -425,7 +425,7 @@ def set_periodic_reload_settings(enabled: bool, interval_s: int):
 
 
 def get_monitor_font_size() -> int:
-    """Return the shared Build/Serial/Syntax/Editor display size (12pt by default)."""
+    """Return the Build Console & Serial Monitor display size (12pt by default)."""
     try:
         size = int(_load_raw_config().get("shared", {}).get("monitor_font_size", 12))
     except Exception:
@@ -434,12 +434,33 @@ def get_monitor_font_size() -> int:
 
 
 def set_monitor_font_size(size: int) -> None:
-    """Save the shared Build/Serial/Syntax/Editor display size to persistent config."""
+    """Save the Build Console & Serial Monitor display size to persistent config."""
     try:
         sz = max(6, min(48, int(size)))
         data = _load_raw_config()
         shared = data.setdefault("shared", {})
         shared["monitor_font_size"] = sz
+        _save_raw_config(data)
+    except Exception:
+        pass
+
+
+def get_editor_font_size() -> int:
+    """Return the Monaco Editor font size (13pt by default)."""
+    try:
+        size = int(_load_raw_config().get("shared", {}).get("editor_font_size", 13))
+    except Exception:
+        size = 13
+    return max(6, min(48, size))
+
+
+def set_editor_font_size(size: int) -> None:
+    """Save the Monaco Editor font size to persistent config."""
+    try:
+        sz = max(6, min(48, int(size)))
+        data = _load_raw_config()
+        shared = data.setdefault("shared", {})
+        shared["editor_font_size"] = sz
         _save_raw_config(data)
     except Exception:
         pass
@@ -1127,6 +1148,7 @@ __all__ = [
     "get_clear_build_console_on_action",
     "get_clear_serial_on_upload",
     "get_hide_build_console_warnings",
+    "get_editor_font_size",
     "get_editor_mode",
     "get_monaco_boot_pending",
     "get_monitor_font_size",
@@ -1151,8 +1173,10 @@ __all__ = [
     "set_clear_build_console_on_action",
     "set_clear_serial_on_upload",
     "set_hide_build_console_warnings",
+    "set_editor_font_size",
     "set_editor_mode",
     "set_instance_hwnd",
+    "set_monitor_font_size",
     "set_monaco_boot_pending",
     "set_periodic_reload_settings",
     "set_project_remembered_board",

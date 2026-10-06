@@ -1605,6 +1605,17 @@ class MCUMainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # Signal any sleeping Download Manager process to terminate if this is the last window
+        try:
+            app = QApplication.instance()
+            top_levels = [w for w in app.topLevelWidgets() if isinstance(w, MCUMainWindow) and w is not self] if app else []
+            if not top_levels:
+                exit_trigger = Path(_project_root) / "index_json" / ".dm_force_exit"
+                exit_trigger.parent.mkdir(parents=True, exist_ok=True)
+                exit_trigger.write_text("exit", encoding="utf-8")
+        except Exception:
+            pass
+
         try:
             from src.modules.crash_detector import mark_session_clean_exit
             mark_session_clean_exit(os.getpid())

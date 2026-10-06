@@ -45,16 +45,12 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QStyle,
     QButtonGroup,
-    QComboBox,
 )
 from main.qt.icons import ActionButton as QPushButton
 
 from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import load_recent_boards, add_recent_board, get_theme_mode
 from main.qt.theme import get_palette
-
-_FRAMEWORK_TOOLTIP = "Choose the framework your source files use. Arduino .ino sketches need Arduino."
-
 
 # ── String & Token Helpers ───────────────────────────────────────────────────
 
@@ -1046,7 +1042,7 @@ class BoardSearchDialog(QDialog):
         self.search_ent.returnPressed.connect(self._confirm_selection)
         search_layout.addWidget(self.search_ent)
         self.btn_refresh = QPushButton("Refresh boards")
-        self.btn_refresh.setToolTip("Refresh locally prepared board definitions; add or update packs in bootstrap")
+        self.btn_refresh.setToolTip("Refresh locally prepared board definitions; add or update packs in Boards & Libraries Manager")
         self.btn_refresh.clicked.connect(self._request_catalog_refresh)
         search_layout.addWidget(self.btn_refresh)
         root.addWidget(self.search_frame)
@@ -1102,13 +1098,6 @@ class BoardSearchDialog(QDialog):
         btn_layout.setSpacing(8)
 
         self.lbl_count = QLabel(f"{len(self.all_boards)} boards available")
-        self._framework_label = QLabel("Framework")
-        self._framework_row = QHBoxLayout()
-        self._framework_row.addWidget(self._framework_label)
-        self.framework_combo = QComboBox()
-        self.framework_combo.setToolTip(_FRAMEWORK_TOOLTIP)
-        self._framework_row.addWidget(self.framework_combo)
-        self.listbox.selectionModel().currentChanged.connect(self._update_frameworks)
 
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setFixedSize(85, 30)
@@ -1154,16 +1143,14 @@ class BoardSearchDialog(QDialog):
                 self._chips_layout.addWidget(btn, index // cols, index % cols)
             self._chip_columns = cols
         narrow = self.width() < (self.lbl_count.minimumSizeHint().width() +
-                                 self._framework_row.minimumSize().width() +
                                  self._actions_row.minimumSize().width() + 52)
         if narrow != self._layout_mode:
             grid = self._footer_grid
             grid.removeWidget(self.lbl_count)
-            for row in (self._framework_row, self._actions_row):
-                grid.removeItem(row)
-            grid.addWidget(self.lbl_count, 0, 0)
-            grid.addLayout(self._framework_row, 0 if not narrow else 1, 1 if not narrow else 0)
-            grid.addLayout(self._actions_row, 0 if not narrow else 1, 2 if not narrow else 1)
+            grid.removeItem(self._actions_row)
+            grid.addWidget(self.lbl_count, 0, 0, 1, 2 if narrow else 1)
+            grid.addLayout(self._actions_row, 1 if narrow else 0, 0 if narrow else 1,
+                           1, 2 if narrow else 1)
             grid.setColumnStretch(0, 1)
             self._layout_mode = narrow
         self.btn_refresh.setText("Refresh" if self.width() < 550 else "Refresh boards")
@@ -1267,23 +1254,20 @@ class BoardSearchDialog(QDialog):
         if data.get("warning"):
             self.lbl_count.setToolTip(data["warning"])
 
-    def _update_frameworks(self, current, previous=None):
-        name = current.data(Qt.ItemDataRole.UserRole) if current.isValid() else ""
+    def _framework_for_board(self, name):
+        """Retain valid preferences and select only an unambiguous default."""
         info = self._search_index.boards.get(name, {}) if self._search_index else {}
-        self.framework_combo.clear()
         allowed = sorted(info.get("frameworks") or ([info["framework"]] if info.get("framework") else []))
-        self.framework_combo.addItems(allowed)
         unavailable = info.get("unavailable_frameworks")
         unavailable = unavailable if isinstance(unavailable, dict) else {}
-        reasons = [f"{framework} unavailable: {reason}" for framework, reason in sorted(unavailable.items())
-                   if isinstance(framework, str) and isinstance(reason, str) and reason.strip()]
-        self.framework_combo.setToolTip("\n".join([_FRAMEWORK_TOOLTIP, *reasons]))
+        allowed = [framework for framework in allowed if not unavailable.get(framework)]
         backend = self._get_backend()
         selected = backend._resolve_board_info(name).get("framework") if backend and hasattr(backend, "_resolve_board_info") and name else ""
         if selected in allowed:
-            self.framework_combo.setCurrentText(selected)
-        elif "arduino" in allowed:
-            self.framework_combo.setCurrentText("arduino")
+            return selected
+        if "arduino" in allowed:
+            return "arduino"
+        return allowed[0] if len(allowed) == 1 else ""
 
     def _update_chip_styles(self) -> None:
         pal = getattr(self, "_pal", {})
@@ -1361,7 +1345,6 @@ class BoardSearchDialog(QDialog):
         self._search_pending = True
         self._confirm_when_ready = False
         self.lbl_count.setText("Searching…")
-        self.framework_combo.setEnabled(False)
         self._update_select_button_state()
 
     def _dispatch_search(self, query=None):
@@ -1383,7 +1366,6 @@ class BoardSearchDialog(QDialog):
         suffix = f" [{self._active_category}]" if self._active_category != "ALL" else ""
         self.lbl_count.setText(f"Search failed: {error}" if error else
                                f"{len(matches)} of {len(self.all_boards)} boards{suffix}")
-        self.framework_combo.setEnabled(True)
         # Initial selection and arrow navigation still work with pinned headers.
         prior = self._pending_selection
         self._pending_selection = None
@@ -1395,8 +1377,6 @@ class BoardSearchDialog(QDialog):
         self._select_initial_board = False
         if select_name:
             self._select_item_by_name(select_name)
-        else:
-            self._update_frameworks(QModelIndex())
         self._update_select_button_state()
         if self._confirm_when_ready:
             self._confirm_when_ready = False
@@ -1417,8 +1397,9 @@ class BoardSearchDialog(QDialog):
         if curr.isValid() and (curr.flags() & Qt.ItemFlag.ItemIsSelectable):
             raw_name = curr.data(Qt.ItemDataRole.UserRole)
             self.result_board = raw_name
-            if backend and hasattr(backend, "set_board_framework") and self.framework_combo.currentText():
-                backend.set_board_framework(raw_name, self.framework_combo.currentText())
+            framework = self._framework_for_board(raw_name)
+            if backend and hasattr(backend, "set_board_framework") and framework:
+                backend.set_board_framework(raw_name, framework)
             if self.on_select_callback:
                 self.on_select_callback(self.result_board)
             else:

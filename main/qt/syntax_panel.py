@@ -312,7 +312,12 @@ class SyntaxPanel(QWidget):
 
     def set_diagnostics(self, diagnostics: List[Dict[str, Any]]) -> None:
         """Store diagnostics, update badges, and render with active filters."""
-        self._all_diagnostics = list(diagnostics or [])
+        # Disk checks and the signal bus can deliver the same result repeatedly.
+        # Keep row objects, selection and scroll position until content changes.
+        incoming = [dict(diag) for diag in (diagnostics or [])]
+        changed = incoming != self._all_diagnostics
+        if changed:
+            self._all_diagnostics = incoming
         err_count = sum(1 for d in self._all_diagnostics if "err" in str(d.get("severity", "")).lower())
         warn_count = sum(1 for d in self._all_diagnostics if "warn" in str(d.get("severity", "")).lower())
 
@@ -327,7 +332,8 @@ class SyntaxPanel(QWidget):
             self._status_kind = "error" if err_count else "warning" if warn_count else "info"
         self._refresh_status_color()
 
-        self._apply_filters()
+        if changed:
+            self._apply_filters()
 
     def _apply_filters(self) -> None:
         """Filter self._all_diagnostics according to severity and search query."""

@@ -172,21 +172,22 @@ class EditorBridgeAPI(QObject):
     def get_font_size(self) -> int:
         """Return configured font size for Monaco editor."""
         try:
-            from main.core.config import get_monitor_font_size
-            return int(get_monitor_font_size())
+            from main.core.config import get_editor_font_size
+            return int(get_editor_font_size())
         except Exception:
-            return 12
+            return 13
 
     @Slot(int, result="QVariant")
     def save_font_size(self, size: int) -> dict:
-        """Monaco reports font size change from Ctrl + +/- shortcuts."""
+        """Monaco reports font size change from Ctrl + +/- shortcuts or mouse wheel zoom."""
         try:
             sz = max(6, min(48, int(size)))
-            from main.core.config import set_monitor_font_size
-            set_monitor_font_size(sz)
+            self._current_font_size = sz
+            from main.core.config import set_editor_font_size
+            set_editor_font_size(sz)
             from main.qt.signals import signals as sig_bus
-            if hasattr(sig_bus, "font_size_changed"):
-                sig_bus.font_size_changed.emit(sz)
+            if hasattr(sig_bus, "editor_font_size_changed"):
+                sig_bus.editor_font_size_changed.emit(sz)
             return {"success": True, "size": sz}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -205,6 +206,15 @@ class EditorBridgeAPI(QObject):
         self._syntax_pending = (self._syntax_generation, file_path, content)
         self._start_syntax()
         return "null"  # Results arrive through the queued marker signal.
+
+    @Slot(str, result=bool)
+    def realtime_check_buffer(self, file_path: str) -> bool:
+        """Reuse the recovery snapshot instead of transferring the file twice."""
+        content = self._buffer_snapshots.get(str(Path(file_path).resolve()))
+        if content is None:
+            return False  # A clean/new model still needs its initial source text.
+        self.realtime_check_syntax(file_path, content)
+        return True
 
     def _start_syntax(self):
         if self._syntax_running or self._syntax_pending is None:
@@ -272,6 +282,16 @@ class EditorBridgeAPI(QObject):
             return
         if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}:
             self._buffer_snapshots[str(path)] = content
+            # Invalidate old diagnostics immediately, before the next debounce
+            # requests a parse. Otherwise stale markers can appear while typing.
+            self._syntax_generation += 1
+            self._syntax_pending = None
+
+    @Slot(str, str)
+    def update_editor_buffer(self, file_path: str, content: str):
+        """One WebChannel message per edit keeps dirty state and recovery current."""
+        self.mark_modified(file_path, True)
+        self.snapshot_buffer(file_path, content)
 
     @Slot(result="QVariant")
     def get_recovery_buffers(self):
@@ -595,10 +615,10 @@ class MonacoEditorPanel(QWidget):
             f"window.setPerformanceMode?.({json.dumps(self._performance.constrained)})"
         )
 
-        # Apply configured font size
+        # Apply configured editor font size
         try:
-            from main.core.config import get_monitor_font_size
-            self.set_font_size(get_monitor_font_size())
+            from main.core.config import get_editor_font_size
+            self.set_font_size(get_editor_font_size())
         except Exception:
             pass
 
@@ -715,12 +735,12 @@ class MonacoEditorPanel(QWidget):
         self._recovery_reload()
 
     def _step_font_size(self, delta: int) -> None:
-        """Step editor font size and notify JS and settings."""
+        """Step editor font size independently from monitor font size."""
         current = getattr(self, "_current_font_size", None)
         if current is None:
             try:
-                from main.core.config import get_monitor_font_size
-                current = int(get_monitor_font_size())
+                from main.core.config import get_editor_font_size
+                current = int(get_editor_font_size())
             except Exception:
                 current = 13
         if delta == 0:
@@ -729,11 +749,11 @@ class MonacoEditorPanel(QWidget):
             new_sz = max(6, min(48, current + delta))
         self._current_font_size = new_sz
         try:
-            from main.core.config import set_monitor_font_size
-            set_monitor_font_size(new_sz)
+            from main.core.config import set_editor_font_size
+            set_editor_font_size(new_sz)
             from main.qt.signals import signals as sig_bus
-            if hasattr(sig_bus, "font_size_changed"):
-                sig_bus.font_size_changed.emit(new_sz)
+            if hasattr(sig_bus, "editor_font_size_changed"):
+                sig_bus.editor_font_size_changed.emit(new_sz)
         except Exception:
             pass
         self.set_font_size(new_sz)
@@ -755,8 +775,10 @@ class MonacoEditorPanel(QWidget):
                     return True
         elif event.type() == QEvent.Type.Wheel:
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                delta = 1 if event.angleDelta().y() > 0 else -1
-                self._step_font_size(delta)
+                y_delta = event.angleDelta().y()
+                if y_delta != 0:
+                    delta = 1 if y_delta > 0 else -1
+                    self._step_font_size(delta)
                 return True
 
         return super().eventFilter(watched, event)
@@ -869,8 +891,8 @@ class MonacoEditorPanel(QWidget):
         sig_bus.editor_set_theme.connect(self.set_theme)
         sig_bus.syntax_errors.connect(self.set_markers)
         sig_bus.project_updated.connect(self._on_project_updated)
-        if hasattr(sig_bus, "font_size_changed"):
-            sig_bus.font_size_changed.connect(self.set_font_size)
+        if hasattr(sig_bus, "editor_font_size_changed"):
+            sig_bus.editor_font_size_changed.connect(self.set_font_size)
         if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.set_theme)
         if hasattr(sig_bus, "autosave_settings_changed"):

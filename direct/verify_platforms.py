@@ -3,6 +3,7 @@
 from __future__ import annotations
 import ast
 import importlib.util
+import io
 import os
 import shutil
 import subprocess
@@ -185,7 +186,22 @@ class PlatformChecks(unittest.TestCase):
         api._get_jobs = lambda: 2
         api._stop_requested = False
         api.emit = Mock()
-        process = SimpleNamespace(stdout=[], wait=lambda: 0, poll=lambda: 0)
+        process = SimpleNamespace(
+            stdout=io.StringIO("\n".join((
+                "Processing mcu_env (platform: atmelavr; board: uno; framework: arduino)",
+                "Dependency Graph",
+                "|-- Arduino @ 1.0.0",
+                "Building in release mode...",
+                "Connecting to programmer: .",
+                'Found programmer: Id = "AVR ISP"',
+                "warning: programmer firmware is outdated",
+                "Timed out waiting for packet header",
+                "Writing flash",
+                "================ [SUCCESS] Took 1.20 seconds ================",
+            )) + "\n"),
+            wait=lambda: 0,
+            poll=lambda: 0,
+        )
         with patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["/fixture/.venv-linux/bin/python", "-m", "platformio"]), \
@@ -198,6 +214,65 @@ class PlatformChecks(unittest.TestCase):
         self.assertNotIn("creationflags", kwargs)
         self.assertNotIn("startupinfo", kwargs)
         self.assertEqual(launch.call_count, 1)
+        records = [call.args[1] for call in api.emit.call_args_list
+                   if call.args and call.args[0] == "console:log"]
+        shown_text = "\n".join(record["text"] for record in records)
+        for hidden in ("Dependency Graph", "Arduino @ 1.0.0", "Building in release mode"):
+            self.assertNotIn(hidden, shown_text)
+        for visible in ("Connecting to programmer", "Found programmer", "Writing flash", "[SUCCESS] Took 1.20 seconds"):
+            self.assertIn(visible, shown_text)
+        warning = next(record for record in records if "programmer firmware is outdated" in record["text"])
+        self.assertEqual(warning["tag"], "warning")
+        timeout = next(record for record in records if "Timed out waiting" in record["text"])
+        self.assertEqual(timeout["tag"], "error")
+        phases = [call.args[1] for call in api.emit.call_args_list
+                  if call.args and call.args[0] == "operation:phase"]
+        self.assertTrue(any(phase.get("can_stop") for phase in phases))
+        self.assertTrue(any(phase.get("phase") == "flash" and not phase.get("can_stop")
+                            for phase in phases))
+
+    def test_ubuntu_native_upload_can_cancel_before_flash_write(self):
+        from main import web_bridge
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.current_port = api._active_port_label = "/dev/ttyACM0"
+        api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
+        api._resolve_board_info = lambda name=None: api._active_board_info
+        api.sketch_dir_path = self.root
+        api._effective_cache_root = lambda path: self.root
+        api._generate_platformio_ini = api._stop_serial_monitor = api._start_serial_monitor = Mock()
+        api._unmap_unc_after_build = Mock()
+        api._get_jobs = lambda: 2
+        api._stop_requested = False
+        api.emit = Mock()
+
+        class StopDuringConnect:
+            def __init__(self):
+                self.calls = 0
+
+            def readline(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return "Connecting to programmer...\n"
+                api._stop_requested = True
+                return ""
+
+            def close(self):
+                pass
+
+        process = SimpleNamespace(stdout=StopDuringConnect(), returncode=None)
+        process.poll = lambda: process.returncode
+        process.wait = lambda: process.returncode or 0
+        api._kill_active_process_tree = Mock(side_effect=lambda: setattr(process, "returncode", -15))
+        with patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(web_bridge, "port_occupied_owner", return_value=None), \
+                patch.object(web_bridge, "find_pio_executable", return_value=["/fixture/.venv-linux/bin/python", "-m", "platformio"]), \
+                patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
+                patch.object(web_bridge.subprocess, "Popen", return_value=process):
+            api._native_upload_worker(can_skip=True)
+        api._kill_active_process_tree.assert_called_once()
+        emitted = [call.args[1] for call in api.emit.call_args_list if call.args]
+        self.assertTrue(any(item.get("title") == "Upload cancelled" for item in emitted))
+        self.assertFalse(any(item.get("title") == "Upload completed" for item in emitted))
 
     def test_launchers_and_ubuntu_dependencies_are_separate(self):
         requirements = (ROOT / "direct/ubuntu/requirements.txt").read_text(encoding="utf-8")

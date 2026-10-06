@@ -93,7 +93,7 @@ try:
     from main.qt.signals import signals as _global_signals
     from main.qt.main_window import MCUMainWindow
     from main.qt.project_dialog import ProjectDialog
-    from main.qt.theme import register_fonts, build_stylesheet
+    from main.qt.theme import register_fonts, build_stylesheet, install_checkbox_focus_style
     _PYSIDE6_AVAILABLE = True
 except ImportError:
     QTimer = None  # type: ignore
@@ -105,6 +105,7 @@ except ImportError:
     ProjectDialog = None  # type: ignore
     register_fonts = None  # type: ignore
     build_stylesheet = None  # type: ignore
+    install_checkbox_focus_style = None  # type: ignore
     _PYSIDE6_AVAILABLE = False
 
 
@@ -216,6 +217,7 @@ def main() -> int:
         active_theme = get_theme_mode()
         Theme.apply_theme(active_theme)
         register_fonts()
+        install_checkbox_focus_style(app)
         if QFont:
             app_font = QFont("Montserrat", 10)
             app_font.setStyleHint(QFont.StyleHint.SansSerif)

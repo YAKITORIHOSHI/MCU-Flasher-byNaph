@@ -89,8 +89,8 @@ class RuntimeChecks(unittest.TestCase):
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 4, 8), 2)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 8), 4)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 0.4), 1)
-            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 8, 8, physical_cpus=4), 4)
-            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 12, 8, physical_cpus=6), 6)
+            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 8, 8, physical_cpus=4), 2)
+            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 12, 8, physical_cpus=6), 4)
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         with patch.object(web_bridge, "load_gui_config", return_value={"compiler_jobs": 99}), patch.object(web_bridge, "get_optimal_compiler_jobs", return_value=2):
             self.assertEqual(api._get_jobs(), 2)
@@ -563,7 +563,7 @@ class PreviewBackend:
 def qt_smoke(app, render_dir=None):
     from PySide6.QtCore import QTimer, Qt, QRect
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QWidget
+    from PySide6.QtWidgets import QWidget, QComboBox, QLabel
     from main.core import config, board_catalog, file_utils
     from main.qt.main_window import MCUMainWindow
     from main.qt.board_dialog import BoardSearchDialog
@@ -739,7 +739,8 @@ def qt_smoke(app, render_dir=None):
                     break
                 QTest.qWait(10)
             assert not dialog._search_pending, "Board search worker did not finish"
-            assert dialog.framework_combo.currentText() == "arduino"
+            assert not dialog.findChildren(QComboBox), "Board picker must not contain a framework dropdown"
+            assert not any(label.text() == "Framework" for label in dialog.findChildren(QLabel))
             if render_dir:
                 dialog.show()
                 app.processEvents()

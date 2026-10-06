@@ -932,16 +932,14 @@ class OfflineChecks(unittest.TestCase):
         for name, method in metadata.items():
             self.assertIs(ZIPArchiver.__dict__[name], method)
 
-    def test_workspace_bootstrap_button_launches_separate_sanitized_process(self):
+    def test_workspace_download_manager_button_launches_browser(self):
         from main.qt import download_dialog
-        with patch.object(download_dialog, "sys", SimpleNamespace(platform="win32")), \
-                patch.object(download_dialog.subprocess, "Popen") as launch, \
-                patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1", "PIP_NO_INDEX": "1"}):
+        with patch.object(download_dialog, "_find_python_executable", return_value=Path("C:/test/pythonw.exe")), \
+                patch.object(download_dialog.subprocess, "Popen") as launch:
             self.assertTrue(download_dialog.launch_download_manager())
         command = launch.call_args.args[0]
-        self.assertTrue(command[-2].endswith("direct\\windows\\run.vbs") or command[-2].endswith("direct/windows/run.vbs"))
-        self.assertEqual(command[-1], "--repair")
-        self.assertNotIn("PIP_NO_INDEX", launch.call_args.kwargs["env"])
+        self.assertTrue(str(command[1]).endswith("arduino_lib_req.py"))
+        self.assertEqual(launch.call_args.kwargs["env"]["MCU_PREF_DIR"], str(download_dialog.ROOT))
 
     def test_catalog_reads_bootstrap_snapshot_without_subprocess(self):
         from main.core import board_catalog

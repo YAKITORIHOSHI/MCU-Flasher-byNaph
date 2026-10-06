@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,93 @@ class PerformanceChecks(unittest.TestCase):
         self.config_patch = patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}})
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)
+
+    def test_editor_resource_protocol_and_debounce(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js is required for the isolated Monaco protocol fixture")
+        result = subprocess.run([node, str(ROOT / "direct/verify_editor_resources.js")],
+                                cwd=ROOT, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_repeated_diagnostics_preserve_rows_selection_and_filters(self):
+        from main.qt.syntax_panel import SyntaxPanel
+        panel = SyntaxPanel()
+        panel._bg_timer.stop()
+        try:
+            panel.resize(700, 300)
+            panel.show()
+            diagnostics = [dict(file="fixture.cpp", line=i+1, severity="warning", message=f"Issue {i}")
+                           for i in range(80)]
+            panel.set_diagnostics(diagnostics)
+            panel._table.setCurrentCell(40, 3)
+            APP.processEvents()
+            item = panel._table.item(40, 3)
+            scroll = panel._table.verticalScrollBar().value()
+            with patch.object(panel, "_render_rows", wraps=panel._render_rows) as render:
+                for _ in range(20):
+                    panel.set_diagnostics(diagnostics)
+                render.assert_not_called()
+            self.assertIs(panel._table.item(40, 3), item)
+            self.assertEqual(panel._table.currentRow(), 40)
+            self.assertEqual(panel._table.verticalScrollBar().value(), scroll)
+            panel._filter_combo.setCurrentIndex(1)
+            self.assertEqual(panel._table.rowCount(), 0)
+            diagnostics[0]["severity"] = "error"
+            panel.set_diagnostics(diagnostics)
+            self.assertEqual(panel._table.rowCount(), 1)
+            self.assertIn("Error", panel._table.item(0, 2).text())
+            panel.clear()
+            panel.set_diagnostics(diagnostics)
+            self.assertEqual(panel._table.rowCount(), 1)
+        finally:
+            panel.close()
+            panel.deleteLater()
+
+    def test_editor_buffer_reuse_preserves_recovery_and_discards_stale_parse(self):
+        from main.qt.editor_panel import EditorBridgeAPI
+        from main.qt.signals import signals
+        from src import syntax_checker
+        project = ROOT / "temp/scratch/editor-resource-fixture"
+        path = str(project / "sample.ino")
+        backend = SimpleNamespace(active_file_path=path, sketch_dir_path=project, modified_files={})
+        backend.mark_modified = lambda name, dirty: backend.modified_files.update({name: dirty})
+        bridge = EditorBridgeAPI(backend)
+        entered, release = threading.Event(), threading.Event()
+        received = []
+        def analyze(content, source):
+            if content == "old revision":
+                entered.set()
+                release.wait(2)
+            return [dict(file=str(source), line=1, message=content)]
+        signals.syntax_errors.connect(received.append)
+        try:
+            self.assertFalse(bridge.realtime_check_buffer(path))
+            with patch.object(syntax_checker, "analyze_cpp_syntax", side_effect=analyze):
+                bridge.update_editor_buffer(path, "old revision")
+                self.assertTrue(bridge.realtime_check_buffer(path))
+                self.assertTrue(entered.wait(1))
+                # The next edit arrives before the debounce requests its parse.
+                bridge.update_editor_buffer(path, "latest Unicode \U0001f600 revision")
+                release.set()
+                wait_until(lambda: not bridge._syntax_running)
+                self.assertEqual(received, [])
+                bridge.begin_buffer_recovery()
+                self.assertEqual(bridge.get_recovery_buffers()[path], "latest Unicode \U0001f600 revision")
+                bridge.recovery_complete()
+                self.assertTrue(bridge.realtime_check_buffer(path))
+                wait_until(lambda: not bridge._syntax_running)
+                self.assertEqual(received[-1][0]["message"], "latest Unicode \U0001f600 revision")
+                bridge.update_editor_buffer(path, "")
+                self.assertTrue(bridge.realtime_check_buffer(path))
+                wait_until(lambda: not bridge._syntax_running)
+                self.assertEqual(received[-1][0]["message"], "")
+            bridge.mark_modified(path, False)
+            self.assertFalse(bridge.realtime_check_buffer(path))
+        finally:
+            release.set()
+            signals.syntax_errors.disconnect(received.append)
+            bridge.deleteLater()
 
     def test_build_queue_retains_diagnostics_and_event_order(self):
         from main.qt.log_buffer import DiagnosticLogBuffer, LogBuffer

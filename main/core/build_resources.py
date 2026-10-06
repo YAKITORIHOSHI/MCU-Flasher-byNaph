@@ -27,8 +27,8 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     Compiler processes are memory-heavy, so CPU count alone is not a safe
     multiplier. Reserve two logical CPUs on systems with 4+ logical CPUs
     for the editor, terminal, serial monitor and OS, then cap workers by
-    currently available RAM (~300-350 MB per compiler job).
-    When ample RAM (>=4GB free) is available, scale workers up to full CPU capacity.
+    currently available RAM. Four/six-core CPUs also reserve two physical
+    cores' worth of compiler concurrency, including systems with SMT.
     """
     from src.modules.runtime_resources import logical_cpu_count, physical_cpu_count
     cpus = max(1, int(total_cpus or logical_cpu_count() or 1))
@@ -39,7 +39,8 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     if physical_cpus:
         # SMT siblings share execution resources. Small physical CPUs need
         # headroom even when they advertise 8 or 12 logical threads.
-        cpu_budget = min(cpu_budget, max(1, physical_cpus))
+        physical_budget = physical_cpus - 2 if physical_cpus <= 6 else physical_cpus
+        cpu_budget = min(cpu_budget, max(1, physical_budget))
     if memory_gb is not None:
         if memory_gb < 0.5:
             memory_budget = 1

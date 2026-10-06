@@ -17,7 +17,7 @@ def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
             return f"The board definition has no valid {key}. Install the correct platform package and select the board again."
     framework = str(info.get("framework") or "").strip()
     if not framework or not all(_IDENTIFIER.fullmatch(f.strip()) for f in framework.split(",")):
-        return "Select a framework supported by this board in the board picker. Arduino .ino projects require Arduino."
+        return "Configure a framework supported by this board. Arduino .ino projects require Arduino."
     selected = {f.strip().lower() for f in framework.split(",")}
     unavailable = info.get("unavailable_frameworks")
     if isinstance(unavailable, Mapping):

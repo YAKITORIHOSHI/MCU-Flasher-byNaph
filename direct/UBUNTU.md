@@ -91,6 +91,13 @@ guaranteed compatible.
 Windows retains its existing optimized ESP32, ESP8266 and AVR upload paths;
 other platforms use native PlatformIO upload. A changed source or framework
 always invalidates firmware reuse, even if **Skip Compile** was checked.
+Native upload output shares the same bounded reader and routine-scan filter as
+Windows uploads. Dependency graphs and build-scan chatter stay hidden while
+programmer messages, warnings, errors and PlatformIO's final result remain
+visible. Quiet upload phases update one status line instead of
+repeatedly filling the console. Stop remains available during scans and
+connection attempts, then disables when programmer output first indicates an
+erase/write. A failed write is not replayed or followed by an automatic reset.
 
 ## Serial access
 
@@ -125,7 +132,12 @@ Devices with 4 or 6 physical cores, or at most 6 logical CPU threads,
 automatically use shorter terminal
 scrollback, less editor animation, coalesced rendering and less frequent
 background syntax checks. Compilation reserves two CPU threads and respects
-available RAM, including saved manual job counts. Fewer than four physical CPU
+available RAM, including saved manual job counts. On four/six physical cores,
+compiler concurrency is capped at two/four jobs even with SMT; low available
+RAM or mechanical storage can reduce it further. The shared editor sends each
+dirty recovery snapshot once, reuses it for syntax checks, and debounces typing
+checks for 600 ms on constrained PCs. Unchanged diagnostic tables retain their
+rows and reading state. Fewer than four physical CPU
 cores prevents startup with a compatibility notice. If physical topology cannot
 be reported, the check falls back to logical threads. Logical CPU detection failure
 also stops startup. A desktop Ubuntu session uses a Tk notice when available,
