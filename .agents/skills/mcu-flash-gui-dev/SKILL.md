@@ -46,7 +46,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `main_window.py`: Root layout with resizable `QSplitter` panes and dockable bottom tabs.
      - `toolbar.py`: Action controls (Compile, Upload, Clean, Reset, Project, Settings), target board combobox, COM port selector, and baud rate selector.
      - `editor_panel.py`: Embedded offline Monaco Code Editor host (`QWebEngineView` + `QWebChannel`).
-     - `console_panel.py`: Bounded semantic build Activity/Details, retained-log copy and autoscroll.
+     - `console_panel.py`: Original build journal with bounded streaming, retained-log copy and autoscroll.
      - `serial_panel.py`: High-performance real-time serial monitor with line ending selector, baud rate dropdown, timestamp toggle, and quick send bar.
      - `terminal_panel.py`: Multi-session integrated terminal panel supporting PowerShell (`pwsh`) and CMD tabs.
      - `posix_terminal_panel.py`: Native Linux Bash PTYs and optional OpenCode assistant.
@@ -131,9 +131,9 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - Pass xterm capability replies, Unicode, alternate screens and bracketed paste intact. Acknowledge output after parsing; bound outstanding output and history. Preserve the user's CLI PATH and remove Python host environment overrides from shell environments.
    - Coalesce resize/font/theme controls in the Qt panel's bounded worker queue. Only explicit user actions create or restart shells; never replay commands after failure.
    - Build/serial displays bound both pending entries and characters before crossing Qt's event queue. Limit render batches and document/history sizes, including streams without newlines. Show truncation/backlog notices; Clear and ANSI clear must clear retained display history too.
-   - Build Console defaults to Activity. `main/core/build_output.py` condenses only exact consecutive compilation records and recognized decorative frames; diagnostic/context/unknown text remains intact. Details and header Copy use retained build events, including warnings hidden by a display filter. Selection copy uses visible selected text. Respect saved fonts/timestamps and move clear-on-action preferences into Options on narrow headers.
-   - Build delivery queues evict ordinary chatter before diagnostics while keeping both character/entry bounds and visible omission notices. Coalesce only valid adjacent progress patterns, preserve diagnostic barriers, cache semantic formats and update retained sizes incrementally. Bounded history expires FIFO. Strip fragmented terminal controls with `main/core/console_text.py`; Clear resets pending escape state and both views. Never replay build or upload operations.
-   - Recognize PlatformIO status/banner records conservatively in `web_bridge.py`; preserve compiler notes, source/carets, unknown custom-builder output and SCons failures. Test parser routing without importing the backend or executing builds using `direct/verify_build_log_routing.py`. Verify Activity/Details/diagnostic projection with `direct/verify_build_output.py`, Qt rendering/copy/follow with `direct/verify_build_console.py`, and queue/resource limits with `direct/verify_performance.py`.
+   - Preserve the original Build Console journal: section dividers, worker banner, each compiling filename and boxed timing breakdown. Do not replace compilation files with a count/latest-file summary or hide dividers behind another view. Use the same saved monospace point size for headings, frames and values to keep columns aligned. Header Copy includes retained events hidden by warning filters; selection copy uses visible selected text. Respect timestamps and move clear-on-action preferences into Options on narrow headers.
+   - Build delivery queues evict ordinary chatter before diagnostics while keeping both character/entry bounds and visible omission notices. Coalesce only valid adjacent declared progress patterns, never compilation file events; preserve diagnostic barriers, cache semantic formats and update retained sizes incrementally. Use one bounded history, expiring FIFO. Strip fragmented terminal controls with `main/core/console_text.py`; Clear resets pending escape state and history. Never replay build or upload operations.
+   - Recognize PlatformIO status/banner records conservatively in `web_bridge.py`; suppress only exact routine boilerplate outside diagnostic context. Preserve every compiler file, compiler notes, source/carets, unknown custom-builder output and SCons failures. Test parser routing without importing the backend or executing builds using `direct/verify_build_log_routing.py`, Qt rendering/copy/follow with `direct/verify_build_console.py`, and queue/resource limits with `direct/verify_performance.py`.
    - Use queued QObject signals for syntax completion, not `QTimer.singleShot` callbacks created inside Python worker threads. Keep one latest pending editor revision and discard stale results. Use one parser on constrained PCs, two otherwise, with bounded revision/diagnostic caches.
 
 5. **Runtime Guards & Crash Detection**
@@ -397,7 +397,6 @@ Use the app's private runtime. On Windows:
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 4
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
-& src/_python/python.exe -B direct/verify_build_output.py
 & src/_python/python.exe -B direct/verify_build_log_routing.py
 & src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py

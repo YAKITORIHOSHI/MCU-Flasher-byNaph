@@ -130,7 +130,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Linking .pio/build/native/firmware.elf",
         )
         text = "\n".join(item["text"] for item in records)
-        self.assertEqual(text.count("Compiling Main.cpp.o..."), 1)
+        self.assertEqual(text.count("Compiling Main.cpp.o..."), 2)
         self.assertIn("Bootloader.bin", text)
         self.assertIn("Compiling Linking.cpp.o...", text)
         self.assertIn("Linking...", text)
@@ -144,6 +144,11 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Looking for FastAccelStepper library",
             "If you like PlatformIO, please star it on GitHub",
             "Check our library registry",
+            "CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32dev.html",
+            "PLATFORM: Espressif 32 (6.12.0) > Espressif ESP32 Dev Module",
+            "HARDWARE: ESP32 240MHz, 320KB RAM, 4MB Flash",
+            "PACKAGES:",
+            "DEBUG: Current (esp-prog) External (cmsis-dap, esp-prog)",
             "RAM: [==       ] 20.0% (used 20 bytes from 100 bytes)",
             "Flash: [===      ] 30.0% (used 30 bytes from 100 bytes)",
             "================= [SUCCESS] Took 1.20 seconds =================",
@@ -162,12 +167,119 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Retrieving maximum program size failed for firmware.elf",
             "Compiling something();",
             "Linking callback();",
-            "Building in release mode",
-            "Building in debug mode...",
         )
         records = self.route(*lines)
         self.assertEqual([item["text"] for item in records], list(lines))
         self.assertTrue(all(item["tag"] == "dim" for item in records))
+
+    def test_routine_platformio_chatter_is_hidden_without_hiding_files(self):
+        chatter = (
+            "Verbose mode can be enabled via `-v, --verbose` option",
+            " - framework-arduinoespressif32 @ 3.20017.241212+sha.dcc1105b ",
+            " - tool-esptoolpy @ 2.41100.0 (4.11.0) ",
+            " - toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch5",
+            "LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf",
+            "LDF Modes: Finder ~ chain, Compatibility ~ soft",
+            "Found 47 compatible libraries",
+            "Scanning dependencies...",
+            "No dependencies",
+            'Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"',
+            "esptool.py v4.11.0",
+            "Creating esp32 image...",
+            "Merged 1 ELF section",
+            "Successfully created esp32 image.",
+        )
+        records = self.route(*chatter, "Compiling .pio/build/native/src/Main.cpp.o")
+        self.assertEqual(records, [{
+            "text": "  ⚙ Compiling Main.cpp.o...", "tag": "info", "newline": True,
+        }])
+
+    def test_boilerplate_matching_is_narrow_and_diagnostic_context_wins(self):
+        similar_custom_lines = (
+            "Verbose mode can be enabled by editing the custom build script",
+            " - custom-runtime @ 1.0.0",
+            "LDF Modes: custom dependency search failed",
+            "Found 47 compatible libraries, but no target match",
+            "No dependencies could be loaded from the custom manifest",
+            "esptool.py v4.11.0: custom builder output",
+            "Creating esp32 image failed",
+            "Merged 1 ELF section with custom metadata",
+            "Successfully created esp32 image. Custom checksum: 123",
+            "Configuration: custom builder could not load its manifest",
+            "Hardware: custom builder has no configured output device",
+            "RAM: custom builder memory allocation failed",
+        )
+        records = self.route(*similar_custom_lines)
+        self.assertEqual([record["text"] for record in records], list(similar_custom_lines))
+
+        records = self.route(
+            "src/Main.cpp:2: error: invalid custom script",
+            "No dependencies",
+            "Merged 1 ELF section",
+            "LDF Modes: Finder ~ chain, Compatibility ~ soft",
+            "RAM: [==       ] 20.0% (used 20 bytes from 100 bytes)",
+            "Compiling .pio/build/native/src/Main.cpp.o",
+            "No dependencies",
+        )
+        text = "\n".join(record["text"] for record in records)
+        self.assertEqual(text.count("No dependencies"), 1)
+        self.assertIn("Merged 1 ELF section", text)
+        self.assertIn("LDF Modes: Finder ~ chain, Compatibility ~ soft", text)
+        self.assertIn("RAM: [==       ] 20.0% (used 20 bytes from 100 bytes)", text)
+        self.assertEqual(records[-1]["text"], "  ⚙ Compiling Main.cpp.o...")
+
+    def test_phase_dividers_and_each_compiling_file_are_retained(self):
+        records = self.route(
+            "Processing native (platform: native)",
+            "Library Manager: MyLibrary@1.0.0 has been installed!",
+            "Building in release mode",
+            "Compiling .pio/build/native/src/Main.cpp.o",
+            "Compiling .pio/build/native/lib123/MyLibrary/Main.cpp.o",
+            "Generating partitions .pio/build/native/partitions.bin",
+            "Linking .pio/build/native/firmware.elf",
+        )
+        texts = [record["text"] for record in records]
+        self.assertEqual(sum("─" * 10 in text for text in texts), 2)
+        self.assertIn("  ⚙ Building in release mode...", texts)
+        self.assertEqual(texts.count("  ⚙ Compiling Main.cpp.o..."), 2)
+        self.assertIn("  ⚡ Building partition table (partitions.bin)...", texts)
+        self.assertEqual(texts[-1], "  🔗 Linking...")
+
+    def test_generic_severity_wins_over_routine_and_promotion_filters(self):
+        lines = (
+            " - tool-custom @ 1.2.3 (warning: missing version metadata)",
+            " - tool-custom @ 1.2.3 (error: failed version validation)",
+            "Looking for FastAccelStepper library: error: missing required headers",
+            "Check our library registry: warning: dependency metadata is incomplete",
+        )
+        records = self.route(*lines)
+        self.assertEqual([record["tag"] for record in records], ["warning", "error", "error", "warning"])
+        for line, record in zip(lines, records):
+            self.assertIn(line, record["text"])
+
+    def test_generic_severity_wins_over_metadata_and_summary_filters(self):
+        lines = (
+            "Hardware: 240MHz warning: custom failure",
+            "Hardware: ESP32 240MHz, 320KB RAM error: custom validation failed",
+            "========= [FAILED] Took 1.20 seconds error: unresolved symbols =========",
+            "========= [SUCCESS] Took 1.20 seconds warning: output metadata incomplete =========",
+        )
+        records = self.route(*lines)
+        self.assertEqual([record["tag"] for record in records], ["warning", "error", "error", "warning"])
+        for line, record in zip(lines, records):
+            self.assertIn(line, record["text"])
+
+    def test_partition_artifacts_and_build_action_paths_are_recognized(self):
+        records = self.route(
+            r"Generating partitions C:\Project with spaces\.pio\build\native\custom.bin",
+            'Building ".pio/build/native/Bootloader.bin" with action: bootloader_action',
+            "Generating partitions failed to create table partitions.bin",
+        )
+        self.assertEqual([record["text"] for record in records], [
+            "  ⚡ Building partition table (custom.bin)...",
+            "  ⚡ Building bootloader image (Bootloader.bin)...",
+            "Generating partitions failed to create table partitions.bin",
+        ])
 
     def test_artifact_records_accept_native_and_quoted_paths_with_spaces(self):
         records = self.route(

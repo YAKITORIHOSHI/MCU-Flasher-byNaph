@@ -3681,7 +3681,7 @@ class MCUWebBackendAPI:
             # Match complete PlatformIO records, never words in diagnostic or
             # source excerpts (for example, a function named "building").
             _build_progress_pattern = re.compile(
-                r"^(?P<action>Compiling|Archiving|Linking|Building|Checking size|"
+                r"^(?P<action>Compiling|Archiving|Linking|Building|Generating partitions|Checking size|"
                 r"Retrieving maximum program size)\s+(?P<target>.+)$",
                 re.IGNORECASE,
             )
@@ -3690,11 +3690,17 @@ class MCUWebBackendAPI:
                 "archiving": (".a", ".lib"),
                 "linking": (".elf", ".axf", ".out", ".exe"),
                 "building": (".bin", ".hex", ".uf2", ".elf"),
+                "generating partitions": (".bin",),
                 "checking size": (".elf", ".axf", ".out", ".exe"),
                 "retrieving maximum program size": (".elf", ".axf", ".out", ".exe"),
             }
             _build_metadata_pattern = re.compile(
-                r"^(?:Platform|Hardware|Packages?|Embedded|Configuration|SDK|Debug|RAM|Flash)\s*:",
+                r"(?:Configuration:\s+https?://docs\.platformio\.org/(?:page/)?boards/\S+|"
+                r"Platform:\s+.+\([^)]+\)\s*>\s*\S.+|"
+                r"Hardware:\s+.*\d+(?:[.,]\d+)?MHz(?:\s*[, ].*)?|Packages?:\s*|"
+                r"Debug:\s+Current\s+\([^)]+\)(?:\s+.*)?|"
+                r"(?:RAM|Flash):\s*\[[=\s]*\]\s*[\d.]+%\s+"
+                r"\(used\s+\d+\s+bytes\s+from\s+\d+\s+bytes\))",
                 re.IGNORECASE,
             )
             _build_summary_pattern = re.compile(
@@ -3706,6 +3712,23 @@ class MCUWebBackendAPI:
                 r"\*\s+(?:CLI|WEB)\s*>|If you like PlatformIO|Star it on GitHub|"
                 r"Follow us on LinkedIn|Try PlatformIO IDE|Please wait while upgrading|"
                 r"Successfully upgraded)(?=\W|$)",
+                re.IGNORECASE,
+            )
+            # Keep the familiar phase/file log concise. These are complete,
+            # routine PlatformIO records, never substring matches in source,
+            # diagnostic context or custom builder output.
+            _build_routine_pattern = re.compile(
+                r"(?:Verbose mode can be enabled via `-v, --verbose` option|"
+                r"[ \t]*-[ \t]+(?:framework|toolchain|tool|platform)-[\w.+-]+[ \t]+@[ \t]+"
+                r"\S+(?:[ \t]+\([^()\r\n]+\))?[ \t]*|"
+                r"LDF: Library Dependency Finder -> https://bit\.ly/configure-pio-ldf|"
+                r"LDF Modes: Finder ~ [\w+]+, Compatibility ~ [\w+]+|"
+                r"Found \d+ compatible libraries|Scanning dependencies\.{3}|No dependencies|"
+                r'Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"|'
+                r"esptool(?:\.py)? v\d+(?:\.\d+)+(?:-[\w.-]+)?|"
+                r"Creating (?:esp32[\w-]*|esp8266) image\.{3}|"
+                r"Merged \d+ ELF sections?|"
+                r"Successfully created (?:esp32[\w-]*|esp8266) image\.?)",
                 re.IGNORECASE,
             )
 
@@ -3837,13 +3860,17 @@ class MCUWebBackendAPI:
                     or bool(re.search(r'(?:^|[\\/])(?:[\w.+-]*-)?ld(?:\.exe)?:', low))
                 )
                 is_gcc_diagnostic = not is_source_excerpt and bool(re.search(r':\d+(?::\d+)?:\s*(fatal\s+error|error|warning|note)\s*:', low))
+                is_generic_error = "error:" in low and "werror" not in low
+                is_generic_warning = "warning:" in low
                 is_scons_wrapper = bool(re.search(r'^\*\*\*\s+\[', line_clean))
                 build_progress = _match_build_progress(line_clean)
                 is_scons_progress = build_progress is not None
                 is_build_mode = bool(re.fullmatch(r'Building in (?:release|debug) mode(?:\.{3})?', line_clean, re.IGNORECASE))
-                is_build_metadata = bool(_build_metadata_pattern.match(line_clean))
+                is_build_metadata = bool(_build_metadata_pattern.fullmatch(line_clean))
                 is_build_summary = bool(_build_summary_pattern.match(line_clean))
                 is_build_decoration = bool(re.fullmatch(r'[-=*]{3,}\s*', line_clean)) or line_clean == "*"
+                if not is_scons_progress:
+                    _last_progress_text[0] = None
 
                 is_context_header = (
                     "in function" in low or
@@ -3856,7 +3883,7 @@ class MCUWebBackendAPI:
                     low.startswith("in file included")
                 )
 
-                if is_scons_progress or is_build_mode or is_build_metadata or is_build_summary or re.match(r'^(?:tool|platform|library) manager:.*has been installed!?$', low):
+                if is_scons_progress or is_build_mode or is_build_summary or re.match(r'^(?:tool|platform|library) manager:.*has been installed!?$', low):
                     _in_error_block[0] = False
 
                 if is_scons_progress or is_build_mode:
@@ -3883,8 +3910,10 @@ class MCUWebBackendAPI:
 
                 # Suppress only known banners outside diagnostic context. A
                 # source string or custom builder status remains useful output.
-                if not (is_linker_error or is_gcc_diagnostic or is_context_header or _in_error_block[0]) and (
+                if not (is_linker_error or is_gcc_diagnostic or is_context_header or _in_error_block[0]
+                        or is_generic_error or is_generic_warning) and (
                     _build_promotion_pattern.match(line_clean) or is_build_decoration
+                    or _build_routine_pattern.fullmatch(line_clean)
                 ):
                     continue
 
@@ -3907,14 +3936,18 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": f"{prefix}{line_clean}", "tag": _error_block_type[0], "newline": True})
                     if "compilation terminated" in low:
                         _in_error_block[0] = False
-                elif is_build_metadata or is_build_summary:
+                elif (is_build_metadata or is_build_summary) and not (is_generic_error or is_generic_warning):
                     pass  # Standard metadata/outcome is summarized after exit.
                 elif is_build_mode:
-                    self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
-                elif "error:" in low and "werror" not in low:
+                    _ensure_post_deps_divider()
+                    self.emit("console:log", {
+                        "text": f"  ⚙ {line_clean}" + ("" if line_clean.endswith("...") else "..."),
+                        "tag": "info", "newline": True,
+                    })
+                elif is_generic_error:
                     _ensure_post_deps_divider()
                     self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
-                elif "warning:" in low:
+                elif is_generic_warning:
                     _ensure_post_deps_divider()
                     self.emit("console:log", {"text": f"  ⚠ {line_clean}", "tag": "warning", "newline": True})
                 elif re.match(r'^Processing\s+\S+\s*\(', line_clean, re.IGNORECASE):
@@ -4009,12 +4042,12 @@ class MCUWebBackendAPI:
                         _prog_tag = "info"
                     elif progress_action == "archiving":
                         _prog_text, _prog_tag = "  📦 Archiving...", "dim"
-                    elif progress_action == "building":
+                    elif progress_action in ("building", "generating partitions"):
                         target_name = progress_target.rsplit("/", 1)[-1]
                         if "bootloader" in target_name.lower():
                             _prog_text = f"  ⚡ Building bootloader image ({target_name})..."
                             _prog_tag = "info"
-                        elif "partition" in target_name.lower():
+                        elif progress_action == "generating partitions" or "partition" in target_name.lower():
                             _prog_text = f"  ⚡ Building partition table ({target_name})..."
                             _prog_tag = "info"
                         elif "firmware" in target_name.lower() or target_name.endswith((".bin", ".hex")):
@@ -4024,7 +4057,7 @@ class MCUWebBackendAPI:
                             _prog_text = f"  ⚙ Building {target_name}..."
                             _prog_tag = "info"
 
-                    if _prog_text and _prog_text != _last_progress_text[0]:
+                    if _prog_text and (progress_action == "compiling" or _prog_text != _last_progress_text[0]):
                         _ensure_post_deps_divider()
                         _last_progress_text[0] = _prog_text
                         self.emit("console:log", {"text": _prog_text, "tag": _prog_tag, "newline": True})

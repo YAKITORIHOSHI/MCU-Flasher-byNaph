@@ -309,16 +309,17 @@ readable semantic colors against their actual surfaces in the active theme.
 Retained output is recolored when the theme changes. Terminals also enforce a
 4.5:1 minimum contrast for CLI truecolor and indexed colors. Each workspace
 propagates a theme change once to each panel, including a detached editor.
-Build Console opens in Activity: phase headings have clear spacing, decorative
-ASCII frames are removed, and consecutive compilation units share one live
-count/latest-file row. Warnings, errors, source excerpts and unfamiliar output
-remain visible. Details shows individual retained build messages; Copy includes
-those messages even from Activity or when warnings are hidden. Selection copy
-copies the selected visible text. Saved content fonts and timestamp preferences
-apply to both views. On narrow windows, Options holds the clear-on-action
-preferences so Details, Auto-scroll, Copy and Clear remain reachable.
+Build Console keeps the original journal: section dividers, the compiler worker
+banner, each individual compiling filename, and the boxed timing breakdown.
+All rows use the saved monospace content size so frames and columns stay aligned.
+Warnings, errors, source excerpts and unfamiliar build messages remain visible;
+routine PlatformIO promotional/status boilerplate stays out of the journal.
+Copy includes all retained messages, even when warnings are hidden. Selection
+copy copies the selected visible text. Saved timestamp preferences apply to the
+journal. On narrow windows, Options holds the clear-on-action preferences so
+Auto-scroll, Copy and Clear remain reachable.
 Build delivery queues discard ordinary chatter before diagnostics under overload
-and report omissions. Both views retain bounded history; Copy reports expired
+and report omissions. The journal retains bounded history; Copy reports expired
 history. Repeated valid progress updates are coalesced in small render batches,
 and individual progress rows update without scanning the entire history.
 Terminal control sequences are removed from displayed and copied build text,
@@ -867,7 +868,6 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
-& src/_python/python.exe -B direct/verify_build_output.py
 & src/_python/python.exe -B direct/verify_build_log_routing.py
 & src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py

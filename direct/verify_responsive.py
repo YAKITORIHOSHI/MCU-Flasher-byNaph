@@ -290,10 +290,11 @@ class QtResponsiveChecks(ControlChecks):
         self.assertEqual(len(new_calls), 3)
         self.assertTrue(all(call.kwargs['extra']['kind'] == 'pwsh' for call in new_calls))
 
-    def test_build_console_header_and_views_preserve_saved_fonts(self):
+    def test_build_console_original_journal_preserves_saved_fonts(self):
         from main.core import config
         from main.core.theme import Theme
         from main.qt.console_panel import ConsolePanelContainer
+        from PySide6.QtGui import QFontMetricsF, QTextCursor
         self.addCleanup(Theme.apply_theme, Theme.active_theme)
 
         cfg = {'timestamp_enabled': False, 'clear_console_on_action': True,
@@ -304,34 +305,65 @@ class QtResponsiveChecks(ControlChecks):
         self.stack.enter_context(patch.object(config, 'get_hide_build_console_warnings', return_value=False))
         clipboard = Mock()
         self.stack.enter_context(patch.object(QApplication, 'clipboard', return_value=clipboard))
+        worker_title = '⚡ Running Parallel Compilation on 6 Logical Processors'
+        worker_width = 73
+        worker_rows = [
+            (' ╔' + '═' * worker_width + '╗', 'header'),
+            ('   ' + worker_title.center(worker_width), 'header'),
+            (' ╚' + '═' * worker_width + '╝', 'header'),
+        ]
+        timing_rows = [
+            ('╔═════════════════════════════════╗', 'purple_header'),
+            ('║    Compilation Time Breakdown   ║', 'purple_header'),
+            ('╠═════════════════════════════════╣', 'purple_header'),
+            ('║ Code Build & Compilation : 4.2s ║', 'purple_header'),
+            ('║ Total Elapsed Time       : 7.1s ║', 'purple_header'),
+            ('╚═════════════════════════════════╝', 'purple_header'),
+        ]
+        compile_rows = [(f'  ⚙ Compiling source{number}.cpp.o...', 'info') for number in range(12)]
         fixture = [
-            ('═' * 50, 'header'),
-            ('⚙ COMPILING (PlatformIO)', 'header'),
-            ('Sketch: isolated responsiveness fixture', 'normal'),
-            ('Target: fixture:board (Arduino)', 'normal'),
-            ('⚡ Running Parallel Compilation on 4 Logical Processors', 'header'),
-            *[(f'⚙ Compiling source{number}.cpp.o...', 'info') for number in range(12)],
-            ('⚠ Warning at sketch.cpp:12:3', 'warning'),
+            ('=' * 50, 'header'),
+            ('  ⚙  COMPILING (PlatformIO)', 'header'),
+            ('=' * 50, 'header'),
+            ('  Sketch : isolated responsiveness fixture', 'dim'),
+            ('  Board  : ESP32 Dev Module (fixture)', 'dim'),
+            ('  Tool   : PlatformIO', 'dim'),
+            ('', 'normal'),
+            ('  ℹ Incremental build enabled; successful objects are preserved.', 'info'),
+            ('  ✔ Entry points OK — setup()/loop() found in: example.ino', 'success'),
+            ('', 'normal'),
+            *worker_rows,
+            ('   >>> System Reserved — 6 Logical Processors <<<', 'dim'),
+            ('', 'normal'),
+            ('  ℹ Selected-board workspace is isolated from every other board.', 'info'),
+            ('    PlatformIO will compile only missing or changed units.', 'dim'),
+            ('', 'normal'),
+            ('  ⚙ Initializing PlatformIO build engine & dependency tree...', 'purple'),
+            ('    SCons is resolving header dependencies in memory...', 'purple_dim'),
+            ('    Processing mcu_env (platform: espressif32; board: esp32dev; framework: arduino)', 'purple_dim'),
+            ('  ' + '─' * 50, 'purple_dim'),
+            *compile_rows,
+            ('  ⚠ Warning at sketch.cpp:12:3', 'warning'),
             ('  12 | lookup("building / looking for");', 'warning'),
             ('       ^~~~~~', 'warning'),
-            ('⚙ Compiling sketch.cpp.o...', 'info'),
-            ('🔗 Linking...', 'dim'),
-            ('📏 Checking firmware size...', 'dim'),
-            ('RAM: 8.5% (used 28012 bytes from 327680 bytes)', 'success'),
-            ('Flash: 26.3% (used 344969 bytes from 1310720 bytes)', 'success'),
-            ('Binary artifact: firmware.bin (337.2 KB) ready for upload', 'success'),
-            ('╔══════════════════════════════╗', 'purple_header'),
-            ('║ Compilation Time Breakdown ║', 'purple_header'),
-            ('╠══════════════════════════════╣', 'purple_header'),
-            ('║ Code Build & Compilation : 2.6s ║', 'purple_header'),
-            ('║ Total Elapsed Time : 3.2s ║', 'purple_header'),
-            ('╚══════════════════════════════╝', 'purple_header'),
-            ('Compilation successful! (3.2s)', 'success'),
+            ('  ⚙ Compiling example.ino.cpp.o...', 'info'),
+            ('  🔗 Linking...', 'dim'),
+            ('  📏 Checking firmware size...', 'dim'),
+            ('  RAM: 8.5% (used 28012 bytes from 327680 bytes)', 'success'),
+            ('  Flash: 26.3% (used 344969 bytes from 1310720 bytes)', 'success'),
+            ('  📦 Binary artifact: firmware.bin (337.2 KB) ready for upload', 'success'),
+            ('', 'normal'),
+            *timing_rows,
+            ('', 'normal'),
+            ('  ✔ Compilation successful! (7.1s)', 'success'),
         ]
+        original = '\n'.join(text for text, _ in fixture)
 
         def check_header(container):
             header = container.header
-            for control in (header._btn_details, header._btn_copy, header._btn_clear,
+            self.assertFalse(hasattr(header, '_btn_details'), 'The original console has one output view')
+            self.assertNotIn('Activity', header._title_lbl.text())
+            for control in (header._btn_copy, header._btn_clear,
                             header.cb_autoscroll, header._btn_options,
                             header.cb_auto_clear, header.cb_auto_clear_serial):
                 if control.isVisible():
@@ -339,7 +371,6 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertTrue(control.visibleRegion().contains(control.rect().center()),
                                     f'Build header control clipped: {control.text()}')
                     self.assertFalse(control.isWindow())
-            self.assertTrue(header._btn_details.isVisible())
             self.assertTrue(header._btn_copy.isVisible())
             self.assertTrue(header._btn_clear.isVisible())
             self.assertTrue(header.cb_autoscroll.isVisible())
@@ -352,6 +383,27 @@ class QtResponsiveChecks(ControlChecks):
                 self.assertEqual(len(options), 2)
                 self.assertEqual(options[0].isChecked(), header.cb_auto_clear.isChecked())
                 self.assertEqual(options[1].isChecked(), header.cb_auto_clear_serial.isChecked())
+
+        def check_frame_metrics(console, point_size):
+            widths = []
+            reference = QFontMetricsF(console.document().defaultFont())
+            for text, _ in worker_rows + timing_rows:
+                # Search literal event text so indentation and box padding are
+                # verified in the real document, rather than recreated here.
+                cursor = console.document().find(text)
+                self.assertFalse(cursor.isNull(), f'Missing original frame row: {text}')
+                cursor.setPosition(cursor.selectionStart() + max(0, text.find('╔') if '╔' in text else 0))
+                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter, QTextCursor.MoveMode.KeepAnchor)
+                font = cursor.charFormat().font().resolve(console.document().defaultFont())
+                self.assertEqual(font.pointSize(), point_size)
+                metrics = QFontMetricsF(font)
+                self.assertAlmostEqual(metrics.horizontalAdvance('M'), reference.horizontalAdvance('M'), places=3,
+                                       msg='Headers and box borders must use the saved monospace cell width')
+                if text in [line for line, _ in timing_rows]:
+                    widths.append(metrics.horizontalAdvance(text))
+            self.assertTrue(all(len(text) == len(timing_rows[0][0]) for text, _ in timing_rows))
+            self.assertLessEqual(max(widths) - min(widths), .01,
+                                 'Every timing frame row must align to the same rendered right edge')
 
         for point_size in (11, 18):
             with patch.object(config, 'get_monitor_font_size', return_value=point_size):
@@ -367,61 +419,67 @@ class QtResponsiveChecks(ControlChecks):
                 from main.qt.theme import get_palette
                 theme_mode.return_value = mode
                 Theme.apply_theme(mode)
-                # Standalone fixtures need the workspace's reading surface
-                # behind translucent glass, rather than a native black window.
                 background = get_palette(mode)['BG_DARKEST']
                 APP.setStyleSheet(build_stylesheet(mode) +
                                  f'QWidget#build-console-fixture {{ background: {background}; }}')
                 container.apply_theme(mode)
                 console.clear()
-                console.set_details_visible(False)
                 for text, tag in fixture:
                     console.append_log({'text': text, 'tag': tag, 'newline': True,
                                         'timestamp': '[12:34:56]'})
                 while console._queue:
                     console._flush_queue()
                 for width in (320, 400, 480, 640, 850, 1100, 1920, 480, 1920):
-                    for details in (False, True):
-                        with self.subTest(theme=mode, font=point_size, width=width, details=details):
-                            container.resize(width, 520)
-                            if header._btn_details.isChecked() != details:
-                                header._btn_details.click()
-                            pump()
-                            self.assertLessEqual(container.width(), width,
-                                                 'Build header size hints must not force a wider window')
-                            self.assertEqual(console._details_visible, details)
-                            self.assertEqual(header._btn_details.isChecked(), details)
-                            self.assertEqual(console.font(), content_font)
-                            self.assertEqual(console.document().defaultFont().pointSize(), point_size)
-                            self.assertGreaterEqual(console.viewport().height(), console.fontMetrics().lineSpacing())
-                            self.contained(header, container)
-                            check_header(container)
-                            text = console.toPlainText()
-                            self.assertIn('lookup("building / looking for")', text)
-                            self.assertIn('Compilation successful!', text)
-                            self.assertIn('3.2s', text)
-                            if details:
-                                self.assertIn('⚙ Compiling source11.cpp.o...', text)
-                            else:
-                                self.assertIn('12 processed', text)
-                                self.assertNotIn('⚙ Compiling source11.cpp.o...', text)
-                            if width in (320, 1100):
-                                # Exercise the real Copy callback without changing
-                                # the user's clipboard or leaving a delayed UI callback.
-                                with patch('main.qt.console_panel.QTimer.singleShot') as later:
-                                    header._btn_copy.click()
-                                    pump()
-                                    copied = clipboard.setText.call_args.args[0]
-                                    self.assertIn('⚙ Compiling source11.cpp.o...', copied)
-                                    check_header(container)
-                                    later.call_args.args[1]()
-                            if width in (480, 1920):
-                                capture(container, f'build-{mode}-{point_size}pt-{width}-'
-                                                   + ('details' if details else 'activity'))
+                    with self.subTest(theme=mode, font=point_size, width=width):
+                        container.resize(width, 520)
+                        pump()
+                        self.assertLessEqual(container.width(), width,
+                                             'Build header size hints must not force a wider window')
+                        self.assertEqual(console.font(), content_font)
+                        self.assertEqual(console.document().defaultFont().pointSize(), point_size)
+                        self.assertGreaterEqual(console.viewport().height(), console.fontMetrics().lineSpacing())
+                        self.contained(header, container)
+                        check_header(container)
+                        self.assertEqual(console.toPlainText(), original)
+                        self.assertEqual(console.get_content_for_clipboard(False), original)
+                        self.assertNotIn('Compiling source units', console.toPlainText())
+                        check_frame_metrics(console, point_size)
+                        if width in (320, 1100):
+                            with patch('main.qt.console_panel.QTimer.singleShot') as later:
+                                header._btn_copy.click()
+                                pump()
+                                self.assertEqual(clipboard.setText.call_args.args[0], original)
+                                check_header(container)
+                                later.call_args.args[1]()
+                        if width in (480, 1920):
+                            capture(container, f'build-{mode}-{point_size}pt-{width}-output')
+                if RENDER_DIR:
+                    container.resize(1280, 680)
+                    pump()
+                    console.verticalScrollBar().setValue(0)
+                    pump()
+                    capture(container, f'build-{mode}-{point_size}pt-start')
+                    console.verticalScrollBar().setValue(console.verticalScrollBar().maximum())
+                    pump()
+                    capture(container, f'build-{mode}-{point_size}pt-compilation-timing')
                 header.cb_autoscroll.setChecked(False)
                 self.assertFalse(console._autoscroll)
                 header.cb_autoscroll.setChecked(True)
                 self.assertTrue(console._autoscroll)
+                # An unchanged incremental build emits no source object rows.
+                # The display must not manufacture compilation activity.
+                console.clear()
+                incremental = [item for item in fixture if not item[0].startswith('  ⚙ Compiling ')]
+                for text, tag in incremental:
+                    console.append_log({'text': text, 'tag': tag})
+                while console._queue:
+                    console._flush_queue()
+                expected_incremental = '\n'.join(text for text, _ in incremental)
+                self.assertEqual(console.toPlainText(), expected_incremental)
+                self.assertEqual(console.get_content_for_clipboard(False), expected_incremental)
+                self.assertNotIn('.cpp.o', console.toPlainText())
+                self.assertNotIn('Compiling source units', console.toPlainText())
+                check_frame_metrics(console, point_size)
             header._btn_clear.click()
             self.assertEqual(console.toPlainText(), '')
             self.assertEqual(console.get_content_for_clipboard(), '')
