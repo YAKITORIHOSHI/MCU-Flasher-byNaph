@@ -906,7 +906,8 @@ def _configure_platformio_environment(script_dir: Path) -> str:
 # packages and preserves existing versions. GitHub Releases
 # provides a CDN-backed, resumable asset download. This is intentionally the
 # only snapshot source; normal PlatformIO installs resolve missing items that
-# are not supplied by the snapshot. Failed artifacts remain available.
+# are not supplied by the snapshot. Failed artifacts remain available for
+# repair, while a successful full bootstrap removes the temporary archive.
 _PLATFORMIO_PREBUILT_ZIP_NAME = "platformio-mcu-gui-prebuilt.zip"
 _PLATFORMIO_PREBUILT_GITHUB_URL = (
     "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/download/"
@@ -918,6 +919,25 @@ _PLATFORMIO_PREBUILT_EXPECTED_SIZE = 1785358455
 _PLATFORMIO_PREBUILT_EXPECTED_SHA256 = (
     "b284708a25c46143827b94ec423d7fe4242729d5c39e4c3324556b9b7af8b7c2"
 )
+
+
+def _cleanup_platformio_prebuilt_archive(script_dir=None) -> bool:
+    """Remove the temporary seed ZIP only after the complete bootstrap succeeds."""
+    archive = Path(script_dir or SCRIPT_DIR) / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
+    if not archive.exists():
+        return True
+    try:
+        removed = safe_unlink(archive)
+    except Exception as exc:
+        removed = False
+        reason = str(exc)
+    else:
+        reason = "the file is still locked or could not be removed"
+    if removed:
+        _record_bootstrap_log("OK", "Temporary prebuilt PlatformIO archive removed after successful bootstrap.")
+        return True
+    _record_bootstrap_log("WARN", f"Bootstrap succeeded, but the temporary PlatformIO archive was retained at {archive}: {reason}.")
+    return False
 
 
 def _platformio_core_is_populated(script_dir: Path) -> bool:
@@ -1021,7 +1041,7 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
     remaining = missing_packages(core, plan)
     reject_unresolved_collisions(core, remaining)
     remaining_count = sum(len(specs) for specs in remaining.values())
-    ok(f"Release seed checked: {len(result['imported'])} groups imported; {remaining_count} missing items remain for normal package setup. Archive retained.")
+    ok(f"Release seed checked: {len(result['imported'])} groups imported; {remaining_count} missing items remain for normal package setup. The temporary archive will be removed after bootstrap succeeds.")
     return True
 
 
@@ -10400,6 +10420,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         # Main GUI process is running! Clean up empty crash log and
         # COMPLETELY dispose bootstrap immediately so it doesn't linger or lag.
+        if not _cleanup_platformio_prebuilt_archive(SCRIPT_DIR):
+            gui.root.after(0, lambda: gui.log_warn(
+                "Bootstrap succeeded, but the temporary prebuilt ZIP is still present because Windows could not remove it."
+            ))
         _record_bootstrap_log(
             "FINISH",
             "Main GUI started successfully after mandatory Bootstrap verification.",

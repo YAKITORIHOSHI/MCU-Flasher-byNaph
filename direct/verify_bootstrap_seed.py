@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retained, hardware-free release seed fixtures; no live setup or deletion."""
+"""Hardware-free seed fixtures; cleanup touches only temporary test archives."""
 from __future__ import annotations
 
 import ast
@@ -28,6 +28,7 @@ def bootstrap_scope(root):
     """Load selected real helpers without bootstrap import-time side effects."""
     source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8")
     names = {"_platformio_core_is_populated", "_ensure_platformio_core_prebuilt",
+             "_cleanup_platformio_prebuilt_archive",
              "_download_file", "_download_matches_expectations", "_normalize_sha256",
              "_file_sha256", "ensure_platformio_scons"}
     nodes = [node for node in ast.parse(source).body
@@ -425,6 +426,50 @@ class SeedChecks(unittest.TestCase):
         importer.assert_not_called()
         scope["_is_network_reachable"].assert_not_called()
         self.assertFalse((self.root / "src").exists())
+
+    def test_successful_bootstrap_cleanup_removes_temporary_seed_archive(self):
+        scope, logs = bootstrap_scope(self.root)
+        archive = self.root / "src/seed.zip"
+        archive.parent.mkdir()
+        archive.write_bytes(b"verified seed fixture")
+        scope["safe_unlink"] = lambda path: Path(path).unlink() is None
+        self.assertTrue(scope["_cleanup_platformio_prebuilt_archive"](script_dir=self.root))
+        self.assertFalse(archive.exists())
+        self.assertTrue(any("removed after successful bootstrap" in line.lower() for line in logs))
+
+    def test_cleanup_failure_is_nonfatal_and_retains_seed_archive(self):
+        scope, logs = bootstrap_scope(self.root)
+        archive = self.root / "src/seed.zip"
+        archive.parent.mkdir()
+        archive.write_bytes(b"verified seed fixture")
+        scope["safe_unlink"] = Mock(return_value=False)
+        self.assertFalse(scope["_cleanup_platformio_prebuilt_archive"](script_dir=self.root))
+        self.assertTrue(archive.is_file())
+        scope["safe_unlink"].assert_called_once_with(archive)
+        self.assertTrue(any("was retained" in line.lower() for line in logs))
+
+    def test_seed_archive_cleanup_runs_after_successful_gui_start_probe(self):
+        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        tree = ast.parse(source)
+        worker = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef)
+                      and node.name == "_run_setup_in_thread")
+        spawn_line = next(node.lineno for node in ast.walk(worker)
+                          if isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Name)
+                          and node.func.id == "_spawn_main_gui")
+        poll_line = next(node.lineno for node in ast.walk(worker)
+                         if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Attribute)
+                         and node.func.attr == "poll"
+                         and isinstance(node.func.value, ast.Name)
+                         and node.func.value.id == "proc")
+        cleanup_line = next(node.lineno for node in ast.walk(worker)
+                            if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name)
+                            and node.func.id == "_cleanup_platformio_prebuilt_archive")
+        self.assertGreater(cleanup_line, spawn_line)
+        self.assertGreater(cleanup_line, poll_line)
 
     def test_new_platforms_receive_second_seed_pass_for_discovered_packages(self):
         scope, _ = bootstrap_scope(self.root)

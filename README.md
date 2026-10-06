@@ -186,7 +186,10 @@ Windows setup checks the configured packages before fetching the pinned
 then imports only absent package groups with genuine PlatformIO metadata and
 compatible versions. Already complete stores skip this download. Missing
 packages are resolved normally afterwards; the release archive alone does not
-certify readiness. Cached archives and failed transfer checkpoints are retained.
+certify readiness. The verified seed ZIP is removed only after all bootstrap
+steps finish and the main GUI passes its startup check. Failed setup retains the
+archive and failed-transfer checkpoints for recovery; if Windows locks the ZIP
+after success, bootstrap logs a warning and continues.
 Publishing a verified release package retries only Windows access/sharing-lock
 errors, for at most six seconds. Every attempt refuses an existing destination,
 including a broken junction. Persistent denial retains the archive and extracted

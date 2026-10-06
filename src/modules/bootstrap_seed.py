@@ -301,7 +301,7 @@ def import_missing(zip_path, core, missing, *, staging_parent, log=print, progre
                     _publish_missing(source_dir, destination, log=log)
                     live_stores[kind].memcache_reset()
                     imported.append(str(destination))
-            log(f"Release seed imported {len(imported)} missing groups, {copied_bytes / 1048576:.1f} MiB in {time.monotonic() - started:.1f}s; archive retained.")
+            log(f"Release seed imported {len(imported)} missing groups, {copied_bytes / 1048576:.1f} MiB in {time.monotonic() - started:.1f}s; archive remains until the full bootstrap succeeds.")
         return {"imported": imported, "staging": str(stage), "bytes": copied_bytes}
     except Exception as exc:
         raise RuntimeError(f"Release seed failed; archive and staging retained at {zip_path} and {stage}: {exc}") from exc
