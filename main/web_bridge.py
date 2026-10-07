@@ -7291,7 +7291,6 @@ class MCUWebBackendAPI:
                     return
                 else:
                     failure_kind = getattr(self, "_last_fast_upload_failure_kind", "")
-                    self.emit("console:log", {"text": "", "newline": True})
                     if failure_kind == "connection":
                         self._append_connecting_progress(
                             min(fast_attempts, _MAX_CONNECT_RETRIES),
@@ -7325,6 +7324,7 @@ class MCUWebBackendAPI:
                             })
                         self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
                     elif failure_kind == "flash" and getattr(self, "_last_fast_upload_write_started", False):
+                        self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {
                             "text": "  ⚠ Flashing stopped after erase/write began. MCU Flasher did not restart the flash automatically.",
                             "tag": "warning",
@@ -7336,6 +7336,7 @@ class MCUWebBackendAPI:
                             "newline": True,
                         })
                     else:
+                        self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {"text": f"  ✖ Fast upload failed: {fast_error}", "tag": "error", "newline": True})
                         if str(upload_speed) in ("921600", "512000"):
                             self.emit("console:log", {
@@ -7800,7 +7801,6 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "  ■ Upload stopped by user.", "tag": "warning", "newline": True})
             else:
                 _pending_pre_box.clear()
-                self.emit("console:log", {"text": "", "newline": True})
 
                 # Check if it was a connection failure
                 if is_esp and not _connected_bar_flipped[0]:
@@ -7836,6 +7836,7 @@ class MCUWebBackendAPI:
                         })
                     self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
                 elif is_avr:
+                    self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {
                         "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
                         "tag": "info",
