@@ -4852,7 +4852,7 @@ class MCUWebBackendAPI:
         bar = "▰" * filled + "▱" * max(0, width - filled)
 
         if failed:
-            text = f"  🔌 Connecting [ {bar} ] | FAILED >> 💡 Please hold 'BOOT' button on MCU physical board"
+            text = f"  🔌 Connecting [ {bar} ] | FAILED >> 💡 Please hold 'BOOT' button on MCU physical board during attempt."
             tag = "error"
         elif connected:
             text = "  ✔ Connected"
