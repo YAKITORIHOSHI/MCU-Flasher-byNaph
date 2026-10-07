@@ -86,9 +86,11 @@ class RuntimeChecks(unittest.TestCase):
         from main.core import toolchain, storage_resources
         from main import web_bridge
         with patch.object(storage_resources, "storage_worker_limit", return_value=None):
-            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 4, 8), 2)
-            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 8), 4)
-            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 0.4), 1)
+            # Synthetic CPU previews must not inherit the runner's topology
+            # when their logical count happens to match the host's count.
+            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 4, 8, physical_cpus=4), 2)
+            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 8, physical_cpus=6), 4)
+            self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 0.4, physical_cpus=6), 1)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 8, 8, physical_cpus=4), 2)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 12, 8, physical_cpus=6), 4)
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)

@@ -26,7 +26,9 @@ Install the desktop dependencies once:
 sudo apt update
 sudo apt install python3-venv python3-tk libegl1 libgl1 libnss3 \
   libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
-  libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 xdg-utils
+  libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
+  libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 \
+  libxcb-render0 libxcb-util1 xdg-utils
 ```
 
 Qt WebEngine also needs ALSA: install `libasound2` on Ubuntu 22.04, or
