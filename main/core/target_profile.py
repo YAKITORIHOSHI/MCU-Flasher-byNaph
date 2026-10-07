@@ -9,6 +9,13 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
+    if info and info.get("backend") == "arduino-cli":
+        from src.modules.arduino_cli_support import unsupported_proof, valid_fqbn
+        if not unsupported_proof(info) or not valid_fqbn(info.get("arduino_fqbn")) or not isinstance(info.get("arduino_cli"), Mapping):
+            return "Arduino CLI fallback is not verified for this exact board. Prepare board support again."
+        if info.get("framework") != "arduino":
+            return "This board's Arduino CLI fallback requires the Arduino framework."
+        return ""
     if not info or info.get("pio_resolved") is False:
         return "No verified PlatformIO definition for this board. Install its platform package and select the exact board."
     for key in ("platform", "board"):

@@ -268,7 +268,7 @@ def import_missing(zip_path, core, missing, *, staging_parent, log=print, progre
                     # genuine metadata here and validate the full tree below.
                     item = staged_stores[kind].get_package(spec)
                     if not item or not item.metadata:
-                        log(f"Release has no matching {spec.humanize()}; normal package setup will resolve this missing item.")
+                        log(f"Bundled release lacks {spec.humanize()}; online package setup will try to fetch it.")
                         continue
                     source_dir = Path(item.path)
                     key = (kind, source_dir.name)

@@ -146,6 +146,7 @@ class MCUSignals(QObject):
     # Payload: {"title": str, "message": str, "type": str}
     #   type: "info" | "success" | "warning" | "error"
     notification = Signal(dict)
+    package_progress = Signal(dict)
 
     # ── Telemetry (CPU / RAM) ────────────────────────────────────────────────
     # Payload: {"cpu_percent": float, "ram_free_gb": float}

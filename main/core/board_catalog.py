@@ -198,14 +198,19 @@ def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool
 
         with _BOARD_CATALOG_RAM_LOCK:
             cached = _ARDUINO_BOARDS_TXT_RAM_CACHE.get(f_key)
-            if not force_read and cached is not None and cached[0] == _manifest_stat_identity(st):
+            if (not force_read and cached is not None and cached[0] == _manifest_stat_identity(st)
+                    and all(isinstance(row.get("source_sha256"), str)
+                            and re.fullmatch(r"[a-f0-9]{64}", row["source_sha256"])
+                            for row in cached[1])):
                 _ARDUINO_BOARDS_TXT_RAM_CACHE.move_to_end(f_key)
                 records.extend(deepcopy(cached[1]))
                 continue
 
         props_by_id: dict[str, dict[str, str]] = {}
         try:
-            lines = boards_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            source_bytes = boards_file.read_bytes()
+            source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+            lines = source_bytes.decode("utf-8", errors="replace").splitlines()
         except OSError:
             continue
 
@@ -262,6 +267,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool
                 ),
                 "hwids": hwids,
                 "source_file": str(boards_file),
+                "source_sha256": source_sha256,
                 "source_core": boards_file.parent.name,
                 "properties": props,
             })
@@ -283,7 +289,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool
     return records
 
 
-_BOARD_CATALOG_CACHE_VERSION = 4
+_BOARD_CATALOG_CACHE_VERSION = 5
 _CATALOG_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _REVIEWED_UNAVAILABLE_PROVIDERS = {
     "ebyte_e77_dev": ("zephyr", "framework-zephyr", "3.40402.0"),
@@ -298,9 +304,8 @@ def _prepared_catalog_fingerprint(core_dir: str | Path | None = None) -> tuple:
     try:
         root = Path(core_dir or _get_safe_platformio_core_dir(SCRIPT_DIR))
         snapshot = root / ".mcu-offline-catalog.json"
-        stat = snapshot.stat()
-        fingerprint = [str(snapshot), *_manifest_stat_identity(stat)]
-        for metadata in (root / "platforms/ststm32/platform.json",
+        fingerprint = []
+        for metadata in (snapshot, root / ".mcu-index-targets.json", root / "platforms/ststm32/platform.json",
                          root / "packages/framework-zephyr/package.json",
                          root / "packages/framework-zephyr@3.40402.0/package.json",
                          root / "packages/framework-mbed/package.json",
@@ -897,14 +902,15 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict], *,
 
 
 def resolve_board_definition(display_name: str, info: dict, catalog: list[dict], *,
-                             match_features: dict[int, dict] | None = None) -> dict:
+                             match_features: dict[int, dict] | None = None,
+                             prepared_targets=None, prepared_validation=None) -> dict:
     """Repair one cached row using canonical definitions, without family guesses.
 
     This also works before downloaded-core discovery completes: the cached
     Arduino identity contains the evidence needed to match installed manifests.
     """
     resolved = dict(info)
-    platform = str(info.get("platform") or "").lower()
+    platform = "" if info.get("backend") == "arduino-cli" else str(info.get("platform") or "").lower()
     board_id = str(info.get("board") or "").lower()
     exact = [row for row in catalog if platform and board_id and
              str(row.get("platform") or "").lower() == platform and
@@ -918,8 +924,25 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
         }
         candidates = [row for row in catalog if not platform or str(row.get("platform") or "").lower() == platform]
         match = _resolve_arduino_board_record(record, candidates, match_features=match_features)
+    from src.modules.arduino_cli_support import prepared_target_for_record, arduino_catalog_entry
+    record = {"name": display_name, "arduino_id": info.get("arduino_board_id"),
+              "source_file": info.get("arduino_source_file"), "mcu": info.get("mcu"),
+              "source_sha256": info.get("arduino_source_sha256"),
+              "variant": info.get("arduino_variant"), "build_board": info.get("arduino_build_board"),
+              "source_core": info.get("source_core")}
+    prepared = prepared_target_for_record(record, catalog, rows=prepared_targets, validation_cache=prepared_validation)
+    if prepared and prepared.get("backend") != "arduino-cli":
+        match = prepared
     if not match:
+        if prepared and prepared.get("backend") == "arduino-cli":
+            return arduino_catalog_entry(record, prepared)
+        if resolved.get("backend") == "arduino-cli":
+            for key in ("backend", "arduino_cli", "arduino_fqbn", "platformio_support", "platformio_support_proof", "fallback_notice"):
+                resolved.pop(key, None)
         return resolved
+    for key in ("arduino_cli", "arduino_fqbn", "platformio_support", "platformio_support_proof", "fallback_notice"):
+        resolved.pop(key, None)
+    resolved["backend"] = "platformio"
     frameworks = sorted(match.get("frameworks") or [])
     resolved.update({
         "platform": str(match.get("platform") or ""), "board": str(match.get("id") or ""),
@@ -1201,17 +1224,28 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         records.extend(_parse_downloaded_arduino_board_files(search_root, force_read=invalidate_parsed))
     match_features = {id(candidate): _arduino_match_features(candidate, candidate=True)
                       for candidate in catalog}
+    from src.modules.arduino_cli_support import load_prepared_targets, prepared_target_for_record, arduino_catalog_entry, prepared_target_index
+    prepared_targets = prepared_target_index(load_prepared_targets())
+    prepared_validation = {}
     # Empty board IDs in an older Arduino row cannot be refreshed by the
     # native (platform, board ID) merge below. Resolve their retained identity.
-    boards = {name: resolve_board_definition(name, info, catalog, match_features=match_features)
+    boards = {name: resolve_board_definition(name, info, catalog, match_features=match_features,
+                                           prepared_targets=prepared_targets, prepared_validation=prepared_validation)
               if info.get("pio_resolved") is False or not info.get("board") else info
               for name, info in boards.items()}
 
     resolved_rows: list[tuple[dict, dict | None]] = []
+    fallback_rows = {}
     for position, record in enumerate(records):
         if position % 32 == 0:
             delivery.checkpoint()
-        resolved_rows.append((record, _resolve_arduino_board_record(record, catalog, match_features=match_features)))
+        match = _resolve_arduino_board_record(record, catalog, match_features=match_features)
+        prepared = prepared_target_for_record(record, catalog, rows=prepared_targets, validation_cache=prepared_validation) if prepared_targets else None
+        if prepared and prepared.get("backend") != "arduino-cli":
+            match = prepared
+        elif prepared and not match:
+            fallback_rows[id(record)] = prepared
+        resolved_rows.append((record, match))
 
     # Infer the PlatformIO platform for an entire downloaded Arduino core from
     # the boards that matched confidently.  This lets an unsupported/new board
@@ -1243,6 +1277,16 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
     used_names: set[str] = set(boards)
     for record, match in resolved_rows:
         display_name = str(record.get("name") or record.get("arduino_id") or "Unknown board")
+        if id(record) in fallback_rows:
+            entry = arduino_catalog_entry(record, fallback_rows[id(record)])
+            existing = boards.get(display_name)
+            if existing and (existing.get("arduino_board_id") != entry["arduino_board_id"]
+                             or existing.get("arduino_source_file") not in (None, entry["arduino_source_file"])):
+                display_name = f"{display_name} ({entry['arduino_board_id']})"
+            boards[display_name] = entry
+            used_names.add(display_name)
+            delivery.add(display_name, entry)
+            continue
         platform = str(
             (match or {}).get("platform")
             or inferred_source_platform.get(record["source_file"], "")
@@ -1280,6 +1324,8 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "pio_match_score": (match or {}).get("match_score", 0.0),
             "pio_match_reasons": list((match or {}).get("match_reasons") or []),
             "arduino_board_id": arduino_id,
+            "arduino_source_file": str(record.get("source_file") or ""),
+            "arduino_source_sha256": str(record.get("source_sha256") or ""),
             "arduino_variant": str(record.get("variant") or ""),
             "arduino_build_board": str(record.get("build_board") or ""),
             "mcu": str((match or {}).get("mcu") or record.get("mcu") or "").lower(),

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "platforms": ["atmelavr", "espressif32"],
+  "platforms": ["atmelavr", "espressif32", "espressif8266"],
   "frameworks": ["arduino"],
   "libraries": ["arduino-libraries/Servo", "madhephaestus/ESP32Servo", "bblanchon/ArduinoJson"]
 }

@@ -173,7 +173,8 @@ def command():
 
 if __name__ == "__main__":
     import runpy
-    with archive_paths(), builder_processes():
+    from src.modules.platformio_locks import package_locks
+    with archive_paths(), builder_processes(), package_locks():
         if len(sys.argv) > 2 and sys.argv[1] == "--script":
             script = sys.argv[2]
             sys.argv = [script, *sys.argv[3:]]

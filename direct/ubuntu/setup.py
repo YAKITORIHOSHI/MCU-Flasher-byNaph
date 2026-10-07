@@ -51,11 +51,15 @@ def main(argv=None) -> int:
                         "import PySide6.QtWebEngineWidgets, serial, psutil, platformio, ptyprocess; "
                         "from src.modules.mbed_compat import prepare_dependencies; prepare_dependencies()"],
                        check=True, env=env, cwd=ROOT)
+        core = native_platformio_dir()
         command = [str(python), "-B", str(ROOT / "src/modules/offline_bootstrap.py"),
-                   "--core", str(native_platformio_dir())]
+                   "--core", str(core)]
         if args.plan:
             command += ["--plan", str(args.plan)]
-        subprocess.run(command, check=True, env=env, cwd=ROOT)
+        from src.modules.package_jobs import package_store_lease
+        with package_store_lease(core, mode="prepare", wait=True,
+                                 on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
+            subprocess.run(command, check=True, env=env, cwd=ROOT)
         print("Ubuntu runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]

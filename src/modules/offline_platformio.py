@@ -10,4 +10,6 @@ from src.modules.offline_runtime import activate, guard_platformio
 if __name__ == "__main__":
     activate()
     guard_platformio()
-    runpy.run_module("platformio", run_name="__main__")
+    from src.modules.platformio_locks import package_locks
+    with package_locks():
+        runpy.run_module("platformio", run_name="__main__")

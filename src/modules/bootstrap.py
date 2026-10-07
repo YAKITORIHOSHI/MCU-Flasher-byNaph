@@ -746,18 +746,12 @@ def _get_safe_platformio_core_dir(script_dir: Path) -> str:
     the CreateProcess command-line limit. A stale app-owned junction is repaired
     automatically.
     """
-    inherited = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
-    if inherited:
-        try:
-            inherited_path = Path(os.path.expandvars(os.path.expanduser(inherited)))
-            inherited_path.mkdir(parents=True, exist_ok=True)
-            return _short_platformio_core_alias(inherited_path)
-        except Exception:
-            pass
-
     target_dir = script_dir / "src" / ".platformio-mcu-gui"
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
+        # Match the workspace's ownership rule. An inherited global core or
+        # another installation's store must never be adopted or mutated by
+        # setup. Only a spelling/alias of this exact store is applicable.
         return _short_platformio_core_alias(target_dir)
     except Exception:
         pass
@@ -9228,6 +9222,11 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "qt" / "icons.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
         SCRIPT_DIR / "src" / "modules" / "offline_bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "package_jobs.py",
+        SCRIPT_DIR / "src" / "modules" / "board_preparation.py",
+        SCRIPT_DIR / "src" / "modules" / "board_index_targets.py",
+        SCRIPT_DIR / "src" / "modules" / "arduino_cli_support.py",
+        SCRIPT_DIR / "src" / "modules" / "platformio_locks.py",
         SCRIPT_DIR / "src" / "modules" / "offline_runtime.py",
         SCRIPT_DIR / "src" / "modules" / "offline_platformio.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_platformio.py",
@@ -9238,6 +9237,10 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "src" / "modules" / "zephyr_compat.py",
         SCRIPT_DIR / "src" / "modules" / "zephyr_board_aliases.cmake",
         SCRIPT_DIR / "main" / "core" / "board_catalog.py",
+        SCRIPT_DIR / "main" / "core" / "package_activity.py",
+        SCRIPT_DIR / "main" / "core" / "arduino_backend.py",
+        SCRIPT_DIR / "main" / "qt" / "package_progress.py",
+        SCRIPT_DIR / "main" / "qt" / "package_coverage.py",
         SCRIPT_DIR / "main" / "core" / "target_profile.py",
         SCRIPT_DIR / "direct" / "offline-packages.json",
         SCRIPT_DIR / "src" / "modules" / "crash_detector.py",
@@ -10019,6 +10022,24 @@ def _stream_offline_setup_output(gui, process):
     output.finish()
 
 
+def _bootstrap_tool_store_lease(gui, core):
+    """Serialize host repair with downloaded board preparation and live builds.
+
+    Call on the setup worker only; the context ends before workspace launch.
+    Keep the caller's short core path for manager processes while the lease
+    canonicalizes only its identity.
+    """
+    from src.modules.package_jobs import package_store_lease
+    signals = getattr(gui, "_signals", None)
+    if threading.get_ident() == getattr(signals, "thread_id", None):
+        raise RuntimeError("Tool-store preparation must wait on the setup worker, not the GUI thread")
+    def queued():
+        gui.root.after(0, lambda: gui.log_status(
+            "Waiting for active builds or board preparation before repairing toolchains…"))
+    return package_store_lease(core, mode="prepare", wait=True, on_wait=queued,
+                               root=getattr(gui, "_package_event_root", None))
+
+
 def _run_setup_in_thread(gui: BootstrapGUI):
     """
     Runs all dependency checks on a background thread so the Tk event loop
@@ -10040,8 +10061,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # PlatformIO setup is a repair/install concern, not an import-time
         # concern.  Keep directory/junction/configuration work on this worker
         # so a normal launch can skip it entirely.
-        _configure_platformio_environment(SCRIPT_DIR)
-        _neutralize_conflicting_global_platformio_config()
+        from src.modules.package_jobs import package_core_directory
+        with _bootstrap_tool_store_lease(gui, package_core_directory()):
+            _configure_platformio_environment(SCRIPT_DIR)
+            _neutralize_conflicting_global_platformio_config()
 
         if sys.platform == "win32":
             try:
@@ -10272,64 +10295,66 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # ── PlatformIO + Board Toolchains (combined step) ───────────────
         gui.root.after(0, lambda: gui.log_section("Checking PlatformIO & Board Toolchains"))
 
-        # Offer configured missing packages the verified release before normal
-        # package setup; complete stores skip it. Invalid existing data stops
-        # this step rather than allowing a fallback to replace those files.
-        try:
-            seeded = _ensure_platformio_core_prebuilt(gui)
-        except Exception as exc:
-            _record_bootstrap_exception("PlatformIO release seed preparation failed")
-            _fail_and_exit("PlatformIO release seed", str(exc))
-            return
-        if not seeded:
-            gui.root.after(0, lambda: gui.log_warn(
-                "Pre-built toolchains archive not used; continuing with direct PlatformIO toolchain setup."
-            ))
-
-        # Check PlatformIO
-        if not ensure_platformio(gui):
-            _fail_and_exit("PlatformIO Core", "Failed to install PlatformIO Core.")
-            return
-
-        # Prepare portable board-core folders used by the Board Browser.
-        if not ensure_arduino_avr_board():
-            _fail_and_exit(
-                "Arduino AVR Board Core",
-                "The required Arduino AVR board folder could not be prepared.",
-            )
-            return
-
-        if not ensure_esp32_board_folder():
-            _fail_and_exit(
-                "ESP32 Board Core",
-                "The required ESP32 board folder could not be prepared.",
-            )
-            return
-
-        # All downloads belong to bootstrap. Prepare every declared package
-        # variant in the configured board packs before launching the workspace.
-        from src.modules.offline_bootstrap import clean_bootstrap_environment, ready, requested_plan
         offline_core = Path(os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR))
-        offline_plan, offline_plan_path = requested_plan()
-        if not ready(offline_core, offline_plan if offline_plan_path else None):
+        from src.modules.platformio_locks import package_locks
+        with _bootstrap_tool_store_lease(gui, offline_core), package_locks():
+            # Offer configured missing packages the verified release before normal
+            # package setup; complete stores skip it. Invalid existing data stops
+            # this step rather than allowing a fallback to replace those files.
             try:
-                opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
-            except Exception:
-                opt_jobs = max(1, min(os.cpu_count() or 4, 8))
-            command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),
-                       "--core", str(offline_core), "--jobs", str(opt_jobs)]
-            if offline_plan_path:
-                command += ["--plan", str(offline_plan_path)]
-            gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))
-            bootstrap_env = clean_bootstrap_environment()
-            bootstrap_env["PYTHONUNBUFFERED"] = "1"
-            process = subprocess.Popen(command, env=bootstrap_env, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                                       creationflags=subprocess.CREATE_NO_WINDOW)
-            _stream_offline_setup_output(gui, process)
-            if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
-                _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
+                seeded = _ensure_platformio_core_prebuilt(gui)
+            except Exception as exc:
+                _record_bootstrap_exception("PlatformIO release seed preparation failed")
+                _fail_and_exit("PlatformIO release seed", str(exc))
                 return
+            if not seeded:
+                gui.root.after(0, lambda: gui.log_warn(
+                    "Pre-built toolchains archive not used; continuing with direct PlatformIO toolchain setup."
+                ))
+
+            # Check PlatformIO
+            if not ensure_platformio(gui):
+                _fail_and_exit("PlatformIO Core", "Failed to install PlatformIO Core.")
+                return
+
+            # Prepare portable board-core folders used by the Board Browser.
+            if not ensure_arduino_avr_board():
+                _fail_and_exit(
+                    "Arduino AVR Board Core",
+                    "The required Arduino AVR board folder could not be prepared.",
+                )
+                return
+
+            if not ensure_esp32_board_folder():
+                _fail_and_exit(
+                    "ESP32 Board Core",
+                    "The required ESP32 board folder could not be prepared.",
+                )
+                return
+
+            # All downloads belong to bootstrap. Prepare every declared package
+            # variant in the configured board packs before launching the workspace.
+            from src.modules.offline_bootstrap import clean_bootstrap_environment, ready, requested_plan
+            offline_plan, offline_plan_path = requested_plan()
+            if not ready(offline_core, offline_plan if offline_plan_path else None):
+                try:
+                    opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
+                except Exception:
+                    opt_jobs = max(1, min(os.cpu_count() or 4, 8))
+                command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),
+                           "--core", str(offline_core), "--jobs", str(opt_jobs)]
+                if offline_plan_path:
+                    command += ["--plan", str(offline_plan_path)]
+                gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))
+                bootstrap_env = clean_bootstrap_environment()
+                bootstrap_env["PYTHONUNBUFFERED"] = "1"
+                process = subprocess.Popen(command, env=bootstrap_env, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                           creationflags=subprocess.CREATE_NO_WINDOW)
+                _stream_offline_setup_output(gui, process)
+                if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
+                    _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
+                    return
 
         # ── Arduino-CLI ──────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))

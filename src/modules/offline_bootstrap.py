@@ -432,15 +432,43 @@ def verify_package_dependencies(manager, package):
             pending.append(installed)
 
 
-def prepare(core, plan=None, log=print, jobs=None):
+def _requested_builder_probes(core, specification, platform_name, probes, requested_targets, allowed_frameworks):
+    """Append validated exact index targets without replacing broad plan scope."""
+    if allowed_frameworks is not None and "arduino" not in allowed_frameworks:
+        return probes
+    from main.core.board_catalog import _load_platformio_board_catalog, _arduino_match_features
+    from src.modules.board_index_targets import exact_arduino_match, explicit_board_match
+    requested = [row for row in requested_targets if isinstance(row, dict) and
+                 (row.get("platform_spec") == specification or row.get("platform") == platform_name)]
+    if not requested:
+        return probes
+    catalog = [row for row in _load_platformio_board_catalog(core, force_read=True)
+               if row.get("platform") == platform_name]
+    features = {id(row): _arduino_match_features(row, candidate=True) for row in catalog}
+    extended = list(probes)
+    for row in requested:
+        record = row.get("record")
+        if not isinstance(record, dict):
+            continue
+        match = (explicit_board_match(record, str(row["board"]), catalog) if row.get("board") else
+                 exact_arduino_match(record, catalog, features))
+        if match and "arduino" in (match.get("frameworks") or []):
+            pair = (str(match["id"]), "arduino")
+            if pair not in extended:
+                extended.append(pair)
+    return extended
+
+
+def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None):
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
-    with archive_paths():
-        return _prepare(core, plan, log, jobs=jobs)
+    from src.modules.platformio_locks import package_locks
+    with archive_paths(), package_locks():
+        return _prepare(core, plan, log, jobs=jobs, event=event, requested_targets=requested_targets)
 
 
-def _prepare(core, plan, log, jobs=None):
+def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None):
     from platformio.package.manager.platform import PlatformPackageManager
     from platformio.package.manager.tool import ToolPackageManager
     from platformio.package.manager.library import LibraryPackageManager
@@ -460,6 +488,10 @@ def _prepare(core, plan, log, jobs=None):
         safe_jobs = max(1, min((os.cpu_count() or 4) - 2, 8))
     jobs = safe_jobs if jobs is None else min(jobs, safe_jobs)
 
+    def report(stage, **details):
+        if event is not None:
+            event(stage, **details)
+
     # Resolve relative components without expanding the short Windows junction.
     core = Path(os.path.abspath(core))
     plan = _validate_plan(plan) if plan is not None else load_plan()
@@ -477,8 +509,12 @@ def _prepare(core, plan, log, jobs=None):
     platform_manager = PlatformPackageManager(str(core / "platforms"))
     tools = ToolPackageManager(str(core / "packages"))
     libraries = LibraryPackageManager(str(core / "lib"))
+    report("preparing", message="Preparing the offline build tools", progress=None)
     prepare_scons(core, manager=tools, log=log)
     files = set()
+    board_manifests = {}
+    platform_sources = {}
+    exact_builder_targets = set()
     unavailable_targets = {}
     unavailable_manifests = {}
     builder_output_dir = ROOT / "logs" / f"offline-builders-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
@@ -489,12 +525,21 @@ def _prepare(core, plan, log, jobs=None):
     for name in plan["platforms"]:
         scope = ", ".join(sorted(allowed_frameworks)) if allowed_frameworks is not None else "all declared frameworks"
         log(f"Bootstrap offline pack: {name} ({scope}; upload/debug tools)")
+        report("preparing", message=f"Preparing {name} ({scope})", platform=name, progress=None)
         package = platform_manager.install(name, skip_dependencies=True)
         platform = PlatformFactory.new(package)
+        # Preserve the exact requested owner/version/source while exposing the
+        # installed platform's real target name. External URLs are not names.
+        prior = next((source for source, actual in platform_sources.items()
+                      if actual == platform.name and source != name), None)
+        if prior:
+            raise RuntimeError(f"Multiple PlatformIO specifications resolve to {platform.name}; select one exact source")
+        platform_sources[name] = platform.name
         specs, probes = package_plan(package, platform.get_boards(), log=log, allowed_frameworks=allowed_frameworks)
         files.add(str((Path(package.path) / "platform.json").relative_to(core)))
         for spec in specs:
             log(f"Preparing {spec.humanize()}")
+            report("preparing", message=f"Preparing {spec.humanize()}", platform=name, progress=None)
             installed = tools.install(spec)
             verify_package_dependencies(tools, installed)
             files.add(str((Path(installed.path) / "package.json").relative_to(core)))
@@ -510,6 +555,12 @@ def _prepare(core, plan, log, jobs=None):
             for framework, reason in frameworks.items():
                 log(f"Unavailable upstream target {platform.name}:{board} ({framework}): {reason}")
         probes = _installed_builder_probes(package, platform, specs, probes, log, unavailable=unavailable, allowed_frameworks=allowed_frameworks)
+        # Shared package probes cover the full plan. User-index preparation
+        # additionally exercises its exact requested IDs, including custom
+        # builders whose behavior depends on the board beyond MCU/packages.
+        if requested_targets:
+            probes = _requested_builder_probes(core, name, platform.name, probes,
+                                              requested_targets, allowed_frameworks)
 
         def _run_single_probe(item):
             local_number, (board, framework) = item
@@ -522,6 +573,8 @@ def _prepare(core, plan, log, jobs=None):
                 (project / "platformio.ini").write_text(f"[env:offline]\nplatform = {name}\nboard = {board}\nframework = {framework}\n")
                 label = f"{name}:{board} ({framework})"
                 log(f"Preparing builder {label} [{local_number}/{len(probes)}]")
+                report("preparing", message=f"Preparing builder {label}", platform=name,
+                       board=board, framework=framework, progress=None)
                 output_path = builder_output_dir / f"builder-{probe_num:04d}.log"
                 probe_env = dict(env)
                 worker_cache = project / ".pio-cache"
@@ -551,8 +604,18 @@ def _prepare(core, plan, log, jobs=None):
             for item in probe_items:
                 _run_single_probe(item)
         builder_number += len(probes)
+        exact_builder_targets.update((platform.name, board, framework) for board, framework in probes)
+        # Bind readiness to the exact definitions whose builders were prepared.
+        # This runs in Bootstrap's worker, never in the startup/GUI gate.
+        for manifest in sorted((Path(package.path) / "boards").glob("*.json")):
+            with manifest.open("rb") as manifest_file:
+                manifest_bytes = manifest_file.read(65537)
+            if len(manifest_bytes) > 65536:
+                raise RuntimeError(f"Board definition exceeds preparation bounds: {manifest.name}")
+            board_manifests[str(manifest.relative_to(core))] = hashlib.sha256(manifest_bytes).hexdigest()
     for spec in plan.get("libraries", []):
         log(f"Preparing offline sketch library {spec}")
+        report("preparing", message=f"Preparing sketch library {spec}", progress=None)
         installed = libraries.install(spec)
         verify_package_dependencies(libraries, installed)
         files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
@@ -562,6 +625,7 @@ def _prepare(core, plan, log, jobs=None):
     for folder in (core / "packages", core / "lib"):
         for metadata in folder.glob("*/.piopm"):
             files.add(str(metadata.relative_to(core)))
+    report("refreshing", message="Verifying the installed board catalog", progress=None)
     catalog = subprocess.run(command() + ["boards", "--json-output"],
                              capture_output=True, text=True, env=env, check=True, timeout=120,
                              creationflags=0x08000000 if sys.platform == "win32" else 0)
@@ -582,10 +646,16 @@ def _prepare(core, plan, log, jobs=None):
     (core / ".mcu-offline-catalog.json").write_text(json.dumps(records), encoding="utf-8")
     files.add(".mcu-offline-catalog.json")
     guards = install_runtime_guard(core)
-    guards.extend(["src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake", "src/modules/mbed_compat.py"])
+    guards.extend(["src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake", "src/modules/mbed_compat.py",
+                   "src/modules/platformio_locks.py", "src/modules/board_index_targets.py",
+                   "src/modules/arduino_cli_support.py", "main/core/arduino_backend.py"])
     payload = {"schema": SCHEMA, "plan": plan_hash(plan), "host": sys.platform,
                "default_plan": plan_hash(load_plan()), "prepared_plan": plan,
                "architecture": host_platform.machine(), "files": sorted(files), "guards": guards,
+               "board_manifests": board_manifests,
+               "platform_sources": platform_sources,
+               "exact_builder_targets": [{"platform": platform, "board": board, "framework": framework}
+                                          for platform, board, framework in sorted(exact_builder_targets)],
                "unavailable_targets": [{"platform": platform, "board": board, "frameworks": frameworks}
                                        for (platform, board), frameworks in sorted(unavailable_targets.items())]}
     temporary = core / (MARKER + ".tmp")

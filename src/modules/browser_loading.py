@@ -14,7 +14,24 @@ _CATALOG_LOCK = threading.Lock()
 _WRITES = OrderedDict()
 _WRITE_LOCK = threading.Lock()
 _WRITER = None
-CATALOG_SCHEMA = 1
+CATALOG_SCHEMA = 3  # Release-local board identity and requested index provenance.
+
+
+def search_catalog(request, cancel):
+    """Rank catalog names off Tk; keep only the latest query's result."""
+    items, query = request
+    starts, contains = [], []
+    for name in items:
+        if cancel.is_set():
+            return None
+        lower = name.casefold()
+        if not query or lower.startswith(query):
+            starts.append(name)
+        elif query in lower:
+            contains.append(name)
+    starts.sort(key=str.casefold)
+    contains.sort(key=str.casefold)
+    return starts + contains
 
 
 def source_signature(paths):

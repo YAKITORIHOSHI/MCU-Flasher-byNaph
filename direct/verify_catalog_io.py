@@ -5,6 +5,7 @@ or network requests are touched by these fixtures.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -191,11 +192,11 @@ class CatalogIOChecks(unittest.TestCase):
         catalog = {"Exact": {"arduino_board_id": "exact"}, "Exact alias": {"arduino_board_id": "exact"},
                    "Other": {"arduino_board_id": "other"}}
         reads = []
-        original = Path.read_text
+        original = Path.read_bytes
         def read(path, *args, **kwargs):
             reads.append(path)
             return original(path, *args, **kwargs)
-        with patch.object(Path, "read_text", read):
+        with patch.object(Path, "read_bytes", read):
             pairs = module.load_downloaded_board_usb_ids(catalog)
         self.assertEqual(reads, [])
         self.assertEqual(pairs[(0x1234, 0x5678)], ("Exact", "Exact alias", "Other"))
@@ -205,6 +206,37 @@ class CatalogIOChecks(unittest.TestCase):
         # explicit invalidation below instead of depending on host clock ticks.
         os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
         self.assertIn((0x1234, 0x9999), module.load_downloaded_board_usb_ids(catalog))
+
+    def test_parser_receipt_binds_the_bytes_parsed_before_a_source_change(self):
+        source = self.downloads / "boards.txt"
+        before = b"exact.name=Exact\nexact.build.mcu=mcu-old\n"
+        after = before.replace(b"mcu-old", b"mcu-new")
+        source.write_bytes(before)
+        original = Path.read_bytes
+        def changing_read(path):
+            raw = original(path)
+            if path == source:
+                path.write_bytes(after)
+            return raw
+        with patch.object(Path, "read_bytes", changing_read):
+            parsed = module._parse_downloaded_arduino_board_files(self.downloads)
+        self.assertEqual(parsed[0]["mcu"], "mcu-old")
+        self.assertEqual(parsed[0]["source_sha256"], hashlib.sha256(before).hexdigest())
+        self.assertEqual(source.read_bytes(), after)
+        fresh = module._parse_downloaded_arduino_board_files(self.downloads, force_read=True)
+        self.assertEqual(fresh[0]["mcu"], "mcu-new")
+        self.assertEqual(fresh[0]["source_sha256"], hashlib.sha256(after).hexdigest())
+
+    def test_parser_cached_rows_without_a_receipt_are_reparsed(self):
+        source = self.downloads / "boards.txt"
+        source.write_bytes(b"exact.name=Exact\n")
+        module._parse_downloaded_arduino_board_files(self.downloads)
+        cached = module._ARDUINO_BOARDS_TXT_RAM_CACHE[str(source)]
+        cached[1][0].pop("source_sha256")
+        with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as read:
+            parsed = module._parse_downloaded_arduino_board_files(self.downloads)
+        read.assert_called_once_with(source)
+        self.assertEqual(parsed[0]["source_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
 
     def test_explicit_refresh_forces_current_pio_arduino_and_prepared_bytes(self):
         manifest = self.manifest("exact")
@@ -224,9 +256,13 @@ class CatalogIOChecks(unittest.TestCase):
         original_identity = module._manifest_stat_identity
         reads = Counter()
         original_read = Path.read_text
+        original_bytes = Path.read_bytes
         def read(path, *args, **kwargs):
             reads[str(path)] += 1
             return original_read(path, *args, **kwargs)
+        def read_bytes(path):
+            reads[str(path)] += 1
+            return original_bytes(path)
         # Model a filesystem retaining the same complete metadata identity; the
         # forced path must bypass both whole-catalog and per-file RAM records.
         def retained_identity(stat):
@@ -235,6 +271,7 @@ class CatalogIOChecks(unittest.TestCase):
                          if identity[3:] == current[3:]), current)
         with patch.object(module, "_manifest_stat_identity", retained_identity), \
                 patch.object(Path, "read_text", read), \
+                patch.object(Path, "read_bytes", read_bytes), \
                 patch.object(module, "_prepared_framework_overlay", wraps=module._prepared_framework_overlay) as prepared:
             fresh = module.load_dynamic_boards({}, prefer_cache=True, invalidate_parsed=True)
         self.assertTrue(any(info["mcu"] == "mcu-old" for info in old.values()))
@@ -258,6 +295,7 @@ class CatalogIOChecks(unittest.TestCase):
         source = self.downloads / "boards.txt"
         source.write_text("exact.name=Exact\n")
         original_read = Path.read_text
+        original_bytes = Path.read_bytes
         for operation in (
                 lambda: module._read_platformio_manifest(manifest, module._manifest_stat_identity(manifest.stat())),
                 lambda: module._parse_downloaded_arduino_board_files(self.downloads),
@@ -267,7 +305,11 @@ class CatalogIOChecks(unittest.TestCase):
                 result = original_read(path, *args, **kwargs)
                 module._invalidate_parsed_board_catalogs()
                 return result
-            with patch.object(Path, "read_text", read):
+            def read_bytes(path):
+                result = original_bytes(path)
+                module._invalidate_parsed_board_catalogs()
+                return result
+            with patch.object(Path, "read_text", read), patch.object(Path, "read_bytes", read_bytes):
                 self.assertTrue(operation())
             self.assertEqual(module._PIO_MANIFEST_RAM_CACHE, {})
             self.assertEqual(module._PIO_BOARD_CATALOG_RAM_CACHE, {})

@@ -120,6 +120,8 @@ class NotifPanel(QWidget):
         self._browser.document().setMaximumBlockCount(1000)
         self._browser.setObjectName("notif-browser")
         self._browser.setOpenExternalLinks(False)
+        self._browser.setOpenLinks(False)
+        self._browser.anchorClicked.connect(self._on_report_link)
         layout.addWidget(self._browser)
 
     def resizeEvent(self, event) -> None:
@@ -280,7 +282,7 @@ class NotifPanel(QWidget):
 
     @staticmethod
     def _record_key(record: dict) -> tuple[str, ...]:
-        return tuple(record[key] for key in ("category", "level", "title", "message"))
+        return tuple(record[key] for key in ("category", "level", "title", "message")) + (record.get("job_id", ""),)
 
     @Slot(dict)
     def _finish_refresh(self, result: dict) -> None:
@@ -329,6 +331,8 @@ class NotifPanel(QWidget):
 
     @staticmethod
     def _display_record(record: dict) -> dict:
+        details = record.get("details")
+        details = details if isinstance(details, dict) else {}
         return {
             "id": display_text(record.get("id", ""), 128),
             "level": display_text(record.get("level", "info"), 64).lower(),
@@ -337,6 +341,10 @@ class NotifPanel(QWidget):
             "message": display_text(record.get("message", "")),
             "date": display_text(record.get("date", ""), 64),
             "time": display_text(record.get("time", ""), 64),
+            # Keep display-buffer values as strings. The report viewer uses
+            # the job identity and reconstructs its app-owned path in a worker.
+            "job_id": display_text(record.get("job_id") or details.get("job_id", ""), 80),
+            "coverage_report": display_text(record.get("coverage_report") or details.get("coverage_report", ""), 4096),
         }
 
     def _matches_filter(self, record: dict) -> bool:
@@ -377,6 +385,12 @@ class NotifPanel(QWidget):
         date_str = r.get("date", "")
         time_str = r.get("time", "")
         timestamp = escape(f"{date_str} {time_str}".strip())
+        from main.qt.package_coverage import JOB_ID
+        job_id = str(r.get("job_id") or "")
+        report_link = ""
+        if r.get("coverage_report") and JOB_ID.fullmatch(job_id):
+            report_link = (f"<div style='margin-top:5px;'><a href='mcu-coverage:{job_id}' "
+                           f"style='color:{self._card_colors['system']};'>View all board results</a></div>")
 
         return (
             f"<div style='margin-bottom: 8px; padding: 6px 10px; background: {self._palette['BG_DARK']}; border-left: 3px solid {color}; border-radius: 4px;'>"
@@ -385,8 +399,15 @@ class NotifPanel(QWidget):
             f"    <span style='color: {self._card_colors['dim']}; font-size: 10px; float: right;'>{timestamp}</span>"
             f"  </div>"
             f"  <div style='color: {self._card_colors['normal']}; margin-top: 3px; white-space: pre-wrap;'>{message}</div>"
+            f"{report_link}"
             f"</div>"
         )
+
+    def _on_report_link(self, url) -> None:
+        from main.qt.package_coverage import JOB_ID, open_package_coverage
+        job_id = url.path()
+        if url.scheme() == "mcu-coverage" and not url.query() and not url.fragment() and JOB_ID.fullmatch(job_id):
+            open_package_coverage(self.window(), job_id)
 
     def _append_notification_card(self, payload: dict) -> None:
         """Append one live notification directly to the bottom of the display."""
@@ -400,6 +421,8 @@ class NotifPanel(QWidget):
             "title": title,
             "message": msg,
             "time": "Just now",
+            "details": payload.get("details", {}),
+            "job_id": payload.get("job_id", ""),
         })
         if record["id"] and self._persisted_counts[(record["id"], self._record_key(record))]:
             return  # This exact event was discovered before its live signal arrived.

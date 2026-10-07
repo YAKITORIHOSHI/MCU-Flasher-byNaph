@@ -38,7 +38,8 @@ class RuntimeChecks(unittest.TestCase):
     def test_source_syntax(self):
         files = [ROOT / "mcu_flash_gui.py", *ROOT.joinpath("main").rglob("*.py")]
         files += [ROOT / "src/modules" / name for name in ("private_python_guard.py", "recovery.py", "platform_runtime.py", "runtime_resources.py", "launcher.py", "project_terminal.py", "arduino_lib_req.py", "bootstrap.py", "offline_bootstrap.py", "offline_runtime.py", "offline_platformio.py", "dedicated_AI.py", "tk_glass.py", "ui_palette.py", "ui_metrics.py")]
-        files += [ROOT / "direct/setup_ubuntu.py", ROOT / "direct/ubuntu/setup.py"]
+        files += [ROOT / "direct/setup_ubuntu.py", ROOT / "direct/ubuntu/setup.py",
+                  ROOT / "src/modules/package_jobs.py", ROOT / "src/modules/board_preparation.py"]
         for path in files:
             compile(path.read_text(encoding="utf-8-sig"), str(path), "exec")
 

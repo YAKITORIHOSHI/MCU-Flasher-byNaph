@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from main.core.constants import board_reset_capabilities
+from src.modules.package_jobs import package_store_lease
 
 
 class ActionChecks(unittest.TestCase):
@@ -39,6 +40,8 @@ class ActionChecks(unittest.TestCase):
                        board_reset_capabilities=board_reset_capabilities, load_gui_config=lambda: {},
                        port_occupied_owner=lambda _: None, _try_acquire_reset_cache_lock=lambda: object(),
                        _release_reset_cache_lock=Mock(), SCRIPT_DIR=self.root,
+                       package_store_lease=package_store_lease,
+                       package_core_directory=lambda: self.root / "tool-store",
                        get_project_build_cache_root=lambda *a, **k: self.root / ".mcu_flasher_build_cache",
                        robust_rmtree=shutil.rmtree, _sketch_ram_cache=SimpleNamespace(invalidate=Mock()),
                        subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, CREATE_NO_WINDOW=0))
@@ -47,6 +50,7 @@ class ActionChecks(unittest.TestCase):
         exec(compile(ast.Module(body=[cls], type_ignores=[]), "isolated_backend", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()
         b = self.api
+        b._package_event_root = self.root / "events"
         b.is_busy = False
         b.active_operation = None
         b.current_board, b.current_port = "Demo", "COM99"
@@ -82,6 +86,13 @@ class ActionChecks(unittest.TestCase):
         self.ns["_try_acquire_reset_cache_lock"] = lambda: None
         self.api.soft_reset()
         self.run_worker()
+        self.assertFalse(self.api.is_busy)
+        self.api._stop_serial_monitor.assert_not_called()
+
+    def test_preparation_lease_rejects_reset_without_hardware_calls(self):
+        with package_store_lease(self.root / "tool-store", "prepare", root=self.api._package_event_root):
+            self.api.soft_reset()
+            self.run_worker()
         self.assertFalse(self.api.is_busy)
         self.api._stop_serial_monitor.assert_not_called()
 

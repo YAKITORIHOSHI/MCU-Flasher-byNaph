@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QRect, QTimer, QStandardPaths
+from PySide6.QtCore import QPoint, QRect, QTimer, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
@@ -454,6 +454,84 @@ class ProjectChecks(unittest.TestCase):
             parent.deleteLater()
             APP.processEvents()
 
+    def test_glass_picker_pages_fit_and_preserve_inputs_through_themes_and_resizing(self):
+        api = self.backend()
+        api.get_recent_projects = Mock(return_value=[str(self.folder / "sketch")])
+        api.get_default_project_parent = Mock(return_value=str(self.folder))
+        config.set_active_sketch_dir(str(self.folder / "sketch"))
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), open_in_new_window=True)
+        dialog._new_name_edit.setText("SensorLogger")
+        dialog._cb_include_h.setChecked(True)
+        dialog._cb_include_cpp.setChecked(True)
+        dialog._template_combo.setCurrentIndex(2)
+        expected = (dialog._open_path_edit.text(), dialog._new_name_edit.text(),
+                    dialog._new_parent_edit.text(), dialog._new_preview_lbl.text(),
+                    dialog._template_combo.currentData(), dialog._cb_include_h.isChecked(),
+                    dialog._cb_include_cpp.isChecked())
+        actions = ((dialog._btn_cancel_existing, dialog._btn_open_existing),
+                   (dialog._btn_cancel_new, dialog._btn_create),
+                   (dialog._btn_clear_recents, dialog._btn_cancel_recent, dialog._btn_open_recent),
+                   (dialog._btn_refresh_projects, dialog._btn_cancel_open, dialog._focus_project_btn))
+        pages = ("existing", "new", "recent", "open")
+        try:
+            with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1920, 1080)):
+                dialog.show()
+                APP.processEvents()
+                for theme in ("default", "light", "solarized_dark"):
+                    APP.setStyleSheet(build_stylesheet(theme))
+                    dialog._apply_dialog_theme(theme)
+                    self.assertIsNotNone(dialog._header_card._colors)
+                    scale = APP.primaryScreen().devicePixelRatio()
+                    max_width, max_height = int(1920 / scale) - 32, int(1080 / scale) - 70
+                    for size_name, width, height in (("wide", min(1000, max_width), min(650, max_height)),
+                                                    ("regular", min(720, max_width), min(560, max_height)),
+                                                    ("compact", 400, 360), ("short", 360, 300)):
+                        dialog.resize(width, height)
+                        for page, buttons in enumerate(actions):
+                            dialog._tabs.setCurrentIndex(page)
+                            APP.processEvents()
+                            self.assertEqual(dialog.width(), width)
+                            self.assertEqual(dialog.height(), height)
+                            for button in buttons:
+                                self.assertTrue(button.isVisible())
+                                rect = QRect(button.mapTo(dialog, QPoint()), button.size())
+                                self.assertTrue(dialog.rect().contains(rect), f"{size_name} {pages[page]} {rect}")
+                                ancestor = button.parentWidget()
+                                while ancestor is not None and ancestor is not dialog:
+                                    visible = QRect(button.mapTo(ancestor, QPoint()), button.size())
+                                    self.assertTrue(ancestor.rect().contains(visible),
+                                                    f"{button.text()} clipped by {type(ancestor).__name__}")
+                                    ancestor = ancestor.parentWidget()
+                                ink_width = button.fontMetrics().horizontalAdvance(button.text())
+                                self.assertGreaterEqual(button.width(), ink_width + 20)
+                            fields = ((dialog._open_path_edit,) if page == 0 else
+                                      (dialog._new_name_edit, dialog._new_parent_edit, dialog._template_combo)
+                                      if page == 1 else ())
+                            for field in fields:
+                                self.assertGreaterEqual(field.height(), field.fontMetrics().height() + 14,
+                                                        f'{size_name} {pages[page]} clipped input text')
+                            if RENDER_DIR:
+                                name = f"project-{theme}-{size_name}-{pages[page]}.png"
+                                self.assertTrue(dialog.grab().save(str(RENDER_DIR / name)))
+                    current = (dialog._open_path_edit.text(), dialog._new_name_edit.text(),
+                               dialog._new_parent_edit.text(), dialog._new_preview_lbl.text(),
+                               dialog._template_combo.currentData(), dialog._cb_include_h.isChecked(),
+                               dialog._cb_include_cpp.isChecked())
+                    self.assertEqual(current, expected)
+                dialog._tabs.setCurrentIndex(0)
+                dialog._open_path_edit.setFocus()
+                dialog._apply_dialog_theme("default")
+                APP.processEvents()
+                self.assertIs(dialog.focusWidget(), dialog._open_path_edit)
+                self.assertEqual(dialog._recent_list.currentRow(), 0)
+                dialog.reject()
+                dialog.reject()
+                self.assertIsNone(dialog.selected_project)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            APP.processEvents()
+
     def test_current_window_save_choice_waits_for_save_ack_before_continue(self):
         from types import SimpleNamespace
 
@@ -489,6 +567,73 @@ class ProjectChecks(unittest.TestCase):
             dialog.close()
             dialog.deleteLater()
             parent.deleteLater()
+            APP.processEvents()
+
+    def test_glass_project_prompts_cancel_safely_in_all_themes(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_recent_projects = Mock(return_value=[])
+        parent = QWidget()
+        parent._active_operation = None
+        parent._editor_panel = SimpleNamespace(trigger_save_all=Mock())
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        before = (api.sketch_dir_path, api.modified_files.copy(), api.current_board, api.current_port)
+        try:
+            for theme in ('default', 'light', 'solarized_dark'):
+                APP.setStyleSheet(build_stylesheet(theme))
+                dialog._apply_dialog_theme(theme)
+
+                def cancel_prompt(name):
+                    prompt = next(widget for widget in APP.topLevelWidgets()
+                                  if isinstance(widget, QMessageBox) and widget.isVisible())
+                    self.assertEqual(prompt._glass._colors['BG_DARKEST'], dialog._dialog_palette['BG_DARKEST'])
+                    if RENDER_DIR:
+                        self.assertTrue(prompt.grab().save(str(RENDER_DIR / f'project-{theme}-{name}.png')))
+                    next(button for button in prompt.buttons() if button.text() == 'Cancel').click()
+
+                QTimer.singleShot(0, lambda: cancel_prompt('window-choice'))
+                self.assertIsNone(dialog._choose_project_window('SensorLogger'))
+                outcomes = []
+                QTimer.singleShot(0, lambda: cancel_prompt('unsaved-choice'))
+                dialog._prepare_current_window_switch(
+                    str(self.folder / 'sketch'),
+                    lambda ready, error, cancelled: outcomes.append((ready, error, cancelled)),
+                )
+                self.assertEqual(outcomes, [(False, '', True)])
+                parent._editor_panel.trigger_save_all.assert_not_called()
+                self.assertEqual(before, (api.sketch_dir_path, api.modified_files,
+                                         api.current_board, api.current_port))
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_picker_foreground_retries_do_not_reopen_cancelled_picker_or_focus_over_prompt(self):
+        dialog = ProjectDialog(initial_dir=str(self.folder / 'sketch'))
+        try:
+            with patch('main.qt.project_dialog.sys.platform', 'win32'), \
+                 patch.object(config, 'focus_project_window') as focus:
+                dialog.show()
+                APP.processEvents()
+                self.assertTrue(any(timer.isActive() for timer in dialog._foreground_timers))
+                dialog.reject()
+                self.assertFalse(any(timer.isActive() for timer in dialog._foreground_timers))
+                focus.reset_mock()
+                dialog._restore_foreground_focus()
+                focus.assert_not_called()
+                dialog.show()
+                APP.processEvents()
+                focus.reset_mock()
+                with patch.object(QApplication, 'activeModalWidget', return_value=QWidget()):
+                    dialog._restore_foreground_focus()
+                focus.assert_not_called()
+                with patch.object(QApplication, 'activeModalWidget', return_value=dialog):
+                    dialog._restore_foreground_focus()
+                focus.assert_called_once()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
             APP.processEvents()
 
     def test_half_screen_minimum_allows_wider_resize_and_restores_maximization(self):

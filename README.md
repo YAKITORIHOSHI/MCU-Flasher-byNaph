@@ -80,6 +80,12 @@ width. It can resize wider and maximize normally; saved maximized state is
 restored. Minimum sizing follows the current monitor in Qt logical pixels.
 Tabs map to exact root filenames rather than loading order, and Ubuntu paths
 retain case. Startup project loading is coalesced to avoid duplicate models.
+The project selector uses the same cached static glass header and cards in all
+three palettes. Existing, New, Recent and Open projects have compact tabs,
+readable file/path surfaces and pinned actions; short pages scroll and forms
+reflow. Project destination and unsaved-change prompts share the palette.
+Foreground retries stop when the selector closes and respect active modal
+prompts, preserving keyboard focus.
 
 Startup opens the main workspace. The compact **Actions** menu belongs to its
 toolbar; it does not create a separate desktop window. **Detach Editor** opens
@@ -92,6 +98,21 @@ connectivity probe. Installed-package and detail scans run in bounded workers;
 rapid selections cancel older scans. Unchanged inventories reuse a five-second
 snapshot, and download progress updates are coalesced. Network concurrency is
 limited to two board-index requests on constrained PCs and four otherwise.
+Search ranking and selected-version inventory checks also run in bounded
+workers, discard superseded results and fill lists in small batches. Package
+lists, details and installed items use static glass cards in Glass Smoked Dark,
+Glass Frosted Light and Solarized Dark. Reopening preserves browser state while
+refreshing the current palette.
+The Custom platform dialog shares these surfaces. Its form scrolls on short
+screens while Save and Cancel stay visible, and its frame fits the current
+monitor work area. Failed saves keep the previous association and allow retry.
+Extracted board downloads start separate background preparation. A compact
+card inside the workspace's bottom-right corner shows the current stage and
+reported progress without taking keyboard focus. Its **Notifications** action
+opens retained activity; hiding the card leaves preparation running. Stage
+changes and final outcomes enter the Notifications tab, while percentage
+updates replace live progress. Exact prepared definitions refresh automatically,
+including the ready subset of a package with unavailable boards.
 Library samples open in a separate read-only viewer with the selected theme and
 saved content font. Its tabs, syntax, selection, line numbers and scrollbars
 follow Glass, Frosted Light and Solarized palettes. The complete window frame
@@ -173,15 +194,36 @@ Compiler concurrency also respects physical core count when the OS reports it.
 ### Startup and resource limits
 
 All application dependency downloads belong to bootstrap. The default package
-plan in [direct/offline-packages.json](direct/offline-packages.json) prepares AVR
-and ESP32 with Arduino, including their required package variants and optional
-upload/debug tools. Add platform specifications for megaAVR, SAM/SAMD, ESP8266,
+plan in [direct/offline-packages.json](direct/offline-packages.json) prepares AVR,
+ESP32 and ESP8266 with Arduino, including their required package variants and
+optional upload/debug tools. Add platform specifications for megaAVR, SAM/SAMD,
 STM32, RP2040, nRF52 or Teensy when needed. The optional `frameworks` list limits
 preparation to those declared frameworks; omit it to prepare every framework
 declared by the configured platforms. Bootstrap checks each distinct builder
 environment before recording local readiness. Readiness certifies the configured
 plan; installed boards outside that plan may need further preparation.
 Incomplete preparation stops launch; a deleted package requires bootstrap repair.
+An older prepared store must run bootstrap again when the default plan changes.
+Compile, Upload and Reset hold shared package-store leases; explicit background
+board preparation reserves an exclusive lease and waits for existing users to
+finish. Further package operations report that preparation is active, while
+editing and monitoring stay available. Coordination applies across sketch
+windows and the separate preparation process.
+The PlatformIO tool-store stages of Windows and Ubuntu host repair use the same
+exclusive coordination and release it before launching the workspace. Python
+environment repair retains its separate setup workflow.
+Board preparation also certifies the exact board-definition bytes. Changed
+definitions, or older certificates without their hashes, require preparation
+before the downloader can report those boards as ready.
+Downloaded-index targets also require a successful builder check for the exact
+board ID; a check for another board with the same chip cannot certify it.
+On Windows, app-owned PlatformIO locks open without truncating their contents
+and retain a stable file between workers. Concurrent builder checks wait on
+the native byte lock instead of racing file deletion. Hidden lock files remain
+usable; genuine read-only or access failures report the affected path. The
+adapter follows the configured core, with no fixed username or drive path,
+and Ubuntu retains its native locking. Setup ignores an inherited unrelated
+PlatformIO store and uses this installation's own store. No held lock is deleted.
 
 On Windows, bootstrap omits the optional Unix-only Zephyr `tool-gperf` package
 when none of the platform's board/framework configurations requires it. All
@@ -689,11 +731,21 @@ MCU Flasher by Naph/
 - **Active COM Port Enumeration**: The port dropdown enumerates all active serial ports with hardware descriptions (e.g. `COM9 - USB-SERIAL CH340 (COM9)`). Selecting a port connects instantly.
 - **Zero-Reset ESP32 Protection**: Serial ports open with DTR and RTS explicitly de-asserted (`conn.dtr = False`, `conn.rts = False`). Background `esptool` probing is disabled, ensuring running firmware on an attached ESP32 continues running smoothly without an unintended reset.
 - **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards and typo fallback remain available. The footer shows the board count, **Cancel** and **Select Board**. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
-- **Additional board platforms and libraries**: Add their PlatformIO specifications to `direct/offline-packages.json`, then open **Bootstrap** or run the host setup command while online. The workspace never opens the network downloader.
-
-> [!WARNING]
-> **Known Issue & Work-In-Progress (ESP8266 & External Board Indexes)**:
-> Support for ESP8266 boards and external board index packages (such as NodeMCU, ESP8266 community cores, or third-party vendor index URLs) is currently in active development and not yet functional for compilation or flashing, even though package definitions may appear downloadable in the Boards & Libraries Manager. Native AVR targets (Uno, Nano ATmega328, Mega 2560) and ESP32 targets remain fully supported.
+- **ESP8266 / NodeMCU**: The default bootstrap plan includes `espressif8266` with Arduino. NodeMCU 0.9 (ESP-12 Module) and NodeMCU 1.0 (ESP-12E Module) retain their independent exact PlatformIO definitions. Run bootstrap while online to prepare an older installation; compiling and uploading use the prepared local packages.
+- **Vendor board indexes**: In the separate **Libraries & boards** downloader, open **Board indexes**, enter complete HTTP/HTTPS vendor URLs separated by commas or newlines, and choose **Apply & refresh**. URLs are normalized and deduplicated; malformed index structures and source failures are reported while usable cached catalogs remain available. A failed settings write preserves the previous URL list.
+- **Downloaded board support**: **Folder / Extracted** and **Both** automatically start background preparation after checksum verification and extraction. For an existing download or **Archive Only**, select that board version and choose **Prepare board support**. Preparation follows Queued, Downloading, Verifying, Extracting, Preparing and Refreshing stages as applicable. Failure or interruption stays visible and can be retried explicitly; closing the progress card does not cancel the work.
+- **Custom board support**: User-added index packages use their downloaded declarations to find unique exact targets in the installed and freshly queried PlatformIO registry catalogs. Preparation adds the matching platform to the existing plan and verifies the installed definition and exact builder. For a vendor's custom PlatformIO source, select **Custom platform…** to save its registry/version or HTTPS specification and optional Arduino-to-PlatformIO board ID mappings. Settings belong to the requested index, package and architecture; index-authored mappings cannot override them.
+- **Arduino CLI fallback**: Only a successful complete registry check with no exact PlatformIO board identity authorizes fallback. A notice explains that PlatformIO has no support for that exact board yet. The separate preparation worker installs the exact declared Arduino core/version, checks its FQBN and compiler, and certifies local core/tools. Compile and Upload then use the prepared Arduino CLI store with downloads disabled. Network failures, ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. Newly installed PlatformIO support disables the old fallback. Upload uses one explicit write attempt and checks the current board, port, source and firmware bytes before writing.
+  Windows Bootstrap prepares the Arduino CLI executable. Ubuntu requires a
+  native Arduino CLI installed on PATH before preparing fallback board support;
+  missing-tool notices explain this prerequisite.
+  Preparation retains the exact declaration bytes it parsed. Changed declarations
+  or PlatformIO definitions invalidate readiness before publication, and older
+  cached identities cannot borrow a newer preparation receipt. Arduino CLI builds
+  check the staged source bytes too; upload rechecks Stop, board and port after
+  validating the prepared toolchain.
+- **Readiness and coverage**: An Arduino archive alone does not certify compilation support. Choose **View all board results** on a completed notification to open the searchable coverage table with status filters, exact targets, backend and complete reasons. Every included board receives a result: ready, preparation required, unsupported framework or unavailable exact definition. Complete reports remain under `logs/package-jobs/reports/` for the most recent 48 completed jobs; active jobs are retained. Ready boards remain available when other boards in the same package cannot be mapped. No nearby board is substituted.
+- **Additional board platforms and libraries**: Add their PlatformIO specifications to `direct/offline-packages.json`, then open **Bootstrap** or run the host setup command while online. Compilation, upload and reset use the prepared store.
 
 
 ### 4. Compiling & Flashing Code
@@ -854,6 +906,14 @@ MCU Flasher by Naph/
 - **`src/modules/crash_detector.py`**: Session sentinel, unhandled exception recorder, and startup crash recovery marker engine.
 - **`src/modules/bootstrap.py`**: Windows runtime bootstrapper with a resizable native PySide6 glass setup window, bounded logs and inline package progress. Repairs Python and dependencies, prepares PlatformIO, and launches the workspace. A healthy Windows installation uses the cached launch path; Ubuntu uses its native virtual environment.
 - **`src/modules/offline_bootstrap.py`**: Prepares `direct/offline-packages.json` before workspace launch and certifies host-native dependencies. An explicit custom plan can be supplied with `direct/windows/run.vbs --repair --plan "path/to/plan.json"` or `python3 direct/ubuntu/setup.py --plan "path/to/plan.json"`. Changing the default plan requires bootstrap preparation again.
+- **`src/modules/board_preparation.py`**: Separate private-runtime worker for downloaded board packages. Preserves existing plan coverage, discovers exact registered targets, verifies requested builder/definition receipts and writes complete coverage.
+- **`src/modules/board_index_targets.py`**: Validates optional custom platform/board associations and distinguishes complete registry absence from failed discovery or ambiguity.
+- **`src/modules/arduino_cli_support.py`** and **`main/core/arduino_backend.py`**: Prepare and execute certified Arduino CLI targets only when PlatformIO has no exact board support; source/core/tool and firmware checks retain offline, single-attempt behavior.
+- **`src/modules/platformio_locks.py`**: Native Windows lock adaptation for app-owned tool stores, including concurrent builder checks and hidden lock files.
+- **`src/modules/package_jobs.py`**: Atomic bounded job snapshots, stage history, file-based metadata/report handoffs and cross-process package-store leases. Workspace readers remain independent; stopped preparation workers are reported as interrupted.
+- **`main/qt/package_progress.py`**: Window-owned, focus-preserving progress card anchored inside the workspace, with themed stage/progress display and a Notifications action.
+- **`main/core/package_activity.py`**: Background reader forwarding package stages and outcomes to each workspace's progress and notification signals, with deferred local catalog refresh.
+- **`main/qt/package_coverage.py`**: Explicit asynchronous coverage viewer with virtual table rows, search/status filters and complete board reasons. Opens only through a requested details action.
 - **`src/modules/offline_runtime.py` / `offline_platformio.py`**: Prevent workspace package downloads and dependency installer fallbacks. Missing local packages report the host bootstrap repair command; local terminal sockets and symlinked libraries remain usable.
 - **`src/modules/launcher.py`**: Entry point launcher configuring Windows `AppUserModelID` for taskbar grouping and single-instance mutex handling.
 - **`src/modules/dedicated_AI.py`**: OpenCode AI assistant process controller (HTTP server + WebSocket + pywinpty).
@@ -987,6 +1047,14 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_target_resolution.py
 & src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
+& src/_python/python.exe -B direct/verify_package_jobs.py
+& src/_python/python.exe -B direct/verify_board_preparation.py
+& src/_python/python.exe -B direct/verify_board_index_targets.py
+& src/_python/python.exe -B direct/verify_arduino_fallback.py
+& src/_python/python.exe -B direct/verify_platformio_locks.py
+& src/_python/python.exe -B direct/verify_custom_board_dialog.py --render-dir temp/audit/custom-board-dialog
+& src/_python/python.exe -B direct/verify_package_progress.py
+& src/_python/python.exe -B direct/verify_package_coverage.py
 & src/_python/python.exe -B direct/verify_responsive.py
 & src/_python/python.exe -B direct/verify_projects.py --render-dir temp/audit/projects
 node direct/verify_editor_preferences.js
@@ -995,6 +1063,29 @@ node direct/verify_editor_preferences.js
 The full Qt/WebEngine and terminal checks require working native renderer and
 loopback facilities. Report unavailable sandbox checks separately from passing
 mocked worker/target checks; physical upload success is not proved by fixtures.
+Package-job verification uses real private-runtime child processes with fake
+tool stores under `temp/`. It checks reader/writer exclusion, queued preparation,
+cancellation, crashed-worker cleanup, write-failure preservation, independent
+workspace readers, bounded progress records and complete coverage handoffs.
+Isolated host-repair checks execute the Windows setup worker with installers
+mocked and the Ubuntu entry point with subprocesses mocked, verifying that
+package mutation is guarded and workspace launch occurs after lease release.
+Board-preparation verification mocks installers and certifiers while checking
+both exact NodeMCU variants, custom-source mapping, plan preservation, failed
+preparation, unsupported frameworks and every board in large coverage reports.
+Custom-index and Arduino CLI checks mock registry/core installation and hardware
+writes while exercising exact absence, failed lookup/ambiguity rejection,
+source-bound publication, runtime routing and changed-byte upload rejection.
+Native Windows lock checks use temporary hidden/read-only files and four real
+child workers with repeated acquisitions; no live package store is changed.
+Custom platform dialog checks mock settings writes and verify literal source
+specifications, preserved unrelated settings, failed-save recovery, cancellation,
+all palettes, scrolling and native frame placement including negative coordinates.
+The progress-card checks cover focus, stale events, multiple jobs, dismissal,
+themes and compact placement; coverage-viewer checks cover asynchronous loading,
+filtering, report validation and explicit notification links.
+For verifiers that construct the backend, set `MCU_PACKAGE_EVENTS_ROOT` to an
+isolated `temp/` directory so lease and job records cannot reach live logs.
 
 The cold-window and promotion checks use isolated configuration and simulated
 dependency availability. They verify the original Qt design, retained logs and

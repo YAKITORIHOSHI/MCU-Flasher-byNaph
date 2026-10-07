@@ -101,6 +101,66 @@ class CacheChecks(unittest.TestCase):
                                                      url='https://example.invalid/core.zip')]) for vendor in ('one', 'two')]
         self.assertEqual(len(browser._group_boards(packages)), 2)
 
+    def test_custom_index_shape_newlines_and_atomic_settings_failure(self):
+        self.assertEqual(browser.parse_additional_board_urls("https://vendor.invalid/a.json\nhttps://vendor.invalid/b.json,https://vendor.invalid/a.json"),
+                         ["https://vendor.invalid/a.json", "https://vendor.invalid/b.json"])
+        for payload in ({"packages": [None]}, {"packages": [{"name": "vendor", "platforms": {}}]},
+                        {"packages": [{"name": "vendor", "platforms": [{"name": "Core", "boards": {}}]}]}):
+            with self.assertRaises(ValueError):
+                browser._validate_index_payload(payload, "packages")
+        settings = self.folder / "settings.json"
+        settings.write_bytes(b'{"additional_board_urls":[]}')
+        before = settings.read_bytes()
+        with patch.object(browser, "SETTINGS_FILE", str(settings)), patch.object(browser.os, "replace", side_effect=OSError("Read-only")):
+            self.assertFalse(browser._save_settings({"additional_board_urls": ["https://vendor.invalid/core.json"]}))
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertEqual(list(self.folder.glob("settings.json.tmp-*")), [])
+
+    def test_board_provenance_and_user_mapping_follow_selected_release(self):
+        source = self.folder / 'vendor.json'
+        source.write_text(json.dumps({'packages': [dict(name='future-vendor', _index_url='https://forged.invalid/index.json',
+            platforms=[dict(name='Future core', architecture='future', version='2.0',
+                            url='https://vendor.invalid/core.zip', boards=[dict(name='Future board')])])]}), encoding='utf-8')
+        with patch.object(browser, 'INDEX_CACHE_DIR', str(self.folder)):
+            grouped = browser._read_board_catalog([str(source)], source_urls={str(source): 'https://vendor.invalid/index.json'})
+        item = grouped['Future core']
+        version = item['versions'][0]
+        self.assertEqual(version['index_url'], 'https://vendor.invalid/index.json')
+        app = object.__new__(browser.ArduinoBrowser)
+        value = {'platform': 'vendor/future@2.0', 'board_ids': {'future_chip': 'exact_future'}}
+        key = app._board_association_key({**item, **version})
+        app._board_platformio_associations = {key: value}
+        self.assertEqual(app._package_metadata(item, version, is_board=True)['platformio'], value)
+        foreign = dict(version, index_url='https://different.invalid/index.json', platformio=value)
+        self.assertNotIn('platformio', app._package_metadata(item, foreign, is_board=True))
+        self.assertNotIn('platformio', app._package_metadata(item, version, is_board=False))
+
+    def test_promotion_failure_restores_previous_payload_and_cancel_keeps_archive(self):
+        previous, staging = self.folder / "core", self.folder / "core.part"
+        previous.mkdir()
+        (previous / "keep.txt").write_bytes(b"Previous payload")
+        staging.mkdir()
+        (staging / "new.txt").write_bytes(b"New payload")
+        replace = browser.os.replace
+        def reject_new(source, target):
+            if str(source) == str(staging):
+                raise OSError("Fixture destination unavailable")
+            return replace(source, target)
+        with patch.object(browser.os, "replace", side_effect=reject_new):
+            with self.assertRaises(OSError):
+                browser._promote_directory(str(staging), str(previous))
+        self.assertEqual((previous / "keep.txt").read_bytes(), b"Previous payload")
+        archive = self.folder / "core.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr("boards.txt", "nodemcuv2.name=NodeMCU 1.0 (ESP-12E Module)\n")
+        cancel = threading.Event()
+        cancel.set()
+        before = archive.read_bytes()
+        with self.assertRaises(InterruptedError):
+            browser._extract_archive(str(archive), str(self.folder / "cancelled"), cancel)
+        self.assertEqual(archive.read_bytes(), before)
+        self.assertFalse((self.folder / "cancelled").exists())
+
     def test_single_pass_details_and_cancellation(self):
         example = self.folder / 'examples/Blink/Blink.ino'
         example.parent.mkdir(parents=True)
@@ -145,6 +205,7 @@ class BrowserLoadingChecks(DownloaderChecks):
         self.addCleanup(flush_writes)
         self.folder = Path(temporary.name)
         self.app._download_dir = str(self.folder / 'downloads')
+        self.app._cancel_event = threading.Event()
         self.app._compute_installed_items = MethodType(browser.ArduinoBrowser._compute_installed_items, self.app)
         self.app._compute_installed_items_async = MethodType(browser.ArduinoBrowser._compute_installed_items_async, self.app)
 
@@ -367,6 +428,156 @@ class BrowserLoadingChecks(DownloaderChecks):
             self.until(lambda: not app._busy and app._tasks._timer is None)
         self.assertEqual(peak[0], 2)
 
+    def test_large_catalog_search_is_latest_only_and_keeps_tk_responsive(self):
+        tab = self.app.lib_tab
+        original_scan = tab._search_worker.scan
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        ui_thread = threading.get_ident()
+        calls = []
+        def scan(request, cancel):
+            self.assertNotEqual(threading.get_ident(), ui_thread)
+            calls.append(request[1])
+            if len(calls) == 1:
+                started.set()
+                release.wait(2)
+            return original_scan(request, cancel)
+        tab._search_worker.scan = scan
+        tab.populate({f"Sensor {index:05}": {"name": f"Sensor {index:05}", "versions": []} for index in range(25000)})
+        self.until(started.is_set)
+        ticks = []
+        self.root.after(0, lambda: ticks.append(True))
+        for query in ("000", "sensor 123", "sensor 12345"):
+            tab.search_var.set(query)
+            tab._execute_search()
+        self.root.update()
+        self.assertEqual(ticks, [True])
+        self.assertEqual(tab.listbox.size(), 0)
+        release.set()
+        self.until(lambda: tab.filtered_names == ["Sensor 12345"] and self.app._tasks._timer is None)
+        self.assertEqual(calls, ["", "sensor 12345"])
+        self.assertEqual(tab.listbox.get(0), "Sensor 12345")
+
+    def test_version_disk_scan_stays_off_tk_and_discards_stale_selection(self):
+        app, tab = self.app, self.app.lib_tab
+        tab.populate({name: {"name": name, "versions": [dict(version="1.0", size=128, url="https://fixture.invalid/core.zip")]} for name in ("First", "Second")})
+        app._update_version_status = MethodType(browser.ArduinoBrowser._update_version_status, app)
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        ui_thread = threading.get_ident()
+        calls = []
+        def slow_scan(_tab, name, item, **kwargs):
+            self.assertNotEqual(threading.get_ident(), ui_thread)
+            calls.append(name)
+            if name == "First":
+                started.set()
+                release.wait(2)
+            return None
+        tab.version_var.set("1.0")
+        with patch.object(app, "_get_installed_info", side_effect=slow_scan), patch.object(app, "_render_version_status") as render:
+            tab.listbox.selection_set(0)
+            app._update_version_status(tab)
+            self.until(started.is_set)
+            tab.listbox.selection_clear(0, "end")
+            tab.listbox.selection_set(1)
+            app._update_version_status(tab)
+            release.set()
+            self.until(lambda: app._tasks._timer is None)
+            self.assertEqual(calls, ["First", "Second"])
+            render.assert_called_once()
+            self.assertEqual(render.call_args.args[1], "Second")
+
+    def test_board_download_handoff_reuses_job_and_selected_version_metadata(self):
+        app, tab = self.app, self.app.board_tab
+        app._active_download_tab = tab
+        app._downloading_item_name = "ESP8266"
+        app._cancel_event = threading.Event()
+        app._busy = True
+        data_stream = io.BytesIO()
+        with zipfile.ZipFile(data_stream, "w") as archive:
+            archive.writestr("esp8266/boards.txt", "nodemcuv2.name=NodeMCU 1.0 (ESP-12E Module)\n")
+        data = data_stream.getvalue()
+        metadata = dict(name="ESP8266", package="esp8266", architecture="esp8266", boards=["NodeMCU 1.0 (ESP-12E Module)"],
+                        size=len(data), checksum="SHA-256:" + hashlib.sha256(data).hexdigest())
+        response = Mock(headers={"content-length": str(len(data))}, raise_for_status=Mock(),
+                        iter_content=Mock(return_value=iter([data])), close=Mock())
+        destination = self.folder / "download/Boards"
+        app._active_package_job = "handoff-fixture"
+        with patch.object(browser.requests, "get", return_value=response), patch("src.modules.board_preparation.start_preparation") as prepare, \
+                patch.object(browser.messagebox, "showinfo") as success, patch.object(browser.messagebox, "showerror") as failure:
+            app._tasks.start(app._download_worker, tab, "https://fixture.invalid/esp8266.zip", "esp8266.zip", str(destination),
+                             "folder", None, metadata, "handoff-fixture")
+            self.until(lambda: not app._busy and app._tasks._timer is None)
+            prepare.assert_called_once()
+            self.assertEqual(prepare.call_args.kwargs["job_id"], "handoff-fixture")
+            self.assertEqual(prepare.call_args.kwargs["package_metadata"], metadata)
+            self.assertEqual(prepare.call_args.kwargs["event_root"], app._package_event_root)
+            self.assertTrue((Path(prepare.call_args.args[0]) / "boards.txt").exists())
+            success.assert_not_called()
+            failure.assert_not_called()
+        event = json.loads((Path(app._package_event_root) / "handoff-fixture.json").read_text(encoding="utf-8"))
+        self.assertEqual([stage["stage"] for stage in event["history"]], ["queued", "downloading", "verifying", "extracting", "queued"])
+        self.assertEqual(event["stage"], "queued")
+        self.assertIn("background", app.status_var.get())
+
+    def test_prepare_saved_archive_is_explicit_and_does_not_redownload(self):
+        app, tab = self.app, self.app.board_tab
+        destination = Path(app._download_dir) / "Boards"
+        destination.mkdir(parents=True)
+        archive = destination / "esp8266.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr("boards.txt", "nodemcuv2.name=NodeMCU 1.0 (ESP-12E Module)\n")
+        release = dict(version="3.1", url="https://fixture.invalid/esp8266.zip", archiveFileName=archive.name,
+                       size=archive.stat().st_size, checksum="SHA-256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+                       package="esp8266", architecture="esp8266", boards=["NodeMCU 1.0 (ESP-12E Module)"])
+        tab.populate({"ESP8266": dict(name="ESP8266", package="esp8266", architecture="esp8266", versions=[release])})
+        tab.listbox.selection_set(0)
+        tab.version_var.set("3.1")
+        with patch.object(browser.requests, "get", side_effect=AssertionError("Archive was redownloaded")), \
+                patch("src.modules.board_preparation.start_preparation") as prepare, patch.object(browser.messagebox, "showerror") as failure:
+            app._prepare_existing_board(tab)
+            self.until(lambda: not app._busy and app._tasks._timer is None)
+            prepare.assert_called_once()
+            failure.assert_not_called()
+        self.assertEqual(archive.stat().st_size, release["size"])
+        self.assertTrue((destination / "esp8266/boards.txt").exists())
+
+    def test_preparation_watcher_failure_warns_without_replaying_spawn(self):
+        app, tab = self.app, self.app.board_tab
+        app._busy, app._active_download_tab = True, tab
+        child = SimpleNamespace(preparation_tracking_error="Worker resources exhausted")
+        with patch("src.modules.board_preparation.start_preparation", return_value=child) as prepare, \
+                patch.object(browser.messagebox, "showerror") as error:
+            app._handoff_board_preparation(str(self.folder / "boards"), {"name": "ESP8266"}, "watcher-fixture")
+            app._download_done(tab, str(self.folder / "boards"), True)
+            self.until(lambda: app._tasks._timer is None)
+            prepare.assert_called_once()
+            error.assert_not_called()
+        self.assertFalse(app._busy)
+        self.assertIn("background tracking unavailable", app.status_var.get())
+        self.assertIn("Worker resources exhausted", app.status_var.get())
+
+    def test_tracking_write_failure_never_strands_download_controls(self):
+        app, tab = self.app, self.app.lib_tab
+        app._busy, app._active_download_tab = True, tab
+        app._downloading_item_name = "Sensor"
+        app._active_package_job = "unwritable-tracking"
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as stream:
+            stream.writestr("library.properties", "name=Sensor\n")
+        data = payload.getvalue()
+        response = Mock(headers={"content-length": str(len(data))}, raise_for_status=Mock(),
+                        iter_content=Mock(return_value=iter([data])), close=Mock())
+        with patch("src.modules.package_jobs.publish_event", side_effect=OSError("Tracking journal read-only")), \
+                patch.object(browser.requests, "get", return_value=response), patch.object(browser.messagebox, "showerror") as error:
+            app._tasks.start(app._download_worker, tab, "https://fixture.invalid/sensor.zip", "sensor.zip",
+                             str(self.folder / "downloads/Libs"), "zip", None, {"size": len(data)}, "unwritable-tracking")
+            self.until(lambda: not app._busy and app._tasks._timer is None)
+            error.assert_not_called()
+        self.assertEqual((self.folder / "downloads/Libs/sensor.zip").read_bytes(), data)
+        self.assertIn("tracking could not be saved", app.status_var.get())
+        self.assertEqual(str(tab.download_btn.cget("state")), "normal")
+
     def test_download_checksum_progress_and_cancel_cleanup(self):
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, 'w') as archive:
@@ -473,7 +684,7 @@ class BrowserLoadingChecks(DownloaderChecks):
                         self.assertEqual(app.status_var.get(), 'Download complete')
                         self.assertEqual(app._tasks._active, 0)
                         show_error.assert_called_once()
-                        show_info.assert_called_once()
+                        show_info.assert_not_called()
                         self.assertFalse((destination / 'fixture.zip.part').exists())
                         if updating:
                             self.assertFalse(old_path.exists())

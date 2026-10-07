@@ -87,6 +87,46 @@ class QtResponsiveChecks(ControlChecks):
             frame = widget.frameGeometry()
             self.assertTrue(QRect(-640, 20, 640, 480).contains(frame), str(frame))
 
+    def test_project_selector_glass_pages_and_frame(self):
+        # Reuse the owned project fixtures, including safe action dispatch,
+        # rather than constructing a backend that can touch live preferences.
+        import verify_projects
+        from main.qt.project_dialog import ProjectDialog
+        with patch.object(verify_projects, 'RENDER_DIR', RENDER_DIR):
+            verify_projects.ProjectChecks(
+                'test_glass_picker_pages_fit_and_preserve_inputs_through_themes_and_resizing'
+            ).debug()
+        ratio = APP.primaryScreen().devicePixelRatio()
+        for physical_width, physical_height in ((1920, 1040), (1366, 728), (1080, 1880)):
+            area = WorkArea(0, 0, int(physical_width / ratio), int(physical_height / ratio))
+            with patch('main.qt.responsive.work_area', return_value=area), \
+                 patch('main.core.config.get_open_projects', return_value=[]), \
+                 patch('main.core.config.get_theme_mode', return_value='default'):
+                dialog = self.own(ProjectDialog(initial_dir=''))
+                dialog.show()
+                pump()
+                clamp_window(dialog)
+                for page in range(dialog._tabs.count()):
+                    dialog._tabs.setCurrentIndex(page)
+                    pump()
+                    frame = dialog.frameGeometry()
+                    self.assertTrue(QRect(area.x, area.y, area.width, area.height).contains(frame),
+                                    f'{physical_width}x{physical_height} scale {ratio}: {frame}')
+                    for button in dialog._tabs.currentWidget().findChildren(QAbstractButton):
+                        # Scrolled page content may extend below its viewport;
+                        # the page-owned footer actions must remain visible.
+                        if button.isVisible() and button.parentWidget() is dialog._tabs.currentWidget():
+                            self.contained(button, dialog)
+                    if page == 1:
+                        scroll = dialog._tab_scrolls[page]
+                        scroll.ensureWidgetVisible(dialog._cb_include_cpp)
+                        pump()
+                        self.contained(dialog._cb_include_cpp, scroll.viewport())
+                        scroll.verticalScrollBar().setValue(0)
+                    if page in (0, 1):
+                        capture(dialog, f'project-frame-{physical_width}-{physical_height}-{page}')
+                dialog.close()
+
     def test_control_rows_and_serial_reflow(self):
         host = self.own(QWidget())
         layout = QVBoxLayout(host)
@@ -736,11 +776,40 @@ class TkResponsiveChecks(DownloaderChecks):
                 pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
                 self.assertTrue(pixmap.save(str(RENDER_DIR / f'downloader-{width}.png')))
 
+    def test_board_preparation_controls_and_source_status_wrap_on_short_screen(self):
+        app = self.app
+        from src.modules.tk_glass import ui_scale
+        scale = ui_scale(self.root)
+        width = min(round(480 * scale), self.root.winfo_screenwidth() - 48)
+        height = min(round(510 * scale), self.root.winfo_screenheight() - 80)
+        board = dict(name='ESP8266 device core', package='esp8266', architecture='esp8266', maintainer='Community',
+                     category='Device support', boards=['NodeMCU 1.0 (ESP-12E Module)', 'NodeMCU 0.9 (ESP-12 Module)'],
+                     versions=[dict(version='3.1.2', url='https://fixture.invalid/esp8266.zip', size=12000)])
+        app.board_tab.populate({board['name']: board})
+        app.board_tab.listbox.selection_set(0)
+        app.board_tab._on_select()
+        app.notebook.select(1)
+        self.root.geometry(f'{width}x{height}+20+20')
+        self.root.deiconify()
+        self.pump()
+        app.board_tab.detail_canvas.yview_moveto(1)
+        self.pump()
+        for control in (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn):
+            self.assertTrue(control.winfo_ismapped())
+            self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
+        app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
+        app.sources_btn.invoke()
+        self.pump()
+        self.assertGreater(app.sources_status.winfo_height(), 12)
+        self.assertLessEqual(app.sources_status.winfo_width(), app.sources_status.master.winfo_width())
+
 
 def main():
     global RENDER_DIR
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--render-dir', type=Path)
+    parser.add_argument('--only', action='append', default=[],
+                        help='Run checks whose method name contains this text (repeatable).')
     args = parser.parse_args()
     RENDER_DIR = args.render_dir
     if RENDER_DIR:
@@ -748,7 +817,7 @@ def main():
     suite = unittest.TestSuite()
     for cls in (QtResponsiveChecks, TkResponsiveChecks):
         for name in cls.__dict__:
-            if name.startswith('test_'):
+            if name.startswith('test_') and (not args.only or any(fragment in name for fragment in args.only)):
                 suite.addTest(cls(name))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print(f'Qt display scale: {APP.primaryScreen().devicePixelRatio():g}')

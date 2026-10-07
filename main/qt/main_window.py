@@ -549,6 +549,9 @@ class MCUMainWindow(QMainWindow):
 
         # ── Status bar ────────────────────────────────────────────────────────
         self._build_status_bar()
+        from main.qt.package_progress import PackageProgressCard
+        self._package_card = PackageProgressCard(self)
+        self._package_card.details_requested.connect(self._show_package_details)
 
         # ── Keyboard shortcuts ────────────────────────────────────────────────
         self._setup_shortcuts()
@@ -557,6 +560,13 @@ class MCUMainWindow(QMainWindow):
         from main.qt.signals import signals
         if hasattr(signals, "compat_confirm_requested"):
             signals.compat_confirm_requested.connect(self._on_compat_confirm_requested)
+
+    def _show_package_details(self):
+        self._bottom_tabs.setCurrentWidget(self._notif_panel)
+        job = self._package_card.current_job()
+        if job.get("details", {}).get("coverage_report"):
+            from main.qt.package_coverage import open_package_coverage
+            open_package_coverage(self, job["job_id"])
 
     def _on_compat_confirm_requested(self, payload: dict) -> None:
         title = payload.get("title", "Compatibility Warning")
@@ -588,6 +598,8 @@ class MCUMainWindow(QMainWindow):
         from main.core.theme import Theme
         from main.qt.theme import build_stylesheet
         Theme.apply_theme(theme_name)
+        if hasattr(self, "_package_card"):
+            self._package_card.apply_theme(theme_name)
         self._refresh_window_icon()
         self._tab_icons_initialized = False
         central = self.centralWidget()
@@ -698,6 +710,7 @@ class MCUMainWindow(QMainWindow):
         sig_bus.console_progress.connect(self._on_console_progress)
         sig_bus.telemetry.connect(self._on_telemetry)
         sig_bus.notification.connect(self._on_notification)
+        sig_bus.package_progress.connect(self._package_card.update_job)
         sig_bus.project_updated.connect(self._on_project_updated)
         sig_bus.window_closable.connect(self._set_window_closable)
         sig_bus.board_catalog_updated.connect(self._on_catalog_updated)

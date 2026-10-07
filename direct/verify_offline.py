@@ -200,6 +200,24 @@ class OfflineChecks(unittest.TestCase):
                 setup.prepare(self.core)
         self.assertFalse((self.core / setup.MARKER).exists())
 
+    def test_preparation_scopes_inprocess_managers_under_package_lock_adapter(self):
+        from contextlib import contextmanager
+        entered = []
+        @contextmanager
+        def adapter():
+            entered.append("entered")
+            try:
+                yield
+            finally:
+                entered.append("released")
+        def preparation(*args, **kwargs):
+            self.assertEqual(entered, ["entered"])
+            return "prepared"
+        with patch("src.modules.platformio_locks.package_locks", adapter), \
+                patch.object(setup, "_prepare", side_effect=preparation):
+            self.assertEqual(setup.prepare(self.core), "prepared")
+        self.assertEqual(entered, ["entered", "released"])
+
     def test_bootstrap_certifies_only_after_all_builder_steps_succeed(self):
         from contextlib import ExitStack
         from src.modules import bootstrap_builders
@@ -218,7 +236,7 @@ class OfflineChecks(unittest.TestCase):
                 manager.return_value.install.return_value = package
                 stack.enter_context(patch.object(tool, "ToolPackageManager"))
                 stack.enter_context(patch.object(library, "LibraryPackageManager"))
-                stack.enter_context(patch.object(PlatformFactory, "new", return_value=SimpleNamespace(get_boards=lambda: {})))
+                stack.enter_context(patch.object(PlatformFactory, "new", return_value=SimpleNamespace(name="demo", get_boards=lambda: {})))
                 stack.enter_context(patch.object(setup, "package_plan", return_value=([], [("demo", "arduino")])))
                 stack.enter_context(patch.object(setup, "install_runtime_guard", return_value=[]))
                 builder = stack.enter_context(patch.object(bootstrap_builders, "run_builder"))
@@ -264,7 +282,8 @@ class OfflineChecks(unittest.TestCase):
                 manager.return_value.install.side_effect = lambda name, **kwargs: packages[name]
                 stack.enter_context(patch.object(tool, "ToolPackageManager"))
                 stack.enter_context(patch.object(library, "LibraryPackageManager"))
-                stack.enter_context(patch.object(PlatformFactory, "new", return_value=SimpleNamespace(get_boards=lambda: {})))
+                stack.enter_context(patch.object(PlatformFactory, "new", side_effect=lambda package:
+                                              SimpleNamespace(name=Path(package.path).name, get_boards=lambda: {})))
                 stack.enter_context(patch.object(setup, "package_plan", return_value=([], [(str(i), "arduino") for i in range(4)])))
                 stack.enter_context(patch.object(setup, "_parallel_builder_safe", return_value=reviewed))
                 stack.enter_context(patch.object(setup, "install_runtime_guard", return_value=[]))
@@ -838,7 +857,7 @@ class OfflineChecks(unittest.TestCase):
                 manager.return_value.install.return_value = SimpleNamespace(path=str(folder))
                 tools = stack.enter_context(patch.object(tool, "ToolPackageManager"))
                 libraries = stack.enter_context(patch.object(library, "LibraryPackageManager"))
-                stack.enter_context(patch.object(PlatformFactory, "new", return_value=SimpleNamespace(get_boards=lambda: {})))
+                stack.enter_context(patch.object(PlatformFactory, "new", return_value=SimpleNamespace(name="demo", get_boards=lambda: {})))
                 stack.enter_context(patch.object(setup, "package_plan", return_value=([], [("demo", "arduino")])))
                 stack.enter_context(patch.object(setup, "install_runtime_guard", return_value=[]))
                 builder = stack.enter_context(patch.object(bootstrap_builders, "run_builder"))

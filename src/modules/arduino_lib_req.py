@@ -89,7 +89,7 @@ def _url_parts(value) -> list[str]:
     trailing comma harmless.
     """
     if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
+        return [part.strip() for part in re.split(r"[,\r\n]+", value) if part.strip()]
     if isinstance(value, (list, tuple)):
         return [str(part).strip() for part in value if str(part).strip()]
     return []
@@ -206,6 +206,21 @@ def _validate_index_payload(data, expected_key: str) -> dict:
         raise ValueError("index root must be a JSON object")
     if not isinstance(data.get(expected_key), list):
         raise ValueError(f"index must contain a '{expected_key}' array")
+    if expected_key == "packages":
+        for package in data[expected_key]:
+            if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+                raise ValueError("each board package must declare a name")
+            platforms = package.get("platforms", [])
+            if not isinstance(platforms, list):
+                raise ValueError("board package platforms must be an array")
+            for platform in platforms:
+                if not isinstance(platform, dict) or not isinstance(platform.get("name"), str):
+                    raise ValueError("each board platform must declare a name")
+                if not isinstance(platform.get("boards", []), list):
+                    raise ValueError("board platform boards must be an array")
+                for key in ("toolsDependencies", "discoveryDependencies", "monitorDependencies", "libraryDependencies"):
+                    if not isinstance(platform.get(key, []), list):
+                        raise ValueError(f"board platform {key} must be an array")
     return data
 
 
@@ -755,12 +770,21 @@ def _load_settings() -> dict:
 
 
 def _save_settings(settings: dict):
-    """Persist settings to disk. Non-fatal on failure."""
+    """Persist atomically and report failure without losing the saved settings."""
+    temporary = f"{SETTINGS_FILE}.tmp-{os.getpid()}-{threading.get_ident()}"
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(SETTINGS_FILE)), exist_ok=True)
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
+        os.replace(temporary, SETTINGS_FILE)
+        return True
     except OSError:
-        pass
+        return False
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Version helpers
@@ -989,7 +1013,7 @@ def _safe_archive_target(extract_dir: str, member_name: str) -> str:
     return target
 
 
-def _extract_archive(filepath: str, extract_dir: str):
+def _extract_archive(filepath: str, extract_dir: str, cancel=None):
     """Extract zip/tar package archives safely, including modern tar.zst names."""
     import zipfile
     import tarfile
@@ -997,11 +1021,25 @@ def _extract_archive(filepath: str, extract_dir: str):
     import stat
     from pathlib import Path
 
+    def check_cancelled():
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Package extraction cancelled")
+
+    def copy(source, dest):
+        while True:
+            check_cancelled()
+            block = source.read(256 * 1024)
+            if not block:
+                break
+            dest.write(block)
+
+    check_cancelled()
     os.makedirs(extract_dir, exist_ok=True)
     lower_path = filepath.lower()
     if lower_path.endswith('.zip') or zipfile.is_zipfile(filepath):
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
             for member in zip_ref.infolist():
+                check_cancelled()
                 target = _safe_archive_target(extract_dir, member.filename)
                 mode = (member.external_attr >> 16) & 0o170000
                 if mode == stat.S_IFLNK:
@@ -1011,7 +1049,7 @@ def _extract_archive(filepath: str, extract_dir: str):
                     continue
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with zip_ref.open(member, "r") as source, open(target, "wb") as dest:
-                    shutil.copyfileobj(source, dest)
+                    copy(source, dest)
     else:
         try:
             tar_ref = tarfile.open(filepath, 'r:*')
@@ -1031,18 +1069,39 @@ def _extract_archive(filepath: str, extract_dir: str):
                     encoding="utf-8", errors="replace",
                 )
                 for member_name in listing.stdout.splitlines():
+                    check_cancelled()
                     _safe_archive_target(extract_dir, member_name.strip())
-                subprocess.run(
-                    [tar_executable, "-xf", filepath, "-C", extract_dir],
-                    check=True, capture_output=True,
-                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
-                )
+                child = subprocess.Popen([tar_executable, "-xf", filepath, "-C", extract_dir],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
+                try:
+                    while True:
+                        check_cancelled()
+                        try:
+                            _output, errors = child.communicate(timeout=.1)
+                            if child.returncode:
+                                raise RuntimeError(errors.decode("utf-8", errors="replace")[:1000])
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
+                finally:
+                    if child.poll() is None:
+                        child.terminate()
+                        try:
+                            child.communicate(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            child.kill()
+                            child.communicate()
+                check_cancelled()
+            except InterruptedError:
+                raise
             except (OSError, subprocess.SubprocessError) as tar_exc:
                 raise RuntimeError(f"Cannot extract tar.zst archive: {tar_exc}") from tar_exc
 
         if tar_ref is not None:
             try:
-                for member in tar_ref.getmembers():
+                for member in tar_ref:
+                    check_cancelled()
                     target = _safe_archive_target(extract_dir, member.name)
                     # Symlinks and hardlinks can escape the destination on Windows;
                     # package contents remain usable without them.
@@ -1058,9 +1117,10 @@ def _extract_archive(filepath: str, extract_dir: str):
                         continue
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with source, open(target, "wb") as dest:
-                        shutil.copyfileobj(source, dest)
+                        copy(source, dest)
             finally:
                 tar_ref.close()
+    check_cancelled()
     # Self-heal / flatten double nesting if present
     try:
         p_dir = Path(extract_dir)
@@ -1070,10 +1130,39 @@ def _extract_archive(filepath: str, extract_dir: str):
             nested = subdirs[0]
             # Move all contents of nested up to p_dir
             for item in nested.iterdir():
+                check_cancelled()
                 shutil.move(str(item), str(p_dir))
             nested.rmdir()
+    except InterruptedError:
+        raise
     except Exception:
         pass
+
+
+def _promote_directory(staging, destination):
+    """Replace a complete payload while preserving the previous one on failure."""
+    import shutil
+    previous = f"{destination}.previous-{os.getpid()}-{threading.get_ident()}"
+    had_previous = os.path.isdir(destination)
+    if had_previous:
+        os.replace(destination, previous)
+    try:
+        os.replace(staging, destination)
+    except Exception:
+        if had_previous:
+            os.replace(previous, destination)
+        raise
+    if had_previous:
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def _inside_directory(path, directory):
+    try:
+        root = os.path.normcase(os.path.abspath(directory))
+        target = os.path.normcase(os.path.abspath(path))
+        return target != root and os.path.commonpath((root, target)) == root
+    except (ValueError, OSError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1210,6 +1299,10 @@ def _group_boards(packages: list[dict]) -> dict[str, dict]:
                 size_val = 0
             versions.append({
                 "version": version,
+                "index_url": str(_pkg.get("_index_url") or ""),
+                "package": str(_pkg.get("name") or ""),
+                "architecture": str(pv.get("architecture") or ""),
+                "boards": [str(board.get("name") or "") for board in pv.get("boards", []) if isinstance(board, dict)],
                 "url": url,
                 "size": size_val,
                 "checksum": pv.get("checksum", ""),
@@ -1252,7 +1345,7 @@ def _read_library_catalog(cache_file=LIBRARY_CACHE_FILE, data=None):
     return load_catalog(cache_file + '.catalog-v1.json', [cache_file], build)
 
 
-def _read_board_catalog(paths, fresh=None):
+def _read_board_catalog(paths, fresh=None, source_urls=None):
     from src.modules.browser_loading import load_catalog
     def build():
         packages, loaded = [], False
@@ -1262,7 +1355,10 @@ def _read_board_catalog(paths, fresh=None):
                 raw = _read_index_cache(path, 'packages')
             if raw is not None:
                 loaded = True
-                packages.extend(raw['packages'])
+                # Provenance comes from our requested source, never a field
+                # supplied by the remote JSON document.
+                packages.extend({**package, '_index_url': (source_urls or {}).get(path, '')}
+                                for package in raw['packages'])
         return _group_boards(packages) if loaded else None
     if fresh and any(raw.get('_browser_cache_written') is False for raw in fresh.values()):
         return build()
@@ -1290,6 +1386,13 @@ class BrowseTab:
         self.loaded_count = 0
         self._loading_more = False
         self._load_more_after_id = None
+        self._label_after_id = None
+        self._search_revision = 0
+        from src.modules.browser_loading import LatestScan, search_catalog
+        self._search_worker = LatestScan(app._tasks, search_catalog)
+        self._version_revision = 0
+        self._version_worker = LatestScan(app._tasks, lambda request, cancel: None if cancel.is_set()
+            else app._get_installed_info(*request[:3], download_dir=request[3], installed_items=request[4], cancel=cancel))
 
         self._wrapping_labels: list[Any] = []
         self.lbl_name: Any = None
@@ -1320,7 +1423,11 @@ class BrowseTab:
 
         def cancel_callbacks(event):
             if event.widget is parent:
-                for name in ('_search_after_id', '_load_more_after_id'):
+                self._search_revision += 1
+                self._search_worker.cancel()
+                self._version_revision += 1
+                self._version_worker.cancel()
+                for name in ('_search_after_id', '_load_more_after_id', '_label_after_id'):
                     timer = getattr(self, name, None)
                     if timer is not None:
                         self.app.root.after_cancel(timer)
@@ -1342,19 +1449,21 @@ class BrowseTab:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER
         )
+        self.lbl_search_status = tk.Label(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        self.lbl_search_status.pack(side="right", padx=(10, 0))
         self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
-
-        self.lbl_search_status = tk.Label(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
-        self.lbl_search_status.pack(side="left", padx=(10, 0))
+        self.search_entry.bind("<Return>", lambda _event: self._execute_search())
 
         # Paned window: list | detail
         pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BORDER, sashwidth=2, sashrelief=tk.FLAT, bd=0)
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
-        left = tk.Frame(pane, bg=Theme.BG_DARKEST)
-        pane.add(left, minsize=200)
+        from src.modules.tk_glass import GlassCard
+        left_card = GlassCard(pane, Theme, padding=7, expand=True)
+        pane.add(left_card, minsize=200)
+        left = left_card.body
 
         self.listbox = tk.Listbox(
             left, font=("Consolas", 10),
@@ -1373,10 +1482,12 @@ class BrowseTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        self.detail_frame = tk.Frame(pane, bg=Theme.BG_DARKEST)
-        pane.add(self.detail_frame, minsize=350)
+        detail_card = GlassCard(pane, Theme, padding=9, expand=True)
+        pane.add(detail_card, minsize=350)
+        self.detail_frame = detail_card.body
+        self.detail_frame.configure(bg=Theme.BG_DARKEST)
         from src.modules.tk_glass import ResponsivePanes
-        self._responsive_panes = ResponsivePanes(pane, left, self.detail_frame)
+        self._responsive_panes = ResponsivePanes(pane, left_card, detail_card)
 
         # Placeholder
         self.lbl_placeholder = tk.Label(
@@ -1455,9 +1566,9 @@ class BrowseTab:
         if self.all_items is items:
             return
         self.all_items = items
-        self.sorted_names = sorted(items.keys(), key=str.lower)
-        self.name_tuples = [(n, n.lower()) for n in self.sorted_names]
-        self.filtered_names = list(self.sorted_names)
+        self.sorted_names = []
+        self.name_tuples = []
+        self.filtered_names = []
         if hasattr(self, "detail_canvas"):
             self.detail_canvas.pack_forget()
         if hasattr(self, "detail_scroll"):
@@ -1470,25 +1581,35 @@ class BrowseTab:
         inst_map = getattr(self.app, "_installed_map", None)
         if inst_map and name.lower() in inst_map:
             inst = inst_map[name.lower()]
-            return f"⬆ {name}" if inst.get("update_available") else f"✔ {name}"
+            return f"⬆ {name}" if inst.get("update_available") else f"{'↓' if self is self.app.board_tab else '✔'} {name}"
         return name
 
     def refresh_listbox_labels(self):
-        """Update visible labels in listbox with current installed/update badges."""
+        """Relabel in bounded batches without resetting scroll or selection."""
         if not hasattr(self, "listbox") or not self.listbox.winfo_exists():
             return
-        sel = self.listbox.curselection()
-        selected_idx = sel[0] if sel else None
-
-        yview = self.listbox.yview()
-        self.listbox.delete(0, tk.END)
-        labels = [self._display_item_name(n) for n in self.filtered_names[:self.loaded_count]]
-        if labels:
-            self.listbox.insert(tk.END, *labels)
-        if selected_idx is not None and selected_idx < len(self.filtered_names):
-            self.listbox.selection_set(selected_idx)
-        if yview:
-            self.listbox.yview_moveto(yview[0])
+        revision = self._search_revision
+        def relabel(start=0):
+            self._label_after_id = None
+            if revision != self._search_revision or not self.listbox.winfo_exists():
+                return
+            end = min(start + 250, self.loaded_count)
+            existing = self.listbox.get(start, end - 1) if end > start else ()
+            for offset, old in enumerate(existing):
+                index = start + offset
+                label = self._display_item_name(self.filtered_names[index])
+                if label != old:
+                    selected = index in self.listbox.curselection()
+                    self.listbox.delete(index)
+                    self.listbox.insert(index, label)
+                    if selected:
+                        self.listbox.selection_set(index)
+            if end < self.loaded_count:
+                self._label_after_id = self.app.root.after(16, lambda: relabel(end))
+        if self._label_after_id is not None:
+            self.app.root.after_cancel(self._label_after_id)
+            self._label_after_id = None
+        relabel()
 
     def _populate_listbox(self):
         _load_more_after_id = getattr(self, "_load_more_after_id", None)
@@ -1543,20 +1664,28 @@ class BrowseTab:
         self._search_after_id = self.app.root.after(150, self._execute_search)
 
     def _execute_search(self):
+        if self._search_after_id is not None:
+            self.app.root.after_cancel(self._search_after_id)
         self._search_after_id = None
-        text = self.search_var.get().strip().lower()
-        if not text:
-            self.filtered_names = list(self.sorted_names)
+        self._search_revision += 1
+        revision, items = self._search_revision, self.all_items
+        query = self.search_var.get().strip().casefold()
+        def completed(names, error):
+            if revision != self._search_revision or items is not self.all_items:
+                return
+            if error:
+                self.lbl_search_status.config(text=f"Search unavailable: {error}")
+                return
+            if names is not None:
+                self.filtered_names = names
+                self._populate_listbox()
+        if len(items) <= 1000:
+            from src.modules.browser_loading import search_catalog
+            self._search_worker.cancel()
+            completed(search_catalog((items, query), threading.Event()), None)
         else:
-            starts_with = []
-            contains = []
-            for n, n_lower in self.name_tuples:
-                if n_lower.startswith(text):
-                    starts_with.append(n)
-                elif text in n_lower:
-                    contains.append(n)
-            self.filtered_names = starts_with + contains
-        self._populate_listbox()
+            self.lbl_search_status.config(text="Searching…")
+            self._search_worker.submit((items, query), completed)
 
     def _on_select(self, event=None):
         sel = self.listbox.curselection()
@@ -1646,8 +1775,10 @@ class InstalledTab:
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
-        left = tk.Frame(pane, bg=Theme.BG_DARKEST)
-        pane.add(left, minsize=200)
+        from src.modules.tk_glass import GlassCard
+        left_card = GlassCard(pane, Theme, padding=7, expand=True)
+        pane.add(left_card, minsize=200)
+        left = left_card.body
 
         self.listbox = tk.Listbox(
             left, font=("Consolas", 10),
@@ -1666,8 +1797,10 @@ class InstalledTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        self.detail_frame = tk.Frame(pane, bg=Theme.BG_DARKEST)
-        pane.add(self.detail_frame, minsize=350)
+        detail_card = GlassCard(pane, Theme, padding=9, expand=True)
+        pane.add(detail_card, minsize=350)
+        self.detail_frame = detail_card.body
+        self.detail_frame.configure(bg=Theme.BG_DARKEST)
 
         # Placeholder
         self.lbl_placeholder = tk.Label(
@@ -1676,7 +1809,7 @@ class InstalledTab:
         )
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         from src.modules.tk_glass import ResponsivePanes
-        self._responsive_panes = ResponsivePanes(pane, left, self.detail_frame)
+        self._responsive_panes = ResponsivePanes(pane, left_card, detail_card)
 
         # Metadata and example controls remain reachable on short detail panes.
         from src.modules.tk_glass import ScrollBody
@@ -2327,6 +2460,8 @@ class ArduinoBrowser:
         self._additional_board_urls = parse_additional_board_urls(
             settings.get("additional_board_urls", [])
         )
+        associations = settings.get("board_platformio_associations", {})
+        self._board_platformio_associations = associations if isinstance(associations, dict) else {}
         if saved_dir and os.path.isdir(saved_dir):
             self._download_dir = saved_dir
         else:
@@ -2584,7 +2719,7 @@ class ArduinoBrowser:
                                        columnspan=2 if stacked else 1, sticky="e", pady=(6, 0) if stacked else 0)
                 self._header_stacked = stacked
                 header._schedule()
-        top_bar.bind("<Configure>", reflow_header)
+        top_bar.bind("<Configure>", reflow_header, add="+")
 
         # Download folder bar
         folder_card = GlassCard(self.root, Theme, padding=10)
@@ -2642,12 +2777,20 @@ class ArduinoBrowser:
         )
         self.board_urls_apply_btn.pack(side="right")
 
-        tk.Label(
+        sources_hint = tk.Label(
             self._sources_card.body,
-            text="Separate multiple URLs with commas. The default Arduino index is included automatically.",
+            text="Add vendor index URLs separated by commas or new lines. Each source is checked independently.",
             font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
-            anchor="w", pady=4,
-        ).pack(fill="x")
+            anchor="w", justify="left", pady=4,
+        )
+        sources_hint.pack(fill="x")
+        self.sources_status = tk.Label(self._sources_card.body, text="", font=("Montserrat", 8),
+                                      fg=Theme.TEXT_DIM, bg=Theme.BG_MID, justify="left", anchor="w")
+        self.sources_status.pack(fill="x", pady=(2, 4))
+        def wrap_sources(event):
+            for label in (sources_hint, self.sources_status):
+                label.configure(wraplength=max(100, event.width - 8))
+        self._sources_card.body.bind("<Configure>", wrap_sources, add="+")
 
         third_party_boards_url = (
             "https://github.com/arduino/Arduino/wiki/"
@@ -2714,8 +2857,11 @@ class ArduinoBrowser:
         self.progress.pack(side="left")
 
         self.status_var = tk.StringVar(value="Starting…")
-        tk.Label(bottom, textvariable=self.status_var, font=("Montserrat", 9),
-                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(side="left", padx=10)
+        status = tk.Label(bottom, textvariable=self.status_var, font=("Montserrat", 9),
+                          fg=Theme.TEXT_DIM, bg=Theme.BG_MID, justify="left", anchor="w")
+        status.pack(side="left", padx=10, fill="x", expand=True)
+        bottom.bind("<Configure>", lambda event: status.configure(
+            wraplength=max(100, event.width - self.progress.winfo_reqwidth() - 24)), add="+")
 
     def _toggle_sources(self):
         """Keep advanced vendor indexes available without occupying list space."""
@@ -2815,7 +2961,10 @@ class ArduinoBrowser:
         self.folder_var.set(new_path)
         settings = _load_settings()
         settings["download_dir"] = new_path
-        _save_settings(settings)
+        if not _save_settings(settings):
+            self._set_status("Download folder changed for this session; settings could not be saved")
+            self._compute_installed_items_async()
+            return
         self._set_status(f"Download folder set to {new_path}")
         # Refresh everything that depends on the download path
         self._compute_installed_items_async()
@@ -2842,19 +2991,19 @@ class ArduinoBrowser:
             return
 
         urls = parse_additional_board_urls(raw_urls)
-        self._additional_board_urls = urls
-        self.board_urls_var.set(", ".join(urls))
-
         settings = _load_settings()
         settings["additional_board_urls"] = urls
-        _save_settings(settings)
-
-
+        if not _save_settings(settings):
+            self._set_status("Board indexes could not be saved; check that settings storage is writable")
+            return
+        self._additional_board_urls = urls
+        self.board_urls_var.set(", ".join(urls))
         self._set_status("Board manager URLs saved — refreshing indexes…")
         self._refresh_all()
 
     def _cancel_download(self):
         self._cancel_event.set()
+        self._set_status("Cancelling download…")
 
     # ------------------------------------------------------------------
     # Library detail panel
@@ -2925,8 +3074,10 @@ class ArduinoBrowser:
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         tab.download_btn.pack(side="left", padx=8)
 
-        tab.lbl_available = tk.Label(ver_frame, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST)
-        tab.lbl_available.pack(side="left", padx=4)
+        tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
+                                     bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        tab.lbl_available.pack(fill="x", pady=2)
+        tab._wrapping_labels.append(tab.lbl_available)
 
         tab.lbl_size = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_size.pack(anchor="w", pady=2)
@@ -3036,11 +3187,27 @@ class ArduinoBrowser:
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         tab.download_btn.pack(side="left", padx=8)
 
-        tab.lbl_available = tk.Label(ver_frame, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST)
-        tab.lbl_available.pack(side="left", padx=4)
+        tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
+                                     bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        tab.lbl_available.pack(fill="x", pady=2)
+        tab._wrapping_labels.append(tab.lbl_available)
 
         tab.lbl_size = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_size.pack(anchor="w", pady=2)
+
+        prepare_row = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        prepare_row.pack(fill="x", pady=(8, 2))
+        tab.prepare_btn = make_flat_button(prepare_row, "Prepare board support",
+            lambda: self._prepare_existing_board(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        tab.prepare_btn.pack(anchor="w")
+        tab.prepare_btn.configure(state="disabled")
+        tab.mapping_btn = make_flat_button(prepare_row, "Custom platform…",
+            lambda: self._edit_board_platform(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        tab.mapping_btn.pack(anchor="w", pady=(5, 0))
+        hint = tk.Label(dc, text="Board support is matched automatically. Arduino CLI is prepared only when PlatformIO has no support for the exact board.",
+                        font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        hint.pack(fill="x", pady=(2, 4))
+        tab._wrapping_labels.append(hint)
 
     def _on_board_select(self, tab: BrowseTab, board: dict):
         tab.lbl_name.config(text=board["name"])
@@ -3070,15 +3237,186 @@ class ArduinoBrowser:
         tab.version_combo.bind("<<ComboboxSelected>>",
                                lambda e: self._update_version_status(tab))
 
+    @staticmethod
+    def _board_association_key(metadata):
+        return json.dumps([metadata.get("index_url", ""), metadata.get("package", ""),
+                           metadata.get("architecture", "")], ensure_ascii=False, separators=(',', ':'))
+
+    def _package_metadata(self, item, version, *, is_board):
+        metadata = {**item, **version}
+        # Index-authored platform associations cannot override the user's
+        # choice. Exact aliases are verified after preparation by the worker.
+        metadata.pop("platformio", None)
+        if is_board:
+            from src.modules.board_index_targets import normalize_platformio_configuration
+            value = getattr(self, '_board_platformio_associations', {}).get(self._board_association_key(metadata))
+            configuration = normalize_platformio_configuration(value)
+            if configuration:
+                metadata['platformio'] = configuration
+        return metadata
+
+    def _edit_board_platform(self, tab):
+        if self._busy:
+            return
+        selection = tab.listbox.curselection()
+        if not selection or selection[0] >= len(tab.filtered_names):
+            return
+        item = tab.all_items[tab.filtered_names[selection[0]]]
+        version = next((entry for entry in item['versions'] if entry['version'] == tab.version_var.get()), None)
+        if version is None:
+            return
+        from src.modules.board_index_targets import normalize_platformio_configuration
+        from src.modules.tk_glass import DialogFit, GlassCard, ScrollForm, ui_scale
+        metadata = {**item, **version}
+        key = self._board_association_key(metadata)
+        try:
+            configuration = normalize_platformio_configuration(self._board_platformio_associations.get(key))
+        except ValueError:
+            configuration = {}
+        dialog = tk.Toplevel(self.root)
+        dialog.title('Custom board platform')
+        dialog.transient(self.root)
+        dialog.configure(bg=Theme.BG_DARKEST)
+        scale = ui_scale(dialog)
+        pad = max(6, round(10 * scale))
+        gap = max(4, round(7 * scale))
+        header = GlassCard(dialog, Theme, padding=10)
+        header.pack(fill='x', padx=pad, pady=(pad, gap))
+        heading = tk.Label(header.body, text=item['name'], font=('Montserrat', 12, 'bold'), fg=Theme.TEXT_BRIGHT,
+                           bg=Theme.BG_MID, anchor='w', justify='left')
+        heading.pack(fill='x')
+        header.body.bind('<Configure>', lambda event: heading.configure(wraplength=max(1, event.width)), add='+')
+        footer = GlassCard(dialog, Theme, padding=10)
+        # Reserve actions before the expanding form consumes the short screen.
+        footer.pack(side='bottom', fill='x', padx=pad, pady=(gap, pad))
+        status = tk.Label(footer.body, text='', fg=Theme.TEXT_DIM, bg=Theme.BG_MID, font=('Montserrat', 8),
+                          anchor='w', justify='left')
+        buttons = tk.Frame(footer.body, bg=Theme.BG_MID)
+        buttons.pack(fill='x')
+        def status_message(message):
+            status.configure(text=message)
+            status.pack(fill='x', before=buttons)
+            buttons.pack_configure(pady=(gap, 0))
+        footer.body.bind('<Configure>', lambda event: status.configure(wraplength=max(1, event.width)), add='+')
+        card = GlassCard(dialog, Theme, padding=10, expand=True)
+        card.pack(fill='both', expand=True, padx=pad)
+        scroll = ScrollForm(card.body, Theme.BG_MID)
+        scroll.pack(fill='both', expand=True)
+        body = scroll.body
+        hint = tk.Label(body, text="Use your vendor's PlatformIO platform for custom boards. Clear both fields to restore automatic matching.",
+                        font=('Montserrat', 9), fg=Theme.TEXT, bg=Theme.BG_MID, justify='left', anchor='w')
+        hint.pack(fill='x', pady=(0, gap))
+        tk.Label(body, text='Platform specification', fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID,
+                 font=('Montserrat', 9, 'bold'), anchor='w').pack(fill='x')
+        platform = tk.StringVar(value=configuration.get('platform', ''))
+        entry = tk.Entry(body, textvariable=platform, bg=Theme.BG_DARKEST, fg=Theme.TEXT,
+                         insertbackground=Theme.CYAN, font=('Montserrat', 10), relief='flat',
+                         highlightbackground=Theme.BORDER, highlightcolor=Theme.CYAN, highlightthickness=1)
+        entry.pack(fill='x', pady=(4, 4), ipady=round(3 * scale))
+        platform_help = tk.Label(body, text='owner/platform@version or an HTTPS platform source', font=('Montserrat', 8),
+                                 fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor='w', justify='left')
+        platform_help.pack(fill='x')
+        tk.Label(body, text='Optional exact board IDs', font=('Montserrat', 9, 'bold'),
+                 fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID, anchor='w').pack(fill='x', pady=(12, 0))
+        mappings_help = tk.Label(body, text='One mapping per line: Arduino declaration ID = PlatformIO board ID',
+                                 font=('Montserrat', 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor='w', justify='left')
+        mappings_help.pack(fill='x', pady=(2, 4))
+        editor = tk.Frame(body, bg=Theme.BG_MID)
+        editor.pack(fill='x')
+        editor.rowconfigure(0, weight=1)
+        editor.columnconfigure(0, weight=1)
+        mappings = tk.Text(editor, height=6, width=1, bg=Theme.BG_DARKEST, fg=Theme.TEXT,
+                           insertbackground=Theme.CYAN, font=('Consolas', 10), wrap='none',
+                           padx=5, pady=5, highlightbackground=Theme.BORDER, highlightcolor=Theme.CYAN,
+                           highlightthickness=1, relief='flat')
+        mappings.insert('1.0', '\n'.join(f'{left} = {right}' for left, right in configuration.get('board_ids', {}).items()))
+        mappings.grid(row=0, column=0, sticky='nsew')
+        vertical = ttk.Scrollbar(editor, orient='vertical', command=mappings.yview)
+        ttk.Style(dialog).configure('CustomPlatform.Horizontal.TScrollbar',
+                                    background=Theme.BG_MID, troughcolor=Theme.BG_DARKEST,
+                                    bordercolor=Theme.BG_DARKEST, arrowcolor=Theme.TEXT_DIM,
+                                    lightcolor=Theme.BG_MID, darkcolor=Theme.BG_MID,
+                                    arrowsize=max(12, round(12 * scale)))
+        ttk.Style(dialog).map('CustomPlatform.Horizontal.TScrollbar',
+                              background=[('disabled', Theme.BG_DARK), ('active', Theme.BG_HOVER)],
+                              troughcolor=[('disabled', Theme.BG_DARKEST)],
+                              arrowcolor=[('disabled', Theme.TEXT_DIM)])
+        horizontal = ttk.Scrollbar(editor, orient='horizontal', command=mappings.xview,
+                                   style='CustomPlatform.Horizontal.TScrollbar')
+        vertical.grid(row=0, column=1, sticky='ns')
+        horizontal.grid(row=1, column=0, sticky='ew')
+        mappings.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        def save():
+            if self._busy:
+                status_message('Wait for the current download before changing its platform.')
+                return
+            try:
+                parsed = {}
+                for line in mappings.get('1.0', 'end').splitlines():
+                    if not line.strip():
+                        continue
+                    left, separator, right = line.partition('=')
+                    if not separator or left.strip() in parsed:
+                        raise ValueError('Use one unique Arduino ID = PlatformIO ID mapping per line.')
+                    parsed[left.strip()] = right.strip()
+                value = normalize_platformio_configuration({'platform': platform.get(), 'board_ids': parsed})
+            except ValueError as error:
+                status_message(str(error))
+                return
+            save_button.configure(state='disabled')
+            status_message('Saving board support settings…')
+            def persist():
+                settings = _load_settings()
+                existing = settings.get('board_platformio_associations')
+                stored = dict(existing) if isinstance(existing, dict) else {}
+                if value:
+                    stored[key] = value
+                else:
+                    stored.pop(key, None)
+                settings['board_platformio_associations'] = stored
+                saved = _save_settings(settings)
+                def finish():
+                    if saved:
+                        self._board_platformio_associations = stored
+                        self._set_status('Board platform saved. Download or prepare support to verify the exact targets.')
+                    if not dialog.winfo_exists():
+                        return
+                    if saved:
+                        dialog.destroy()
+                    else:
+                        save_button.configure(state='normal')
+                        status_message('Settings could not be saved. Check that settings storage is writable.')
+                self._post_ui(finish)
+            def failed(error):
+                if dialog.winfo_exists():
+                    save_button.configure(state='normal')
+                    status_message(f'Settings could not be saved: {error}')
+            self._tasks.start(persist, failed=failed)
+        make_flat_button(buttons, 'Cancel', dialog.destroy, Theme.BTN_MONITOR, Theme.BTN_MONITOR_H).pack(side='right')
+        save_button = make_flat_button(buttons, 'Save', save, Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
+        save_button.pack(side='right', padx=(0, 8))
+        body.bind('<Configure>', lambda event: [label.configure(wraplength=max(1, event.width - 4))
+                                               for label in (hint, platform_help, mappings_help)], add='+')
+        dialog.bind('<Escape>', lambda _event: dialog.destroy())
+        dialog._platform_form = scroll
+        dialog._platform_entry = entry
+        dialog._platform_mappings = mappings
+        dialog._platform_status = status
+        dialog._platform_save = save_button
+        dialog._dialog_fit = DialogFit(dialog, self.root, preferred=(620, 475), minimum=(320, 240))
+        dialog.grab_set()
+        entry.focus_set()
+        scroll.ensure_visible(entry)
+
     # ------------------------------------------------------------------
     # Shared detail helpers
     # ------------------------------------------------------------------
 
-    def _get_installed_info(self, tab: BrowseTab, name: str, item: dict) -> dict | None:
+    def _get_installed_info(self, tab: BrowseTab, name: str, item: dict, *, download_dir=None, installed_items=None, cancel=None) -> dict | None:
         """Find local installation metadata for the given item (board or library)."""
         is_board = (tab == self.board_tab)
         subfolder = "Boards" if is_board else "Libs"
-        dest_dir = os.path.join(self._download_dir, subfolder)
+        dest_dir = os.path.join(self._download_dir if download_dir is None else download_dir, subfolder)
         if not os.path.isdir(dest_dir):
             return None
 
@@ -3088,6 +3426,8 @@ class ArduinoBrowser:
 
         installed_versions = {}
         for ver_entry in versions:
+            if cancel is not None and cancel.is_set():
+                return None
             v_str = ver_entry.get("version", "")
             if not v_str:
                 continue
@@ -3112,9 +3452,12 @@ class ArduinoBrowser:
                 }
 
         # Also fallback to check item name in self._installed_items if direct match wasn't in versions list
-        if not installed_versions and hasattr(self, "_installed_items") and self._installed_items:
+        installed_items = getattr(self, "_installed_items", []) if installed_items is None else installed_items
+        if not installed_versions and installed_items:
             expected_type = "Board Platform" if is_board else "Library"
-            for inst in self._installed_items:
+            for inst in installed_items:
+                if cancel is not None and cancel.is_set():
+                    return None
                 if inst.get("type") == expected_type and inst.get("name", "").lower() == name.lower():
                     inst_v = inst.get("installed_version", "")
                     p = inst.get("path", "")
@@ -3180,7 +3523,31 @@ class ArduinoBrowser:
         else:
             tab.lbl_size.config(text=f"Size: {size_kb:.0f} KB")
 
-        installed_info = self._get_installed_info(tab, name, item)
+        tab._version_revision += 1
+        revision = tab._version_revision
+        folder = self._download_dir
+        if hasattr(tab, "prepare_btn"):
+            tab.prepare_btn.configure(state="disabled")
+        if self._busy and tab == self._active_download_tab and item.get("name") == self._downloading_item_name:
+            self._render_version_status(tab, name, item, ver, None)
+            return
+        def completed(installed_info, error):
+            if (revision != tab._version_revision or folder != self._download_dir
+                    or ver != tab.version_var.get()):
+                return
+            selection = tab.listbox.curselection()
+            if not selection or selection[0] >= len(tab.filtered_names) or tab.filtered_names[selection[0]] != name:
+                return
+            if error:
+                tab.lbl_available.configure(text=f"Local package scan failed: {error}", fg=Theme.RED)
+                return
+            self._render_version_status(tab, name, item, ver, installed_info)
+        tab._version_worker.submit((tab, name, item, folder, tuple(getattr(self, "_installed_items", []))), completed)
+
+    def _render_version_status(self, tab, name, item, ver, installed_info):
+        if hasattr(tab, "prepare_btn"):
+            available = bool(installed_info and ver in installed_info["installed_versions"])
+            tab.prepare_btn.configure(state="normal" if available and not self._busy else "disabled")
 
         if self._busy and tab == self._active_download_tab and item.get("name") == self._downloading_item_name:
             tab.lbl_available.config(text="")
@@ -3196,7 +3563,7 @@ class ArduinoBrowser:
 
             if ver in all_inst_vers:
                 curr_info = all_inst_vers[ver]
-                badge_text = f"✔ Already Available (v{ver})"
+                badge_text = f"Downloaded files (v{ver})" if tab is self.board_tab else f"✔ Already Available (v{ver})"
                 tab.lbl_available.config(text=badge_text, fg=Theme.GREEN)
                 if hasattr(tab, "lbl_status_badge"):
                     tab.lbl_status_badge.config(text=badge_text, fg=Theme.GREEN)
@@ -3397,7 +3764,7 @@ class ArduinoBrowser:
                     return None
                 if entry in matched_lib_folders or entry in matched_lib_archives:
                     continue
-                if entry.startswith(".") or entry.endswith((".part", ".tmp")):
+                if entry.startswith(".") or entry.endswith((".part", ".tmp")) or ".part-" in entry or ".previous-" in entry:
                     continue
                 entry_path = os.path.join(libs_dir, entry)
                 lib_name = entry
@@ -3459,7 +3826,7 @@ class ArduinoBrowser:
                     return None
                 if entry in matched_board_folders or entry in matched_board_archives:
                     continue
-                if entry.startswith(".") or entry.endswith((".part", ".tmp")):
+                if entry.startswith(".") or entry.endswith((".part", ".tmp")) or ".part-" in entry or ".previous-" in entry:
                     continue
                 entry_path = os.path.join(boards_dir, entry)
                 board_name = entry
@@ -3564,7 +3931,8 @@ class ArduinoBrowser:
         paths = [BOARD_CACHE_FILE if index == 0 else _board_index_cache_file(url)
                  for index, url in enumerate(urls)]
         libs = _read_library_catalog(LIBRARY_CACHE_FILE)
-        boards = _read_board_catalog(paths)
+        source_urls = dict(zip(paths, urls))
+        boards = _read_board_catalog(paths, source_urls=source_urls)
         self._post_ui(self._publish_catalogs, libs, boards)
         needed = [(index, url, cache) for index, (url, cache) in enumerate(zip(urls, paths))
                   if force_refresh or not self._cache_is_fresh(cache) or _read_index_cache(cache, 'packages') is None]
@@ -3573,6 +3941,8 @@ class ArduinoBrowser:
             self._post_ui(self._finish_load, f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded from cache')
             return
         self._index_fetch_succeeded = threading.Event()
+        self._source_results = {}
+        self._source_results_lock = threading.Lock()
         self._catalog_memory_only = False
         # A failed prior refresh must not prevent a later explicit reconnect.
         self._is_online = True
@@ -3596,7 +3966,7 @@ class ArduinoBrowser:
                 elif index:
                     failed.append(url)
         if needed:
-            boards = _read_board_catalog(paths, fresh)
+            boards = _read_board_catalog(paths, fresh, source_urls=source_urls)
         self._is_online = self._index_fetch_succeeded.is_set()
         self._post_ui(self._publish_catalogs, libs, boards)
         message = f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded'
@@ -3606,6 +3976,10 @@ class ArduinoBrowser:
             message += f'; {len(failed)} additional index(es) unavailable'
         if self._catalog_memory_only:
             message += '; cache storage unavailable — downloaded data kept in memory'
+        if hasattr(self, "sources_status"):
+            lines = [f"{source}: {outcome}" for source, outcome in self._source_results.items()
+                     if source != LIBRARY_INDEX_URL]
+            self._post_ui(lambda: self.sources_status.configure(text="\n".join(lines)))
         self._post_ui(self._finish_load, message)
 
     def _load_index(self, url: str, cache_file: str,
@@ -3641,6 +4015,10 @@ class ArduinoBrowser:
         data = None
         raw_text = None
         errors: list[str] = []
+        def source_result(outcome):
+            if hasattr(self, "_source_results_lock"):
+                with self._source_results_lock:
+                    self._source_results[normalized_url] = outcome
 
         def _parse_response(raw_bytes: bytes):
             text = raw_bytes.decode("utf-8-sig")
@@ -3672,6 +4050,7 @@ class ArduinoBrowser:
                 errors.append(str(e))
 
         if data is not None and raw_text is not None:
+            source_result("Available")
             if hasattr(self, '_index_fetch_succeeded'):
                 self._index_fetch_succeeded.set()
             try:
@@ -3684,10 +4063,12 @@ class ArduinoBrowser:
         # A failed refresh must not throw away the last known-good index.
         stale = _read_index_cache(cache_file, expected_key)
         if stale is not None:
+            source_result("Refresh failed; using saved catalog")
             self._post_ui(self._set_status, f"Offline/unavailable: loaded cached {label} index")
             return stale
 
         detail = next((error for error in errors if error), "invalid index response")
+        source_result(f"Unavailable — {detail[:200]}")
         self._post_ui(self._set_status, f"Failed to download {label} index: {detail}")
         return None
 
@@ -3707,6 +4088,109 @@ class ArduinoBrowser:
     # ------------------------------------------------------------------
     # Download
     # ------------------------------------------------------------------
+
+    def _publish_job(self, stage, *, job_id=None, title=None, message=None, progress=None, **details):
+        job_id = job_id or getattr(self, "_active_package_job", None)
+        if not job_id:
+            return
+        try:
+            from src.modules.package_jobs import publish_event
+            publish_event(job_id, stage, root=getattr(self, "_package_event_root", None), title=title,
+                          message=message, progress=progress, **details)
+        except Exception as error:
+            # Tracking is optional; a full/read-only journal must not strand
+            # transfer controls or recursively attempt another journal write.
+            if not getattr(self, "_package_tracking_error", None):
+                self._package_tracking_error = str(error)
+                self._post_ui(self._set_status, f"Package tracking unavailable: {error}")
+
+    def _begin_package_job(self, name):
+        import uuid
+        self._active_package_job = uuid.uuid4().hex
+        self._package_tracking_error = None
+        self._preparation_tracking_error = None
+
+    def _download_start_error(self, tab, message):
+        try:
+            self._tasks.start(lambda: self._publish_job("failed", message=message))
+        finally:
+            self._download_error(tab, message)
+
+    def _handoff_board_preparation(self, folder, metadata, job_id):
+        from src.modules.board_preparation import start_preparation
+        self._publish_job("queued", job_id=job_id, message="Preparing downloaded board support")
+        child = start_preparation(folder, job_id=job_id, package_metadata=metadata,
+                                  event_root=getattr(self, "_package_event_root", None))
+        tracking_error = getattr(child, "preparation_tracking_error", None)
+        if isinstance(tracking_error, str) and tracking_error:
+            # The child already owns the installation. Keep its job running
+            # and report only the missing exit watcher; never replay the spawn.
+            self._preparation_tracking_error = tracking_error
+
+    def _prepare_existing_board(self, tab):
+        if self._busy:
+            return
+        selection = tab.listbox.curselection()
+        if not selection or selection[0] >= len(tab.filtered_names):
+            return
+        name = tab.filtered_names[selection[0]]
+        item = tab.all_items.get(name)
+        if not item:
+            return
+        version = next((entry for entry in item.get("versions", []) if entry["version"] == tab.version_var.get()), None)
+        if not version:
+            return
+        try:
+            metadata = self._package_metadata(item, version, is_board=True)
+        except ValueError as error:
+            self._set_status(f'Custom platform settings are invalid: {error}')
+            return
+        self._begin_package_job(name)
+        job_id = self._active_package_job
+        self._busy, self._active_download_tab = True, tab
+        self._downloading_item_name = name
+        self._cancel_event.clear()
+        tab.prepare_btn.configure(state="disabled")
+        tab.download_btn.configure(text="✕ Cancel", command=self._cancel_download, state="normal")
+        self._set_status("Checking downloaded board package…")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(self._progress_interval)
+        destination = os.path.join(self._download_dir, "Boards")
+        self._tasks.start(self._prepare_existing_worker, tab, destination, metadata, job_id,
+            failed=lambda error: self._download_start_error(tab, f"Unable to start preparation:\n{error}"))
+
+    def _prepare_existing_worker(self, tab, destination, metadata, job_id):
+        import shutil
+        archive = _archive_filename(metadata.get("url", ""), metadata.get("archiveFileName", ""))
+        archive_path = os.path.join(destination, archive)
+        folder = os.path.join(destination, _get_folder_name(archive))
+        staging = f"{folder}.part-{os.getpid()}-{threading.get_ident()}"
+        try:
+            self._publish_job("queued", job_id=job_id, title=metadata.get("name"), message="Checking downloaded board files")
+            if not os.path.isdir(folder):
+                if not os.path.isfile(archive_path):
+                    raise FileNotFoundError("Download this board version before preparing support")
+                self._publish_job("verifying", job_id=job_id, message="Verifying saved board archive")
+                _verify_download(archive_path, metadata.get("size", 0), metadata.get("checksum", ""))
+                _validate_archive_file(archive_path)
+                self._publish_job("extracting", job_id=job_id, message="Extracting saved board archive")
+                _extract_archive(archive_path, staging, self._cancel_event)
+                if self._cancel_event.is_set():
+                    raise InterruptedError("Preparation cancelled")
+                _promote_directory(staging, folder)
+            elif self._cancel_event.is_set():
+                raise InterruptedError("Preparation cancelled")
+            self._handoff_board_preparation(folder, metadata, job_id)
+            self._post_ui(self._download_done, tab, folder, True)
+        except InterruptedError:
+            self._publish_job("cancelled", job_id=job_id, message="Board preparation cancelled")
+            self._post_ui(self._download_cancelled, tab)
+        except Exception as error:
+            self._publish_job("failed", job_id=job_id, message=str(error))
+            self._post_ui(self._download_error, tab, f"Board preparation failed:\n{error}")
+        finally:
+            if os.path.isdir(staging) and _inside_directory(staging, destination):
+                shutil.rmtree(staging, ignore_errors=True)
 
     def _prompt_download_option(self, archive_name, already_available: bool = False) -> str:
         dialog = tk.Toplevel(self.root)
@@ -3820,12 +4304,15 @@ class ArduinoBrowser:
         if not url or target_version is None:
             messagebox.showerror("Error", f"No download URL found for version '{ver or '(none)'}'.")
             return
+        try:
+            metadata = self._package_metadata(item, target_version, is_board=(tab == self.board_tab))
+        except ValueError as error:
+            self._set_status(f'Custom platform settings are invalid: {error}')
+            return
         archive = _archive_filename(url, target_version.get("archiveFileName", ""))
 
         subfolder = "Libs" if tab == self.lib_tab else "Boards"
         dest_dir = os.path.join(self._download_dir, subfolder)
-        os.makedirs(dest_dir, exist_ok=True)
-
         download_option = self._prompt_download_option(archive, already_available=already_available)
         if not download_option:
             return
@@ -3834,6 +4321,7 @@ class ArduinoBrowser:
         self._active_download_tab = tab
         self._downloading_item_name = name
         self._cancel_event.clear()
+        self._begin_package_job(name)
         tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
         status_action = "Updating" if cleanup_old else "Downloading"
         self._set_status(f"{status_action} {archive}…")
@@ -3841,8 +4329,8 @@ class ArduinoBrowser:
         self.progress.start(self._progress_interval)
 
         self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
-                          download_option, cleanup_old, target_version,
-                          failed=lambda error: self._download_error(tab, f"Unable to start download:\n{error}"))
+                          download_option, cleanup_old, metadata, self._active_package_job,
+                          failed=lambda error: self._download_start_error(tab, f"Unable to start download:\n{error}"))
 
     def _download_update(self, name: str, is_board: bool, old_path: str = "", old_archive: str = ""):
         if self._busy:
@@ -3865,12 +4353,15 @@ class ArduinoBrowser:
         if not url or target_version is None:
             messagebox.showerror("Error", f"No download URL found for version '{ver}'.", parent=self.root)
             return
+        try:
+            metadata = self._package_metadata(item, target_version, is_board=is_board)
+        except ValueError as error:
+            self._set_status(f'Custom platform settings are invalid: {error}')
+            return
         archive = _archive_filename(url, target_version.get("archiveFileName", ""))
 
         subfolder = "Boards" if is_board else "Libs"
         dest_dir = os.path.join(self._download_dir, subfolder)
-        os.makedirs(dest_dir, exist_ok=True)
-
         download_option = self._prompt_download_option(archive)
         if not download_option:
             return
@@ -3879,6 +4370,7 @@ class ArduinoBrowser:
         self._active_download_tab = tab
         self._downloading_item_name = name
         self._cancel_event.clear()
+        self._begin_package_job(name)
 
         tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
@@ -3889,8 +4381,8 @@ class ArduinoBrowser:
         self.progress.start(self._progress_interval)
 
         self._tasks.start(self._download_worker, tab, url, archive, dest_dir,
-                          download_option, (old_path, old_archive), target_version,
-                          failed=lambda error: self._download_error(tab, f"Unable to start download update:\n{error}"))
+                          download_option, (old_path, old_archive), metadata, self._active_package_job,
+                          failed=lambda error: self._download_start_error(tab, f"Unable to start download update:\n{error}"))
 
     def _download_worker(
         self,
@@ -3901,6 +4393,7 @@ class ArduinoBrowser:
         download_option: str,
         cleanup_old: tuple | None = None,
         package_metadata: dict | None = None,
+        job_id: str | None = None,
     ):
         import shutil
         filepath = os.path.join(dest_dir, archive)
@@ -3910,6 +4403,9 @@ class ArduinoBrowser:
         resp = None
         try:
             os.makedirs(dest_dir, exist_ok=True)
+            self._publish_job("queued", job_id=job_id, title=(package_metadata or {}).get("name"), message="Starting package download")
+            self._publish_job("downloading", job_id=job_id, message="Downloading package archive")
+            last_progress = time.monotonic()
 
             resp = None
             if requests is not None:
@@ -3937,8 +4433,7 @@ class ArduinoBrowser:
                                     os.remove(partial_path)
                             except OSError:
                                 pass
-                            self._post_ui(self._download_cancelled, tab)
-                            return
+                            raise InterruptedError("Package download cancelled")
 
                         if chunk:
                             fh.write(chunk)
@@ -3946,6 +4441,10 @@ class ArduinoBrowser:
                             if total:
                                 self._post_ui(self._update_progress,
                                                 downloaded, total)
+                            if time.monotonic() - last_progress >= .25:
+                                self._publish_job("downloading", job_id=job_id, message="Downloading package archive",
+                                                  progress=int(downloaded / total * 100) if total else None)
+                                last_progress = time.monotonic()
             else:
                 import urllib.request
                 req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
@@ -3963,8 +4462,7 @@ class ArduinoBrowser:
                                         os.remove(partial_path)
                                 except OSError:
                                     pass
-                                self._post_ui(self._download_cancelled, tab)
-                                return
+                                raise InterruptedError("Package download cancelled")
                             chunk = uresp.read(16384)
                             if not chunk:
                                 break
@@ -3972,25 +4470,34 @@ class ArduinoBrowser:
                             downloaded += len(chunk)
                             if total:
                                 self._post_ui(self._update_progress, downloaded, total)
+                            if time.monotonic() - last_progress >= .25:
+                                self._publish_job("downloading", job_id=job_id, message="Downloading package archive",
+                                                  progress=int(downloaded / total * 100) if total else None)
+                                last_progress = time.monotonic()
 
+            if self._cancel_event.is_set():
+                raise InterruptedError("Package download cancelled")
+            self._publish_job("verifying", job_id=job_id, message="Verifying package size and checksum")
             _verify_download(
                 partial_path,
                 (package_metadata or {}).get("size", 0),
                 (package_metadata or {}).get("checksum", ""),
             )
             _validate_archive_file(partial_path)
-            os.replace(partial_path, filepath)
-
             if download_option in ("folder", "both"):
+                self._publish_job("extracting", job_id=job_id, message="Extracting verified package")
                 self._post_ui(self._set_status, "Extracting files…")
                 if os.path.isdir(extraction_path):
                     shutil.rmtree(extraction_path, ignore_errors=True)
-                _extract_archive(filepath, extraction_path)
+                _extract_archive(partial_path, extraction_path, self._cancel_event)
                 # Replace an older folder only after the new archive has been
                 # downloaded, verified and fully extracted.
-                if os.path.isdir(folder_path):
-                    shutil.rmtree(folder_path)
-                os.replace(extraction_path, folder_path)
+                if self._cancel_event.is_set():
+                    raise InterruptedError("Package extraction cancelled")
+                _promote_directory(extraction_path, folder_path)
+            if download_option not in ("folder", "both") and self._cancel_event.is_set():
+                raise InterruptedError("Package download cancelled")
+            os.replace(partial_path, filepath)
 
             if download_option == "folder":
                 try:
@@ -4002,7 +4509,7 @@ class ArduinoBrowser:
             # Safe cleanup of old version only after new version is confirmed extracted/saved
             if cleanup_old:
                 old_p, old_arc = cleanup_old
-                if old_p and os.path.exists(old_p):
+                if old_p and _inside_directory(old_p, dest_dir) and os.path.exists(old_p):
                     try:
                         norm_old = os.path.normpath(old_p).lower()
                         norm_new_folder = os.path.normpath(folder_path).lower()
@@ -4016,24 +4523,35 @@ class ArduinoBrowser:
                         pass
                 if old_arc:
                     old_arc_path = os.path.join(dest_dir, old_arc)
-                    if os.path.isfile(old_arc_path) and os.path.normpath(old_arc_path).lower() != os.path.normpath(filepath).lower():
+                    if _inside_directory(old_arc_path, dest_dir) and os.path.isfile(old_arc_path) and os.path.normpath(old_arc_path).lower() != os.path.normpath(filepath).lower():
                         try:
                             os.remove(old_arc_path)
                         except Exception:
                             pass
 
-            self._post_ui(self._download_done, tab, filepath if download_option != "folder" else folder_path)
+            preparing = tab == self.board_tab and download_option in ("folder", "both") and bool(job_id)
+            if preparing:
+                self._handoff_board_preparation(folder_path, package_metadata or {}, job_id)
+            else:
+                self._publish_job("unavailable" if tab == self.board_tab else "ready", job_id=job_id,
+                    message="Archive saved; select Prepare board support to verify targets" if tab == self.board_tab else "Library download complete",
+                    progress=100)
+            self._post_ui(self._download_done, tab, filepath if download_option != "folder" else folder_path, preparing)
 
         except OSError as e:
             if self._cancel_event.is_set():
+                self._publish_job("cancelled", job_id=job_id, message="Package download cancelled")
                 self._post_ui(self._download_cancelled, tab)
             else:
+                self._publish_job("failed", job_id=job_id, message=str(e))
                 self._post_ui(self._download_error, tab,
                                f"File/download error:\n{e}")
         except Exception as e:
             if self._cancel_event.is_set():
+                self._publish_job("cancelled", job_id=job_id, message="Package download cancelled")
                 self._post_ui(self._download_cancelled, tab)
             else:
+                self._publish_job("failed", job_id=job_id, message=str(e))
                 self._post_ui(self._download_error, tab,
                                f"Download failed:\n{e}")
         finally:
@@ -4059,10 +4577,14 @@ class ArduinoBrowser:
         pct = int(downloaded / total * 100) if total else 0
         self._set_status(f"Downloading… {pct}%")
 
-    def _download_done(self, tab: BrowseTab, filepath):
+    def _download_done(self, tab: BrowseTab, filepath, preparing=False):
         self.progress.stop()
         self.progress.config(mode="determinate", value=0)
-        self._set_status("Download complete")
+        self._set_status("Board preparation is running in the background" if preparing else "Download complete")
+        if preparing and getattr(self, "_preparation_tracking_error", None):
+            self._set_status(f"{self.status_var.get()}; background tracking unavailable: {self._preparation_tracking_error}")
+        if getattr(self, "_package_tracking_error", None):
+            self._set_status(f"{self.status_var.get()}; package tracking could not be saved")
         self._busy = False
         tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
@@ -4084,7 +4606,7 @@ class ArduinoBrowser:
         except Exception:
             pass
         
-        messagebox.showinfo("Done", f"Saved:\n{filepath}", parent=self.root)
+        # Completion stays in the status row and workspace Notifications tab.
 
     def _download_cancelled(self, tab: BrowseTab):
         self.progress.stop()

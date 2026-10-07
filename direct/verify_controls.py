@@ -849,6 +849,13 @@ class DownloaderChecks(unittest.TestCase):
         app._busy, app._is_online, app._is_hidden = False, True, False
         app._download_dir = str(ROOT / "temp/audit/fixture-download")
         app._additional_board_urls, app._installed_items = [], []
+        # All package event writes stay inside this fixture's disposable folder.
+        import tempfile
+        fixture_root = ROOT / "temp/audit/downloader-jobs"
+        fixture_root.mkdir(parents=True, exist_ok=True)
+        event_fixture = tempfile.TemporaryDirectory(dir=fixture_root)
+        self.addCleanup(event_fixture.cleanup)
+        app._package_event_root = event_fixture.name
         app._compute_installed_items_async = Mock()
         app._compute_installed_items = Mock()
         app._update_version_status = Mock()

@@ -2,13 +2,130 @@
 from __future__ import annotations
 
 import tkinter as tk
+import sys
 from tkinter import ttk
 from src.modules.ui_palette import mix, readable_foreground
+from src.modules.ui_metrics import WorkArea, fit_rect
 
 
 def ui_scale(widget):
     """Tk distances are native pixels; fonts already follow Tk point scaling."""
     return max(.75, min(3.0, widget.winfo_fpixels("1i") / 96.0))
+
+
+def native_work_area(widget):
+    """Current window's monitor work area in the same native units as Tk."""
+    area = WorkArea(widget.winfo_vrootx(), widget.winfo_vrooty(),
+                    widget.winfo_vrootwidth(), widget.winfo_vrootheight())
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+            user32 = ctypes.windll.user32
+            user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+            user32.MonitorFromWindow.restype = wintypes.HANDLE
+            user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(info)
+            monitor = user32.MonitorFromWindow(widget.winfo_toplevel().winfo_id(), 2)
+            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                rect = info.rcWork
+                area = WorkArea(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+        except (AttributeError, OSError, ValueError, tk.TclError):
+            pass
+    return area
+
+
+def _native_frame(widget):
+    """Measure native decoration separately from content pixels."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            handle = int(widget.tk.call("wm", "frame", widget._w), 0)
+            rect = wintypes.RECT()
+            if user32.GetWindowRect(handle, ctypes.byref(rect)):
+                return WorkArea(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top), handle
+        except (AttributeError, OSError, ValueError, tk.TclError):
+            pass
+    return WorkArea(widget.winfo_rootx(), widget.winfo_rooty(), widget.winfo_width(), widget.winfo_height()), None
+
+
+class DialogFit:
+    """Fit complete native frames on open and coalesced window/monitor moves."""
+
+    def __init__(self, dialog, reference=None, preferred=(620, 475), minimum=(320, 240)):
+        self.dialog = dialog
+        self._pending = None
+        self._fitting = False
+        self._minimum = minimum
+        self._scale = ui_scale(dialog)
+        area = native_work_area(reference or dialog)
+        width = min(round(preferred[0] * self._scale), max(1, area.width - 32))
+        height = min(round(preferred[1] * self._scale), max(1, area.height - 64))
+        x, y = area.x + (area.width - width) // 2, area.y + (area.height - height) // 2
+        dialog.geometry(f"{width}x{height}{x:+d}{y:+d}")
+        dialog.bind("<Configure>", self._schedule, add="+")
+        dialog.bind("<Destroy>", self._cancel, add="+")
+        dialog.update_idletasks()
+        self._fit(area)
+
+    def _schedule(self, event):
+        if event.widget is self.dialog and not self._fitting and self._pending is None:
+            self._pending = self.dialog.after(60, self._fit)
+
+    def _cancel(self, event):
+        if event.widget is self.dialog and self._pending is not None:
+            self.dialog.after_cancel(self._pending)
+            self._pending = None
+
+    def _fit(self, area=None):
+        if self._pending is not None:
+            self.dialog.after_cancel(self._pending)
+        self._pending = None
+        if not self.dialog.winfo_exists():
+            return
+        self._fitting = True
+        try:
+            dialog = self.dialog
+            area = area or native_work_area(dialog)
+            frame, handle = _native_frame(dialog)
+            extra_width = max(0, frame.width - dialog.winfo_width())
+            extra_height = max(0, frame.height - dialog.winfo_height())
+            # X11 fallback reserves conventional native frame clearance.
+            if handle is None:
+                extra_height = max(extra_height, 40)
+            maximum_width = max(1, area.width - extra_width - 16)
+            maximum_height = max(1, area.height - extra_height - 16)
+            minimum_width = min(round(self._minimum[0] * self._scale), maximum_width)
+            minimum_height = min(round(self._minimum[1] * self._scale), maximum_height)
+            dialog.minsize(minimum_width, minimum_height)
+            width = max(minimum_width, min(dialog.winfo_width(), maximum_width))
+            height = max(minimum_height, min(dialog.winfo_height(), maximum_height))
+            x, y, _, _ = fit_rect(frame.x, frame.y, width + extra_width, height + extra_height, area, 8)
+            if (width, height) != (dialog.winfo_width(), dialog.winfo_height()):
+                dialog.geometry(f"{width}x{height}")
+                dialog.update_idletasks()
+            if handle is not None:
+                import ctypes
+                from ctypes import wintypes
+                user32 = ctypes.windll.user32
+                user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                               ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                # Native positioning handles negative monitor coordinates as
+                # absolute coordinates, unlike Tk's screen-edge offsets.
+                user32.SetWindowPos(handle, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+            elif (x, y) != (frame.x, frame.y):
+                dialog.geometry(f"{width}x{height}{x:+d}{y:+d}")
+        finally:
+            self._fitting = False
 
 
 class ResponsivePanes:
@@ -82,12 +199,50 @@ class ScrollBody(tk.Frame):
             self._bindings.clear()
 
 
+class ScrollForm(ScrollBody):
+    """Scrollable utility form which reveals fields reached with Tab."""
+
+    def __init__(self, parent, background):
+        super().__init__(parent, background)
+        self._focus_binding = self._toplevel.bind("<FocusIn>", self._focus_in, add="+")
+        self.bind("<Destroy>", self._detach_focus, add="+")
+
+    def _focus_in(self, event):
+        widget = event.widget
+        owner = widget
+        while owner is not None and owner is not self.body:
+            owner = getattr(owner, "master", None)
+        if owner is self.body:
+            self.ensure_visible(widget)
+
+    def ensure_visible(self, widget):
+        self.update_idletasks()
+        top = widget.winfo_rooty() - self.body.winfo_rooty()
+        height = widget.winfo_height()
+        current = self.canvas.canvasy(0)
+        viewport = self.canvas.winfo_height()
+        target = current
+        if top < current:
+            target = top
+        elif top + height > current + viewport:
+            target = top if height >= viewport else top + height - viewport
+        if target != current:
+            total = max(1, self.body.winfo_height())
+            self.canvas.yview_moveto(max(0, target) / total)
+
+    def _detach_focus(self, event):
+        if event.widget is self and self._focus_binding:
+            self._toplevel.unbind("<FocusIn>", self._focus_binding)
+            self._focus_binding = None
+
+
 class GlassCard(tk.Canvas):
     """A bordered gradient around an opaque content frame, redrawn on resize."""
 
-    def __init__(self, parent, palette, padding: int = 10):
+    def __init__(self, parent, palette, padding: int = 10, *, expand=False):
         super().__init__(parent, bg=palette.BG_DARKEST, height=1, bd=0, highlightthickness=0)
         self.palette = palette
+        self.expand = expand
         self.padding = round(padding * ui_scale(self))
         self._redraw_id = None
         self.body = tk.Frame(self, bg=palette.BG_MID)
@@ -108,11 +263,13 @@ class GlassCard(tk.Canvas):
     def _draw(self):
         self._redraw_id = None
         p = self.palette
-        height = self.body.winfo_reqheight() + 2 * self.padding
+        height = self.winfo_height() if self.expand else self.body.winfo_reqheight() + 2 * self.padding
         width = self.winfo_width()
-        if self.winfo_pixels(self.cget("height")) != height:
+        if not self.expand and self.winfo_pixels(self.cget("height")) != height:
             self.configure(height=height)
         self.itemconfigure(self._body_window, width=max(1, width - 2 * self.padding))
+        if self.expand:
+            self.itemconfigure(self._body_window, height=max(1, height - 2 * self.padding))
         self.delete("glass")
         radius = min(12, height // 2)
         points = [1 + radius, 1, width - radius - 1, 1, width - 1, 1,

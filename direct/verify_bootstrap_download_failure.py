@@ -34,6 +34,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QTextCursor, QTextCharFormat
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout,
                               QLabel, QPlainTextEdit, QProgressBar, QSizePolicy, QVBoxLayout)
 from main.core.theme import Theme
+from src.modules.ui_palette import contrast_ratio
 
 
 def definitions(root):
@@ -158,7 +159,9 @@ def main():
         assert partial.read_bytes() == checkpoint, "The failed attempt changed the retained partial"
         document = gui._window.log_edit.document()
         assert not gui._window.log_edit.textCursor().hasSelection(), "Output created an unwanted selection"
-        red = Theme.PALETTES["default"]["RED"]
+        palette = gui._window._theme_pal
+        red = palette["T_RED"]
+        assert contrast_ratio(red, palette["T_BG_DARKEST"]) >= 4.5
         failed_start = gui._window._step_start_cursor.position()
         fragments = []
         block = document.firstBlock()
@@ -174,7 +177,8 @@ def main():
                         assert color == red, (fragment.text(), color)
                 it += 1
             block = block.next()
-        assert document.find("Previous fixture stage completed").charFormat().foreground().color().name() == Theme.PALETTES["default"]["GREEN"]
+        assert document.find("Previous fixture stage completed").charFormat().foreground().color().name() == palette["T_GREEN"]
+        assert contrast_ratio(palette["T_GREEN"], palette["T_BG_DARKEST"]) >= 4.5
         full_log = scope["_BOOTSTRAP_LOG_FILE"].read_text(encoding="utf-8")
         assert "HTTP Error 503: Blocked transfer" in full_log
         assert "Traceback" in full_log and "Setup aborted" in full_log

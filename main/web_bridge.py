@@ -32,6 +32,8 @@ for _p in (_project_root, _modules_path, _main_path):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from src.modules.package_jobs import guarded_package_operation, package_store_lease, package_core_directory
+
 SCRIPT_DIR = _project_root
 
 
@@ -560,6 +562,12 @@ class MCUWebBackendAPI:
                 if not self._stop_port_monitor.wait(2.0):
                     self.refresh_board_catalog()
             threading.Thread(target=discover, name="MCU_DeferredCatalog", daemon=True).start()
+            from main.core.package_activity import PackageActivityMonitor
+            self._package_monitor = PackageActivityMonitor(self, self._stop_port_monitor,
+                                                          getattr(self, "_package_event_root", None))
+            self._package_monitor_thread = threading.Thread(target=self._package_monitor.run,
+                                                           name="MCU_PackageActivity", daemon=True)
+            self._package_monitor_thread.start()
         except Exception as exc:
             with self._services_lock:
                 self._services_started = False
@@ -570,7 +578,7 @@ class MCUWebBackendAPI:
         """Discover installed board manifests off the GUI thread."""
         with self._catalog_lock:
             if self.is_busy or self._catalog_refresh_running or self._stop_port_monitor.is_set():
-                return
+                return False
             self._catalog_refresh_running = True
             self._catalog_refresh_generation += 1
             refresh_id = self._catalog_refresh_generation
@@ -615,12 +623,28 @@ class MCUWebBackendAPI:
                 with self._catalog_lock:
                     self._catalog_refresh_running = False
 
+        def coordinated_worker():
+            try:
+                with package_store_lease(package_core_directory(), wait=True,
+                                         cancel=self._stop_port_monitor,
+                                         root=getattr(self, "_package_event_root", None)):
+                    worker()
+            except InterruptedError:
+                pass
+            except Exception as exc:
+                self.emit("boards:updated", {"error": str(exc), "refresh_id": refresh_id})
+            finally:
+                with self._catalog_lock:
+                    self._catalog_refresh_running = False
+
         try:
-            threading.Thread(target=worker, name="MCU_BoardCatalog", daemon=True).start()
+            threading.Thread(target=coordinated_worker, name="MCU_BoardCatalog", daemon=True).start()
+            return True
         except Exception as exc:
             with self._catalog_lock:
                 self._catalog_refresh_running = False
             self.emit("boards:updated", {"error": str(exc), "refresh_id": refresh_id})
+            return False
 
     def stop_services(self) -> None:
         """Signal all persistent background workers to stop and wait for them to exit.
@@ -709,6 +733,7 @@ class MCUWebBackendAPI:
                     "project:updated":  bus.project_updated,
                     "syntax:errors":    bus.syntax_errors,
                     "notification":     bus.notification,
+                    "package:progress": getattr(bus, "package_progress", None),
                     "telemetry":        bus.telemetry,
                     "timestamp:toggled": getattr(bus, "timestamp_toggled", None),
                     "skip_compile:availability": getattr(bus, "skip_compile_availability_changed", None),
@@ -3614,24 +3639,30 @@ class MCUWebBackendAPI:
             if needs_resolution:
                 self.emit("console:log", {"text": f"  Resolving board definition for {name}…", "tag": "info", "newline": True})
             resolved = resolve_board_definition(name, info, _load_platformio_board_catalog())
-            if resolved.get("pio_resolved") is False or not resolved.get("board"):
+            fallback = resolved.get("backend") == "arduino-cli"
+            if not fallback and (resolved.get("pio_resolved") is False or not resolved.get("board")):
                 from src.modules.offline_runtime import bootstrap_instruction
                 self.emit("console:log", {"text": bootstrap_instruction(f"Offline board definition unavailable: {name}"),
                                           "tag": "error", "newline": True})
-            if resolved.get("pio_resolved") and resolved.get("board") and resolved != info:
+            if (fallback or (resolved.get("pio_resolved") and resolved.get("board"))) and resolved != info:
                 SUPPORTED_BOARDS.set_definition(name, resolved)
                 _revision, catalog = SUPPORTED_BOARDS.snapshot()
                 _save_board_catalog_cache(catalog)
                 self.emit("boards:updated", {"boards": catalog})
-                self.emit("console:log", {"text": f"  Target: {resolved['platform']}:{resolved['board']} ({self._resolve_board_info(name).get('framework', '')})",
+                target = str(resolved.get("arduino_fqbn")) if fallback else f"{resolved['platform']}:{resolved['board']}"
+                self.emit("console:log", {"text": f"  Target: {target} ({self._resolve_board_info(name).get('framework', '')})",
                                           "tag": "success", "newline": True})
         return self._check_target(action, sketch=True)
 
+    @guarded_package_operation
     def _compile_requested_worker(self):
         try:
             if not self._resolve_requested_target("Compile"):
                 self._release_requested_operation()
                 return False
+            if self._resolve_board_info().get("backend") == "arduino-cli":
+                from main.core.arduino_backend import run_arduino_operation
+                return run_arduino_operation(self)
             return self._compile_worker(False)
         except Exception as exc:
             self.emit("console:log", {"text": f"Build preparation failed: {exc}", "tag": "error", "newline": True})
@@ -4709,21 +4740,22 @@ class MCUWebBackendAPI:
         self.emit("notification", {"title": f"{action} unavailable", "message": problem, "type": "warning"})
         return False
 
-    def _hash_sources(self, board_name: str | None = None) -> str:
+    def _hash_sources(self, board_name: str | None = None, *, source_files: dict[str, Path] | None = None) -> str:
         """Calculate MD5 digest of all sketch sources for build cache hit detection."""
         hasher = hashlib.md5()
         hasher.update(sys.platform.encode("utf-8"))
         # Firmware built with another framework/target must never be reused.
         info = self._resolve_board_info(board_name)
-        identity_keys = ("platform", "board", "framework", "flash_mb", "has_psram", "memory_type", "flash_mode")
+        identity_keys = ("platform", "board", "framework", "flash_mb", "has_psram", "memory_type", "flash_mode", "backend", "arduino_fqbn", "arduino_cli")
         hasher.update(json.dumps({key: info.get(key, "") for key in identity_keys}, sort_keys=True).encode("utf-8"))
         manifest = str(info.get("pio_manifest") or "")
         if manifest and Path(manifest).is_file():
             hasher.update(Path(manifest).read_bytes())
         try:
-            files = sorted(get_sketch_files_fast(self.sketch_dir_path), key=lambda p: p.name)
-            for f in files:
-                hasher.update(f.name.encode("utf-8"))
+            files = ({path.name: path for path in get_sketch_files_fast(self.sketch_dir_path)}
+                     if source_files is None else source_files)
+            for name, f in sorted(files.items()):
+                hasher.update(name.encode("utf-8"))
                 # This is a build/upload safety boundary, not an editor preview.
                 # FAT/exFAT timestamps can be coarse or deliberately preserved;
                 # same-sized replacements must never reuse older firmware.
@@ -6207,6 +6239,7 @@ class MCUWebBackendAPI:
                                       "tag": "error", "newline": True})
             self._release_requested_operation()
 
+    @guarded_package_operation
     def _upload_requested_worker(self, cfg):
         try:
             if not self._resolve_requested_target("Upload"):
@@ -6240,6 +6273,10 @@ class MCUWebBackendAPI:
         self._mcu_detached_during_compile = None
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         self._stop_requested = False
+
+        if selected_board_info.get("backend") == "arduino-cli":
+            from main.core.arduino_backend import run_arduino_operation
+            return run_arduino_operation(self, upload=True)
 
         # Fingerprint sources on the worker, after board resolution.
         can_skip = (self._active_skip_compile
@@ -8104,7 +8141,9 @@ class MCUWebBackendAPI:
 
         def run():
             try:
-                worker()
+                with package_store_lease(package_core_directory(),
+                                         root=getattr(self, "_package_event_root", None)):
+                    worker()
             except Exception as exc:
                 self.emit("console:log", {"text": f"Reset failed: {exc}", "tag": "error", "newline": True})
             finally:
@@ -9150,4 +9189,3 @@ class MCUWebBackendAPI:
             return json.dumps(diagnostics)
         except Exception:
             return "[]"
-
