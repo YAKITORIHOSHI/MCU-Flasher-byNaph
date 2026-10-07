@@ -691,6 +691,11 @@ MCU Flasher by Naph/
 - **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards and typo fallback remain available. The footer shows the board count, **Cancel** and **Select Board**. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
 - **Additional board platforms and libraries**: Add their PlatformIO specifications to `direct/offline-packages.json`, then open **Bootstrap** or run the host setup command while online. The workspace never opens the network downloader.
 
+> [!WARNING]
+> **Known Issue & Work-In-Progress (ESP8266 & External Board Indexes)**:
+> Support for ESP8266 boards and external board index packages (such as NodeMCU, ESP8266 community cores, or third-party vendor index URLs) is currently in active development and not yet functional for compilation or flashing, even though package definitions may appear downloadable in the Boards & Libraries Manager. Native AVR targets (Uno, Nano ATmega328, Mega 2560) and ESP32 targets remain fully supported.
+
+
 ### 4. Compiling & Flashing Code
 - **Compile Only (`🔨 Compile`)**:
   - Available as soon as a board is selected, even without a serial port. The build pipeline checks the exact board definition and framework and reports missing definitions when invoked.
