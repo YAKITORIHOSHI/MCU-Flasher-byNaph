@@ -479,9 +479,14 @@ QPushButton#btn-search-board:enabled:hover {{
     color: {cyan};
 }}
 QPushButton#btn-search-board:disabled {{
-    background-color: {btn_disabled_bg};
-    color: {btn_disabled_fg};
-    border: 1px solid {btn_disabled_border};
+    background-color: {bg_darkest};
+    color: {text_dim};
+    border: 1px solid {border};
+    border-radius: 4px;
+    padding: 0px;
+    text-align: center;
+    font-size: 12px;
+    font-family: 'Segoe UI Emoji', 'Segoe UI Symbol', 'Segoe UI', sans-serif;
 }}
 
 QPushButton#btn-toggle-editor:enabled,

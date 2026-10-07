@@ -1022,20 +1022,26 @@ class MCUWebBackendAPI:
         except Exception:
             pass
 
-    def is_upload_phase_active(self) -> bool:
-        """Return True if an actual firmware upload/flash phase is actively in progress.
-        During compilation (even when initiated by Upload), this returns False."""
+    def is_compile_or_upload_active(self) -> bool:
+        """Return True if compiling or uploading/flashing is actively in progress."""
         if not getattr(self, "is_busy", False):
             return False
         phase = str(getattr(self, "_current_op_phase", "") or "").lower()
         op = str(getattr(self, "active_operation", "") or "").lower()
-        if phase in ("compiling", "compile", "resolving", "installing"):
+        if phase in ("idle", "") and not op:
             return False
         return (
-            phase in ("upload", "uploading", "flash", "flashing", "connecting", "writing", "erasing", "verifying")
-            or op == "flash"
-            or (op == "upload" and phase not in ("compiling", "compile", "resolving", "installing", "idle"))
+            phase in (
+                "compile", "compiling", "resolving", "installing",
+                "upload", "uploading", "flash", "flashing",
+                "connecting", "writing", "erasing", "verifying", "toolchain"
+            )
+            or op in ("compile", "upload", "flash")
         )
+
+    def is_upload_phase_active(self) -> bool:
+        """Return True if an actual firmware compile or upload/flash phase is actively in progress."""
+        return self.is_compile_or_upload_active()
 
     def set_upload_speed(self, speed: str | int) -> None:
         """Set the upload baud rate, capped at MAX_BAUD_RATE (921600)."""
@@ -3108,10 +3114,10 @@ class MCUWebBackendAPI:
 
     def select_port(self, port: str):
         """Select COM port and update serial monitor."""
-        if self.is_upload_phase_active():
+        if self.is_compile_or_upload_active():
             self.emit("notification", {
                 "title": "Port locked",
-                "message": "Serial port cannot be changed while uploading firmware.",
+                "message": "Serial port cannot be changed while compiling or uploading firmware.",
                 "type": "warning",
             })
             return False
@@ -3144,10 +3150,10 @@ class MCUWebBackendAPI:
 
     def select_board(self, board_name: str):
         """Select microcontroller board model for the active session."""
-        if self.is_upload_phase_active():
+        if self.is_compile_or_upload_active():
             self.emit("notification", {
                 "title": "Board locked",
-                "message": "Board selection cannot be changed while uploading firmware.",
+                "message": "Board selection cannot be changed while compiling or uploading firmware.",
                 "type": "warning",
             })
             return False

@@ -1569,7 +1569,7 @@ class ControlsBar(QWidget):
         # Upload speed configuration
         if getattr(self, "_upload_phase_locked", False):
             self.upload_speed_combo.setEnabled(False)
-            self.upload_speed_combo.setToolTip("Upload speed is locked while uploading firmware.")
+            self.upload_speed_combo.setToolTip("Upload speed is locked while compiling or uploading firmware.")
             return
 
         previous = self.upload_speed_combo.blockSignals(True)
@@ -1870,13 +1870,13 @@ class ControlsBar(QWidget):
         self.board_selector.setEnabled(not locked)
         self.board_selector.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
         self.board_selector.setToolTip(
-            "Board selection is locked while uploading firmware."
+            "Board selection is locked while compiling or uploading firmware."
             if locked else "Click to search & select MCU board"
         )
         self.btn_search_board.setEnabled(not locked)
         self.btn_search_board.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
         self.btn_search_board.setToolTip(
-            "Board selection is locked while uploading firmware."
+            "Board selection is locked while compiling or uploading firmware."
             if locked else "Search & Select MCU Board"
         )
 
@@ -1884,7 +1884,7 @@ class ControlsBar(QWidget):
         self.port_combo.setEnabled(not locked)
         self.port_combo.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
         self.port_combo.setToolTip(
-            "Port selection is locked while uploading firmware."
+            "Port selection is locked while compiling or uploading firmware."
             if locked else "Serial port for upload and monitoring"
         )
         if locked and hasattr(self.port_combo, "hidePopup"):
@@ -1896,7 +1896,7 @@ class ControlsBar(QWidget):
         # Upload speed controls
         if locked:
             self.upload_speed_combo.setEnabled(False)
-            self.upload_speed_combo.setToolTip("Upload speed is locked while uploading firmware.")
+            self.upload_speed_combo.setToolTip("Upload speed is locked while compiling or uploading firmware.")
             if hasattr(self.upload_speed_combo, "hidePopup"):
                 try:
                     self.upload_speed_combo.hidePopup()
@@ -1908,25 +1908,24 @@ class ControlsBar(QWidget):
 
     @Slot(dict)
     def on_operation_phase(self, payload: dict) -> None:
-        """Lock port, board, and upload speed when the upload phase starts."""
+        """Lock port, board, and upload speed during compiling and uploading phases."""
         is_busy: bool = bool(payload.get("is_busy", False))
         phase: str = str(payload.get("phase", "")).lower()
         op: str = str(payload.get("op", "")).lower()
 
-        is_compile_phase = (
-            phase in ("compile", "compiling", "resolving", "installing")
-            or (op == "compile" and phase not in ("flash", "flashing", "upload"))
-        )
-        is_upload_phase = (
+        is_operation_phase = (
             is_busy
-            and not is_compile_phase
             and (
-                phase in ("flash", "flashing", "upload", "connecting", "writing", "erasing", "verifying")
-                or op in ("upload", "flash")
+                phase in (
+                    "compile", "compiling", "resolving", "installing",
+                    "flash", "flashing", "upload", "connecting",
+                    "writing", "erasing", "verifying", "toolchain",
+                )
+                or op in ("compile", "upload", "flash")
             )
         )
 
-        self.set_upload_phase_locked(is_upload_phase)
+        self.set_upload_phase_locked(is_operation_phase)
 
     def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         sig_bus.ports_updated.connect(self.on_ports_updated)
