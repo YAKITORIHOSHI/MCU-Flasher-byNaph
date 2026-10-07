@@ -155,6 +155,33 @@ class TargetResolutionChecks(unittest.TestCase):
         self.assertEqual(refreshed[NAME]["board"], "esp32dev")
         self.assertEqual(seed[NAME]["board"], "")
 
+    def test_incremental_native_preview_precedes_matching_and_preserves_final_catalog(self):
+        batches = []
+        base = definitions()[0]
+        native = [dict(base, id=f"exact_{number}", name=f"Exact fixture {number}") for number in range(270)]
+        original = catalog_module._resolve_arduino_board_record
+        def resolve(record, rows, **kwargs):
+            self.assertTrue(batches, "Native definitions should be visible before fuzzy matching")
+            return original(record, rows, **kwargs)
+        with patch.object(catalog_module, "_load_platformio_board_catalog", return_value=native), \
+                patch.object(catalog_module, "_get_arduino_board_search_roots", return_value=[self.sandbox]), \
+                patch.object(catalog_module, "_parse_downloaded_arduino_board_files", return_value=[neutral_record()]):
+            expected = catalog_module.load_dynamic_boards({})
+            with patch.object(catalog_module, "_resolve_arduino_board_record", side_effect=resolve):
+                actual = catalog_module.load_dynamic_boards({}, on_batch=lambda batch: batches.append(batch) if batch else None)
+        self.assertEqual(actual, expected)
+        self.assertEqual(len(batches[0]), 16)
+        self.assertTrue(all(len(batch) <= 128 for batch in batches))
+        first = next(iter(batches[0]))
+        batches[0][first]["frameworks"].append("mutated-preview")
+        self.assertNotIn("mutated-preview", actual[first]["frameworks"])
+
+    def test_cancelled_incremental_refresh_does_not_save_incomplete_catalog(self):
+        self.saved.reset_mock()
+        with self.assertRaises(InterruptedError):
+            catalog_module.load_dynamic_boards({}, on_batch=lambda _batch: False)
+        self.saved.assert_not_called()
+
     def test_batch_refresh_rechecks_changed_identity_and_ambiguity(self):
         candidates = definitions()
         candidates[0].update(id="alpha-id", name="Fixture Alpha", variant="alpha", arduino_defines=set())
@@ -206,6 +233,7 @@ class TargetResolutionChecks(unittest.TestCase):
 
     def test_upload_resolves_before_snapshot_and_source_hashing(self):
         self.api.current_port = "SIMULATED"
+        self.api.skip_compile = True
         self.api.check_can_skip_compile_for_upload = Mock(return_value=False)
         invoked = []
         def upload_boundary(can_skip):

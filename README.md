@@ -112,6 +112,13 @@ installed/cache entries. Discovery computes matching evidence once per refresh
 to avoid repeatedly normalizing each Arduino/PlatformIO pair. Matching scores,
 ambiguity rejection and unavailable framework guards retain their exact rules;
 a new refresh rebuilds the evidence from the current manifests. The picker
+shows the first 16 indexed rows before the complete list is ready, then fills
+in 128-row pages with one outstanding index page at a time. Cold local discovery
+previews native definitions before Arduino matching; Select remains disabled
+until exact, authoritative metadata is ready. Cached rows stay usable while a
+refresh is pending. Typing, closing the picker or starting a newer refresh
+discards stale work without publishing provisional targets to build controls.
+The picker
 validates exact targets and exposes declared
 framework choices. Future boards require compatible toolchain definitions;
 universal hardware support is not guaranteed. Firmware reuse is allowed only
@@ -401,6 +408,36 @@ Constrained PCs debounce typing checks for 600 ms (300 ms otherwise), and editor
 initialization polling stops after event listeners are installed. Unchanged
 diagnostics retain their table rows, selection and scroll position. Resize events share a settling timer, fonts register
 once, and vector icons use a bounded cache.
+Worker-start failures release their busy reservations and leave a visible error
+so the next explicit action can try again. Catalog completion keeps only the
+latest result while an operation is busy and applies it on completion, without
+repeated polling timers. Repeated Stop requests dispatch once; a live upload
+worker cannot be unlocked by the stale-operation failsafe. Closed compact menus
+release their widgets rather than accumulating behind repeated opens.
+Source-scan ownership checks reuse the import-canonical app root and resolve
+only real symlink/junction internal targets, avoiding repeated ordinary-directory
+path walks while preserving sketch/application separation and alias retargeting.
+
+Slow storage is considered independently from CPU speed. Read-only Windows
+volume/device hints and native Linux mount/sysfs hints run in one bounded
+background worker, with an expiring RAM cache and no disk-write benchmarks.
+Build and Bootstrap budgets consider the app, project and configured tool store:
+known HDD and USB/removable paths cap jobs at two; network paths cap jobs at one.
+Known SSDs and unavailable hints retain the ordinary CPU/RAM budget. A build
+worker may wait at most 350 ms for the hint; the interface never waits for it.
+
+Board refresh enumerates each installed manifest directory once and reuses
+bounded, currently validated parsed records. Unchanged catalog publication,
+settings copies and generated text avoid replacement writes. Compatibility/API
+and GPIO checks share one fresh source read per file. Explicit board Refresh
+rereads current definitions even when file metadata was reused. Source staging compares
+bounded sequential chunks and preserves unchanged objects; build/upload hashes
+still verify actual source bytes, not only FAT/exFAT timestamps. External edit
+watching uses one background scan with one latest pending request and coalesced
+file events, rather than doing source reads in the Qt event loop. Rapid hardware
+state updates similarly retain only the latest pending write. These changes do
+not relocate your sketch, settings or recovery journals, and cannot eliminate
+the first-load cost of reading the runtime and toolchain from a slow device.
 
 A separate isolated Windows fixture with 1,500 diagnostics and 20 identical
 updates measured **1.94 s before / 0.010 s after**, eliminating 20 redundant
@@ -643,6 +680,7 @@ MCU Flasher by Naph/
 - Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Switching the current window prompts to save, discard or cancel when editor changes are unsaved. Choosing a new window keeps the current editor, terminal, build output and board/port state intact; new windows start with hardware unselected. The startup picker opens the first project directly.
 - **Open projects** lists running sketch windows and their folder paths. Use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
 - Right-click the project title or click its folder icon to reopen the picker. **Cancel** leaves the current editor and monitor sessions intact. Choose a new window to open another project while the current one compiles; choosing the current window is blocked while an action is in progress.
+- **Existing project → Browse** always starts in your system's Documents folder, including redirected or localized Documents locations. Every click starts there; cancelling keeps the selected project path unchanged.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
 
@@ -670,6 +708,14 @@ MCU Flasher by Naph/
   - Automatically pauses the Serial Monitor during the write phase to release port contention, then auto-resumes monitoring once flashing finishes.
   - Uses the exact board's declared protocol and bootloader speed. Nano ATmega328 keeps its 57600-baud default; Uno and Mega keep theirs. The speed control shows the board default or **Auto** on non-ESP boards. Native programmers never receive a serial-port argument, and hardware writes are never automatically replayed.
   - ESP bootloader connection may retry before flash erase/write begins. After erase/write starts, a dropped link stops the attempt without replaying the flash or pulsing reset; the console reports that the firmware may be partial. A local `Library Manager: Linking symlink://...` line means PlatformIO linked an already-installed local library into the build and is routine dependency setup.
+  - Fast ESP serial uploads use the same prepared reset configuration as the
+    PlatformIO route, with the existing ten-attempt connection budget. Native
+    USB and Ubuntu retain their declared reset strategies. Missing or failed
+    uploader telemetry after launch is a terminal, potentially partial-write
+    state, not permission to retry or claim that firmware was untouched.
+  - Skip Compile preserves your choice: an unchecked box compiles even when a
+    matching firmware cache exists. Reuse still requires unchanged source and
+    exact-target fingerprints.
 - **Framework compatibility**: Board selection preserves a valid saved framework, otherwise choosing Arduino when available or the sole supported native framework. Multiple native frameworks require an explicit saved choice in the `board_frameworks` configuration; no arbitrary framework is selected. Unavailable frameworks remain excluded. `.ino` files require Arduino; native C/C++ projects can use other declared frameworks. First-use preparation resolves their own packages rather than compiling an Arduino placeholder. Framework and board-definition changes use distinct firmware/cache identities. BIN, HEX, UF2 and ELF artifacts are recognized. Exact PlatformIO definitions, compatible source/libraries, packages and hardware drivers remain required; arbitrary unsupported boards are not inferred from their family name.
 - **Stop Operation (`🛑 Stop`)**: Cancels an active compilation, upload, or resets a hanging serial session.
 
@@ -677,7 +723,12 @@ MCU Flasher by Naph/
 - View real-time MCU serial output in the bottom **Serial Monitor** tab.
 - **Upload & Reset Parity**:
   - Upon a successful upload, hard reset, or soft reset, the application automatically switches the bottom view to the **Serial Monitor** after a 500ms grace delay.
-  - After upload completion, MCU Flasher issues an automatic silent DTR/RTS reset pulse, guaranteeing the MCU reboots into user application mode and starts streaming boot logs immediately.
+  - After upload completion, MCU Flasher requests a silent DTR/RTS reset pulse
+    for the still-selected supported target so the sketch can start and stream
+    boot logs, provided its serial connection remains valid.
+  - Delayed monitor focus and reset callbacks are discarded when the board,
+    port, project or operation changes; the reset worker also rechecks its
+    captured serial connection and generation before touching the device.
   - **Error Visibility Retention**: If an operation fails (`success=False`), the focus strictly remains on the **Build Console** so error traces stay visible and actionable.
 - **Reset on Baud Change Toggle**:
   - Configurable in the Settings Dialog (`reset_on_baud_change`).
@@ -703,6 +754,10 @@ MCU Flasher by Naph/
   - Features: Multi-tab editing with drag reordering, C++ autocomplete, F12 / Ctrl+Click Go-To-Definition, Ctrl+Hover documentation cards, and real-time syntax checking.
   - Source tabs support keyboard navigation and announce selection and unsaved changes. Workspace tool tabs shorten labels in compact windows and keep full tooltips.
   - **Detach Editor** moves the existing editor into a separate window. Closing that window reattaches it; files and dirty buffers stay in memory.
+  - Editor input focus is preserved through theme changes and explicit
+    detach/reattach. An event-driven, workspace-only guard restores accidentally
+    blank mouse pointers while keeping text/link/resize/busy pointers and Windows
+    pointer preferences unchanged. Every editor theme defines a visible caret.
   - Debounced auto-saving (customizable delay in Settings).
   - Keyboard shortcuts: `Ctrl+R` to Compile, `Ctrl+U` to Upload, `Ctrl+S` to Save All, `Ctrl+` / `Ctrl-` to zoom.
 
@@ -835,7 +890,8 @@ MCU Flasher by Naph/
 
 ## ⚙️ Configuration
 
-Application settings are persisted in `src/gui_config.json`:
+Application settings use the per-user `.mcu_gui_config.json` as the authoritative
+store, with `src/gui_config.json` retained for portable-copy compatibility:
 
 ```json
 {
@@ -862,6 +918,13 @@ Application settings are persisted in `src/gui_config.json`:
 - **`reset_on_baud_change`**: Whether changing the serial monitor baud rate triggers a silent DTR/RTS hardware reset pulse (`true`/`false`).
 - **`autosave_enabled` & `autosave_delay`**: Debounced automatic file saving state and delay in milliseconds.
 - **`hide_build_console_warnings`**: Filter out non-fatal compiler warning lines from the build console.
+- **`editor_font_size` / `monitor_font_size`**: Independent saved editor and output
+  sizes; terminal hosts restore the monitor size before starting a session.
+- **Display checkboxes**: Timestamps, Skip Compile, Build/Serial Auto-scroll,
+  clear-on-action and serial ANSI Clear-screen inherit their last saved value
+  on restart. Hardware selection and window ownership remain per-instance.
+  Migrating older/Bootstrap-only configuration preserves existing shared values.
+  Failed writes report a warning and preserve the previous control state.
 
 ---
 
@@ -896,6 +959,14 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
+& src/_python/python.exe -B direct/verify_cursor.py
+& src/_python/python.exe -B direct/verify_preferences.py
+& src/_python/python.exe -B direct/verify_upload_workers.py
+& src/_python/python.exe -B direct/verify_application_guard.py
+& src/_python/python.exe -B direct/verify_storage_io.py
+& src/_python/python.exe -B direct/verify_storage_resources.py
+& src/_python/python.exe -B direct/verify_catalog_io.py
+& src/_python/python.exe -B direct/verify_slow_storage_flow.py
 & src/_python/python.exe -B direct/verify_build_log_routing.py
 & src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py
@@ -913,7 +984,12 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_browser_loading.py
 & src/_python/python.exe -B direct/verify_responsive.py
 & src/_python/python.exe -B direct/verify_projects.py --render-dir temp/audit/projects
+node direct/verify_editor_preferences.js
 ```
+
+The full Qt/WebEngine and terminal checks require working native renderer and
+loopback facilities. Report unavailable sandbox checks separately from passing
+mocked worker/target checks; physical upload success is not proved by fixtures.
 
 The cold-window and promotion checks use isolated configuration and simulated
 dependency availability. They verify the original Qt design, retained logs and
@@ -944,6 +1020,10 @@ Host syntax without running installers or launchers. The compatibility workflow
 also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04, then
 checks the actual Compile button for Uno, Nano and Mega using copied native
 packages. Native Ubuntu results remain pending until that workflow runs.
+The workflow also runs the recent cursor, preference, catalog, storage and
+worker regressions on both Ubuntu versions, with explicit Node-based editor
+checks and native Qt xcb rendering under Xvfb. Local Windows simulations do
+not substitute for those native results.
 
 For native setup/downloader screenshots, run the controls verifier with
 `QT_QPA_PLATFORM=windows` and `--render-dir temp/audit/controls`. On Ubuntu use

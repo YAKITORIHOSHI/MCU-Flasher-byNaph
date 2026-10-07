@@ -480,7 +480,13 @@ class SyntaxPanel(QWidget):
             except RuntimeError:
                 pass  # The panel was destroyed while the read-only worker finished.
 
-        threading.Thread(target=_worker, name="MCU_SyntaxWorker", daemon=True).start()
+        try:
+            threading.Thread(target=_worker, name="MCU_SyntaxWorker", daemon=True).start()
+        except Exception as exc:
+            # No worker exists to deliver its queued completion in this case.
+            # Release the GUI-owned reservation so a later explicit check works.
+            self._finish_analysis({"project": str(project), "generation": generation,
+                                   "manual": is_manual, "error": str(exc)})
 
     @Slot(dict)
     def _finish_analysis(self, result: dict) -> None:

@@ -547,6 +547,24 @@ class PerformanceChecks(unittest.TestCase):
             self.assertNotIn("failed", panel._lbl_status.text())
             panel.deleteLater()
 
+    def test_syntax_worker_start_failure_releases_checking_state(self):
+        from main.qt.syntax_panel import SyntaxPanel
+        backend = SimpleNamespace(get_project_dir=lambda: str(ROOT / "temp"), is_busy=False)
+        panel = SyntaxPanel(backend)
+        panel._bg_timer.stop()
+        try:
+            with patch("main.qt.syntax_panel.threading.Thread", side_effect=RuntimeError("No worker slot")):
+                panel._run_manual_check()
+                self.assertFalse(panel._is_checking)
+                self.assertIn("failed", panel._lbl_status.text())
+                self.assertIn("No worker slot", panel._lbl_status.toolTip())
+            with patch("main.qt.syntax_panel.threading.Thread") as start:
+                panel._run_manual_check()
+                start.return_value.start.assert_called_once()
+                self.assertTrue(panel._is_checking)
+        finally:
+            panel.deleteLater()
+
     def test_project_switch_releases_discarded_buffers_and_preserves_current_recovery(self):
         from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
         scratch = ROOT / "temp/scratch"

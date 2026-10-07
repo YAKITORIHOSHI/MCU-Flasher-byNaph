@@ -353,7 +353,7 @@ class SettingsDialog(QDialog):
         font_row.addWidget(font_lbl)
 
         self.font_combo = QComboBox()
-        for sz in range(8, 25):
+        for sz in range(6, 49):
             self.font_combo.addItem(f"{sz} pt", userData=sz)
         cur_font_size = get_monitor_font_size()
         font_idx = self.font_combo.findData(cur_font_size)
@@ -890,7 +890,7 @@ class SettingsDialog(QDialog):
         notif_msg = (
             f"• CPU Multithreading: {cpu_key}\n"
             f"• Continuous Panel Resize: {g_accel}\n"
-            f"• Editor & Monitor Font: {new_font_size} pt\n"
+            f"• Monitor & Terminal Font: {new_font_size} pt\n"
             f"• Console Warnings: {warn_str}\n"
             f"• Theme Mode: {theme_str}\n"
             f"• Auto-Save: {autosave_str}\n"

@@ -26,7 +26,9 @@ class ActionChecks(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         methods = {"_start_reset_worker", "hard_reset", "soft_reset", "clean_cache",
-                   "_new_upload_progress_state", "_fast_upload_retry_allowed"}
+                   "_new_upload_progress_state", "_fast_upload_retry_allowed",
+                   "compile_sketch", "upload_sketch", "_release_requested_operation",
+                   "_start_resolved_upload", "set_timestamp_enabled"}
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in methods]
@@ -40,6 +42,8 @@ class ActionChecks(unittest.TestCase):
                        get_project_build_cache_root=lambda *a, **k: self.root / ".mcu_flasher_build_cache",
                        robust_rmtree=shutil.rmtree, _sketch_ram_cache=SimpleNamespace(invalidate=Mock()),
                        subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, CREATE_NO_WINDOW=0))
+        self.ns["_HOST_RUNTIME"] = SimpleNamespace(use_native_upload=lambda _: False)
+        self.ns["DEFAULT_UPLOAD_SPEED"] = 460800
         exec(compile(ast.Module(body=[cls], type_ignores=[]), "isolated_backend", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()
         b = self.api
@@ -54,6 +58,9 @@ class ActionChecks(unittest.TestCase):
         b._stop_serial_monitor = Mock()
         b._start_serial_monitor = Mock()
         b._remote_workspace_root = lambda _: None
+        b._block_if_pending_ai_edits = lambda _: False
+        b._compile_requested_worker = Mock()
+        b._upload_requested_worker = Mock()
 
     def run_worker(self):
         self.pending.pop(0)()
@@ -84,6 +91,36 @@ class ActionChecks(unittest.TestCase):
         self.assertFalse(self.api.is_busy)
         self.api.clean_cache()
         self.assertFalse(self.api.is_busy)
+
+    def test_compile_upload_worker_start_failure_releases_reservation(self):
+        self.ns["threading"].Thread = Mock(side_effect=RuntimeError("No worker available"))
+        for action in (self.api.compile_sketch, self.api.upload_sketch):
+            action()
+            self.assertFalse(self.api.is_busy)
+            self.assertIsNone(self.api.active_operation)
+
+    def test_unchecked_skip_compile_never_uses_the_available_cache(self):
+        b = self.api
+        b.skip_compile = False
+        b.check_can_skip_compile_for_upload = Mock(return_value=True)
+        b._native_upload_worker = Mock()
+        b._upload_worker = Mock()
+        b._start_resolved_upload({})
+        b.check_can_skip_compile_for_upload.assert_not_called()
+        b._upload_worker.assert_called_once_with(False)
+        b.skip_compile = True
+        b._start_resolved_upload({})
+        b.check_can_skip_compile_for_upload.assert_called_once_with("Demo")
+        self.assertEqual(b._upload_worker.call_args.args, (True,))
+
+    def test_timestamp_save_failure_remains_visible(self):
+        self.ns["save_gui_config"] = Mock(return_value=False)
+        self.api.timestamp_enabled = False
+        self.assertFalse(self.api.set_timestamp_enabled(True))
+        self.assertFalse(self.api.timestamp_enabled)
+        messages = [call.args[1] for call in self.api.emit.call_args_list
+                    if call.args[0] == "notification"]
+        self.assertEqual(messages[-1]["title"], "Settings not saved")
 
     def test_clean_deletion_failure_is_reported(self):
         cache = self.root / ".mcu_flasher_build_cache"

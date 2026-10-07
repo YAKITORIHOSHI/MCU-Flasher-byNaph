@@ -134,7 +134,8 @@ class PosixTerminalPanel(QWidget):
         super().__init__(parent)
         self._backend = backend
         self._theme = "default"
-        self._font_size = 14
+        from main.core.config import get_monitor_font_size
+        self._font_size = get_monitor_font_size()
         self._sessions = {}
         self._project_dir = ""
         layout = QVBoxLayout(self)

@@ -122,9 +122,12 @@ _FLAGSHIP_MAPPINGS: dict[str, list[str]] = {
 class BoardSearchIndex:
     """Fast, pre-indexed in-memory search index for MCU boards."""
 
-    def __init__(self, boards_dict: dict, recent_boards: Optional[list[str]] = None):
+    def __init__(self, boards_dict: dict, recent_boards: Optional[list[str]] = None,
+                 *, on_progress=None):
         self.boards = boards_dict
         self.recent_boards = set(recent_boards or [])
+        self._recent_order = tuple(recent_boards or ())
+        self._on_progress = on_progress
         self.index: list[dict] = []
         self._query_cache = OrderedDict()
         self._query_lock = threading.Lock()
@@ -140,7 +143,13 @@ class BoardSearchIndex:
             "AI Thinker ESP32-CAM",
         }
 
-        for name in sorted(self.boards.keys()):
+        # Put the first visible page (including recents) through the same
+        # metadata path first. Search ranking still sorts by its original score.
+        recent_names = [name for name in self._recent_order if name in self.boards]
+        recent_set = set(recent_names)
+        ordered_names = recent_names + [name for name in sorted(self.boards) if name not in recent_set]
+        delivered = 0
+        for name in ordered_names:
             info = self.boards.get(name, {}) or {}
             name_lower = name.lower()
             clean_name = _normalize_text(name)
@@ -300,6 +309,14 @@ class BoardSearchIndex:
                 "is_recent": name in self.recent_boards,
                 "problem": problem,
             })
+            if self._on_progress and (len(self.index) == 16 or len(self.index) - delivered >= 128):
+                if self._on_progress(self.index[delivered:]) is False:
+                    raise _BoardSearchCancelled()
+                delivered = len(self.index)
+        if self._on_progress and delivered < len(self.index):
+            if self._on_progress(self.index[delivered:]) is False:
+                raise _BoardSearchCancelled()
+        self._on_progress = None
 
     def search(self, query: str, category_filter: str = "ALL") -> list[str]:
         """Return board names ranked by relevance score, optionally filtered by category."""
@@ -490,10 +507,15 @@ _INDEX_CACHE = OrderedDict()
 _INDEX_CACHE_LOCK = threading.Lock()
 
 
+class _BoardSearchCancelled(Exception):
+    """A closed picker or newer catalog cancelled incomplete indexing."""
+
+
 class _BoardSearchWorker(QObject):
     """One active search and one latest pending request; completion is queued."""
 
     completed = Signal(object)
+    progress = Signal(object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -501,6 +523,8 @@ class _BoardSearchWorker(QObject):
         self._pending = None
         self._closed = False
         self._thread = None
+        self._progress_token = 0
+        self._awaiting_progress = None
 
     def submit(self, request):
         with self._condition:
@@ -508,8 +532,13 @@ class _BoardSearchWorker(QObject):
                 return
             self._pending = request
             if self._thread is None:
-                self._thread = threading.Thread(target=self._run, name="MCU_BoardSearch", daemon=True)
-                self._thread.start()
+                try:
+                    self._thread = threading.Thread(target=self._run, name="MCU_BoardSearch", daemon=True)
+                    self._thread.start()
+                except Exception as exc:
+                    self._thread = None
+                    self._pending = None
+                    self.completed.emit((request[0], [], [], None, str(exc)))
             self._condition.notify()
 
     def stop(self):
@@ -517,6 +546,28 @@ class _BoardSearchWorker(QObject):
             self._closed = True
             self._pending = None
             self._condition.notify()
+
+    def acknowledge_progress(self, token):
+        with self._condition:
+            if self._awaiting_progress == token:
+                self._awaiting_progress = None
+            self._condition.notify()
+
+    def _deliver_progress(self, generation, key, rows, reset):
+        # At most one queued page can be outstanding. Closed/stale requests
+        # wake the wait immediately; no timer polling or unbounded Qt signals.
+        with self._condition:
+            if self._closed or (self._pending is not None and self._pending[1] != key):
+                return False
+            if self._pending is not None:
+                return True  # Finish and cache this index for the latest query.
+            self._progress_token += 1
+            token = self._progress_token
+            self._awaiting_progress = token
+            self.progress.emit((generation, rows, reset, token))
+            self._condition.wait_for(lambda: self._closed or self._pending is not None or
+                                     self._awaiting_progress != token)
+            return not self._closed and (self._pending is None or self._pending[1] == key)
 
     def _run(self):
         while True:
@@ -532,7 +583,29 @@ class _BoardSearchWorker(QObject):
                     if index is not None:
                         _INDEX_CACHE.move_to_end(key)
                 if index is None:
-                    index = BoardSearchIndex(boards, recent_boards=recents)
+                    progressive = not query.strip() and category == "ALL"
+                    preview_started = False
+                    delivered_count = 0
+                    recent_count = len([name for name in recents if name in boards])
+
+                    def indexed_page(page):
+                        nonlocal preview_started, delivered_count
+                        rows = []
+                        if progressive:
+                            if not preview_started and recent_count:
+                                rows.append({"header": "RECENTLY USED BOARDS"})
+                            for meta in page:
+                                if recent_count and delivered_count == recent_count:
+                                    rows.append({"header": "ALL BOARDS"})
+                                rows.append(meta)
+                                delivered_count += 1
+                            reset = not preview_started
+                            preview_started = True
+                            return self._deliver_progress(generation, key, rows, reset)
+                        with self._condition:
+                            return not self._closed and (self._pending is None or self._pending[1] == key)
+
+                    index = BoardSearchIndex(boards, recent_boards=recents, on_progress=indexed_page)
                     with _INDEX_CACHE_LOCK:
                         _INDEX_CACHE[key] = index
                         while len(_INDEX_CACHE) > 2:
@@ -553,6 +626,8 @@ class _BoardSearchWorker(QObject):
                         rows.append({"header": "ALL BOARDS"})
                     rows.append(index.by_name[name])
                 result = (generation, rows, names, index, "")
+            except _BoardSearchCancelled:
+                continue
             except Exception as exc:
                 result = (generation, [], [], None, str(exc))
             with self._condition:
@@ -575,6 +650,14 @@ class _BoardListModel(QAbstractListModel):
         self.beginResetModel()
         self.rows = rows
         self.endResetModel()
+
+    def append(self, rows):
+        if not rows:
+            return
+        first = len(self.rows)
+        self.beginInsertRows(QModelIndex(), first, first + len(rows) - 1)
+        self.rows.extend(rows)
+        self.endInsertRows()
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -844,6 +927,12 @@ class BoardSearchDialog(QDialog):
         self._local_catalog_ready.connect(self._local_catalog_finished, Qt.ConnectionType.QueuedConnection)
         self._generation = 0
         self._search_pending = False
+        self._catalog_loading = False
+        self._catalog_refresh_id = None
+        self._catalog_pending = {}
+        self._catalog_before_preview = None
+        self._catalog_error = ""
+        self._preview_count = 0
         self._confirm_when_ready = False
         self._select_initial_board = True
         self._pending_selection: Optional[str] = None
@@ -853,10 +942,15 @@ class BoardSearchDialog(QDialog):
         self._worker = _BoardSearchWorker(self)
         self.destroyed.connect(self._worker.stop)
         self._worker.completed.connect(self._search_completed, Qt.ConnectionType.QueuedConnection)
+        self._worker.progress.connect(self._search_progress, Qt.ConnectionType.QueuedConnection)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(75)
         self._search_timer.timeout.connect(self._dispatch_search)
+        self._catalog_timer = QTimer(self)
+        self._catalog_timer.setSingleShot(True)
+        self._catalog_timer.setInterval(50)
+        self._catalog_timer.timeout.connect(self._apply_catalog_batch)
 
         self._build_ui()
         self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_layout())
@@ -1125,8 +1219,8 @@ class BoardSearchDialog(QDialog):
         QShortcut(QKeySequence("Enter"), self, activated=self._confirm_selection)
         from main.qt.signals import signals
         signals.board_catalog_updated.connect(self._catalog_updated)
-        # Opening uses the published catalog. Only explicit Refresh requests
-        # registry/network discovery; startup already refreshes in the background.
+        # Opening uses the published catalog. Refresh reads local definitions
+        # only; runtime never queries a network registry.
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1178,7 +1272,7 @@ class BoardSearchDialog(QDialog):
             self.lbl_count.setText("Auto-refreshing board catalog…")
             self.btn_refresh.setEnabled(False)
             self.btn_refresh.setText("Refreshing…")
-        self._request_catalog_refresh()
+        self._request_catalog_refresh(invalidate_parsed=False)
 
     def _on_auto_refresh_timer(self) -> None:
         if self._closed or self._board_subset is not None:
@@ -1186,20 +1280,20 @@ class BoardSearchDialog(QDialog):
         backend = self._get_backend()
         if backend and (getattr(backend, "is_busy", False) or getattr(backend, "_catalog_refresh_running", False)):
             return
-        self._request_catalog_refresh()
+        self._request_catalog_refresh(invalidate_parsed=False)
 
-    def _request_catalog_refresh(self):
+    def _request_catalog_refresh(self, _checked=False, *, invalidate_parsed=True):
         if self._closed:
             return
         backend = self._get_backend()
         if backend and hasattr(backend, "refresh_board_catalog"):
             self.btn_refresh.setEnabled(False)
             self.btn_refresh.setText("Refreshing…")
-            backend.refresh_board_catalog(include_registry=True)
+            backend.refresh_board_catalog(include_registry=True, invalidate_parsed=invalidate_parsed)
         else:
-            self._async_local_refresh()
+            self._async_local_refresh(invalidate_parsed=invalidate_parsed)
 
-    def _async_local_refresh(self):
+    def _async_local_refresh(self, *, invalidate_parsed=False):
         if self._closed or self._local_refresh_running:
             return
         self._local_refresh_running = True
@@ -1211,7 +1305,13 @@ class BoardSearchDialog(QDialog):
         def _worker():
             try:
                 from main.core.board_catalog import load_dynamic_boards, SUPPORTED_BOARDS
-                boards = load_dynamic_boards(dict(SUPPORTED_BOARDS))
+                def on_batch(batch):
+                    if self._closed or generation != self._local_refresh_generation:
+                        return False
+                    self._local_catalog_ready.emit(generation, {"batch": batch, "partial": True})
+                    return True
+                boards = load_dynamic_boards(dict(SUPPORTED_BOARDS), on_batch=on_batch,
+                                            invalidate_parsed=invalidate_parsed)
                 data = {"boards": boards}
             except Exception as exc:
                 data = {"error": str(exc)}
@@ -1230,6 +1330,10 @@ class BoardSearchDialog(QDialog):
     def _local_catalog_finished(self, generation, data):
         if self._closed:
             return
+        if data.get("partial"):
+            if generation == self._local_refresh_generation:
+                self._catalog_updated(data)
+            return
         self._local_refresh_running = False
         if generation != self._local_refresh_generation:
             return
@@ -1241,18 +1345,58 @@ class BoardSearchDialog(QDialog):
     def _catalog_updated(self, data):
         if self._closed:
             return
+        refresh_id = data.get("refresh_id")
+        if isinstance(refresh_id, int):
+            if self._catalog_refresh_id is not None and refresh_id < self._catalog_refresh_id:
+                return
+            self._catalog_refresh_id = refresh_id
+        if data.get("partial"):
+            batch = data.get("batch")
+            if not isinstance(batch, dict) or not batch:
+                return
+            if not self._catalog_loading:
+                self._catalog_before_preview = dict(self._boards_snapshot)
+            self._catalog_loading = True
+            self._catalog_error = ""
+            self._catalog_pending.update(batch)
+            if not self._catalog_timer.isActive():
+                self._catalog_timer.start()
+            self._update_select_button_state()
+            return
         # A newer catalog delivery invalidates a still-running local refresh.
         self._local_refresh_generation += 1
+        self._catalog_timer.stop()
+        self._catalog_pending.clear()
+        self._catalog_loading = False
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("Refresh boards")
         if "error" in data:
-            self.lbl_count.setText(f"Refresh failed: {data['error']}")
+            self._catalog_error = str(data["error"])
+            if self._catalog_before_preview is not None:
+                self._set_catalog_snapshot(self._catalog_before_preview)
+                self._catalog_before_preview = None
+                self.lbl_hdr_sub.setText(f"{len(self.all_boards)} definitions")
+                self._apply_filter(self.search_ent.text())
+            self.lbl_count.setText(f"Refresh failed: {self._catalog_error}")
+            self._update_select_button_state()
             return
+        self._catalog_error = ""
+        self._catalog_before_preview = None
         self._set_catalog_snapshot(data.get("boards"))
         self.lbl_hdr_sub.setText(f"{len(self.all_boards)} definitions")
         self._apply_filter(self.search_ent.text())
         if data.get("warning"):
             self.lbl_count.setToolTip(data["warning"])
+
+    def _apply_catalog_batch(self):
+        if self._closed or not self._catalog_pending:
+            return
+        snapshot = dict(self._boards_snapshot)
+        snapshot.update(self._catalog_pending)
+        self._catalog_pending.clear()
+        self._set_catalog_snapshot(snapshot)
+        self.lbl_hdr_sub.setText(f"{len(self.all_boards)} definitions · loading…")
+        self._apply_filter(self.search_ent.text())
 
     def _framework_for_board(self, name):
         """Retain valid preferences and select only an unambiguous default."""
@@ -1318,7 +1462,7 @@ class BoardSearchDialog(QDialog):
 
     def _update_select_button_state(self) -> None:
         curr = self.listbox.currentIndex()
-        is_sel = bool(not self._search_pending and curr.isValid() and
+        is_sel = bool(not self._search_pending and not self._catalog_loading and curr.isValid() and
                       (curr.flags() & Qt.ItemFlag.ItemIsSelectable))
         self.btn_select.setEnabled(is_sel)
         self.btn_select.setCursor(Qt.CursorShape.PointingHandCursor if is_sel else Qt.CursorShape.ArrowCursor)
@@ -1344,6 +1488,7 @@ class BoardSearchDialog(QDialog):
         self._generation += 1
         self._search_pending = True
         self._confirm_when_ready = False
+        self._preview_count = 0
         self.lbl_count.setText("Searching…")
         self._update_select_button_state()
 
@@ -1356,6 +1501,27 @@ class BoardSearchDialog(QDialog):
                              self._active_category))
 
     @Slot(object)
+    def _search_progress(self, result):
+        generation, rows, reset, token = result
+        try:
+            if self._closed or generation != self._generation:
+                return
+            if reset:
+                self._list_model.replace(list(rows))
+                self._preview_count = 0
+            else:
+                self._list_model.append(rows)
+            self._preview_count += sum("name" in row for row in rows)
+            self.lbl_count.setText(f"Loading {self._preview_count} of {len(self.all_boards)} boards…")
+            if not self.listbox.currentIndex().isValid():
+                preferred = self._pending_selection or self.current_board
+                names = [row.get("name") for row in self._list_model.rows if "name" in row]
+                self._select_item_by_name(preferred if preferred in names else (names[0] if names else ""))
+            self._update_select_button_state()
+        finally:
+            self._worker.acknowledge_progress(token)
+
+    @Slot(object)
     def _search_completed(self, result):
         generation, rows, matches, index, error = result
         if self._closed or generation != self._generation:
@@ -1364,8 +1530,10 @@ class BoardSearchDialog(QDialog):
         self._search_index = index
         self._list_model.replace(rows)
         suffix = f" [{self._active_category}]" if self._active_category != "ALL" else ""
+        loading = " · loading definitions…" if self._catalog_loading else ""
         self.lbl_count.setText(f"Search failed: {error}" if error else
-                               f"{len(matches)} of {len(self.all_boards)} boards{suffix}")
+                               f"Refresh failed: {self._catalog_error}" if self._catalog_error else
+                               f"{len(matches)} of {len(self.all_boards)} boards{suffix}{loading}")
         # Initial selection and arrow navigation still work with pinned headers.
         prior = self._pending_selection
         self._pending_selection = None
@@ -1390,6 +1558,8 @@ class BoardSearchDialog(QDialog):
             self._confirm_when_ready = True
             self._dispatch_search()
             return
+        if self._catalog_loading:
+            return  # Provisional display aliases wait for the coherent catalog.
         backend = self._get_backend()
         if backend and (getattr(backend, "is_busy", False) or getattr(backend, "active_operation", None) is not None):
             return
@@ -1412,6 +1582,8 @@ class BoardSearchDialog(QDialog):
             self._local_refresh_generation += 1
             self._local_catalog_ready.disconnect(self._local_catalog_finished)
             self._search_timer.stop()
+            self._catalog_timer.stop()
+            self._catalog_pending.clear()
             self._worker.stop()
             if hasattr(self, "_auto_refresh_timer"):
                 self._auto_refresh_timer.stop()

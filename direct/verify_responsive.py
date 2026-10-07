@@ -462,10 +462,19 @@ class QtResponsiveChecks(ControlChecks):
                     console.verticalScrollBar().setValue(console.verticalScrollBar().maximum())
                     pump()
                     capture(container, f'build-{mode}-{point_size}pt-compilation-timing')
+                # Resizing/themes/output are read-only; explicit display
+                # choices now persist so the next app run restores them.
+                saved.assert_not_called()
                 header.cb_autoscroll.setChecked(False)
                 self.assertFalse(console._autoscroll)
+                saved.assert_called_once()
+                self.assertEqual(saved.call_args.kwargs['shared_updates'], {'build_autoscroll': False})
+                saved.reset_mock()
                 header.cb_autoscroll.setChecked(True)
                 self.assertTrue(console._autoscroll)
+                saved.assert_called_once()
+                self.assertEqual(saved.call_args.kwargs['shared_updates'], {'build_autoscroll': True})
+                saved.reset_mock()
                 # An unchanged incremental build emits no source object rows.
                 # The display must not manufacture compilation activity.
                 console.clear()

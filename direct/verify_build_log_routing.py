@@ -469,7 +469,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
             def __init__(self):
                 self.calls = 0
 
-            def readline(self):
+            def readline(self, size=-1):
                 self.calls += 1
                 if self.calls == 1:
                     return "Processing mcu_env (platform: native)\n"
@@ -491,7 +491,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         terminated = []
 
         class BlockingStdout:
-            def readline(self):
+            def readline(self, size=-1):
                 released.wait(1.0)
                 return ""
 

@@ -75,8 +75,10 @@ class ConsolePanelHeader(QWidget):
 
         # Autoscroll
         self.cb_autoscroll = QCheckBox("Auto-scroll", self)
-        self.cb_autoscroll.setChecked(True)
+        self.cb_autoscroll.setChecked(bool(cfg.get("build_autoscroll", True)))
+        self._console.set_autoscroll(self.cb_autoscroll.isChecked())
         self.cb_autoscroll.setToolTip("Auto-scroll console output to bottom")
+        self.cb_autoscroll.stateChanged.connect(self._on_autoscroll_changed)
         layout.addWidget(self.cb_autoscroll)
 
         self._btn_options = QPushButton("Options", self)
@@ -90,7 +92,10 @@ class ConsolePanelHeader(QWidget):
             action.setCheckable(True)
             action.setChecked(checkbox.isChecked())
             action.toggled.connect(checkbox.setChecked)
-            checkbox.toggled.connect(action.setChecked)
+            # stateChanged may roll back a failed save before Qt emits
+            # toggled. Read the final state rather than its stale argument.
+            checkbox.toggled.connect(lambda _checked, control=checkbox, option=action:
+                                     option.setChecked(control.isChecked()))
             self._clear_actions.append(action)
         self._btn_options.setMenu(menu)
         layout.addWidget(self._btn_options)
@@ -164,11 +169,11 @@ class ConsolePanelHeader(QWidget):
 
     def _on_timestamp_changed(self, state: int) -> None:
         is_checked = bool(state)
+        from main.qt.preferences import save_display_preference
+        if not save_display_preference("timestamp_enabled", is_checked, "Timestamps"):
+            self.sync_timestamp(self._console._timestamp_enabled)
+            return
         self._console.set_timestamp_enabled(is_checked)
-        from main.core.config import load_gui_config, save_gui_config
-        cfg = load_gui_config()
-        cfg["timestamp_enabled"] = is_checked
-        save_gui_config(cfg)
         if self._backend is not None:
             self._backend.timestamp_enabled = is_checked
         from main.qt.signals import signals
@@ -184,10 +189,10 @@ class ConsolePanelHeader(QWidget):
 
     def _on_auto_clear_changed(self, state: int) -> None:
         is_checked = self.cb_auto_clear.isChecked()
-        from main.core.config import load_gui_config, save_gui_config
-        cfg = load_gui_config()
-        cfg["clear_console_on_action"] = is_checked
-        save_gui_config(cfg)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("clear_console_on_action", is_checked, "Clear build console on action"):
+            restore_checkbox(self.cb_auto_clear, not is_checked)
+            return
         if self._backend is not None:
             self._backend.clear_console_on_action = is_checked
         from main.qt.signals import signals
@@ -196,15 +201,23 @@ class ConsolePanelHeader(QWidget):
 
     def _on_auto_clear_serial_changed(self, state: int) -> None:
         is_checked = self.cb_auto_clear_serial.isChecked()
-        from main.core.config import load_gui_config, save_gui_config
-        cfg = load_gui_config()
-        cfg["clear_serial_on_action"] = is_checked
-        save_gui_config(cfg)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("clear_serial_on_action", is_checked, "Clear serial monitor on action"):
+            restore_checkbox(self.cb_auto_clear_serial, not is_checked)
+            return
         if self._backend is not None:
             self._backend.clear_serial_on_action = is_checked
         from main.qt.signals import signals
         if hasattr(signals, "clear_serial_on_action_changed"):
             signals.clear_serial_on_action_changed.emit(is_checked)
+
+    def _on_autoscroll_changed(self, state: int) -> None:
+        enabled = bool(state)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("build_autoscroll", enabled, "Build auto-scroll"):
+            restore_checkbox(self.cb_autoscroll, self._console._autoscroll)
+            return
+        self._console.set_autoscroll(enabled)
 
     def sync_clear_on_action(self, checked: bool) -> None:
         if self.cb_auto_clear.isChecked() != checked:
@@ -523,11 +536,6 @@ class ConsolePanelContainer(QWidget):
 
         self.console = ConsolePanel()
         self.header  = ConsolePanelHeader(self.console, parent=self, backend=backend)
-
-        # Wire autoscroll checkbox
-        self.header.cb_autoscroll.stateChanged.connect(
-            lambda s: self.console.set_autoscroll(bool(s))
-        )
 
         # Separator
         sep = QFrame()

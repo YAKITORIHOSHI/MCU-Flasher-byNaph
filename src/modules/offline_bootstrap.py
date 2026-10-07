@@ -455,7 +455,7 @@ def _prepare(core, plan, log, jobs=None):
         raise ValueError("Bootstrap builder jobs must be a positive integer")
     try:
         from main.core.build_resources import get_optimal_compiler_jobs
-        safe_jobs = get_optimal_compiler_jobs()
+        safe_jobs = get_optimal_compiler_jobs(storage_paths=(ROOT, core), storage_wait=True)
     except Exception:
         safe_jobs = max(1, min((os.cpu_count() or 4) - 2, 8))
     jobs = safe_jobs if jobs is None else min(jobs, safe_jobs)

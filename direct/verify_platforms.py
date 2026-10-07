@@ -249,7 +249,7 @@ class PlatformChecks(unittest.TestCase):
             def __init__(self):
                 self.calls = 0
 
-            def readline(self):
+            def readline(self, size=-1):
                 self.calls += 1
                 if self.calls == 1:
                     return "Connecting to programmer...\n"

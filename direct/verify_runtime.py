@@ -83,9 +83,9 @@ class RuntimeChecks(unittest.TestCase):
         self.assertTrue(resources.performance_profile(12, 4).low_memory)
 
     def test_compiler_jobs_reserve_ui_and_limit_saved_values(self):
-        from main.core import toolchain, file_utils
+        from main.core import toolchain, storage_resources
         from main import web_bridge
-        with patch.object(file_utils, "is_drive_hdd", return_value=False):
+        with patch.object(storage_resources, "storage_worker_limit", return_value=None):
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 4, 8), 2)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 8), 4)
             self.assertEqual(toolchain._resource_safe_worker_count("MAX", 6, 0.4), 1)

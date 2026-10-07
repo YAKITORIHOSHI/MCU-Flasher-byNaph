@@ -181,42 +181,18 @@ def _migrate_legacy_project_generated_files(project_dir) -> Path:
     return cache
 
 
-import functools
-
-@functools.lru_cache(maxsize=16)
 def is_drive_hdd(path: str | Path | None = None) -> bool:
-    """Return True if the target drive is a mechanical hard drive (HDD) incurring seek penalty.
+    """Compatibility hint: known rotational storage, without blocking the UI.
 
-    Queries Windows StorageDeviceSeekPenaltyProperty via DeviceIoControl.
-    Results are cached in memory for sub-microsecond subsequent queries.
+    Shared resource budgeting also accounts for removable/network storage and
+    all relevant paths. Unknown devices are not presumed to be HDDs.
     """
-    if sys.platform != "win32":
-        return False
     try:
-        p = Path(path).resolve() if path else Path.cwd().resolve()
-        drive = p.drive or "C:"
-        drive_path = r"\\.\\" + drive.rstrip("\\")
-        import ctypes
-        from ctypes import wintypes
-        import struct
-
-        h = ctypes.windll.kernel32.CreateFileW(
-            drive_path, 0, 3, None, 3, 0, None
-        )
-        if h == -1 or h == 0xFFFFFFFF:
-            return False
-        query = struct.pack("II", 7, 0)
-        out_buf = ctypes.create_string_buffer(12)
-        bytes_returned = wintypes.DWORD()
-        res = ctypes.windll.kernel32.DeviceIoControl(
-            h, 0x002D1400, query, len(query),
-            out_buf, len(out_buf), ctypes.byref(bytes_returned), None
-        )
-        ctypes.windll.kernel32.CloseHandle(h)
-        if res:
-            return bool(out_buf.raw[8])
-    except Exception:
-        pass
+        from main.core.storage_resources import _CACHE, ROTATIONAL
+        target = os.path.normcase(os.path.abspath(os.fspath(path or SCRIPT_DIR)))
+        return _CACHE.request(target) == ROTATIONAL
+    except (OSError, TypeError, ValueError):
+        return False
     return False
 
 
@@ -245,9 +221,8 @@ def hide_hidden_attribute(path) -> None:
     GUI and ordinary editors can still update them."""
     try:
         p = Path(path)
-        if not p.exists() or sys.platform != "win32":
+        if sys.platform != "win32":
             return
-        os.chmod(p, 0o777 if p.is_dir() else 0o666)
         import ctypes
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
         if attrs != -1:
@@ -272,7 +247,6 @@ def hide_generated_directory(path) -> None:
         p = Path(path)
         if sys.platform != "win32" or not p.is_dir():
             return
-        os.chmod(p, 0o777)
         import ctypes
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
         if attrs != -1:
@@ -315,9 +289,6 @@ def ensure_file_writable(path) -> None:
     """Clear read-only protection while preserving hidden and system flags."""
     try:
         p = Path(path)
-        if not p.exists():
-            return
-        os.chmod(p, 0o777 if p.is_dir() else 0o666)
         if sys.platform == "win32":
             import ctypes
             attrs = ctypes.windll.kernel32.GetFileAttributesW(str(p))
@@ -327,6 +298,11 @@ def ensure_file_writable(path) -> None:
                     desired = 0x80
                 if desired != attrs:
                     _set_windows_file_attributes(p, desired)
+        else:
+            import stat
+            mode = p.stat().st_mode
+            if not mode & stat.S_IWUSR:
+                os.chmod(p, stat.S_IMODE(mode) | stat.S_IWUSR)
     except Exception:
         pass
 
@@ -336,8 +312,20 @@ def write_generated_text(path, content: str, *, encoding="utf-8") -> None:
 
     Windows rejects truncation of some hidden files. Replacing a prepared
     hidden sibling avoids exposing the target while updating its contents.
+    Equal content needs only a bounded sequential read, not a temporary file,
+    replacement, or changed timestamp. Never rely on coarse removable-drive
+    timestamps to decide whether the content is unchanged.
     """
     target = Path(path)
+    try:
+        if not target.is_symlink():
+            with target.open("r", encoding=encoding, newline="") as stream:
+                unchanged = stream.read(len(content) + 1) == content
+            if unchanged:
+                hide_hidden_attribute(target)
+                return
+    except (OSError, UnicodeError):
+        pass
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".mcu-generated-", suffix=".tmp", dir=target.parent)
     temporary = Path(temporary_name)
@@ -1233,6 +1221,9 @@ def application_agent_guidance(project_dir) -> str:
         "- Show the workspace before starting services. Keep discovery and parsing off the GUI "
         "thread; bound log events, display histories and caches. Return syntax completion through "
         "queued Qt signals and discard stale revisions.\n"
+        "- Consider HDD/removable/network storage independently of CPU speed. Keep storage "
+        "probes and source scans off the GUI thread, avoid unchanged metadata writes, and "
+        "verify actual source bytes before firmware reuse on coarse-timestamp filesystems.\n"
         "- Preserve PTY capability replies, Unicode, bracketed paste and output backpressure "
         "for coding CLIs. Clear is display-only. Never replay commands or hardware writes.\n"
         "- Run hardware-free `direct/verify_runtime.py` using the private runtime; on Windows "

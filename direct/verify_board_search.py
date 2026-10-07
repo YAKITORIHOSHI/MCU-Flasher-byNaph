@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import unittest
+from collections import OrderedDict
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Optional
@@ -228,7 +229,7 @@ class BoardPickerChecks(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         replacement = {"Local UNO fixture": self.boards["Arduino UNO"]}
         calls, delivery_threads = [], []
-        def discover(_seed):
+        def discover(_seed, **_kwargs):
             calls.append(threading.get_ident())
             entered.set()
             release.wait(2)
@@ -257,6 +258,24 @@ class BoardPickerChecks(unittest.TestCase):
                 release.set()
                 dialog._catalog_updated = original
 
+    def test_explicit_refresh_invalidates_parsing_but_auto_refresh_reuses_warm_records(self):
+        dialog = self.picker()
+        backend = self.parent._backend
+        backend.refresh_board_catalog.reset_mock()
+        dialog._auto_refresh_boards()
+        backend.refresh_board_catalog.assert_called_once_with(include_registry=True, invalidate_parsed=False)
+        backend.refresh_board_catalog.reset_mock()
+        dialog.btn_refresh.setEnabled(True)
+        QTest.mouseClick(dialog.btn_refresh, Qt.MouseButton.LeftButton)
+        backend.refresh_board_catalog.assert_called_once_with(include_registry=True, invalidate_parsed=True)
+        with patch.object(dialog, "_get_backend", return_value=None), \
+                patch.object(dialog, "_async_local_refresh") as local:
+            dialog._auto_refresh_boards()
+            local.assert_called_once_with(invalidate_parsed=False)
+            local.reset_mock()
+            dialog._request_catalog_refresh()
+            local.assert_called_once_with(invalidate_parsed=True)
+
     def test_local_refresh_does_not_publish_after_newer_catalog_or_close(self):
         from main.core import board_catalog
         for close_dialog in (False, True):
@@ -264,7 +283,7 @@ class BoardPickerChecks(unittest.TestCase):
             entered, release, finished = threading.Event(), threading.Event(), threading.Event()
             stale = {"Stale UNO fixture": self.boards["Arduino UNO"]}
             newer = {"Newer Nano fixture": self.boards["Arduino Nano"]}
-            def discover(_seed):
+            def discover(_seed, **_kwargs):
                 entered.set()
                 release.wait(2)
                 finished.set()
@@ -310,6 +329,107 @@ class BoardPickerChecks(unittest.TestCase):
             second = self.picker()
         self.assertIs(second._search_index, first._search_index)
 
+    def test_first_page_visible_before_full_index_and_progress_queue_bounded(self):
+        self.boards.update(fixture(900))
+        entered, release = threading.Event(), threading.Event()
+        original = module.BoardSearchIndex._build_index
+        def slow_index(index):
+            callback = index._on_progress
+            first = True
+            def deliver(rows):
+                nonlocal first
+                result = callback(rows)
+                if first:
+                    first = False
+                    entered.set()
+                    release.wait(3)
+                return result
+            index._on_progress = deliver
+            return original(index)
+        with patch.object(module.BoardSearchIndex, "_build_index", slow_index):
+            dialog = module.BoardSearchDialog(self.parent, current_board="Arduino Nano")
+            self.dialogs.append(dialog)
+            dialog.show()
+            try:
+                wait_for(entered.is_set)
+                self.assertEqual(sum("name" in row for row in dialog._list_model.rows), 16)
+                self.assertTrue(dialog._search_pending)
+                self.assertFalse(dialog.btn_select.isEnabled())
+                self.assertIsNone(dialog._worker._awaiting_progress)
+                self.assertEqual(dialog.listbox.currentIndex().data(Qt.ItemDataRole.UserRole), "Arduino Nano")
+                release.set()
+                wait_for(lambda: not dialog._search_pending)
+                self.assertEqual(sum("name" in row for row in dialog._list_model.rows), len(self.boards))
+            finally:
+                release.set()
+
+    def test_partial_discovery_coalesces_and_final_aliases_are_authoritative(self):
+        dialog = self.picker()
+        partial = {"Native preview fixture": self.boards["Arduino UNO"]}
+        for _ in range(20):
+            dialog._catalog_updated({"batch": partial, "partial": True, "refresh_id": 7})
+        generation = dialog._generation
+        wait_for(lambda: "Native preview fixture" in dialog.all_boards and not dialog._search_pending)
+        self.assertEqual(dialog._generation, generation + 1)
+        self.assertFalse(dialog.btn_select.isEnabled())
+        dialog._catalog_updated({"boards": {"Stale fixture": {}}, "refresh_id": 6})
+        self.assertNotIn("Stale fixture", dialog.all_boards)
+        final = {"Final Arduino alias fixture": self.boards["Arduino UNO"]}
+        dialog._catalog_updated({"boards": final, "refresh_id": 7})
+        wait_for(lambda: not dialog._search_pending)
+        self.assertEqual(dialog.all_boards, list(final))
+        self.assertFalse(dialog._catalog_loading)
+        self.assertTrue(dialog.btn_select.isEnabled())
+
+    def test_local_partial_rows_show_before_final_and_never_publish_build_metadata(self):
+        from main.core import board_catalog
+        published = board_catalog.BoardCatalog(self.boards)
+        entered, release = threading.Event(), threading.Event()
+        replacement = {"Local incremental UNO": self.boards["Arduino UNO"]}
+        def discover(_seed, *, on_batch, invalidate_parsed=False):
+            self.assertFalse(invalidate_parsed)
+            on_batch(replacement)
+            entered.set()
+            release.wait(3)
+            return replacement
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", published), \
+                patch.object(board_catalog, "load_dynamic_boards", side_effect=discover):
+            dialog = self.picker()
+            try:
+                dialog._async_local_refresh()
+                wait_for(lambda: entered.is_set() and "Local incremental UNO" in dialog.all_boards and
+                         not dialog._search_pending)
+                self.assertEqual(dict(published), self.boards)
+                self.assertTrue(dialog._local_refresh_running)
+                self.assertFalse(dialog.btn_select.isEnabled())
+                release.set()
+                wait_for(lambda: not dialog._local_refresh_running and not dialog._search_pending)
+                self.assertEqual(dict(published), replacement)
+                self.assertEqual(dialog.all_boards, list(replacement))
+            finally:
+                release.set()
+
+    def test_failed_partial_discovery_restores_only_published_rows(self):
+        dialog = self.picker()
+        dialog._catalog_updated({"batch": {"Provisional fixture": self.boards["Arduino UNO"]},
+                                 "partial": True, "refresh_id": 4})
+        wait_for(lambda: "Provisional fixture" in dialog.all_boards and not dialog._search_pending)
+        dialog._catalog_updated({"error": "fixture discovery failed", "refresh_id": 4})
+        wait_for(lambda: not dialog._search_pending)
+        self.assertNotIn("Provisional fixture", dialog.all_boards)
+        self.assertEqual(dialog.all_boards, sorted(self.boards))
+        self.assertIn("fixture discovery failed", dialog.lbl_count.text())
+        self.assertFalse(dialog._catalog_loading)
+
+    def test_search_worker_start_failure_releases_pending_and_allows_retry(self):
+        with patch.object(module.threading, "Thread", side_effect=RuntimeError("fixture start failed")):
+            dialog = self.picker()
+        self.assertIn("fixture start failed", dialog.lbl_count.text())
+        self.assertIsNone(dialog._worker._thread)
+        dialog._apply_filter("")
+        wait_for(lambda: not dialog._search_pending)
+        self.assertEqual(sum("name" in row for row in dialog._list_model.rows), len(self.boards))
+
     def test_selection_rechecks_busy_and_no_results_do_not_accept(self):
         selected = Mock()
         dialog = self.picker(on_select_callback=selected)
@@ -348,7 +468,7 @@ class BoardPickerChecks(unittest.TestCase):
     def test_empty_catalog_triggers_auto_refresh_on_open(self):
         with patch.object(module, "SUPPORTED_BOARDS", {}):
             dialog = self.picker()
-            self.parent._backend.refresh_board_catalog.assert_called_with(include_registry=True)
+            self.parent._backend.refresh_board_catalog.assert_called_with(include_registry=True, invalidate_parsed=False)
 
     def test_empty_subset_normalized_to_none_and_not_locked(self):
         with patch.object(module, "SUPPORTED_BOARDS", {}):
@@ -376,18 +496,26 @@ def benchmark(output):
     nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and
              node.name in ("_normalize_text", "_extract_tokens", "BoardSearchIndex") or
              isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "_FLAGSHIP_MAPPINGS"]
-    namespace = dict(re=re, difflib=difflib, Optional=Optional)
+    namespace = dict(re=re, difflib=difflib, Optional=Optional, OrderedDict=OrderedDict,
+                     threading=threading)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "baseline-board-index", "exec"), namespace)
     boards = fixture(3000)
     report = {"board_count": len(boards), "queries": ["esp32", "raspbery", "noresult123456789"]}
     for label, cls in (("before", namespace["BoardSearchIndex"]), ("after", module.BoardSearchIndex)):
+        started_index = time.perf_counter()
         index = cls(boards)
+        report[label + "_index_ms"] = round((time.perf_counter() - started_index) * 1000, 2)
         times = []
         for query in report["queries"]:
             started = time.perf_counter()
             index.search(query)
             times.append(round((time.perf_counter() - started) * 1000, 2))
         report[label + "_ms"] = times
+    pages = []
+    started = time.perf_counter()
+    module.BoardSearchIndex(boards, on_progress=lambda rows: pages.append(
+        {"rows": len(rows), "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}))
+    report["incremental_pages"] = {"first": pages[0], "last": pages[-1], "count": len(pages)}
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report))
 

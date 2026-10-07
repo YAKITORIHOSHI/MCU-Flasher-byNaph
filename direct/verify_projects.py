@@ -19,12 +19,12 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QRect, QTimer
+from PySide6.QtCore import QRect, QTimer, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
 from main.qt.main_window import MCUMainWindow
-from main.qt.project_dialog import ProjectDialog
+from main.qt.project_dialog import ProjectDialog, QFileDialog
 from main.qt.theme import build_stylesheet, register_fonts
 from main import web_bridge
 from src.modules.ui_metrics import WorkArea
@@ -354,6 +354,61 @@ class ProjectChecks(unittest.TestCase):
             dialog.close()
             dialog.deleteLater()
             parent.deleteLater()
+            APP.processEvents()
+
+    def test_sketch_browse_always_starts_in_system_documents_and_cancel_preserves_selection(self):
+        api = self.backend()
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project = Mock()
+        api.open_project_window = Mock()
+        before = (api.sketch_dir_path, api.active_file_path, api.modified_files.copy())
+        documents = self.folder / "redirected" / "Documents with spaces"
+        documents.mkdir(parents=True)
+        chosen_folder = self.folder / "chosen"
+        chosen_folder.mkdir()
+        sketch = chosen_folder / "chosen.ino"
+        sketch.write_text("void setup() {}\nvoid loop() {}\n")
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), open_in_new_window=True)
+        try:
+            with patch.object(QStandardPaths, "writableLocation", return_value=str(documents)) as location, \
+                 patch.object(QFileDialog, "getOpenFileName", side_effect=[(str(sketch), ""), ("", ""), ("", "")]) as picker:
+                dialog._btn_browse.click()
+                self.assertEqual(dialog._open_path_edit.text(), str(chosen_folder))
+                dialog._btn_browse.click()
+                self.assertEqual(dialog._open_path_edit.text(), str(chosen_folder))
+                dialog._open_path_edit.setText(str(self.folder / "typed-folder"))
+                dialog._btn_browse.click()
+                self.assertEqual(dialog._open_path_edit.text(), str(self.folder / "typed-folder"))
+            self.assertEqual(picker.call_count, 3)
+            for call in picker.call_args_list:
+                self.assertEqual(call.args[2], str(documents))
+            for call in location.call_args_list:
+                self.assertEqual(call.args, (QStandardPaths.StandardLocation.DocumentsLocation,))
+            self.assertEqual(location.call_count, 3)
+            self.assertIsNone(dialog.selected_project)
+            api.open_project.assert_not_called()
+            api.open_project_window.assert_not_called()
+            self.assertEqual(before, (api.sketch_dir_path, api.active_file_path, api.modified_files))
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            APP.processEvents()
+
+    def test_startup_sketch_browse_uses_documents_and_empty_os_location_has_fallback(self):
+        dialog = ProjectDialog(initial_dir=str(self.folder / "sketch"))
+        try:
+            for location, expected in ((str(self.folder / "Localized Documents"), str(self.folder / "Localized Documents")),
+                                       ("", str(self.folder / "Documents"))):
+                with self.subTest(location=location), \
+                     patch.object(QStandardPaths, "writableLocation", return_value=location), \
+                     patch.object(QFileDialog, "getOpenFileName", return_value=("", "")) as picker:
+                    dialog._btn_browse.click()
+                    self.assertEqual(picker.call_args.args[2], expected)
+                    self.assertEqual(dialog._open_path_edit.text(), str(self.folder / "sketch"))
+                    self.assertIsNone(dialog.selected_project)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
             APP.processEvents()
 
     def test_new_project_honors_selected_window(self):

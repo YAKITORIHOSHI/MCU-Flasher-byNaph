@@ -1409,7 +1409,12 @@
     })();
 
     (function () {
-      let monacoFontSize = 13;
+      window.__mcuEditorFontSize = 13;
+      window.__mcuSavedEditorFontSize = 13;
+      window.__mcuFontChangeRevision = 0;
+      window.__mcuSavedFontRevision = 0;
+      let fontSaveGeneration = 0;
+      let savedFontGeneration = 0;
 
       function triggerMonacoLayout() {
         if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
@@ -1425,17 +1430,41 @@
       }
 
       function syncFontSizeToBridge(sz) {
+        const generation = ++fontSaveGeneration;
+        const revision = window.__mcuFontChangeRevision;
+        let settled = false;
+        const complete = result => {
+          if (settled || !result || typeof result.success !== 'boolean') return;
+          settled = true;
+          if (result.success) {
+            if (generation >= savedFontGeneration && revision >= window.__mcuSavedFontRevision) {
+              savedFontGeneration = generation;
+              window.__mcuSavedEditorFontSize = sz;
+              window.__mcuSavedFontRevision = revision;
+            }
+          } else if (generation === fontSaveGeneration && revision === window.__mcuFontChangeRevision &&
+                     window.__mcuEditorFontSize === sz) {
+            // Failed writes are display-only rollbacks, never another save.
+            window.setEditorFontSize(window.__mcuSavedEditorFontSize, false);
+            triggerMonacoLayout();
+          }
+        };
+        const failed = () => complete({success: false});
         try {
           if (window.editorBridge && typeof window.editorBridge.save_font_size === 'function') {
-            window.editorBridge.save_font_size(sz);
+            // Raw QWebChannel methods complete through their last callback.
+            const result = window.editorBridge.save_font_size(sz, complete);
+            if (result && typeof result.then === 'function') result.then(complete).catch(failed);
+            else complete(result);
           } else if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_font_size === 'function') {
-            window.pywebview.api.save_font_size(sz);
+            Promise.resolve(window.pywebview.api.save_font_size(sz)).then(complete).catch(failed);
           }
-        } catch (_) {}
+        } catch (_) { failed(); }
       }
 
       function zoomMonaco(delta) {
         if (!window.editorInstance) return;
+        let monacoFontSize = window.__mcuEditorFontSize;
         if (delta === 0) {
           monacoFontSize = 13;
         } else {
@@ -1444,6 +1473,8 @@
         try {
           window.editorInstance.updateOptions({ fontSize: monacoFontSize });
         } catch (_) {}
+        if (window.__mcuEditorFontSize !== monacoFontSize) window.__mcuFontChangeRevision++;
+        window.__mcuEditorFontSize = monacoFontSize;
         triggerMonacoLayout();
         syncFontSizeToBridge(monacoFontSize);
       }
@@ -1694,6 +1725,7 @@
           setTimeout(checkMonacoSyntaxRealtime, 1000);
           return;
         }
+        window.setEditorFontSize?.(window.__mcuEditorFontSize, false);
 
         // Register even for an empty project: onDidChangeModel will pick up
         // its first file without keeping a polling timer alive.
@@ -3950,6 +3982,7 @@
               'editorLineNumber.foreground': '#6b7d94',
               'editorLineNumber.activeForeground': '#80d9ce',
               'editor.lineHighlightBackground': '#18283b',
+              'editorCursor.foreground': '#80d9ce',
               'editor.selectionBackground': '#324e69',
               'editorGutter.background': '#101b2a'
             }
@@ -3994,11 +4027,18 @@
         }
       };
 
-      window.setEditorFontSize = function (sz) {
-        if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
+      window.setEditorFontSize = function (sz, persisted = true) {
+        const value = Number(sz);
+        if (!Number.isFinite(value)) return;
+        const num = Math.max(6, Math.min(48, value));
+        if (window.__mcuEditorFontSize !== num) window.__mcuFontChangeRevision++;
+        window.__mcuEditorFontSize = num;
+        if (persisted) {
+          window.__mcuSavedEditorFontSize = num;
+          window.__mcuSavedFontRevision = window.__mcuFontChangeRevision;
+        }
+        if (window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
           try {
-            const num = Math.max(6, Math.min(48, Number(sz)));
-            monacoFontSize = num;
             window.editorInstance.updateOptions({ fontSize: num });
             if (typeof window.editorInstance.layout === 'function') {
               window.editorInstance.layout();
@@ -4022,10 +4062,7 @@
         if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_font_size === 'function') {
           try {
             const sz = await window.pywebview.api.get_font_size();
-            if (sz && window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
-              monacoFontSize = Number(sz);
-              window.editorInstance.updateOptions({ fontSize: Number(sz) });
-            }
+            window.setEditorFontSize(sz);
           } catch (e) {}
         }
       }

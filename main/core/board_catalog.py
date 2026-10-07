@@ -11,6 +11,8 @@ import hashlib
 import re
 import difflib
 import threading
+from collections import OrderedDict
+from copy import deepcopy
 import subprocess
 from pathlib import Path
 from typing import Optional, Any
@@ -19,11 +21,21 @@ from main.core.constants import SCRIPT_DIR
 from main.core.toolchain import _get_safe_platformio_core_dir
 
 # Process-wide RAM caches for board catalogs and Arduino core parsing
-_BOARD_CATALOG_CACHE_RAM: tuple[int, int, tuple, dict] | None = None
+_BOARD_CATALOG_CACHE_RAM: tuple[tuple, tuple, dict] | None = None
+_BOARD_CATALOG_CACHE_RAM_PATH: str | None = None
 _BOARD_CATALOG_RAM_LOCK = threading.Lock()
+_BOARD_CATALOG_PARSE_GENERATION = 0
 
 _PIO_BOARD_CATALOG_RAM_CACHE: dict[str, tuple[tuple, list[dict]]] = {}
-_ARDUINO_BOARDS_TXT_RAM_CACHE: dict[str, tuple[int, int, list[dict]]] = {}
+_ARDUINO_BOARDS_TXT_RAM_CACHE: OrderedDict[str, tuple[tuple, list[dict], int]] = OrderedDict()
+_ARDUINO_BOARDS_TXT_RAM_BYTES = 0
+_ARDUINO_BOARDS_TXT_RAM_MAX_FILES = 128
+_ARDUINO_BOARDS_TXT_RAM_MAX_BYTES = 16 * 1024 * 1024
+_PIO_MANIFEST_RAM_CACHE: OrderedDict[str, tuple[tuple, dict, int]] = OrderedDict()
+_PIO_MANIFEST_RAM_BYTES = 0
+_PIO_MANIFEST_RAM_MAX_FILES = 8192
+_PIO_MANIFEST_RAM_MAX_BYTES = 16 * 1024 * 1024
+_PIO_CATALOG_RAM_MAX_ROOTS = 4
 
 def _get_download_dir() -> str:
     """Read the download directory from the shared settings file.
@@ -56,6 +68,8 @@ def _get_download_dir() -> str:
 
         # The settings file is copied with the project. Replace a stale
         # absolute path from another account/machine with this user's default.
+        if settings.get("download_dir") == str(default_dir):
+            return str(default_dir)
         settings["download_dir"] = str(default_dir)
         temporary: Optional[Path] = None
         try:
@@ -158,7 +172,7 @@ def _board_name_tokens(value: object) -> set[str]:
     }
 
 
-def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
+def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool = False) -> list[dict]:
     """Parse every downloaded Arduino ``boards.txt`` into neutral board records.
 
     No PlatformIO board IDs are guessed here.  The Arduino identity (id, name,
@@ -168,6 +182,9 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
     Uses _ARDUINO_BOARDS_TXT_RAM_CACHE to avoid re-parsing multi-thousand line
     boards.txt files from disk on repeated queries.
     """
+    global _ARDUINO_BOARDS_TXT_RAM_BYTES
+    with _BOARD_CATALOG_RAM_LOCK:
+        generation = _BOARD_CATALOG_PARSE_GENERATION
     records: list[dict] = []
     if not boards_path.is_dir():
         return records
@@ -181,8 +198,9 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
 
         with _BOARD_CATALOG_RAM_LOCK:
             cached = _ARDUINO_BOARDS_TXT_RAM_CACHE.get(f_key)
-            if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-                records.extend([dict(r) for r in cached[2]])
+            if not force_read and cached is not None and cached[0] == _manifest_stat_identity(st):
+                _ARDUINO_BOARDS_TXT_RAM_CACHE.move_to_end(f_key)
+                records.extend(deepcopy(cached[1]))
                 continue
 
         props_by_id: dict[str, dict[str, str]] = {}
@@ -249,8 +267,18 @@ def _parse_downloaded_arduino_board_files(boards_path: Path) -> list[dict]:
             })
 
         with _BOARD_CATALOG_RAM_LOCK:
-            _ARDUINO_BOARDS_TXT_RAM_CACHE[f_key] = (st.st_mtime_ns, st.st_size, file_records)
-        records.extend([dict(r) for r in file_records])
+            if generation == _BOARD_CATALOG_PARSE_GENERATION:
+                previous = _ARDUINO_BOARDS_TXT_RAM_CACHE.pop(f_key, None)
+                if previous is not None:
+                    _ARDUINO_BOARDS_TXT_RAM_BYTES -= previous[2]
+                if st.st_size <= _ARDUINO_BOARDS_TXT_RAM_MAX_BYTES:
+                    _ARDUINO_BOARDS_TXT_RAM_CACHE[f_key] = (_manifest_stat_identity(st), file_records, st.st_size)
+                    _ARDUINO_BOARDS_TXT_RAM_BYTES += st.st_size
+                while (_ARDUINO_BOARDS_TXT_RAM_BYTES > _ARDUINO_BOARDS_TXT_RAM_MAX_BYTES
+                       or len(_ARDUINO_BOARDS_TXT_RAM_CACHE) > _ARDUINO_BOARDS_TXT_RAM_MAX_FILES):
+                    _removed_key, removed = _ARDUINO_BOARDS_TXT_RAM_CACHE.popitem(last=False)
+                    _ARDUINO_BOARDS_TXT_RAM_BYTES -= removed[2]
+        records.extend(deepcopy(file_records))
 
     return records
 
@@ -271,7 +299,7 @@ def _prepared_catalog_fingerprint(core_dir: str | Path | None = None) -> tuple:
         root = Path(core_dir or _get_safe_platformio_core_dir(SCRIPT_DIR))
         snapshot = root / ".mcu-offline-catalog.json"
         stat = snapshot.stat()
-        fingerprint = [str(snapshot), stat.st_mtime_ns, stat.st_size]
+        fingerprint = [str(snapshot), *_manifest_stat_identity(stat)]
         for metadata in (root / "platforms/ststm32/platform.json",
                          root / "packages/framework-zephyr/package.json",
                          root / "packages/framework-zephyr@3.40402.0/package.json",
@@ -279,9 +307,9 @@ def _prepared_catalog_fingerprint(core_dir: str | Path | None = None) -> tuple:
                          root / "packages/framework-mbed@6.61700.231105/package.json"):
             try:
                 stat = metadata.stat()
-                fingerprint.extend((str(metadata), stat.st_mtime_ns, stat.st_size))
+                fingerprint.extend((str(metadata), *_manifest_stat_identity(stat)))
             except OSError:
-                fingerprint.extend((str(metadata), 0, 0))
+                fingerprint.extend((str(metadata), 0, 0, 0, 0, 0))
         return tuple(fingerprint)
     except (OSError, TypeError, ValueError):
         return ()
@@ -406,7 +434,7 @@ def _json_safe_board_value(value):
 
 def _load_board_catalog_cache() -> dict | None:
     """Read the last known board catalog without scanning PlatformIO at launch."""
-    global _BOARD_CATALOG_CACHE_RAM
+    global _BOARD_CATALOG_CACHE_RAM, _BOARD_CATALOG_CACHE_RAM_PATH
     try:
         path = _board_catalog_cache_path()
         if not path.is_file():
@@ -415,9 +443,10 @@ def _load_board_catalog_cache() -> dict | None:
         prepared = _prepared_catalog_fingerprint()
         with _BOARD_CATALOG_RAM_LOCK:
             if _BOARD_CATALOG_CACHE_RAM is not None:
-                cached_mtime, cached_size, cached_prepared, cached_dict = _BOARD_CATALOG_CACHE_RAM
-                if cached_mtime == st.st_mtime_ns and cached_size == st.st_size and cached_prepared == prepared:
-                    return {k: dict(v) for k, v in cached_dict.items()}
+                cached_identity, cached_prepared, cached_dict = _BOARD_CATALOG_CACHE_RAM
+                if (_BOARD_CATALOG_CACHE_RAM_PATH == str(path) and cached_identity == _manifest_stat_identity(st)
+                        and cached_prepared == prepared):
+                    return deepcopy(cached_dict)
 
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != _BOARD_CATALOG_CACHE_VERSION:
@@ -436,33 +465,56 @@ def _load_board_catalog_cache() -> dict | None:
             }
             info["arduino_defines"] = set(info.get("arduino_defines", []))
 
+        if (_manifest_stat_identity(path.stat()) != _manifest_stat_identity(st)
+                or _prepared_catalog_fingerprint() != prepared):
+            # The bytes were read during a replacement/preparation change.
+            # Do not certify them under the older file's metadata identity.
+            return None
         with _BOARD_CATALOG_RAM_LOCK:
-            _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, prepared, boards)
-        return {k: dict(v) for k, v in boards.items()}
+            _BOARD_CATALOG_CACHE_RAM = (_manifest_stat_identity(st), prepared, boards)
+            _BOARD_CATALOG_CACHE_RAM_PATH = str(path)
+        return deepcopy(boards)
     except Exception:
         return None
 
 
 def _save_board_catalog_cache(boards: dict) -> None:
-    """Atomically save the resolved catalog for the next fast launch."""
-    global _BOARD_CATALOG_CACHE_RAM
+    """Atomically save changed catalogs; avoid flash/HDD writes for no-op refreshes."""
+    global _BOARD_CATALOG_CACHE_RAM, _BOARD_CATALOG_CACHE_RAM_PATH
     temporary = None
     try:
+        # Keep the serialized payload and RAM publication the same snapshot if
+        # a caller changes nested metadata while disk I/O is in progress.
+        boards = deepcopy(boards)
         path = _board_catalog_cache_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(path.name + ".tmp")
         prepared = _prepared_catalog_fingerprint()
+        try:
+            st = path.stat()
+        except OSError:
+            st = None
+        with _BOARD_CATALOG_RAM_LOCK:
+            cached = _BOARD_CATALOG_CACHE_RAM
+            if (st is not None and _BOARD_CATALOG_CACHE_RAM_PATH == str(path) and cached is not None
+                    and cached[:2] == (_manifest_stat_identity(st), prepared) and cached[2] == boards):
+                return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
         payload = {
             "version": _BOARD_CATALOG_CACHE_VERSION,
             "prepared_catalog": list(prepared),
             "boards": _json_safe_board_value(boards),
         }
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        written_identity = _manifest_stat_identity(temporary.stat())
         os.replace(temporary, path)
         try:
             st = path.stat()
-            with _BOARD_CATALOG_RAM_LOCK:
-                _BOARD_CATALOG_CACHE_RAM = (st.st_mtime_ns, st.st_size, prepared, boards)
+            # Another window/process may have replaced this file after our
+            # atomic save. Never label our older payload with that file's ID.
+            if st.st_ino and written_identity[3:] == _manifest_stat_identity(st)[3:]:
+                with _BOARD_CATALOG_RAM_LOCK:
+                    _BOARD_CATALOG_CACHE_RAM = (_manifest_stat_identity(st), prepared, boards)
+                    _BOARD_CATALOG_CACHE_RAM_PATH = str(path)
         except OSError:
             pass
     except Exception:
@@ -473,7 +525,139 @@ def _save_board_catalog_cache(boards: dict) -> None:
             pass
 
 
-def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[dict]:
+def _manifest_stat_identity(stat) -> tuple:
+    # ctime/file identity also catch replacement with unchanged size/mtime.
+    # No freshness timeout: every request inventories the current directories.
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+
+def _invalidate_parsed_board_catalogs() -> None:
+    """Forget RAM parsing only; never remove installed packs or disk caches.
+
+    Explicit Refresh must reread current bytes even on filesystems with coarse
+    timestamps or after an in-place edit which deliberately restores mtime.
+    The generation prevents older in-flight readers from refilling this cache.
+    """
+    global _BOARD_CATALOG_PARSE_GENERATION
+    global _PIO_MANIFEST_RAM_BYTES, _ARDUINO_BOARDS_TXT_RAM_BYTES
+    with _BOARD_CATALOG_RAM_LOCK:
+        _BOARD_CATALOG_PARSE_GENERATION += 1
+        _PIO_BOARD_CATALOG_RAM_CACHE.clear()
+        _PIO_MANIFEST_RAM_CACHE.clear()
+        _ARDUINO_BOARDS_TXT_RAM_CACHE.clear()
+        _PIO_MANIFEST_RAM_BYTES = _ARDUINO_BOARDS_TXT_RAM_BYTES = 0
+
+
+def _platformio_manifest_inventory(root: Path) -> tuple[tuple, list[tuple[Path, str, tuple]]]:
+    """Enumerate each installed board directory once, reusing DirEntry metadata.
+
+    Reuse enumeration metadata when it includes a file identity. Windows
+    DirEntry.stat() omits that identity, so use a real stat in that case:
+    replacement can preserve size, mtime and even creation time through NTFS
+    tunneling. Each directory is still enumerated only once, and unchanged
+    manifests need no JSON reads. Recompute the complete fingerprint every time
+    so edits/additions/removals never depend on a TTL.
+    """
+    candidates: list[tuple[Path, str, tuple]] = []
+    platform_stats = []
+    complete = True
+
+    def directory_stamp(path):
+        nonlocal complete
+        try:
+            return path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return 0
+        except OSError:
+            complete = False
+            return 0
+
+    def collect(board_dir, platform_hint):
+        nonlocal complete
+        try:
+            with os.scandir(board_dir) as entries:
+                for entry in entries:
+                    if not entry.name.lower().endswith(".json"):
+                        continue
+                    try:
+                        if entry.is_file():
+                            manifest_path = Path(entry.path)
+                            metadata = entry.stat()
+                            if not metadata.st_ino:
+                                metadata = manifest_path.stat()
+                            candidates.append((manifest_path, platform_hint, _manifest_stat_identity(metadata)))
+                    except OSError:
+                        complete = False
+        except FileNotFoundError:
+            pass
+        except OSError:
+            complete = False
+
+    global_boards, platforms_root = root / "boards", root / "platforms"
+    global_stamp, platforms_stamp = directory_stamp(global_boards), directory_stamp(platforms_root)
+    collect(global_boards, "")
+    try:
+        with os.scandir(platforms_root) as entries:
+            for entry in entries:
+                try:
+                    if not entry.is_dir():
+                        continue
+                    platform_dir = Path(entry.path)
+                    board_dir, metadata = platform_dir / "boards", platform_dir / "platform.json"
+                    try:
+                        metadata_stat = metadata.stat()
+                        metadata_identity = _manifest_stat_identity(metadata_stat)
+                    except FileNotFoundError:
+                        metadata_identity = ()
+                    platform_stats.append((entry.name, entry.stat().st_mtime_ns,
+                                           directory_stamp(board_dir), metadata_identity))
+                    collect(board_dir, entry.name.split("@", 1)[0])
+                except OSError:
+                    complete = False
+    except FileNotFoundError:
+        pass
+    except OSError:
+        complete = False
+    fingerprint = (global_stamp, platforms_stamp, tuple(sorted(platform_stats)),
+                   tuple(sorted((str(path), identity) for path, _hint, identity in candidates)),
+                   _prepared_catalog_fingerprint(root)) if complete else ()
+    return fingerprint, candidates
+
+
+def _read_platformio_manifest(path: Path, identity: tuple, *, force_read: bool = False) -> dict | None:
+    """Reuse only records validated by this pass; bound retained raw metadata."""
+    global _PIO_MANIFEST_RAM_BYTES
+    key = str(path)
+    with _BOARD_CATALOG_RAM_LOCK:
+        generation = _BOARD_CATALOG_PARSE_GENERATION
+        cached = _PIO_MANIFEST_RAM_CACHE.get(key)
+        if not force_read and cached is not None and cached[0] == identity:
+            _PIO_MANIFEST_RAM_CACHE.move_to_end(key)
+            return cached[1]
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    size = len(raw.encode("utf-8"))
+    with _BOARD_CATALOG_RAM_LOCK:
+        if generation == _BOARD_CATALOG_PARSE_GENERATION:
+            previous = _PIO_MANIFEST_RAM_CACHE.pop(key, None)
+            if previous is not None:
+                _PIO_MANIFEST_RAM_BYTES -= previous[2]
+            if size <= _PIO_MANIFEST_RAM_MAX_BYTES:
+                _PIO_MANIFEST_RAM_CACHE[key] = (identity, data, size)
+                _PIO_MANIFEST_RAM_BYTES += size
+            while (_PIO_MANIFEST_RAM_BYTES > _PIO_MANIFEST_RAM_MAX_BYTES
+                   or len(_PIO_MANIFEST_RAM_CACHE) > _PIO_MANIFEST_RAM_MAX_FILES):
+                _removed_key, removed = _PIO_MANIFEST_RAM_CACHE.popitem(last=False)
+                _PIO_MANIFEST_RAM_BYTES -= removed[2]
+    return data
+
+
+def _load_platformio_board_catalog(core_dir: str | Path | None = None, *, force_read: bool = False) -> list[dict]:
     """Read PlatformIO's *actual installed* board manifests dynamically.
 
     PlatformIO officially searches custom/global boards and each installed
@@ -496,66 +680,27 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         return []
     root = Path(os.path.expandvars(os.path.expanduser(root_value)))
 
-    # Include file metadata: editing a manifest does not change directory mtime.
-    global_boards = root / "boards"
-    platforms_root = root / "platforms"
-    try:
-        gb_mtime = global_boards.stat().st_mtime_ns if global_boards.is_dir() else 0
-        pr_mtime = platforms_root.stat().st_mtime_ns if platforms_root.is_dir() else 0
-        platform_st = []
-        if platforms_root.is_dir():
-            for p in sorted(platforms_root.iterdir()):
-                if p.is_dir():
-                    b = p / "boards"
-                    metadata = p / "platform.json"
-                    metadata_stat = metadata.stat() if metadata.is_file() else None
-                    platform_st.append((p.name, p.stat().st_mtime_ns, b.stat().st_mtime_ns if b.is_dir() else 0,
-                                        metadata_stat.st_mtime_ns if metadata_stat else 0,
-                                        metadata_stat.st_size if metadata_stat else 0))
-        manifests = list(global_boards.glob("*.json")) if global_boards.is_dir() else []
-        if platforms_root.is_dir():
-            for platform_dir in platforms_root.iterdir():
-                board_dir = platform_dir / "boards"
-                if board_dir.is_dir():
-                    manifests.extend(board_dir.glob("*.json"))
-        manifest_stats = []
-        for path in sorted(manifests):
-            stat = path.stat()
-            manifest_stats.append((str(path), stat.st_size, stat.st_mtime_ns))
-        fp = (gb_mtime, pr_mtime, tuple(platform_st), tuple(manifest_stats), _prepared_catalog_fingerprint(root))
-    except Exception:
-        fp = ()
+    with _BOARD_CATALOG_RAM_LOCK:
+        generation = _BOARD_CATALOG_PARSE_GENERATION
+
+    fp, candidates = _platformio_manifest_inventory(root)
 
     cache_key = str(root)
     with _BOARD_CATALOG_RAM_LOCK:
         cached = _PIO_BOARD_CATALOG_RAM_CACHE.get(cache_key)
-        if cached is not None and fp and cached[0] == fp:
-            return [dict(x) for x in cached[1]]
-
-    candidates: list[tuple[Path, str]] = []
-
-    if global_boards.is_dir():
-        candidates.extend((p, "") for p in global_boards.glob("*.json"))
-
-    if platforms_root.is_dir():
-        try:
-            for platform_dir in platforms_root.iterdir():
-                board_dir = platform_dir / "boards"
-                if not platform_dir.is_dir() or not board_dir.is_dir():
-                    continue
-                platform_id = platform_dir.name.split("@", 1)[0]
-                candidates.extend((p, platform_id) for p in board_dir.glob("*.json"))
-        except OSError:
-            pass
+        if not force_read and cached is not None and fp and cached[0] == fp:
+            return deepcopy(cached[1])
 
     prepared_overlay = _prepared_framework_overlay(root)
     catalog: list[dict] = []
-    for manifest_path, platform_hint in candidates:
-        try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
-            continue
-        if not isinstance(data, dict):
+    readable = True
+    for manifest_path, platform_hint, identity in candidates:
+        data = _read_platformio_manifest(manifest_path, identity, force_read=force_read)
+        if data is None:
+            # A transient read failure is not a stable missing-board catalog.
+            # Retry this manifest on the next explicit refresh even when file
+            # metadata has not changed; never certify a partial inventory.
+            readable = False
             continue
         build_raw = data.get("build")
         build: dict[str, Any] = build_raw if isinstance(build_raw, dict) else {}
@@ -623,7 +768,15 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None) -> list[d
         catalog.append(record)
 
     with _BOARD_CATALOG_RAM_LOCK:
-        _PIO_BOARD_CATALOG_RAM_CACHE[cache_key] = (fp, catalog)
+        if generation != _BOARD_CATALOG_PARSE_GENERATION:
+            return catalog
+        if fp and readable:
+            _PIO_BOARD_CATALOG_RAM_CACHE.pop(cache_key, None)
+            _PIO_BOARD_CATALOG_RAM_CACHE[cache_key] = (fp, deepcopy(catalog))
+            while len(_PIO_BOARD_CATALOG_RAM_CACHE) > _PIO_CATALOG_RAM_MAX_ROOTS:
+                del _PIO_BOARD_CATALOG_RAM_CACHE[next(iter(_PIO_BOARD_CATALOG_RAM_CACHE))]
+        elif not readable:
+            _PIO_BOARD_CATALOG_RAM_CACHE.pop(cache_key, None)
     return catalog
 
 
@@ -921,7 +1074,74 @@ def load_registry_board_catalog() -> list[dict]:
     return catalog
 
 
-def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, registry_catalog=None) -> dict:
+def _native_board_entry(pio_board: dict) -> dict:
+    """One exact installed target's picker metadata, shared by preview/final."""
+    frameworks = set(pio_board.get("frameworks") or [])
+    framework = "arduino" if "arduino" in frameworks else (next(iter(frameworks)) if len(frameworks) == 1 else "")
+    board_id = str(pio_board.get("id") or "").strip()
+    entry = {
+        "platform": str(pio_board.get("platform") or "").strip(),
+        "board": board_id,
+        "framework": framework,
+        "frameworks": sorted(frameworks),
+        **_framework_availability(pio_board),
+        "pio_resolved": True,
+        "pio_match_score": 100.0,
+        "pio_match_reasons": ["platformio-native-manifest"],
+        "arduino_board_id": board_id,
+        "arduino_variant": "",
+        "arduino_build_board": "",
+        "mcu": str(pio_board.get("mcu") or "").lower(),
+        "pio_name": str(pio_board.get("name") or board_id).strip(),
+        "pio_vendor": str(pio_board.get("vendor") or ""),
+        "pio_manifest": str(pio_board.get("manifest") or ""),
+        "upload_protocol": str(pio_board.get("upload_protocol") or ""),
+        "upload_speed": pio_board.get("upload_speed"),
+        "require_upload_port": pio_board.get("require_upload_port"),
+        "flash_mb": None,
+        "has_psram": bool(pio_board.get("has_psram")),
+        "memory_type": str(pio_board.get("memory_type") or "") or None,
+        "flash_mode": str(pio_board.get("flash_mode") or "") or None,
+        "source_core": "platformio-installed",
+    }
+    flash = re.match(r"(\d+(?:\.\d+)?)\s*MB", str(pio_board.get("flash_size") or ""), re.IGNORECASE)
+    if flash:
+        entry["flash_mb"] = float(flash.group(1))
+    return entry
+
+
+class _BoardBatchDelivery:
+    """Bound each delivery, detach metadata and let closed consumers cancel."""
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.pending = {}
+        self.first = True
+
+    def add(self, name, info):
+        if self.callback is None:
+            return
+        self.pending[name] = info
+        if len(self.pending) >= (16 if self.first else 128):
+            self.flush()
+
+    def flush(self):
+        if not self.pending or self.callback is None:
+            return
+        batch = deepcopy(self.pending)
+        self.pending.clear()
+        self.first = False
+        if self.callback(batch) is False:
+            raise InterruptedError("Board discovery cancelled.")
+
+    def checkpoint(self):
+        # An empty page is a cancellation probe, not a visual update.
+        if self.callback is not None and self.callback({}) is False:
+            raise InterruptedError("Board discovery cancelled.")
+
+
+def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, registry_catalog=None,
+                        on_batch=None, invalidate_parsed: bool = False) -> dict:
     """Load downloaded/installed Arduino boards and resolve them to real PlatformIO IDs.
 
     Arduino ``boards.txt`` identifiers and PlatformIO board IDs are different
@@ -929,8 +1149,17 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
     therefore generate ``UnknownBoard`` failures.  This loader reads
     PlatformIO's installed board JSON manifests and matches dynamically using
     MCU, variant, board name, Arduino build define and USB VID/PID information.
+    ``on_batch`` receives detached preview metadata in pages of at most 128
+    rows (16 first). Only the returned full catalog is authoritative: Arduino
+    aliases can supersede native display names during final reconciliation.
+    Empty pages are cancellation probes; return False to stop this refresh.
+    Explicit user Refresh sets ``invalidate_parsed`` to bypass all parsed RAM
+    records, including same-size/timestamp-preserved in-place edits. Ordinary
+    startup and resolver discovery keep metadata-validated warm reuse.
     """
-    if prefer_cache:
+    if invalidate_parsed:
+        _invalidate_parsed_board_catalogs()
+    if prefer_cache and not invalidate_parsed:
         cached = _load_board_catalog_cache()
         if cached is not None:
             return cached
@@ -939,13 +1168,37 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         return default_boards.copy()
 
     boards = {name: dict(info) for name, info in default_boards.items() if isinstance(info, dict)}
-    records: list[dict] = []
-    for search_root in _get_arduino_board_search_roots():
-        records.extend(_parse_downloaded_arduino_board_files(search_root))
-    catalog = _load_platformio_board_catalog()
+    delivery = _BoardBatchDelivery(on_batch)
+    catalog = _load_platformio_board_catalog(force_read=invalidate_parsed)
     if registry_catalog:
         installed = {(b["platform"], b["id"]) for b in catalog}
         catalog.extend(b for b in registry_catalog if (b["platform"], b["id"]) not in installed)
+    if on_batch is not None:
+        # Show exact native definitions before the expensive all-pairs Arduino
+        # identity pass. These previews never mutate the published build catalog.
+        preview_names = set(boards)
+        preview_identities = {(str(info.get("platform") or "").lower(), str(info.get("board") or "").lower())
+                              for info in boards.values()}
+        for name, info in boards.items():
+            delivery.add(name, info)
+        for candidate in catalog:
+            board_id = str(candidate.get("id") or "").strip()
+            platform = str(candidate.get("platform") or "").strip()
+            identity = (platform.lower(), board_id.lower())
+            if not board_id or not platform or identity in preview_identities:
+                continue
+            name = str(candidate.get("name") or board_id).strip()
+            if name in preview_names:
+                name = f"{name} ({board_id})"
+                if name in preview_names:
+                    name = f"{candidate.get('name') or board_id} [{platform}:{board_id}]"
+            preview_names.add(name)
+            preview_identities.add(identity)
+            delivery.add(name, _native_board_entry(candidate))
+        delivery.flush()
+    records: list[dict] = []
+    for search_root in _get_arduino_board_search_roots():
+        records.extend(_parse_downloaded_arduino_board_files(search_root, force_read=invalidate_parsed))
     match_features = {id(candidate): _arduino_match_features(candidate, candidate=True)
                       for candidate in catalog}
     # Empty board IDs in an older Arduino row cannot be refreshed by the
@@ -954,9 +1207,11 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
               if info.get("pio_resolved") is False or not info.get("board") else info
               for name, info in boards.items()}
 
-    resolved_rows: list[tuple[dict, dict | None]] = [
-        (record, _resolve_arduino_board_record(record, catalog, match_features=match_features)) for record in records
-    ]
+    resolved_rows: list[tuple[dict, dict | None]] = []
+    for position, record in enumerate(records):
+        if position % 32 == 0:
+            delivery.checkpoint()
+        resolved_rows.append((record, _resolve_arduino_board_record(record, catalog, match_features=match_features)))
 
     # Infer the PlatformIO platform for an entire downloaded Arduino core from
     # the boards that matched confidently.  This lets an unsupported/new board
@@ -1048,6 +1303,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         if m:
             entry["flash_mb"] = float(m.group(1))
         boards[display_name] = entry
+        delivery.add(display_name, entry)
 
     # Index aliases once: refreshing thousands of manifests must stay linear.
     identities: dict[tuple[str, str], list[dict]] = {}
@@ -1092,43 +1348,12 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
                 disp_name = f"{b_name} [{b_platform}:{b_id}]"
         used_names.add(disp_name)
 
-        frameworks = set(pio_board.get("frameworks") or [])
-        # A single declared framework needs no guess. Multiple native choices
-        # remain explicit in the picker; .ino compatibility is checked at build.
-        framework = "arduino" if "arduino" in frameworks else (next(iter(frameworks)) if len(frameworks) == 1 else "")
-
-        entry = {
-            "platform": b_platform,
-            "board": b_id,
-            "framework": framework,
-            "frameworks": sorted(frameworks),
-            **_framework_availability(pio_board),
-            "pio_resolved": True,
-            "pio_match_score": 100.0,
-            "pio_match_reasons": ["platformio-native-manifest"],
-            "arduino_board_id": b_id,
-            "arduino_variant": "",
-            "arduino_build_board": "",
-            "mcu": str(pio_board.get("mcu") or "").lower(),
-            "pio_name": b_name,
-            "pio_vendor": str(pio_board.get("vendor") or ""),
-            "pio_manifest": str(pio_board.get("manifest") or ""),
-            "upload_protocol": str(pio_board.get("upload_protocol") or ""),
-            "upload_speed": pio_board.get("upload_speed"),
-            "require_upload_port": pio_board.get("require_upload_port"),
-            "flash_mb": None,
-            "has_psram": bool(pio_board.get("has_psram")),
-            "memory_type": str(pio_board.get("memory_type") or "") or None,
-            "flash_mode": str(pio_board.get("flash_mode") or "") or None,
-            "source_core": "platformio-installed",
-        }
-        flash_raw = str(pio_board.get("flash_size") or "")
-        m = re.match(r"(\d+(?:\.\d+)?)\s*MB", flash_raw, re.IGNORECASE)
-        if m:
-            entry["flash_mb"] = float(m.group(1))
+        entry = _native_board_entry(pio_board)
         boards[disp_name] = entry
         identities.setdefault(identity, []).append(entry)
+        delivery.add(disp_name, entry)
 
+    delivery.flush()
     _save_board_catalog_cache(boards)
     return boards
 
@@ -1143,9 +1368,12 @@ class BoardCatalog(dict):
 
     def replace(self, catalog):
         with self._lock:
+            if isinstance(catalog, dict) and super().__eq__(catalog):
+                return False
             super().clear()
             super().update(catalog)
             self._revision += 1
+            return True
 
     def snapshot(self):
         """Return one coherent revision for background search indexing."""
@@ -1155,8 +1383,11 @@ class BoardCatalog(dict):
     def set_definition(self, name, info):
         """Publish a resolved row without losing concurrent catalog additions."""
         with self._lock:
+            if super().get(name) == info:
+                return False
             super().__setitem__(name, dict(info))
             self._revision += 1
+            return True
 
     def items(self):
         with self._lock:
@@ -1196,42 +1427,25 @@ def load_downloaded_board_usb_ids(board_catalog: dict | None = None) -> dict[tup
     win.  Preserve ambiguity and auto-select an exact board only when the pair
     uniquely identifies one currently resolved board.
     """
-    values: dict[tuple[str, str], dict[str, int]] = {}
-    property_re = re.compile(
-        r"^([^.=]+)\.(?:upload_port\.)?(vid|pid)\.(\d+)\s*=\s*(0x[0-9a-f]+|\d+)\s*$",
-        re.IGNORECASE,
-    )
+    # Reuse the same current-file-validated parser as discovery instead of
+    # rereading large boards.txt files immediately after catalog refresh.
+    records = []
     for search_root in _get_arduino_board_search_roots():
-        if not search_root.is_dir():
-            continue
-        for boards_file in search_root.glob("**/boards.txt"):
-            try:
-                for raw_line in boards_file.read_text(encoding="utf-8", errors="replace").splitlines():
-                    match = property_re.match(raw_line.strip())
-                    if not match:
-                        continue
-                    board_id, field, index, raw_value = match.groups()
-                    try:
-                        values.setdefault((board_id.lower(), index), {})[field.lower()] = int(raw_value, 0)
-                    except ValueError:
-                        continue
-            except OSError:
-                continue
+        records.extend(_parse_downloaded_arduino_board_files(search_root))
 
-    board_names_by_id: dict[str, str] = {}
+    board_names_by_id: dict[str, set[str]] = {}
     catalog = board_catalog if board_catalog is not None else SUPPORTED_BOARDS
     for display_name, info in catalog.items():
         board_id = str(info.get("arduino_board_id") or info.get("board", "")).strip().lower()
         if board_id:
-            board_names_by_id.setdefault(board_id, display_name)
+            board_names_by_id.setdefault(board_id, set()).add(display_name)
 
     buckets: dict[tuple[int, int], set[str]] = {}
-    for (board_id, _index), usb_id in values.items():
-        if "vid" not in usb_id or "pid" not in usb_id:
-            continue
-        display_name = board_names_by_id.get(board_id)
-        if display_name:
-            buckets.setdefault((usb_id["vid"], usb_id["pid"]), set()).add(display_name)
+    for record in records:
+        names = board_names_by_id.get(str(record.get("arduino_id") or "").lower(), ())
+        for pair in record.get("hwids", ()):
+            if names:
+                buckets.setdefault(pair, set()).update(names)
     return {
         pair: tuple(sorted(names, key=str.lower))
         for pair, names in buckets.items()

@@ -37,7 +37,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 # pyrefly: ignore [missing-import]
 from PySide6.QtWebChannel import QWebChannel
 # pyrefly: ignore [missing-import]
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QApplication
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QWebChannel JS bootstrap
@@ -182,9 +182,12 @@ class EditorBridgeAPI(QObject):
         """Monaco reports font size change from Ctrl + +/- shortcuts or mouse wheel zoom."""
         try:
             sz = max(6, min(48, int(size)))
-            self._current_font_size = sz
             from main.core.config import set_editor_font_size
-            set_editor_font_size(sz)
+            if set_editor_font_size(sz) is False:
+                from main.qt.preferences import report_preference_failure
+                report_preference_failure("Editor font size")
+                return {"success": False, "error": "Editor font size could not be saved"}
+            self._current_font_size = sz
             from main.qt.signals import signals as sig_bus
             if hasattr(sig_bus, "editor_font_size_changed"):
                 sig_bus.editor_font_size_changed.emit(sz)
@@ -523,6 +526,7 @@ class MonacoEditorPanel(QWidget):
 
         # ── QWebEngineView ──────────────────────────────────────────────────
         self._view = QWebEngineView(self)
+        self._view.setProperty("mcuTextPointer", True)
 
         # Configure WebEngine settings for local file access + offline Monaco
         settings = self._view.settings()
@@ -747,15 +751,20 @@ class MonacoEditorPanel(QWidget):
             new_sz = 13
         else:
             new_sz = max(6, min(48, current + delta))
-        self._current_font_size = new_sz
         try:
             from main.core.config import set_editor_font_size
-            set_editor_font_size(new_sz)
+            if set_editor_font_size(new_sz) is False:
+                from main.qt.preferences import report_preference_failure
+                report_preference_failure("Editor font size")
+                return
+            self._current_font_size = new_sz
             from main.qt.signals import signals as sig_bus
             if hasattr(sig_bus, "editor_font_size_changed"):
                 sig_bus.editor_font_size_changed.emit(new_sz)
         except Exception:
-            pass
+            from main.qt.preferences import report_preference_failure
+            report_preference_failure("Editor font size")
+            return
         self.set_font_size(new_sz)
 
     def eventFilter(self, watched: QObject, event: Any) -> bool:
@@ -958,6 +967,20 @@ class MonacoEditorPanel(QWidget):
         page.runJavaScript(js)
         if hasattr(self._view, "update"):
             self._view.update()
+
+    def has_input_focus(self) -> bool:
+        """Include Chromium's native focus proxy when preserving editor focus."""
+        focused = QApplication.focusWidget()
+        return bool(focused and (focused is self._view or self._view.isAncestorOf(focused)))
+
+    def restore_input_focus(self) -> None:
+        """Restore only an explicitly preserved editing focus, without reloading."""
+        if not self.isVisible() or not self._view.isEnabled():
+            return
+        self._view.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._view.page().runJavaScript(
+            "if (window.editorInstance?.getModel()) { window.editorInstance.focus(); }"
+        )
 
     def showEvent(self, event) -> None:
         """Instantly wake up Monaco and recalculate layout upon unhide/show."""

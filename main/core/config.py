@@ -37,6 +37,18 @@ import os as _os
 _INSTANCE_ID = str(_os.getpid())
 del _os
 
+# Hardware and window ownership remain per-instance. These display choices
+# also have a last-used shared value so a new PID does not reset the UI.
+_INSTANCE_PREFERENCE_DEFAULTS = {
+    "timestamp_enabled": False,
+    "clear_console_on_action": True,
+    "clear_serial_on_action": False,
+    "build_autoscroll": True,
+    "serial_autoscroll": True,
+    "serial_ansi_clear": True,
+    "skip_compile": True,
+}
+
 # Each sketch runs in its own process; shared reset caches retain an OS lock.
 _GUI_INSTANCE_MUTEX = None
 _RESET_CACHE_MUTEX_NAME = "Local\\MCUFlasherByNaph.ResetCache"
@@ -136,7 +148,8 @@ def _load_raw_config(fresh=False) -> dict:
     now = time.time()
     user_config = Path.home() / ".mcu_gui_config.json"
     signature = []
-    for target in (user_config, LOCAL_GUI_CONFIG):
+    targets = (user_config, LOCAL_GUI_CONFIG)
+    for target in targets:
         try:
             stat = target.stat()
             signature.append((str(target), stat.st_mtime_ns, stat.st_size))
@@ -149,12 +162,12 @@ def _load_raw_config(fresh=False) -> dict:
     # valid: an app-local file can be copied from another device or rewritten
     # by an older Bootstrap pass and otherwise hide the user's editor choice.
     candidates = []
-    for target in (user_config, LOCAL_GUI_CONFIG):
+    for target, (_, modified, size) in zip(targets, signature):
         try:
-            if target.exists() and target.stat().st_size > 0:
+            if size is not None and size > 0:
                 data = json.loads(target.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    candidates.append((target == user_config, target.stat().st_mtime_ns, data))
+                    candidates.append((target == user_config, modified, data))
         except Exception:
             pass
     if candidates:
@@ -193,14 +206,25 @@ def _write_raw_config(data: dict):
     payload = json.dumps(data, indent=2)
     saved = False
     user_config = Path.home() / ".mcu_gui_config.json"
-    try:
-        user_authoritative = isinstance(json.loads(user_config.read_text(encoding="utf-8")), dict)
-    except (OSError, ValueError):
-        user_authoritative = False
+    # Keep both portable and per-user copies, but do not replace equal files.
+    # This retains atomic transactions and save acknowledgements while avoiding
+    # flash writes and HDD seeks for repeated settings/window registrations.
+    existing = {}
+    for target in (LOCAL_GUI_CONFIG, user_config):
+        try:
+            existing[target] = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing[target] = None
+    user_authoritative = isinstance(existing.get(user_config), dict)
     user_saved = False
     for target in (LOCAL_GUI_CONFIG, user_config):
         temporary = None
         try:
+            if existing[target] == data:
+                saved = True
+                if target == user_config:
+                    user_saved = True
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
                                              prefix=target.name + ".", suffix=".tmp", delete=False) as stream:
@@ -433,16 +457,16 @@ def get_monitor_font_size() -> int:
     return max(6, min(48, size))
 
 
-def set_monitor_font_size(size: int) -> None:
+def set_monitor_font_size(size: int) -> bool:
     """Save the Build Console & Serial Monitor display size to persistent config."""
     try:
         sz = max(6, min(48, int(size)))
         data = _load_raw_config()
         shared = data.setdefault("shared", {})
         shared["monitor_font_size"] = sz
-        _save_raw_config(data)
+        return _save_raw_config(data)
     except Exception:
-        pass
+        return False
 
 
 def get_editor_font_size() -> int:
@@ -454,16 +478,16 @@ def get_editor_font_size() -> int:
     return max(6, min(48, size))
 
 
-def set_editor_font_size(size: int) -> None:
+def set_editor_font_size(size: int) -> bool:
     """Save the Monaco Editor font size to persistent config."""
     try:
         sz = max(6, min(48, int(size)))
         data = _load_raw_config()
         shared = data.setdefault("shared", {})
         shared["editor_font_size"] = sz
-        _save_raw_config(data)
+        return _save_raw_config(data)
     except Exception:
-        pass
+        return False
 
 
 def get_monaco_boot_pending() -> bool:
@@ -601,14 +625,18 @@ def set_auto_clear_serial_monitor(enabled: bool):
 def load_gui_config() -> dict:
     """Return this instance's config dict (creates it if absent)."""
     data = _load_raw_config()
-    # Migrate old flat format {"last_sketch_dir": "..."} → new nested format
+    # Migrate old flat/Bootstrap-only data without discarding already-saved
+    # shared fonts, themes, checkboxes or unknown compatible preference keys.
     if "instances" not in data:
         old_dir = data.get("last_sketch_dir", "")
-        data.clear()
-        data.update({"instances": {}, "shared": {}})
+        data["instances"] = {}
+        data.setdefault("shared", {})
         if old_dir:
             data["instances"][_INSTANCE_ID] = {"last_sketch_dir": old_dir}
-            data["shared"] = {"last_sketch_dir": old_dir}
+            data["shared"].setdefault("last_sketch_dir", old_dir)
+        for key in _INSTANCE_PREFERENCE_DEFAULTS:
+            if key in data:
+                data["shared"].setdefault(key, data[key])
         _save_raw_config(data)
     
     # Initialize the current PID's config block using fallback from shared or other active configs
@@ -634,6 +662,15 @@ def load_gui_config() -> dict:
 
         # Board always starts empty / unconfigured on launch (per user requirement)
         new_inst = {"last_sketch_dir": fallback_dir, "selected_board": ""}
+        shared = data.setdefault("shared", {})
+        for key, default in _INSTANCE_PREFERENCE_DEFAULTS.items():
+            if key not in shared:
+                # Upgrade older releases whose checkboxes only lived under
+                # an exited PID. Do not inherit its board, port or ownership.
+                inherited = next((inst[key] for inst in reversed(tuple(data["instances"].values()))
+                                  if isinstance(inst, dict) and key in inst), default)
+                shared[key] = bool(inherited)
+            new_inst[key] = bool(shared[key])
         data["instances"][_INSTANCE_ID] = new_inst
         _save_raw_config(data)
 
@@ -646,6 +683,8 @@ def load_gui_config() -> dict:
         _save_raw_config(data)
 
     res = data["instances"].get(_INSTANCE_ID, {})
+    for key, default in _INSTANCE_PREFERENCE_DEFAULTS.items():
+        res.setdefault(key, bool(data.get("shared", {}).get(key, default)))
     if res.get("last_sketch_dir") and is_application_codebase_dir(res.get("last_sketch_dir")):
         res["last_sketch_dir"] = ""
     return ConfigSnapshot(res)
@@ -667,6 +706,9 @@ def save_gui_config(config: dict, shared_updates: dict | None = None):
     # Also update the shared config so new instances can inherit it
     if "shared" not in data:
         data["shared"] = {}
+    for key in _INSTANCE_PREFERENCE_DEFAULTS:
+        if key in config and (original is None or key not in original or config[key] != original[key]):
+            data["shared"][key] = bool(config[key])
     if "last_sketch_dir" in config and config["last_sketch_dir"]:
         data["shared"]["last_sketch_dir"] = config["last_sketch_dir"]
     if "selected_board" in config and config["selected_board"]:

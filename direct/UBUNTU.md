@@ -170,6 +170,17 @@ paths. Errors remain visible; broad try/catch blocks do not prove recovery.
 .venv-linux/bin/python -B direct/verify_board_families.py
 .venv-linux/bin/python -B direct/verify_board_search.py
 .venv-linux/bin/python -B direct/verify_projects.py
+.venv-linux/bin/python -B direct/verify_application_guard.py
+.venv-linux/bin/python -B direct/verify_actions.py
+.venv-linux/bin/python -B direct/verify_cursor.py
+.venv-linux/bin/python -B direct/verify_preferences.py
+.venv-linux/bin/python -B direct/verify_storage_resources.py
+.venv-linux/bin/python -B direct/verify_storage_io.py
+.venv-linux/bin/python -B direct/verify_slow_storage_flow.py
+.venv-linux/bin/python -B direct/verify_catalog_io.py
+.venv-linux/bin/python -B direct/verify_upload_workers.py
+.venv-linux/bin/python -B direct/verify_build_log_routing.py
+node direct/verify_editor_preferences.js
 .venv-linux/bin/python -B direct/verify_runtime.py \
   --render-dir temp/audit/glass-redesign
 .venv-linux/bin/python -B direct/verify_performance.py
@@ -190,6 +201,11 @@ streams, serial Clear, latest-revision parsing, GUI-thread completion and local
 warm-launch health helpers with temporary fixtures. The Windows bootstrap fast
 path is Windows-only; Ubuntu continues using its native virtual environment.
 `.github/workflows/compatibility.yml` runs that verifier on Windows and Ubuntu.
+The workflow also runs the recent pointer/focus, saved-preference, Documents
+browse, incremental catalog, storage I/O and upload-worker regression fixtures
+on both Ubuntu versions. Node 22 runs the real editor-preference script; the
+Ubuntu runtime/editor render check uses an Xvfb desktop with the native Qt xcb
+backend. Local Windows simulations are not native Ubuntu execution proof.
 The platform verifier checks isolated host selection, import order, native
 package paths, setup/launch arguments and build/upload process options. It
 parses Bash scripts without launching; the native Windows Script Host check

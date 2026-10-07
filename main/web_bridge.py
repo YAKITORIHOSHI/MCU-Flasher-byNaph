@@ -51,16 +51,27 @@ def _iter_process_output(process, stop_requested, stop_process, on_silence,
 
     records: queue.Queue = queue.Queue(maxsize=256)
     finished = threading.Event()
+    abandoned = threading.Event()
     sentinel = object()
+
+    def _publish(record):
+        while not abandoned.is_set():
+            try:
+                records.put(record, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
 
     def _read_pipe():
         try:
-            for output_line in iter(stdout.readline, ""):
-                records.put(("line", output_line))
+            for output_line in iter(lambda: stdout.readline(8192), ""):
+                if not _publish(("line", output_line)):
+                    break
         except Exception as exc:
-            records.put(("error", exc))
+            _publish(("error", exc))
         finally:
-            records.put(("eof", sentinel))
+            _publish(("eof", sentinel))
             finished.set()
 
     reader = threading.Thread(target=_read_pipe, name="MCU_BuildOutputReader", daemon=True)
@@ -68,36 +79,39 @@ def _iter_process_output(process, stop_requested, stop_process, on_silence,
     last_output = time.monotonic()
     next_notice = last_output + max(0.1, float(notice_after))
     killed_for_stop = False
-    while True:
-        if stop_requested() and not killed_for_stop:
-            killed_for_stop = True
-            try:
-                stop_process()
-            except Exception:
-                pass
-
-        try:
-            kind, value = records.get(timeout=max(0.02, float(poll_interval)))
-        except queue.Empty:
-            now = time.monotonic()
-            if finished.is_set() and records.empty():
-                break
-            if now >= next_notice:
+    try:
+        while True:
+            if stop_requested() and not killed_for_stop:
+                killed_for_stop = True
                 try:
-                    on_silence(max(1, int(now - last_output)))
+                    stop_process()
                 except Exception:
                     pass
-                next_notice = now + max(1.0, float(notice_every))
-            continue
 
-        if kind == "eof" and value is sentinel:
-            break
-        if kind == "error":
-            raise value
-        last_output = time.monotonic()
-        yield value
+            try:
+                kind, value = records.get(timeout=max(0.02, float(poll_interval)))
+            except queue.Empty:
+                now = time.monotonic()
+                if finished.is_set() and records.empty():
+                    break
+                if now >= next_notice:
+                    try:
+                        on_silence(max(1, int(now - last_output)))
+                    except Exception:
+                        pass
+                    next_notice = now + max(1.0, float(notice_every))
+                continue
 
-    reader.join(timeout=1.0)
+            if kind == "eof" and value is sentinel:
+                break
+            if kind == "error":
+                raise value
+            last_output = time.monotonic()
+            yield value
+    finally:
+        # Early consumer exit must not strand a reader on a full queue.
+        abandoned.set()
+        reader.join(timeout=0.25)
 
 
 def _classify_platformio_upload_line(raw_line: str) -> tuple[str, str | None]:
@@ -233,12 +247,14 @@ class _SketchRAMCache:
         # dir_str -> (hash_str, baud_rate_or_None)
         self._baud_cache: dict[str, tuple[str, Optional[str]]] = {}
 
-    def get_content(self, path: Path) -> Optional[str]:
+    def get_content(self, path: Path, *, refresh: bool = False) -> Optional[str]:
         try:
-            resolved = str(path.resolve())
+            # Cache aliases separately; do not traverse junctions a second time
+            # for every RPC after read_file has already validated the path.
+            resolved = os.path.normcase(os.path.abspath(path))
             st = path.stat()
             with self._lock:
-                if resolved in self._content_cache:
+                if not refresh and resolved in self._content_cache:
                     size, mtime, content = self._content_cache[resolved]
                     if size == st.st_size and mtime == st.st_mtime_ns:
                         return content
@@ -251,7 +267,7 @@ class _SketchRAMCache:
 
     def set_content(self, path: Path, content: str) -> None:
         try:
-            resolved = str(path.resolve())
+            resolved = os.path.normcase(os.path.abspath(path))
             st = path.stat()
             with self._lock:
                 self._cache_content(resolved, st.st_size, st.st_mtime_ns, content)
@@ -271,16 +287,16 @@ class _SketchRAMCache:
             oldest = self._content_cache.pop(next(iter(self._content_cache)))
             self._content_chars -= len(oldest[2])
 
-    def get_includes(self, path: Path) -> list[str]:
+    def get_includes(self, path: Path, *, refresh: bool = False) -> list[str]:
         try:
-            resolved = str(path.resolve())
+            resolved = os.path.normcase(os.path.abspath(path))
             st = path.stat()
             with self._lock:
-                if resolved in self._includes_cache:
+                if not refresh and resolved in self._includes_cache:
                     size, mtime, incs = self._includes_cache[resolved]
                     if size == st.st_size and mtime == st.st_mtime_ns:
                         return incs
-            content = self.get_content(path) or ""
+            content = self.get_content(path, refresh=refresh) or ""
             detected: list[str] = []
             for m in re.finditer(r'#include\s*[<"]([^>"]+)[>"]', content):
                 hdr = m.group(1).strip()
@@ -295,7 +311,7 @@ class _SketchRAMCache:
             return []
 
     def get_baud_rate(self, dir_path: Path, current_hash: str) -> tuple[bool, Optional[str]]:
-        key = str(dir_path.resolve())
+        key = os.path.normcase(os.path.abspath(dir_path))
         with self._lock:
             if key in self._baud_cache:
                 cached_hash, baud = self._baud_cache[key]
@@ -304,7 +320,7 @@ class _SketchRAMCache:
         return False, None
 
     def set_baud_rate(self, dir_path: Path, current_hash: str, baud: Optional[str]) -> None:
-        key = str(dir_path.resolve())
+        key = os.path.normcase(os.path.abspath(dir_path))
         with self._lock:
             self._baud_cache[key] = (current_hash, baud)
             while len(self._baud_cache) > 64:
@@ -313,7 +329,7 @@ class _SketchRAMCache:
     def invalidate(self, path: Optional[Path] = None) -> None:
         with self._lock:
             if path:
-                resolved = str(path.resolve())
+                resolved = os.path.normcase(os.path.abspath(path))
                 previous = self._content_cache.pop(resolved, None)
                 if previous:
                     self._content_chars -= len(previous[2])
@@ -416,6 +432,7 @@ class MCUWebBackendAPI:
         self._op_session_id: int = 0
         self._stop_requested: bool = False
         self._active_process: Optional[subprocess.Popen] = None
+        self._operation_worker: Optional[threading.Thread] = None
         self._last_source_hash: str = ""
         self._last_compiled_board: str = ""
 
@@ -452,6 +469,7 @@ class MCUWebBackendAPI:
         self._services_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
         self._catalog_refresh_running = False
+        self._catalog_refresh_generation = 0
         self._catalog_refreshed_once = False
         self._skip_compile_check_lock = threading.Lock()
         self._skip_compile_check_gen = 0
@@ -459,6 +477,10 @@ class MCUWebBackendAPI:
 
         # Restore project compile state & remembered board for active sketch
         self._last_synced_hardware_payload: Optional[tuple] = None
+        self._hardware_state_lock = threading.Lock()
+        self._hardware_state_pending = None
+        self._hardware_state_running = False
+        self._hardware_state_active_payload = None
         self._restore_project_compile_state()
 
         # AI Review Engine & Filesystem Watcher
@@ -476,6 +498,7 @@ class MCUWebBackendAPI:
         after_exists: bool,
     ) -> None:
         """Handle AI edit or external change detected by AIEditWatcher."""
+        _sketch_ram_cache.invalidate(Path(path))
         file_name = Path(path).name
         # Emit Qt signal to editor to reload active file with diff
         sig_bus = self._get_qt_signals()
@@ -518,31 +541,39 @@ class MCUWebBackendAPI:
             if self._services_started:
                 return
             self._services_started = True
-        if self._telemetry_thread is None or not self._telemetry_thread.is_alive():
-            self._stop_telemetry.clear()
-            self._telemetry_thread = threading.Thread(
-                target=self._telemetry_loop, name="MCU_Telemetry", daemon=True
-            )
-            self._telemetry_thread.start()
-        if self._port_monitor_thread is None or not self._port_monitor_thread.is_alive():
-            self._stop_port_monitor.clear()
-            self._port_monitor_thread = threading.Thread(
-                target=self._port_monitor_loop, name="MCU_PortMonitor", daemon=True
-            )
-            self._port_monitor_thread.start()
-        # Port enumeration belongs to the monitor worker. Catalog discovery
-        # waits for first paint/editor startup to settle on slower CPUs.
-        def discover():
-            if not self._stop_port_monitor.wait(2.0):
-                self.refresh_board_catalog()
-        threading.Thread(target=discover, name="MCU_DeferredCatalog", daemon=True).start()
+        try:
+            if self._telemetry_thread is None or not self._telemetry_thread.is_alive():
+                self._stop_telemetry.clear()
+                self._telemetry_thread = threading.Thread(
+                    target=self._telemetry_loop, name="MCU_Telemetry", daemon=True
+                )
+                self._telemetry_thread.start()
+            if self._port_monitor_thread is None or not self._port_monitor_thread.is_alive():
+                self._stop_port_monitor.clear()
+                self._port_monitor_thread = threading.Thread(
+                    target=self._port_monitor_loop, name="MCU_PortMonitor", daemon=True
+                )
+                self._port_monitor_thread.start()
+            # Port enumeration belongs to the monitor worker. Catalog discovery
+            # waits for first paint/editor startup to settle on slower CPUs.
+            def discover():
+                if not self._stop_port_monitor.wait(2.0):
+                    self.refresh_board_catalog()
+            threading.Thread(target=discover, name="MCU_DeferredCatalog", daemon=True).start()
+        except Exception as exc:
+            with self._services_lock:
+                self._services_started = False
+            self.emit("console:log", {"text": f"Background services could not start: {exc}",
+                                      "tag": "warning", "newline": True})
 
-    def refresh_board_catalog(self, *, include_registry=False):
+    def refresh_board_catalog(self, *, include_registry=False, invalidate_parsed=False):
         """Discover installed board manifests off the GUI thread."""
         with self._catalog_lock:
             if self.is_busy or self._catalog_refresh_running or self._stop_port_monitor.is_set():
                 return
             self._catalog_refresh_running = True
+            self._catalog_refresh_generation += 1
+            refresh_id = self._catalog_refresh_generation
 
         def worker():
             try:
@@ -555,21 +586,41 @@ class MCUWebBackendAPI:
                 warning = ""
                 if include_registry:
                     warning = "Refreshed local board packs. Add or update packs in Boards & Libraries Manager."
-                catalog = load_dynamic_boards(seed, prefer_cache=not include_registry, registry_catalog=registry)
+                def publish_batch(batch):
+                    if (self._stop_port_monitor.is_set()
+                            or refresh_id != self._catalog_refresh_generation):
+                        return False
+                    if batch:
+                        self.emit("boards:updated", {
+                            "batch": batch, "partial": True, "refresh_id": refresh_id,
+                        })
+                    return True
+
+                # Startup has already read the persisted snapshot. Discover real
+                # manifests incrementally rather than returning that cache again.
+                catalog = load_dynamic_boards(seed, prefer_cache=False,
+                                              registry_catalog=registry, on_batch=publish_batch,
+                                              invalidate_parsed=bool(invalidate_parsed))
                 usb_ids = load_downloaded_board_usb_ids(catalog)
                 if not self._stop_port_monitor.is_set():
                     DOWNLOADED_BOARD_USB_IDS.clear()
                     DOWNLOADED_BOARD_USB_IDS.update(usb_ids)
                     self._catalog_refreshed_once = True
-                    self.emit("boards:updated", {"boards": catalog, "warning": warning})
+                    self.emit("boards:updated", {"boards": catalog, "warning": warning,
+                                                  "refresh_id": refresh_id})
             except Exception as exc:
                 if not self._stop_port_monitor.is_set():
-                    self.emit("boards:updated", {"error": str(exc)})
+                    self.emit("boards:updated", {"error": str(exc), "refresh_id": refresh_id})
             finally:
                 with self._catalog_lock:
                     self._catalog_refresh_running = False
 
-        threading.Thread(target=worker, name="MCU_BoardCatalog", daemon=True).start()
+        try:
+            threading.Thread(target=worker, name="MCU_BoardCatalog", daemon=True).start()
+        except Exception as exc:
+            with self._catalog_lock:
+                self._catalog_refresh_running = False
+            self.emit("boards:updated", {"error": str(exc), "refresh_id": refresh_id})
 
     def stop_services(self) -> None:
         """Signal all persistent background workers to stop and wait for them to exit.
@@ -590,7 +641,7 @@ class MCUWebBackendAPI:
                 t.join(timeout=2.0)
         if hasattr(self, "ai_watcher") and self.ai_watcher:
             try:
-                self.ai_watcher._timer.stop()
+                self.ai_watcher.shutdown()
             except Exception:
                 pass
         if hasattr(self, "ai_review_manager") and self.ai_review_manager:
@@ -919,11 +970,17 @@ class MCUWebBackendAPI:
         """Save text content safely to a sketch file."""
         try:
             p = Path(file_path).resolve()
-            ensure_file_writable(p)
-            def _write():
-                with open(p, "w", encoding="utf-8", newline="") as f:
-                    f.write(content)
-            retry_transient_file_operation(_write, attempts=6, delay=0.08)
+            encoded = content.encode("utf-8")
+            try:
+                unchanged = p.read_bytes() == encoded
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                ensure_file_writable(p)
+                def _write():
+                    with open(p, "w", encoding="utf-8", newline="") as f:
+                        f.write(content)
+                retry_transient_file_operation(_write, attempts=6, delay=0.08)
             _sketch_ram_cache.set_content(p, content)
             self.modified_files[str(p)] = False
             self.update_skip_compile_availability()
@@ -977,13 +1034,20 @@ class MCUWebBackendAPI:
         """Set whether upload should reuse cached build without compiling."""
         self.skip_compile = bool(skip)
 
-    def set_timestamp_enabled(self, enabled: bool) -> None:
+    def set_timestamp_enabled(self, enabled: bool) -> bool:
         """Toggle console log timestamping."""
-        self.timestamp_enabled = bool(enabled)
+        previous = bool(getattr(self, "timestamp_enabled", False))
         cfg = load_gui_config()
-        cfg["timestamp_enabled"] = self.timestamp_enabled
-        save_gui_config(cfg)
+        cfg["timestamp_enabled"] = bool(enabled)
+        if not save_gui_config(cfg):
+            self.emit("notification", {"title": "Settings not saved",
+                      "message": "The Timestamps preference could not be saved. The previous setting was kept.",
+                      "type": "warning"})
+            self.emit("timestamp:toggled", previous)
+            return False
+        self.timestamp_enabled = bool(enabled)
         self.emit("timestamp:toggled", self.timestamp_enabled)
+        return True
 
     # ── Remote / UNC Network Path Support ─────────────────────────────────
     def _remote_workspace_root(self, project_dir: Optional[Path] = None) -> Optional[Path]:
@@ -1468,7 +1532,14 @@ class MCUWebBackendAPI:
             with self._skip_compile_check_lock:
                 self._skip_compile_check_running = False
 
-        threading.Thread(target=_bg, name="MCU_SkipCompileCheck", daemon=True).start()
+        try:
+            threading.Thread(target=_bg, name="MCU_SkipCompileCheck", daemon=True).start()
+        except Exception as exc:
+            with self._skip_compile_check_lock:
+                self._skip_compile_check_running = False
+            self.emit("skip_compile:availability", False)
+            self.emit("console:log", {"text": f"Cached-build check could not start: {exc}",
+                                      "tag": "warning", "newline": True})
 
     def check_can_skip_compile_for_upload(self, board_name: str | None = None) -> bool:
         """Synchronously check whether upload can skip compilation and flash directly.
@@ -2880,12 +2951,10 @@ class MCUWebBackendAPI:
         can instantly know the active MCU architecture, pinouts, and COM connection in real-time.
         """
         sketch_dir = Path(target_dir) if target_dir else getattr(self, "sketch_dir_path", None)
-        if not sketch_dir or not Path(sketch_dir).is_dir():
+        if not sketch_dir:
             return
 
         try:
-            cache_dir = get_project_build_cache_root(sketch_dir)
-
             port_label = getattr(self, "current_port", "") or ""
             port_device = self._extract_port_device(port_label) or ""
 
@@ -2917,7 +2986,7 @@ class MCUWebBackendAPI:
 
             state_payload = (
                 Path(sketch_dir).name,
-                str(Path(sketch_dir).resolve(strict=False)),
+                str(sketch_dir),
                 status_summary,
                 tuple(sorted((k, str(v)) for k, v in {
                     "board_selected": board_selected,
@@ -2936,13 +3005,9 @@ class MCUWebBackendAPI:
                 }.items())),
             )
 
-            if getattr(self, "_last_synced_hardware_payload", None) == state_payload:
-                return
-            self._last_synced_hardware_payload = state_payload
-
             state_data = {
                 "project_name": Path(sketch_dir).name,
-                "project_path": str(Path(sketch_dir).resolve(strict=False)),
+                "project_path": str(sketch_dir),
                 "status_summary": status_summary,
                 "hardware": {
                     "board_selected": board_selected,
@@ -2962,22 +3027,67 @@ class MCUWebBackendAPI:
                 "last_updated": datetime.now().isoformat(timespec="seconds"),
             }
 
-            state_file = cache_dir / "project_state.json"
             payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
+            self._queue_hardware_state_write(sketch_dir, state_payload, payload_text)
+        except Exception as exc:
+            self.emit("console:log", {"text": f"Project connection state could not be saved: {exc}",
+                                      "tag": "warning", "newline": True})
 
-            def _write_state_bg():
+    def _queue_hardware_state_write(self, project, state_payload, payload_text) -> None:
+        """Serialize metadata writes, retaining only the latest pending state.
+
+        A slow USB drive must not turn rapid target/baud clicks into overlapping
+        writers that finish out of order. Deduplicate only confirmed writes;
+        a failed write stays eligible for the next explicit state update.
+        """
+        with self._hardware_state_lock:
+            pending = self._hardware_state_pending
+            if (pending is not None and pending[1] == state_payload
+                    or pending is None and self._hardware_state_active_payload == state_payload):
+                return
+            if (not self._hardware_state_running
+                    and self._last_synced_hardware_payload == state_payload):
+                return
+            self._hardware_state_pending = (Path(project), state_payload, payload_text)
+            if self._hardware_state_running:
+                return
+            self._hardware_state_running = True
+
+        def worker():
+            while True:
+                with self._hardware_state_lock:
+                    item = self._hardware_state_pending
+                    self._hardware_state_pending = None
+                    if item is None:
+                        self._hardware_state_running = False
+                        self._hardware_state_active_payload = None
+                        return
+                    self._hardware_state_active_payload = item[1]
+                target, payload, text = item
                 try:
-                    cache_dir.mkdir(parents=True, exist_ok=True)
-                    hide_generated_directory(cache_dir)
-                    write_generated_text(state_file, payload_text)
-                    ensure_hidden_read_first_md(sketch_dir)
-                    hide_internal_project_metadata(sketch_dir)
-                except Exception:
-                    pass
+                    if not target.is_dir():
+                        raise OSError("The sketch folder is no longer available.")
+                    cache_dir = get_project_build_cache_root(target)
+                    write_generated_text(cache_dir / "project_state.json", text)
+                    # Cosmetic reconciliation is independent from durability:
+                    # its failure must not cause the saved state to be replayed.
+                    with self._hardware_state_lock:
+                        self._last_synced_hardware_payload = payload
+                    ensure_hidden_read_first_md(target)
+                    hide_internal_project_metadata(target)
+                except Exception as exc:
+                    self.emit("console:log", {"text": f"Project connection state could not be saved: {exc}",
+                                              "tag": "warning", "newline": True})
 
-            threading.Thread(target=_write_state_bg, name="MCU_SyncHardwareState", daemon=True).start()
-        except Exception:
-            pass
+        try:
+            threading.Thread(target=worker, name="MCU_SyncHardwareState", daemon=True).start()
+        except Exception as exc:
+            with self._hardware_state_lock:
+                self._hardware_state_running = False
+                self._hardware_state_active_payload = None
+                self._hardware_state_pending = None
+            self.emit("console:log", {"text": f"Project connection state writer could not start: {exc}",
+                                      "tag": "warning", "newline": True})
 
     def select_port(self, port: str):
         """Select COM port and update serial monitor."""
@@ -3297,19 +3407,28 @@ class MCUWebBackendAPI:
         open or if a destructive operation (upload / flash / reset) is active.
         """
         now = time.monotonic()
-        if now - getattr(self, "_last_dtr_pulse_time", 0.0) < 0.6:
+        previous_pulse_time = getattr(self, "_last_dtr_pulse_time", 0.0)
+        if now - previous_pulse_time < 0.6:
             return
         self._last_dtr_pulse_time = now
+        requested_board = self.current_board
+        requested_port = self.current_port
+        requested_generation = self._serial_generation
+
+        def target_unchanged():
+            return (self.current_board == requested_board
+                    and self.current_port == requested_port
+                    and self._serial_generation == requested_generation)
 
         def _pulse():
             # Don't interfere with an ongoing operation.
-            if self.is_busy and self.active_operation != "compile":
+            if not target_unchanged() or (self.is_busy and self.active_operation != "compile"):
                 return
 
             # Wait up to 2.0s for the serial monitor to finish connecting if it was just restarted
             conn = None
             for _ in range(20):
-                if self.is_busy and self.active_operation != "compile":
+                if not target_unchanged() or (self.is_busy and self.active_operation != "compile"):
                     return
                 with self._serial_lock:
                     if self._serial_conn and self._serial_conn.is_open:
@@ -3321,43 +3440,60 @@ class MCUWebBackendAPI:
                 return
 
             try:
-                binfo = self._resolve_board_info(getattr(self, "current_board", ""))
+                if not target_unchanged() or self._serial_conn is not conn:
+                    return
+                binfo = self._resolve_board_info(requested_board)
                 platform = str(binfo.get("platform", "")).lower()
                 if platform not in {"atmelavr", "espressif32", "espressif8266", "ststm32", "raspberrypi", "ch32v", "samd"}:
                     return  # No reset sequence is declared for this target.
                 is_uno = ("avr" in platform)
                 is_arm = platform in ("ststm32", "raspberrypi", "ch32v", "samd")
 
-                if is_uno:
-                    conn.rts = False
-                    conn.dtr = False
-                    time.sleep(0.05)
-                    conn.dtr = True
-                    time.sleep(0.10)
-                    conn.dtr = False
-                    time.sleep(0.05)
-                elif is_arm:
-                    conn.dtr = False
-                    conn.rts = False
-                    time.sleep(0.05)
-                    conn.dtr = True
-                    time.sleep(0.05)
-                    conn.dtr = False
-                    time.sleep(0.05)
-                else:
-                    # ESP32 / ESP8266 auto-reset transistor circuit:
-                    # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
-                    # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
-                    conn.dtr = False
-                    conn.rts = True
-                    time.sleep(0.15)
-                    conn.rts = False
-                    conn.dtr = False
-                    time.sleep(0.05)
+                # Resolve outside the lock, then revalidate after that work.
+                # Keep the brief waveform under the same lock used to stop/
+                # replace the monitor, so upload cannot acquire this port until
+                # an already-started pulse has released both control lines.
+                with self._serial_lock:
+                    if (not target_unchanged() or self._serial_conn is not conn
+                            or not conn.is_open
+                            or (self.is_busy and self.active_operation != "compile")):
+                        return
+                    if is_uno:
+                        conn.rts = False
+                        conn.dtr = False
+                        time.sleep(0.05)
+                        conn.dtr = True
+                        time.sleep(0.10)
+                        conn.dtr = False
+                        time.sleep(0.05)
+                    elif is_arm:
+                        conn.dtr = False
+                        conn.rts = False
+                        time.sleep(0.05)
+                        conn.dtr = True
+                        time.sleep(0.05)
+                        conn.dtr = False
+                        time.sleep(0.05)
+                    else:
+                        # ESP32 / ESP8266 auto-reset transistor circuit:
+                        # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
+                        # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
+                        conn.dtr = False
+                        conn.rts = True
+                        time.sleep(0.15)
+                        conn.rts = False
+                        conn.dtr = False
+                        time.sleep(0.05)
             except Exception:
                 pass  # Port may have been closed or disconnected mid-pulse; ignore silently.
 
-        threading.Thread(target=_pulse, name="MCU_SilentDTR", daemon=True).start()
+        try:
+            threading.Thread(target=_pulse, name="MCU_SilentDTR", daemon=True).start()
+        except Exception as exc:
+            if self._last_dtr_pulse_time == now:
+                self._last_dtr_pulse_time = previous_pulse_time
+            self.emit("serial:log", {"text": f"Reset pulse could not start: {exc}",
+                                     "tag": "warning", "newline": True})
 
     def serial_send(self, text: str, line_ending: str = "both"):
         """Transmit text command to the connected microcontroller."""
@@ -3386,7 +3522,7 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     def compile_sketch(self):
         """Run sketch compilation on a background thread."""
-        if self.is_busy:
+        if self.is_busy or self.active_operation:
             return
 
         if self._block_if_pending_ai_edits("Compile"):
@@ -3409,9 +3545,16 @@ class MCUWebBackendAPI:
         self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "compile"})
         self.emit("window:closable", {"closable": True})
 
-        threading.Thread(
-            target=self._compile_requested_worker, name="MCU_Compile", daemon=True
-        ).start()
+        try:
+            self._operation_worker = threading.Thread(
+                target=self._compile_requested_worker, name="MCU_Compile", daemon=True
+            )
+            self._operation_worker.start()
+        except Exception as exc:
+            self._operation_worker = None
+            self.emit("console:log", {"text": f"Compile worker could not start: {exc}",
+                                      "tag": "error", "newline": True})
+            self._release_requested_operation()
 
     def _release_requested_operation(self):
         self.is_busy = False
@@ -3646,25 +3789,7 @@ class MCUWebBackendAPI:
 
             for name, src_path in non_ino_files.items():
                 dst_path = src_dir / name
-                should_replace = True
-                if dst_path.is_file():
-                    try:
-                        src_stat = src_path.stat()
-                        dst_stat = dst_path.stat()
-                        # Fast path: size + mtime_ns match means file is unchanged.
-                        # This avoids reading file contents entirely on slow HDD/eMMC
-                        # storage (e.g. dual-core Celeron with 5400 RPM drive).
-                        # shutil.copy2 propagates mtime so subsequent compiles benefit.
-                        if (src_stat.st_size == dst_stat.st_size
-                                and src_stat.st_mtime_ns == dst_stat.st_mtime_ns):
-                            should_replace = False
-                        elif src_stat.st_size == dst_stat.st_size:
-                            # Same size but different mtime — read bytes to be certain
-                            should_replace = src_path.read_bytes() != dst_path.read_bytes()
-                    except OSError:
-                        should_replace = True
-                if should_replace:
-                    shutil.copy2(src_path, dst_path)
+                self._stage_root_source_file(src_path, dst_path)
 
             target_ino_cpp_names: set[str] = set()
             if ino_files:
@@ -4560,14 +4685,56 @@ class MCUWebBackendAPI:
             files = sorted(get_sketch_files_fast(self.sketch_dir_path), key=lambda p: p.name)
             for f in files:
                 hasher.update(f.name.encode("utf-8"))
-                content = _sketch_ram_cache.get_content(f)
-                if content is not None:
-                    hasher.update(content.encode("utf-8", errors="replace"))
-                else:
-                    hasher.update(f.read_bytes())
+                # This is a build/upload safety boundary, not an editor preview.
+                # FAT/exFAT timestamps can be coarse or deliberately preserved;
+                # same-sized replacements must never reuse older firmware.
+                with f.open("rb") as source:
+                    for chunk in iter(lambda: source.read(131072), b""):
+                        hasher.update(chunk)
         except OSError as exc:
             raise RuntimeError(f"Cannot verify source content: {exc}") from exc
         return hasher.hexdigest()
+
+    @staticmethod
+    def _stage_root_source_file(source: Path, destination: Path) -> bool:
+        """Keep unchanged objects without treating coarse timestamps as proof.
+
+        Compare bounded sequential chunks, avoiding both rewrite wear and a
+        whole-file pair in RAM. A genuinely changed staging file retains its
+        new write time, so even timestamp-based compiler deciders see it.
+        """
+        same = False
+        previous_mtime_ns = None
+        try:
+            previous = destination.stat()
+            previous_mtime_ns = previous.st_mtime_ns
+            if source.stat().st_size == previous.st_size:
+                with source.open("rb") as incoming, destination.open("rb") as staged:
+                    same = True
+                    while True:
+                        chunk = incoming.read(131072)
+                        if chunk != staged.read(131072):
+                            same = False
+                            break
+                        if not chunk:
+                            break
+        except OSError:
+            pass
+        if same:
+            return False
+        ensure_file_writable(destination)
+        shutil.copyfile(source, destination)
+        if previous_mtime_ns is not None:
+            written = destination.stat()
+            if written.st_mtime_ns == previous_mtime_ns:
+                # FAT's two-second clock can give a changed same-size file its
+                # former write time. Advance only the changed staged copy, not
+                # user sources or unchanged objects; fail rather than compile
+                # stale bytes if the device cannot represent a new timestamp.
+                os.utime(destination, ns=(written.st_atime_ns, previous_mtime_ns + 2_000_000_000))
+                if destination.stat().st_mtime_ns == previous_mtime_ns:
+                    raise OSError("The build drive could not mark the staged source change.")
+        return True
 
     def _detect_sketch_baud_rate(self) -> Optional[str]:
         """Scan active sketch directory for Serial.begin(...) calls and return a valid baud rate string, or None."""
@@ -4583,7 +4750,7 @@ class MCUWebBackendAPI:
             macros: dict[str, int] = {}
             sketch_files = get_sketch_files_fast(self.sketch_dir_path)
             for file_path in sketch_files:
-                content = _sketch_ram_cache.get_content(file_path)
+                content = _sketch_ram_cache.get_content(file_path, refresh=True)
                 if content is None:
                     continue
 
@@ -4619,7 +4786,7 @@ class MCUWebBackendAPI:
         try:
             files = get_sketch_files_fast(self.sketch_dir_path)
             for f in files:
-                for hdr in _sketch_ram_cache.get_includes(f):
+                for hdr in _sketch_ram_cache.get_includes(f, refresh=True):
                     detected_headers.add(hdr)
         except Exception:
             pass
@@ -5166,6 +5333,19 @@ class MCUWebBackendAPI:
             "--flash-freq", "keep",
             "--flash-size", "detect",
         ]
+        launch_env = os.environ.copy()
+        reset_mode = str(fast_bins.get("before") or "default-reset")
+        if self._is_native_usb_port(port):
+            reset_mode = "usb-reset"
+        config_path = self._write_esptool_connect_config(
+            self._effective_cache_root(self.sketch_dir_path), 1, reset_mode
+        )
+        if config_path:
+            launch_env["ESPTOOL_CFGFILE"] = config_path
+        # Keep the outer budget authoritative; inherited options must not turn
+        # each of its ten pre-write attempts into another ten attempts.
+        launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = "1"
+        launch_env["PYTHONUNBUFFERED"] = "1"
 
         if fast_bins.get("platform") == "espressif32":
             write_cmd += [
@@ -5191,8 +5371,7 @@ class MCUWebBackendAPI:
             "a device attached to the system is not functioning",
             "write timeout", "serial exception", "serialexception",
             "cannot configure port", "clearcommerror", "setcommstate",
-            "getcommstate", "timeout", "serial timeout", "failed to write",
-            "fatal error occurred", "fatal error",
+            "getcommstate", "serial timeout",
         )
 
         chip_info: dict[str, str] = {}
@@ -5293,6 +5472,8 @@ class MCUWebBackendAPI:
             if not stripped:
                 return
             output_lines.append(stripped)
+            if len(output_lines) > 256:
+                del output_lines[0]
             low = stripped.lower()
 
             match = re.search(r"chip (?:is|type)\s*:?\s+(.+)$", stripped, re.IGNORECASE)
@@ -5368,6 +5549,9 @@ class MCUWebBackendAPI:
             expected_image_count = len(upload_progress_state.get("stages") or [])
             timed_out = False
             verification_complete_seen = False
+            proc = None
+            reader_thread = None
+            discard_output = threading.Event()
 
             try:
                 if _connect_retry_count == max(0, start_attempt - 1):
@@ -5379,25 +5563,43 @@ class MCUWebBackendAPI:
                 proc = subprocess.Popen(
                     attempt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, encoding="utf-8", errors="replace",
-                    creationflags=creationflags,
+                    creationflags=creationflags, env=launch_env,
                 )
                 self._active_process = proc
-                _start = time.time()
-                output_queue: queue.Queue = queue.Queue()
+                _start = time.monotonic()
+                output_queue: queue.Queue = queue.Queue(maxsize=128)
 
-                def _read_fast_output():
+                def _publish_fast_output(record, attempt_queue=output_queue,
+                                         attempt_discard=discard_output):
+                    while not attempt_discard.is_set():
+                        try:
+                            attempt_queue.put(record, timeout=0.1)
+                            return
+                        except queue.Full:
+                            continue
+
+                def _read_fast_output(attempt_process=proc, publish=_publish_fast_output):
                     try:
-                        if proc.stdout is not None:
-                            for raw_line in iter(proc.stdout.readline, ""):
-                                output_queue.put(raw_line)
+                        if attempt_process.stdout is not None:
+                            for raw_line in iter(lambda: attempt_process.stdout.readline(8192), ""):
+                                # After verification/consumer failure, continue
+                                # draining this same child so it can exit; never
+                                # feed a later attempt or block on a full queue.
+                                publish(raw_line)
+                    except Exception as exc:
+                        # A broken pipe reader cannot certify that flash was
+                        # untouched. Propagate it to the terminal unknown-write
+                        # path rather than treating it as ordinary EOF/retry.
+                        publish(exc)
                     finally:
-                        output_queue.put(None)
+                        publish(None)
 
-                threading.Thread(
+                reader_thread = threading.Thread(
                     target=_read_fast_output, name="MCU_FastUpload_Reader", daemon=True
-                ).start()
+                )
+                reader_thread.start()
                 reader_done = False
-                _last_output_time = time.time()  # tracks last received line for silence watchdog
+                _last_output_time = time.monotonic()
                 # Silence watchdog: if esptool is connected but goes quiet mid-write,
                 # kill it after this many seconds.  Separate from _WATCHDOG_SECS which
                 # only covers the pre-connection phase.
@@ -5406,7 +5608,7 @@ class MCUWebBackendAPI:
                     try:
                         line = output_queue.get(timeout=0.10)
                     except queue.Empty:
-                        now = time.time()
+                        now = time.monotonic()
                         elapsed = now - _start
                         silent_for = now - _last_output_time
                         # Pre-connection watchdog: no bootloader response within _WATCHDOG_SECS
@@ -5435,10 +5637,12 @@ class MCUWebBackendAPI:
                             break
                         continue
 
-                    _last_output_time = time.time()
+                    _last_output_time = time.monotonic()
                     if line is None:
                         reader_done = True
                         continue
+                    if isinstance(line, BaseException):
+                        raise line
 
                     _handle_fast_line(line)
                     if (
@@ -5500,8 +5704,12 @@ class MCUWebBackendAPI:
                 is_conn_failure = (
                     rc != 0
                     and not attempt_connected
+                    and not write_started
+                    and not upload_progress_state.get("started")
+                    and not upload_progress_state.get("stage_locked")
                     and not completed_images
                     and not cli_syntax_error
+                    and any(signature in joined for signature in _CONNECT_FAIL_SIGNATURES)
                 )
 
                 if is_conn_failure:
@@ -5714,7 +5922,7 @@ class MCUWebBackendAPI:
                     self._last_fast_upload_failure_kind = "connection"
                 elif writing_started or completed_images:
                     self._last_fast_upload_failure_kind = "flash"
-                elif not cli_syntax_error:
+                elif attempt_connected and not cli_syntax_error:
                     self._last_fast_upload_failure_kind = "connection"
                 else:
                     self._last_fast_upload_failure_kind = "tool"
@@ -5725,12 +5933,36 @@ class MCUWebBackendAPI:
                 )
                 return False, error_message, _connect_retry_count + 1
             except Exception as e:
-                self._last_fast_upload_write_started = bool(write_started)
-                self._last_fast_upload_failure_kind = "flash" if write_started else "connection"
+                # Missing reader telemetry is not evidence of untouched flash:
+                # the launched child can already be erasing/writing while we
+                # drain it in finally. Treat that state as potentially written.
+                launched = proc is not None
+                self._last_fast_upload_write_started = bool(write_started or launched)
+                self._last_fast_upload_failure_kind = "flash" if launched else "tool"
+                error_message = str(e)
+                if launched:
+                    error_message += "; uploader status was interrupted after launch, so firmware may have changed"
                 self._record_fast_upload_diagnostic(
-                    port, attempt_cmd, error=str(e),
+                    port, attempt_cmd, error=error_message,
                 )
-                return False, str(e), _connect_retry_count + 1
+                return False, error_message, _connect_retry_count + 1
+            finally:
+                discard_output.set()
+                if proc is not None:
+                    # A consumer/worker exception is not proof that a launched
+                    # write is safe to kill. Drain and await it before unlocking.
+                    if proc.poll() is None:
+                        if reader_thread is None or not reader_thread.is_alive():
+                            if proc.stdout is not None:
+                                for _unused in iter(lambda: proc.stdout.readline(8192), ""):
+                                    pass
+                        proc.wait()
+                    if reader_thread is not None and reader_thread.is_alive():
+                        reader_thread.join(timeout=0.5)
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if getattr(self, "_active_process", None) is proc:
+                        self._active_process = None
 
     def _validate_entry_points(self) -> tuple[bool, str]:
         """Validate that setup() and loop() are defined in the sketch files."""
@@ -5903,7 +6135,7 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     def upload_sketch(self):
         """Compile and upload firmware to the target microcontroller."""
-        if self.is_busy:
+        if self.is_busy or self.active_operation:
             return
 
         if self._block_if_pending_ai_edits("Upload"):
@@ -5931,7 +6163,14 @@ class MCUWebBackendAPI:
         self._current_op_phase = "resolving"
         self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "upload"})
         self.emit("window:closable", {"closable": True})
-        threading.Thread(target=self._upload_requested_worker, args=(cfg,), name="MCU_Upload", daemon=True).start()
+        try:
+            self._operation_worker = threading.Thread(target=self._upload_requested_worker, args=(cfg,), name="MCU_Upload", daemon=True)
+            self._operation_worker.start()
+        except Exception as exc:
+            self._operation_worker = None
+            self.emit("console:log", {"text": f"Upload worker could not start: {exc}",
+                                      "tag": "error", "newline": True})
+            self._release_requested_operation()
 
     def _upload_requested_worker(self, cfg):
         try:
@@ -5968,7 +6207,8 @@ class MCUWebBackendAPI:
         self._stop_requested = False
 
         # Fingerprint sources on the worker, after board resolution.
-        can_skip = self.check_can_skip_compile_for_upload(selected_board)
+        can_skip = (self._active_skip_compile
+                    and self.check_can_skip_compile_for_upload(selected_board))
 
         self.is_busy = True
         if can_skip:
@@ -6129,7 +6369,13 @@ class MCUWebBackendAPI:
 
     def _get_jobs(self) -> int:
         configured_jobs = load_gui_config().get("compiler_jobs")
-        safe_jobs = get_optimal_compiler_jobs()
+        storage_paths = [SCRIPT_DIR, getattr(self, "sketch_dir_path", SCRIPT_DIR)]
+        for key in ("PLATFORMIO_CORE_DIR", "PLATFORMIO_PACKAGES_DIR"):
+            if os.environ.get(key):
+                storage_paths.append(Path(os.environ[key]))
+        # Called by build workers; a bounded warm probe includes portable app
+        # and source drives even if the process started on a fast system disk.
+        safe_jobs = get_optimal_compiler_jobs(storage_paths=storage_paths, storage_wait=True)
         if configured_jobs is not None and str(configured_jobs).isdigit() and int(configured_jobs) > 0:
             return min(int(configured_jobs), safe_jobs)
         return safe_jobs
@@ -6715,26 +6961,30 @@ class MCUWebBackendAPI:
         except Exception:
             pass
 
-    def _write_esptool_connect_config(self, cache_root: Path, connect_attempts: int = 10) -> str | None:
+    def _write_esptool_connect_config(self, cache_root: Path, connect_attempts: int = 10,
+                                      reset_mode: str = "default-reset") -> str | None:
         """Write the esptool connect config shared by every esptool subprocess.
 
-        esptool's default ClassicReset asserts IO0 (BOOT) and releases EN
-        back-to-back with no settle delay between them. On boards with slow
-        auto-reset transistor propagation the chip then boots into run mode
-        ("Wrong boot mode detected (0x13)") instead of download mode and every
-        connection attempt fails while the user sketch keeps running.
-        The custom sequence below mirrors the proven recovery: the chip is held
-        in reset (EN low) while IO0 is asserted and settled, and then EN is released
-        with 500ms of bootloader settle time so the chip reliably enters download mode.
+        Share the application's existing longer UART reset/boot settle timing
+        with optimized and PlatformIO children. Keep DTR/RTS's transition adjacent:
+        two-transistor auto-reset circuits release EN when both controls are
+        asserted, so inserting a delay between D1 and R0 can boot run mode.
+        This is not a substitute for manual BOOT on boards without working reset
+        wiring. Native USB and POSIX keep esptool's own reset strategies.
         """
         try:
             cache_root.mkdir(parents=True, exist_ok=True)
             esptool_cfg = cache_root / "esptool.cfg"
+            # A custom sequence overrides even esptool's USB reset strategy.
+            # Only Windows external UART bridges need this timing adaptation;
+            # native USB and POSIX retain esptool's transport-specific reset.
+            custom_reset = ("custom_reset_sequence = D0|R1|W0.15|D1|R0|W0.5|D0\n"
+                            if sys.platform == "win32" and reset_mode == "default-reset" else "")
             esptool_cfg.write_text(
                 "[esptool]\n"
                 f"connect_attempts = {int(connect_attempts)}\n"
                 "reset_delay = 0.5\n"
-                "custom_reset_sequence = D0|R1|W0.15|D1|R0|W0.5|D0\n",
+                + custom_reset,
                 encoding="utf-8",
             )
             return str(esptool_cfg)
@@ -6804,15 +7054,15 @@ class MCUWebBackendAPI:
 
         # ── Smart compile check: auto-skip when binary is cached and sources unchanged ──
         need_compile = True
-        skip_comp = bool(getattr(self, "skip_compile", False)) or bool(can_skip)
+        skip_comp = bool(getattr(self, "_active_skip_compile", getattr(self, "skip_compile", False)))
         skip_reason_msg: str | None = None  # message to show after console clear
         bin_file = self._find_cached_firmware_binary(self.current_board)
         has_prior_build = (bin_file is not None) or self._has_prior_build(self.current_board)
 
-        if has_prior_build:
+        if skip_comp and has_prior_build:
             recompile_needed, reason = self._needs_recompile(self.current_board)
             if not recompile_needed:
-                # Sources unchanged → always safe to skip recompile
+                # Reuse only when the user requested it and identity is valid.
                 need_compile = False
                 skip_reason_msg = "  ✔ Sources unchanged — skipping recompile (using cached firmware)"
             else:
@@ -6852,9 +7102,11 @@ class MCUWebBackendAPI:
                 return
 
         # Check if MCU detached during compile
-        if mcu_detached_during_compile[0] or not self._is_port_present(port):
+        if (mcu_detached_during_compile[0] or self.current_port != port
+                or self.current_board != getattr(self, "_active_board_name", self.current_board)
+                or not self._is_port_present(port)):
             self.emit("console:log", {
-                "text": f"  ⚠ Upload skipped: MCU on {port} is disconnected.\n  💡 Reconnect your board and click Upload again (cached build will be reused).",
+                "text": f"  ⚠ Upload skipped: the target or port changed, or MCU on {port} disconnected.\n  💡 Select the intended board and stable port, then click Upload again.",
                 "tag": "warning",
                 "newline": True,
             })
@@ -7160,7 +7412,8 @@ class MCUWebBackendAPI:
 
             # Synchronize esptool connect behavior via cache_root and env vars (ESP only)
             if is_esp:
-                esptool_cfg_path = self._write_esptool_connect_config(cache_root, _MAX_CONNECT_RETRIES)
+                reset_mode = "usb-reset" if self._is_native_usb_port(port) else "default-reset"
+                esptool_cfg_path = self._write_esptool_connect_config(cache_root, _MAX_CONNECT_RETRIES, reset_mode)
                 if esptool_cfg_path:
                     launch_env["ESPTOOL_CFGFILE"] = esptool_cfg_path
                 launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = str(_MAX_CONNECT_RETRIES)
@@ -8793,18 +9046,23 @@ class MCUWebBackendAPI:
 
         if not self.is_busy:
             return
+        if self._stop_requested:
+            return  # Repeated clicks must not spawn redundant kill/failsafe workers.
 
         self._stop_requested = True
         session_id = getattr(self, "_op_session_id", 0)
-        self.emit("console:log", {"text": "⏹ Stopping compilation process...", "tag": "warning", "newline": True})
+        self.emit("console:log", {"text": "⏹ Stopping the active operation...", "tag": "warning", "newline": True})
 
         def _kill_bg():
             self._kill_active_process_tree()
             time.sleep(4)
             if self.is_busy and getattr(self, "_op_session_id", 0) == session_id:
                 process = getattr(self, "_active_process", None)
-                if (process is not None and process.poll() is None) or getattr(self, "_framework_download_active", False):
-                    self.emit("console:log", {"text": "Compiler is still stopping; its process must exit before another operation can begin.", "tag": "warning", "newline": True})
+                worker = getattr(self, "_operation_worker", None)
+                if ((process is not None and process.poll() is None)
+                        or (worker is not None and worker.is_alive())
+                        or getattr(self, "_framework_download_active", False)):
+                    self.emit("console:log", {"text": "The operation is still stopping; its worker and process must exit before another action can begin.", "tag": "warning", "newline": True})
                     return
                 try:
                     cache_root = self._effective_cache_root(self.sketch_dir_path)

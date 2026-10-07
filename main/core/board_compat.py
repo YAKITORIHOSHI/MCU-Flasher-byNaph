@@ -5,6 +5,7 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -263,6 +264,38 @@ def detect_chip_on_port(port: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _read_compatibility_sources(sketch_dir: Path) -> str:
+    """One shallow directory pass and one read per source per analysis.
+
+    GPIO and API checks share this exact snapshot. Do not persist a source
+    cache keyed only by timestamps: FAT/exFAT edits may reuse those values.
+    Retain the historical extension/name ordering for deterministic results.
+    """
+    groups = {extension: [] for extension in (".ino", ".cpp", ".c", ".h")}
+    try:
+        with os.scandir(sketch_dir) as entries:
+            for entry in entries:
+                extension = os.path.splitext(os.path.normcase(entry.name))[1]
+                if extension in groups:
+                    try:
+                        if entry.is_file():
+                            groups[extension].append(Path(entry.path))
+                    except OSError:
+                        continue
+    except OSError:
+        # A transient entry/iteration failure must not discard sources already
+        # found; the previous per-file reader also kept the readable inputs.
+        pass
+    texts = []
+    for files in groups.values():
+        for path in sorted(files):
+            try:
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pass
+    return "\n".join(texts)
+
+
 def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
     """Statically analyse source files and return which of the supported
     boards this sketch is likely compatible with.
@@ -273,17 +306,9 @@ def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
     reasons    : list of human-readable strings explaining each exclusion
                  (empty when nothing was excluded or detected)
     """
-    all_texts: list[str] = []
-    for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
-        for f in sorted(sketch_dir.glob(ext)):
-            try:
-                all_texts.append(f.read_text(encoding="utf-8", errors="replace"))
-            except Exception:
-                pass
-    if not all_texts:
+    all_code = _read_compatibility_sources(sketch_dir)
+    if not all_code:
         return set(SUPPORTED_BOARDS.keys()), []
-
-    all_code = "\n".join(all_texts)
 
     # Collect normalised include names
     raw_includes = re.findall(r'#include\s*[<"]([^>"]+)[>"]', all_code, re.IGNORECASE)
@@ -442,7 +467,7 @@ def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
         )
 
     # ── GPIO pin-number analysis ──────────────────────────────────────────
-    gpio_result = _analyze_gpio_compatibility(sketch_dir)
+    gpio_result = _analyze_gpio_compatibility(sketch_dir, source_code=all_code)
     excluded_pins_summary = {}  # pins_str -> list of board names
     for board in gpio_result["excluded"]:
         if board in boards:
@@ -559,7 +584,7 @@ def _format_compat_label(boards: set[str]) -> str:
         return f"{ordered[0]} and {ordered[1]}"
     return ", ".join(ordered[:-1]) + f", and {ordered[-1]}"
 
-def _analyze_gpio_compatibility(sketch_dir: Path) -> dict:
+def _analyze_gpio_compatibility(sketch_dir: Path, *, source_code: str | None = None) -> dict:
     """Scan all source files for GPIO function calls and resolve pin numbers.
 
     Detects literal integers AND #define / const-int aliases.
@@ -578,17 +603,9 @@ def _analyze_gpio_compatibility(sketch_dir: Path) -> dict:
         "shiftIn", "shiftOut",
     ]
 
-    all_texts: list[str] = []
-    for ext in ("*.ino", "*.cpp", "*.c", "*.h"):
-        for f in sorted(sketch_dir.glob(ext)):
-            try:
-                all_texts.append(f.read_text(encoding="utf-8", errors="replace"))
-            except Exception:
-                pass
-    if not all_texts:
+    all_code = _read_compatibility_sources(sketch_dir) if source_code is None else source_code
+    if not all_code:
         return {"excluded": set(), "warnings": [], "pin_hits": {}}
-
-    all_code = "\n".join(all_texts)
 
     # Strip comments before scanning
     code_nc = re.sub(r'//.*?$', '', all_code, flags=re.MULTILINE)

@@ -17,7 +17,7 @@ from typing import Callable, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QStandardPaths
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
@@ -711,7 +711,12 @@ class ProjectDialog(QDialog):
         )
 
     def _browse_folder(self) -> None:
-        start = self._open_path_edit.text().strip() or self._start_dir
+        # Reset every Browse click to the user's OS Documents location, not
+        # the active sketch or the native dialog's last-used folder.
+        start = (
+            QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+            or str(Path.home() / "Documents")
+        )
         # Use getOpenFileName so .ino/.cpp/.h/.txt files are visible
         # (stable reference: dialogs.py:577 uses filedialog.askopenfilename)
         selected, _ = QFileDialog.getOpenFileName(

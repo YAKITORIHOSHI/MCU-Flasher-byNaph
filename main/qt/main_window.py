@@ -76,8 +76,10 @@ class MCUMainWindow(QMainWindow):
         self._editor_pane_visible_before_detach = True
         self._detached_window = None
         self._active_operation: str | None = None
+        self._operation_generation = 0
         self._startup_complete = False
         self._startup_scheduled = False
+        self._pending_catalog = None
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(60)
@@ -86,6 +88,8 @@ class MCUMainWindow(QMainWindow):
         self._setup_window()
         self._build_ui()
         self._connect_signals()
+        from main.qt.cursor_visibility import WorkspacePointerGuard
+        self._pointer_guard = WorkspacePointerGuard(self)
         self._restore_geometry()
         self._screen_watcher = ScreenWatcher(self, self._on_screen_changed)
 
@@ -579,6 +583,8 @@ class MCUMainWindow(QMainWindow):
         self._layout_timer.start()
 
     def _on_theme_changed(self, theme_name: str) -> None:
+        focused = QApplication.focusWidget()
+        preserve_focus = bool(focused and self._pointer_guard.owns(focused))
         from main.core.theme import Theme
         from main.qt.theme import build_stylesheet
         Theme.apply_theme(theme_name)
@@ -620,6 +626,8 @@ class MCUMainWindow(QMainWindow):
             self._notif_panel.apply_theme(theme_name)
         self._apply_responsive_layout(self.width())
         self._layout_timer.start()
+        if preserve_focus and focused.isVisible() and focused.isEnabled():
+            focused.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _build_status_bar(self) -> None:
         sb = QStatusBar()
@@ -723,19 +731,28 @@ class MCUMainWindow(QMainWindow):
 
     @Slot(dict)
     def _on_catalog_updated(self, data):
-        if self._backend and self._backend.is_busy:
-            QTimer.singleShot(500, lambda: self._on_catalog_updated(data))
+        # Incremental previews belong to the picker, never to target controls.
+        if data.get("partial"):
             return
         if "error" in data:
             self._set_status_text(f"Board catalog unavailable: {data['error']}")
             return
+        self._pending_catalog = data
+        self._apply_pending_catalog()
+
+    def _apply_pending_catalog(self):
+        # Keep only the latest authoritative result during an operation. Its
+        # completion signal applies it; no per-result recursive polling timers.
+        if not self._pending_catalog or (self._backend and self._backend.is_busy):
+            return
+        data, self._pending_catalog = self._pending_catalog, None
         from main.core.board_catalog import SUPPORTED_BOARDS
         SUPPORTED_BOARDS.replace(data.get("boards", {}))
         self._primary_toolbar._update_action_button_states()
         if self._backend and self._backend.current_board:
             self._controls_bar._update_hardware_defaults_for_board(self._backend.current_board, update_monitor=False)
         if data.get("warning"):
-            self._set_status_text("Showing cached and installed boards; online refresh was unavailable.")
+            self._set_status_text("Showing locally prepared boards. Use Boards & Libraries Manager for new packs.")
             self._status_label.setToolTip(data["warning"])
 
     @Slot(bool)
@@ -797,6 +814,7 @@ class MCUMainWindow(QMainWindow):
         phase: str    = payload.get("phase", "idle")
         op: str       = payload.get("op", "")
         if is_busy:
+            self._operation_generation += 1
             self._active_operation = op or phase
             phase_map = {
                 "compile": "Compiling",
@@ -858,6 +876,7 @@ class MCUMainWindow(QMainWindow):
                 if hasattr(self, "_serial_panel") and self._serial_panel:
                     self._serial_panel.setEnabled(True)
         else:
+            self._apply_pending_catalog()
             self._set_status_text("Ready")
             self._progress_bar.setVisible(False)
             self._progress_bar.setRange(0, 0)
@@ -874,14 +893,34 @@ class MCUMainWindow(QMainWindow):
             prev_op = getattr(self, "_active_operation", None) or payload.get("op")
             is_success = payload.get("success", True)
             self._active_operation = None
+            generation = self._operation_generation
+            target = self._post_upload_target()
             if prev_op in ("upload", "flash", "hard_reset", "soft_reset", "reset") and is_success:
-                QTimer.singleShot(500, self._focus_serial_monitor)
+                QTimer.singleShot(500, self, lambda: self._finish_upload_ui(generation, target))
 
             # After an upload/flash or soft reset, once the Serial Monitor tab is focused, issue
             # a silent DTR pulse to reboot the MCU so its boot logs and sketch
             # output appear immediately — no manual Reset button press needed.
             if prev_op in ("upload", "flash") and is_success:
-                QTimer.singleShot(700, self._post_upload_dtr_pulse)
+                QTimer.singleShot(700, self, lambda: self._finish_upload_ui(generation, target, reset=True))
+
+    def _post_upload_target(self):
+        if not self._backend:
+            return None
+        return (self._backend.current_board, self._backend.current_port,
+                str(self._backend.sketch_dir_path))
+
+    def _finish_upload_ui(self, generation, target, reset=False):
+        # A previous successful upload must not refocus or reset a new target,
+        # even if a second operation has already started AND finished meanwhile.
+        if (generation != self._operation_generation or target != self._post_upload_target()
+                or self._active_operation is not None
+                or (self._backend and self._backend.is_busy)):
+            return
+        if reset:
+            self._post_upload_dtr_pulse()
+        else:
+            self._focus_serial_monitor()
 
     def _focus_serial_monitor(self) -> None:
         """Switch bottom tab to Serial Monitor and set focus (e.g. after upload completes)."""
@@ -1260,6 +1299,7 @@ class MCUMainWindow(QMainWindow):
         """Pop the Monaco editor out into an independent floating window."""
         if self._editor_detached:
             return
+        self._editor_had_focus_before_detach = self._editor_panel.has_input_focus()
         self._editor_detached = True
         # Remember the user's editor visibility choice so re-attaching restores
         # it exactly (hidden stays hidden, shown stays shown).
@@ -1299,6 +1339,8 @@ class MCUMainWindow(QMainWindow):
 
         # Synchronize layout in the main window
         self._sync_ai_and_editor_layout()
+        if self._editor_had_focus_before_detach:
+            self._editor_panel.restore_input_focus()
         self._on_notification({"type": "info", "message": "✓ Code editor detached to separate window."})
 
     def attach_editor(self) -> None:
@@ -1307,6 +1349,8 @@ class MCUMainWindow(QMainWindow):
             return
         self._is_attaching_editor = True
         try:
+            restore_editor_focus = (self._editor_panel.has_input_focus()
+                                    or getattr(self, "_editor_had_focus_before_detach", False))
             self._editor_detached = False
 
             # Take (NOT delete) the editor panel out of the detached window
@@ -1340,6 +1384,10 @@ class MCUMainWindow(QMainWindow):
                 QTimer.singleShot(80, self._editor_panel.force_layout)
             elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
                 self._editor_panel._view.update()
+
+            if restore_editor_focus and self._editor_pane_visible:
+                self.activateWindow()
+                self._editor_panel.restore_input_focus()
 
             if self._editor_pane_visible:
                 self._on_notification({"type": "info", "message": "✓ Code editor re-attached to main window."})

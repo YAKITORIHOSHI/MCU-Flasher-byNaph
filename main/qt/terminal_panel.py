@@ -125,7 +125,8 @@ class TerminalPanel(QWidget):
         self.control_failed.connect(self._on_control_failed)
 
         self._current_theme = "default"
-        self._current_font_size = 14
+        from main.core.config import get_monitor_font_size
+        self._current_font_size = get_monitor_font_size()
 
         self._spin_timer = QTimer(self)
         self._spin_timer.setInterval(90)

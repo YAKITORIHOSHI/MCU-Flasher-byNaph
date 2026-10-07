@@ -73,6 +73,7 @@ class CompactDropdownPopup(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         from main.core.theme import Theme
         self.setStyleSheet(
             f"CompactDropdownPopup {{"
@@ -93,6 +94,12 @@ class CompactDropdownPopup(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._scroll)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        # Qt.Popup may dismiss through hide rather than close on an outside
+        # click. Menus are rebuilt from live state and must not accumulate.
+        self.deleteLater()
 
     def add_button(
         self,
@@ -1393,6 +1400,7 @@ class ControlsBar(QWidget):
         self.cb_skip_compile = QCheckBox("Skip Compile")
         self.cb_skip_compile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.cb_skip_compile.setToolTip("Reuse firmware only when sources and the selected target still match the last build")
+        self._skip_compile_requested = bool(load_gui_config().get("skip_compile", True))
         self.cb_skip_compile.setEnabled(False)
         self.cb_skip_compile.stateChanged.connect(self._on_skip_compile_changed)
         checkbox_row.addWidget(self.cb_skip_compile)
@@ -1499,11 +1507,11 @@ class ControlsBar(QWidget):
         self._update_action_button_states_on_controls()
 
         # Synchronize skip compile availability based on whether project is already compiled
-        can_skip = self._backend.check_can_skip_compile() if getattr(self._backend, "current_board", "") else False
-        self.cb_skip_compile.setEnabled(can_skip)
-        self.cb_skip_compile.setChecked(can_skip)
-        if self._backend:
-            self._backend.set_skip_compile(can_skip)
+        # Fingerprints may involve many source files. Use the already-coalesced
+        # backend worker rather than blocking construction on a cache scan.
+        self.on_skip_compile_availability(False)
+        if self._backend and getattr(self._backend, "current_board", ""):
+            self._backend.update_skip_compile_availability()
 
     def _open_board_search_dialog(self) -> None:
         """Open the BoardSearchDialog modal matching the stable release."""
@@ -1618,19 +1626,27 @@ class ControlsBar(QWidget):
     def _on_timestamp_changed(self, state: int) -> None:
         enabled = bool(state)
         if self._backend and hasattr(self._backend, "set_timestamp_enabled"):
-            self._backend.set_timestamp_enabled(enabled)
+            if self._backend.set_timestamp_enabled(enabled) is False:
+                from main.qt.preferences import restore_checkbox
+                restore_checkbox(self.cb_timestamp, bool(self._backend.timestamp_enabled))
         else:
-            from main.core.config import load_gui_config, save_gui_config
-            cfg = load_gui_config()
-            cfg["timestamp_enabled"] = enabled
-            save_gui_config(cfg)
+            from main.qt.preferences import save_display_preference, restore_checkbox
+            if not save_display_preference("timestamp_enabled", enabled, "Timestamps"):
+                restore_checkbox(self.cb_timestamp, not enabled)
+                return
             from main.qt.signals import signals
             if hasattr(signals, "timestamp_toggled"):
                 signals.timestamp_toggled.emit(enabled)
 
     def _on_skip_compile_changed(self, state: int) -> None:
+        requested = bool(state)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("skip_compile", requested, "Skip Compile"):
+            restore_checkbox(self.cb_skip_compile, self._skip_compile_requested)
+            return
+        self._skip_compile_requested = requested
         if self._backend:
-            self._backend.set_skip_compile(bool(state))
+            self._backend.set_skip_compile(requested and self.cb_skip_compile.isEnabled())
 
     def _update_action_button_states_on_controls(self) -> None:
         """Notify the PrimaryToolbar to refresh compile/upload gating."""
@@ -1794,10 +1810,13 @@ class ControlsBar(QWidget):
 
     @Slot(bool)
     def on_skip_compile_availability(self, available: bool) -> None:
+        effective = bool(available and self._skip_compile_requested)
         self.cb_skip_compile.setEnabled(available)
-        self.cb_skip_compile.setChecked(available)
+        previous = self.cb_skip_compile.blockSignals(True)
+        self.cb_skip_compile.setChecked(effective)
+        self.cb_skip_compile.blockSignals(previous)
         if self._backend:
-            self._backend.set_skip_compile(available)
+            self._backend.set_skip_compile(effective)
 
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:

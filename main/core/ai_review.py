@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional, Any, Callable
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QObject, Signal, QTimer, QFileSystemWatcher
+from PySide6.QtCore import QObject, Signal, QTimer, QFileSystemWatcher, Qt
 
 from main.core.file_utils import (
     ensure_file_writable,
@@ -358,6 +358,9 @@ class AIReviewManager:
         after_content: str,
         before_exists: bool = True,
         after_exists: bool = True,
+        *,
+        expected_project: Optional[Path] = None,
+        expected_valid: Optional[Callable[[], bool]] = None,
     ) -> bool | str:
         """Queue a detected external AI edit for user review in Monaco."""
         if not path or not self._path_is_in_project(path):
@@ -373,6 +376,15 @@ class AIReviewManager:
         key = self._path_key(resolved_path)
 
         with self._pending_ai_lock:
+            # A slow filesystem scan may finish after the workspace switched.
+            # Recheck under the same lock that bind_project uses, before any
+            # journal mutation; the earlier path check alone can race a switch.
+            if expected_project is not None and self.project_dir != expected_project:
+                return False
+            if expected_valid is not None and not expected_valid():
+                return False
+            if not self._path_is_in_project(resolved_path):
+                return False
             existing = self._pending_ai_edits.get(key)
             if existing:
                 original_content = str(existing.get("beforeContent", ""))
@@ -408,6 +420,10 @@ class AIReviewManager:
                 "afterExists": after_exists,
                 "diff": build_ai_line_diff(original_content, after_content),
             }
+            # Diff calculation can take time for a large source. If a manual
+            # save or project switch won meanwhile, do not start journal I/O.
+            if expected_valid is not None and not expected_valid():
+                return False
             self._pending_ai_edits[key] = payload
             self._ai_decision_redo.clear()
             try:
@@ -658,10 +674,12 @@ class AIReviewManager:
 class AIEditWatcher(QObject):
     """
     Lightweight, high-frequency sketch file & signal watcher.
-    Monitors .ai_edit_signal and file modification times to detect
-    AI code applications in real time and trigger Monaco's review banner.
+    Filesystem events wake one background scan; a quiet fallback catches
+    unsupported watchers without repeatedly seeking through a USB/HDD project
+    on the GUI thread. Scan completions belong to the captured project only.
     """
     ai_edit_detected = Signal(str, str, str, bool, bool)  # (path, before, after, before_exists, after_exists)
+    _scan_finished = Signal(object)
 
     SKETCH_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp"}
 
@@ -677,35 +695,49 @@ class AIEditWatcher(QObject):
         )
         self.review_manager = review_manager
         self._baseline_contents: dict[str, str] = {}
-        self._baseline_mtimes: dict[str, float] = {}
+        self._baseline_mtimes: dict[str, tuple] = {}
         self._pending_settle: dict[str, dict] = {}
         self._last_signal_mtime: float = 0.0
         self._lock = threading.Lock()
+        self._generation = 0
+        self._scan_running = False
+        self._scan_pending = False
+        self._baseline_ready = False
+        self._force_read = False
+        self._save_versions: dict[str, int] = {}
+        self._closed = False
 
-        # Adaptive Qt Timer: 2000ms when idle to protect mechanical HDDs from seek thrashing;
-        # speeds up to 250ms dynamically only when edits are in-flight settling.
-        self._idle_interval = 2000
+        # File events are immediate. The fallback is deliberately less frequent
+        # even on high-core PCs: faster CPUs do not improve mechanical seeks.
+        self._idle_interval = 5000
         self._settle_interval = 250
         self._timer = QTimer(self)
         self._timer.setInterval(self._idle_interval)
         self._timer.timeout.connect(self._poll_step)
+        self._wake_timer = QTimer(self)
+        self._wake_timer.setSingleShot(True)
+        self._wake_timer.setInterval(100)
+        self._wake_timer.timeout.connect(self._poll_step)
+        self._scan_finished.connect(self._finish_scan, Qt.ConnectionType.QueuedConnection)
 
         # OS-level filesystem watcher (Windows ReadDirectoryChangesW): zero-overhead event notification
         self._fs_watcher = QFileSystemWatcher(self)
         self._fs_watcher.directoryChanged.connect(self._on_fs_changed)
         self._fs_watcher.fileChanged.connect(self._on_fs_changed)
 
-        if self.project_dir and self.project_dir.is_dir():
-            self._rebuild_baseline()
+        if self.project_dir:
             try:
                 self._fs_watcher.addPath(str(self.project_dir))
             except Exception:
                 pass
             self._timer.start()
+            self._poll_step()
 
     def _on_fs_changed(self, path: str) -> None:
-        """OS kernel notified that directory or file changed: wake up poll immediately."""
-        self._poll_step()
+        """Coalesce event bursts, including replacements with coarse timestamps."""
+        with self._lock:
+            self._force_read = True
+        self._wake_timer.start()
 
     def bind_project(self, project_dir: str | Path) -> None:
         """Switch watcher target when project folder changes."""
@@ -716,12 +748,17 @@ class AIEditWatcher(QObject):
             self._baseline_mtimes.clear()
             self._pending_settle.clear()
             self._last_signal_mtime = 0.0
+            self._generation += 1
+            self._baseline_ready = False
+            self._force_read = False
+            self._save_versions.clear()
+            self._scan_pending = False
 
-            if self._fs_watcher.directories():
-                self._fs_watcher.removePaths(self._fs_watcher.directories())
+            old_paths = self._fs_watcher.directories() + self._fs_watcher.files()
+            if old_paths:
+                self._fs_watcher.removePaths(old_paths)
 
-            if self.project_dir and self.project_dir.is_dir():
-                self._rebuild_baseline()
+            if self.project_dir:
                 try:
                     self._fs_watcher.addPath(str(self.project_dir))
                 except Exception:
@@ -730,6 +767,9 @@ class AIEditWatcher(QObject):
                     self._timer.start()
             else:
                 self._timer.stop()
+        self._wake_timer.stop()
+        if self.project_dir:
+            self._poll_step()
 
     def _is_sketch_file(self, path: Path) -> bool:
         if not path.is_file():
@@ -739,138 +779,211 @@ class AIEditWatcher(QObject):
         return path.suffix.lower() in self.SKETCH_EXTS
 
     def _rebuild_baseline(self) -> None:
-        if not self.project_dir or not self.project_dir.is_dir():
-            return
-        try:
-            for p in self.project_dir.iterdir():
-                if self._is_sketch_file(p):
-                    key = AIReviewManager._path_key(p)
-                    try:
-                        self._baseline_mtimes[key] = p.stat().st_mtime
-                        self._baseline_contents[key] = p.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        """Schedule, rather than synchronously reading every source at startup."""
+        with self._lock:
+            self._baseline_ready = False
+        self._poll_step()
+
+    @staticmethod
+    def _signature(stat) -> tuple:
+        return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
 
     def note_user_save(self, path: str | Path, content: Optional[str] = None) -> None:
         """Record manual user saves so they are never flagged as external AI edits."""
         target = Path(path)
         key = AIReviewManager._path_key(target)
+        try:
+            stat = target.stat()
+            saved_content = content if content is not None else AIReviewManager._read_text_exact(target)
+        except OSError:
+            return
         with self._lock:
+            self._save_versions[key] = self._save_versions.get(key, 0) + 1
             self._pending_settle.pop(key, None)
-            if target.is_file():
-                try:
-                    self._baseline_mtimes[key] = target.stat().st_mtime
-                    self._baseline_contents[key] = (
-                        content if content is not None
-                        else target.read_text(encoding="utf-8", errors="replace")
-                    )
-                except Exception:
-                    pass
+            self._baseline_mtimes[key] = self._signature(stat)
+            self._baseline_contents[key] = saved_content
 
     def _poll_step(self) -> None:
-        if not self.project_dir or not self.project_dir.is_dir():
-            return
-
-        now = time.time()
+        """Dispatch one scan, retaining only one latest pending request."""
         with self._lock:
-            # 1. Check wake-up signal from OpenCode AI
-            signal_file = self.project_dir / ".ai_edit_signal"
-            if signal_file.exists():
-                try:
-                    sig_m = signal_file.stat().st_mtime
-                    if sig_m > self._last_signal_mtime:
-                        self._last_signal_mtime = sig_m
-                    signal_file.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-            # 2. Check current files in project directory
-            try:
-                current_files = {
-                    AIReviewManager._path_key(p): p
-                    for p in self.project_dir.iterdir()
-                    if self._is_sketch_file(p)
-                }
-            except Exception:
+            if self._closed or not self.project_dir:
                 return
+            if self._scan_running:
+                self._scan_pending = True
+                return
+            self._scan_running = True
+            request = (self._generation, self.project_dir, self._baseline_ready,
+                       dict(self._baseline_contents), dict(self._baseline_mtimes),
+                       {key: dict(value) for key, value in self._pending_settle.items()},
+                       dict(self._save_versions), self._force_read)
+            self._force_read = False
 
-            # Check for modified or new files
-            for key, path in current_files.items():
+        def scan():
+            try:
+                result = self._scan_project(request)
+            except Exception as exc:
+                result = {"generation": request[0], "error": str(exc), "events": []}
+            with self._lock:
+                if self._closed:
+                    return
+            try:
+                # The parent window can delete the QObject after the closed
+                # check while a slow scan finishes. Do not report that normal
+                # teardown as an unhandled worker failure. Live stale-project
+                # completions still reach _finish_scan to release the slot.
+                self._scan_finished.emit(result)
+            except RuntimeError:
+                pass
+
+        try:
+            threading.Thread(target=scan, name="MCU_SketchWatcher", daemon=True).start()
+        except Exception as exc:
+            self._finish_scan({"generation": request[0], "error": str(exc), "events": []})
+
+    def _scan_project(self, request) -> dict:
+        generation, project, ready, contents, signatures, pending, versions, force = request
+        now = time.monotonic()
+        signal_file = project / ".ai_edit_signal"
+        try:
+            signal_file.stat()
+            force = True
+            signal_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        current = {}
+        with os.scandir(project) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                # Filter names before metadata access: user asset directories or
+                # thousands of unrelated files cost no per-entry stat/resolve.
+                if (path.name.startswith(".") or path.suffix.lower() not in self.SKETCH_EXTS
+                        or not entry.is_file()):
+                    continue
+                key = (AIReviewManager._path_key(path) if entry.is_symlink()
+                       else os.path.normcase(os.path.abspath(entry.path)))
                 try:
-                    mtime = path.stat().st_mtime
+                    stat = entry.stat()
+                    # Windows directory snapshots can omit file identity and
+                    # report different creation metadata than a handle stat.
+                    # Use the same reliable identity for scan and read checks.
+                    if not stat.st_ino:
+                        stat = path.stat()
+                    current[key] = (path, self._signature(stat))
                 except OSError:
                     continue
+        for key, (path, signature) in current.items():
+            if not ready:
+                try:
+                    contents[key] = AIReviewManager._read_text_exact(path)
+                    signatures[key] = signature
+                except OSError:
+                    pass
+                continue
+            previous = signatures.get(key)
+            if previous != signature or force:
+                item = pending.setdefault(key, {
+                    "path": str(path), "before": contents.get(key, ""),
+                    "before_exists": previous is not None,
+                    "last_change_time": now, "last_mtime": signature,
+                })
+                if item["last_mtime"] != signature:
+                    item["last_mtime"] = signature
+                    item["last_change_time"] = now
+        # A removed settling file must not keep the fast timer alive forever.
+        # Retain its baseline so a later recreation can still compare content.
+        pending = {key: value for key, value in pending.items() if key in current}
+        events = []
+        for key, item in list(pending.items()):
+            if now - item["last_change_time"] < 0.35 or key not in current:
+                continue
+            path, signature = current[key]
+            try:
+                after = retry_transient_file_operation(
+                    lambda: AIReviewManager._read_text_exact(path), attempts=3, delay=0.05)
+                # Do not combine bytes from an in-flight replacement with its
+                # previous signature. Wait for another settled pass instead.
+                if signature != self._signature(path.stat()):
+                    item["last_change_time"] = time.monotonic()
+                    continue
+            except OSError:
+                continue
+            before, exists = item["before"], item["before_exists"]
+            signatures[key], contents[key] = signature, after
+            pending.pop(key, None)
+            if before != after or not exists:
+                events.append((key, str(path), before, after, exists, True))
 
-                old_mtime = self._baseline_mtimes.get(key)
-                if old_mtime is None:
-                    # New file created
-                    if key not in self._pending_settle:
-                        self._pending_settle[key] = {
-                            "path": str(path),
-                            "before": "",
-                            "before_exists": False,
-                            "first_seen": now,
-                            "last_change_time": now,
-                            "last_mtime": mtime,
-                        }
-                    else:
-                        if abs(mtime - self._pending_settle[key].get("last_mtime", 0.0)) > 0.0001:
-                            self._pending_settle[key]["last_mtime"] = mtime
-                            self._pending_settle[key]["last_change_time"] = now
-                elif abs(mtime - old_mtime) > 0.001:
-                    # File modified
-                    if key not in self._pending_settle:
-                        self._pending_settle[key] = {
-                            "path": str(path),
-                            "before": self._baseline_contents.get(key, ""),
-                            "before_exists": True,
-                            "first_seen": now,
-                            "last_change_time": now,
-                            "last_mtime": mtime,
-                        }
-                    else:
-                        if abs(mtime - self._pending_settle[key].get("last_mtime", 0.0)) > 0.0001:
-                            self._pending_settle[key]["last_mtime"] = mtime
-                            self._pending_settle[key]["last_change_time"] = now
+        published = []
+        with self._lock:
+            if self._closed or generation != self._generation:
+                return {"generation": generation, "events": []}
+            # Manual saves while a slow scan was reading win for that file.
+            for key in current:
+                if versions.get(key, 0) != self._save_versions.get(key, 0):
+                    continue
+                if key in contents:
+                    self._baseline_contents[key] = contents[key]
+                    self._baseline_mtimes[key] = signatures[key]
+                if key in pending:
+                    self._pending_settle[key] = pending[key]
+                else:
+                    self._pending_settle.pop(key, None)
+            self._baseline_ready = True
+            for key in list(self._pending_settle):
+                if key not in current:
+                    self._pending_settle.pop(key, None)
+            eligible = [event for event in events
+                        if versions.get(event[0], 0) == self._save_versions.get(event[0], 0)]
+        # Journal I/O is rare, but must also stay off the GUI thread. The
+        # manager checks the captured project atomically with journal mutation.
+        for key, *event in eligible:
+            with self._lock:
+                valid = (not self._closed and generation == self._generation
+                         and versions.get(key, 0) == self._save_versions.get(key, 0))
+            if not valid:
+                continue
+            def still_valid():
+                with self._lock:
+                    return (not self._closed and generation == self._generation
+                            and versions.get(key, 0) == self._save_versions.get(key, 0))
+            result = self.review_manager.queue_ai_edit_snapshot(
+                *event, expected_project=project, expected_valid=still_valid)
+            if result and result != "cancelled":
+                published.append((key, *event))
+        return {"generation": generation, "events": published,
+                "files": [str(path) for path, _ in current.values()], "save_versions": versions}
 
-            # 3. Process settled edits (debounce: mtime quiescent for >= 350ms)
-            to_emit = []
-            for key, pending in list(self._pending_settle.items()):
-                last_change = pending.get("last_change_time", pending.get("first_seen", now))
-                if now - last_change >= 0.35:
-                    p = Path(pending["path"])
-                    if p.is_file():
-                        try:
-                            def _read():
-                                return p.read_text(encoding="utf-8", errors="replace")
-                            after_content = retry_transient_file_operation(_read, attempts=3, delay=0.05)
-                            mtime = p.stat().st_mtime
-                        except Exception:
-                            continue
+    def _finish_scan(self, result) -> None:
+        """Queued GUI completion: Qt watcher/timer changes never run in workers."""
+        with self._lock:
+            self._scan_running = False
+            valid = not self._closed and result.get("generation") == self._generation
+            again = self._scan_pending
+            self._scan_pending = False
+            settling = bool(self._pending_settle)
+        if valid and not result.get("error"):
+            # Watching actual sources matters on Linux: directory events alone
+            # need not report modifications to existing files. Bound kernel slots.
+            wanted = set(result.get("files", [])[:512])
+            existing = set(self._fs_watcher.files())
+            if existing - wanted:
+                self._fs_watcher.removePaths(list(existing - wanted))
+            if wanted - existing:
+                self._fs_watcher.addPaths(list(wanted - existing))
+            for key, *event in result.get("events", []):
+                with self._lock:
+                    saved_since_scan = (result.get("save_versions", {}).get(key, 0)
+                                        != self._save_versions.get(key, 0))
+                if not saved_since_scan:
+                    self.ai_edit_detected.emit(*event)
+            self._timer.setInterval(self._settle_interval if settling else self._idle_interval)
+        if not self._closed and (again or not valid):
+            self._wake_timer.start()
 
-                        before_content = pending["before"]
-                        before_exists = pending["before_exists"]
-                        if before_content != after_content or not before_exists:
-                            to_emit.append((str(p), before_content, after_content, before_exists, True))
-                            self._baseline_contents[key] = after_content
-                            self._baseline_mtimes[key] = mtime
-                    del self._pending_settle[key]
-
-        # 4. Trigger review queue and UI signals
-        for fp, before_c, after_c, b_exists, a_exists in to_emit:
-            res = self.review_manager.queue_ai_edit_snapshot(
-                fp, before_c, after_c, b_exists, a_exists
-            )
-            if res and res != "cancelled":
-                self.ai_edit_detected.emit(fp, before_c, after_c, b_exists, a_exists)
-
-        # 5. Adaptive timer interval: if there are pending files debouncing, tick fast (250ms).
-        # When all files have settled, relax interval to 2000ms to eliminate HDD head thrashing.
-        if self._pending_settle:
-            if self._timer.interval() != self._settle_interval:
-                self._timer.setInterval(self._settle_interval)
-        else:
-            if self._timer.interval() != self._idle_interval:
-                self._timer.setInterval(self._idle_interval)
+    def shutdown(self) -> None:
+        self._timer.stop()
+        self._wake_timer.stop()
+        with self._lock:
+            self._closed = True
+            self._generation += 1
+            self._scan_pending = False

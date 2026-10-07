@@ -21,7 +21,8 @@ def _system_reserved_cpu_count(total_cpus: int) -> int:
 
 def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = None,
                                 available_gb: float | None = None,
-                                physical_cpus: int | None = None) -> int:
+                                physical_cpus: int | None = None,
+                                storage_paths=None, storage_wait: bool = False) -> int:
     """Return a build/background concurrency level that will not swamp small PCs.
 
     Compiler processes are memory-heavy, so CPU count alone is not a safe
@@ -55,13 +56,14 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
             memory_budget = max(1, int((memory_gb - 0.5) / 0.28))
         cpu_budget = min(cpu_budget, memory_budget)
 
-    # HDD Seek Penalty Optimization: If running on a mechanical spinning hard drive,
-    # excessive parallel compiler workers cause severe head thrashing and disk queue saturation.
-    # Cap compiler workers to max 2 on HDDs to ensure sequential I/O.
+    # CPU/RAM are not the only bottleneck: bound random I/O on HDD, removable
+    # and network paths. This cache queues discovery without a synchronous
+    # filesystem/device query during imports or settings-dialog construction.
     try:
-        from main.core.file_utils import is_drive_hdd
-        if is_drive_hdd():
-            cpu_budget = min(cpu_budget, 2)
+        from main.core.storage_resources import storage_worker_limit
+        storage_budget = storage_worker_limit(storage_paths, wait=storage_wait)
+        if storage_budget is not None:
+            cpu_budget = min(cpu_budget, storage_budget)
     except Exception:
         pass
 
@@ -77,7 +79,8 @@ def _resource_safe_worker_count(mode: str = "HIGH", total_cpus: int | None = Non
     return max(1, min(cpu_budget, cpus, 12))
 
 
-def get_optimal_compiler_jobs(mode: str | None = None) -> int:
+def get_optimal_compiler_jobs(mode: str | None = None, storage_paths=None,
+                              storage_wait: bool = False) -> int:
     """Dynamically determine the best compiler concurrency using real-time available RAM and user settings."""
     if not mode:
         try:
@@ -91,7 +94,8 @@ def get_optimal_compiler_jobs(mode: str | None = None) -> int:
         effective_mode = norm_mode
     else:
         effective_mode = "MAX" if (current_avail_gb is not None and current_avail_gb >= 4.0) else "HIGH"
-    return _resource_safe_worker_count(effective_mode, available_gb=current_avail_gb)
+    return _resource_safe_worker_count(effective_mode, available_gb=current_avail_gb,
+                                       storage_paths=storage_paths, storage_wait=storage_wait)
 
 
 _max_cpu_jobs = str(_resource_safe_worker_count("HIGH"))

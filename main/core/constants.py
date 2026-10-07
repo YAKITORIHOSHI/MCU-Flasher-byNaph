@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 import re
+import stat
 from pathlib import Path
 
 
@@ -44,7 +45,10 @@ def is_application_codebase_dir(path: Path | str | None) -> bool:
         return False
     try:
         p = Path(path).resolve()
-        app_root = SCRIPT_DIR.resolve()
+        # SCRIPT_DIR already came from this module's resolved filename. Repeating
+        # its full Windows path walk (and six ordinary child walks) on every
+        # syntax/source scan adds substantial latency on guarded filesystems.
+        app_root = SCRIPT_DIR
         if p == app_root:
             return True
         # Check for signature files of this application codebase
@@ -56,9 +60,22 @@ def is_application_codebase_dir(path: Path | str | None) -> bool:
             return True
         # Check if p is an internal application system folder
         for internal in ("main", "src", "installers", "direct", ".agents", ".github"):
-            internal_p = (app_root / internal).resolve()
+            internal_p = app_root / internal
             if p == internal_p or internal_p in p.parents:
                 return True
+            # Ordinary/absent children of the canonical root need no further
+            # normalization. Resolve real symlinks/junctions afresh so retargeted
+            # aliases retain the same containment protection without stale caches.
+            try:
+                attributes = internal_p.lstat()
+            except FileNotFoundError:
+                continue
+            if (stat.S_ISLNK(attributes.st_mode)
+                    or getattr(attributes, "st_file_attributes", 0)
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+                internal_p = internal_p.resolve()
+                if p == internal_p or internal_p in p.parents:
+                    return True
     except Exception:
         pass
     return False

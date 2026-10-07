@@ -129,6 +129,8 @@ path references, and fallback logic in the same operation.
 
 - Prefer a single shallow project-root pass over recursive traversal.
 - Avoid rewriting unchanged files or touching every object in a cache tree.
+- `write_generated_text()` compares bounded current content before replacing equal metadata; keep hidden/writable attribute repair without needless chmod calls. Settings transactions retain atomic cross-process merging and authoritative save failures while skipping equal portable/per-user copies.
+- Treat slow HDD/removable/network storage separately from CPU speed. Keep storage hint probes read-only, bounded and off the UI thread; preserve exact-board incremental objects and actual-byte source validation on FAT/exFAT. Verify I/O counts and equal-size/coarse-timestamp edits in isolated `direct/verify_storage_io.py` fixtures, never live caches/journals.
 - Keep attribute calls best-effort; a cosmetic hiding failure must not block a
   compile, save, upload, reset, or project open.
 - Preserve shared frameworks/toolchains and exact-board incremental state.

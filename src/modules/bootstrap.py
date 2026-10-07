@@ -5436,6 +5436,29 @@ def _ensure_platform_upload_tools(
     return all_ok
 
 
+def _apply_bootstrap_compiler_budget(env: dict, pio_core_dir) -> int:
+    """Worker-only resource decision; preserve lower inherited job limits."""
+    try:
+        from main.core.build_resources import get_optimal_compiler_jobs
+        jobs = get_optimal_compiler_jobs(storage_paths=(SCRIPT_DIR, pio_core_dir), storage_wait=True)
+    except Exception:
+        jobs = max(1, min((os.cpu_count() or 4) - 2, 2))
+    for name in ("PLATFORMIO_BUILD_JOBS", "PLATFORMIO_RUN_JOBS"):
+        value = str(env.get(name, ""))
+        if value.isdigit() and int(value) > 0:
+            jobs = min(jobs, int(value))
+    flags = str(env.get("SCONSFLAGS", ""))
+    job_pattern = r"(?:^|\s)(?:-j\s*|--jobs(?:=|\s+))(\d+)(?=\s|$)"
+    for value in re.findall(job_pattern, flags):
+        if int(value) > 0:
+            jobs = min(jobs, int(value))
+    flags = re.sub(job_pattern, " ", flags).strip()
+    env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
+    env["PLATFORMIO_RUN_JOBS"] = str(jobs)
+    env["SCONSFLAGS"] = f"{flags} -j{jobs}".strip()
+    return jobs
+
+
 def ensure_board_toolchains() -> bool:
     """Prepare PlatformIO packages exactly the way the main app's first Compile does.
 
@@ -5504,25 +5527,9 @@ def ensure_board_toolchains() -> bool:
         env["PYTHONUNBUFFERED"] = "1"
         env["PLATFORMIO_UNBUFFERED"] = "1"
 
-        # Low-end device budgeting: throttle compiler jobs to prevent RAM thrashing and UI freezes
-        cpu_count = max(1, int(os.cpu_count() or 1))
-        avail_gb = None
-        try:
-            import psutil
-            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-        except Exception:
-            pass
-        if avail_gb is not None and avail_gb < 1.0:
-            safe_jobs = "1"
-        elif cpu_count <= 2:
-            safe_jobs = "1"
-        else:
-            safe_jobs = str(max(1, min(cpu_count - 1, 4)))
-        env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
-        env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
+        _apply_bootstrap_compiler_budget(env, pio_core_dir)
         env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
-        env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
 
         warning_shown = [False]
         def _warn_once():
@@ -5662,25 +5669,9 @@ def prepare_platformio_board_toolchain(
         env["PYTHONUNBUFFERED"] = "1"
         env["PLATFORMIO_UNBUFFERED"] = "1"
 
-        # Low-end device budgeting: throttle compiler jobs to prevent RAM thrashing and UI freezes
-        cpu_count = max(1, int(os.cpu_count() or 1))
-        avail_gb = None
-        try:
-            import psutil
-            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-        except Exception:
-            pass
-        if avail_gb is not None and avail_gb < 1.0:
-            safe_jobs = "1"
-        elif cpu_count <= 2:
-            safe_jobs = "1"
-        else:
-            safe_jobs = str(max(1, min(cpu_count - 1, 4)))
-        env.setdefault("PLATFORMIO_BUILD_JOBS", safe_jobs)
-        env.setdefault("PLATFORMIO_RUN_JOBS", safe_jobs)
+        _apply_bootstrap_compiler_budget(env, pio_core_dir)
         env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
-        env.setdefault("SCONSFLAGS", f"-j{safe_jobs}")
 
         if callable(on_status):
             try:
@@ -10322,8 +10313,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         offline_plan, offline_plan_path = requested_plan()
         if not ready(offline_core, offline_plan if offline_plan_path else None):
             try:
-                from main.core.build_resources import get_optimal_compiler_jobs
-                opt_jobs = get_optimal_compiler_jobs()
+                opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
             except Exception:
                 opt_jobs = max(1, min(os.cpu_count() or 4, 8))
             command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),

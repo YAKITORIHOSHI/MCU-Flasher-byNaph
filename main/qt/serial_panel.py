@@ -82,14 +82,17 @@ class SerialOutputView(QPlainTextEdit):
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
         try:
-            sz = int(size)
+            sz = max(6, min(48, int(size)))
         except (ValueError, TypeError):
-            sz = 11
+            sz = 12
+        self._font_size = sz
         font = QFont("Consolas", sz)
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setFixedPitch(True)
         self.setFont(font)
         self.document().setDefaultFont(font)
+        if hasattr(self, "_theme_name"):
+            self.apply_theme(self._theme_name)
 
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to serial output view base colors."""
@@ -106,6 +109,7 @@ class SerialOutputView(QPlainTextEdit):
             "QPlainTextEdit#serial-console { "
             f"background-color: {bg}; color: {fg}; "
             f"selection-background-color: {hover}; selection-color: {bright}; "
+            f"font-family: Consolas; font-size: {self._font_size}pt; "
             "border: none; }"
         )
         palette = self.palette()
@@ -365,18 +369,17 @@ class SerialPanel(QWidget):
 
         h.setColumnStretch(3, 1)
 
+        from main.core.config import load_gui_config
+        cfg = load_gui_config()
+
         # Autoscroll
         self.cb_autoscroll = QCheckBox("Auto-scroll")
-        self.cb_autoscroll.setChecked(True)
+        self.cb_autoscroll.setChecked(bool(cfg.get("serial_autoscroll", True)))
         self.cb_autoscroll.setToolTip("Auto-scroll output to newest received line")
-        self.cb_autoscroll.stateChanged.connect(
-            lambda s: self._output.set_autoscroll(bool(s))
-        )
+        self.cb_autoscroll.stateChanged.connect(self._on_autoscroll_changed)
         h.addWidget(self.cb_autoscroll, 0, 3)
 
         # Clear on Action checkbox
-        from main.core.config import load_gui_config
-        cfg = load_gui_config()
         init_clear_serial = bool(cfg.get("clear_serial_on_action", False))
         self.cb_auto_clear = QCheckBox("Clear on Action")
         self.cb_auto_clear.setChecked(init_clear_serial)
@@ -386,11 +389,9 @@ class SerialPanel(QWidget):
 
         # ANSI clear-screen checkbox
         self.cb_ansi_clear = QCheckBox("Clear-screen")
-        self.cb_ansi_clear.setChecked(True)
+        self.cb_ansi_clear.setChecked(bool(cfg.get("serial_ansi_clear", True)))
         self.cb_ansi_clear.setToolTip("Honour ANSI terminal clear-screen sequences from MCU output")
-        self.cb_ansi_clear.stateChanged.connect(
-            lambda s: self._output.set_ansi_clear_enabled(bool(s))
-        )
+        self.cb_ansi_clear.stateChanged.connect(self._on_ansi_clear_changed)
         h.addWidget(self.cb_ansi_clear, 0, 5)
 
         # Separator
@@ -484,6 +485,8 @@ class SerialPanel(QWidget):
 
         # ── Output View ───────────────────────────────────────────────────────
         self._output = SerialOutputView()
+        self._output.set_autoscroll(self.cb_autoscroll.isChecked())
+        self._output.set_ansi_clear_enabled(self.cb_ansi_clear.isChecked())
         output_policy = self._output.sizePolicy()
         output_policy.setVerticalPolicy(QSizePolicy.Policy.Ignored)
         self._output.setSizePolicy(output_policy)
@@ -731,11 +734,11 @@ class SerialPanel(QWidget):
 
     def _on_timestamp_changed(self, state: int) -> None:
         is_checked = bool(state)
+        from main.qt.preferences import save_display_preference
+        if not save_display_preference("timestamp_enabled", is_checked, "Timestamps"):
+            self.sync_timestamp(self._output._timestamp_enabled)
+            return
         self._output.set_timestamp_enabled(is_checked)
-        from main.core.config import load_gui_config, save_gui_config
-        cfg = load_gui_config()
-        cfg["timestamp_enabled"] = is_checked
-        save_gui_config(cfg)
         if self._backend is not None:
             self._backend.timestamp_enabled = is_checked
         from main.qt.signals import signals
@@ -760,15 +763,31 @@ class SerialPanel(QWidget):
 
     def _on_auto_clear_changed(self, state: int) -> None:
         is_checked = self.cb_auto_clear.isChecked()
-        from main.core.config import load_gui_config, save_gui_config
-        cfg = load_gui_config()
-        cfg["clear_serial_on_action"] = is_checked
-        save_gui_config(cfg)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("clear_serial_on_action", is_checked, "Clear serial monitor on action"):
+            restore_checkbox(self.cb_auto_clear, not is_checked)
+            return
         if self._backend is not None:
             self._backend.clear_serial_on_action = is_checked
         from main.qt.signals import signals
         if hasattr(signals, "clear_serial_on_action_changed"):
             signals.clear_serial_on_action_changed.emit(is_checked)
+
+    def _on_autoscroll_changed(self, state: int) -> None:
+        enabled = bool(state)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("serial_autoscroll", enabled, "Serial auto-scroll"):
+            restore_checkbox(self.cb_autoscroll, self._output._autoscroll)
+            return
+        self._output.set_autoscroll(enabled)
+
+    def _on_ansi_clear_changed(self, state: int) -> None:
+        enabled = bool(state)
+        from main.qt.preferences import save_display_preference, restore_checkbox
+        if not save_display_preference("serial_ansi_clear", enabled, "Serial clear-screen"):
+            restore_checkbox(self.cb_ansi_clear, self._output._ansi_clear_enabled)
+            return
+        self._output.set_ansi_clear_enabled(enabled)
 
     def sync_clear_serial_on_action(self, checked: bool) -> None:
         if self.cb_auto_clear.isChecked() != checked:
