@@ -810,6 +810,8 @@ class MCUMainWindow(QMainWindow):
 
     @Slot(dict)
     def _on_operation_phase(self, payload: dict) -> None:
+        if hasattr(self, "_controls_bar") and self._controls_bar:
+            self._controls_bar.on_operation_phase(payload)
         is_busy: bool = payload.get("is_busy", False)
         phase: str    = payload.get("phase", "idle")
         op: str       = payload.get("op", "")

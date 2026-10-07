@@ -993,6 +993,8 @@ class MarqueeComboBox(QComboBox):
             self._timer.stop()
 
     def showPopup(self) -> None:
+        if not self.isEnabled():
+            return
         self._is_popup_open = True
         self._offset = 0
         if self._timer.isActive():
@@ -1246,10 +1248,14 @@ class MarqueeBoardSelector(QWidget):
         self.update()
 
     def mousePressEvent(self, event) -> None:
+        if not self.isEnabled():
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
     def enterEvent(self, event) -> None:
+        if not self.isEnabled():
+            return
         self._is_hovered = True
         self.update()
 
@@ -1265,7 +1271,7 @@ class MarqueeBoardSelector(QWidget):
         # Background & Border
         from main.core.theme import Theme
         bg = QColor(Theme.BG_DARKEST)
-        border = QColor(Theme.CYAN if self._is_hovered else Theme.BORDER)
+        border = QColor(Theme.CYAN if self._is_hovered and self.isEnabled() else Theme.BORDER)
         p.setBrush(bg)
         p.setPen(QPen(border, 1))
         p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4)
@@ -1298,6 +1304,7 @@ class ControlsBar(QWidget):
     def __init__(self, backend: "MCUWebBackendAPI", parent: QWidget | None = None):
         super().__init__(parent)
         self._backend = backend
+        self._upload_phase_locked = False
         self.setObjectName("controls-bar")
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._setup_ui()
@@ -1514,7 +1521,9 @@ class ControlsBar(QWidget):
 
     def _open_board_search_dialog(self) -> None:
         """Open the BoardSearchDialog modal matching the stable release."""
-        if self._backend and self._backend.is_busy:
+        if getattr(self, "_upload_phase_locked", False) or not self.board_selector.isEnabled():
+            return
+        if self._backend and getattr(self._backend, "is_upload_phase_active", lambda: False)():
             return
         from main.qt.board_dialog import BoardSearchDialog
 
@@ -1530,7 +1539,9 @@ class ControlsBar(QWidget):
         dlg.deleteLater()
 
     def _select_board_from_dialog(self, selected_board: str) -> None:
-        if not selected_board:
+        if getattr(self, "_upload_phase_locked", False) or not selected_board:
+            return
+        if self._backend and getattr(self._backend, "is_upload_phase_active", lambda: False)():
             return
         self.board_selector.set_board(selected_board)
         self._on_board_changed(selected_board)
@@ -1556,6 +1567,11 @@ class ControlsBar(QWidget):
         ).get("family")
 
         # Upload speed configuration
+        if getattr(self, "_upload_phase_locked", False):
+            self.upload_speed_combo.setEnabled(False)
+            self.upload_speed_combo.setToolTip("Upload speed is locked while uploading firmware.")
+            return
+
         previous = self.upload_speed_combo.blockSignals(True)
         if fam in {"espressif32", "espressif8266"}:
             self.upload_speed_combo.setEnabled(True)
@@ -1597,10 +1613,14 @@ class ControlsBar(QWidget):
         self.on_ports_updated(ports)
 
     def _refresh_ports_and_show(self) -> None:
+        if getattr(self, "_upload_phase_locked", False) or not self.port_combo.isEnabled():
+            return
         self._refresh_ports()
         MarqueeComboBox.showPopup(self.port_combo)
 
     def _on_board_changed(self, board_name: str) -> None:
+        if getattr(self, "_upload_phase_locked", False):
+            return
         if self._backend:
             self._backend.select_board(board_name)
         else:
@@ -1608,6 +1628,8 @@ class ControlsBar(QWidget):
         self._update_action_button_states_on_controls()
 
     def _on_port_changed(self, index: int) -> None:
+        if getattr(self, "_upload_phase_locked", False):
+            return
         if not self._backend:
             return
         port = self.port_combo.currentData() or ""
@@ -1619,6 +1641,8 @@ class ControlsBar(QWidget):
         self._update_action_button_states_on_controls()
 
     def _on_upload_speed_changed(self, speed: str) -> None:
+        if getattr(self, "_upload_phase_locked", False):
+            return
         if self._backend and speed:
             self._backend.set_upload_speed(speed)
 
@@ -1836,6 +1860,74 @@ class ControlsBar(QWidget):
             self.cb_timestamp.setChecked(enabled)
             self.cb_timestamp.blockSignals(False)
 
+    def set_upload_phase_locked(self, locked: bool) -> None:
+        """Lock or unlock port, board, and upload speed selection during the upload phase."""
+        if getattr(self, "_upload_phase_locked", False) == locked:
+            return
+        self._upload_phase_locked = locked
+
+        # Board selection controls
+        self.board_selector.setEnabled(not locked)
+        self.board_selector.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
+        self.board_selector.setToolTip(
+            "Board selection is locked while uploading firmware."
+            if locked else "Click to search & select MCU board"
+        )
+        self.btn_search_board.setEnabled(not locked)
+        self.btn_search_board.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
+        self.btn_search_board.setToolTip(
+            "Board selection is locked while uploading firmware."
+            if locked else "Search & Select MCU Board"
+        )
+
+        # Port selection controls
+        self.port_combo.setEnabled(not locked)
+        self.port_combo.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
+        self.port_combo.setToolTip(
+            "Port selection is locked while uploading firmware."
+            if locked else "Serial port for upload and monitoring"
+        )
+        if locked and hasattr(self.port_combo, "hidePopup"):
+            try:
+                self.port_combo.hidePopup()
+            except Exception:
+                pass
+
+        # Upload speed controls
+        if locked:
+            self.upload_speed_combo.setEnabled(False)
+            self.upload_speed_combo.setToolTip("Upload speed is locked while uploading firmware.")
+            if hasattr(self.upload_speed_combo, "hidePopup"):
+                try:
+                    self.upload_speed_combo.hidePopup()
+                except Exception:
+                    pass
+        else:
+            board = self._backend.current_board if self._backend else ""
+            self._update_hardware_defaults_for_board(board, update_monitor=False)
+
+    @Slot(dict)
+    def on_operation_phase(self, payload: dict) -> None:
+        """Lock port, board, and upload speed when the upload phase starts."""
+        is_busy: bool = bool(payload.get("is_busy", False))
+        phase: str = str(payload.get("phase", "")).lower()
+        op: str = str(payload.get("op", "")).lower()
+
+        is_compile_phase = (
+            phase in ("compile", "compiling", "resolving", "installing")
+            or (op == "compile" and phase not in ("flash", "flashing", "upload"))
+        )
+        is_upload_phase = (
+            is_busy
+            and not is_compile_phase
+            and (
+                phase in ("flash", "flashing", "upload", "connecting", "writing", "erasing", "verifying")
+                or op in ("upload", "flash")
+            )
+        )
+
+        self.set_upload_phase_locked(is_upload_phase)
+
     def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         sig_bus.ports_updated.connect(self.on_ports_updated)
         if hasattr(sig_bus, "port_selected"):
@@ -1847,6 +1939,8 @@ class ControlsBar(QWidget):
             sig_bus.skip_compile_availability_changed.connect(self.on_skip_compile_availability)
         if hasattr(sig_bus, "timestamp_toggled"):
             sig_bus.timestamp_toggled.connect(self.sync_timestamp)
+        if hasattr(sig_bus, "operation_phase"):
+            sig_bus.operation_phase.connect(self.on_operation_phase)
         if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 

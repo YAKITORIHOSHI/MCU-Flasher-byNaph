@@ -1022,8 +1022,25 @@ class MCUWebBackendAPI:
         except Exception:
             pass
 
+    def is_upload_phase_active(self) -> bool:
+        """Return True if an actual firmware upload/flash phase is actively in progress.
+        During compilation (even when initiated by Upload), this returns False."""
+        if not getattr(self, "is_busy", False):
+            return False
+        phase = str(getattr(self, "_current_op_phase", "") or "").lower()
+        op = str(getattr(self, "active_operation", "") or "").lower()
+        if phase in ("compiling", "compile", "resolving", "installing"):
+            return False
+        return (
+            phase in ("upload", "uploading", "flash", "flashing", "connecting", "writing", "erasing", "verifying")
+            or op == "flash"
+            or (op == "upload" and phase not in ("compiling", "compile", "resolving", "installing", "idle"))
+        )
+
     def set_upload_speed(self, speed: str | int) -> None:
         """Set the upload baud rate, capped at MAX_BAUD_RATE (921600)."""
+        if self.is_upload_phase_active():
+            return
         try:
             val = int(speed)
             self.upload_speed = str(min(val, MAX_BAUD_RATE))
@@ -3091,6 +3108,13 @@ class MCUWebBackendAPI:
 
     def select_port(self, port: str):
         """Select COM port and update serial monitor."""
+        if self.is_upload_phase_active():
+            self.emit("notification", {
+                "title": "Port locked",
+                "message": "Serial port cannot be changed while uploading firmware.",
+                "type": "warning",
+            })
+            return False
         if not claim_serial_port(port):
             owner = port_occupied_owner(port)
             self.emit("notification", {"title": "Serial port unavailable",
@@ -3120,6 +3144,13 @@ class MCUWebBackendAPI:
 
     def select_board(self, board_name: str):
         """Select microcontroller board model for the active session."""
+        if self.is_upload_phase_active():
+            self.emit("notification", {
+                "title": "Board locked",
+                "message": "Board selection cannot be changed while uploading firmware.",
+                "type": "warning",
+            })
+            return False
         self.current_board = board_name
         self.emit("board:selected", {"board_name": board_name})
         cfg = load_gui_config()
@@ -3144,6 +3175,8 @@ class MCUWebBackendAPI:
         return load_recent_boards()
 
     def set_board_framework(self, board_name, framework):
+        if self.is_upload_phase_active():
+            return False
         info = SUPPORTED_BOARDS.get(board_name, {})
         allowed = info.get("frameworks") or [info.get("framework", "")]
         if framework not in allowed or not framework:
