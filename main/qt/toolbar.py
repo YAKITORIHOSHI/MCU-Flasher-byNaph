@@ -206,7 +206,6 @@ class CompactDropdownPopup(QWidget):
         self.setGeometry(*fit_rect(x, y, req_w, req_h, area, margin=8))
         self.show()
         self.raise_()
-        self.activateWindow()
 
 
 class PrimaryToolbar(QToolBar):

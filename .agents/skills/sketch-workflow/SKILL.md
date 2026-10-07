@@ -32,5 +32,7 @@ This directory contains the MCU Flasher application. When the user requests app 
 - Keep setup and downloader palettes consistent with the workspace, including Solarized. Revalidate busy/target state in Actions and Settings callbacks; report failed settings writes. Verify auxiliary screens with isolated fixtures, without installing or launching.
 - Support Windows and native Ubuntu paths separately. Require four CPU cores (physical when detectable, logical fallback), and keep four/six-core resource budgets.
 - Show the workspace before starting services. Keep discovery and parsing off the GUI thread; bound log events, display histories and caches. Return syntax completion through queued Qt signals and discard stale revisions.
+- Consider HDD/removable/network storage independently of CPU speed. Keep storage probes and source scans off the GUI thread, avoid unchanged metadata writes, and verify actual source bytes before firmware reuse on coarse-timestamp filesystems.
 - Preserve PTY capability replies, Unicode, bracketed paste and output backpressure for coding CLIs. Clear is display-only. Never replay commands or hardware writes.
 - Run hardware-free `direct/verify_runtime.py` using the private runtime; on Windows also run `direct/verify_terminal.py`. Put captures and audit scratch work in `temp/`. Use `direct/verify_performance.py` for isolated resource regressions. Mock persistence/hardware calls; never run metadata generation against live caches during verification. Update README and relevant skills with behavior changes.
+

@@ -20,6 +20,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
       PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
     steps:
       - uses: actions/checkout@v4
         with:
