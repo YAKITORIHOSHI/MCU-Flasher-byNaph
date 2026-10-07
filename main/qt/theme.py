@@ -117,6 +117,9 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     btn_disabled_bg     = "#e2e8f0" if theme_mode == "light" else pal.get("BG_DARK", "#11161f")
     btn_disabled_fg     = "#94a3b8" if theme_mode == "light" else "#4b5563"
     btn_disabled_border = "#cbd5e1" if theme_mode == "light" else "#1c2333"
+    btn_blue            = "#0969da" if theme_mode == "light" else pal.get("BTN_BLUE", "#1a4f7c")
+    btn_blue_h          = "#0858b8" if theme_mode == "light" else pal.get("BTN_BLUE_H", "#2563a6")
+    btn_grey            = "#e2e8f0" if theme_mode == "light" else pal.get("BTN_GREY", "#283342")
 
     def translucent(color: str, alpha: int) -> str:
         value = color.lstrip("#")
@@ -464,9 +467,9 @@ QPushButton#btn-detach-editor:disabled {{
 }}
 
 QPushButton#btn-search-board:enabled {{
-    background-color: {btn_clear};
-    color: {text_bright};
-    border: 1px solid {border};
+    background-color: {btn_blue};
+    color: #ffffff;
+    border: 1px solid {border_lit};
     border-radius: 4px;
     padding: 0px;
     text-align: center;
@@ -474,12 +477,17 @@ QPushButton#btn-search-board:enabled {{
     font-family: 'Segoe UI Emoji', 'Segoe UI Symbol', 'Segoe UI', sans-serif;
 }}
 QPushButton#btn-search-board:enabled:hover {{
-    background-color: {btn_clear_h};
-    border: 1px solid {border_lit};
-    color: {cyan};
+    background-color: {btn_blue_h};
+    border: 1px solid {cyan};
+    color: #ffffff;
+}}
+QPushButton#btn-search-board:enabled:pressed {{
+    background-color: {btn_blue};
+    border: 1px solid {cyan};
+    color: #ffffff;
 }}
 QPushButton#btn-search-board:disabled {{
-    background-color: {bg_darkest};
+    background-color: {btn_grey};
     color: {text_dim};
     border: 1px solid {border};
     border-radius: 4px;
