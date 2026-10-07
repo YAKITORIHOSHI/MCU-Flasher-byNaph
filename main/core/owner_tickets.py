@@ -129,10 +129,25 @@ def is_internet_available(timeout: float = 0.5) -> bool:
     Returns False immediately if offline or on any connection failure.
     """
     try:
+        from src.modules.dedicated_AI import check_internet_connection
+        return check_internet_connection(timeout=timeout)
+    except Exception:
+        pass
+    try:
+        import sys
+        if sys.platform == "win32":
+            import ctypes
+            import ctypes.wintypes
+            flags = ctypes.wintypes.DWORD()
+            if ctypes.windll.wininet.InternetGetConnectedState(ctypes.byref(flags), 0):
+                return True
+    except Exception:
+        pass
+    try:
         import socket
-        for host in ("8.8.8.8", "1.1.1.1"):
+        for host in ("1.1.1.1", "8.8.8.8"):
             try:
-                with socket.create_connection((host, 53), timeout=timeout):
+                with socket.create_connection((host, 443), timeout=timeout):
                     return True
             except (socket.timeout, OSError, Exception):
                 continue

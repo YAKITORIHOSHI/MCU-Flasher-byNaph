@@ -15,6 +15,7 @@ import ctypes
 import threading
 import subprocess
 from pathlib import Path
+import urllib.request
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 try:
     import tkinter as tk
@@ -69,19 +70,83 @@ def _configure_windows_dpi_awareness():
 _configure_windows_dpi_awareness()
 
 def check_internet_connection(timeout: float = 2.0) -> bool:
-    """Fast socket check for active internet connection."""
-    test_targets = [
-        ("1.1.1.1", 53),
-        ("8.8.8.8", 53),
-        ("google.com", 80),
-    ]
-    for host, port in test_targets:
+    """Robust, fast multi-layer check for active internet connection.
+
+    Uses concurrent probing over port 443 (HTTPS) and HTTP captive-portal probes
+    (which respect system/user proxies), with Windows WinINet fallback. Never
+    relies on TCP port 53, which is routinely blocked by firewalls and ISPs.
+    """
+    success = threading.Event()
+
+    def _test_tcp(host: str, port: int) -> None:
         try:
             sock = socket.create_connection((host, port), timeout=timeout)
             sock.close()
-            return True
+            success.set()
         except Exception:
-            continue
+            pass
+
+    def _test_http(url: str) -> None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status in (200, 204, 301, 302):
+                    success.set()
+        except Exception:
+            pass
+
+    # Port 443 (HTTPS) Anycast IPs: globally routed, fast, no DNS lookup needed
+    targets_tcp = [
+        ("1.1.1.1", 443),
+        ("8.8.8.8", 443),
+        ("1.0.0.1", 443),
+        ("9.9.9.9", 443),
+    ]
+    # HTTP/HTTPS captive-portal probes (urllib respects system proxy and VPN configurations)
+    urls = [
+        "http://www.msftconnecttest.com/connecttest.txt",
+        "http://clients3.google.com/generate_204",
+        "https://cloudflare.com",
+    ]
+    # Hostname probes over 443 in case IP literals are filtered
+    host_targets = [
+        ("cloudflare.com", 443),
+        ("github.com", 443),
+    ]
+
+    threads = []
+    for host, port in targets_tcp:
+        t = threading.Thread(target=_test_tcp, args=(host, port), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for url in urls:
+        t = threading.Thread(target=_test_http, args=(url,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for host, port in host_targets:
+        t = threading.Thread(target=_test_tcp, args=(host, port), daemon=True)
+        t.start()
+        threads.append(t)
+
+    success.wait(timeout=timeout)
+    if success.is_set():
+        return True
+
+    # Secondary check: Windows Network Location Awareness via WinINet
+    if sys.platform == "win32":
+        try:
+            import ctypes.wintypes
+            flags = ctypes.wintypes.DWORD()
+            if ctypes.windll.wininet.InternetGetConnectedState(ctypes.byref(flags), 0):
+                return True
+        except Exception:
+            pass
+
     return False
 
 
@@ -902,19 +967,27 @@ def _pre_hide_console_for_conpty():
 
 def run_standalone_ai(target_directory=None):
     """Entry point when executed as an independent AI terminal process."""
-    if not check_internet_connection():
+    # When spawned by the main GUI via --launch-ai, the GUI handles pre-flight
+    # connection checks and user confirmation. Child process must not display
+    # an unparented blocking MessageBox or abort embedding.
+    is_gui_child = any(arg == "--launch-ai" for arg in sys.argv)
+    if not is_gui_child and not check_internet_connection():
         msg = (
-            "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
-            "Please check your network connection and try again."
+            "Could not verify an active internet connection.\n\n"
+            "OpenCode AI Assistant typically requires an active internet connection to communicate with cloud AI services.\n\n"
+            "Would you like to continue launching anyway?"
         )
         if sys.platform == "win32":
             try:
-                ctypes.windll.user32.MessageBoxW(
-                    0, msg, "No Internet Connection", 0x30  # MB_ICONWARNING
+                ret = ctypes.windll.user32.MessageBoxW(
+                    0, msg, "Internet Connection Warning", 0x24  # MB_ICONQUESTION | MB_YESNO
                 )
+                if ret != 6:  # IDYES == 6
+                    return
             except Exception:
                 pass
-        return
+        else:
+            return
 
     _pre_hide_console_for_conpty()
     target_dir = os.path.abspath(target_directory) if target_directory else os.getcwd()
@@ -1346,13 +1419,17 @@ class AIController:
         """Ensure OpenCode AI process is running (prompts disclaimer prompt ONLY ONCE)."""
         if not check_internet_connection():
             if self.root:
-                messagebox.showwarning(
-                    "No Internet Connection",
-                    "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
-                    "Please check your network connection and try again.",
+                proceed = messagebox.askyesno(
+                    "Internet Connection Warning",
+                    "Could not verify an active internet connection.\n\n"
+                    "OpenCode AI Assistant typically requires internet access to connect with cloud AI providers.\n\n"
+                    "Would you like to continue launching anyway (for local models, custom proxies, or offline use)?",
                     parent=self.root,
                 )
-            return False
+                if not proceed:
+                    return False
+            else:
+                return False
 
         if self.is_launching or is_opencode_running():
             return True

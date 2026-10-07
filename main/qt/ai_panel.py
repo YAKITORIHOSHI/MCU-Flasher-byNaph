@@ -351,10 +351,15 @@ class AIPanel(QWidget):
             from src.modules.dedicated_AI import check_internet_connection
             return check_internet_connection()
         except Exception:
+            try:
+                from src.modules.downloader import check_internet_connection as dl_check
+                return dl_check()
+            except Exception:
+                pass
             import socket
-            for host, port in [("1.1.1.1", 53), ("8.8.8.8", 53), ("google.com", 80)]:
+            for host, port in [("1.1.1.1", 443), ("8.8.8.8", 443), ("1.0.0.1", 443)]:
                 try:
-                    s = socket.create_connection((host, port), timeout=2.0)
+                    s = socket.create_connection((host, port), timeout=1.5)
                     s.close()
                     return True
                 except Exception:
@@ -388,14 +393,18 @@ class AIPanel(QWidget):
 
     def _start_ai(self) -> None:
         if not self._check_internet():
-            QMessageBox.warning(
+            reply = QMessageBox.question(
                 self,
-                "No Internet Connection",
-                "OpenCode AI Assistant requires an active internet connection to communicate with AI services.\n\n"
-                "Please check your network connection and try again.",
+                "Internet Connection Warning",
+                "Could not verify an active internet connection.\n\n"
+                "OpenCode AI Assistant typically requires internet access to communicate with cloud AI services.\n\n"
+                "Would you like to try launching anyway (for local models, custom proxies, or offline use)?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            self._on_close_clicked()
-            return
+            if reply != QMessageBox.StandardButton.Yes:
+                self._on_close_clicked()
+                return
 
         if not self._confirm_ai_assistant_launch():
             self._on_close_clicked()

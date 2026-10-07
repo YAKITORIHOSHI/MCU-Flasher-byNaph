@@ -12,6 +12,8 @@ import socket
 import re
 import threading
 import mimetypes
+import sys
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,19 +23,80 @@ from tkinter import ttk, filedialog, messagebox
 
 
 def check_internet_connection(timeout: float = 2.0) -> bool:
-    """Fast socket check for active internet connection."""
-    test_targets = [
-        ("1.1.1.1", 53),
-        ("8.8.8.8", 53),
-        ("google.com", 80),
-    ]
-    for host, port in test_targets:
+    """Robust, fast multi-layer check for active internet connection.
+
+    Uses concurrent probing over port 443 (HTTPS) and HTTP captive-portal probes
+    (which respect system/user proxies), with Windows WinINet fallback. Never
+    relies on TCP port 53, which is routinely blocked by firewalls and ISPs.
+    """
+    success = threading.Event()
+
+    def _test_tcp(host: str, port: int) -> None:
         try:
             sock = socket.create_connection((host, port), timeout=timeout)
             sock.close()
-            return True
+            success.set()
         except Exception:
-            continue
+            pass
+
+    def _test_http(url: str) -> None:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status in (200, 204, 301, 302):
+                    success.set()
+        except Exception:
+            pass
+
+    targets_tcp = [
+        ("1.1.1.1", 443),
+        ("8.8.8.8", 443),
+        ("1.0.0.1", 443),
+        ("9.9.9.9", 443),
+    ]
+    urls = [
+        "http://www.msftconnecttest.com/connecttest.txt",
+        "http://clients3.google.com/generate_204",
+        "https://cloudflare.com",
+    ]
+    host_targets = [
+        ("cloudflare.com", 443),
+        ("github.com", 443),
+    ]
+
+    threads = []
+    for host, port in targets_tcp:
+        t = threading.Thread(target=_test_tcp, args=(host, port), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for url in urls:
+        t = threading.Thread(target=_test_http, args=(url,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    for host, port in host_targets:
+        t = threading.Thread(target=_test_tcp, args=(host, port), daemon=True)
+        t.start()
+        threads.append(t)
+
+    success.wait(timeout=timeout)
+    if success.is_set():
+        return True
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import ctypes.wintypes
+            flags = ctypes.wintypes.DWORD()
+            if ctypes.windll.wininet.InternetGetConnectedState(ctypes.byref(flags), 0):
+                return True
+        except Exception:
+            pass
+
     return False
 
 try:
@@ -248,13 +311,15 @@ class DownloaderApp(tk.Tk):
             return
 
         if not check_internet_connection():
-            messagebox.showwarning(
-                "No Internet Connection",
-                "Cannot start download because you are currently offline.\n\n"
-                "Please check your network connection and try again.",
+            proceed = messagebox.askyesno(
+                "Internet Connection Warning",
+                "Could not verify an active internet connection.\n\n"
+                "Downloads typically require an active internet connection.\n\n"
+                "Would you like to attempt the download anyway?",
                 parent=self,
             )
-            return
+            if not proceed:
+                return
 
         dest_dir = Path(self.download_dir.get())
         dest_dir.mkdir(parents=True, exist_ok=True)
