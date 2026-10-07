@@ -27,11 +27,18 @@ class LogFollow(QObject):
         self.user_scrolled_up = False
         self._depth = 0
         self._plain = isinstance(view, QPlainTextEdit)
+        self._pending_scroll = None
+        self._resize_state = None
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._settle_scroll)
         bar = view.verticalScrollBar()
         self._bar = bar
         bar.valueChanged.connect(self._on_value_changed)
+        bar.rangeChanged.connect(self._on_range_changed)
         bar.sliderPressed.connect(self._press)
         bar.sliderReleased.connect(self._release)
+        view.selectionChanged.connect(self._selection_changed)
         bar.installEventFilter(self)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
@@ -42,10 +49,45 @@ class LogFollow(QObject):
 
     def _on_value_changed(self, _value):
         if not self._depth:
+            self._cancel_settle()
             self.user_scrolled_up = not self._at_bottom()
 
     def _press(self):
+        self._cancel_settle()
         self.scrollbar_held = True
+
+    def _selection_changed(self):
+        if not self._depth:
+            self._cancel_settle()
+
+    def _wrapped(self):
+        return self._plain and self.view.lineWrapMode() != QPlainTextEdit.LineWrapMode.NoWrap
+
+    def _cancel_settle(self):
+        self._settle_timer.stop()
+        self._pending_scroll = None
+        self._resize_state = None
+
+    def _on_range_changed(self, _minimum, _maximum):
+        # QPlainTextEdit can finish wrapping after the output transaction.
+        # Coalesce that layout work without polling or one callback per line.
+        if self._depth or not self._wrapped() or self.scrollbar_held or self._bar.isSliderDown():
+            return
+        if self._pending_scroll is None and self.enabled and not self.user_scrolled_up:
+            self._pending_scroll = self._capture(False)
+        if self._pending_scroll is not None:
+            self._settle_timer.start(0)
+
+    def _settle_scroll(self):
+        state = self._pending_scroll
+        self._pending_scroll = None
+        if state is None or not isValid(self.view) or self.scrollbar_held or self._bar.isSliderDown():
+            return
+        self._depth += 1
+        try:
+            self._restore_scroll(state)
+        finally:
+            self._depth -= 1
 
     def _release(self):
         self.scrollbar_held = False
@@ -81,12 +123,16 @@ class LogFollow(QObject):
                 self._press()
             elif kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._release()
+        elif kind == QEvent.Type.MouseButtonPress:
+            self._cancel_settle()
         elif kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):
             # QAbstractScrollArea routes wheel input through its viewport.
+            self._cancel_settle()
             QTimer.singleShot(0, self._sync_scroll)
         return super().eventFilter(obj, event)
 
     def set_enabled(self, enabled):
+        self._cancel_settle()
         self.enabled = bool(enabled)
         if self.resume_on_release and self.enabled:
             self._resume_scroll()
@@ -94,18 +140,21 @@ class LogFollow(QObject):
             self._sync_scroll()
 
     def reset(self):
+        self._cancel_settle()
         self.scrollbar_held = False
         self.user_scrolled_up = False
 
     def _capture(self, rebuild):
         view = self.view
         bar = view.verticalScrollBar()
+        wrapped = self._wrapped()
         following = (self.enabled and not self.scrollbar_held and not bar.isSliderDown()
-                     and not self.user_scrolled_up and self._at_bottom())
-        if self._plain:
+                     and not self.user_scrolled_up and (wrapped or self._at_bottom()))
+        if self._plain and not wrapped:
             anchor = QTextCursor(view.firstVisibleBlock())
         else:
-            anchor = view.cursorForPosition(QPoint(0, 0))
+            anchor = view.cursorForPosition(QPoint(0, 1))
+        anchor.setKeepPositionOnInsert(True)
         selection = QTextCursor(view.textCursor())
         endpoints = []
         points = []
@@ -122,7 +171,16 @@ class LogFollow(QObject):
             "horizontal": view.horizontalScrollBar().value(), "selection": endpoints,
             "rebuild": rebuild, "empty": view.document().isEmpty(),
             "selection_points": points,
+            "anchor_point": (anchor.blockNumber(), anchor.positionInBlock(), anchor.block().text()) if rebuild else None,
+            "row_offset": bar.value() - self._visual_row(anchor) if wrapped else 0,
         }
+
+    @staticmethod
+    def _visual_row(cursor):
+        block = cursor.block()
+        layout = block.layout()
+        line = layout.lineForTextPosition(cursor.positionInBlock()) if layout is not None else None
+        return max(0, block.firstLineNumber()) + (line.lineNumber() if line is not None and line.isValid() else 0)
 
     def _rebuilt_position(self, point):
         number, column, old_text = point
@@ -138,7 +196,6 @@ class LogFollow(QObject):
 
     def _restore(self, state):
         view = self.view
-        bar = view.verticalScrollBar()
         # Appending output must not move the active caret or erase a selection.
         if state["rebuild"]:
             selection = QTextCursor(view.document())
@@ -150,8 +207,27 @@ class LogFollow(QObject):
             selection.setPosition(state["selection"][1].position(), QTextCursor.MoveMode.KeepAnchor)
         if view.textCursor() != selection:
             view.setTextCursor(selection)
+        if state["anchor_point"] is not None:
+            anchor = QTextCursor(view.document())
+            anchor.setPosition(self._rebuilt_position(state["anchor_point"]))
+            anchor.setKeepPositionOnInsert(True)
+            state["anchor"] = anchor
+            state["block"] = anchor.blockNumber()
+            state["anchor_point"] = None
+        self._restore_scroll(state)
+
+    def _restore_scroll(self, state):
+        view = self.view
+        bar = view.verticalScrollBar()
         if state["following"] and not self.scrollbar_held and not bar.isSliderDown():
-            bar.setValue(bar.maximum())
+            # Moving into a lazily laid-out final block can increase the range.
+            # Resolve that bounded final viewport before finishing the follow.
+            for _ in range(4):
+                bar.setValue(bar.maximum())
+                if bar.value() == bar.maximum():
+                    break
+        elif self._wrapped():
+            bar.setValue(0 if state["empty"] else self._visual_row(state["anchor"]) + state["row_offset"])
         elif self._plain:
             block = state["block"] if state["rebuild"] else state["anchor"].blockNumber()
             bar.setValue(0 if state["empty"] else max(0, block))
@@ -163,9 +239,14 @@ class LogFollow(QObject):
         view.horizontalScrollBar().setValue(state["horizontal"])
 
     @contextmanager
-    def update(self, *, rebuild=False):
+    def update(self, *, rebuild=False, resize=False):
         outer = not self._depth
-        state = self._capture(rebuild) if outer else None
+        state = (self._resize_state if resize and self._resize_state is not None
+                 else self._capture(rebuild)) if outer else None
+        if outer:
+            # Keep the original character through repeated width changes;
+            # recapturing each newly wrapped row would accumulate drift.
+            self._resize_state = state if resize else None
         self._depth += 1
         try:
             yield
@@ -173,6 +254,11 @@ class LogFollow(QObject):
             try:
                 if outer:
                     self._restore(state)
+                    if self._wrapped() and not self.scrollbar_held and not self._bar.isSliderDown():
+                        self._pending_scroll = state
+                        self._settle_timer.start(0)
+                    else:
+                        self._cancel_settle()
             finally:
                 self._depth -= 1
 

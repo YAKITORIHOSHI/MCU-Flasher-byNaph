@@ -46,6 +46,7 @@ _INSTANCE_PREFERENCE_DEFAULTS = {
     "build_autoscroll": True,
     "serial_autoscroll": True,
     "serial_ansi_clear": True,
+    "serial_line_wrap": True,
     "skip_compile": True,
 }
 

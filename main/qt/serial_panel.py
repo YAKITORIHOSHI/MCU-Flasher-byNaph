@@ -20,7 +20,7 @@ from itertools import chain
 from collections import deque
 
 from PySide6.QtCore import QTimer, Slot, Signal, Qt
-from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
@@ -124,6 +124,7 @@ class SerialOutputView(QPlainTextEdit):
     and long-line limits. Sustained display overload produces a visible notice.
     """
     copy_started = Signal()
+    line_wrap_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -132,7 +133,6 @@ class SerialOutputView(QPlainTextEdit):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         self.setUndoRedoEnabled(False)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         from src.modules.runtime_resources import performance_profile
         from main.qt.log_buffer import LogBuffer
         profile = performance_profile()
@@ -156,7 +156,10 @@ class SerialOutputView(QPlainTextEdit):
         self._ansi_pending_tag = "normal"
         self._ansi_pending_stamp = ""
         from main.core.config import load_gui_config
-        self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
+        cfg = load_gui_config()
+        self._line_wrap_enabled = bool(cfg.get("serial_line_wrap", True))
+        self._apply_line_wrap()
+        self._timestamp_enabled = bool(cfg.get("timestamp_enabled", False))
         self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda item: item[0])
         self._queue = LogBuffer(256_000 if profile.constrained else 1_000_000, 2000, lambda item: item[0])
         self._last_autoscroll = 0.0
@@ -167,6 +170,13 @@ class SerialOutputView(QPlainTextEdit):
         self._flush_timer.setInterval(40 if performance_profile().constrained else 30)
         self._flush_timer.timeout.connect(self._flush_queue)
         # Demand-driven: timer starts when logs arrive and stops when queue is drained
+
+    def resizeEvent(self, event) -> None:
+        if hasattr(self, "_follow"):
+            with self._follow.update(resize=True):
+                super().resizeEvent(event)
+        else:
+            super().resizeEvent(event)
 
     def set_font_size(self, size: int) -> None:
         """Update font size ensuring strict monospace metrics across the widget and QTextDocument."""
@@ -211,6 +221,38 @@ class SerialOutputView(QPlainTextEdit):
     def set_autoscroll(self, enabled: bool) -> None:
         self._autoscroll = enabled
         self._follow.set_enabled(enabled)
+
+    def _apply_line_wrap(self) -> None:
+        option = self.document().defaultTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+                           if self._line_wrap_enabled else QTextOption.WrapMode.NoWrap)
+        self.document().setDefaultTextOption(option)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth
+                             if self._line_wrap_enabled else QPlainTextEdit.LineWrapMode.NoWrap)
+        status = "Long serial lines wrap to fit." if self._line_wrap_enabled else "Serial line wrapping is off."
+        self.setToolTip(f"{status} Right-click for Wrap lines and Copy options.")
+        self.setAccessibleDescription("Read-only serial output. Wrap lines changes display only and preserves copied line breaks.")
+
+    @preserve_log_view()
+    def set_line_wrap_enabled(self, enabled: bool) -> None:
+        """Reflow the visible document without changing retained device lines."""
+        enabled = bool(enabled)
+        if self._line_wrap_enabled == enabled:
+            return
+        self._line_wrap_enabled = enabled
+        self._apply_line_wrap()
+        self.line_wrap_changed.emit(enabled)
+
+    def request_line_wrap(self, enabled: bool) -> bool:
+        """Apply an explicit display choice only after it is safely saved."""
+        enabled = bool(enabled)
+        if enabled == self._line_wrap_enabled:
+            return True
+        from main.qt.preferences import save_display_preference
+        if not save_display_preference("serial_line_wrap", enabled, "Serial line wrapping"):
+            return False
+        self.set_line_wrap_enabled(enabled)
+        return True
 
     def set_paused(self, paused: bool) -> None:
         self._paused = bool(paused)
@@ -276,6 +318,20 @@ class SerialOutputView(QPlainTextEdit):
         select_all.setShortcut(QKeySequence(QKeySequence.StandardKey.SelectAll))
         select_all.setEnabled(not self.document().isEmpty())
         select_all.triggered.connect(self.selectAll)
+        menu.addSeparator()
+        wrap_action = menu.addAction(self.tr("Wrap lines"))
+        wrap_action.setObjectName("serial-wrap-lines")
+        wrap_action.setCheckable(True)
+        wrap_action.setChecked(self._line_wrap_enabled)
+        wrap_action.setToolTip("Fit long lines to the panel width; copied output keeps its original line breaks")
+
+        def toggle_wrap(enabled):
+            self.request_line_wrap(enabled)
+            previous = wrap_action.blockSignals(True)
+            wrap_action.setChecked(self._line_wrap_enabled)
+            wrap_action.blockSignals(previous)
+
+        wrap_action.toggled.connect(toggle_wrap)
         try:
             menu.exec(self.viewport().mapToGlobal(position))
         finally:
@@ -650,9 +706,16 @@ class SerialPanel(QWidget):
         self._display_options.setObjectName("serial-display-options")
         self._display_options.setText("Options")
         self._display_options.setAccessibleName("Serial display options")
+        self._display_options.setToolTip("Serial display options, including Wrap lines; also available by right-clicking output")
         self._display_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self._display_options)
         self._display_option_actions = []
+        self._wrap_action = menu.addAction("Wrap lines")
+        self._wrap_action.setObjectName("serial-wrap-lines")
+        self._wrap_action.setCheckable(True)
+        self._wrap_action.setChecked(bool(cfg.get("serial_line_wrap", True)))
+        self._wrap_action.setToolTip("Fit long lines to the panel width; copied output keeps its original line breaks")
+        self._wrap_action.toggled.connect(self._on_line_wrap_changed)
         for label, checkbox in (("Auto-scroll", self.cb_autoscroll), ("Clear on Action", self.cb_auto_clear), ("Clear-screen", self.cb_ansi_clear)):
             action = menu.addAction(label)
             action.setCheckable(True)
@@ -673,6 +736,7 @@ class SerialPanel(QWidget):
         # ── Output View ───────────────────────────────────────────────────────
         self._output = SerialOutputView()
         self._output.copy_started.connect(self._cancel_copy_output)
+        self._output.line_wrap_changed.connect(self._sync_display_options)
         self._output.set_autoscroll(self.cb_autoscroll.isChecked())
         self._output.set_ansi_clear_enabled(self.cb_ansi_clear.isChecked())
         output_policy = self._output.sizePolicy()
@@ -814,6 +878,9 @@ class SerialPanel(QWidget):
         self._send_layout.setContentsMargins(4 if compact_send else 10, 2 if short_panel else 4, 4 if compact_send else 10, 2 if short_panel else 4)
 
     def _sync_display_options(self) -> None:
+        previous = self._wrap_action.blockSignals(True)
+        self._wrap_action.setChecked(self._output._line_wrap_enabled)
+        self._wrap_action.blockSignals(previous)
         for action, checkbox in self._display_option_actions:
             action.blockSignals(True)
             action.setChecked(checkbox.isChecked())
@@ -1041,6 +1108,10 @@ class SerialPanel(QWidget):
             restore_checkbox(self.cb_autoscroll, self._output._autoscroll)
             return
         self._output.set_autoscroll(enabled)
+
+    def _on_line_wrap_changed(self, enabled: bool) -> None:
+        self._output.request_line_wrap(enabled)
+        self._sync_display_options()
 
     def _on_ansi_clear_changed(self, state: int) -> None:
         enabled = bool(state)

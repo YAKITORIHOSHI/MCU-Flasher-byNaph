@@ -794,6 +794,12 @@ MCU Flasher by Naph/
 - **High-Throughput Optimization**:
   - Batch chunk coalescing, queue backlog clamping, and smart timestamp bypass eliminate GUI lag during high baud rate streaming (up to 921,600 / 2,000,000 baud).
 - **Stable logging and Copy**:
+  - Long output wraps to the monitor width by default, including escaped startup
+    bytes. Auto-scroll keeps the latest output visible without sideways scrolling.
+    Right-click the output and toggle **Wrap lines** to change this saved display
+    preference; it is also available in the compact **Options** menu. Wrapping
+    preserves original copied line breaks, selections and your reading position
+    through resizing, timestamp changes and theme changes.
   - Decode UTF-8 incrementally across reads and show prompts without requiring
     a newline. Flush already received data when the connection ends.
   - Show undecodable bytes and unsafe controls as visible escapes such as
@@ -820,7 +826,8 @@ MCU Flasher by Naph/
     printed only in `setup()` can already have been sent before a passive monitor
     connects; use the explicit Reset control when you intend to restart it.
   - Hardware-free regressions: `direct/verify_serial_reader.py`,
-    `direct/verify_serial_view.py` and `direct/verify_serial_delivery.py`.
+    `direct/verify_serial_view.py`, `direct/verify_serial_wrap.py` and
+    `direct/verify_serial_delivery.py`.
 
 ### 6. Critical Operation Protection & Safe Shutdown
 - The application actively protects against closing the window or interrupting sensitive operations:

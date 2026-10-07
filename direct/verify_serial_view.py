@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QTimer, Qt
-from PySide6.QtGui import QContextMenuEvent
+from PySide6.QtGui import QContextMenuEvent, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtWidgets import QApplication, QMenu, QPlainTextEdit
 from main.core import config
 from main.qt.serial_panel import SerialOutputView, SerialPanel
 from src.modules.runtime_resources import performance_profile
@@ -124,6 +124,105 @@ class SerialViewChecks(unittest.TestCase):
                 return inspect(menu, position)
         with patch("main.qt.serial_panel.QMenu", FixtureMenu):
             self.send_context_event(view)
+
+    def test_default_wrap_makes_message_after_escaped_boot_noise_visible(self):
+        self.view.resize(420, 150)
+        self.view.show()
+        APP.processEvents()
+        text = "\\x03\\xe4\\x1b\\x83" * 70 + "Hello from MCU Flasher by Naph!"
+        self.feed(text, newline=True)
+        APP.processEvents()
+        self.assertEqual(self.view.lineWrapMode(), QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.assertEqual(self.view.document().defaultTextOption().wrapMode(),
+                         QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.assertEqual(self.view.horizontalScrollBar().maximum(), 0)
+        self.assertGreater(self.view.document().firstBlock().layout().lineCount(), 1)
+        message_end = QTextCursor(self.view.document())
+        message_end.setPosition(len(text))
+        self.assertTrue(self.view.viewport().rect().intersects(self.view.cursorRect(message_end)))
+        self.assertEqual(self.view.toPlainText(), text + "\n")
+        self.assertEqual(self.view.get_content_for_clipboard(), text + "\n")
+
+    def test_wrap_reflows_on_resize_without_adding_copy_line_breaks(self):
+        self.view.resize(850, 150)
+        self.view.show()
+        APP.processEvents()
+        text = "\\x00\\xa3" * 140 + "Hello from MCU Flasher by Naph!"
+        self.feed(text)
+        APP.processEvents()
+        original = self.view.get_content_for_clipboard()
+        wide_rows = self.view.document().firstBlock().layout().lineCount()
+        self.view.resize(320, 150)
+        APP.processEvents()
+        self.assertGreater(self.view.document().firstBlock().layout().lineCount(), wide_rows)
+        self.assertEqual(self.view.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(self.view.get_content_for_clipboard(), original)
+        self.view.selectAll()
+        self.view.copy()
+        self.assertEqual(APP.clipboard().text(), text)
+        self.assertNotIn("\n", APP.clipboard().text())
+        self.view.set_line_wrap_enabled(False)
+        APP.processEvents()
+        self.assertGreater(self.view.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(self.view.textCursor().selectedText(), text)
+        self.view.set_line_wrap_enabled(True)
+        APP.processEvents()
+        self.assertEqual(self.view.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(self.view.toPlainText(), text)
+        self.assertEqual(self.view.get_content_for_clipboard(), original)
+
+    def test_saved_wrap_preference_is_loaded_without_persistence(self):
+        with patch.object(config, "load_gui_config", return_value={"serial_line_wrap": False}):
+            view = SerialOutputView()
+            try:
+                self.assertFalse(view._line_wrap_enabled)
+                self.assertEqual(view.lineWrapMode(), QPlainTextEdit.LineWrapMode.NoWrap)
+                self.assertEqual(view.document().defaultTextOption().wrapMode(), QTextOption.WrapMode.NoWrap)
+            finally:
+                view.close()
+                view.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_options_and_context_wrap_choice_save_then_sync(self):
+        panel = self.panel()
+        with patch.object(config, "save_gui_config", return_value=True) as save:
+            panel._wrap_action.trigger()
+            self.assertFalse(panel._output._line_wrap_enabled)
+            self.assertFalse(panel._wrap_action.isChecked())
+            save.assert_called_once_with({"serial_line_wrap": False}, shared_updates={"serial_line_wrap": False})
+            save.reset_mock()
+
+            def choose_wrap(menu, _position):
+                action = next(action for action in menu.actions()
+                              if action.objectName() == "serial-wrap-lines")
+                self.assertTrue(action.isCheckable())
+                self.assertFalse(action.isChecked())
+                self.assertIn("original line breaks", action.toolTip())
+                action.trigger()
+            self.inspect_context_event(panel._output, choose_wrap)
+            self.assertTrue(panel._output._line_wrap_enabled)
+            self.assertTrue(panel._wrap_action.isChecked())
+            save.assert_called_once_with({"serial_line_wrap": True}, shared_updates={"serial_line_wrap": True})
+
+    def test_failed_wrap_write_preserves_display_and_restores_menu_choices(self):
+        panel = self.panel()
+        with patch.object(config, "save_gui_config", return_value=False), \
+             patch("main.qt.preferences.report_preference_failure") as failure:
+            panel._wrap_action.trigger()
+            self.assertTrue(panel._output._line_wrap_enabled)
+            self.assertTrue(panel._wrap_action.isChecked())
+            failure.assert_called_once_with("Serial line wrapping")
+            failure.reset_mock()
+
+            def choose_wrap(menu, _position):
+                action = next(action for action in menu.actions()
+                              if action.objectName() == "serial-wrap-lines")
+                action.trigger()
+                self.assertTrue(action.isChecked())
+            self.inspect_context_event(panel._output, choose_wrap)
+            self.assertTrue(panel._output._line_wrap_enabled)
+            self.assertEqual(panel._output.lineWrapMode(), QPlainTextEdit.LineWrapMode.WidgetWidth)
+            failure.assert_called_once_with("Serial line wrapping")
 
     def test_header_copy_retries_one_snapshot_when_clipboard_temporarily_refuses(self):
         panel = self.panel()
