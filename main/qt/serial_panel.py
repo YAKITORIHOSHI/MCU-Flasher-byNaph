@@ -15,11 +15,12 @@ Features:
 from __future__ import annotations
 
 import re
-import time
 from datetime import datetime
+from itertools import chain
+from collections import deque
 
-from PySide6.QtCore import QTimer, Slot, Qt
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtCore import QTimer, Slot, Signal, Qt
+from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
@@ -34,8 +35,86 @@ _BAUD_RATES = [b for b in ["9600", "19200", "38400", "57600", "74880", "115200",
                "230400", "460800", "512000", "921600"] if int(b) <= MAX_BAUD_RATE]
 _LINE_ENDINGS = [("None", "none"), ("\\n", "nl"), ("\\r", "cr"), ("\\r\\n", "both")]
 
-_ANSI_CLEAR_RE = re.compile(r"\x1b\[2J|\x1b\[H|\x1b\[1;1H")
-_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_SERIAL_CONTROLS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")
+
+
+def _visible_serial_controls(text: str) -> str:
+    """Keep clipboard-hostile controls visible without discarding device data."""
+    def escape(match):
+        value = ord(match.group())
+        return f"\\x{value:02x}" if value < 256 else f"\\u{value:04x}"
+    return _SERIAL_CONTROLS_RE.sub(escape, text.replace("\r\n", "\n"))
+
+
+class _SerialAnsiParser:
+    """Bounded incremental terminal controls for an append-only serial log.
+
+    A random/incomplete escape must not swallow unlimited subsequent output.
+    Cursor-home does not erase history; only an explicit erase-screen does.
+    """
+    def __init__(self):
+        self._sequence_id = 0
+        self.reset()
+
+    def reset(self):
+        self._state = "text"
+        self._pending = ""
+
+    def finish(self):
+        text = _visible_serial_controls(self._pending)
+        self.reset()
+        return text
+
+    def feed(self, text):
+        if self._state == "text" and "\x1b" not in text:
+            return [(_visible_serial_controls(text), False)]
+        events, pieces = [], []
+
+        def emit(clear=False):
+            if pieces:
+                events.append((_visible_serial_controls("".join(pieces)), False))
+                pieces.clear()
+            if clear:
+                events.append(("", True))
+
+        for char in text:
+            if self._state == "text":
+                if char == "\x1b":
+                    self._sequence_id += 1
+                    self._pending = char
+                    self._state = "escape"
+                else:
+                    pieces.append(char)
+                continue
+            self._pending += char
+            if len(self._pending) > 256:
+                pieces.append(self.finish())
+                continue
+            if self._state == "escape":
+                self._state = {"[": "csi", "]": "string", "P": "string",
+                               "^": "string", "_": "string"}.get(char, "text")
+                if self._state == "text":
+                    pieces.append(self.finish())
+            elif self._state == "csi":
+                if "@" <= char <= "~":
+                    clear = char == "J" and self._pending[2:-1] in ("2", "3")
+                    self.reset()
+                    if clear:
+                        emit(True)
+                elif not (" " <= char <= "?"):
+                    pieces.append(self.finish())
+            elif self._state == "string":
+                if char == "\x07":
+                    self.reset()
+                elif char == "\x1b":
+                    self._state = "string_end"
+            elif self._state == "string_end":
+                if char == "\\":
+                    self.reset()
+                else:
+                    self._state = "string"
+        emit()
+        return events
 
 
 class SerialOutputView(QPlainTextEdit):
@@ -44,11 +123,14 @@ class SerialOutputView(QPlainTextEdit):
     Coalesces output with bounded pending/history buffers, small render batches
     and long-line limits. Sustained display overload produces a visible notice.
     """
+    copy_started = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("serial-console")
         self.setReadOnly(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
         self.setUndoRedoEnabled(False)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         from src.modules.runtime_resources import performance_profile
@@ -65,7 +147,14 @@ class SerialOutputView(QPlainTextEdit):
         self._follow = LogFollow(self)
 
         self._paused = False
+        self._paused_dirty = False
         self._ansi_clear_enabled = True
+        self._ansi_parser = _SerialAnsiParser()
+        self._render_line_start = True
+        self._history_line_start = True
+        self._stream_generation = None
+        self._ansi_pending_tag = "normal"
+        self._ansi_pending_stamp = ""
         from main.core.config import load_gui_config
         self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
         self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda item: item[0])
@@ -124,7 +213,10 @@ class SerialOutputView(QPlainTextEdit):
         self._follow.set_enabled(enabled)
 
     def set_paused(self, paused: bool) -> None:
-        self._paused = paused
+        self._paused = bool(paused)
+        if not self._paused and self._paused_dirty:
+            self._rebuild_document()
+            self._paused_dirty = False
 
     def set_ansi_clear_enabled(self, enabled: bool) -> None:
         self._ansi_clear_enabled = enabled
@@ -136,77 +228,161 @@ class SerialOutputView(QPlainTextEdit):
         self._rebuild_document()
 
     def get_content_for_clipboard(self, include_timestamp: bool | None = None) -> str:
-        """Return serial monitor text formatted for clipboard copying.
+        """Copy retained serial data, including output awaiting a display batch.
 
-        If include_timestamp is False, any timestamps ([HH:MM:SS]) are strictly
-        stripped from all lines, guaranteeing clean output when the toggle is off.
+        Qt shortens very long visual lines to protect responsiveness. Copy uses
+        the bounded journal, so it still includes retained data on those lines.
+        Device-authored timestamp-like text is never removed.
         """
         if include_timestamp is None:
             include_timestamp = self._timestamp_enabled
-
-        if include_timestamp:
-            return self.toPlainText()
-
-        raw_text = self.toPlainText()
-        clean_lines = [
-            re.sub(r"^\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]\s*", "", line)
-            for line in raw_text.splitlines()
-        ]
-        return "\n".join(clean_lines)
+        while self._queue:
+            self._flush_queue()
+        # An unfinished escape is still received data. Snapshot it visibly for
+        # Copy without resetting the active parser or corrupting its next chunk.
+        pending = _visible_serial_controls(self._ansi_parser._pending)
+        tail = [(pending, self._ansi_pending_tag, False, self._ansi_pending_stamp)] if pending else []
+        chunks, _ = self._formatted_chunks(chain(self._entries, tail), bool(include_timestamp))
+        return "".join(text for text, _tag in chunks)
 
     def copy(self) -> None:
-        """Custom clipboard copy respecting timestamp toggle."""
+        """Copy exactly the selected visible text, without reinterpretation."""
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
         selected_text = cursor.selectedText().replace("\u2029", "\n")
-        if not self._timestamp_enabled:
-            selected_text = "\n".join(
-                re.sub(r"^\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]\s*", "", line)
-                for line in selected_text.splitlines()
-            )
-        from PySide6.QtWidgets import QApplication
+        self.copy_started.emit()
         QApplication.clipboard().setText(selected_text)
+
+    def keyPressEvent(self, event) -> None:
+        # QPlainTextEdit.copy is a non-virtual C++ slot. Native shortcuts must
+        # enter our handler to cancel an older pending header-copy retry.
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _show_context_menu(self, position) -> None:
+        menu = QMenu(self)
+        copy_action = menu.addAction(self.tr("&Copy"))
+        copy_action.setObjectName("serial-copy-selection")
+        copy_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Copy))
+        copy_action.setEnabled(self.textCursor().hasSelection())
+        copy_action.triggered.connect(self.copy)
+        menu.addSeparator()
+        select_all = menu.addAction(self.tr("Select &All"))
+        select_all.setObjectName("serial-select-all")
+        select_all.setShortcut(QKeySequence(QKeySequence.StandardKey.SelectAll))
+        select_all.setEnabled(not self.document().isEmpty())
+        select_all.triggered.connect(self.selectAll)
+        try:
+            menu.exec(self.viewport().mapToGlobal(position))
+        finally:
+            menu.deleteLater()
+
+    @staticmethod
+    def _formatted_chunks(entries, timestamps, line_start=True):
+        """Format only application prefixes, once per logical device line."""
+        groups = []
+
+        def add(text, tag):
+            if not text:
+                return
+            if groups and groups[-1][1] == tag:
+                groups[-1][0].append(text)
+            else:
+                groups.append(([text], tag))
+
+        for text, tag, newline, stamp in entries:
+            payload = text + ("\n" if newline else "")
+            parts = payload.split("\n")
+            for index, part in enumerate(parts):
+                if part:
+                    if timestamps and line_start:
+                        add(f"[{stamp}] ", "timestamp")
+                    add(part, tag or "normal")
+                    line_start = False
+                if index < len(parts) - 1:
+                    add("\n", tag or "normal")
+                    line_start = True
+        return [("".join(parts), tag) for parts, tag in groups], line_start
+
+    def _insert_chunks(self, cursor, chunks):
+        for text, tag in chunks:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
+            cursor.insertText(text, fmt)
+
+    @staticmethod
+    def _visual_entries(entries, timestamps=False):
+        """Bound paragraphs before Qt shapes them; retain the journal intact.
+
+        Match ordinary display trimming: the latest 8191 UTF-16 units plus its
+        marker (QTextBlock's 8192-unit tail also counts the block terminator).
+        A deque and small per-event encodes avoid shaping or encoding the full
+        multi-megabyte line. Trimming never splits a Unicode surrogate pair.
+        """
+        line, size, total, truncated = deque(), 0, 0, False
+        first_stamp = ""
+        prefix_units = 0
+
+        def flush():
+            if truncated:
+                yield ("[Long line display truncated] ", "warning", False, first_stamp)
+            for text, tag, newline, stamp, _units in line:
+                yield text, tag, newline, stamp
+
+        for text, tag, newline, stamp in entries:
+            parts = (text + ("\n" if newline else "")).split("\n")
+            for index, part in enumerate(parts):
+                if part:
+                    if not line:
+                        first_stamp = stamp
+                        prefix_units = len(f"[{stamp}] ") if timestamps else 0
+                    units = len(part.encode("utf-16-le")) // 2
+                    line.append((part, tag, False, stamp, units))
+                    size += units
+                    total += units
+                    truncated = truncated or total + prefix_units > 16383
+                    limit = 8191 if truncated else 16383 - prefix_units
+                    excess = size - limit
+                    while excess > 0:
+                        old, old_tag, _, old_stamp, old_units = line.popleft()
+                        cut = min(excess, old_units)
+                        remaining = ""
+                        if cut < old_units:
+                            encoded = old.encode("utf-16-le")
+                            offset = cut * 2
+                            next_unit = int.from_bytes(encoded[offset:offset + 2], "little")
+                            if 0xdc00 <= next_unit <= 0xdfff:
+                                cut += 1
+                            remaining = encoded[cut * 2:].decode("utf-16-le")
+                        size -= cut
+                        excess -= cut
+                        truncated = True
+                        if remaining:
+                            line.appendleft((remaining, old_tag, False, old_stamp, old_units - cut))
+                if index < len(parts) - 1:
+                    yield from flush()
+                    yield ("\n", tag, False, stamp)
+                    line.clear()
+                    size, total, truncated = 0, 0, False
+        yield from flush()
 
     @preserve_log_view(rebuild=True)
     def _rebuild_document(self) -> None:
+        if self._paused:
+            self._paused_dirty = True
+            return
         cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         cursor.select(QTextCursor.SelectionType.Document)
         cursor.removeSelectedText()
 
-        coalesced_chunks: list[tuple[str, str]] = []
-        curr_pieces: list[str] = []
-        curr_tag: str = ""
-
-        def _flush_chunk():
-            if curr_pieces:
-                coalesced_chunks.append(("".join(curr_pieces), curr_tag))
-                curr_pieces.clear()
-
-        for clean_text, tag, is_newline, batch_ts in self._entries:
-            if not clean_text and not is_newline:
-                continue
-            line_tag = tag or "normal"
-            if self._timestamp_enabled and clean_text:
-                if curr_tag != "timestamp":
-                    _flush_chunk()
-                    curr_tag = "timestamp"
-                curr_pieces.append(f"[{batch_ts}] ")
-
-            payload = clean_text + ("\n" if is_newline else "")
-            if payload:
-                if line_tag != curr_tag:
-                    _flush_chunk()
-                    curr_tag = line_tag
-                curr_pieces.append(payload)
-
-        _flush_chunk()
-
-        for text_chunk, tag in coalesced_chunks:
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
-            cursor.insertText(text_chunk, fmt)
+        chunks, self._render_line_start = self._formatted_chunks(
+            self._visual_entries(self._entries, self._timestamp_enabled), self._timestamp_enabled)
+        self._insert_chunks(cursor, chunks)
 
         cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
@@ -214,21 +390,21 @@ class SerialOutputView(QPlainTextEdit):
 
     @Slot(dict)
     def append_log(self, payload: dict) -> None:
-        if self._paused:
-            return
         tag: str  = payload.get("tag", "normal")
         lines = payload.get("lines")
         from main.qt.log_buffer import display_text
-        if lines and isinstance(lines, list):
-            for l in lines:
-                self._queue.append((display_text(l), tag, True))
-            if not self._flush_timer.isActive():
-                self._flush_timer.start()
-            return
-
-        text: str = display_text(payload.get("text", ""))
-        newline: bool = payload.get("newline", True)
-        self._queue.append((text, tag, newline))
+        stamp = str(payload.get("timestamp", "")).strip("[]")
+        if len(stamp) > 32 or not re.fullmatch(r"[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?", stamp):
+            stamp = datetime.now().strftime("%H:%M:%S")
+        stream = bool(payload.get("stream", True))
+        generation = payload.get("generation")
+        stream_end = bool(payload.get("stream_end", False))
+        if isinstance(lines, list):
+            for line in lines:
+                self._queue.append((display_text(line), tag, True, stamp, stream, generation, stream_end))
+        else:
+            self._queue.append((display_text(payload.get("text", "")), tag,
+                                bool(payload.get("newline", True)), stamp, stream, generation, stream_end))
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
@@ -242,65 +418,71 @@ class SerialOutputView(QPlainTextEdit):
         items = self._queue.drain(max_items=128, max_chars=32768)
         notice = self._queue.take_notice()
         if notice:
-            items.insert(0, (notice, "warning", True))
+            # A missing chunk can split a terminal control; do not allow its
+            # remainder to swallow the subsequent retained output.
+            self._ansi_parser.reset()
+            items.insert(0, ("\n" + notice, "warning", True,
+                             datetime.now().strftime("%H:%M:%S"), False, None, False))
 
         if not items:
             return
 
-        # Coalesce adjacent lines with identical tags into chunks
-        # This turns hundreds of individual Qt text insertions into 1-3 bulk calls
-        batch_ts = datetime.now().strftime("%H:%M:%S")
-        coalesced_chunks: list[tuple[str, str]] = []
-        curr_pieces: list[str] = []
-        curr_tag: str = ""
+        additions = []
+        cleared = False
+        for text, tag, newline, stamp, stream, generation, stream_end in items:
+            events = []
+            sequence = self._ansi_parser._sequence_id
 
-        def _flush_chunk():
-            if curr_pieces:
-                coalesced_chunks.append(("".join(curr_pieces), curr_tag))
-                curr_pieces.clear()
+            def finish_pending():
+                pending = self._ansi_parser.finish()
+                if pending:
+                    events.append((pending, False, self._ansi_pending_tag, self._ansi_pending_stamp))
 
-        for clean_text, tag, is_newline in items:
-            if "\x1b" in clean_text:
-                if self._ansi_clear_enabled and _ANSI_CLEAR_RE.search(clean_text):
-                    curr_pieces.clear()
-                    coalesced_chunks.clear()
+            if generation is not None and generation != self._stream_generation:
+                finish_pending()
+                self._stream_generation = generation
+            if not stream:
+                finish_pending()
+                line_open = not self._history_line_start or bool(events)
+                prefix = "\n" if line_open and (text or newline) and not text.startswith("\n") else ""
+                events.append((prefix + _visible_serial_controls(text) + ("\n" if newline else ""), False, tag, stamp))
+            else:
+                events.extend((content, erased, tag, stamp) for content, erased in
+                              self._ansi_parser.feed(text + ("\n" if newline else "")))
+            if self._ansi_parser._pending and self._ansi_parser._sequence_id != sequence:
+                self._ansi_pending_tag = tag
+                self._ansi_pending_stamp = stamp
+            if stream_end:
+                finish_pending()
+            for clean_text, erase_screen, event_tag, event_stamp in events:
+                if erase_screen and self._ansi_clear_enabled:
+                    additions.clear()
                     self._entries.clear()
-                    super().clear()
-                    clean_text = _ANSI_CLEAR_RE.sub("", clean_text)
-                clean_text = _ANSI_CSI_RE.sub("", clean_text)
+                    self._render_line_start = True
+                    self._history_line_start = True
+                    cleared = True
+                if clean_text:
+                    entry = (clean_text, event_tag, False, event_stamp)
+                    self._entries.append(entry)
+                    additions.append(entry)
+                    self._history_line_start = clean_text.endswith("\n")
 
-            if not clean_text and not is_newline:
-                continue
-
-            line_tag = tag or "normal"
-            if self._timestamp_enabled and clean_text:
-                if curr_tag != "timestamp":
-                    _flush_chunk()
-                    curr_tag = "timestamp"
-                curr_pieces.append(f"[{batch_ts}] ")
-
-            payload = clean_text + ("\n" if is_newline else "")
-            if payload:
-                if line_tag != curr_tag:
-                    _flush_chunk()
-                    curr_tag = line_tag
-                curr_pieces.append(payload)
-
-            self._entries.append((clean_text, tag, is_newline, batch_ts))
-
-        _flush_chunk()
-
-        if not coalesced_chunks:
+        if self._paused:
+            self._paused_dirty = self._paused_dirty or bool(additions) or cleared
+            if not self._queue:
+                self._flush_timer.stop()
             return
+
+        if cleared:
+            super().clear()
+        chunks, self._render_line_start = self._formatted_chunks(
+            additions, self._timestamp_enabled, self._render_line_start)
 
         cursor = QTextCursor(self.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.beginEditBlock()
         try:
-            for text_chunk, tag in coalesced_chunks:
-                fmt = QTextCharFormat()
-                fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
-                cursor.insertText(text_chunk, fmt)
+            self._insert_chunks(cursor, chunks)
         finally:
             cursor.endEditBlock()
         from main.qt.log_buffer import trim_document
@@ -312,6 +494,11 @@ class SerialOutputView(QPlainTextEdit):
     def clear(self) -> None:
         self._entries.clear()
         self._queue.clear()
+        self._ansi_parser.reset()
+        self._render_line_start = True
+        self._history_line_start = True
+        self._stream_generation = None
+        self._paused_dirty = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
         super().clear()
@@ -485,6 +672,7 @@ class SerialPanel(QWidget):
 
         # ── Output View ───────────────────────────────────────────────────────
         self._output = SerialOutputView()
+        self._output.copy_started.connect(self._cancel_copy_output)
         self._output.set_autoscroll(self.cb_autoscroll.isChecked())
         self._output.set_ansi_clear_enabled(self.cb_ansi_clear.isChecked())
         output_policy = self._output.sizePolicy()
@@ -719,17 +907,90 @@ class SerialPanel(QWidget):
             pass
 
     def _copy_output(self) -> None:
+        flush_serial = getattr(self._backend, "flush_serial_output", None)
+        if callable(flush_serial):
+            flush_serial()
+        sig_bus = getattr(self, "_sig_bus", None)
+        if sig_bus is not None and hasattr(sig_bus, "flush_pending_logs"):
+            sig_bus.flush_pending_logs("serial")
         include_ts = self._output._timestamp_enabled if hasattr(self._output, "_timestamp_enabled") else False
         text = self._output.get_content_for_clipboard(include_timestamp=include_ts)
-        from PySide6.QtWidgets import QApplication
-        QApplication.clipboard().setText(text)
-        self.btn_copy.setText("✔ Copied!")
-        def _restore_copy_btn():
-            self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
-        QTimer.singleShot(1500, _restore_copy_btn)
+        self._ensure_copy_timers()
+        self._cancel_copy_output()
+        self._copy_snapshot = text
+        self._copy_attempts = 0
+        self._copy_active = True
+        self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "Copying…")
+        self.btn_copy.setToolTip("Copying retained serial output to the clipboard")
+        self._attempt_copy_output(self._copy_generation)
+
+    def _ensure_copy_timers(self) -> None:
+        if hasattr(self, "_copy_retry_timer"):
+            return
+        self._copy_generation = 0
+        self._copy_active = False
+        self._copy_snapshot = ""
+        self._copy_retry_timer = QTimer(self)
+        self._copy_retry_timer.setSingleShot(True)
+        self._copy_retry_timer.setInterval(30)
+        self._copy_retry_timer.timeout.connect(self._retry_copy_output)
+        self._copy_feedback_timer = QTimer(self)
+        self._copy_feedback_timer.setSingleShot(True)
+        self._copy_feedback_timer.setInterval(1500)
+        self._copy_feedback_timer.timeout.connect(self._restore_copy_button)
+
+    def _restore_copy_button(self) -> None:
+        self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
+        self.btn_copy.setToolTip("Copy serial monitor output to clipboard")
+
+    def _cancel_copy_output(self) -> None:
+        """A newer header or selection copy owns the clipboard from now on."""
+        if not hasattr(self, "_copy_retry_timer"):
+            return
+        self._copy_generation += 1
+        self._copy_active = False
+        self._copy_snapshot = ""
+        self._copy_retry_timer.stop()
+        self._copy_feedback_timer.stop()
+        self._restore_copy_button()
+
+    def _retry_copy_output(self) -> None:
+        self._attempt_copy_output(self._copy_retry_generation)
+
+    def _attempt_copy_output(self, generation: int) -> None:
+        if not self._copy_active or generation != self._copy_generation:
+            return
+        self._copy_attempts += 1
+        try:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(self._copy_snapshot)
+            accepted = clipboard.text() == self._copy_snapshot
+        except RuntimeError:
+            accepted = False
+        if accepted:
+            self._copy_active = False
+            self._copy_snapshot = ""
+            self._copy_retry_timer.stop()
+            self.btn_copy.setText("✔" if getattr(self, "_is_ultra_compact", False) else "✔ Copied!")
+            self.btn_copy.setToolTip("Retained serial output copied to clipboard")
+            self._copy_feedback_timer.start()
+        elif self._copy_attempts < 3:
+            self._copy_retry_generation = generation
+            self._copy_retry_timer.start()
+        else:
+            self._copy_active = False
+            self._copy_snapshot = ""
+            self._copy_retry_timer.stop()
+            self.btn_copy.setText("⚠" if getattr(self, "_is_ultra_compact", False) else "Copy failed")
+            self.btn_copy.setToolTip("The system clipboard did not accept the text. Try Copy again.")
 
     def _output_clear(self) -> None:
-        self._output._entries.clear()
+        clear_serial = getattr(self._backend, "clear_serial_output", None)
+        if callable(clear_serial) and clear_serial() is True:
+            return
+        sig_bus = getattr(self, "_sig_bus", None)
+        if sig_bus is not None and hasattr(sig_bus, "clear_log_queue"):
+            sig_bus.clear_log_queue("serial")
         self._output.clear()
 
     def _on_timestamp_changed(self, state: int) -> None:
@@ -798,6 +1059,12 @@ class SerialPanel(QWidget):
     @Slot(dict)
     def update_status(self, payload: dict) -> None:
         """Handle serial:status signal."""
+        generation = payload.get("generation")
+        if generation is not None:
+            previous = getattr(self, "_status_generation", None)
+            if previous is not None and generation < previous:
+                return
+            self._status_generation = generation
         connected: bool = payload.get("connected", False)
         state: str = payload.get("state", "connected" if connected else "disconnected")
         is_conn = bool(connected or state == "connected")
@@ -834,6 +1101,7 @@ class SerialPanel(QWidget):
 
     def connect_signals(self, sig_bus, *, connect_theme: bool = True) -> None:
         """Connect to the MCUSignals bus."""
+        self._sig_bus = sig_bus
         sig_bus.serial_log.connect(self._output.append_log)
         sig_bus.serial_status.connect(self.update_status)
         sig_bus.serial_clear.connect(self._output.clear)

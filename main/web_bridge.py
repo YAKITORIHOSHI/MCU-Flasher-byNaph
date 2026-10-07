@@ -452,6 +452,13 @@ class MCUWebBackendAPI:
         # Only the call whose token matches the latest wins; stale callers abort early.
         self._serial_reconnect_token: int = 0
         self._serial_generation = 0
+        # UART draining never waits for notification history on slow storage.
+        # One persistent worker retains one active and one latest pending notice.
+        self._serial_notice_condition = threading.Condition()
+        self._serial_notice_pending = None
+        self._serial_notice_active = False
+        self._serial_notice_thread = None
+        self._serial_notice_stopped = False
         from src.modules.recovery import RecoveryBudget
         self._serial_recovery_budget = RecoveryBudget()
         # Track the last (port, baud) for which a "connected" banner was printed.
@@ -653,6 +660,7 @@ class MCUWebBackendAPI:
         """
         self._stop_telemetry.set()
         self._stop_port_monitor.set()
+        self._stop_serial_notifications()
         try:
             self._stop_serial_monitor()
         except Exception:
@@ -704,10 +712,21 @@ class MCUWebBackendAPI:
                 data["id"] = "notif_" + uuid4().hex
         # ── 1. Qt signal dispatch ──────────────────────────────────────────
         bus = self._get_qt_signals()
+        if event_name in ("serial:log", "serial:status") and isinstance(data, dict):
+            generation = data.get("generation")
+            if generation is not None:
+                if generation != getattr(self, "_serial_generation", generation):
+                    return
+                if (bus is not None and hasattr(bus, "set_serial_generation")
+                        and not bus.set_serial_generation(generation)):
+                    return
         if bus is not None:
             try:
                 # Apply timestamp metadata for console logs
                 payload = data
+                if event_name == "serial:log" and isinstance(data, dict):
+                    payload = dict(data)
+                    payload.setdefault("stream", False)
                 if event_name == "console:log" and isinstance(data, dict):
                     payload = dict(data)
                     if "timestamp" not in payload:
@@ -3280,9 +3299,16 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     def _start_serial_monitor(self, _expected_generation=None):
         """Open the COM port and stream data in a background thread."""
+        from main.core.serial_stream import SerialTextDecoder
+
         with self._serial_lock:
             if _expected_generation is not None and _expected_generation != self._serial_generation:
                 return
+            finish_previous = getattr(self, "_serial_log_finalize", None)
+            if finish_previous:
+                finish_previous()
+                self._serial_log_finalize = None
+                self._serial_log_flush = None
             self._serial_generation += 1
             generation = self._serial_generation
             self.serial_running = False
@@ -3295,6 +3321,7 @@ class MCUWebBackendAPI:
 
             if not self.current_port or (self.is_busy and self.active_operation != "compile"):
                 self.emit("serial:status", {
+                    "generation": generation,
                     "connected": False,
                     "state": "disconnected",
                     "port": self.current_port or "",
@@ -3308,7 +3335,7 @@ class MCUWebBackendAPI:
                 self._serial_conn = serial.Serial()
                 self._serial_conn.port = self.current_port
                 self._serial_conn.baudrate = self.current_baud
-                self._serial_conn.timeout = 0.2
+                self._serial_conn.timeout = 0.04
                 self._serial_conn.dsrdtr = False
                 self._serial_conn.rtscts = False
                 self._serial_conn.dtr = False
@@ -3318,6 +3345,7 @@ class MCUWebBackendAPI:
                 self._serial_conn.rts = False
                 self.serial_running = True
                 self.emit("serial:status", {
+                    "generation": generation,
                     "connected": True,
                     "state": "connected",
                     "port": self.current_port,
@@ -3330,6 +3358,8 @@ class MCUWebBackendAPI:
                 if connection_key != getattr(self, "_last_serial_connection_key", None):
                     self._last_serial_connection_key = connection_key
                     self.emit("serial:log", {
+                        "generation": generation,
+                        "stream": False,
                         "text": f"--- Serial Monitor connected to {self.current_port} @ {self.current_baud} baud ---",
                         "tag": "info",
                         "newline": True,
@@ -3343,12 +3373,15 @@ class MCUWebBackendAPI:
                         pass
                     self._serial_conn = None
                 self.emit("serial:status", {
+                    "generation": generation,
                     "connected": False,
                     "state": "disconnected",
                     "port": self.current_port,
                     "baud": self.current_baud,
                 })
                 self.emit("serial:log", {
+                    "generation": generation,
+                    "stream": False,
                     "text": f"--- Could not open {self.current_port}: {e} ---",
                     "tag": "error",
                     "newline": True,
@@ -3358,40 +3391,105 @@ class MCUWebBackendAPI:
 
             conn = self._serial_conn
 
+        decoder = SerialTextDecoder()
+        pieces = []
+        piece_chars = 0
+        next_flush = time.monotonic() + 0.03
+        finalized = False
+        warned_invalid = False
+        log_lock = threading.RLock()
+
+        def warning_for_invalid():
+            # Caller owns log_lock; claiming a notice is bounded memory work.
+            # Its dispatch/persistence happens after both serial locks release.
+            nonlocal warned_invalid
+            if decoder.invalid_bytes and not warned_invalid and generation == self._serial_generation:
+                warned_invalid = True
+                return {
+                    "category": "serial", "type": "warning",
+                    "title": "Serial data contains non-UTF-8 bytes",
+                    "message": (
+                        f"Bytes received from {port} at {baud} baud cannot all be decoded as UTF-8. "
+                        "They are shown as \\xNN so copying retains them. Check the running firmware's "
+                        "baud rate or whether it sends binary data."
+                    ),
+                }
+            return None
+
+        def publish(*, stream_end=False, clear=False):
+            nonlocal piece_chars, next_flush
+            with log_lock:
+                if (pieces or stream_end) and generation == self._serial_generation:
+                    self.emit("serial:log", {
+                        "text": "".join(pieces), "newline": False,
+                        "stream": True, "generation": generation,
+                        "stream_end": stream_end,
+                    })
+                pieces.clear()
+                piece_chars = 0
+                next_flush = time.monotonic() + 0.03
+                if clear:
+                    # No reader publication can overtake this clear. The
+                    # codec retains incomplete UTF-8 for subsequent reads.
+                    self.emit("serial:clear", None)
+
+        def retain(text):
+            nonlocal piece_chars
+            while text:
+                room = 8192 - piece_chars
+                part, text = text[:room], text[room:]
+                pieces.append(part)
+                piece_chars += len(part)
+                if piece_chars >= 8192:
+                    publish()
+
+        def finish():
+            # State transitions take state -> log locks; readers and Copy/Clear
+            # take only log_lock and never wait for port open/close or storage.
+            nonlocal finalized
+            with log_lock:
+                if not finalized:
+                    finalized = True
+                    retain(decoder.feed(b"", final=True))
+                    publish(stream_end=True)
+                    return warning_for_invalid()
+            return None
+
+        def notify_warning(notice):
+            # Notifications may persist on slow storage. Neither state nor
+            # decoder/log locks may be held across this optional diagnostic.
+            if notice and generation == self._serial_generation:
+                self._queue_serial_notification(generation, notice)
+
         def _reader():
-            buf = bytearray()
             error = None
             while generation == self._serial_generation and conn and conn.is_open:
                 try:
-                    raw = conn.read(min(conn.in_waiting or 1, 8192))
-                    if generation != self._serial_generation:
-                        return
-                    if not raw:
-                        continue
-                    buf.extend(raw)
-                    if b"\n" in buf:
-                        lines = buf.split(b"\n")
-                        buf = lines[-1]
-                        decoded_batch = [
-                            l.decode("utf-8", errors="replace").rstrip("\r")
-                            for l in lines[:-1]
-                        ]
-                        if len(decoded_batch) > 1:
-                            for chunk_start in range(0, len(decoded_batch), 40):
-                                chunk = decoded_batch[chunk_start:chunk_start + 40]
-                                self.emit("serial:log", {"lines": chunk, "newline": True})
-                        elif len(decoded_batch) == 1:
-                            self.emit("serial:log", {"text": decoded_batch[0], "newline": True})
-                    if len(buf) > 8192:
-                        # Streams without newline must not grow without bounds.
-                        self.emit("serial:log", {"text": buf.decode("utf-8", errors="replace"), "newline": False})
-                        buf.clear()
+                    # Escaped byte text can be four times the raw size. Bound
+                    # every event before the signal bus's display-text limit.
+                    raw = conn.read(min(conn.in_waiting or 1, 2048))
+                    notice = None
+                    with log_lock:
+                        if generation != self._serial_generation or finalized:
+                            return
+                        if raw:
+                            retain(decoder.feed(raw))
+                            notice = warning_for_invalid()
+                        if not raw or piece_chars >= 8192 or time.monotonic() >= next_flush:
+                            # Prompts and newline-free output are delivered
+                            # promptly; per-byte bursts share a bounded event.
+                            publish()
+                    notify_warning(notice)
                 except Exception as exc:
                     error = exc
                     break
             with self._serial_lock:
                 if generation != self._serial_generation:
                     return  # An old reader never changes a newer connection.
+                notice = finish()
+                if getattr(self, "_serial_log_finalize", None) is finish:
+                    self._serial_log_finalize = None
+                    self._serial_log_flush = None
                 self.serial_running = False
                 if self._serial_conn is conn:
                     self._serial_conn = None
@@ -3400,15 +3498,98 @@ class MCUWebBackendAPI:
                 except serial.SerialException:
                     pass
                 self.emit("serial:status", {
+                    "generation": generation,
                     "connected": False, "state": "disconnected", "port": port, "baud": baud,
                 })
                 if error:
                     self._schedule_serial_recovery(generation, port, error)
+            notify_warning(notice)
 
-        self._serial_thread = threading.Thread(
-            target=_reader, name="MCU_SerialReader", daemon=True
-        )
-        self._serial_thread.start()
+        with self._serial_lock:
+            if generation != self._serial_generation:
+                return
+            self._serial_log_finalize = finish
+            self._serial_log_flush = publish
+            self._serial_log_lock = log_lock
+            try:
+                self._serial_thread = threading.Thread(
+                    target=_reader, name="MCU_SerialReader", daemon=True
+                )
+                self._serial_thread.start()
+            except Exception as exc:
+                finish()
+                self._serial_log_finalize = self._serial_thread = None
+                self._serial_log_flush = None
+                self.serial_running = False
+                if self._serial_conn is conn:
+                    self._serial_conn = None
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                self.emit("serial:status", {
+                    "generation": generation, "connected": False,
+                    "state": "disconnected", "port": port, "baud": baud,
+                })
+                self.emit("serial:log", {
+                    "generation": generation, "stream": False,
+                    "text": f"--- Could not start Serial Monitor: {exc} ---",
+                    "tag": "error", "newline": True,
+                })
+
+    def _queue_serial_notification(self, generation, notice):
+        """Hand off optional UART diagnostics to one bounded storage worker."""
+        condition = self._serial_notice_condition
+
+        def worker():
+            while True:
+                with condition:
+                    condition.wait_for(lambda: self._serial_notice_stopped
+                                       or self._serial_notice_pending is not None)
+                    if self._serial_notice_stopped:
+                        self._serial_notice_pending = None
+                        self._serial_notice_thread = None
+                        condition.notify_all()
+                        return
+                    item_generation, item = self._serial_notice_pending
+                    self._serial_notice_pending = None
+                    self._serial_notice_active = True
+                try:
+                    if item_generation == self._serial_generation:
+                        self.emit("notification", item)
+                except Exception:
+                    # Failure to persist an optional notice cannot stop UART
+                    # reads or replay a device command. Escaped data remains.
+                    pass
+                finally:
+                    with condition:
+                        self._serial_notice_active = False
+                        condition.notify_all()
+
+        with condition:
+            if self._serial_notice_stopped or generation != self._serial_generation:
+                return False
+            self._serial_notice_pending = (generation, dict(notice))
+            if self._serial_notice_thread is None:
+                try:
+                    thread = threading.Thread(target=worker, name="MCU_SerialNotice", daemon=True)
+                    self._serial_notice_thread = thread
+                    thread.start()
+                except Exception:
+                    self._serial_notice_pending = None
+                    self._serial_notice_thread = None
+                    return False
+            condition.notify()
+        return True
+
+    def _stop_serial_notifications(self):
+        """Wake the notice worker without waiting for an active storage write."""
+        condition = getattr(self, "_serial_notice_condition", None)
+        if condition is not None:
+            with condition:
+                self._serial_notice_stopped = True
+                self._serial_notice_pending = None
+                condition.notify_all()
 
     def _schedule_serial_recovery(self, generation, port, error):
         """Retry opening the selected port only; never reset or replay writes."""
@@ -3419,9 +3600,11 @@ class MCUWebBackendAPI:
         else:
             delay = self._serial_recovery_budget.next_delay()
         if delay is None:
-            self.emit("serial:log", {"text": f"Serial recovery stopped. {hint}", "tag": "warning", "newline": True})
+            self.emit("serial:log", {"text": f"Serial recovery stopped. {hint}", "tag": "warning", "newline": True,
+                                     "generation": generation, "stream": False})
             return
-        self.emit("serial:log", {"text": f"Serial connection interrupted: {error}. Retrying in {delay:g}s.", "tag": "warning", "newline": True})
+        self.emit("serial:log", {"text": f"Serial connection interrupted: {error}. Retrying in {delay:g}s.", "tag": "warning", "newline": True,
+                                 "generation": generation, "stream": False})
 
         def reconnect():
             if self._stop_port_monitor.is_set() or self.current_port != port:
@@ -3434,10 +3617,31 @@ class MCUWebBackendAPI:
         timer.daemon = True
         timer.start()
 
+    def flush_serial_output(self):
+        """Publish already decoded bytes for a bounded Copy snapshot."""
+        flush = getattr(self, "_serial_log_flush", None)
+        if flush:
+            flush()
+        return True
+
+    def clear_serial_output(self):
+        """Clear displayed serial history without closing or resetting the port."""
+        flush = getattr(self, "_serial_log_flush", None)
+        if flush:
+            flush(clear=True)
+        else:
+            self.emit("serial:clear", None)
+        return True
+
     def _stop_serial_monitor(self):
         """Stop and close the serial monitor before upload/flash."""
         old_thread = None
         with self._serial_lock:
+            finish_previous = getattr(self, "_serial_log_finalize", None)
+            if finish_previous:
+                finish_previous()
+                self._serial_log_finalize = None
+                self._serial_log_flush = None
             self._serial_generation += 1
             self.serial_running = False
             if self._serial_conn:
@@ -3451,6 +3655,7 @@ class MCUWebBackendAPI:
             old_thread = getattr(self, "_serial_thread", None)
             self._serial_thread = None
             self.emit("serial:status", {
+                "generation": self._serial_generation,
                 "connected": False,
                 "state": "disconnected",
                 "port": self.current_port,
@@ -3596,7 +3801,7 @@ class MCUWebBackendAPI:
         if getattr(self, "clear_console_on_action", cfg.get("clear_console_on_action", True)):
             self.emit("console:clear", None)
         if getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)):
-            self.emit("serial:clear", None)
+            self.clear_serial_output()
 
         if not self.current_board:
             self.emit("console:log", {"text": "✖ Compile error: No board selected. Please select a board first.", "tag": "error", "newline": True})
@@ -6212,7 +6417,7 @@ class MCUWebBackendAPI:
         if getattr(self, "clear_console_on_action", cfg.get("clear_console_on_action", True)):
             self.emit("console:clear", None)
         if getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)):
-            self.emit("serial:clear", None)
+            self.clear_serial_output()
 
         if not self.current_board:
             self.emit("console:log", {"text": "✖ Upload error: No board selected. Please select a board first.", "tag": "error", "newline": True})
@@ -7149,7 +7354,7 @@ class MCUWebBackendAPI:
             if cfg.get("clear_console_on_action", True):
                 self.emit("console:clear", None)
             if cfg.get("clear_serial_on_action", False):
-                self.emit("serial:clear", None)
+                self.clear_serial_output()
             if skip_reason_msg:
                 self.emit("console:log", {
                     "text": skip_reason_msg,
@@ -7995,7 +8200,7 @@ class MCUWebBackendAPI:
 
         cfg = load_gui_config()
         if getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)):
-            self.emit("serial:clear", None)
+            self.clear_serial_output()
 
         if not self.current_port:
             self.emit("serial:log", {"text": "--- ✖ Cannot reset MCU: No COM port selected. ---", "tag": "error", "newline": True})
@@ -8182,7 +8387,7 @@ class MCUWebBackendAPI:
         if getattr(self, "clear_console_on_action", cfg.get("clear_console_on_action", True)):
             self.emit("console:clear", None)
         if getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)):
-            self.emit("serial:clear", None)
+            self.clear_serial_output()
 
         if not self.current_board:
             self.emit("console:log", {"text": "✖ Hard Reset error: No board selected.", "tag": "error", "newline": True})
@@ -8553,7 +8758,7 @@ class MCUWebBackendAPI:
         if getattr(self, "clear_console_on_action", cfg.get("clear_console_on_action", True)):
             self.emit("console:clear", None)
         if getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)):
-            self.emit("serial:clear", None)
+            self.clear_serial_output()
 
         if not self.current_board:
             self.emit("console:log", {"text": "✖ Soft Reset error: No board selected.", "tag": "error", "newline": True})

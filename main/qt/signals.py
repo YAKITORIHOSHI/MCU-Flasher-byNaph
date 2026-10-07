@@ -17,7 +17,8 @@ Signal naming convention mirrors the original JS event names:
 from __future__ import annotations
 
 import threading
-from PySide6.QtCore import QObject, Signal, Slot, QTimer, Qt
+import time
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, Qt, QThread
 
 
 class MCUSignals(QObject):
@@ -38,6 +39,8 @@ class MCUSignals(QObject):
             "serial": LogBuffer(limit, 2000, text_of),
         }
         self._log_lock = threading.Lock()
+        self._log_epochs = {"console": 0, "serial": 0}
+        self._serial_generation = None
         self._log_wake_pending = False
         self._log_timer = None
         self._logs_ready.connect(self._start_log_timer, Qt.ConnectionType.QueuedConnection)
@@ -47,15 +50,34 @@ class MCUSignals(QObject):
         from main.qt.log_buffer import display_text
         wake = False
         with self._log_lock:
+            generation = payload.get("generation")
+            if (stream == "serial" and generation is not None
+                    and self._serial_generation is not None
+                    and generation != self._serial_generation):
+                return
             buffer = self._pending_logs[stream]
             lines = payload.get("lines")
             if isinstance(lines, list):
-                for line in lines:
-                    buffer.append({"text": display_text(line), "tag": payload.get("tag", "normal"), "newline": True})
+                base = {key: value for key, value in payload.items() if key != "lines"}
+                items = (dict(base, text=str(line), newline=True) for line in lines)
             else:
-                item = dict(payload)
-                item["text"] = display_text(item.get("text", ""))
-                buffer.append(item)
+                items = [dict(payload)]
+            for item in items:
+                text = str(item.get("text", ""))
+                if stream == "serial":
+                    item.setdefault("timestamp", time.strftime("%H:%M:%S"))
+                    # Keep long serial lines intact across bounded events. A
+                    # middle truncation can sever UTF-8/control stream context.
+                    for offset in range(0, max(1, len(text)), 8192):
+                        part = dict(item, text=text[offset:offset + 8192])
+                        last = offset + 8192 >= len(text)
+                        part["newline"] = item.get("newline", True) if last else False
+                        if "stream_end" in item:
+                            part["stream_end"] = bool(item["stream_end"] and last)
+                        buffer.append(part)
+                else:
+                    item["text"] = display_text(text)
+                    buffer.append(item)
             if buffer and not self._log_wake_pending:
                 self._log_wake_pending = True
                 wake = True
@@ -65,6 +87,46 @@ class MCUSignals(QObject):
     def clear_log_queue(self, stream):
         with self._log_lock:
             self._pending_logs[stream].clear()
+            self._log_epochs[stream] += 1
+
+    def set_serial_generation(self, generation):
+        """Reject late readers without discarding already received history."""
+        with self._log_lock:
+            if self._serial_generation is not None and generation < self._serial_generation:
+                return False
+            self._serial_generation = generation
+        return True
+
+    def flush_pending_logs(self, stream):
+        """Deliver one bounded snapshot for an explicit Copy action.
+
+        Take the snapshot once: an active device cannot keep a copy action
+        draining indefinitely. Widgets are only notified on the bus thread.
+        """
+        if QThread.currentThread() != self.thread():
+            raise RuntimeError("Log snapshots must be delivered on the UI thread")
+        with self._log_lock:
+            batch, epoch = self._take_log_batch(stream, all_pending=True)
+        self._deliver_log_batch(stream, batch, epoch)
+
+    def _take_log_batch(self, stream, *, all_pending=False):
+        # Caller owns _log_lock; retained queues already have both limits.
+        buffer = self._pending_logs[stream]
+        batch = buffer.drain(max_items=max(1, len(buffer)) if all_pending else 64,
+                             max_chars=buffer.max_chars if all_pending else 16384)
+        notice = buffer.take_notice()
+        if notice:
+            batch.insert(0, {"text": notice, "tag": "system" if stream == "console" else "warning",
+                             "newline": True, "stream": False})
+        return batch, self._log_epochs[stream]
+
+    def _deliver_log_batch(self, stream, batch, epoch):
+        signal = self.console_log if stream == "console" else self.serial_log
+        for payload in batch:
+            with self._log_lock:
+                if epoch != self._log_epochs[stream]:
+                    break
+            signal.emit(payload)
 
     @Slot()
     def _start_log_timer(self):
@@ -77,20 +139,12 @@ class MCUSignals(QObject):
     @Slot()
     def _flush_log_signals(self):
         with self._log_lock:
-            batches = {}
-            for stream, buffer in self._pending_logs.items():
-                batch = buffer.drain(max_items=64, max_chars=16384)
-                notice = buffer.take_notice()
-                if notice:
-                    batch.insert(0, {"text": notice, "tag": "system" if stream == "console" else "warning", "newline": True})
-                batches[stream] = batch
+            batches = {stream: self._take_log_batch(stream) for stream in self._pending_logs}
             empty = not any(self._pending_logs.values())
             if empty:
                 self._log_wake_pending = False
-        for stream, batch in batches.items():
-            signal = self.console_log if stream == "console" else self.serial_log
-            for payload in batch:
-                signal.emit(payload)
+        for stream, (batch, epoch) in batches.items():
+            self._deliver_log_batch(stream, batch, epoch)
         if empty and self._log_timer is not None:
             self._log_timer.stop()
 

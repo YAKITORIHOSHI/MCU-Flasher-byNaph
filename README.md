@@ -793,6 +793,34 @@ MCU Flasher by Naph/
   - When disabled (default), baud rates switch cleanly without resetting the microcontroller.
 - **High-Throughput Optimization**:
   - Batch chunk coalescing, queue backlog clamping, and smart timestamp bypass eliminate GUI lag during high baud rate streaming (up to 921,600 / 2,000,000 baud).
+- **Stable logging and Copy**:
+  - Decode UTF-8 incrementally across reads and show prompts without requiring
+    a newline. Flush already received data when the connection ends.
+  - Show undecodable bytes and unsafe controls as visible escapes such as
+    `\xff` and `\x00`. Raw null characters can terminate Windows clipboard
+    text; escaped controls keep the text after them copyable. A notification
+    explains non-UTF-8 input without changing the selected baud rate. Its history
+    write runs in a bounded background worker so slow storage cannot stop reception.
+  - Header **Copy** takes a bounded snapshot of received history, including
+    pending output and data collected during **Pause**. Selection copy takes
+    the selected visible text. Long visual lines may be shortened for speed;
+    header Copy retains their bounded underlying history. Clipboard contention
+    gets a bounded retry and accurate success or failure feedback.
+  - **Pause** freezes painting while retaining incoming history within the
+    resource budget. Resume displays retained output; overload reports omitted
+    older entries. **Clear** removes pending and retained display output without
+    resetting the board or replaying a command.
+  - Handle fragmented ANSI controls with bounded parser state. Only erase-screen
+    commands clear history; cursor-home does not. Timestamps prefix each logical
+    line once and preserve timestamp-like text printed by the firmware.
+  - Unreadable startup bytes can originate from a different boot baud rate.
+    ESP8266 ROM startup logs commonly use 74880 baud even when the sketch uses
+    115200 ([Espressif boot-log documentation](https://docs.espressif.com/projects/esptool/en/latest/esp8266/advanced-topics/boot-mode-selection.html)).
+    Keep the monitor at the running sketch's baud for its normal output. A message
+    printed only in `setup()` can already have been sent before a passive monitor
+    connects; use the explicit Reset control when you intend to restart it.
+  - Hardware-free regressions: `direct/verify_serial_reader.py`,
+    `direct/verify_serial_view.py` and `direct/verify_serial_delivery.py`.
 
 ### 6. Critical Operation Protection & Safe Shutdown
 - The application actively protects against closing the window or interrupting sensitive operations:
