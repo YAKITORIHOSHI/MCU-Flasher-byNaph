@@ -42,14 +42,14 @@ def fix_paths():
                 # Read first 10,000 chars to find directory and include patterns
                 sample = f.read(20000)
                 
-            # Find directory pattern, e.g. "directory": "c:\\Users\\napht\\..."
+            # Find a directory pattern such as a profile-specific Windows path.
             dir_match = re.search(r'"directory"\s*:\s*"([^"]+)"', sample)
             if dir_match:
                 # Convert double backslashes to normal slashes for standard base representation
                 old_directory = dir_match.group(1).replace("\\\\", "/").replace("\\", "/")
                 print(f"    Found old workspace directory path: {old_directory}")
                 
-            # Find platformio pattern, e.g. C:\\Users\\napht\\.platformio
+            # Find a PlatformIO path under a Windows user profile.
             pio_match = re.search(r'([a-zA-Z]:[\\/]+[^"\s]+?[\\/]+\.platformio)', sample)
             if pio_match:
                 old_platformio = pio_match.group(1).replace("\\\\", "/").replace("\\", "/")

@@ -2289,106 +2289,177 @@ def run_update_checks(auto_update: bool = False):
 
 # ── 1. Ensure pip ────────────────────────────────────────────
 def ensure_pip() -> bool:
-    """Make sure pip is available in the current Python."""
-    try:
-        # pyrefly: ignore [missing-import]
-        import pip  # noqa: F401 — availability probe
+    """Make sure pip works in the selected target environment."""
+    target_py = _get_target_python()
+    from src.modules.windows_tool_paths import pip_environment
+
+    child_env = pip_environment()
+    child_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+    def _pip_probe():
+        return subprocess.run(
+            [str(target_py), "-m", "pip", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            env=child_env,
+            creationflags=child_flags,
+        )
+
+    def _short_output(result) -> str:
+        output = str(getattr(result, "stdout", "") or "").strip()
+        if not output:
+            return ""
+        output = "\n".join(output.splitlines()[-8:])
+        return output[-1600:]
+
+    def _pip_is_healthy() -> bool:
+        try:
+            return _pip_probe().returncode == 0
+        except Exception:
+            return False
+
+    if _pip_is_healthy():
         ok("pip already installed in target environment")
         return True
-    except Exception:
-        pass
-    try:
-        target_py = _get_target_python()
-        res = subprocess.run(
-            [str(target_py), "-m", "pip", "--version"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-        if res.returncode == 0:
-            ok("pip already installed in target environment")
-            return True
-    except Exception:
-        pass
 
     section("Installing pip")
-    status("pip not found in target environment, bootstrapping...")
+    status("pip is missing or incomplete in the target environment, bootstrapping...")
 
-    # Fast path: pre-seed packages (including pip/setuptools) from base Python into target venv site-packages
-    try:
-        if _preseed_venv_site_packages():
-            status("Pre-seeded dependencies from base Python...")
-            target_py = _get_target_python()
-            res = subprocess.run(
-                [str(target_py), "-m", "pip", "--version"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
-            if res.returncode == 0:
-                ok("pip bootstrapped from base Python")
-                return True
-    except Exception:
-        pass
+    def _remove_incomplete_target_pip() -> None:
+        """Remove only pip's interrupted-install files from the target venv."""
+        try:
+            target_root = _get_target_venv_dir()
+            if sys.platform == "win32":
+                expected_python = target_root / "Scripts" / "python.exe"
+                site_packages = target_root / "Lib" / "site-packages"
+                scripts = target_root / "Scripts"
+            else:
+                expected_python = target_root / "bin" / "python"
+                try:
+                    site_packages = next((target_root / "lib").glob("python*/site-packages"))
+                except StopIteration:
+                    site_packages = target_root / "lib" / "site-packages"
+                scripts = target_root / "bin"
+            if not expected_python.is_file() or not expected_python.samefile(target_py):
+                return
 
-    # Try ensurepip with strict timeout
+            if site_packages.is_dir():
+                for entry in site_packages.iterdir():
+                    name = entry.name.lower()
+                    is_pip_metadata = (
+                        (name.startswith("pip-") and name.endswith((".dist-info", ".egg-info")))
+                        or (name.startswith("~ip-") and name.endswith(".dist-info"))
+                    )
+                    if name == "pip" or is_pip_metadata:
+                        if entry.is_symlink():
+                            entry.unlink(missing_ok=True)
+                        elif entry.is_dir():
+                            shutil.rmtree(entry, ignore_errors=True)
+                        else:
+                            entry.unlink(missing_ok=True)
+
+            # Clear only pip's own launchers; ensurepip/get-pip will recreate
+            # them after the package is installed successfully.
+            if scripts.is_dir():
+                for entry in scripts.iterdir():
+                    name = entry.name.lower()
+                    is_pip_launcher = (
+                        name in {"pip", "pip.exe", "pip-script.py", "pip-script.pyw",
+                                 "pip3", "pip3.exe", "pip3-script.py", "pip3-script.pyw"}
+                        or re.fullmatch(r"pip3\.\d+(?:-script\.pyw?|\.exe)?", name)
+                    )
+                    if is_pip_launcher:
+                        if entry.is_file() or entry.is_symlink():
+                            entry.unlink(missing_ok=True)
+        except Exception as exc:
+            warn(f"Could not fully clear incomplete pip files from env: {exc}")
+
+    # A failed pip install can leave a namespace-package directory and a
+    # '~ip-*.dist-info' staging folder. Python may import that directory even
+    # though pip cannot run; clear those known pip-only fragments, then use
+    # ensurepip's bundled wheel before reaching for the network.
+    _remove_incomplete_target_pip()
+
+    ensurepip_result = None
     if _gui:
         _gui.start_busy()
     try:
-        res = subprocess.run(
-            [sys.executable, "-m", "ensurepip", "--upgrade"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        ensurepip_result = subprocess.run(
+            [str(target_py), "-m", "ensurepip", "--upgrade", "--default-pip"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            env=child_env,
+            creationflags=child_flags,
         )
-        if res.returncode == 0:
-            ok("pip installed via ensurepip")
+        if ensurepip_result.returncode == 0 and _pip_is_healthy():
+            ok("pip installed and verified via ensurepip")
             return True
-    except Exception:
-        pass
+        detail = _short_output(ensurepip_result)
+        if ensurepip_result.returncode == 0:
+            detail = (detail + "\n" if detail else "") + "ensurepip exited successfully but pip still failed its target-interpreter check."
+        status("Bundled ensurepip did not produce a working pip; trying the official fallback.")
+        if detail:
+            warn(f"ensurepip diagnostic: {detail}")
+    except Exception as exc:
+        warn(f"ensurepip could not run in the target environment: {exc}")
     finally:
         if _gui:
             _gui.stop_busy(restore_step=True)
 
-    # For embeddable Python: need to enable pip by editing pth file
-    # and downloading get-pip.py
-    python_dir = Path(sys.executable).parent
-    pth_files = list(python_dir.glob("python*._pth"))
-    for pth in pth_files:
-        content = pth.read_text(encoding="utf-8")
-        if "#import site" in content:
-            status("Enabling site-packages in embeddable Python...")
-            content = content.replace("#import site", "import site")
-            pth.write_text(content, encoding="utf-8")
-            ok("Enabled import site in " + pth.name)
+    # ensurepip itself may have left files behind before failing. Give the
+    # network fallback a clean target just as we did for the bundled attempt.
+    _remove_incomplete_target_pip()
 
-    # Prepare get-pip.py
-    get_pip = python_dir / "get-pip.py"
-    if not get_pip.exists():
-        status("Preparing get-pip.py...")
-        url = "https://bootstrap.pypa.io/get-pip.py"
-        try:
-            _download_file(url, get_pip)
-        except Exception as e:
-            fail(f"Failed to prepare get-pip.py: {e}")
-            return False
-
+    # Some embeddable runtimes omit a usable ensurepip wheel. Download get-pip
+    # to the short Python installer temp folder, rather than leaving a stale
+    # script in env/Scripts or using PlatformIO's long core temp path.
+    pip_temp = child_env.get("TEMP") or child_env.get("TMP") or tempfile.gettempdir()
+    try:
+        temp_root = Path(tempfile.mkdtemp(prefix="mcuf-get-pip-", dir=pip_temp))
+    except Exception:
+        temp_root = Path(tempfile.mkdtemp(prefix="mcuf-get-pip-"))
+    get_pip = temp_root / "get-pip.py"
     if _gui:
         _gui.start_busy()
     try:
-        subprocess.run(
-            [sys.executable, str(get_pip)],
-            stdout=sys.stdout, stderr=sys.stderr,
-            timeout=60,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            check=True,
+        status("Downloading the official pip bootstrap fallback...")
+        _download_file("https://bootstrap.pypa.io/get-pip.py", get_pip)
+        result = subprocess.run(
+            [str(target_py), str(get_pip)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            env=child_env,
+            creationflags=child_flags,
         )
-        ok("pip installed via get-pip.py")
-        return True
-    except Exception as e:
-        fail(f"get-pip.py failed: {e}")
+        if result.returncode == 0 and _pip_is_healthy():
+            ok("pip installed and verified via get-pip.py")
+            return True
+        detail = _short_output(result)
+        if result.returncode == 0:
+            detail = (detail + "\n" if detail else "") + "get-pip.py exited successfully but pip still failed its target-interpreter check."
+        fail("get-pip.py failed in the target environment." + (f"\n{detail}" if detail else ""))
+        return False
+    except Exception as exc:
+        detail = _short_output(ensurepip_result) if ensurepip_result is not None else ""
+        message = f"get-pip.py could not install pip: {exc}"
+        if detail:
+            message += f"\nensurepip diagnostic:\n{detail}"
+        fail(message)
         return False
     finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
         if _gui:
             _gui.stop_busy(restore_step=True)
 

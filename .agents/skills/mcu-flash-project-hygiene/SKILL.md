@@ -7,10 +7,14 @@ description: Audit MCU Flasher project hygiene on Windows and Ubuntu, including 
 
 Work on the main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), native launchers and supporting utilities. Windows attribute helpers are best-effort; Linux uses dot-prefixed containers and must not invoke `attrib.exe` or Windows junctions.
 
-Generated AGENTS instructions retain authoritative hardware state and root-sketch
-firmware boundaries. `application_agent_guidance()` adds application development
-rules only to application checkouts. Verify that distinction without running
-metadata generation against live caches or modifying AI backup journals.
+Generated AGENTS instructions keep root-sketch firmware boundaries, use
+project-relative paths, and direct agents to the current GUI or a read-only
+project-state snapshot instead of embedding machine-specific hardware values.
+OpenCode discovers project instructions from the project-root `AGENTS.md`;
+`.opencode/` is reserved for project skills and agents. `application_agent_guidance()`
+adds application development rules only to application checkouts. Verify the
+distinction in isolated fixtures without running metadata generation against
+live caches or modifying AI backup journals.
 
 ## Preserve ownership boundaries
 
