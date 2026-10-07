@@ -4841,10 +4841,6 @@ class MCUWebBackendAPI:
                                     connected: bool = False, failed: bool = False):
         if failed:
             current = total
-        elif connected:
-            # A successful handshake is complete, regardless of how many
-            # polling rounds were needed to reach it.
-            current = total
         current = max(0, min(total, current))
         if total > 0:
             multiplier = max(1, round(bar_width / total))
@@ -4859,7 +4855,7 @@ class MCUWebBackendAPI:
             text = f"  🔌 Connecting [ {bar} ] | FAILED >> 💡 Please hold 'BOOT' button on MCU physical board"
             tag = "error"
         elif connected:
-            text = f"  ✔ Connected [ {bar} ] | {current}/{total}"
+            text = "  ✔ Connected"
             tag = "success"
         else:
             text = f"  🔌 Connecting [ {bar} ] | {current}/{total}"
@@ -4869,7 +4865,7 @@ class MCUWebBackendAPI:
         self.emit("console:log", {
             "text": text,
             "tag": tag,
-            "replace_pattern": r"(?:connecting|connected)\s*\[.*\]\s*\|\s*(?:\d+/\d+|FAILED)",
+            "replace_pattern": r"(?:connecting|connected).*",
             "newline": True
         })
 
