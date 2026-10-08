@@ -414,6 +414,8 @@ class PackageJobChecks(unittest.TestCase):
                 patch.dict(os.environ, {'PLATFORMIO_CORE_DIR': str(self.core)}), \
                 patch.object(offline_bootstrap, 'requested_plan', return_value=({'schema': 1, 'platforms': ['fixture']}, None)), \
                 patch.object(offline_bootstrap, 'ready', side_effect=[False, True]), \
+                patch('src.modules.offline_mode.offline_enabled', return_value=True), \
+                patch('src.modules.offline_mode.finish_bootstrap'), \
                 patch.object(offline_bootstrap, 'clean_bootstrap_environment', return_value={}):
             namespace['_run_setup_in_thread'](gui)
         return namespace, gui, calls
@@ -474,6 +476,8 @@ class PackageJobChecks(unittest.TestCase):
                 patch('src.modules.runtime_resources.enforce_minimum_cpu_requirement', return_value=True), \
                 patch('src.modules.platform_runtime.native_platformio_dir', return_value=self.core), \
                 patch('src.modules.offline_bootstrap.clean_bootstrap_environment', return_value={}), \
+                patch('src.modules.offline_mode.offline_enabled', return_value=False), \
+                patch('src.modules.offline_mode.finish_bootstrap'), \
                 patch.object(setup.venv, 'EnvBuilder') as builder, \
                 patch.object(setup.subprocess, 'run', side_effect=run), \
                 patch.object(setup.subprocess, 'call', side_effect=launch), \

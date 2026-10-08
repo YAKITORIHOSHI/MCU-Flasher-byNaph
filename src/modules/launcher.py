@@ -104,10 +104,9 @@ _verify_storage_drive_type()
 # the scenario that can actually race on shared state (the "env" venv
 # folder, installers/, etc).
 #
-# It deliberately does NOT check whether the Main GUI itself is already
-# running -- mcu_flash_gui.py already owns that check on its own (its
-# _claim_gui_instance() mutex + message box), so duplicating it here would
-# just be redundant.
+# Once a workspace from this installation is running, a second launch can
+# open another independent project without repeating Bootstrap. Explicit
+# setup, a pending mode change, or a recorded crash retains repair handling.
 #
 # Implementation: a PID lock file rather than a named OS mutex. A named
 # "Local\" mutex is normally session-wide regardless of UAC elevation, but
@@ -130,24 +129,32 @@ def _process_is_alive(pid: int) -> bool:
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     STILL_ACTIVE = 259
     try:
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD,
+                                                       wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
         try:
             exit_code = ctypes.c_ulong()
-            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
                 return False
             if exit_code.value != STILL_ACTIVE:
                 return False
 
             buf = ctypes.create_unicode_buffer(1024)
             size = ctypes.c_ulong(1024)
-            if ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
                 exe_name = Path(buf.value).name.lower()
                 return any(k in exe_name for k in ("python", "mcu", "flasher", "launcher"))
             return False
         finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 
@@ -278,9 +285,8 @@ if __name__ == "__main__":
 
     # If another main GUI window is already active, skip bootstrap completely and launch the new window directly
     try:
-        from bootstrap import _is_main_gui_running, _spawn_main_gui, _explicit_setup_requested, _read_startup_health_snapshot
-        if _is_main_gui_running() and not _explicit_setup_requested() and _read_startup_health_snapshot() is not None:
-            _spawn_main_gui()
+        from bootstrap import _try_running_instance_launch
+        if _try_running_instance_launch():
             sys.exit(0)
     except Exception:
         pass

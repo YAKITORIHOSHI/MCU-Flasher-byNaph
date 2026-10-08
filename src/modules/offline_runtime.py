@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 _enabled = False
+_network_blocked = False
 
 
 class OfflineDependencyError(RuntimeError):
@@ -38,9 +39,9 @@ def _local_address(address):
 
 
 def _audit(event, args):
-    if event in ("socket.connect", "socket.sendto") and not _local_address(args[-1]):
+    if _network_blocked and event in ("socket.connect", "socket.sendto") and not _local_address(args[-1]):
         raise OfflineDependencyError(bootstrap_instruction("Network downloads are disabled in the workspace"))
-    if event == "socket.getaddrinfo" and str(args[0]).lower() not in ("localhost", "127.0.0.1", "::1", "none"):
+    if _network_blocked and event == "socket.getaddrinfo" and str(args[0]).lower() not in ("localhost", "127.0.0.1", "::1", "none"):
         raise OfflineDependencyError(bootstrap_instruction("Online lookup is disabled in the workspace"))
     if event == "subprocess.Popen":
         command = args[1]
@@ -59,13 +60,24 @@ def _audit(event, args):
             raise OfflineDependencyError(bootstrap_instruction("Dependency installation is bootstrap-only"))
 
 
-def activate():
-    global _enabled
+def activate(offline=True):
+    """Keep installation bootstrap-only; networking follows the saved mode.
+
+    Audit hooks cannot be removed. A mode change therefore requires a new
+    process, rather than trying to turn an active offline hook off in place.
+    """
+    global _enabled, _network_blocked
     if _enabled:
         return
-    os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = "1"
+    _network_blocked = bool(offline)
+    os.environ["MCU_FLASHER_WORKSPACE_RUNTIME"] = "1"
     os.environ["MCU_FLASHER_APP_ROOT"] = str(ROOT)
-    os.environ["PIP_NO_INDEX"] = "1"
+    if offline:
+        os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = "1"
+        os.environ["PIP_NO_INDEX"] = "1"
+    else:
+        os.environ.pop("MCU_FLASHER_OFFLINE_RUNTIME", None)
+        os.environ.pop("PIP_NO_INDEX", None)
     os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
     os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
     from src.modules.windows_tool_paths import install_espidf_component_relpaths
@@ -74,6 +86,9 @@ def activate():
     install_mbed_compat()
     sys.addaudithook(_audit)
     _enabled = True
+    # The site hook also runs in nested SCons/framework Python children. Their
+    # package managers must retain installed-only behavior in online mode too.
+    guard_platformio()
 
 
 def guard_platformio():

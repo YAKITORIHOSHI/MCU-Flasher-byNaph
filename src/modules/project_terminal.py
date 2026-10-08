@@ -671,6 +671,9 @@ def _build_terminal_env(target_dir: str) -> dict[str, str]:
     # coding CLIs or their child Python processes.
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
+    env.pop("MCU_FLASHER_OFFLINE_RUNTIME", None)
+    env.pop("MCU_FLASHER_WORKSPACE_RUNTIME", None)
+    env.pop("PIP_NO_INDEX", None)
 
     # Ensure PATHEXT includes all executable extensions
     pathext = env.get("PATHEXT", "")
@@ -1132,6 +1135,17 @@ class ProjectTerminalServer:
                     with session.lock:
                         pty = session.pty if session.running else None
                     if pty:
+                        try:
+                            from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_active
+                            tracker = getattr(session, "_prompt_tracker", None)
+                            if tracker is None:
+                                tracker = session._prompt_tracker = PromptInputTracker(self.target_dir)
+                            active = getattr(session, "_assistant_input_active", False)
+                            if "\r" in clean_data or "\n" in clean_data:
+                                active = session._assistant_input_active = assistant_process_active(getattr(pty, "pid", 0))
+                            tracker.feed(clean_data, active=active)
+                        except Exception:
+                            pass
                         try:
                             pty.write(clean_data)
                         except Exception:

@@ -193,8 +193,18 @@ Compiler concurrency also respects physical core count when the OS reports it.
 
 ### Startup and resource limits
 
-All application dependency downloads belong to bootstrap. The default package
-plan in [direct/offline-packages.json](direct/offline-packages.json) prepares AVR,
+All application dependency downloads belong to bootstrap. **Offline mode** in
+Settings is disabled by default. Online setup prepares the local application
+runtime and SCons; use Boards & Libraries Manager to prepare missing exact targets.
+Compile, Upload and Reset always use installed packages and never run installers.
+Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
+can consume many gigabytes and substantial time. Close other project windows
+before changing modes. Disabling confirms removal of app-owned offline records
+and retained archives, while preserving shared toolchains, projects and recovery
+history. Failed saves or restart handoffs leave the workspace open.
+
+For offline mode, the package plan in
+[direct/offline-packages.json](direct/offline-packages.json) prepares AVR,
 ESP32 and ESP8266 with Arduino, including their required package variants and
 optional upload/debug tools. Add platform specifications for megaAVR, SAM/SAMD,
 STM32, RP2040, nRF52 or Teensy when needed. The optional `frameworks` list limits
@@ -202,8 +212,8 @@ preparation to those declared frameworks; omit it to prepare every framework
 declared by the configured platforms. Bootstrap checks each distinct builder
 environment before recording local readiness. Readiness certifies the configured
 plan; installed boards outside that plan may need further preparation.
-Incomplete preparation stops launch; a deleted package requires bootstrap repair.
-An older prepared store must run bootstrap again when the default plan changes.
+Incomplete offline preparation stops launch; a deleted required package needs
+bootstrap repair. An offline store must be prepared again when its plan changes.
 Bootstrap also audits every visible Arduino declaration in the discovered board
 sources and writes the complete `.mcu-bootstrap-board-coverage.json` report in
 the host's package store. Its summary distinguishes prepared exact targets,
@@ -329,7 +339,11 @@ settings. A Zephyr module failure still stops setup and reports its full log.
 Concurrent checks require reviewed builders that do not modify shared framework
 state. Native and unknown builders run sequentially; separate temporary folders
 alone do not isolate framework virtual environments or generated package files.
-The reviewed AVR Arduino probes use the shared CPU/RAM/storage job budget.
+Reviewed AVR and exact ESP8266 Arduino probes share a bounded worker pool after
+package installation finishes. Their source signatures and full package identities
+must match; native and unknown builders remain sequential. A failed probe cancels
+active and queued siblings and never certifies readiness. Existing certified
+preparation is reused. The pool uses the shared CPU/RAM/storage job budget.
 `offline_bootstrap.py --jobs N` can reduce concurrency; requests above the safe
 budget are capped. Each probe gets one compiler job to avoid nested job pools.
 Windows Zephyr CMake uses the canonical framework base so junction-expanded
@@ -348,7 +362,8 @@ these prepared providers before its older bundled dependencies take precedence.
 Setup validates their versions and imports; offline builds use them without
 installing packages. Missing or incompatible providers require bootstrap repair.
 
-The main app and its PlatformIO commands enforce offline operation. Missing
+Offline mode denies workspace network access; online mode permits networking.
+Both modes keep dependency installation inside Bootstrap. Missing
 packages report the bootstrap repair command, and **Refresh boards** reads local
 definitions. Editor, terminal and assistant frontend assets are bundled locally.
 The toolbar's **Bootstrap** action opens a separate setup process. Add custom
@@ -425,8 +440,10 @@ Checking Auto-scroll also resumes following; checking it while holding the
 scrollbar waits for release. Serial Monitor Auto-scroll follows whenever it is
 enabled: holding or dragging its scrollbar pauses the view, and release jumps
 to the latest output immediately, even if no new data arrives. Turn Auto-scroll
-off to keep reading older serial output. Build output and notifications keep
-a scrolled-up reading position until the reader returns to the bottom.
+off to keep reading older output. Build output uses the same hold/release policy,
+including a drag released outside the view. Notifications retain their independent
+reading position. The unexpanded ESP32 objcopy recipe and quiet dependency-scan
+notice are omitted; compiler diagnostics and failures remain visible.
 Turning Auto-scroll off prevents forced following. If bounded history evicts
 the visible text, the view clamps to the remaining history. The HTML assistant
 fallback keeps its reading position; coding terminals retain their native
@@ -567,7 +584,7 @@ Setup starts at 70% of the active monitor's width and height. Qt logical sizing,
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
 4. **Pre-Built Toolchain Seeding**: Seeds the pre-built PlatformIO core (~1.7GB fast download with resume & SHA-256 verification) and Arduino CLI binaries.
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
-6. **Offline Package Preparation**: Installs every configured platform's declared framework and uploader/debugger package variants, prepares builders and sketch libraries, and verifies local editor/terminal assets. Bootstrap writes readiness only after the whole plan succeeds.
+6. **Package Preparation**: Online mode verifies the runtime and local editor/terminal assets. Explicit offline mode prepares the configured framework, uploader/debugger and library plan, then records readiness only after every required check succeeds.
 7. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition. Direct GUI entry points require bootstrap readiness and never run installers.
 
 > [!IMPORTANT]
@@ -748,7 +765,7 @@ MCU Flasher by Naph/
 - Launch the application by double-clicking **`MCU_Flasher.exe`** (or running **`direct\runThisOnWindows.vbs`**).
 - **Private Python Runtime Enforcer**: Handled transparently by `src/modules/private_python_guard.py`. Windows uses its bundled private runtime. Linux uses `.venv-linux` (or a valid local Linux `env` virtual environment) and provides a setup command when it is missing.
 - **Session Sentinel & Crash Detection**: `src/modules/crash_detector.py` monitors runtime integrity, providing unhandled exception logging and clean startup recovery markers.
-- Bootstrap verifies runtime dependencies and prepares the configured board/framework/tool/library packs before opening the app. Compile, Upload and Reset use installed packages only.
+- Bootstrap verifies the selected online/offline preparation mode before opening the app. Compile, Upload and Reset use installed packages only. An additional window of the same healthy installation bypasses Bootstrap while respecting explicit repair and pending mode changes. Session markers, child logs and native crash diagnostics are separate per process.
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
 
 ### 2. Opening, Selecting & Scaffolding Projects
@@ -878,6 +895,31 @@ MCU Flasher by Naph/
 - Pure compilation (`op == "compile"`) is safely cancellable upon closing.
 
 ### 7. Offline Monaco Code Editor
+
+**Ctrl+Shift+F** opens Find All for root sketch sources and text notes. Literal
+search supports Match case and Whole word, includes unsaved editor buffers, and
+opens a result at its file, line and column. Search runs in a bounded background
+worker and excludes build/cache folders. Enter between C++ braces follows the
+model's saved tab/space indentation. New sketches contain empty `setup()` and
+`loop()` functions; optional `.cpp` files are empty and headers contain only
+`#pragma once`. Modify starts with the sketch's filename and scrolls on short
+screens. Explicit Blink remains available.
+
+The **AI Changes** tool tab retains recent timestamped file previews grouped by
+submitted prompt. Each file has its own Accept/Reject review with a queue counter
+and Previous/Next navigation. Before and AI-edit panes highlight removed and
+added lines. Delete card and Delete all affect display history only, preserving
+pending reviews and recovery copies. History survives reopening the project and
+is bounded to 200 cards / 4 MiB; large previews are marked as truncated.
+Integrated assistant input supplies prompt titles when reconstructable. Changes
+from an external CLI without prompt metadata are grouped by settled activity and
+explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
+registered as manual operations before disk changes and never become AI reviews.
+
+Hardware-free checks for these behaviors are `direct/verify_project_search.py`,
+`direct/verify_ai_changes.py`, `direct/verify_offline_mode.py` and
+`direct/verify_sessions.py`. Native board compilation/upload and Ubuntu execution
+require their own hardware/host verification.
 - **Monaco Editor (VS Code Engine)**:
   - Embedded offline via `QWebEngineView` and `QWebChannel` (`src/editor/qwebchannel.js`).
   - 100% offline: zero CDN dependencies, local bundled scripts, web workers, and font assets.

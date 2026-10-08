@@ -8,6 +8,7 @@ Operates directly on the current sketch folder and refreshes the editor on succe
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,11 +18,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QPushButton, QLabel, QLineEdit, QComboBox,
-    QMessageBox,
+    QMessageBox, QScrollArea, QFrame,
 )
 from main.qt.icons import ActionButton as QPushButton
 
-ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".txt"]
+ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".hpp", ".c", ".txt"]
 
 
 class ModifyFilesDialog(QDialog):
@@ -34,13 +35,14 @@ class ModifyFilesDialog(QDialog):
         self._backend = backend
         self.setWindowTitle("Modify project files")
         from main.qt.responsive import fit_dialog, ScreenWatcher
-        fit_dialog(self, (480, 340), (320, 260))
+        fit_dialog(self, (520, 460), (320, 260))
         self.setModal(True)
 
         self._setup_ui()
         self._screen_watcher = ScreenWatcher(self)
         self._apply_dialog_theme()
         self._refresh_file_lists()
+        self._reset_default_name()
 
         # Connect theme changed signal for live re-theming
         try:
@@ -96,7 +98,7 @@ class ModifyFilesDialog(QDialog):
         btn_clear     = pal.get("BTN_CLEAR", "#2d3748")
         btn_clear_h   = pal.get("BTN_CLEAR_H", "#3a4a60")
 
-        self.setStyleSheet(f"QDialog {{ background-color: {bg_dark}; color: {text}; }}")
+        self.setStyleSheet(f"QDialog {{ background-color: {bg_dark}; color: {text}; }} QLabel {{ color: {text}; }}")
         self._header_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {cyan}; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
         self._path_lbl.setStyleSheet(f"font-size: 11px; color: {text_dim}; font-family: Consolas, monospace;")
 
@@ -265,12 +267,10 @@ class ModifyFilesDialog(QDialog):
         root.addLayout(btn_row)
 
     def _setup_add_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        tab, layout, actions = self._file_tab()
 
         hint = QLabel("Create a new header or source file inside the active sketch folder:")
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         row = QHBoxLayout()
@@ -287,6 +287,7 @@ class ModifyFilesDialog(QDialog):
         layout.addLayout(row)
 
         self._add_status = QLabel("")
+        self._add_status.setWordWrap(True)
         self._add_status.setStyleSheet("font-size: 11px; min-height: 16px;")
         layout.addWidget(self._add_status)
 
@@ -295,17 +296,15 @@ class ModifyFilesDialog(QDialog):
         self._btn_add = QPushButton("✚ Create File")
         self._btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_add.clicked.connect(self._on_add_file)
-        layout.addWidget(self._btn_add, alignment=Qt.AlignmentFlag.AlignRight)
+        actions.addWidget(self._btn_add, alignment=Qt.AlignmentFlag.AlignRight)
 
         self._tabs.addTab(tab, "✚ Add")
 
     def _setup_rename_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        tab, layout, actions = self._file_tab()
 
         hint = QLabel("Select an existing project file to rename:")
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         self._rename_combo = QComboBox()
@@ -319,6 +318,7 @@ class ModifyFilesDialog(QDialog):
         layout.addWidget(self._rename_edit)
 
         self._rename_status = QLabel("")
+        self._rename_status.setWordWrap(True)
         self._rename_status.setStyleSheet("font-size: 11px; min-height: 16px;")
         layout.addWidget(self._rename_status)
 
@@ -327,27 +327,27 @@ class ModifyFilesDialog(QDialog):
         self._btn_rename = QPushButton("✏ Rename File")
         self._btn_rename.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_rename.clicked.connect(self._on_rename_file)
-        layout.addWidget(self._btn_rename, alignment=Qt.AlignmentFlag.AlignRight)
+        actions.addWidget(self._btn_rename, alignment=Qt.AlignmentFlag.AlignRight)
 
         self._tabs.addTab(tab, "✏ Rename")
 
     def _setup_delete_tab(self) -> None:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        tab, layout, actions = self._file_tab()
 
         hint = QLabel("Select a file to permanently delete from the sketch folder:")
+        hint.setWordWrap(True)
         layout.addWidget(hint)
 
         self._delete_combo = QComboBox()
         layout.addWidget(self._delete_combo)
 
         warn_lbl = QLabel("⚠️ Deleted files cannot be restored from the Recycle Bin.")
+        warn_lbl.setWordWrap(True)
         warn_lbl.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
         layout.addWidget(warn_lbl)
 
         self._delete_status = QLabel("")
+        self._delete_status.setWordWrap(True)
         self._delete_status.setStyleSheet("font-size: 11px; min-height: 16px;")
         layout.addWidget(self._delete_status)
 
@@ -356,17 +356,50 @@ class ModifyFilesDialog(QDialog):
         self._btn_delete = QPushButton("🗑 Delete File")
         self._btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_delete.clicked.connect(self._on_delete_file)
-        layout.addWidget(self._btn_delete, alignment=Qt.AlignmentFlag.AlignRight)
+        actions.addWidget(self._btn_delete, alignment=Qt.AlignmentFlag.AlignRight)
 
         self._tabs.addTab(tab, "🗑 Delete")
 
     # ── Helpers & Actions ────────────────────────────────────────────────────
+
+    def _file_tab(self):
+        """Keep the action visible while the form scrolls on short monitors."""
+        tab = QWidget(self._tabs)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+        scroll = QScrollArea(tab)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        form = QWidget(scroll)
+        layout = QVBoxLayout(form)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(10)
+        scroll.setWidget(form)
+        outer.addWidget(scroll, 1)
+        return tab, layout, outer
+
+    def _reset_default_name(self):
+        project = getattr(self._backend, "sketch_dir_path", None)
+        active = getattr(self._backend, "active_file_path", None)
+        # The active .cpp/.h can differ from the primary sketch basename.
+        sketches = [Path(name).stem for name in getattr(self, "_project_file_names", [])
+                    if name.lower().endswith(".ino")]
+        sketch = next((name for name in sketches if project and name == Path(project).name), "")
+        if not sketch and active and Path(active).suffix.lower() == ".ino":
+            sketch = Path(active).stem
+        if not sketch and sketches:
+            sketch = sketches[0]
+        self._add_name_edit.setText(sketch or (Path(project).name if project else ""))
+        self._add_name_edit.selectAll()
 
     def _refresh_file_lists(self) -> None:
         if not self._backend or not self._backend.sketch_dir_path:
             return
         files = self._backend.get_project_files()
         names = [f["name"] for f in files if isinstance(f, dict) and "name" in f]
+        self._project_file_names = names
 
         self._rename_combo.clear()
         self._delete_combo.clear()
@@ -403,7 +436,7 @@ class ModifyFilesDialog(QDialog):
         if res.get("success"):
             self._add_status.setStyleSheet("color: #4ec994;")
             self._add_status.setText(f"✔ File '{filename}' created successfully.")
-            self._add_name_edit.clear()
+            self._reset_default_name()
             self._refresh_file_lists()
         else:
             self._add_status.setStyleSheet("color: #e74c3c;")

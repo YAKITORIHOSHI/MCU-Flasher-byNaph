@@ -202,6 +202,13 @@ class EditorBridgeAPI(QObject):
             return self._backend.get_project_dir()
         return ""
 
+    @Slot()
+    def open_project_search(self) -> None:
+        """Route the editor shortcut to its window-owned native Find All."""
+        panel = self.parent()
+        if panel and hasattr(panel, "show_project_search"):
+            panel.show_project_search()
+
     @Slot(str, str, result=str)
     def realtime_check_syntax(self, file_path: str, content: str) -> str:
         """Coalesce edits; parsing never blocks the WebChannel/UI thread."""
@@ -773,7 +780,10 @@ class MonacoEditorPanel(QWidget):
             if modifiers & Qt.KeyboardModifier.ControlModifier:
                 key = event.key()
                 text = event.text()
-                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or text in ("+", "="):
+                if key == Qt.Key.Key_F and modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    self.show_project_search()
+                    return True
+                elif key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) or text in ("+", "="):
                     self._step_font_size(1)
                     return True
                 elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore) or text in ("-", "_"):
@@ -932,6 +942,11 @@ class MonacoEditorPanel(QWidget):
     def _on_project_updated(self, payload: dict) -> None:
         """Handle project folder change or new sketch creation."""
         self._bridge.retain_current_project_buffers()
+        search = getattr(self, "_search_dialog", None)
+        if search and self._backend and search.project != Path(self._backend.sketch_dir_path):
+            search.close()
+            search.deleteLater()
+            self._search_dialog = None
         self.reload_project()
         active = payload.get("active_file")
         if active:
@@ -939,16 +954,86 @@ class MonacoEditorPanel(QWidget):
 
     def goto_line(self, file_path: str, line_no: int) -> None:
         """Navigate to file and scroll to line in Monaco editor."""
-        if file_path:
-            self.open_file(file_path)
+        self.goto_location(file_path, line_no)
+
+    def goto_location(self, file_path: str, line_no: int, column: int = 1, end_column: int = 1) -> None:
+        """Wait for file activation before positioning a search/syntax result."""
+        path_json = json.dumps(str(file_path or ""))
+        line_no, column = max(1, int(line_no)), max(1, int(column))
+        end_column = max(column, int(end_column))
         js = (
-            f"if (window.editorInstance) {{"
-            f"  window.editorInstance.revealLineInCenter({line_no});"
-            f"  window.editorInstance.setPosition({{lineNumber: {line_no}, column: 1}});"
-            f"  window.editorInstance.focus();"
-            f"}}"
+            "(async () => {"
+            f" const path = {path_json};"
+            " if (path && window.activateProjectFile && !window.activateProjectFile(path)) {"
+            "   if (window.safeLoadProject) await window.safeLoadProject();"
+            "   if (!window.activateProjectFile?.(path)) return;"
+            " }"
+            " await new Promise(resolve => requestAnimationFrame(resolve));"
+            " const active = document.querySelector('#tab-bar .tab.active');"
+            " if (path && window.projectPathKey(active?._filePath) !== window.projectPathKey(path)) return;"
+            " const editor = window.editorInstance; if (!editor?.getModel()) return;"
+            f" editor.revealLineInCenter({line_no});"
+            f" editor.setSelection({{startLineNumber: {line_no}, startColumn: {column},"
+            f" endLineNumber: {line_no}, endColumn: {end_column}}});"
+            " editor.focus();"
+            "})()"
         )
+        self._view.setFocus(Qt.FocusReason.OtherFocusReason)
         self._view.page().runJavaScript(js)
+
+    def show_project_search(self) -> None:
+        """Search current text without saving files or changing dirty tabs."""
+        if not self._backend or not self._backend.sketch_dir_path:
+            return
+        requested_project = Path(self._backend.sketch_dir_path)
+        requested_buffers = dict(self._bridge._buffer_snapshots)
+
+        def show(snapshot):
+            if isinstance(snapshot, str):
+                try:
+                    snapshot = json.loads(snapshot)
+                except (ValueError, TypeError):
+                    snapshot = {}
+            snapshot = snapshot if isinstance(snapshot, dict) else {}
+            project = Path(self._backend.sketch_dir_path)
+            if project != requested_project:
+                return
+            search = getattr(self, "_search_dialog", None)
+            if search is None or search.project != project or search.parentWidget() is not self.window():
+                if search:
+                    search.close()
+                    search.deleteLater()
+                from main.qt.project_search import ProjectSearchDialog
+                search = ProjectSearchDialog(project, self._search_buffers, self.goto_location, self.window())
+                self._search_dialog = search
+            snapshot["buffer_present"] = snapshot.get("path") in requested_buffers
+            snapshot["buffer_baseline"] = requested_buffers.get(snapshot.get("path"))
+            self._search_active_snapshot = snapshot
+            search.open_search(str(snapshot.get("selection", "")))
+
+        self._view.page().runJavaScript(
+            "(() => { const editor = window.editorInstance, model = editor?.getModel();"
+            " const tab = document.querySelector('#tab-bar .tab.active');"
+            " if (!model || !tab?._filePath) return '{}';"
+            " const selection = editor.getSelection();"
+            " const snapshot = {path: tab._filePath, selection: selection &&"
+            " model.getValueLengthInRange(selection) <= 512 ? model.getValueInRange(selection) : ''};"
+            " if (model.getValueLength() <= 2 * 1024 * 1024) snapshot.content = model.getValue();"
+            " return JSON.stringify(snapshot); })()", show
+        )
+
+    def _search_buffers(self) -> dict[str, str]:
+        buffers = dict(self._bridge._buffer_snapshots)
+        active = getattr(self, "_search_active_snapshot", {})
+        # The last keystroke can still be crossing WebChannel at shortcut time.
+        # Use the renderer snapshot only if no newer edit/save has arrived.
+        path = active.get("path")
+        unchanged = ((path in buffers) == active.get("buffer_present", False)
+                     and buffers.get(path) == active.get("buffer_baseline"))
+        if path and "content" in active and unchanged:
+            buffers[active["path"]] = active["content"]
+        self._search_active_snapshot = {}
+        return buffers
 
     def force_layout(self) -> None:
         """Force Monaco to instantly recalculate geometry and repaint."""

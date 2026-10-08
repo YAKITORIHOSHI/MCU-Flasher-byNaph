@@ -3648,7 +3648,7 @@ def ensure_optional_pip_feature(
     installed by bootstrap. Offline workspace callers receive False and must
     request a separate bootstrap repair instead of installing at runtime.
     """
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         return False
     package_ids = _FEATURE_PACKAGE_IDS.get(str(feature).strip().lower())
     if not package_ids:
@@ -5609,7 +5609,7 @@ def prepare_platformio_board_toolchain(
     declared packages without inventing Arduino entry points; the user's real
     project compile validates their startup/linker requirements.
     """
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Board package installation is bootstrap-only; the workspace cannot prepare packages")
     platform = str(platform or "").strip()
     board_id = str(board_id or "").strip()
@@ -9458,6 +9458,7 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "src" / "modules" / "arduino_cli_support.py",
         SCRIPT_DIR / "src" / "modules" / "platformio_locks.py",
         SCRIPT_DIR / "src" / "modules" / "offline_runtime.py",
+        SCRIPT_DIR / "src" / "modules" / "offline_mode.py",
         SCRIPT_DIR / "src" / "modules" / "offline_platformio.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_platformio.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_seed.py",
@@ -9592,8 +9593,10 @@ def _read_startup_health_snapshot() -> dict | None:
         core_dir = str(data.get("platformio_core_dir") or "").strip()
         if core_dir and not Path(core_dir).exists():
             return None
-        from src.modules.offline_bootstrap import ready
-        if not core_dir or not ready(core_dir):
+        from src.modules.offline_mode import offline_enabled, startup_ready
+        if data.get("offline_enabled", False) != offline_enabled():
+            return None
+        if not core_dir or not startup_ready(core_dir):
             return None
         return data
     except (OSError, ValueError, TypeError):
@@ -9604,6 +9607,7 @@ def _write_startup_health_snapshot() -> bool:
     """Persist the successful setup result atomically for future warm launches."""
     temporary: Path | None = None
     try:
+        from src.modules.offline_mode import offline_enabled
         if _startup_site_packages_dir() is None:
             return False
         STARTUP_HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -9617,6 +9621,7 @@ def _write_startup_health_snapshot() -> bool:
             "python_executable_name": Path(sys.executable).name,
             "critical_ready": all(path.exists() for path in _startup_required_paths()),
             "platformio_core_dir": os.environ.get("PLATFORMIO_CORE_DIR", ""),
+            "offline_enabled": offline_enabled(),
             "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if not payload["critical_ready"]:
@@ -9712,17 +9717,14 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
             from private_python_guard import get_private_python_exe
             python_exe = get_private_python_exe(prefer_pythonw=True)
 
-        # Try to find a non-locked log file name to support multiple concurrent windows
-        for i in range(10):
-            suffix = "" if i == 0 else f"_{i}"
-            candidate_log = logs_dir / f"gui_crash{suffix}.log"
-            try:
-                candidate_log.write_text("", encoding="utf-8")
-                log_fh = open(candidate_log, "w", encoding="utf-8")
-                gui_log = candidate_log
-                break
-            except Exception:
-                continue
+        # A writable file is not necessarily unlocked on Windows. Exclusive
+        # allocation avoids truncating another window's diagnostics.
+        try:
+            log_fh = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=logs_dir,
+                                                 prefix="gui_startup-", suffix=".log", delete=False)
+            gui_log = Path(log_fh.name)
+        except OSError:
+            pass
 
         if log_fh is None:
             try:
@@ -9736,6 +9738,7 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
         startupinfo.wShowWindow = 1  # SW_SHOWNORMAL
         
         launch_env = os.environ.copy()
+        launch_env["MCU_FLASHER_GUI_LOG"] = str(gui_log)
         launch_env["PLATFORMIO_CORE_DIR"] = os.environ.get(
             "PLATFORMIO_CORE_DIR", _get_safe_platformio_core_dir(SCRIPT_DIR)
         )
@@ -10539,7 +10542,8 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             # package setup; complete stores skip it. Invalid existing data stops
             # this step rather than allowing a fallback to replace those files.
             try:
-                seeded = _ensure_platformio_core_prebuilt(gui)
+                from src.modules.offline_mode import offline_enabled
+                seeded = _ensure_platformio_core_prebuilt(gui) if offline_enabled() else True
             except Exception as exc:
                 _record_bootstrap_exception("PlatformIO release seed preparation failed")
                 _fail_and_exit("PlatformIO release seed", str(exc))
@@ -10576,11 +10580,12 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             offline_plan, offline_plan_path = requested_plan()
             offline_board_sources = requested_board_sources()
             offline_packages_ready = ready(offline_core, offline_plan if offline_plan_path else None)
-            if offline_board_sources or _explicit_setup_requested() or not offline_packages_ready:
+            prepare_offline = offline_enabled() or bool(offline_plan_path or offline_board_sources)
+            if prepare_offline and (offline_board_sources or _explicit_setup_requested() or not offline_packages_ready):
                 try:
                     opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
                 except Exception:
-                    opt_jobs = max(1, min(os.cpu_count() or 4, 8))
+                    opt_jobs = 1
                 command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/offline_bootstrap.py"),
                            "--core", str(offline_core), "--jobs", str(opt_jobs)]
                 if offline_plan_path:
@@ -10599,6 +10604,15 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
                     _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
                     return
+            elif not prepare_offline:
+                # Online is the default: keep the local editor and build engine
+                # ready without installing every offline board/library variant.
+                from src.modules.offline_bootstrap import install_runtime_guard
+                install_runtime_guard(offline_core)
+                gui.root.after(0, lambda: gui.log_ok(
+                    "Online runtime ready; offline board/library preparation is disabled."))
+            from src.modules.offline_mode import finish_bootstrap
+            finish_bootstrap(offline_core)
 
         # ── CP210x Driver ─────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking CP210x Driver"))
@@ -10894,19 +10908,18 @@ def _notify_bootstrap_already_running():
 
 
 def _is_main_gui_running() -> bool:
-    """Check whether any Main GUI window/process is currently running."""
-    # 1. Check instances registry in gui_config.json
+    """Check live sessions/processes from this particular installation."""
     try:
-        from main.core.config import _load_raw_config, _get_alive_pid_create_times, _instance_is_alive
-        data = _load_raw_config()
-        alive = _get_alive_pid_create_times()
-        for pid, inst in data.get("instances", {}).items():
-            if _instance_is_alive(pid, inst, alive):
+        from src.modules.crash_detector import running_sessions
+        for session in running_sessions(SCRIPT_DIR):
+            if (session.get("installation_root") == _startup_installation_identity()
+                    and int(session.get("pid", 0)) != os.getpid()):
                 return True
     except Exception:
         pass
 
-    # 2. Direct process scan: check for any running Python process executing mcu_flash_gui.py
+    # Compatibility with already-running older builds. A filename/title alone
+    # could identify another portable copy whose dependencies differ from ours.
     try:
         import psutil
         cur_pid = os.getpid()
@@ -10917,44 +10930,48 @@ def _is_main_gui_running() -> bool:
             if "python" not in name:
                 continue
             cmdline = proc.info.get("cmdline") or []
-            if any(Path(arg).name.lower() == "mcu_flash_gui.py" for arg in cmdline):
-                return True
+            for arg in cmdline:
+                candidate = Path(str(arg))
+                if candidate.name.lower() != "mcu_flash_gui.py":
+                    continue
+                if not candidate.is_absolute():
+                    candidate = Path(proc.cwd()) / candidate
+                candidate = candidate.resolve(strict=False)
+                if candidate in (GUI_SCRIPT.resolve(strict=False),
+                                 (SCRIPT_DIR / "main/mcu_flash_gui.py").resolve(strict=False)):
+                    return True
     except Exception:
         pass
 
-    # 3. Direct Win32 window check: search for existing MCU Flasher top-level window owned by a Python process
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            found_hwnds = []
-            def _enum_cb(hwnd, lparam):
-                if user32.IsWindowVisible(hwnd):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        title = buf.value.lower()
-                        if "mcu flasher" in title and "setup" not in title and "crash" not in title:
-                            pid = ctypes.c_ulong()
-                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                            if pid.value and pid.value != os.getpid():
-                                try:
-                                    import psutil
-                                    proc_name = (psutil.Process(pid.value).name() or "").lower()
-                                    if "python" in proc_name or "mcu_flasher" in proc_name:
-                                        found_hwnds.append(hwnd)
-                                except Exception:
-                                    pass
-                return True
-            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
-            user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
-            if found_hwnds:
-                return True
-        except Exception:
-            pass
-
     return False
+
+
+def _try_running_instance_launch() -> bool:
+    """Open another workspace directly after checking mode/repair readiness."""
+    if _explicit_setup_requested() or not _is_main_gui_running():
+        return False
+    try:
+        from src.modules.offline_mode import startup_ready
+        from src.modules.crash_detector import detect_previous_crash
+        core_dir = os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR)
+        if (not startup_ready(core_dir) or not all(path.exists() for path in _startup_required_paths())
+                or detect_previous_crash(SCRIPT_DIR).get("crashed")):
+            return False
+        proc, _log = _spawn_main_gui()
+        if proc is None:
+            return False
+        try:
+            exit_code = proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return True
+        if exit_code == 0:
+            return True
+        STARTUP_HEALTH_FILE.unlink(missing_ok=True)
+        _record_bootstrap_log("RECOVERY", f"Additional workspace exited early ({exit_code}); verification required.")
+        return False
+    except Exception as exc:
+        _record_bootstrap_log("RECOVERY", f"Additional workspace could not start: {exc}")
+        return False
 
 
 def _verify_storage_drive_type():
@@ -11052,9 +11069,8 @@ def main():
 
     # If another main GUI is already active and healthy, spawn a new window directly
     # without running the setup/repair pipeline again.
-    if _is_main_gui_running() and not _explicit_setup_requested() and _read_startup_health_snapshot() is not None:
+    if _try_running_instance_launch():
         _record_bootstrap_log("FINISH", "Existing main GUI detected; spawning new window directly.")
-        _spawn_main_gui()
         return
 
     # Fast path: on subsequent launches where the previous run was healthy,

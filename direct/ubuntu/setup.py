@@ -38,7 +38,7 @@ def main(argv=None) -> int:
     from src.modules.platform_runtime import native_platformio_dir
     env = clean_bootstrap_environment()
     env["PYTHONNOUSERSITE"] = "1"
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         # A terminal inside the app can inherit its conditional Python guard.
         # Relaunch bootstrap before running installers in that interpreter.
         return subprocess.call([sys.executable, "-B", str(Path(__file__).resolve()),
@@ -56,18 +56,23 @@ def main(argv=None) -> int:
         core = native_platformio_dir()
         command = [str(python), "-B", str(ROOT / "src/modules/offline_bootstrap.py"),
                    "--core", str(core)]
+        from src.modules.offline_mode import offline_enabled, finish_bootstrap
+        prepare_offline = offline_enabled() or bool(args.plan or args.board_source)
+        if not prepare_offline:
+            command += ["--runtime-only"]
         if args.plan:
             command += ["--plan", str(args.plan)]
         for source in args.board_source or ():
             command += ["--board-source", str(source)]
         # Existing package certificates need only a fresh declaration audit.
         from src.modules.offline_bootstrap import load_plan, ready
-        if ready(core, load_plan(args.plan) if args.plan else None):
+        if prepare_offline and ready(core, load_plan(args.plan) if args.plan else None):
             command += ["--coverage-only"]
         from src.modules.package_jobs import package_store_lease
         with package_store_lease(core, mode="prepare", wait=True,
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
+            finish_bootstrap(core)
         print("Ubuntu runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]
@@ -77,7 +82,7 @@ def main(argv=None) -> int:
                 command += ["--new-window"]
             return subprocess.call(command, cwd=ROOT, env=env)
         return 0
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError) as exc:
         print(f"Setup failed: {exc}\nCheck network access and install python3-venv, then rerun setup.", file=sys.stderr)
         return 1
 

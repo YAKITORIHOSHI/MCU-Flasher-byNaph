@@ -1038,6 +1038,8 @@
         <span id="ai-review-title" class="review-title">⚡ AI Review</span>
         <span id="ai-review-file" class="review-file"></span>
         <span id="ai-review-position" class="review-position"></span>
+        <button id="ai-review-previous" class="review-btn" type="button" aria-label="Previous file review">Previous</button>
+        <button id="ai-review-next" class="review-btn" type="button" aria-label="Next file review">Next</button>
         <span id="ai-diff-add-count" class="diff-badge-add">+0 added</span>
         <span id="ai-diff-modify-count" class="diff-badge-modify">~0 changed</span>
         <span id="ai-diff-remove-count" class="diff-badge-remove">-0 removed</span>
@@ -1147,6 +1149,57 @@
   </script>
   <!-- Local, C++-only trimmed Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
+  <script>
+    // Extend the offline C++ language after its lazy configuration loads.
+    // Monaco keeps its normal undo, multicursor and tab/space settings.
+    (function () {
+      async function configureCppIndentation() {
+        if (typeof monaco === 'undefined' || !monaco.languages) return false;
+        try {
+          const cpp = monaco.languages.getLanguages().find(language => language.id === 'cpp');
+          const loaded = cpp && cpp.loader ? await cpp.loader() : null;
+          // The first C++ model also registers this lazily loaded object.
+          // Extend it in memory so that registration cannot erase these rules.
+          const configuration = loaded && loaded.conf ? loaded.conf : {};
+          Object.assign(configuration, {
+            indentationRules: {
+              increaseIndentPattern: /^((?!\/\/).)*\{[^}"']*$/,
+              decreaseIndentPattern: /^\s*\}/
+            },
+            onEnterRules: [
+              {
+                beforeText: /^((?!\/\/).)*\{[^}"']*$/,
+                afterText: /^\s*\}/,
+                action: { indentAction: monaco.languages.IndentAction.IndentOutdent }
+              },
+              {
+                beforeText: /^((?!\/\/).)*\{[^}"']*$/,
+                action: { indentAction: monaco.languages.IndentAction.Indent }
+              }
+            ]
+          });
+          monaco.languages.setLanguageConfiguration('cpp', configuration);
+          window.editorInstance?.updateOptions({autoIndent: 'full'});
+          return true;
+        } catch (error) {
+          console.error('C++ indentation configuration failed:', error);
+          return false;
+        }
+      }
+      window.configureCppIndentation = configureCppIndentation;
+      configureCppIndentation();
+
+      document.addEventListener('keydown', event => {
+        if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey ||
+            event.key.toLowerCase() !== 'f') return;
+        const api = window.pywebview && window.pywebview.api;
+        if (!api || !api.open_project_search) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        api.open_project_search();
+      }, true);
+    })();
+  </script>
   <script>
     if (!window.pywebview && window.parent && window.parent.pywebview) {
       window.pywebview = window.parent.pywebview;
@@ -1919,6 +1972,10 @@
         const reject = document.getElementById('ai-review-reject');
         if (accept) accept.disabled = !!disabled;
         if (reject) reject.disabled = !!disabled;
+        for (const id of ['ai-review-previous', 'ai-review-next']) {
+          const button = document.getElementById(id);
+          if (button) button.disabled = !!disabled;
+        }
       }
 
       function setBannerReviewMode() {
@@ -1929,6 +1986,8 @@
         setVisible(document.getElementById('ai-diff-remove-count'), true);
         setVisible(document.getElementById('ai-review-accept'), true);
         setVisible(document.getElementById('ai-review-reject'), true);
+        setVisible(document.getElementById('ai-review-previous'), true);
+        setVisible(document.getElementById('ai-review-next'), true);
         setVisible(document.getElementById('ai-history-undo'), false);
         setVisible(document.getElementById('ai-history-redo'), false);
         setVisible(document.getElementById('ai-history-close'), false);
@@ -1955,6 +2014,10 @@
           const index = Number(snapshot.reviewIndex) || 1;
           const count = Number(snapshot.pendingCount) || 1;
           position.textContent = `${index} of ${count}`;
+          for (const id of ['ai-review-previous', 'ai-review-next']) {
+            const button = document.getElementById(id);
+            if (button) button.style.display = count > 1 ? 'inline-flex' : 'none';
+          }
         }
         if (addBadge) addBadge.textContent = `+${Number(diff.added) || 0} added`;
         if (modifyBadge) modifyBadge.textContent = `~${Number(diff.modified) || 0} changed`;
@@ -2004,6 +2067,8 @@
           lastAiHistoryState = state;
 
           if (title) title.textContent = '↶ AI History';
+          setVisible(document.getElementById('ai-review-previous'), false);
+          setVisible(document.getElementById('ai-review-next'), false);
           if (file) {
             file.textContent = activeEntry.fileName || 'AI decision';
             file.title = activeEntry.path || '';
@@ -2707,6 +2772,21 @@
 
       const acceptButton = document.getElementById('ai-review-accept');
       const rejectButton = document.getElementById('ai-review-reject');
+      async function browseFileReview(direction) {
+        if (resolvingReview || !currentReview) return;
+        const api = bridgeApi();
+        if (!api || !api.get_ai_edit_reviews) return;
+        const reviews = await api.get_ai_edit_reviews() || [];
+        const index = reviews.findIndex(review => normalizePath(review.path) === normalizePath(currentReview.path));
+        if (reviews.length > 1) {
+          const next = reviews[(Math.max(0, index) + direction + reviews.length) % reviews.length];
+          await window.reloadActiveFileWithDiff(next.path);
+        }
+      }
+      const previousReviewButton = document.getElementById('ai-review-previous');
+      const nextReviewButton = document.getElementById('ai-review-next');
+      if (previousReviewButton) previousReviewButton.addEventListener('click', () => browseFileReview(-1));
+      if (nextReviewButton) nextReviewButton.addEventListener('click', () => browseFileReview(1));
       const undoButton = document.getElementById('ai-history-undo');
       const redoButton = document.getElementById('ai-history-redo');
       const closeHistoryButton = document.getElementById('ai-history-close');

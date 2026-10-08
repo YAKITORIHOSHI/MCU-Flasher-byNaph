@@ -85,7 +85,7 @@ def start_preparation(board_directory, *, job_id, package_metadata=None, core=No
     if event_root is not None:
         command.extend(["--events-root", os.path.abspath(event_root)])
     env = dict(os.environ)
-    for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX", "PYTHONHOME", "PYTHONPATH"):
+    for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX", "PYTHONHOME", "PYTHONPATH"):
         env.pop(key, None)
     env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
                PLATFORMIO_NO_TELEMETRY="1", PLATFORMIO_SETTING_ENABLE_TELEMETRY="false",
@@ -326,7 +326,7 @@ def _certified_definitions(core, rows):
 
 def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=None):
     """Worker-only operation; caller holds the exclusive package-store lease."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Board packages must be prepared outside the workspace process")
     from main.core import board_catalog
     from src.modules.offline_bootstrap import load_plan, prepare, ready

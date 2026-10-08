@@ -302,12 +302,8 @@ class PerformanceChecks(unittest.TestCase):
                 visible = widget.firstVisibleBlock().text()
                 widget.append_log({"text": "Output during wheel scroll"})
                 widget._flush_queue()
-                if serial:
-                    APP.processEvents()
-                    self.assertEqual(bar.value(), bar.maximum())
-                else:
-                    self.assertEqual(widget.firstVisibleBlock().text(), visible)
-                    self.assertLess(bar.value(), bar.maximum())
+                APP.processEvents()
+                self.assertEqual(bar.value(), bar.maximum())
                 bar.setSliderDown(True)
                 bar.setSliderPosition(bar.maximum())
                 visible = widget.firstVisibleBlock().text()
@@ -327,11 +323,8 @@ class PerformanceChecks(unittest.TestCase):
                 widget.set_autoscroll(True)
                 widget.append_log({"text": "Output after enabling Auto while reading"})
                 widget._flush_queue()
-                if serial:
-                    APP.processEvents()
-                    self.assertEqual(bar.value(), bar.maximum())
-                else:
-                    self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                APP.processEvents()
+                self.assertEqual(bar.value(), bar.maximum())
                 bar.setValue(bar.maximum())
                 widget.append_log({"text": "Following resumes at the actual bottom"})
                 widget._flush_queue()
@@ -810,7 +803,11 @@ class PerformanceChecks(unittest.TestCase):
                            "board_coverage": {"schema": 1, "path": REPORT, "total": 0,
                                               "ready_count": 0, "unavailable_count": 0}}
             (offline_core / offline_bootstrap.MARKER).write_text(json.dumps(certificate))
-            with patch.object(sys, "argv", ["bootstrap.py"]), patch.dict(os.environ, {"PLATFORMIO_CORE_DIR": str(offline_core)}), patch.dict(sys.modules, {"crash_detector": SimpleNamespace(detect_previous_crash=lambda: {"crashed": False})}):
+            with patch.object(sys, "argv", ["bootstrap.py"]), \
+                 patch.dict(os.environ, {"PLATFORMIO_CORE_DIR": str(offline_core)}), \
+                 patch("src.modules.offline_mode._configuration", return_value={"shared": {"offline_enabled": True}}), \
+                 patch("src.modules.offline_mode.ROOT", fixture), \
+                 patch.dict(sys.modules, {"crash_detector": SimpleNamespace(detect_previous_crash=lambda: {"crashed": False})}):
                 self.assertIsNone(scope["_read_startup_health_snapshot"]())
                 self.assertTrue(scope["_write_startup_health_snapshot"]())
                 child = Mock()

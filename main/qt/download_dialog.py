@@ -103,7 +103,7 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
     env = os.environ.copy()
     env["MCU_PREF_DIR"] = str(ROOT)
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    for k in ["_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH", "MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"]:
+    for k in ["_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH", "MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX"]:
         env.pop(k, None)
 
     cmd = [str(python_exe), str(script_path)]

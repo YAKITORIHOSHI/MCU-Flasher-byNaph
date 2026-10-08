@@ -45,6 +45,9 @@ class PtySession(QObject):
             env = os.environ.copy()
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
+            env.pop("MCU_FLASHER_OFFLINE_RUNTIME", None)
+            env.pop("MCU_FLASHER_WORKSPACE_RUNTIME", None)
+            env.pop("PIP_NO_INDEX", None)
             if "NO_COLOR" in env:
                 env.pop("FORCE_COLOR", None)
             env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="MCUFlasher")
@@ -58,6 +61,16 @@ class PtySession(QObject):
     @Slot(str)
     def write(self, data):
         if self.process and not self._closed:
+            try:
+                from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_active
+                if not hasattr(self, "_prompt_tracker"):
+                    self._prompt_tracker = PromptInputTracker(self.cwd)
+                active = getattr(self, "_assistant_input_active", False)
+                if "\r" in data or "\n" in data:
+                    active = self._assistant_input_active = assistant_process_active(self.process.pid)
+                self._prompt_tracker.feed(data, active=active)
+            except Exception:
+                pass
             try:
                 self.process.write(data.encode("utf-8"))
             except (OSError, EOFError) as exc:

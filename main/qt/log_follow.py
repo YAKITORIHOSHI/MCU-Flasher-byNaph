@@ -4,7 +4,7 @@ from functools import wraps
 
 from PySide6.QtCore import QObject, QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QPlainTextEdit
+from PySide6.QtWidgets import QPlainTextEdit, QApplication
 from shiboken6 import isValid
 
 
@@ -46,6 +46,11 @@ class LogFollow(QObject):
         bar.installEventFilter(self)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
+        # A drag can finish outside the scrollbar or viewport. Observe release
+        # at the application boundary so a lost grab cannot leave Auto anchored.
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
     def _at_bottom(self):
         bar = self.view.verticalScrollBar()
@@ -139,14 +144,22 @@ class LogFollow(QObject):
         if not isValid(self.view):
             return False
         kind = event.type()
+        if (self.scrollbar_held and kind == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._release()
+        if self.scrollbar_held and kind in (QEvent.Type.UngrabMouse, QEvent.Type.WindowDeactivate):
+            self._release()
         if obj == self._bar:
             if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._press()
             elif kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self._release()
-        elif kind == QEvent.Type.MouseButtonPress:
-            self._cancel_settle()
-        elif kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):
+        elif obj in (self.view, self.view.viewport()) and kind == QEvent.Type.MouseButtonPress:
+            if self.hold_to_pause and event.button() == Qt.MouseButton.LeftButton:
+                self._press()
+            else:
+                self._cancel_settle()
+        elif obj in (self.view, self.view.viewport()) and kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):
             # QAbstractScrollArea routes wheel input through its viewport.
             self._cancel_settle()
             QTimer.singleShot(0, self._sync_scroll)

@@ -122,6 +122,14 @@ class ParserBackend:
 
 
 class BuildLogRoutingChecks(unittest.TestCase):
+    def test_unexpanded_objcopy_recipe_is_hidden_but_diagnostics_are_kept(self):
+        recipe = '"$PYTHONEXE" "$OBJCOPY" --chip esp32 elf2image --flash_mode ${__get_board_flash_mode(__env__)} -o $TARGET $SOURCES'
+        messages = self.route(recipe, "scons: *** firmware.bin Error 1")
+        self.assertFalse(any(recipe == item.get("text", "").strip() for item in messages))
+        self.assertTrue(any("Error 1" in item.get("text", "") for item in messages))
+        messages = self.route("src/main.cpp:3:1: error: command failed", recipe)
+        self.assertTrue(any(recipe in item.get("text", "") for item in messages))
+
     def route(self, *lines):
         backend = ParserBackend(lines)
         captured = ROUTE(backend)

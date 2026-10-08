@@ -70,6 +70,7 @@ compile_commands.json
 .clangd
 
 # === Project & Runtime Logs / State ===
+src/offline-extras/
 logs/
 logs/*
 .dm_hwnd
@@ -160,4 +161,3 @@ old-*
 /.opencodeignore
 /AGENTS.md
 /.ai_ready_signal
-

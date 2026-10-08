@@ -106,7 +106,7 @@ def retained_board_sources(core, sources=()):
 
 def report_coverage(core, sources, *, plan, platform_sources, board_manifests, log=print, source_preparation=None):
     """Publish full source-bound coverage while retaining package readiness scope."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Bootstrap board coverage belongs to the preparation worker")
     from main.core import board_catalog
     from main.core.file_utils import write_generated_text

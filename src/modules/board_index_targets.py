@@ -149,7 +149,7 @@ def fetch_preparation_catalog(core):
     PlatformIO also returns installed entries; callers retain their own local
     manifests first. This operation never installs a development platform.
     """
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Online board discovery belongs to explicit preparation outside the workspace")
     from src.modules.offline_bootstrap import clean_bootstrap_environment
     environment = clean_bootstrap_environment()
@@ -282,7 +282,8 @@ def explicit_board_match(record, board_id, candidates):
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.modules.private_python_guard import is_running_private_python
-    if sys.argv[1:] != ["--registry-catalog"] or not is_running_private_python() or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if (sys.argv[1:] != ["--registry-catalog"] or not is_running_private_python() or
+            os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME")):
         raise SystemExit("Registered board discovery requires the explicit private preparation runtime")
     from platformio.package.manager.platform import PlatformPackageManager
     # No installed fallback, no one-day cached subset, and no platform

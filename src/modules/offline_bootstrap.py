@@ -69,6 +69,16 @@ _REVIEWED_STM32_NATIVE_PACKAGES = {
     "zephyr": {"scripts/platformio/platformio-build.py": "49741b887efb67252b6d7bb7be80ace7ac448f5888ae8513ab0e491b958e28d3"},
     "mbed": {"platformio/pio_mbed_adapter.py": "447a3d2beda11296e710935b3b2dee7a17d0cf3b7740b86484f3e69b9d601685"},
 }
+# This exact ESP8266 Arduino dispatcher builds only in $BUILD_DIR. Its framework
+# package script was reviewed too; unknown versions retain serial preparation.
+_REVIEWED_ESP8266_BUILDERS = {
+    ("espressif8266", "4.2.1"): {
+        "platform.py": "94f42a90239d1d13e4ac20b0889fb5436b2747e32fd911db01d60b3e4cc747cc",
+        "builder/main.py": "18cec6eadeeb724b84c4de0376d19edd323d01c782b415e73134c8fcf28ec91d",
+        "builder/frameworks/arduino.py": "e731251bf95ffdf13be196e972ee6299cfbd065b21f5bb8ab0b901621e60c3f5",
+    },
+}
+_ESP8266_PACKAGE_SCRIPT = {"tools/platformio-build.py": "3b2fc7e9d704ae8775c8dc3ce87f752a9d31d2cad486c02113e3d71071dd17ed"}
 
 
 def _reviewed_source_files(directory, signatures, limit=65536):
@@ -219,7 +229,7 @@ def ready(core, plan=None):
 
 def clean_bootstrap_environment(env=None):
     env = dict(os.environ if env is None else env)
-    for name in ("MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX", "PYTHONHOME", "PYTHONPATH"):
+    for name in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX", "PYTHONHOME", "PYTHONPATH"):
         env.pop(name, None)
     env["PLATFORMIO_NO_TELEMETRY"] = "1"
     env["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
@@ -246,7 +256,7 @@ def install_runtime_guard(core=None):
         directories.update(ROOT / item for item in ("env/Lib/site-packages", "src/_python/Lib/site-packages"))
         if core:
             directories.add(Path(core) / "penv/Lib/site-packages")
-    code = "import os, sys; sys.path.insert(0, os.environ.get('MCU_FLASHER_APP_ROOT', '')) if os.environ.get('MCU_FLASHER_OFFLINE_RUNTIME') else None; __import__('src.modules.offline_runtime', fromlist=['activate']).activate() if os.environ.get('MCU_FLASHER_OFFLINE_RUNTIME') else None\n"
+    code = "import os, sys; sys.path.insert(0, os.environ.get('MCU_FLASHER_APP_ROOT', '')) if os.environ.get('MCU_FLASHER_WORKSPACE_RUNTIME') or os.environ.get('MCU_FLASHER_OFFLINE_RUNTIME') else None; __import__('src.modules.offline_runtime', fromlist=['activate']).activate(bool(os.environ.get('MCU_FLASHER_OFFLINE_RUNTIME'))) if os.environ.get('MCU_FLASHER_WORKSPACE_RUNTIME') or os.environ.get('MCU_FLASHER_OFFLINE_RUNTIME') else None\n"
     hooks = []
     for directory in directories:
         if not directory.is_dir():
@@ -367,14 +377,30 @@ def package_plan(platform, boards, log=None, unavailable=None, allowed_framework
 
 
 def _parallel_builder_safe(platform, probes):
-    """Only reviewed AVR Arduino setup writes exclusively inside each project.
+    """Reviewed AVR/ESP8266 Arduino setup writes inside each scratch project.
 
     Native frameworks can mutate shared Python environments, framework module
     trees or generated package files. Separate cache/temp directories do not
     isolate those writes. Unknown and package-dispatched builders stay serial.
     """
-    return bool(probes and all(framework == "arduino" for _, framework in probes)
-                and _reviewed_avr_builder(platform))
+    if not probes or any(framework != "arduino" for _, framework in probes):
+        return False
+    if _reviewed_avr_builder(platform):
+        return True
+    try:
+        signatures = _REVIEWED_ESP8266_BUILDERS.get((platform.name, platform.version))
+        framework = platform.frameworks.get("arduino", {})
+        if (not signatures or framework.get("script") != "builder/frameworks/arduino.py" or
+                framework.get("package") != "framework-arduinoespressif8266" or
+                not _reviewed_source_files(platform.get_dir(), signatures)):
+            return False
+        directory = Path(platform.get_package_dir("framework-arduinoespressif8266"))
+        manifest = json.loads((directory / "package.json").read_text(encoding="utf-8-sig"))
+        return (manifest.get("name") == "framework-arduinoespressif8266" and
+                manifest.get("version") == "3.30102.0" and
+                _reviewed_source_files(directory, _ESP8266_PACKAGE_SCRIPT))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
 
 
 def _unavailable_frameworks(platform):
@@ -468,7 +494,7 @@ def _requested_builder_probes(core, specification, platform_name, probes, reques
 
 
 def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None, board_sources=()):
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
     from src.modules.platformio_locks import package_locks
@@ -479,7 +505,7 @@ def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets
 
 def refresh_board_coverage(core, sources, *, plan=None, log=print, jobs=None):
     """Refresh original Arduino targets while reusing certified PIO packages."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Bootstrap board coverage belongs to the preparation worker")
     from src.modules.bootstrap_arduino_sources import prepare_sources
     core = Path(os.path.abspath(core))
@@ -527,7 +553,7 @@ def _publish_board_coverage(core, sources, data, *, log=print, source_preparatio
 
 def finalize_board_coverage(core, sources, *, plan, source_preparation=None, log=print):
     """Certify final downloader results after all target associations are published."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Bootstrap board coverage belongs to the preparation worker")
     from src.modules.bootstrap_board_coverage import report_coverage
     core = Path(os.path.abspath(core))
@@ -561,6 +587,7 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     from src.modules import bootstrap_builders
     import subprocess
     import time
+    import threading
     board_sources = tuple(board_sources)
 
     if jobs is not None and (not isinstance(jobs, int) or isinstance(jobs, bool) or jobs <= 0):
@@ -569,7 +596,7 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         from main.core.build_resources import get_optimal_compiler_jobs
         safe_jobs = get_optimal_compiler_jobs(storage_paths=(ROOT, core), storage_wait=True)
     except Exception:
-        safe_jobs = max(1, min((os.cpu_count() or 4) - 2, 8))
+        safe_jobs = 1  # Missing resource evidence cannot grant extra workers.
     jobs = safe_jobs if jobs is None else min(jobs, safe_jobs)
 
     def report(stage, **details):
@@ -603,6 +630,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     unavailable_manifests = {}
     builder_output_dir = ROOT / "logs" / f"offline-builders-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
     builder_number = 0
+    isolated_probes = []
+    probe_cancel = threading.Event()
     if not all((ROOT / item).is_file() for item in ASSETS):
         raise RuntimeError("Offline editor/terminal assets are missing from this application copy")
     allowed_frameworks = set(plan["frameworks"]) if "frameworks" in plan else None
@@ -646,18 +675,20 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
             probes = _requested_builder_probes(core, name, platform.name, probes,
                                               requested_targets, allowed_frameworks)
 
-        def _run_single_probe(item):
+        def _run_single_probe(item, probe_platform=name, number_offset=builder_number, probe_count=len(probes)):
+            if probe_cancel.is_set():
+                raise InterruptedError("Remaining Bootstrap probes were cancelled after a preparation failure")
             local_number, (board, framework) = item
-            probe_num = builder_number + local_number
+            probe_num = number_offset + local_number
             with tempfile.TemporaryDirectory(prefix="offline-prewarm-", dir=core) as scratch:
                 project = Path(scratch)
                 (project / "src").mkdir()
                 source = "#include <Arduino.h>\nvoid setup() {}\nvoid loop() {}\n" if framework == "arduino" else "int main(void) { return 0; }\n"
                 (project / "src/main.cpp").write_text(source)
-                (project / "platformio.ini").write_text(f"[env:offline]\nplatform = {name}\nboard = {board}\nframework = {framework}\n")
-                label = f"{name}:{board} ({framework})"
-                log(f"Preparing builder {label} [{local_number}/{len(probes)}]")
-                report("preparing", message=f"Preparing builder {label}", platform=name,
+                (project / "platformio.ini").write_text(f"[env:offline]\nplatform = {probe_platform}\nboard = {board}\nframework = {framework}\n")
+                label = f"{probe_platform}:{board} ({framework})"
+                log(f"Preparing builder {label} [{local_number}/{probe_count}]")
+                report("preparing", message=f"Preparing builder {label}", platform=probe_platform,
                        board=board, framework=framework, progress=None)
                 output_path = builder_output_dir / f"builder-{probe_num:04d}.log"
                 probe_env = dict(env)
@@ -675,15 +706,13 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
                 probe_env["SCONSFLAGS"] = "-j1"
                 bootstrap_builders.run_builder(command() + ["run", "--jobs", "1", "-d", str(project),
                                               "-e", "offline", "-t", "envdump"], env=probe_env, label=label,
-                                              output_path=output_path, log=log)
+                                              output_path=output_path, log=log, cancel=probe_cancel)
 
-        worker_count = max(1, min(jobs, len(probes))) if _parallel_builder_safe(platform, probes) else 1
         probe_items = list(enumerate(probes, 1))
-        if worker_count > 1 and len(probes) > 1:
-            log(f"Running {len(probes)} builder probes in parallel ({worker_count} concurrent workers)...")
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                list(executor.map(_run_single_probe, probe_items))
+        if _parallel_builder_safe(platform, probes):
+            # Installation remains serial. Run finite reviewed probes together
+            # only after every platform/package/library mutation has completed.
+            isolated_probes.extend((_run_single_probe, item) for item in probe_items)
         else:
             for item in probe_items:
                 _run_single_probe(item)
@@ -703,6 +732,20 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         installed = libraries.install(spec)
         verify_package_dependencies(libraries, installed)
         files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
+    if isolated_probes:
+        worker_count = max(1, min(jobs, len(isolated_probes)))
+        log(f"Running {len(isolated_probes)} reviewed builder probes across platforms "
+            f"({worker_count} concurrent workers)...")
+        from concurrent.futures import ThreadPoolExecutor
+        def run_isolated(probe):
+            worker, item = probe
+            try:
+                worker(item)
+            except BaseException:
+                probe_cancel.set()
+                raise
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            list(executor.map(run_isolated, isolated_probes))
     # Include all builder-created host packages, not only manifest defaults.
     for manifest in (core / "packages").glob("*/package.json"):
         files.add(str(manifest.relative_to(core)))
@@ -770,6 +813,24 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     log("Offline bootstrap package preparation complete. Workspace downloads are disabled.")
 
 
+def prepare_runtime(core, log=print):
+    """Prepare the online runtime without exhaustive offline board/library packs."""
+    if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        raise RuntimeError("Runtime preparation belongs to Bootstrap, outside the workspace process")
+    from src.modules.bootstrap_platformio import archive_paths
+    from src.modules.bootstrap_seed import prepare_scons
+    from src.modules.platformio_locks import package_locks
+    core = Path(os.path.abspath(core))
+    with archive_paths(), package_locks():
+        core.mkdir(parents=True, exist_ok=True)
+        for name, directory in (("CORE", core), ("PACKAGES", core / "packages"),
+                                ("PLATFORMS", core / "platforms"), ("GLOBALLIB", core / "lib")):
+            os.environ[f"PLATFORMIO_{name}_DIR"] = str(directory)
+        prepare_scons(core, log=log)
+        install_runtime_guard(core)
+    log("Online runtime prepared. Additional boards use explicit Bootstrap preparation when requested.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--core", required=True, type=Path)
@@ -779,8 +840,15 @@ def main(argv=None):
                         help="Arduino declaration source root; repeat for multiple roots")
     parser.add_argument("--coverage-only", action="store_true",
                         help="Prepare changed original Arduino targets and refresh coverage while reusing certified PlatformIO packages")
+    parser.add_argument("--runtime-only", action="store_true",
+                        help="Prepare only the online runtime, without exhaustive offline board/library packs")
     args = parser.parse_args(argv)
     try:
+        if args.runtime_only:
+            if args.coverage_only or args.plan or args.board_source:
+                raise ValueError("--runtime-only cannot be combined with an offline plan or coverage audit")
+            prepare_runtime(args.core)
+            return 0
         if any(not source.is_dir() for source in args.board_source or ()):
             raise ValueError("Every --board-source must name an existing Arduino board source directory")
         from src.modules.bootstrap_board_coverage import default_board_sources, retained_board_sources

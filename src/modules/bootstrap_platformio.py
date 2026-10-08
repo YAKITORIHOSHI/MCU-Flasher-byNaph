@@ -18,7 +18,7 @@ def _python_script(args):
 @contextmanager
 def builder_processes():
     """Keep builder children in bootstrap and expose nested module diagnostics."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Builder preparation belongs to bootstrap")
     import subprocess
     import click
@@ -71,7 +71,7 @@ def extended_windows_path(path):
 
 @contextmanager
 def archive_paths():
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Package installation belongs to bootstrap, outside the workspace process")
     if sys.platform != "win32":
         yield

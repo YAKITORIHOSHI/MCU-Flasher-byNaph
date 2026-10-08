@@ -139,7 +139,7 @@ def _cli_environment(*, online=False):
         if key.startswith("ARDUINO_"):
             environment.pop(key, None)
     if online:
-        for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
+        for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX"):
             environment.pop(key, None)
     else:
         # CLI startup must not fetch missing indexes/builtin tools either.
@@ -322,7 +322,7 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
     targets = [row for row in prepared if source_target_proof(row) or unsupported_proof(row)]
     if not targets:
         return prepared
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Arduino core preparation belongs to the separate online worker")
     notice = ("Preparing original Arduino source targets with Arduino CLI. Board identities and vendor defaults are preserved."
               if any(source_target_proof(row) for row in targets) else

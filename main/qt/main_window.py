@@ -282,6 +282,7 @@ class MCUMainWindow(QMainWindow):
                 "Notifications",
                 "Syntax Check",
                 "Terminal",
+                "AI Changes",
             ]
         elif width >= 850:
             titles = [
@@ -291,6 +292,7 @@ class MCUMainWindow(QMainWindow):
                 "Alerts",
                 "Syntax",
                 "Terminal",
+                "AI Changes",
             ]
         else:
             titles = [
@@ -300,10 +302,11 @@ class MCUMainWindow(QMainWindow):
                 "Alerts",
                 "Syntax",
                 "Terminal",
+                "AI Changes",
             ]
         if not getattr(self, "_tab_icons_initialized", False):
             from main.qt.icons import icon
-            names = ("console", "serial", "devices", "alerts", "search", "console")
+            names = ("console", "serial", "devices", "alerts", "search", "console", "edit")
             for i, name in enumerate(names):
                 if i < self._bottom_tabs.count():
                     self._bottom_tabs.setTabIcon(i, icon(name))
@@ -509,6 +512,10 @@ class MCUMainWindow(QMainWindow):
         self._terminal_panel = TerminalPanel(self._backend, self)
         self._bottom_tabs.addTab(self._terminal_panel, "Terminal")
 
+        from main.qt.ai_changes_panel import AIChangesPanel
+        self._ai_changes_panel = AIChangesPanel(self._backend, self)
+        self._bottom_tabs.addTab(self._ai_changes_panel, "AI Changes")
+
         # Set helpful hover tooltips across all bottom tabs
         self._bottom_tabs.setTabToolTip(0, "Build Console (Ctrl+R to compile, Ctrl+U to upload)")
         self._bottom_tabs.setTabToolTip(1, "Serial Monitor & Real-time MCU Communication")
@@ -516,6 +523,7 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setTabToolTip(3, "Notifications & Event Log")
         self._bottom_tabs.setTabToolTip(4, "Syntax Diagnostics & Code Analysis")
         self._bottom_tabs.setTabToolTip(5, "Integrated Bash terminal" if sys.platform.startswith("linux") else "Integrated PowerShell / CMD terminal")
+        self._bottom_tabs.setTabToolTip(6, "AI file changes grouped by prompt, with timestamps and before/after previews")
 
         # Ensure Build Console is always the default active bottom tab on startup
         self._bottom_tabs.setCurrentIndex(0)
@@ -590,6 +598,8 @@ class MCUMainWindow(QMainWindow):
             else:
                 self._terminal_panel._on_tab_hidden()
         self._fit_panes_for_height()
+        if widget is getattr(self, "_ai_changes_panel", None):
+            self._ai_changes_panel.refresh()
         self._layout_timer.start()
 
     def _on_theme_changed(self, theme_name: str) -> None:
@@ -636,6 +646,8 @@ class MCUMainWindow(QMainWindow):
             self._compat_panel.apply_theme(theme_name)
         if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
             self._notif_panel.apply_theme(theme_name)
+        if hasattr(self, "_ai_changes_panel"):
+            self._ai_changes_panel.apply_theme(theme_name)
         self._apply_responsive_layout(self.width())
         self._layout_timer.start()
         if preserve_focus and focused.isVisible() and focused.isEnabled():
@@ -697,6 +709,8 @@ class MCUMainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+U"), self, activated=self._shortcut_upload)
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self._shortcut_save)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=self._shortcut_save_all)
+        self._find_all_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self,
+                                          activated=self._editor_panel.show_project_search)
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_project)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -735,6 +749,7 @@ class MCUMainWindow(QMainWindow):
         # Settings and theme signals
         sig_bus.theme_changed.connect(self._on_theme_changed)
         sig_bus.font_size_changed.connect(self._on_content_font_changed)
+        sig_bus.font_size_changed.connect(self._ai_changes_panel.set_font_size)
         if hasattr(sig_bus, "graphics_accel_changed"):
             sig_bus.graphics_accel_changed.connect(self._on_graphics_accel_changed)
 
@@ -1092,6 +1107,62 @@ class MCUMainWindow(QMainWindow):
     def _shortcut_save_all(self) -> None:
         self._trigger_temporary_action("Saving All", 800)
         self._editor_panel.trigger_save_all()
+
+    def restart_for_offline_mode(self, previous_mode: bool) -> None:
+        """Save acknowledged editor bytes before handing restart to Bootstrap."""
+        from src.modules.offline_mode import transition_blocker
+        import subprocess
+
+        def failed(message="The sketch could not be saved. The workspace remains open."):
+            self.setEnabled(True)
+            from main.core.config import _load_raw_config, _save_raw_config
+            data = _load_raw_config(fresh=True)
+            data.setdefault("shared", {})["offline_enabled"] = bool(previous_mode)
+            data["shared"]["offline_preparation_pending"] = False
+            if _save_raw_config(data) is False:
+                message += " The previous mode could not be restored; run Bootstrap on the next launch."
+            QMessageBox.warning(self, "Restart cancelled", message)
+
+        def saved():
+            blocker = transition_blocker(self._backend)
+            if blocker or self._is_busy():
+                failed(blocker or "An operation started before restart. Wait for it to finish.")
+                return
+            environment = os.environ.copy()
+            for key in ("PYTHONHOME", "PYTHONPATH", "MCU_FLASHER_WORKSPACE_RUNTIME",
+                        "MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX"):
+                environment.pop(key, None)
+            command = [sys.executable, "-B", str(_project_root / "direct/restart_workspace.py"),
+                       "--parent", str(os.getpid()), "--project", str(getattr(self._backend, "sketch_dir_path", "") or "")]
+            options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
+            try:
+                child = subprocess.Popen(command, cwd=_project_root, env=environment,
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, **options)
+            except OSError as exc:
+                failed(f"Bootstrap restart could not start: {exc}")
+                return
+            def close_after_handoff():
+                if child.poll() is not None:
+                    failed("The restart helper stopped before the workspace closed.")
+                elif transition_blocker(self._backend) or self._is_busy():
+                    child.terminate()
+                    failed("An operation or another project window opened before restart.")
+                else:
+                    if not self.close():
+                        child.terminate()
+                        failed("The workspace could not close safely. Wait for the current action to finish.")
+            QTimer.singleShot(250, close_after_handoff)
+
+        blocker = transition_blocker(self._backend)
+        if blocker or self._is_busy():
+            failed(blocker or "Wait for the current operation to finish before restarting.")
+            return
+        self.setEnabled(False)
+        try:
+            self._editor_panel.trigger_save_all(callback=saved, failure_callback=failed)
+        except (OSError, RuntimeError) as exc:
+            failed(f"The editor could not save before restart: {exc}")
 
     def _is_busy(self) -> bool:
         if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
@@ -1676,12 +1747,6 @@ class MCUMainWindow(QMainWindow):
                 exit_trigger = Path(_project_root) / "index_json" / ".dm_force_exit"
                 exit_trigger.parent.mkdir(parents=True, exist_ok=True)
                 exit_trigger.write_text("exit", encoding="utf-8")
-        except Exception:
-            pass
-
-        try:
-            from src.modules.crash_detector import mark_session_clean_exit
-            mark_session_clean_exit(os.getpid())
         except Exception:
             pass
 

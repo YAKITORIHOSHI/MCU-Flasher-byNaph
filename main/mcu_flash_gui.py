@@ -42,7 +42,8 @@ from src.modules.private_python_guard import enforce_private_python
 enforce_private_python()
 
 from src.modules.offline_runtime import activate
-activate()
+from src.modules.offline_mode import offline_enabled
+activate(offline_enabled())
 
 # Hide background subprocess consoles on Windows
 if sys.platform == "win32":
@@ -61,7 +62,6 @@ from main.core.config import (
     set_instance_hwnd, set_active_sketch_dir,
     clean_instance_config,
 )
-from main.web_bridge import MCUWebBackendAPI
 
 # ── Crash Detection & Session Tracking ────────────────────────────────────────
 try:
@@ -69,6 +69,7 @@ try:
         mark_session_started,
         mark_session_clean_exit,
         record_crash_event,
+        install_crash_tracking,
     )
 except ImportError:
     try:
@@ -76,11 +77,16 @@ except ImportError:
             mark_session_started,
             mark_session_clean_exit,
             record_crash_event,
+            install_crash_tracking,
         )
     except ImportError:
         def mark_session_started(pid: int | None = None) -> None: pass
         def mark_session_clean_exit(pid: int | None = None) -> None: pass
         def record_crash_event(*args: Any, **kwargs: Any) -> None: pass
+        def install_crash_tracking(*args: Any, **kwargs: Any) -> None: pass
+
+install_crash_tracking(SCRIPT_DIR)
+from main.web_bridge import MCUWebBackendAPI
 
 # ── PySide6 GUI Components ───────────────────────────────────────────────────
 try:
@@ -193,11 +199,11 @@ def main() -> int:
             print(msg, file=sys.stderr)
             return 1
 
-        from src.modules.offline_bootstrap import ready
+        from src.modules.offline_mode import startup_ready
         from src.modules.offline_runtime import bootstrap_instruction
         from main.core.toolchain import _get_safe_platformio_core_dir
-        if not ready(_get_safe_platformio_core_dir(_project_root)):
-            print(bootstrap_instruction("Offline bootstrap preparation is incomplete"), file=sys.stderr)
+        if not startup_ready(_get_safe_platformio_core_dir(_project_root)):
+            print(bootstrap_instruction("Bootstrap preparation is incomplete for the selected mode"), file=sys.stderr)
             return 1
 
         # ── Qt Application ────────────────────────────────────────────────────

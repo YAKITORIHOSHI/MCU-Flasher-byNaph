@@ -287,7 +287,7 @@ class ConsolePanel(QPlainTextEdit):
         self._patterns = {}
         self._progress_blocks = {}
         self._autoscroll = True
-        self._follow = LogFollow(self)
+        self._follow = LogFollow(self, hold_to_pause=True)
         self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
         self._hide_warnings = bool(get_hide_build_console_warnings())
         self.set_font_size(get_monitor_font_size())

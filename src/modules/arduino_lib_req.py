@@ -51,7 +51,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 # The Arduino Library & Board Browser is the package downloader; remove offline runtime limits
-for _barrier_var in ("MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
+for _barrier_var in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX"):
     os.environ.pop(_barrier_var, None)
 
 try:

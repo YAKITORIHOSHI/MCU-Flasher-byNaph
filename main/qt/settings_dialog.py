@@ -65,6 +65,8 @@ class SettingsDialog(QDialog):
 
         self._raw_cfg = _load_raw_config()
         self._shared = self._raw_cfg.get("shared", {})
+        self.offline_mode_restart_requested = False
+        self.offline_mode_previous = self._shared.get("offline_enabled") is True
 
         self._build_ui()
         self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_rows())
@@ -105,6 +107,8 @@ class SettingsDialog(QDialog):
         narrow = available < 440
         for row in (self._autosave_row, self._reset_row):
             row.setDirection(QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight)
+        if hasattr(self, "_offline_box"):
+            self._offline_box.setMaximumWidth(max(0, self.width() - 52))
 
     def _apply_dialog_theme(self, mode: str) -> None:
         from main.qt.theme import get_palette
@@ -504,6 +508,22 @@ class SettingsDialog(QDialog):
         sv.addWidget(startup_lbl)
         layout.addWidget(startup_box)
 
+        offline_box = QGroupBox("Offline Mode")
+        self._offline_box = offline_box
+        ov = QVBoxLayout(offline_box)
+        self.cb_offline = QCheckBox("Enable offline mode", offline_box)
+        self.cb_offline.setToolTip("Prepare the configured board and library package plan. Restart required.")
+        self.cb_offline.setChecked(self.offline_mode_previous)
+        ov.addWidget(self.cb_offline)
+        offline_note = QLabel(
+            "Disabled by default. Enabling restarts the app into Bootstrap to prepare the configured "
+            "board and library plan, which can use many gigabytes of disk space. "
+            "Changing mode requires other project windows to be closed.", offline_box)
+        offline_note.setProperty("role", "dim")
+        offline_note.setWordWrap(True)
+        ov.addWidget(offline_note)
+        layout.addWidget(offline_box)
+
         # ── 7. Hardware Reset Operations ─────────────────────────────────────
         reset_box = QGroupBox("Hardware Reset Operations")
         rv = QVBoxLayout(reset_box)
@@ -665,7 +685,7 @@ class SettingsDialog(QDialog):
             self,
             "Reset All Settings",
             "Are you sure you want to restore all settings to their default values?\n\n"
-            "This will reset CPU Multithreading, Panel Resize, Font Size, Console Warnings, Theme, Auto-Save, and Serial Monitor options to resource-aware defaults.",
+            "This will reset CPU Multithreading, Panel Resize, Font Size, Console Warnings, Theme, Auto-Save, Serial Monitor, and Offline Mode options to resource-aware defaults.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -687,6 +707,7 @@ class SettingsDialog(QDialog):
         self.cb_autosave.setChecked(False)
         self.autosave_spin.setValue(1500)
         self.cb_reset_on_baud.setChecked(False)
+        self.cb_offline.setChecked(False)
 
         # Apply and save
         self._save_and_apply()
@@ -813,6 +834,38 @@ class SettingsDialog(QDialog):
         data = copy.deepcopy(_load_raw_config())
         if "shared" not in data or not isinstance(data["shared"], dict):
             data["shared"] = {}
+        requested_offline = self.cb_offline.isChecked()
+        current_offline = data["shared"].get("offline_enabled") is True
+        mode_changed = requested_offline != current_offline
+        if mode_changed:
+            from src.modules.offline_mode import transition_blocker
+            blocker = transition_blocker(self._backend)
+            if blocker:
+                QMessageBox.warning(self, "Offline mode cannot change", blocker)
+                return
+            if requested_offline:
+                title = "Prepare offline packages and restart?"
+                message = (
+                    "Bootstrap will download and prepare every board/framework and library in the configured "
+                    "offline plan. This can consume many gigabytes of disk space and take substantial time.\n\n"
+                    "The app will restart into Bootstrap after your sketch files are saved. Continue?")
+            else:
+                title = "Disable offline mode and remove extras?"
+                message = (
+                    "Bootstrap will delete application-owned offline preparation records and retained offline "
+                    "archives. Installed runtimes and toolchains, your projects, settings and AI edit history "
+                    "will be kept.\n\nThe app will restart after your sketch files are saved. Continue?")
+            if QMessageBox.question(self, title, message,
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+            # A dialog can remain open while another window or operation starts.
+            blocker = transition_blocker(self._backend)
+            if blocker:
+                QMessageBox.warning(self, "Offline mode cannot change", blocker)
+                return
+            data["shared"]["offline_enabled"] = requested_offline
+            data["shared"]["offline_preparation_pending"] = True
 
         # 1. CPU Multithreading
         cpu_text = self.cpu_combo.currentText()
@@ -866,6 +919,8 @@ class SettingsDialog(QDialog):
         if _save_raw_config(data) is False:
             QMessageBox.critical(self, "Settings not saved", "The configuration files could not be written. Check that your user folder is writable and try again.")
             return
+        self.offline_mode_restart_requested = mode_changed
+        self.offline_mode_previous = current_offline
 
         from main.core.theme import Theme
         from main.qt.theme import build_stylesheet

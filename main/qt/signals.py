@@ -240,6 +240,7 @@ class MCUSignals(QObject):
     # ── AI Review Signals ────────────────────────────────────────────────────
     ai_review_requested = Signal(str)
     ai_review_resolved = Signal(str)
+    ai_changes_updated = Signal()
 
 
 # Module-level singleton — import and use directly:

@@ -1680,7 +1680,12 @@ class ControlsBar(QWidget):
     def _open_settings(self) -> None:
         from main.qt.settings_dialog import SettingsDialog
         dlg = SettingsDialog(self._backend, parent=self.window())
-        dlg.exec()
+        result = dlg.exec()
+        from PySide6.QtWidgets import QDialog
+        if result == QDialog.DialogCode.Accepted and getattr(dlg, "offline_mode_restart_requested", False):
+            window = self.window()
+            if hasattr(window, "restart_for_offline_mode"):
+                window.restart_for_offline_mode(dlg.offline_mode_previous)
 
     def _toggle_ai_panel(self, checked: bool) -> None:
         self.btn_ai.setText("🤖 Hide AI" if checked else "🤖 AI Assistant")

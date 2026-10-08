@@ -17,6 +17,7 @@ import subprocess
 import hashlib
 import textwrap
 import queue
+from contextlib import nullcontext
 from datetime import datetime
 from uuid import uuid4
 from pathlib import Path
@@ -380,11 +381,10 @@ class MCUWebBackendAPI:
                 if not default_ino.exists():
                     default_ino.write_text(
                         "void setup() {\n"
-                        "  Serial.begin(115200);\n"
-                        "  Serial.println(\"Hello from MCU Flasher by Naph!\");\n"
+                        "\n"
                         "}\n\n"
                         "void loop() {\n"
-                        "  delay(1000);\n"
+                        "\n"
                         "}\n",
                         encoding="utf-8",
                     )
@@ -495,8 +495,14 @@ class MCUWebBackendAPI:
         # AI Review Engine & Filesystem Watcher
         from main.core.ai_review import AIReviewManager, AIEditWatcher
         self.ai_review_manager = AIReviewManager(self.sketch_dir_path)
+        self.ai_review_manager.history_changed_callback = self._on_ai_changes_updated
         self.ai_watcher = AIEditWatcher(self.sketch_dir_path, self.ai_review_manager)
         self.ai_watcher.ai_edit_detected.connect(self._on_ai_edit_detected)
+
+    def _on_ai_changes_updated(self) -> None:
+        bus = self._get_qt_signals()
+        if bus is not None and hasattr(bus, "ai_changes_updated"):
+            bus.ai_changes_updated.emit()
 
     def _on_ai_edit_detected(
         self,
@@ -2426,7 +2432,7 @@ class MCUWebBackendAPI:
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         clean_name = filename.strip()
-        if not clean_name:
+        if not clean_name or Path(clean_name).name != clean_name or "/" in clean_name or "\\" in clean_name:
             return {"success": False, "error": "Filename cannot be empty."}
         target = self.sketch_dir_path / clean_name
         if target.exists():
@@ -2437,17 +2443,15 @@ class MCUWebBackendAPI:
 
         content = ""
         if ext in (".h", ".hpp"):
-            guard = re.sub(r'[^A-Za-z0-9_]', '_', clean_name.upper())
-            content = f"#ifndef {guard}\n#define {guard}\n\n#include <Arduino.h>\n\n#endif // {guard}\n"
-        elif ext == ".cpp":
-            h_pair = target.with_suffix(".h")
-            if h_pair.exists():
-                content = f'#include "{h_pair.name}"\n\n'
-            else:
-                content = '#include <Arduino.h>\n\n'
+            content = "#pragma once\n"
+        elif ext == ".ino":
+            content = "void setup() {\n\n}\n\nvoid loop() {\n\n}\n"
 
         try:
-            target.write_text(content, encoding="utf-8")
+            watcher = getattr(self, "ai_watcher", None)
+            with watcher.user_file_operation(target) if watcher else nullcontext():
+                with target.open("x", encoding="utf-8") as stream:
+                    stream.write(content)
             _sketch_ram_cache.invalidate()
             self.update_skip_compile_availability()
             self.emit("project:updated", {"path": str(self.sketch_dir_path), "active_file": str(target)})
@@ -2463,12 +2467,19 @@ class MCUWebBackendAPI:
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         old_file = self.sketch_dir_path / old_name.strip()
         new_file = self.sketch_dir_path / new_name.strip()
+        if any(not name.strip() or Path(name.strip()).name != name.strip() or "/" in name or "\\" in name
+               for name in (old_name, new_name)) or old_file.is_symlink() or new_file.is_symlink():
+            return {"success": False, "error": "Use a source filename in the project root."}
+        if new_file.suffix.lower() not in {".ino", ".h", ".hpp", ".cpp", ".c", ".txt"}:
+            return {"success": False, "error": "Choose a supported sketch file extension."}
         if not old_file.is_file():
             return {"success": False, "error": f"File '{old_name}' not found."}
         if new_file.exists():
             return {"success": False, "error": f"File '{new_name}' already exists."}
         try:
-            old_file.rename(new_file)
+            watcher = getattr(self, "ai_watcher", None)
+            with watcher.user_file_operation(old_file, new_file) if watcher else nullcontext():
+                old_file.rename(new_file)
             _sketch_ram_cache.invalidate()
             self.update_skip_compile_availability()
             self.emit("project:updated", {"path": str(self.sketch_dir_path), "active_file": str(new_file)})
@@ -2483,13 +2494,17 @@ class MCUWebBackendAPI:
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
             return {"success": False, "error": "Cannot modify files in the MCU Flasher application folder."}
         target = self.sketch_dir_path / filename.strip()
+        if not filename.strip() or Path(filename.strip()).name != filename.strip() or "/" in filename or "\\" in filename or target.is_symlink():
+            return {"success": False, "error": "Use a source filename in the project root."}
         if not target.is_file():
             return {"success": False, "error": f"File '{filename}' not found."}
         all_sources = get_sketch_files_fast(self.sketch_dir_path)
         if len(all_sources) <= 1:
             return {"success": False, "error": "Cannot delete the only source file in the project."}
         try:
-            target.unlink()
+            watcher = getattr(self, "ai_watcher", None)
+            with watcher.user_file_operation(target) if watcher else nullcontext():
+                target.unlink()
             _sketch_ram_cache.invalidate()
             self.update_skip_compile_availability()
             self.emit("project:updated", {"path": str(self.sketch_dir_path)})
@@ -2604,11 +2619,10 @@ class MCUWebBackendAPI:
                 if not default_ino.exists():
                     template = (
                         "void setup() {\n"
-                        "  Serial.begin(115200);\n"
-                        "  Serial.println(\"Hello from MCU Flasher by Naph!\");\n"
+                        "\n"
                         "}\n\n"
                         "void loop() {\n"
-                        "  delay(1000);\n"
+                        "\n"
                         "}\n"
                     )
                     default_ino.write_text(template, encoding="utf-8")
@@ -2844,7 +2858,7 @@ class MCUWebBackendAPI:
             target_dir.mkdir(parents=True, exist_ok=False)
             ensure_hidden_read_first_md(target_dir)
 
-            ino_includes = f'#include "{clean_name}.h"\n\n' if include_h else ""
+            ino_includes = ""
 
             if template_type == "bare":
                 body = (
@@ -2870,11 +2884,10 @@ class MCUWebBackendAPI:
             else:  # standard
                 body = (
                     "void setup() {\n"
-                    "  Serial.begin(115200);\n"
-                    "  Serial.println(\"Hello from MCU Flasher by Naph!\");\n"
+                    "\n"
                     "}\n\n"
                     "void loop() {\n"
-                    "  delay(1000);\n"
+                    "\n"
                     "}\n"
                 )
 
@@ -2883,19 +2896,12 @@ class MCUWebBackendAPI:
 
             if include_h:
                 h_file = target_dir / f"{clean_name}.h"
-                h_content = (
-                    "#pragma once\n\n"
-                    "// Header declarations for " + clean_name + "\n"
-                )
+                h_content = "#pragma once\n"
                 h_file.write_text(h_content, encoding="utf-8")
 
             if include_cpp:
                 cpp_file = target_dir / f"{clean_name}.cpp"
-                cpp_includes = f'#include "{clean_name}.h"\n\n' if include_h else ""
-                cpp_content = (
-                    cpp_includes +
-                    "// Implementation details for " + clean_name + "\n"
-                )
+                cpp_content = ""
                 cpp_file.write_text(cpp_content, encoding="utf-8")
 
             return (self.open_project_window(str(target_dir)) if open_in_new_window
@@ -4352,12 +4358,8 @@ class MCUWebBackendAPI:
                 return None
 
             def _report_build_silence(seconds: int) -> None:
-                self.emit("console:log", {
-                    "text": f"  ℹ PlatformIO has not emitted build output for {seconds} seconds; dependency scanning can be quiet.",
-                    "tag": "dim",
-                    "replace_pattern": r"PlatformIO has not emitted build output for \d+ seconds",
-                    "newline": True,
-                })
+                # Pipe polling still keeps Stop responsive during a quiet scan.
+                pass
 
             for line in _iter_process_output(
                 self._active_process,
@@ -4370,6 +4372,14 @@ class MCUWebBackendAPI:
                     continue
                 output_lines.append(line_clean)
                 low = line_clean.lower()
+
+                # SCons sometimes prints this unexpanded recipe rather than a
+                # command. Hide only the exact routine; preserve failed recipes.
+                if (line_clean.strip().startswith('"$PYTHONEXE" "$OBJCOPY" --chip ')
+                        and " elf2image " in line_clean and "-o $TARGET $SOURCES" in line_clean
+                        and not _in_error_block[0]
+                        and not re.search(r"\b(error|failed|warning|exception)\b", low)):
+                    continue
 
                 # PlatformIO's dependency tree is repetitive in the GUI log;
                 # hide only its heading and contiguous tree rows. The next

@@ -7,6 +7,54 @@ description: "Developer and troubleshooting guide for MCU Flasher on Windows and
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) on Windows 10/11 and native Ubuntu. Ordinary firmware work still follows the live root-sketch boundaries in AGENTS.md.
 
+For explicitly requested assistant delegation, use the local
+[`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
+
+## Search, review and preparation modes
+
+- Ctrl+Shift+F opens the owned modeless Find All dialog. Search only root editable
+  sketch sources/text notes, overlay dirty Monaco snapshots, use literal case/word
+  options and UTF-16 locations. Keep one background worker, discard stale queries,
+  and bound bytes/files/results. Preserve the active buffer on result navigation.
+- Keep C++ brace Enter rules in the lazy language configuration and respect each
+  model's tab/space settings. Empty projects/new sketches use empty setup/loop;
+  new .cpp/.c are empty, headers only `#pragma once`. Preserve explicit Blink.
+- Wrap Modify Add/Rename/Delete in `AIEditWatcher.user_file_operation` before
+  mutation. Invalidate in-flight scans, baseline success/failure and deleted paths,
+  and refuse changes to a file with a pending review. Never classify these manual
+  actions as AI. Watch root .txt notes and source files, excluding symlinks.
+- AI Changes uses timestamped per-file cards grouped by known submitted input.
+  Observe PTY input passively; capability replies/Unicode/paste must still pass
+  unchanged. Unknown external prompts use labeled activity groups, never invented
+  titles. Keep before/after previews, per-file Accept/Reject with navigation and
+  counters, history bounds (200 cards / 4 MiB), truncated-preview notices and
+  atomic replicas. Delete history never removes pending reviews or recovery copies.
+- Offline mode defaults off. Online startup verifies the local runtime and SCons;
+  missing exact targets use explicit board preparation. Both modes retain the
+  bootstrap-only installer boundary. Offline enables network denial and full
+  configured-plan readiness. Settings confirms disk/restart or removal of owned
+  extras, rechecks busy/other-window state, saves acknowledged buffers, then a
+  private helper waits for exit before native Bootstrap --repair. Report failure
+  and roll back mode without dropping buffers. Cleanup authenticates per-host
+  extras and rejects links/unknown content; preserve shared toolchains and sketches.
+- An additional healthy same-installation window skips source-fingerprint
+  rechecks while retaining runtime/mode/crash validation and immediate-child
+  failure checks. Keep session/crash records and spawn logs per process; mark clean
+  only after the event loop exits. Preserve live siblings through repair and
+  record native/worker failures without replaying compilation or hardware writes.
+- Build and Serial Auto-scroll follow whenever enabled except during a mouse
+  hold; resume on release, including outside the view/lost grab. Auto OFF retains
+  the reading anchor. Omit only the routine unexpanded ESP32 objcopy recipe and
+  quiet build notice, preserving diagnostics and cancellation polling.
+- Reviewed AVR and exact ESP8266 Arduino checks share one bounded worker pool
+  after installers complete. Source/package signatures must match; unknown/native
+  builders remain serial. Failure cancels siblings and leaves readiness uncertified.
+- Verify with `direct/verify_project_search.py`, `direct/verify_ai_changes.py`,
+  `direct/verify_offline_mode.py`, `direct/verify_sessions.py` and the existing
+  runtime/terminal/responsive/performance checks. Mock all live persistence,
+  hardware and installers; captures belong in temp/. Native Ubuntu and physical
+  compile/upload remain separate verification requirements.
+
 ## Platform Scope
 
 - Keep host implementations in separate files: `main/platforms/windows.py` owns Windows paths and executable discovery; `main/platforms/ubuntu.py` owns native PlatformIO paths and POSIX process sessions. `main/core/toolchain.py` is the stable host-selecting API, and `main/core/build_resources.py` shares CPU/RAM/storage budgets. Core exports stay lazy to avoid Ubuntu-first import cycles and unnecessary board discovery. Runtime must never import bootstrap installers.
@@ -108,7 +156,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - Windows setup ignores inherited PlatformIO cores outside this installation, matching workspace ownership; never create or modify a foreign inherited store. Ubuntu CLI fallback requires native Arduino CLI on PATH, whereas Windows Bootstrap prepares its executable; missing-tool guidance must reflect the host rather than claiming Ubuntu repair installs it.
    - `src/modules/package_jobs.py` owns cross-process package-store coordination. Build/upload/reset workers hold shared use leases; background preparation reserves an exclusive waiting writer before mutating packages, blocking later readers while active users finish. Windows host repair guards initial store/configuration work and its complete seed/SCons/board-folder/offline preparation stage through `_bootstrap_tool_store_lease`; Ubuntu guards the native offline preparation child. Release host repair leases on failure/return and before workspace launch. Python environment repair remains a separate setup concern. Queue and disk failures must terminate truthfully, cancellation releases reservations, and dead-worker leases are reclaimable. Keep waiting/acquisition and job I/O off the GUI thread, preserve short Windows core aliases, and never replay a hardware operation after lease failure.
    - Publish atomic bounded live job snapshots with job identity, monotonic sequence and retained stage transitions. Coalesce percentages without losing diagnostics or final outcomes; independent workspace readers reject stale events and report interrupted processes once. Retain the newest 48 completed/interrupted jobs and their associated request/report files; active jobs are never pruned. `main/core/package_activity.py` forwards progress through queued Qt signals. The `PackageProgressCard` stays parented inside the main window's bottom-right corner, preserves typing focus and theme changes, and hides independently of the job. Notifications retain stage/final history, while completed ready subsets trigger local catalog refresh. **View all board results** opens `PackageCoverageDialog` only on an explicit details action; load reports and filter immutable rows off Qt, reject stale/closed completions and validate report identity/containment/limits. Preserve full reason text and report every included board. Verification must route events/leases through `MCU_PACKAGE_EVENTS_ROOT` or explicit fixture roots under `temp/`, never live logs or caches.
-   - `offline_runtime.py` and `offline_platformio.py` enforce no runtime downloads while allowing loopback terminal traffic and installed/local symlink packages. Bootstrap installs a conditional `.pth` guard for Python children; the root comes from the launch environment so moves stay supported. Main entry points check offline readiness before opening the workspace. Setup handoffs remove inherited runtime/no-index variables. Runtime board refresh reads local manifests/catalog snapshots; the Bootstrap toolbar action opens a separate setup process and rechecks busy state. Keep Monaco/xterm/assistant assets local and remove pip/CDN fallbacks.
+   - `offline_runtime.py` and `offline_platformio.py` keep package installation in Bootstrap in both modes, including nested Python builders. Offline additionally denies external network traffic while allowing loopback terminals and installed/local symlink packages. Bootstrap installs a conditional `.pth` guard; the root comes from the launch environment so moves stay supported. Main entry points check mode-specific readiness before opening the workspace. Setup and user-terminal handoffs remove inherited runtime/no-index variables. Runtime board refresh reads local manifests/catalog snapshots; the Bootstrap toolbar action opens a separate setup process and rechecks busy state. Keep Monaco/xterm/assistant assets local and remove pip/CDN fallbacks.
    - The real project build verifies source compatibility with the declared framework. A single declared native framework can be selected automatically; multiple native frameworks stay explicit. Require Arduino for .ino sources. Cache identity reflects current framework/definition on every call, across windows; recognize BIN/HEX/UF2/ELF outputs. Use `direct/verify_offline.py` for isolated package planning, startup certificates, setup handoffs, remote-network denial/local sockets and actual PlatformIO missing-package rejection. Mock all bootstrap installers/builders; never run live setup during verification.
    - Use `direct/verify_board_families.py` for isolated multi-family framework/transport checks and native Upload-button clicks. Optional `direct/verify_target_resolution.py --compile-installed-avr` builds Uno, Nano ATmega328 and Mega 2560 through the actual Compile button with copied installed host-native packages. Ubuntu accepts an explicit read-only `--avr-core` store and refuses copied Windows stores. No verifier runs installs, uploads, or live persistence. The Ubuntu CI integration provisions native AVR packages separately in `temp/` before running this probe.
    - `direct/verify_platforms.py` checks host/import order, native environment replacement, guarded runtime discovery, mocked venv setup/argument forwarding, POSIX upload sessions and Bash/Windows Script Host syntax. Syntax checks never execute installers or launchers; Windows Script Host skips on Linux. Report native Ubuntu CI results separately from Windows simulations.
@@ -340,7 +388,7 @@ MCU Flasher by Naph/
 
 ### 3. Toolchain & Serial Monitor Execution Pipeline
 - **PlatformIO targets**: Validate the exact board and declared framework through `target_profile.py`; never silently substitute a family default. `.ino` projects require Arduino. Runtime refresh reads only installed/cache definitions. Firmware cache fingerprints include host, board/framework/platform, manifests and sources.
-- **Bootstrap-Only Board Toolchain Preparation**: Prepare configured board/framework/tool/library packs before the workspace opens. Compile, Upload and Reset never call installers; missing packages require a separate bootstrap repair.
+- **Bootstrap-Only Board Toolchain Preparation**: Explicit offline mode prepares its complete configured plan before launch; online default prepares runtime/SCons and uses explicit board preparation for missing targets. Compile, Upload and Reset never call installers.
 - **Process Scheduling Priority**: Background compiler subprocesses are launched with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`) on Windows, ensuring the Qt event loop, Monaco editor, and serial monitor remain responsive under full CPU load.
 - **Operation Phase Scoping**:
   - `_active_operation == "compile"`: Serial Monitor, Reset DTR/RTS pulse, Baud Rate selection, and Send bar remain **fully functional and active**.

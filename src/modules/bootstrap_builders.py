@@ -90,12 +90,15 @@ def _terminate_tree(process):
         process.wait(timeout=5)
 
 
-def run_builder(command, *, env, label, output_path, log, timeout=1800, heartbeat=20):
+def run_builder(command, *, env, label, output_path, log, timeout=1800, heartbeat=20, cancel=None):
     """Run one builder; return elapsed seconds or fail with its full log path."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or env.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if any(source.get(name) for source in (os.environ, env) for name in
+           ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME")):
         raise RuntimeError("Builder preparation belongs to bootstrap, outside the workspace process")
     if timeout <= 0 or heartbeat <= 0:
         raise ValueError("Builder timeout and heartbeat must be positive")
+    if cancel is not None and cancel.is_set():
+        raise InterruptedError("Builder preparation cancelled before launch")
     output_path = Path(os.path.abspath(output_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pending = Queue(maxsize=QUEUE_CHUNKS)
@@ -153,6 +156,10 @@ def run_builder(command, *, env, label, output_path, log, timeout=1800, heartbea
             reader.start()
             while True:
                 now = time.monotonic()
+                if cancel is not None and cancel.is_set():
+                    failure = "cancelled after another preparation failed"
+                    _terminate_tree(process)
+                    break
                 if stream_done and process.poll() is not None:
                     break
                 if now >= deadline:

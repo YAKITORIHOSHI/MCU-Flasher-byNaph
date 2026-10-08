@@ -614,6 +614,8 @@ class TerminalServer:
         webview_connected = [False]
         input_line = [""]
         input_escape = [False]
+        from src.modules.ai_prompt_context import PromptInputTracker
+        prompt_tracker = PromptInputTracker(target_dir)
 
         def input_requests_exit(raw_data):
             """Detect a complete user-entered /exit line without swallowing it."""
@@ -757,6 +759,10 @@ class TerminalServer:
                     webview_connected[0] = True
                 elif self.pty and msg.get('type') == 'input':
                     input_data = msg.get('data', '')
+                    try:
+                        prompt_tracker.feed(input_data)
+                    except Exception:
+                        pass
                     if input_requests_exit(input_data):
                         # Let OpenCode receive /exit normally.  The CMD
                         # supervisor above observes its termination and starts

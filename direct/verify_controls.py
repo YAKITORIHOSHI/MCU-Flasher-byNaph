@@ -138,6 +138,70 @@ class ControlChecks(unittest.TestCase):
         self.backend.set_reset_on_baud_change.assert_not_called()
         QMessageBox.critical.assert_called_once()
 
+    def test_offline_settings_default_confirmation_and_restart_request(self):
+        dialog = self.settings()
+        self.assertFalse(dialog.cb_offline.isChecked())
+        dialog.cb_offline.setChecked(True)
+        with patch("src.modules.offline_mode.transition_blocker", return_value=""):
+            dialog._save_and_apply()
+        self.assertIn("gigabytes", self.question.call_args.args[2])
+        self.assertTrue(self.save.call_args.args[0]["shared"]["offline_enabled"])
+        self.assertTrue(self.save.call_args.args[0]["shared"]["offline_preparation_pending"])
+        self.assertTrue(dialog.offline_mode_restart_requested)
+        self.assertFalse(dialog.offline_mode_previous)
+
+    def test_offline_settings_cancel_and_failed_save_preserve_mode(self):
+        for save_fails in (False, True):
+            self.save.reset_mock()
+            self.question.return_value = (QMessageBox.StandardButton.Yes if save_fails
+                                          else QMessageBox.StandardButton.No)
+            self.save.return_value = not save_fails
+            dialog = self.settings()
+            dialog.cb_offline.setChecked(True)
+            with patch("src.modules.offline_mode.transition_blocker", return_value=""), \
+                    patch.object(dialog, "accept") as accept:
+                dialog._save_and_apply()
+            accept.assert_not_called()
+            self.assertFalse(dialog.offline_mode_restart_requested)
+            self.assertNotIn("offline_enabled", self.config["shared"])
+            if not save_fails:
+                self.save.assert_not_called()
+
+    def test_offline_settings_revalidates_after_confirmation(self):
+        dialog = self.settings()
+        dialog.cb_offline.setChecked(True)
+        with patch("src.modules.offline_mode.transition_blocker", side_effect=["", "Another window opened"]):
+            dialog._save_and_apply()
+        self.save.assert_not_called()
+        self.assertFalse(dialog.offline_mode_restart_requested)
+        QMessageBox.warning.assert_called_once()
+
+    def test_disabling_offline_confirms_preserved_toolchains_and_projects(self):
+        self.config["shared"]["offline_enabled"] = True
+        dialog = self.settings()
+        dialog.cb_offline.setChecked(False)
+        with patch("src.modules.offline_mode.transition_blocker", return_value=""):
+            dialog._save_and_apply()
+        self.assertIn("Installed runtimes and toolchains", self.question.call_args.args[2])
+        self.assertIn("AI edit history", self.question.call_args.args[2])
+        self.assertFalse(self.save.call_args.args[0]["shared"]["offline_enabled"])
+        self.assertTrue(dialog.offline_mode_previous)
+
+    def test_offline_settings_control_fits_compact_dialog_in_each_palette(self):
+        for theme in ("default", "light", "solarized_dark"):
+            self.config["shared"]["theme_mode"] = theme
+            dialog = self.settings()
+            dialog._apply_dialog_theme(theme)
+            dialog.resize(360, 480)
+            dialog.show()
+            APP.processEvents()
+            dialog.scroll.ensureWidgetVisible(dialog._offline_box)
+            APP.processEvents()
+            self.assertGreaterEqual(dialog.cb_offline.width(), dialog.cb_offline.minimumSizeHint().width())
+            self.assertLessEqual(dialog.cb_offline.width(), dialog.scroll.viewport().width())
+            if RENDER_DIR:
+                self.assertTrue(dialog.grab().save(str(RENDER_DIR / f"settings-offline-{theme}.png")))
+
     def test_settings_history_failure_keeps_saved_preferences_and_reports_warning(self):
         dialog = self.settings()
         notice = Mock()

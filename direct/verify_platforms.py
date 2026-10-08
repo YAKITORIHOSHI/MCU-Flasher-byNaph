@@ -144,6 +144,8 @@ class PlatformChecks(unittest.TestCase):
                 patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
                 patch.object(platform, "_uname_cache", None), \
                 patch.object(platform, "machine", return_value="x86_64") as architecture, \
+                patch("src.modules.offline_mode.offline_enabled", return_value=False), \
+                patch("src.modules.offline_mode.finish_bootstrap") as finished, \
                 patch.object(setup.venv, "EnvBuilder") as builder, \
                 patch.object(setup.subprocess, "run") as run, patch.object(setup.subprocess, "call", return_value=0) as launch:
             # A cold Windows platform probe may itself use subprocess.run.
@@ -154,7 +156,10 @@ class PlatformChecks(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
         self.assertTrue(run.call_args_list[-1].args[0][2].endswith("offline_bootstrap.py"))
         architecture.assert_called_once_with()
-        self.assertEqual(Path(run.call_args_list[-1].args[0][-1]).name, "x86_64")
+        final_command = run.call_args_list[-1].args[0]
+        self.assertEqual(Path(final_command[final_command.index("--core") + 1]).name, "x86_64")
+        self.assertIn("--runtime-only", final_command)
+        finished.assert_called_once()
         command = run.call_args_list[0].args[0]
         self.assertEqual(command[0], str(setup.ENV_DIR / "bin/python"))
         self.assertEqual(command[-1], str(self.root / "direct/ubuntu/requirements.txt"))

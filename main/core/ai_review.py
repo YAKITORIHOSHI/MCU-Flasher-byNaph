@@ -23,6 +23,8 @@ import json
 import difflib
 import tempfile
 import threading
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any, Callable
 
@@ -116,6 +118,10 @@ class AIReviewManager:
         self._ai_review_journal_error: str = ""
         self._ai_review_journal_recovery_required: bool = False
         self._ai_review_state_path: Optional[Path] = None
+        self._ai_changes: list[dict] = []
+        self._change_group = ""
+        self._change_group_time = 0.0
+        self.history_changed_callback = None
 
         if self.project_dir:
             self.bind_project(self.project_dir)
@@ -189,6 +195,9 @@ class AIReviewManager:
             self._pending_ai_edits = {}
             self._ai_decision_history = []
             self._ai_decision_redo = []
+            self._ai_changes = []
+            self._change_group = ""
+            self._change_group_time = 0.0
             self._ai_review_revision = 0
             self._ai_review_generation = 0
             self._ai_review_journal_error = ""
@@ -253,12 +262,13 @@ class AIReviewManager:
 
     def _ai_review_state_data_locked(self, generation: Optional[int] = None) -> dict:
         return {
-            "version": 2,
+            "version": 3,
             "generation": (
                 self._ai_review_generation if generation is None else int(generation)
             ),
             "revision": self._ai_review_revision,
             "reviews": list(self._pending_ai_edits.values()),
+            "changes": self._ai_changes,
         }
 
     def _commit_pending_ai_edits_locked(self) -> None:
@@ -329,6 +339,9 @@ class AIReviewManager:
                     "generation": generation,
                     "revision": revision,
                     "reviews": loaded,
+                    "changes": [item for item in data.get("changes", [])
+                                if isinstance(item, dict) and self._path_is_in_project(item.get("path"))]
+                                if isinstance(data.get("changes", []), list) else [],
                 })
             except Exception:
                 continue
@@ -339,6 +352,72 @@ class AIReviewManager:
             self._pending_ai_edits = best["reviews"]
             self._ai_review_revision = best["revision"]
             self._ai_review_generation = best["generation"]
+            self._ai_changes = best["changes"]
+            self._bound_changes_locked()
+
+    def _bound_changes_locked(self) -> None:
+        self._ai_changes = self._ai_changes[-200:]
+        total = 0
+        for index in range(len(self._ai_changes) - 1, -1, -1):
+            item = self._ai_changes[index]
+            for field in ("beforeContent", "content"):
+                value = str(item.get(field, ""))
+                if len(value) > 60000:
+                    item["previewTruncated"] = True
+                item[field] = value[:60000]
+            total += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if total > 4 * 1024 * 1024:
+                del self._ai_changes[:index + 1]
+                break
+
+    def _history_changed(self) -> None:
+        if callable(self.history_changed_callback):
+            try:
+                self.history_changed_callback()
+            except RuntimeError:
+                pass
+
+    def get_ai_changes(self) -> list[dict]:
+        with self._pending_ai_lock:
+            return [dict(item) for item in self._ai_changes]
+
+    def delete_ai_changes(self, change_id: str = "") -> dict:
+        """Remove display history only; pending reviews and recovery remain intact."""
+        with self._pending_ai_lock:
+            original = self._ai_changes
+            self._ai_changes = [item for item in original if item.get("id") != change_id] if change_id else []
+            self._commit_pending_ai_edits_locked()
+            if self._ai_review_journal_error:
+                error = self._ai_review_journal_error
+                self._ai_changes = original
+                # Repair a successfully written first replica after a failed
+                # second write; report the original failure either way.
+                self._commit_pending_ai_edits_locked()
+                return {"success": False, "error": error}
+        self._history_changed()
+        return {"success": True}
+
+    def _record_change_locked(self, payload: dict, before: str, context: Optional[dict]) -> None:
+        now = time.monotonic()
+        context = context or {}
+        group = str(context.get("id", ""))[:160]
+        title = str(context.get("prompt", ""))[:500]
+        if not group:
+            if not self._change_group or now - self._change_group_time > 8:
+                self._change_group = f"external:{time.time_ns()}"
+            group = self._change_group
+            title = "External assistant changes (prompt unavailable)"
+        self._change_group_time = now
+        record_id = f"{group}:{self._path_key(payload['path'])}"
+        existing = next((item for item in self._ai_changes if item.get("id") == record_id), None)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = dict(payload, id=record_id, groupId=group, prompt=title or "Assistant changes",
+                      timestamp=existing.get("timestamp", stamp) if existing else stamp,
+                      updatedAt=stamp, status="pending", beforeContent=existing.get("beforeContent", before) if existing else before)
+        if existing:
+            self._ai_changes.remove(existing)
+        self._ai_changes.append(record)
+        self._bound_changes_locked()
 
     def _snapshot_for_key_locked(self, key: str) -> dict:
         payload = self._pending_ai_edits.get(key)
@@ -361,6 +440,7 @@ class AIReviewManager:
         *,
         expected_project: Optional[Path] = None,
         expected_valid: Optional[Callable[[], bool]] = None,
+        prompt_context: Optional[dict] = None,
     ) -> bool | str:
         """Queue a detected external AI edit for user review in Monaco."""
         if not path or not self._path_is_in_project(path):
@@ -398,6 +478,9 @@ class AIReviewManager:
             # If user or AI reverted back to original, clear review
             if existing and original_exists == after_exists and original_content == after_content:
                 self._pending_ai_edits.pop(key, None)
+                for item in self._ai_changes:
+                    if item.get("reviewId") == existing.get("reviewId"):
+                        item["status"] = "cancelled"
                 self._next_ai_review_revision_locked()
                 try:
                     self._commit_pending_ai_edits_locked()
@@ -408,6 +491,7 @@ class AIReviewManager:
                         self._ai_backup_store.mark_cancelled(existing)
                     except Exception:
                         pass
+                self._history_changed()
                 return "cancelled"
 
             payload = {
@@ -425,6 +509,7 @@ class AIReviewManager:
             if expected_valid is not None and not expected_valid():
                 return False
             self._pending_ai_edits[key] = payload
+            self._record_change_locked(payload, before_content, prompt_context)
             self._ai_decision_redo.clear()
             try:
                 self._commit_pending_ai_edits_locked()
@@ -439,6 +524,7 @@ class AIReviewManager:
                     )
                 except Exception:
                     pass
+        self._history_changed()
         return True
 
     def consume_ai_edit_snapshot(self, path: str) -> dict:
@@ -536,6 +622,9 @@ class AIReviewManager:
             }
 
             self._pending_ai_edits.pop(key, None)
+            for item in self._ai_changes:
+                if item.get("reviewId") == resolved.get("reviewId"):
+                    item["status"] = "accepted" if accept else "rejected"
             try:
                 self._commit_pending_ai_edits_locked()
             except Exception:
@@ -560,6 +649,7 @@ class AIReviewManager:
             next_path = next(iter(self._pending_ai_edits.values()), {}).get("path", "")
             pending_count = len(self._pending_ai_edits)
 
+        self._history_changed()
         return {
             "success": True,
             "action": "accepted" if accept else "rejected",
@@ -681,7 +771,7 @@ class AIEditWatcher(QObject):
     ai_edit_detected = Signal(str, str, str, bool, bool)  # (path, before, after, before_exists, after_exists)
     _scan_finished = Signal(object)
 
-    SKETCH_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp"}
+    SKETCH_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
 
     def __init__(
         self,
@@ -706,6 +796,7 @@ class AIEditWatcher(QObject):
         self._force_read = False
         self._save_versions: dict[str, int] = {}
         self._closed = False
+        self._user_operations: set[str] = set()
 
         # File events are immediate. The fallback is deliberately less frequent
         # even on high-core PCs: faster CPUs do not improve mechanical seeks.
@@ -795,13 +886,40 @@ class AIEditWatcher(QObject):
         try:
             stat = target.stat()
             saved_content = content if content is not None else AIReviewManager._read_text_exact(target)
+        except FileNotFoundError:
+            stat, saved_content = None, ""
         except OSError:
             return
         with self._lock:
             self._save_versions[key] = self._save_versions.get(key, 0) + 1
             self._pending_settle.pop(key, None)
-            self._baseline_mtimes[key] = self._signature(stat)
-            self._baseline_contents[key] = saved_content
+            if stat is None:
+                self._baseline_mtimes.pop(key, None)
+                self._baseline_contents.pop(key, None)
+            else:
+                self._baseline_mtimes[key] = self._signature(stat)
+                self._baseline_contents[key] = saved_content
+
+    @contextmanager
+    def user_file_operation(self, *paths):
+        """Invalidate scans before a manual add/rename/delete can touch disk."""
+        keys = {AIReviewManager._path_key(path) for path in paths}
+        # Match the scan's manager -> watcher lock order.
+        with self.review_manager._pending_ai_lock:
+            if any(key in self.review_manager._pending_ai_edits for key in keys):
+                raise ValueError("Review pending AI changes before modifying this file.")
+            with self._lock:
+                self._user_operations.update(keys)
+                for key in keys:
+                    self._save_versions[key] = self._save_versions.get(key, 0) + 1
+                    self._pending_settle.pop(key, None)
+        try:
+            yield
+        finally:
+            for path in paths:
+                self.note_user_save(path)
+            with self._lock:
+                self._user_operations.difference_update(keys)
 
     def _poll_step(self) -> None:
         """Dispatch one scan, retaining only one latest pending request."""
@@ -844,6 +962,15 @@ class AIEditWatcher(QObject):
         generation, project, ready, contents, signatures, pending, versions, force = request
         now = time.monotonic()
         signal_file = project / ".ai_edit_signal"
+        prompt_context = None
+        try:
+            context_file = project / ".mcu_flasher_build_cache" / "ai_prompt.json"
+            if context_file.stat().st_size <= 8192:
+                candidate = json.loads(context_file.read_text(encoding="utf-8"))
+                if isinstance(candidate, dict) and 0 <= time.time() - float(candidate.get("time", 0)) < 3600:
+                    prompt_context = candidate
+        except (OSError, ValueError, TypeError):
+            pass
         try:
             signal_file.stat()
             force = True
@@ -857,7 +984,7 @@ class AIEditWatcher(QObject):
                 # Filter names before metadata access: user asset directories or
                 # thousands of unrelated files cost no per-entry stat/resolve.
                 if (path.name.startswith(".") or path.suffix.lower() not in self.SKETCH_EXTS
-                        or not entry.is_file()):
+                        or not entry.is_file(follow_symlinks=False)):
                     continue
                 key = (AIReviewManager._path_key(path) if entry.is_symlink()
                        else os.path.normcase(os.path.abspath(entry.path)))
@@ -889,12 +1016,25 @@ class AIEditWatcher(QObject):
                 if item["last_mtime"] != signature:
                     item["last_mtime"] = signature
                     item["last_change_time"] = now
-        # A removed settling file must not keep the fast timer alive forever.
-        # Retain its baseline so a later recreation can still compare content.
-        pending = {key: value for key, value in pending.items() if key in current}
+        if ready:
+            for key in set(signatures) - set(current):
+                item = pending.setdefault(key, {
+                    "path": key, "before": contents.get(key, ""), "before_exists": True,
+                    "last_change_time": now, "last_mtime": None,
+                })
+                if item["last_mtime"] is not None:
+                    item["last_mtime"] = None
+                    item["last_change_time"] = now
+        pending = {key: value for key, value in pending.items() if key in current or key in signatures}
         events = []
         for key, item in list(pending.items()):
-            if now - item["last_change_time"] < 0.35 or key not in current:
+            if now - item["last_change_time"] < 0.35:
+                continue
+            if key not in current:
+                pending.pop(key, None)
+                contents.pop(key, None)
+                signatures.pop(key, None)
+                events.append((key, item["path"], item["before"], "", True, False))
                 continue
             path, signature = current[key]
             try:
@@ -918,36 +1058,43 @@ class AIEditWatcher(QObject):
             if self._closed or generation != self._generation:
                 return {"generation": generation, "events": []}
             # Manual saves while a slow scan was reading win for that file.
-            for key in current:
+            for key in set(current) | set(self._baseline_mtimes):
                 if versions.get(key, 0) != self._save_versions.get(key, 0):
                     continue
                 if key in contents:
                     self._baseline_contents[key] = contents[key]
                     self._baseline_mtimes[key] = signatures[key]
+                elif key not in signatures:
+                    self._baseline_contents.pop(key, None)
+                    self._baseline_mtimes.pop(key, None)
                 if key in pending:
                     self._pending_settle[key] = pending[key]
                 else:
                     self._pending_settle.pop(key, None)
             self._baseline_ready = True
             for key in list(self._pending_settle):
-                if key not in current:
+                if key not in current and key not in signatures:
                     self._pending_settle.pop(key, None)
             eligible = [event for event in events
-                        if versions.get(event[0], 0) == self._save_versions.get(event[0], 0)]
+                        if versions.get(event[0], 0) == self._save_versions.get(event[0], 0)
+                        and event[0] not in self._user_operations]
         # Journal I/O is rare, but must also stay off the GUI thread. The
         # manager checks the captured project atomically with journal mutation.
         for key, *event in eligible:
             with self._lock:
                 valid = (not self._closed and generation == self._generation
-                         and versions.get(key, 0) == self._save_versions.get(key, 0))
+                         and versions.get(key, 0) == self._save_versions.get(key, 0)
+                         and key not in self._user_operations)
             if not valid:
                 continue
             def still_valid():
                 with self._lock:
                     return (not self._closed and generation == self._generation
-                            and versions.get(key, 0) == self._save_versions.get(key, 0))
+                            and versions.get(key, 0) == self._save_versions.get(key, 0)
+                            and key not in self._user_operations)
             result = self.review_manager.queue_ai_edit_snapshot(
-                *event, expected_project=project, expected_valid=still_valid)
+                *event, expected_project=project, expected_valid=still_valid,
+                prompt_context=prompt_context)
             if result and result != "cancelled":
                 published.append((key, *event))
         return {"generation": generation, "events": published,

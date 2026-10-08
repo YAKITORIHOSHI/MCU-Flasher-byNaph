@@ -164,7 +164,7 @@ def _explicit_platformio(metadata, preferences):
 
 def prepare_sources(core, sources, *, emit, jobs=None):
     """Prepare primary exact FQBNs; the caller owns the package-store lease."""
-    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Arduino source preparation belongs to the separate bootstrap worker")
     from main.core import board_catalog
     from src.modules.arduino_cli_support import (load_prepared_targets, prepared_target_index,

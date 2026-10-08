@@ -15,7 +15,7 @@ Set shell = CreateObject("WScript.Shell")
 ' must start without the workspace's conditional offline runtime guard.
 Dim setupEnvironment, setupVariable
 Set setupEnvironment = shell.Environment("PROCESS")
-For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX")
+For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX")
     If Len(setupEnvironment(setupVariable)) > 0 Then setupEnvironment.Remove setupVariable
 Next
 
