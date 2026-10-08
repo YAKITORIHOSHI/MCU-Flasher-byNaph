@@ -564,6 +564,8 @@ class PreviewBackend:
 
 
 def qt_smoke(app, render_dir=None):
+    from main.qt.garbage_collection import install_gui_garbage_collector
+    collector = install_gui_garbage_collector(app)
     from PySide6.QtCore import QTimer, Qt, QRect
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QWidget, QComboBox, QLabel
@@ -658,6 +660,8 @@ def qt_smoke(app, render_dir=None):
             assert backend.modified_files.get(backend.active_file_path), "Restored buffer must remain dirty"
             assert not window._editor_panel.bridge._recovering_buffers
             verify_window_ownership()
+            collector._last_full -= 61
+            collector.collect_pending()
             print("Qt tabs, keyboard navigation, compact/wide ownership, detach/reattach, action gating and dirty renderer recovery: OK")
             finish()
 

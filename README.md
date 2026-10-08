@@ -916,6 +916,19 @@ from an external CLI without prompt metadata are grouped by settled activity and
 explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
 registered as manual operations before disk changes and never become AI reviews.
 
+Compile, Upload, Reset and Clean reserve distinct operation identities. A delayed
+Stop callback only acts on its original worker and process; Clean waits for that
+worker to finish, including package-lease and temporary-workspace teardown.
+Windows cancellation uses the captured process handle and identity-checked child
+processes, preserving unrelated windows. A Stop during target resolution remains
+cancelled when the build phase starts.
+
+Python cyclic object cleanup runs periodically on the GUI thread between events,
+outside nested modal loops. This avoids finalizing Qt objects during a worker's
+allocations or an embedded renderer's virtual event handler. Ordinary reference
+cleanup remains immediate. Verify these boundaries with
+`direct/verify_operation_lifecycle.py` and `direct/verify_gui_lifetime.py`.
+
 Hardware-free checks for these behaviors are `direct/verify_project_search.py`,
 `direct/verify_ai_changes.py`, `direct/verify_offline_mode.py` and
 `direct/verify_sessions.py`. Native board compilation/upload and Ubuntu execution

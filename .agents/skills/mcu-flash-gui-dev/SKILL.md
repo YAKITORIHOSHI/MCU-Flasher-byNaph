@@ -42,6 +42,19 @@ For explicitly requested assistant delegation, use the local
   failure checks. Keep session/crash records and spawn logs per process; mark clean
   only after the event loop exits. Preserve live siblings through repair and
   record native/worker failures without replaying compilation or hardware writes.
+- Reserve a fresh operation session before every Compile/Upload/Reset/Clean.
+  Track its worker through teardown; refuse a new action while that worker lives.
+  Deferred Stop captures its session, operation, worker and process, revalidates
+  destructive phases, and cannot clear or terminate a later action. Preserve Stop
+  during resolution. On Windows terminate the original Popen handle and checked
+  descendants, never an exited process's PID. Verify real fixture children and
+  delayed callbacks with `direct/verify_operation_lifecycle.py`.
+- Install `GuiGarbageCollector` before backend/window construction. Disable
+  automatic cyclic GC for the workspace lifetime; collect only on the GUI thread
+  between events, outside modal/nested loops, at bounded intervals. Ordinary
+  refcount cleanup remains immediate. Stop its timer at shutdown; do not collect
+  from eventFilter or backend workers. Verify with `direct/verify_gui_lifetime.py`
+  and the real runtime renderer fixture.
 - Build and Serial Auto-scroll follow whenever enabled except during a mouse
   hold; resume on release, including outside the view/lost grab. Auto OFF retains
   the reading anchor. Omit only the routine unexpanded ESP32 objcopy recipe and

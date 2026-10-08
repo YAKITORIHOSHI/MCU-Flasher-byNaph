@@ -1706,23 +1706,29 @@ class MCUWebBackendAPI:
         except Exception:
             return False
 
-    def _kill_active_process_tree(self) -> None:
+    def _kill_active_process_tree(self, process=None) -> None:
         """Forcefully terminate the active compiler process and all child processes recursively.
         Prevents compiler or linker child processes from lingering and holding file locks on Windows.
         """
-        proc = getattr(self, "_active_process", None)
-        if not proc:
+        proc = process if process is not None else getattr(self, "_active_process", None)
+        if not proc or proc.poll() is not None:
             return
         try:
             pid = proc.pid
             if sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(pid)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    timeout=5,
-                )
+                import psutil
+                # Snapshot descendants while the parent's Popen handle is live.
+                # psutil rechecks each child's identity; Popen.kill targets the
+                # original Windows process handle rather than a recycled PID.
+                parent = psutil.Process(pid)
+                children = parent.children(recursive=True) if proc.poll() is None else []
+                for child in reversed(children):
+                    try:
+                        child.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                if proc.poll() is None:
+                    proc.kill()
             else:
                 import signal
                 if os.getpgid(pid) == pid:
@@ -3795,9 +3801,19 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     # JS-RPC: COMPILATION PIPELINE (PlatformIO)
     # ──────────────────────────────────────────────────────────
+    def _operation_worker_alive(self) -> bool:
+        """Keep a finished phase's worker from overlapping the next action."""
+        worker = getattr(self, "_operation_worker", None)
+        return bool(worker is not None and worker.is_alive())
+
+    def _begin_operation_session(self) -> None:
+        """Reserve one cancellation identity before dispatching an operation."""
+        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        self._stop_requested = False
+
     def compile_sketch(self):
         """Run sketch compilation on a background thread."""
-        if self.is_busy or self.active_operation:
+        if self.is_busy or self.active_operation or self._operation_worker_alive():
             return
 
         if self._block_if_pending_ai_edits("Compile"):
@@ -3814,7 +3830,7 @@ class MCUWebBackendAPI:
             self.emit("notification", {"title": "Compile Failed", "message": "No board selected.", "type": "warning"})
             return
         self.is_busy = True
-        self._stop_requested = False
+        self._begin_operation_session()
         self.active_operation = "compile"
         self._current_op_phase = "resolving"
         self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "compile"})
@@ -3871,6 +3887,10 @@ class MCUWebBackendAPI:
     def _compile_requested_worker(self):
         try:
             if not self._resolve_requested_target("Compile"):
+                self._release_requested_operation()
+                return False
+            if self._stop_requested:
+                self.emit("console:log", {"text": "Compilation cancelled before the build started.", "tag": "warning", "newline": True})
                 self._release_requested_operation()
                 return False
             if self._resolve_board_info().get("backend") == "arduino-cli":
@@ -3957,9 +3977,11 @@ class MCUWebBackendAPI:
 
     def _compile_worker_impl(self, is_upload: bool = False, is_clean_retry: bool = False) -> bool:
         """Core compile worker executing PlatformIO."""
+        if getattr(self, "_stop_requested", False):
+            self._release_requested_operation()
+            return False
         if not is_clean_retry:
             self.is_busy = True
-            self._stop_requested = False
             self.active_operation = "upload" if is_upload else "compile"
             self._current_op_phase = "compiling"
             self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True, "op": self.active_operation})
@@ -6419,7 +6441,7 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     def upload_sketch(self):
         """Compile and upload firmware to the target microcontroller."""
-        if self.is_busy or self.active_operation:
+        if self.is_busy or self.active_operation or self._operation_worker_alive():
             return
 
         if self._block_if_pending_ai_edits("Upload"):
@@ -6442,7 +6464,7 @@ class MCUWebBackendAPI:
             return
 
         self.is_busy = True
-        self._stop_requested = False
+        self._begin_operation_session()
         self.active_operation = "upload"
         self._current_op_phase = "resolving"
         self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "upload"})
@@ -6470,6 +6492,10 @@ class MCUWebBackendAPI:
 
     def _start_resolved_upload(self, cfg):
         """Snapshot the verified target and check cached sources on the worker."""
+        if self._stop_requested:
+            self.emit("console:log", {"text": "Upload cancelled before the build or write started.", "tag": "warning", "newline": True})
+            self._release_requested_operation()
+            return
         from main.core.target_profile import requires_upload_port
         if not self.current_port and requires_upload_port(self._resolve_board_info()):
             self.emit("console:log", {"text": "Upload cancelled: the selected port disconnected during board resolution.",
@@ -6488,8 +6514,6 @@ class MCUWebBackendAPI:
         self._active_port_label = str(self.current_port or "")
         self._active_reset_kind = None
         self._mcu_detached_during_compile = None
-        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
-        self._stop_requested = False
 
         if selected_board_info.get("backend") == "arduino-cli":
             from main.core.arduino_backend import run_arduino_operation
@@ -8344,14 +8368,13 @@ class MCUWebBackendAPI:
 
     def _start_reset_worker(self, kind, worker):
         """Reserve the operation before dispatch, including early failure cleanup."""
-        if self.is_busy or self.active_operation:
+        if self.is_busy or self.active_operation or self._operation_worker_alive():
             return False
         self.is_busy = True
         self.active_operation = "reset"
         self._active_reset_kind = kind
         self._current_op_phase = "resetting"
-        self._stop_requested = False
-        self._op_session_id = getattr(self, "_op_session_id", 0) + 1
+        self._begin_operation_session()
         reset_session = self._op_session_id
         self.emit("operation:phase", {"phase": "reset", "is_busy": True, "can_stop": False, "op": kind + "_reset"})
         self.emit("window:closable", {"closable": False})
@@ -8375,8 +8398,10 @@ class MCUWebBackendAPI:
                     self.emit("console:progress", {"action": "Failed"})
 
         try:
-            threading.Thread(target=run, name="MCU_" + kind.title() + "Reset", daemon=True).start()
+            self._operation_worker = threading.Thread(target=run, name="MCU_" + kind.title() + "Reset", daemon=True)
+            self._operation_worker.start()
         except Exception as exc:
+            self._operation_worker = None
             self.is_busy = False
             self.active_operation = None
             self._active_reset_kind = None
@@ -9189,12 +9214,13 @@ class MCUWebBackendAPI:
 
     def clean_cache(self):
         """Clean intermediate build files, temporary directories, and generated configs matching LATEST-WORKING-MCU- FLASHER."""
-        if self.is_busy:
-            self.emit("console:log", {"text": "⚠ Busy — stop the current operation first", "tag": "warning", "newline": True})
+        if self.is_busy or self.active_operation or self._operation_worker_alive():
+            self.emit("console:log", {"text": "⚠ Wait for the previous operation and its worker to finish before Clean.", "tag": "warning", "newline": True})
             return
 
         sketch = self.sketch_dir_path
         self.is_busy = True
+        self._begin_operation_session()
         self.active_operation = "clean"
         self._current_op_phase = "cleaning"
         self.emit("operation:phase", {"phase": "clean", "is_busy": True, "can_stop": False, "op": "clean"})
@@ -9312,8 +9338,10 @@ class MCUWebBackendAPI:
                 self.emit("console:progress", {"action": "Completed" if clean_success else "Failed"})
 
         try:
-            threading.Thread(target=_worker, name="MCU_CleanCache", daemon=True).start()
+            self._operation_worker = threading.Thread(target=_worker, name="MCU_CleanCache", daemon=True)
+            self._operation_worker.start()
         except Exception as exc:
+            self._operation_worker = None
             self.is_busy = False
             self.active_operation = None
             self._current_op_phase = None
@@ -9343,15 +9371,27 @@ class MCUWebBackendAPI:
 
         self._stop_requested = True
         session_id = getattr(self, "_op_session_id", 0)
+        operation = self.active_operation
+        process = getattr(self, "_active_process", None)
+        worker = getattr(self, "_operation_worker", None)
         self.emit("console:log", {"text": "⏹ Stopping the active operation...", "tag": "warning", "newline": True})
 
         def _kill_bg():
-            self._kill_active_process_tree()
+            if (getattr(self, "_op_session_id", 0) != session_id
+                    or self.active_operation != operation
+                    or getattr(self, "_operation_worker", None) is not worker):
+                return
+            if (getattr(self, "_current_op_phase", None) in ("flashing", "writing", "resetting", "erasing")
+                    or getattr(self, "_framework_download_active", False)):
+                return
+            if process is not None and getattr(self, "_active_process", None) is process:
+                self._kill_active_process_tree(process)
             time.sleep(4)
-            if self.is_busy and getattr(self, "_op_session_id", 0) == session_id:
-                process = getattr(self, "_active_process", None)
-                worker = getattr(self, "_operation_worker", None)
-                if ((process is not None and process.poll() is None)
+            if (self.is_busy and getattr(self, "_op_session_id", 0) == session_id
+                    and self.active_operation == operation
+                    and getattr(self, "_operation_worker", None) is worker):
+                active_process = getattr(self, "_active_process", None)
+                if ((active_process is not None and active_process.poll() is None)
                         or (worker is not None and worker.is_alive())
                         or getattr(self, "_framework_download_active", False)):
                     self.emit("console:log", {"text": "The operation is still stopping; its worker and process must exit before another action can begin.", "tag": "warning", "newline": True})
@@ -9368,7 +9408,11 @@ class MCUWebBackendAPI:
                 self.emit("window:closable", {"closable": True})
                 self.emit("console:log", {"text": "  ⚠ Busy state cleared by failsafe timer.", "tag": "warning", "newline": True})
 
-        threading.Thread(target=_kill_bg, name="MCU_StopWorker", daemon=True).start()
+        try:
+            threading.Thread(target=_kill_bg, name="MCU_StopWorker", daemon=True).start()
+        except Exception as exc:
+            self._stop_requested = False
+            self.emit("console:log", {"text": f"Stop could not start: {exc}. Try Stop again.", "tag": "error", "newline": True})
 
     # ──────────────────────────────────────────────────────────
     # JS-RPC: SETTINGS & SYNTAX

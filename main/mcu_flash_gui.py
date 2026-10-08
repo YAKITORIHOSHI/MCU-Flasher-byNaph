@@ -163,6 +163,7 @@ def main() -> int:
     # Multiple windows are allowed to run concurrently. Per-project isolation
     # ensures an active sketch can only be open in one window at a time.
 
+    cycle_collector = None
     try:
         mark_session_started(os.getpid())
 
@@ -208,6 +209,8 @@ def main() -> int:
 
         # ── Qt Application ────────────────────────────────────────────────────
         app = QApplication.instance() or QApplication(sys.argv)
+        from main.qt.garbage_collection import install_gui_garbage_collector
+        cycle_collector = install_gui_garbage_collector(app)
         app.setApplicationName("MCU Flasher by Naph")
         app.setOrganizationName("Naph")
         app.setApplicationVersion("3.0")
@@ -407,6 +410,8 @@ def main() -> int:
         print(err_msg, file=sys.stderr)
         return 1
     finally:
+        if cycle_collector is not None:
+            cycle_collector.stop()
         clean_instance_config()
 
 
