@@ -16,13 +16,14 @@ class LogFollow(QObject):
     Only output transactions suppress the reader's scrollbar change signals.
     """
 
-    def __init__(self, view, enabled=True, *, resume_on_release=False):
+    def __init__(self, view, enabled=True, *, resume_on_release=False, hold_to_pause=False):
         super().__init__(view)
         self.view = view
         self.enabled = bool(enabled)
-        # Setup can explicitly resume following on release; workspace logs
-        # keep their reading position until the reader returns to the bottom.
-        self.resume_on_release = bool(resume_on_release)
+        # Serial follows whenever Auto is enabled, pausing only during a hold.
+        # Other logs can retain their independent reading-position policy.
+        self.hold_to_pause = bool(hold_to_pause)
+        self.resume_on_release = bool(resume_on_release or hold_to_pause)
         self.scrollbar_held = False
         self.user_scrolled_up = False
         self._depth = 0
@@ -32,6 +33,9 @@ class LogFollow(QObject):
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._settle_scroll)
+        self._resume_timer = QTimer(self)
+        self._resume_timer.setSingleShot(True)
+        self._resume_timer.timeout.connect(self._finish_release)
         bar = view.verticalScrollBar()
         self._bar = bar
         bar.valueChanged.connect(self._on_value_changed)
@@ -51,9 +55,13 @@ class LogFollow(QObject):
         if not self._depth:
             self._cancel_settle()
             self.user_scrolled_up = not self._at_bottom()
+            if (self.hold_to_pause and self.enabled and self.user_scrolled_up
+                    and not self.scrollbar_held and not self._bar.isSliderDown()):
+                self._resume_timer.start(0)
 
     def _press(self):
         self._cancel_settle()
+        self._resume_timer.stop()
         self.scrollbar_held = True
 
     def _selection_changed(self):
@@ -73,7 +81,8 @@ class LogFollow(QObject):
         # Coalesce that layout work without polling or one callback per line.
         if self._depth or not self._wrapped() or self.scrollbar_held or self._bar.isSliderDown():
             return
-        if self._pending_scroll is None and self.enabled and not self.user_scrolled_up:
+        if (self._pending_scroll is None and self.enabled
+                and (self.hold_to_pause or not self.user_scrolled_up)):
             self._pending_scroll = self._capture(False)
         if self._pending_scroll is not None:
             self._settle_timer.start(0)
@@ -93,7 +102,7 @@ class LogFollow(QObject):
         self.scrollbar_held = False
         # The scrollbar applies its final drag/track position after its event
         # filter and can also emit sliderReleased during that handler.
-        QTimer.singleShot(0, self._finish_release)
+        self._resume_timer.start(0)
 
     def _finish_release(self):
         if not isValid(self.view) or self.scrollbar_held or self._bar.isSliderDown():
@@ -107,11 +116,23 @@ class LogFollow(QObject):
         if (isValid(self.view) and self.enabled and not self._depth
                 and not self.scrollbar_held and not self._bar.isSliderDown()):
             self.user_scrolled_up = False
-            self._bar.setValue(self._bar.maximum())
+            state = self._capture(False)
+            state["following"] = True
+            self._depth += 1
+            try:
+                self._restore_scroll(state)
+                if self._wrapped():
+                    self._pending_scroll = state
+                    self._settle_timer.start(0)
+            finally:
+                self._depth -= 1
 
     def _sync_scroll(self):
         if isValid(self.view) and not self._depth:
-            self.user_scrolled_up = not self._at_bottom()
+            if self.hold_to_pause and self.enabled:
+                self._resume_scroll()
+            else:
+                self.user_scrolled_up = not self._at_bottom()
 
     def eventFilter(self, obj, event):
         # Child scrollbars receive destruction events after their view is gone.
@@ -133,6 +154,7 @@ class LogFollow(QObject):
 
     def set_enabled(self, enabled):
         self._cancel_settle()
+        self._resume_timer.stop()
         self.enabled = bool(enabled)
         if self.resume_on_release and self.enabled:
             self._resume_scroll()
@@ -141,7 +163,9 @@ class LogFollow(QObject):
 
     def reset(self):
         self._cancel_settle()
-        self.scrollbar_held = False
+        self._resume_timer.stop()
+        # Clearing output must not release a scrollbar the reader still holds.
+        self.scrollbar_held = self.scrollbar_held or self._bar.isSliderDown()
         self.user_scrolled_up = False
 
     def _capture(self, rebuild):
@@ -149,7 +173,7 @@ class LogFollow(QObject):
         bar = view.verticalScrollBar()
         wrapped = self._wrapped()
         following = (self.enabled and not self.scrollbar_held and not bar.isSliderDown()
-                     and not self.user_scrolled_up and (wrapped or self._at_bottom()))
+                     and (self.hold_to_pause or (not self.user_scrolled_up and (wrapped or self._at_bottom()))))
         if self._plain and not wrapped:
             anchor = QTextCursor(view.firstVisibleBlock())
         else:

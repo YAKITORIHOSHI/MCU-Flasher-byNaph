@@ -283,6 +283,7 @@ class PerformanceChecks(unittest.TestCase):
         from main.qt.serial_panel import SerialOutputView
         for cls in (ConsolePanel, SerialOutputView):
             widget = cls()
+            serial = isinstance(widget, SerialOutputView)
             widget.resize(360, 160)
             widget.show()
             try:
@@ -301,8 +302,12 @@ class PerformanceChecks(unittest.TestCase):
                 visible = widget.firstVisibleBlock().text()
                 widget.append_log({"text": "Output during wheel scroll"})
                 widget._flush_queue()
-                self.assertEqual(widget.firstVisibleBlock().text(), visible)
-                self.assertLess(bar.value(), bar.maximum())
+                if serial:
+                    APP.processEvents()
+                    self.assertEqual(bar.value(), bar.maximum())
+                else:
+                    self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                    self.assertLess(bar.value(), bar.maximum())
                 bar.setSliderDown(True)
                 bar.setSliderPosition(bar.maximum())
                 visible = widget.firstVisibleBlock().text()
@@ -320,9 +325,13 @@ class PerformanceChecks(unittest.TestCase):
                 widget._flush_queue()
                 self.assertEqual(widget.firstVisibleBlock().text(), visible)
                 widget.set_autoscroll(True)
-                widget.append_log({"text": "Enabling Auto while reading does not jump"})
+                widget.append_log({"text": "Output after enabling Auto while reading"})
                 widget._flush_queue()
-                self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                if serial:
+                    APP.processEvents()
+                    self.assertEqual(bar.value(), bar.maximum())
+                else:
+                    self.assertEqual(widget.firstVisibleBlock().text(), visible)
                 bar.setValue(bar.maximum())
                 widget.append_log({"text": "Following resumes at the actual bottom"})
                 widget._flush_queue()

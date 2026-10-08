@@ -144,7 +144,7 @@ class SerialOutputView(QPlainTextEdit):
         from main.core.config import get_theme_mode
         self.apply_theme(get_theme_mode())
         self._autoscroll = True
-        self._follow = LogFollow(self)
+        self._follow = LogFollow(self, hold_to_pause=True)
 
         self._paused = False
         self._paused_dirty = False

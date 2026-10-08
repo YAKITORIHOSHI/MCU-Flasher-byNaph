@@ -392,7 +392,10 @@ while output arrives. Bootstrap
 Auto-scroll pauses while the scrollbar is held or dragged, and releasing it
 resumes following the latest output even when released above the bottom.
 Checking Auto-scroll also resumes following; checking it while holding the
-scrollbar waits for release. Build output, serial logs and notifications keep
+scrollbar waits for release. Serial Monitor Auto-scroll follows whenever it is
+enabled: holding or dragging its scrollbar pauses the view, and release jumps
+to the latest output immediately, even if no new data arrives. Turn Auto-scroll
+off to keep reading older serial output. Build output and notifications keep
 a scrolled-up reading position until the reader returns to the bottom.
 Turning Auto-scroll off prevents forced following. If bounded history evicts
 the visible text, the view clamps to the remaining history. The HTML assistant
@@ -796,6 +799,8 @@ MCU Flasher by Naph/
 - **Stable logging and Copy**:
   - Long output wraps to the monitor width by default, including escaped startup
     bytes. Auto-scroll keeps the latest output visible without sideways scrolling.
+    Holding the scrollbar pauses following; release resumes at the bottom.
+    Turn **Auto-scroll** off to read older output without resuming.
     Right-click the output and toggle **Wrap lines** to change this saved display
     preference; it is also available in the compact **Options** menu. Wrapping
     preserves original copied line breaks, selections and your reading position
