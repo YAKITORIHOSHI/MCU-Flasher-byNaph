@@ -12,7 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -218,14 +220,58 @@ def _store_configuration_valid(store):
         return False
 
 
+def _reported_installed_core_version(item):
+    """Read the installed version across Arduino CLI's JSON schema variants.
+
+    Recent releases report ``installed_version`` on the platform summary.
+    Older/alternate payloads may instead include an ``installed`` flag and
+    version, or mark the installed release inside ``releases``. In particular,
+    never stringify a boolean ``installed`` flag as though it were a version.
+    """
+    installed_version = item.get("installed_version")
+    if isinstance(installed_version, str) and installed_version.strip():
+        return installed_version.strip()
+
+    installed = item.get("installed")
+    if isinstance(installed, str) and installed.strip():
+        return installed.strip()
+    if installed is not False:
+        legacy_version = item.get("version")
+        if isinstance(legacy_version, str) and legacy_version.strip():
+            return legacy_version.strip()
+
+    releases = item.get("releases")
+    if isinstance(releases, dict):
+        installed_releases = []
+        for release_key, release in releases.items():
+            if not isinstance(release, dict) or release.get("installed") is not True:
+                continue
+            release_version = release.get("version")
+            if not isinstance(release_version, str) or not release_version.strip():
+                release_version = release_key
+            if isinstance(release_version, str) and release_version.strip():
+                installed_releases.append(release_version.strip())
+        if len(installed_releases) == 1:
+            return installed_releases[0]
+    return ""
+
+
 def _verify_core_version(command, core_id, version, *, online=False):
     payload = _run_json(command + ["core", "list"], timeout=120, online=online)
     platforms = payload.get("platforms") if isinstance(payload, dict) else payload
     if not isinstance(platforms, list):
         raise RuntimeError("Arduino CLI did not confirm its installed core inventory")
     matches = [item for item in platforms if isinstance(item, dict) and item.get("id") == core_id]
-    if len(matches) != 1 or str(matches[0].get("installed_version") or matches[0].get("installed") or matches[0].get("version") or "") != version:
-        raise RuntimeError(f"Arduino CLI did not confirm exact installed core {core_id}@{version}")
+    installed_version = _reported_installed_core_version(matches[0]) if len(matches) == 1 else ""
+    if len(matches) != 1 or installed_version != version:
+        reported = ", ".join(
+            f"{item.get('id') or '?'}@{_reported_installed_core_version(item) or 'unknown'}"
+            for item in platforms[:12] if isinstance(item, dict)
+        ) or "none"
+        raise RuntimeError(
+            f"Arduino CLI did not confirm exact installed core {core_id}@{version}"
+            f" (reported: {reported[:500]})"
+        )
 
 
 def _atomic_json(path, payload):
@@ -333,7 +379,7 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
             raise ValueError("Arduino CLI compiler jobs must be a positive integer")
         from main.core.build_resources import get_optimal_compiler_jobs
         safe_jobs = get_optimal_compiler_jobs(storage_paths=(Path(core), Path(directory)), storage_wait=True)
-        compiler_jobs = min(jobs or 1, safe_jobs)
+        total_jobs = min(jobs or safe_jobs, safe_jobs)
         package, architecture, version = (str(metadata.get(key) or "") for key in ("package", "architecture", "version"))
         if not _IDENTIFIER.fullmatch(package) or not _IDENTIFIER.fullmatch(architecture) or not _VERSION.fullmatch(version):
             raise ValueError("The Arduino index has no valid exact package, architecture and version")
@@ -363,12 +409,34 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
         proof_files = {str(path.relative_to(Path(core))): sha256_file(path) for path in proof_paths}
         installed_source_digest = proof_files[str(proof_paths[0].relative_to(Path(core)))]
         source_digests = {}
-        # board details validates FQBN, installed core and its tool dependencies.
         for row in targets:
+            if not source_target_proof(row):
+                continue
+            source = str(row.get("source_file") or "")
+            if source and source not in source_digests:
+                try:
+                    source_digests[source] = sha256_file(source)
+                except Exception as exc:
+                    source_digests[source] = exc
+
+        worker_count = max(1, min(total_jobs, len(targets)))
+        compiler_jobs = max(1, total_jobs // worker_count)
+        emit("verifying", message=(f"Checking {len(targets)} Arduino fallback targets in parallel "
+                                   f"({worker_count} workers; up to {compiler_jobs} compiler jobs each)…"),
+             progress=0)
+        probes = Path(core) / "arduino-cli/probes"
+        probes.mkdir(parents=True, exist_ok=True)
+        cli_digest = sha256_file(cli)
+        cli_path = str(Path(cli).resolve())
+        tool_inventory_cache = {}
+        tool_inventory_lock = threading.Lock()
+
+        def prepare_target(row):
+            row = dict(row)
             arduino_id = str(row.get("arduino_id") or "")
             if not _IDENTIFIER.fullmatch(arduino_id):
                 row.update(status="unavailable", reason="The Arduino declaration has no valid exact board ID")
-                continue
+                return row
             fqbn = f"{package}:{architecture}:{arduino_id}"
             try:
                 primary = source_target_proof(row)
@@ -379,28 +447,32 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                     source = str(row.get("source_file") or "")
                     if not source or not _within(source, directory):
                         raise RuntimeError("The original Arduino declaration escapes its verified source folder")
-                    if source not in source_digests:
-                        source_digests[source] = sha256_file(source)
-                    if source_digests[source] != proof["source_sha256"]:
+                    observed_digest = source_digests.get(source)
+                    if isinstance(observed_digest, Exception):
+                        raise RuntimeError(f"The original Arduino declaration could not be read: {observed_digest}")
+                    if observed_digest != proof["source_sha256"]:
                         raise RuntimeError("The original Arduino board declarations changed before preparation")
                     if installed_source_digest != proof["source_sha256"]:
                         raise RuntimeError("The exact installed Arduino core does not match the original source declaration bytes")
                 details = _run_json(command + ["board", "details", "--fqbn", fqbn], timeout=120, online=True)
                 if not isinstance(details, dict) or details.get("fqbn") != fqbn:
                     raise RuntimeError("Arduino CLI did not confirm the exact requested board")
-                probes = Path(core) / "arduino-cli/probes"
-                probes.mkdir(parents=True, exist_ok=True)
-                emit("verifying", message=f"Checking Arduino CLI compilation for {row.get('name') or arduino_id}…", progress=None)
                 with tempfile.TemporaryDirectory(prefix="target-", dir=probes) as probe_directory:
                     sketch = Path(probe_directory) / "Probe"
                     sketch.mkdir()
                     (sketch / "Probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
                     _run_json(command + ["compile", "--fqbn", fqbn, "--build-path", str(Path(probe_directory) / "build"),
                                          "--jobs", str(compiler_jobs), str(sketch)], timeout=900, online=True, parse=False)
-                tool_files = _tool_inventory(core, details, store=store, hardware=platform_dir)
+                dependency_key = json.dumps(details.get("tools_dependencies") or [], sort_keys=True,
+                                            separators=(",", ":"), ensure_ascii=False)
+                with tool_inventory_lock:
+                    tool_files = tool_inventory_cache.get(dependency_key)
+                    if tool_files is None:
+                        tool_files = _tool_inventory(core, details, store=store, hardware=platform_dir)
+                        tool_inventory_cache[dependency_key] = tool_files
                 certificate = {"schema": 1, "host": sys.platform, "core": f"{package}:{architecture}",
                                "version": version, "proof_files": proof_files, "tool_files": tool_files,
-                               "cli_sha256": sha256_file(cli), "cli_path": str(Path(cli).resolve()), "fqbn": fqbn,
+                               "cli_sha256": cli_digest, "cli_path": cli_path, "fqbn": fqbn,
                                "store": str(store.relative_to(Path(core)))}
                 if primary:
                     certificate.update(arduino_backend_role="primary", arduino_source_proof=dict(row["arduino_source_proof"]))
@@ -420,6 +492,24 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
             except Exception as exc:
                 prefix = "Original Arduino source target preparation failed" if source_target_proof(row) else "PlatformIO does not support this exact board yet. Arduino CLI preparation failed"
                 row.update(status="unavailable", reason=f"{prefix}: {exc}")
+            return row
+
+        result_index = {id(row): index for index, row in enumerate(prepared)}
+        completed = 0
+        report_interval = max(1, len(targets) // 20)
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="arduino-target") as executor:
+            futures = {executor.submit(prepare_target, row): (result_index[id(row)], row) for row in targets}
+            for future in as_completed(futures):
+                index, original = futures[future]
+                try:
+                    prepared[index] = future.result()
+                except Exception as exc:
+                    prefix = "Original Arduino source target preparation failed" if source_target_proof(original) else "PlatformIO does not support this exact board yet. Arduino CLI preparation failed"
+                    prepared[index].update(status="unavailable", reason=f"{prefix}: {exc}")
+                completed += 1
+                if completed % report_interval == 0 or completed == len(targets):
+                    emit("verifying", message=f"Arduino CLI fallback checks completed: {completed}/{len(targets)}.",
+                         progress=round(completed * 100 / len(targets), 1))
     except Exception as exc:
         for row in targets:
             prefix = "Original Arduino source target preparation failed" if source_target_proof(row) else "PlatformIO does not support this exact board yet. Arduino CLI preparation failed"

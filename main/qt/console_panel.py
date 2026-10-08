@@ -286,6 +286,7 @@ class ConsolePanel(QPlainTextEdit):
         self._formats = {}
         self._patterns = {}
         self._progress_blocks = {}
+        self._keyed_progress = {}
         self._autoscroll = True
         self._follow = LogFollow(self, hold_to_pause=True)
         self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
@@ -374,10 +375,18 @@ class ConsolePanel(QPlainTextEdit):
         return self._formats[tag]
 
     def _render_entry(self, cursor, entry, replace=False):
-        if self._hide_warnings and entry["tag"] == "warning":
+        if self._hide_warnings and entry["tag"] == "warning" and not entry.get("progress_key"):
             return
-        block = self._progress_blocks.get(entry["id"]) if replace else None
-        if replace and block is None:
+        progress_key = entry.get("progress_key")
+        if progress_key:
+            oldest = next(iter(self._entries), None)
+            if oldest is None or entry["id"] < oldest["id"]:
+                return  # This render batch's keyed row already expired.
+            state = self._keyed_progress.get(progress_key)
+            block = state["block"] if replace and state and state["entry"]["id"] == entry["id"] else None
+        else:
+            block = self._progress_blocks.get(entry["id"]) if replace else None
+        if replace and block is None and not progress_key:
             # The small cache may expire before the bounded lookup horizon.
             # Match a verified progress identity, never diagnostic/source text.
             candidate = self.document().lastBlock()
@@ -399,17 +408,34 @@ class ConsolePanel(QPlainTextEdit):
         if self._timestamp_enabled and entry["ts"]:
             cursor.insertText(entry["ts"] + " ", self._format("timestamp"))
         _insert_with_bar_styling(cursor, entry["text"], self._format(entry["tag"]))
-        if entry.get("replace_pattern"):
+        if entry.get("replace_pattern") or entry.get("progress_key"):
             if "\n" not in entry["text"] and entry["newline"]:
                 data = _ProgressBlockData(entry["id"])
                 cursor.block().setUserData(data)
                 self._progress_blocks[entry["id"]] = cursor.block()
                 if len(self._progress_blocks) > 128:
                     self._progress_blocks.pop(next(iter(self._progress_blocks)))
+                self._remember_keyed_progress(entry, cursor.block())
+            else:
+                self._remember_keyed_progress(entry)
+
+    def _remember_keyed_progress(self, entry, block=None):
+        key = entry.get("progress_key")
+        if not key:
+            return
+        state = self._keyed_progress.pop(key, None)
+        if state is None or state["entry"]["id"] != entry["id"]:
+            state = {"entry": entry, "block": None}
+        if block is not None:
+            state["block"] = block
+        self._keyed_progress[key] = state
+        if len(self._keyed_progress) > 128:
+            self._keyed_progress.pop(next(iter(self._keyed_progress)))
 
     @preserve_log_view(rebuild=True)
     def _rebuild_document(self) -> None:
         self._progress_blocks.clear()
+        self._keyed_progress.clear()
         self._formats.clear()
         cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
@@ -430,7 +456,18 @@ class ConsolePanel(QPlainTextEdit):
         from main.qt.log_buffer import DIAGNOSTIC_TAGS
         match = None
         pattern = record.get("replace_pattern")
-        if pattern and record["newline"] and record["tag"] not in DIAGNOSTIC_TAGS and "\n" not in record["text"]:
+        progress_key = record.get("progress_key")
+        if progress_key and record["newline"] and "\n" not in record["text"]:
+            # Only a producer-owned identity can finish an activity row across
+            # intervening output. FIFO ids reject expired cached references in
+            # constant time; completed diagnostics remain immutable.
+            state = self._keyed_progress.get(progress_key)
+            oldest = next(iter(history), None)
+            candidate = state["entry"] if state else None
+            if candidate is not None and oldest is not None and candidate["id"] >= oldest["id"]:
+                if candidate["tag"] not in DIAGNOSTIC_TAGS and candidate["newline"] and "\n" not in candidate["text"]:
+                    match = candidate
+        elif pattern and record["newline"] and record["tag"] not in DIAGNOSTIC_TAGS and "\n" not in record["text"]:
             if pattern not in self._patterns:
                 try:
                     self._patterns[pattern] = re.compile(pattern, re.IGNORECASE)
@@ -441,7 +478,7 @@ class ConsolePanel(QPlainTextEdit):
             compiled = self._patterns[pattern]
             if compiled is not None:
                 for candidate in islice(reversed(history), 250):
-                    if candidate["tag"] in DIAGNOSTIC_TAGS or not candidate["newline"] or not candidate.get("replace_pattern"):
+                    if candidate["tag"] in DIAGNOSTIC_TAGS or not candidate["newline"] or not candidate.get("replace_pattern") or candidate.get("progress_key"):
                         break
                     if candidate.get("replace_pattern") == pattern and "\n" not in candidate["text"] and compiled.search(candidate["text"]):
                         match = candidate
@@ -451,12 +488,14 @@ class ConsolePanel(QPlainTextEdit):
             entry_id = match["id"]
             match.update(record, id=entry_id)
             history.adjust_size(match, old_length)
+            self._remember_keyed_progress(match)
             return match, True
         self._entry_number += 1
         # The single journal owns this fresh record; avoid a second allocation
         # for every compiler file in a long build.
         record["id"] = self._entry_number
         history.append(record)
+        self._remember_keyed_progress(record)
         return record, False
 
     @Slot(dict)
@@ -471,7 +510,10 @@ class ConsolePanel(QPlainTextEdit):
         if stamp:
             ts, text = stamp.groups()
         pattern = payload.get("replace_pattern")
-        self._queue.append((text, payload.get("tag", "normal"), payload.get("newline", True), pattern if isinstance(pattern, str) else None, ts))
+        progress_key = payload.get("progress_key")
+        if not isinstance(progress_key, str) or not 0 < len(progress_key) <= 160:
+            progress_key = None
+        self._queue.append((text, payload.get("tag", "normal"), payload.get("newline", True), pattern if isinstance(pattern, str) else None, ts, progress_key))
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
@@ -481,12 +523,12 @@ class ConsolePanel(QPlainTextEdit):
         items = coalesce_progress(self._queue.drain())
         notice = self._queue.take_notice()
         if notice:
-            items.insert(0, (notice + "\n", "system", True, None, ""))
+            items.insert(0, (notice + "\n", "system", True, None, "", None))
         cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         pending_render = []
-        for text, tag, newline, pattern, ts in items:
-            record = dict(text=text, tag=tag, newline=newline, replace_pattern=pattern, ts=ts)
+        for text, tag, newline, pattern, ts, progress_key in items:
+            record = dict(text=text, tag=tag, newline=newline, replace_pattern=pattern, ts=ts, progress_key=progress_key)
             rendered = self._store_entry(self._entries, record)
             # Only declared live progress is mutable. Compilation file events
             # have no replacement pattern and are always rendered individually.
@@ -511,6 +553,7 @@ class ConsolePanel(QPlainTextEdit):
         self._queue.clear()
         self._cleaner.reset()
         self._progress_blocks.clear()
+        self._keyed_progress.clear()
         self._patterns.clear()
         self._entry_number = 0
         self._flush_timer.stop()

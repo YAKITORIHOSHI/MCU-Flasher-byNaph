@@ -175,16 +175,6 @@ def report_coverage(core, sources, *, plan, platform_sources, board_manifests, l
                     continue
                 prepared = prepared_target_for_record(record, catalog, core=core,
                     rows=associations, validation_cache=validation_cache)
-                if prepared and prepared.get("backend") == "arduino-cli":
-                    row.update(platform=str(prepared.get("platform") or ""),
-                               board=str(prepared.get("board") or ""), backend="arduino-cli",
-                               arduino_cli=dict(prepared.get("arduino_cli") or {}),
-                               arduino_backend_role=prepared.get("arduino_backend_role", "fallback"),
-                               arduino_source_proof=prepared.get("arduino_source_proof"))
-                    row.update(status="ready" if arduino_selected else "outside_plan",
-                               reason=("Exact Arduino CLI board and source certificates verified."
-                                       if arduino_selected else "Arduino is outside the explicit bootstrap framework plan."))
-                    continue
                 diagnosis = board_catalog.diagnose_arduino_board_record(record, catalog, match_features=features)
                 row["candidates"] = diagnosis.get("candidates") or []
                 failure = failures.get((*identity, expected_source))
@@ -195,14 +185,30 @@ def report_coverage(core, sources, *, plan, platform_sources, board_manifests, l
                                                                         validation_cache=validation_cache)
                 if not primary_intent and failure and source_namespace_proof(failure):
                     primary_intent = failure
-                if primary_intent and not prepared:
+                match = (prepared if prepared and prepared.get("backend") != "arduino-cli"
+                         else diagnosis.get("match"))
+                if diagnosis.get("status") == "ambiguous" and not (
+                        prepared and prepared.get("backend") != "arduino-cli"):
+                    row.update(status="ambiguous", backend="platformio",
+                               reason="Several installed definitions match this declaration; select an exact board or provide an explicit association.")
+                    continue
+                if not match and prepared and prepared.get("backend") == "arduino-cli":
+                    row.update(platform=str(prepared.get("platform") or ""),
+                               board=str(prepared.get("board") or ""), backend="arduino-cli",
+                               arduino_cli=dict(prepared.get("arduino_cli") or {}),
+                               arduino_backend_role=prepared.get("arduino_backend_role", "fallback"),
+                               arduino_source_proof=prepared.get("arduino_source_proof"))
+                    row.update(status="ready" if arduino_selected else "outside_plan",
+                               reason=("Exact Arduino CLI board and source certificates verified."
+                                       if arduino_selected else "Arduino is outside the explicit bootstrap framework plan."))
+                    continue
+                if primary_intent and not match:
                     row.update(status="unavailable", backend="arduino-cli", arduino_backend_role="primary",
                                arduino_source_proof=primary_intent["arduino_source_proof"],
                                platform=primary_intent["arduino_source_proof"]["core"], board=row["arduino_id"],
                                reason=(failure["reason"] if failure else
                                        "The original Arduino source target needs preparation; its exact compiler certificate is unavailable."))
                     continue
-                match = prepared or diagnosis.get("match")
                 if not match:
                     row.update(status="ambiguous" if diagnosis.get("status") == "ambiguous" else "unavailable",
                                reason=("Several installed definitions match this declaration; select an exact board or provide an explicit association."

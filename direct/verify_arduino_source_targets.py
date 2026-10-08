@@ -116,21 +116,19 @@ esp32c3.build.board=ESP32C3_DEV
         self.assertEqual(probe[probe.index("--fqbn") + 1], "esp32:esp32:esp32s3")
         self.assertFalse(any("upload" in command for command, _ in self.commands))
 
-    def test_source_primary_can_resolve_with_ambiguous_concrete_platformio_definitions(self):
+    def test_source_primary_does_not_override_a_resolved_platformio_definition(self):
         result = self.ready()
         candidates = self.candidates()
-        self.assertIsNone(board_catalog._resolve_arduino_board_record(self.record, candidates))
+        match = board_catalog._resolve_arduino_board_record(self.record, candidates)
+        self.assertIsNotNone(match)
         prepared = support.prepared_target_for_record(self.record, candidates, core=self.core)
         self.assertEqual(prepared["arduino_fqbn"], result["arduino_fqbn"])
         info = support.arduino_catalog_entry(self.record, prepared)
-        self.assertEqual(target_profile.target_problem(info, arduino_sketch=True), "")
-        self.assertEqual(info["arduino_variant"], "esp32s3")
-        self.assertEqual(self.record["flash_size"], "4MB")
-        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=candidates):
-            _, environment, fqbn = support.runtime_command(info, core=self.core)
-        self.assertEqual(fqbn, "esp32:esp32:esp32s3")
-        self.assertEqual(environment["HTTPS_PROXY"], "http://127.0.0.1:9")
-        self.assertFalse(self.commands[-1][1].get("online", False))
+        resolved = board_catalog.resolve_board_definition(self.record["name"], info, candidates)
+        self.assertEqual(resolved["backend"], "platformio")
+        self.assertEqual(resolved["board"], match["id"])
+        self.assertNotIn("arduino_cli", resolved)
+        self.assertEqual(target_profile.target_problem(resolved, arduino_sketch=True), "")
 
     def test_each_source_declaration_keeps_its_own_fqbn(self):
         record = board_catalog._parse_downloaded_arduino_board_files(self.download, force_read=True)[1]

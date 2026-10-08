@@ -152,9 +152,9 @@ class ProjectDialog(QDialog):
             self._update_existing_preview(self._start_dir)
 
     def _is_busy(self) -> bool:
-        if self._allow_window_choice:
-            return False
-        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+        if self._backend and (self._backend.is_busy
+                              or getattr(self._backend, "active_operation", None) is not None
+                              or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
         p = self.parent()
         if p and getattr(p, "_active_operation", None) is not None:
@@ -784,6 +784,8 @@ class ProjectDialog(QDialog):
 
     def _choose_project_window(self, project_name: str) -> bool | None:
         """Ask whether this project belongs in this workspace or another."""
+        if self._is_busy():
+            return None
         if not self._allow_window_choice:
             return False
 
@@ -919,6 +921,9 @@ class ProjectDialog(QDialog):
         on_success: Callable[[], None],
         status_label: QLabel,
     ) -> None:
+        if self._is_busy():
+            status_label.setText("✖ Changing project is not allowed while an action is in progress.")
+            return
         in_new_window = self._choose_project_window(project_name)
         if in_new_window is None:
             return
@@ -967,6 +972,9 @@ class ProjectDialog(QDialog):
                 )
 
         def perform() -> None:
+            if self._is_busy():
+                finish(error="Changing project is not allowed while an action is in progress.")
+                return
             begin_wait()
             try:
                 finish(action(bool(in_new_window)))
@@ -1042,6 +1050,9 @@ class ProjectDialog(QDialog):
         self._open_projects_status.setText("" if has_projects else "No sketch windows are open yet.")
 
     def _focus_open_project(self, item=None) -> None:
+        if self._is_busy():
+            self._open_projects_status.setText("Project switching is unavailable while an action is running.")
+            return
         from main.core.config import find_project_window, focus_project_window
         if not isinstance(item, QListWidgetItem):
             item = self._open_projects_list.currentItem()

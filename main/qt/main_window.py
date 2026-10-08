@@ -711,7 +711,7 @@ class MCUMainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=self._shortcut_save_all)
         self._find_all_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self,
                                           activated=self._editor_panel.show_project_search)
-        QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_project)
+        self._project_shortcut = QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_project)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Signal connections
@@ -844,6 +844,8 @@ class MCUMainWindow(QMainWindow):
         phase: str    = payload.get("phase", "idle")
         op: str       = payload.get("op", "")
         if is_busy:
+            if hasattr(self, "_project_shortcut"):
+                self._project_shortcut.setEnabled(False)
             self._operation_generation += 1
             self._active_operation = op or phase
             phase_map = {
@@ -906,6 +908,8 @@ class MCUMainWindow(QMainWindow):
                 if hasattr(self, "_serial_panel") and self._serial_panel:
                     self._serial_panel.setEnabled(True)
         else:
+            if hasattr(self, "_project_shortcut"):
+                self._project_shortcut.setEnabled(True)
             self._apply_pending_catalog()
             self._set_status_text("Ready")
             self._progress_bar.setVisible(False)
@@ -1165,13 +1169,17 @@ class MCUMainWindow(QMainWindow):
             failed(f"The editor could not save before restart: {exc}")
 
     def _is_busy(self) -> bool:
-        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+        if self._backend and (self._backend.is_busy
+                              or getattr(self._backend, "active_operation", None) is not None
+                              or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
         if getattr(self, "_active_operation", None) is not None:
             return True
         return False
 
     def _shortcut_open_project(self) -> None:
+        if self._is_busy():
+            return
         from main.qt.project_dialog import ProjectDialog
         dlg = ProjectDialog(self._backend, parent=self, open_in_new_window=True)
         dlg.exec()

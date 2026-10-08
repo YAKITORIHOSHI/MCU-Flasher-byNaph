@@ -499,7 +499,9 @@ class PrimaryToolbar(QToolBar):
             mw._editor_panel.trigger_reload()
 
     def _is_busy(self) -> bool:
-        if self._backend and (self._backend.is_busy or getattr(self._backend, "active_operation", None) is not None):
+        if self._backend and (self._backend.is_busy
+                              or getattr(self._backend, "active_operation", None) is not None
+                              or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
         mw = self.window()
         if mw and getattr(mw, "_active_operation", None) is not None:
@@ -598,6 +600,8 @@ class PrimaryToolbar(QToolBar):
             pass
 
     def _on_new_project(self) -> None:
+        if self._is_busy():
+            return
         from main.qt.project_dialog import ProjectDialog
         dlg = ProjectDialog(self._backend, parent=self.window(), open_in_new_window=True)
         dlg.exec()
@@ -617,7 +621,7 @@ class PrimaryToolbar(QToolBar):
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
         if self._is_busy():
-            self.lbl_sketch.setToolTip("Current sketch folder — right-click: choose where a project opens")
+            self.lbl_sketch.setToolTip("Project switching is unavailable while an action is running")
         else:
             self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: choose where a project opens" if path else "Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
         self._balance_spacers()
@@ -645,14 +649,15 @@ class PrimaryToolbar(QToolBar):
             self.btn_clean.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_modify.setEnabled(False)
             self.btn_modify.setCursor(Qt.CursorShape.ArrowCursor)
-            self.btn_project.setEnabled(True)
-            self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.btn_project.setToolTip("Choose where to open a project (Ctrl+O)")
-            self.lbl_sketch_icon.setEnabled(True)
-            self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.lbl_sketch_icon.setToolTip("Open a project in this window or a new window")
+            self.btn_project.setEnabled(False)
+            self.btn_project.setCursor(Qt.CursorShape.ArrowCursor)
+            self.btn_project.setToolTip("Project switching is unavailable while an action is running")
+            self.lbl_sketch_icon.setEnabled(False)
+            self.lbl_sketch_icon.setCursor(Qt.CursorShape.ArrowCursor)
+            self.lbl_sketch_icon.setToolTip("Project switching is unavailable while an action is running")
+            self.lbl_sketch.setEnabled(False)
             if hasattr(self, "lbl_sketch"):
-                self.lbl_sketch.setToolTip("Current sketch folder — right-click: choose where a project opens")
+                self.lbl_sketch.setToolTip("Project switching is unavailable while an action is running")
 
             # STOP button: enabled during compile and build.
             # DISABLED during flash/reset (direct flash write — brick risk) and generic fallback.
@@ -709,6 +714,7 @@ class PrimaryToolbar(QToolBar):
             self.lbl_sketch_icon.setEnabled(True)
             self.lbl_sketch_icon.setCursor(Qt.CursorShape.PointingHandCursor)
             self.lbl_sketch_icon.setToolTip("Open a project in this window or a new window")
+            self.lbl_sketch.setEnabled(True)
             if hasattr(self, "lbl_sketch"):
                 cur_path = getattr(self, "_current_sketch_path", "")
                 if cur_path:

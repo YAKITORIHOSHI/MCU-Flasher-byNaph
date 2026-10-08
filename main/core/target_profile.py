@@ -34,8 +34,11 @@ def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
                  for row in candidates[:3] if isinstance(row, Mapping)]
         targets = ", ".join(name for name in names if name)
         detail = f" Matching installed boards: {targets}." if targets else ""
-        return ("This Arduino board entry matches multiple PlatformIO definitions." + detail +
-                " Use Bootstrap to prepare the original Arduino target, or select your exact hardware model in Controls.")
+        if len(names) > 1:
+            return ("This Arduino board entry matches multiple PlatformIO definitions." + detail +
+                    " Select your exact hardware model in Controls or provide an explicit board mapping.")
+        return ("This Arduino board entry does not identify one exact PlatformIO definition." + detail +
+                " Select your exact hardware model in Controls or provide an explicit board mapping.")
     if not info or info.get("pio_resolved") is False:
         return "No verified PlatformIO definition for this board. Install its platform package and select the exact board."
     for key in ("platform", "board"):

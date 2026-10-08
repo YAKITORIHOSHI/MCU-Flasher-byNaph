@@ -889,9 +889,9 @@ def diagnose_arduino_board_record(record: dict, catalog: list[dict], *,
                                   match_features: dict[int, dict] | None = None) -> dict:
     """Explain missing identity separately from conflicting installed targets.
 
-    Keep the same scoring, threshold and ambiguity margin as resolution. A
-    package repair cannot choose between concrete boards sharing an Arduino
-    variant; retain a bounded description for bootstrap coverage and Controls.
+    Strong family/build evidence can select the leading S3/C3 PlatformIO match
+    even when close, matching the established resolver behavior. Keep exact
+    ties ambiguous, and require the wider margin for other or name-only matches.
     """
     ranked: list[tuple[float, dict, list[str]]] = []
     record_features = _arduino_match_features(record)
@@ -916,7 +916,11 @@ def diagnose_arduino_board_record(record: dict, catalog: list[dict], *,
                    "score": round(score, 2), "reasons": evidence}
                   for score, candidate, evidence in ranked[:3]
                   if best_score - score < 18.0]
-    if best_score - second_score < 18.0:
+    score_margin = best_score - second_score
+    generic_mcu = _normalize_board_identity(record.get("mcu"))
+    generic_id = _normalize_board_identity(record.get("arduino_id"))
+    generic_s3_c3 = generic_mcu in {"esp32s3", "esp32c3"} and generic_id == generic_mcu
+    if score_margin <= 0.01 or (score_margin < 18.0 and (not strong or not generic_s3_c3)):
         return {"status": "ambiguous", "match": None, "candidates": candidates}
     match = {
         **best,
@@ -962,11 +966,24 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
     planned = source_namespace_target_for_record(record, rows=planned_targets, validation_cache=prepared_validation)
     if prepared and prepared.get("backend") != "arduino-cli":
         match = prepared
-    elif prepared and prepared.get("arduino_backend_role") == "primary":
+    elif match is None and diagnosis.get("status") == "ambiguous":
+        # A verified Arduino CLI fallback cannot silently select a compiler
+        # while PlatformIO recognizes multiple concrete hardware models.
+        # Preserve the PIO ambiguity so the user can select the exact native
+        # board or add an explicit mapping.
+        for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+                    "platformio_support", "platformio_support_proof", "fallback_notice"):
+            resolved.pop(key, None)
+        resolved.update(backend="platformio", pio_resolved=False, board="",
+                        pio_resolution_status="ambiguous",
+                        pio_resolution_candidates=diagnosis["candidates"])
+        return resolved
+    elif match is None and prepared and prepared.get("arduino_backend_role") == "primary":
         return arduino_catalog_entry(record, prepared)
-    elif planned or source_target_proof(info):
+    elif match is None and (planned or source_target_proof(info)):
         # Losing a compiler certificate cannot turn an original Arduino
-        # declaration into a newly installed concrete PlatformIO model.
+        # declaration into a fuzzy concrete PlatformIO model. A current
+        # unambiguous compatible definition above takes precedence.
         intended = planned or info
         blocked = arduino_catalog_entry(record, dict(intended, arduino_cli=None))
         blocked.update(pio_resolution_status="unavailable", pio_resolution_candidates=diagnosis["candidates"],
@@ -1333,10 +1350,14 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         intended = source_namespace_target_for_record(record, rows=planned_targets, validation_cache=prepared_validation) if planned_targets else None
         if prepared and prepared.get("backend") != "arduino-cli":
             match = prepared
-        elif prepared and (not match or prepared.get("arduino_backend_role") == "primary"):
+        elif diagnosis.get("status") == "ambiguous":
+            # PlatformIO recognized multiple concrete boards. Do not route
+            # this through Arduino CLI: the user must choose an exact model.
+            match = None
+        elif prepared and not match:
             fallback_rows[id(record)] = prepared
             match = None
-        elif intended:
+        elif intended and not match:
             fallback_rows[id(record)] = dict(intended, arduino_cli=None)
             match = None
         resolved_rows.append((record, match))

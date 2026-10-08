@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -110,6 +111,31 @@ class FallbackChecks(unittest.TestCase):
         self.assertEqual(probe[probe.index("--jobs") + 1], "2")
         self.assertFalse(any("upload" in command for command in self.commands))
         self.assertTrue(any("PlatformIO does not support" in str(call) for call in self.emit.call_args_list))
+
+    def test_fallback_board_compile_probes_run_in_parallel_with_shared_job_budget(self):
+        barrier = threading.Barrier(2)
+        compile_jobs = []
+
+        def run_parallel(command, **kwargs):
+            if "core" in command and "list" in command:
+                return {"platforms": [{"id": "vendor:newarch", "installed_version": "2.0.0"}]}
+            if "details" in command:
+                return {"fqbn": command[command.index("--fqbn") + 1],
+                        "tools_dependencies": [{"packager": "vendor", "name": "compiler", "version": "1.0.0"}]}
+            if "compile" in command:
+                compile_jobs.append(command[command.index("--jobs") + 1])
+                barrier.wait(timeout=5)
+            return None
+
+        self.runner.side_effect = run_parallel
+        targets = [dict(self.row), dict(self.row, arduino_id="future2", name="Future Board 2")]
+        prepared = support.prepare_unsupported_boards(
+            self.core, self.download, self.metadata, targets, emit=self.emit, jobs=2)
+
+        self.assertEqual([row["status"] for row in prepared], ["ready", "ready"])
+        self.assertEqual(compile_jobs, ["1", "1"])
+        self.assertTrue(any("2 workers" in str(call) for call in self.emit.call_args_list))
+        self.assertTrue(any("2/2" in str(call) for call in self.emit.call_args_list))
 
     def test_probe_jobs_respect_resource_budget_and_reject_invalid_values(self):
         rows = support.prepare_unsupported_boards(self.core, self.download, self.metadata, [self.row], emit=self.emit, jobs=80)

@@ -22,8 +22,9 @@ class SourceNamespaceChecks(unittest.TestCase):
     candidates = fixtures.SourceTargetChecks.candidates
 
     def refresh(self, roots=None, previous=None, candidates=None):
+        available = self.candidates()[:1] if candidates is None else candidates
         with patch.object(board_catalog, "_get_arduino_board_search_roots", return_value=roots or [self.download]), \
-                patch.object(board_catalog, "_load_platformio_board_catalog", return_value=candidates or self.candidates()[:1]), \
+                patch.object(board_catalog, "_load_platformio_board_catalog", return_value=available), \
                 patch.object(board_catalog, "_save_board_catalog_cache"):
             return board_catalog.load_dynamic_boards(previous or {})
 
@@ -39,7 +40,7 @@ class SourceNamespaceChecks(unittest.TestCase):
         row = self.ready()
         info = support.arduino_catalog_entry(self.record, row)
         self.cli.unlink()
-        actual = board_catalog.resolve_board_definition(self.record["name"], info, self.candidates()[:1])
+        actual = board_catalog.resolve_board_definition(self.record["name"], info, [])
         self.assert_original_unavailable(actual)
         self.assertNotIn("flash_mb", actual)
         self.assertNotIn("Ready through", actual["fallback_notice"])
@@ -48,13 +49,13 @@ class SourceNamespaceChecks(unittest.TestCase):
         row = self.ready()
         info = support.arduino_catalog_entry(self.record, row)
         (self.core / support.TARGETS_FILE).unlink()
-        actual = board_catalog.resolve_board_definition(self.record["name"], info, self.candidates()[:1])
+        actual = board_catalog.resolve_board_definition(self.record["name"], info, [])
         self.assert_original_unavailable(actual)
 
     def test_fresh_discovery_of_invalid_primary_keeps_original_namespace(self):
         self.ready()
         self.cli.unlink()
-        self.assert_original_unavailable(self.refresh()[self.record["name"]])
+        self.assert_original_unavailable(self.refresh(candidates=[])[self.record["name"]])
 
     def test_unavailable_primary_publication_survives_later_fresh_refresh(self):
         row = self.ready()
@@ -64,14 +65,14 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.assertEqual(values[0]["status"], "unavailable")
         self.assertEqual(support.prepared_target_index(values), {})
         self.assertIsNone(support.prepared_target_for_record(self.record, self.candidates(), core=self.core))
-        self.assert_original_unavailable(self.refresh()[self.record["name"]])
+        self.assert_original_unavailable(self.refresh(candidates=[])[self.record["name"]])
 
     def test_invalid_primary_is_reprepared_before_new_automatic_platformio_match(self):
         self.ready()
         self.cli.unlink()
         def failure(core, directory, metadata, rows, **kwargs):
             return [dict(row, status="unavailable", reason="Simulated exact-core preparation failure.") for row in rows]
-        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=self.candidates()[:1]), \
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]), \
                 patch.object(preparation, "_receipt_for_record", return_value=(self.metadata, self.download, "")), \
                 patch.object(preparation, "_platformio_preferences", return_value={}), \
                 patch.object(support, "prepare_source_boards", side_effect=failure) as prepare:
@@ -80,7 +81,59 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.assertEqual(s3["status"], "unavailable")
         self.assertEqual(s3["arduino_backend_role"], "primary")
         self.assertTrue(any(row["arduino_id"] == "esp32s3" for call in prepare.call_args_list for row in call.args[3]))
-        self.assert_original_unavailable(self.refresh()[self.record["name"]])
+        self.assert_original_unavailable(self.refresh(candidates=[])[self.record["name"]])
+
+    def test_exact_platformio_id_supersedes_saved_arduino_primary(self):
+        self.ready()
+        candidate = self.candidates()[0]
+        candidate.update(id="esp32s3", name="ESP32S3 Dev Module")
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[candidate]):
+            info = support.arduino_catalog_entry(self.record, support.prepared_target_for_record(
+                self.record, [candidate], core=self.core))
+            actual = board_catalog.resolve_board_definition(self.record["name"], info, [candidate])
+        self.assertEqual(actual["backend"], "platformio")
+        self.assertEqual(actual["board"], "esp32s3")
+        self.assertNotIn("arduino_backend_role", actual)
+        self.assertNotIn("arduino_cli", actual)
+
+    def test_catalog_refresh_uses_exact_platformio_id_over_saved_cli_primary(self):
+        self.ready()
+        candidate = self.candidates()[0]
+        candidate.update(id="esp32s3", name="ESP32S3 Dev Module")
+        actual = self.refresh(candidates=[candidate])[self.record["name"]]
+        self.assertTrue(actual["pio_resolved"], actual)
+        self.assertEqual(actual["board"], "esp32s3")
+        self.assertNotIn("arduino_backend_role", actual)
+        self.assertNotIn("arduino_cli", actual)
+
+    def test_source_refresh_retires_cli_association_when_exact_pio_target_appears(self):
+        self.ready()
+        candidate = self.candidates()[0]
+        candidate.update(id="esp32s3", name="ESP32S3 Dev Module")
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[candidate]), \
+                patch.object(preparation, "_receipt_for_record", return_value=(self.metadata, self.download, "")), \
+                patch.object(preparation, "_platformio_preferences", return_value={}), \
+                patch.object(support, "prepare_source_boards") as prepare:
+            result = preparation.prepare_sources(self.core, [self.download], emit=Mock())
+        row = next(item for item in result["boards"] if item["arduino_id"] == "esp32s3")
+        self.assertEqual(row["status"], "not_required")
+        self.assertEqual(row["backend"], "platformio")
+        self.assertEqual(row["board"], "esp32s3")
+        prepare.assert_called_once()
+        requested = prepare.call_args.args[3]
+        self.assertEqual({item["arduino_id"] for item in requested}, {"esp32c3"})
+        remaining = support.load_prepared_targets(self.core)
+        self.assertEqual([item["arduino_id"] for item in remaining], ["esp32c3"])
+
+    def test_ambiguous_platformio_models_do_not_reuse_a_cli_primary(self):
+        self.ready()
+        with patch.object(board_catalog, "_score_arduino_to_pio_board", return_value=(391.0, ["variant"])):
+            info = self.refresh(candidates=self.candidates())[self.record["name"]]
+        self.assertFalse(info["pio_resolved"])
+        self.assertEqual(info["pio_resolution_status"], "ambiguous")
+        self.assertEqual(info["board"], "")
+        self.assertNotIn("arduino_cli", info)
+        self.assertNotIn("arduino_backend_role", info)
 
     def test_valid_explicit_platformio_mapping_can_replace_prior_primary(self):
         row = self.ready()
@@ -114,17 +167,17 @@ class SourceNamespaceChecks(unittest.TestCase):
         support.publish_prepared_targets(self.core, root, [row])
         return record
 
-    def test_three_equal_board_names_and_ids_retain_every_source_version(self):
+    def test_three_equal_board_names_and_ids_retain_every_source_as_platformio_rows(self):
         roots = [self.fixture / f"source-{index}" for index in range(3)]
         records = [self.intent(root, version=f"3.3.{11 + index}") for index, root in enumerate(roots)]
         actual = self.refresh(roots=roots)
         s3 = {name: row for name, row in actual.items() if row.get("arduino_board_id") == "esp32s3"}
         self.assertEqual(len(s3), 3)
         self.assertEqual({row["arduino_source_file"] for row in s3.values()}, {row["source_file"] for row in records})
-        self.assertTrue(any("esp32:esp32@3.3.12" in name for name in s3))
-        self.assertTrue(any("esp32:esp32@3.3.13" in name for name in s3))
         for info in s3.values():
-            self.assert_original_unavailable(info)
+            self.assertTrue(info["pio_resolved"])
+            self.assertEqual(info["board"], self.candidates()[0]["id"])
+            self.assertNotIn("arduino_cli", info)
         again = self.refresh(roots=list(reversed(roots)), previous=actual)
         self.assertEqual({name: row["arduino_source_file"] for name, row in s3.items()},
                          {name: row["arduino_source_file"] for name, row in again.items() if row.get("arduino_board_id") == "esp32s3"})
@@ -151,14 +204,14 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.source.write_text(self.source.read_text().replace("4MB", "8MB"), encoding="utf-8")
         current = board_catalog._parse_downloaded_arduino_board_files(self.download, force_read=True)[0]
         self.assertIsNone(support.prepared_target_for_record(current, self.candidates()[:1], core=self.core))
-        info = self.refresh()[self.record["name"]]
+        info = self.refresh(candidates=[])[self.record["name"]]
         self.assert_original_unavailable(info)
         self.assertEqual(info["arduino_source_sha256"], current["source_sha256"])
         self.assertEqual(info["arduino_source_proof"], row["arduino_source_proof"])
         self.assertFalse(support.source_target_proof(info))
         self.assertNotIn("flash_mb", info)
         self.assertNotIn("Ready through", info["fallback_notice"])
-        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=self.candidates()[:1]), \
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]), \
                 patch.object(preparation, "_receipt_for_record", return_value=({}, self.download, "Source receipt bytes changed.")), \
                 patch.object(preparation, "_platformio_preferences", return_value={}), \
                 patch.object(support, "prepare_source_boards") as prepare:
@@ -171,7 +224,7 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.assertFalse(support.source_target_proof(unavailable))
         # A failed repair publication retains only namespace intention. A later
         # fresh picker still cannot reinterpret this source as physical PIO.
-        self.assert_original_unavailable(self.refresh()[self.record["name"]])
+        self.assert_original_unavailable(self.refresh(candidates=[])[self.record["name"]])
         self.assertIsNone(support.planned_source_target_for_record(current, core=self.core))
 
     def test_changed_source_repreparation_uses_only_new_verified_declaration_proof(self):
@@ -181,7 +234,7 @@ class SourceNamespaceChecks(unittest.TestCase):
         metadata = dict(self.metadata, version="3.3.12")
         def failure(core, directory, metadata, rows, **kwargs):
             return [dict(row, status="unavailable", reason="Simulated compiler preparation failure.") for row in rows]
-        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=self.candidates()[:1]), \
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]), \
                 patch.object(preparation, "_receipt_for_record", return_value=(metadata, self.download, "")), \
                 patch.object(preparation, "_platformio_preferences", return_value={}), \
                 patch.object(support, "prepare_source_boards", side_effect=failure) as prepare:
@@ -190,7 +243,7 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.assertEqual(s3["arduino_source_proof"]["source_sha256"], current["source_sha256"])
         self.assertEqual(s3["arduino_source_proof"]["version"], "3.3.12")
         self.assertTrue(support.source_target_proof(s3))
-        self.assertIsNone(support.prepared_target_for_record(current, self.candidates()[:1], core=self.core))
+        self.assertIsNone(support.prepared_target_for_record(current, [], core=self.core))
 
 
 if __name__ == "__main__":

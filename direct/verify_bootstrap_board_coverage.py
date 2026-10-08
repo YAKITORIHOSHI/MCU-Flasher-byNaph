@@ -165,11 +165,12 @@ class CoverageChecks(unittest.TestCase):
         candidates = row.get("candidates") or []
         self.assertEqual({candidate["id"] for candidate in candidates}, {"s3-fixture-a", "s3-fixture-b"})
 
-    def test_exact_source_preparation_failure_survives_coverage_reclassification(self):
+    def test_ambiguous_platformio_models_do_not_route_through_failed_cli_preparation(self):
         failure = dict(self.s3, status="unavailable", reason="Exact source compilation failed: missing fixture compiler.")
         row = self.row(self.report(source_preparation={"boards": [failure]}), "esp32s3")
-        self.assertEqual(row["status"], "unavailable")
-        self.assertEqual(row["reason"], failure["reason"])
+        self.assertEqual(row["status"], "ambiguous")
+        self.assertEqual(row["backend"], "platformio")
+        self.assertNotEqual(row["reason"], failure["reason"])
         self.assertEqual({candidate["id"] for candidate in row["candidates"]}, {"s3-fixture-a", "s3-fixture-b"})
 
     def test_failed_preparation_cannot_overlay_another_source_or_changed_declarations(self):
@@ -193,18 +194,33 @@ class CoverageChecks(unittest.TestCase):
         return dict(self.s3, status="unavailable", backend="arduino-cli", arduino_backend_role="primary",
                     arduino_source_proof=proof, reason="Exact Arduino compiler preparation failed.")
 
-    def test_primary_source_intention_prevents_automatic_switch_to_a_new_unique_platformio_target(self):
+    def test_unique_generic_s3_platformio_target_supersedes_source_primary_intention(self):
         intent = self.primary_intention()
         self.prepared_rows = [intent]
         self.catalog.remove(self.s3_second)
         row = self.row(self.report(), "esp32s3")
-        self.assertEqual(row["status"], "unavailable")
-        self.assertEqual(row["backend"], "arduino-cli")
-        self.assertEqual(row["arduino_source_proof"], intent["arduino_source_proof"])
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual(row["backend"], "platformio")
+        self.assertEqual(row["board"], self.s3_first["id"])
+        self.assertNotIn("arduino_source_proof", row)
+
+    def test_current_unique_platformio_target_supersedes_source_primary_intention(self):
+        proof = arduino_cli_support.source_declaration_proof(self.uno, {
+            "package": "arduino", "architecture": "avr", "version": "1.8.6",
+            "index_url": "https://fixture.invalid/arduino-source.json"})
+        self.prepared_rows = [dict(self.uno, status="unavailable", backend="arduino-cli",
+                                   arduino_backend_role="primary", arduino_source_proof=proof,
+                                   reason="Prior Arduino CLI preparation failed.")]
+        row = self.row(self.report(), "uno")
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual(row["backend"], "platformio")
+        self.assertEqual(row["board"], self.uno_pio["id"])
+        self.assertNotIn("arduino_source_proof", row)
 
     def test_failed_current_primary_plan_preserves_namespace_and_precise_reason_without_previous_row(self):
         failure = self.primary_intention()
         self.catalog.remove(self.s3_second)
+        self.catalog.remove(self.s3_first)
         row = self.row(self.report(source_preparation={"boards": [failure]}), "esp32s3")
         self.assertEqual(row["status"], "unavailable")
         self.assertEqual(row["backend"], "arduino-cli")
@@ -219,7 +235,7 @@ class CoverageChecks(unittest.TestCase):
         self.assertEqual(row["status"], "ready")
         self.assertEqual(row["backend"], "platformio")
 
-    def test_changed_declarations_preserve_source_namespace_without_borrowing_old_readiness(self):
+    def test_changed_declarations_do_not_override_a_current_unique_platformio_target(self):
         intent = self.primary_intention()
         self.prepared_rows = [intent]
         self.catalog.remove(self.s3_second)
@@ -227,11 +243,11 @@ class CoverageChecks(unittest.TestCase):
         source.write_text(source.read_text() + "# Updated source defaults\n")
         self.s3["source_sha256"] = digest(source)
         row = self.row(self.report(), "esp32s3")
-        self.assertEqual(row["status"], "unavailable")
-        self.assertEqual(row["backend"], "arduino-cli")
+        self.assertEqual(row["status"], "ready")
+        self.assertEqual(row["backend"], "platformio")
+        self.assertEqual(row["board"], self.s3_first["id"])
         self.assertEqual(row["source_sha256"], self.s3["source_sha256"])
-        self.assertEqual(row["arduino_source_proof"], intent["arduino_source_proof"])
-        self.assertFalse(arduino_cli_support.source_target_proof(row))
+        self.assertNotIn("arduino_source_proof", row)
 
     def test_matching_definition_needs_its_manifest_receipt(self):
         signatures = dict(self.manifests)

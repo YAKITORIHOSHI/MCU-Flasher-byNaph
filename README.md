@@ -220,15 +220,15 @@ the host's package store. Its summary distinguishes prepared exact targets,
 ambiguous identities, unavailable definitions and targets outside the package
 plan. Package preparation success does not mean every Arduino display name has
 an exact PlatformIO equivalent. Generic **ESP32S3 Dev Module** and **ESP32C3 Dev
-Module** entries can match multiple concrete DevKit models. Bootstrap prepares
-their original Arduino core/version/FQBN from a verified source receipt, keeping
-the source's default pin and memory settings. The installed Arduino declaration
-must exactly match the downloaded source bytes before a compile probe certifies
-it. This applies to any verified Arduino source without a unique PlatformIO
-target, rather than a list of special-case board names. Runtime uses that prepared
-target directly; it never changes compilers after a PlatformIO failure.
-If no verified source target is available, Compile and Upload report competing
-definitions instead of implying package repair can choose a physical model.
+Module** entries can match multiple concrete DevKit models. Strong variant and
+build-define evidence may select the leading PlatformIO model even when its
+score lead is small; exact score ties remain unresolved and list the competing
+models. The supplied successful ESP32-S3 reference resolved to
+`espressif32:esp32-s3-devkitm-1` and compiled/uploaded through PlatformIO. A
+prepared Arduino CLI source target cannot override an ambiguous PIO match. CLI
+is used only as a verified fallback when PlatformIO has no compatible target,
+never after a PlatformIO build failure. A current compatible PlatformIO match
+takes precedence over older Arduino CLI associations.
 Windows Bootstrap prepares Arduino CLI; Ubuntu requires native Arduino CLI on
 PATH for these source targets. Full coverage retains missing-tool/source reasons.
 Exact Arduino core versions and package indexes use separate prepared stores so
@@ -236,9 +236,10 @@ one source version cannot replace another. Bootstrap reuses verified source
 receipts even when folders were renamed, and checks all existing candidates
 before attempting to certify an older folder. Final downloader results also
 refresh the aggregate coverage report and readiness certificate.
-An original Arduino target that loses its certificate stays unavailable in its
-source namespace until prepared again or explicitly associated with PlatformIO.
-It cannot silently become a different DevKit with different memory defaults.
+An original Arduino target that loses its certificate stays in its source
+namespace until prepared again or resolved to a compatible PlatformIO target.
+Tied PIO models remain unavailable rather than silently selecting a different
+DevKit with different memory defaults.
 Arduino builds use both the libraries prepared by the package plan and those
 installed through Library Downloader. Build receipts verify the used library
 and compiler inputs before reusing firmware; changed inputs require a rebuild.
@@ -420,6 +421,11 @@ visible; quiet upload phases receive a throttled waiting status.
 Stop remains available during scans and connection attempts, then disables
 when programmer output first indicates erase/write. A failed flash is never
 replayed automatically.
+ESP bootloader polling ends with a compact Connected, Connection failed,
+Connection stopped or Board mismatch status. Its BOOT prompt updates with the
+result in both the display and copied log. A reported chip mismatch identifies
+the detected chip and selected target and directs you to select the matching
+board in Controls; it does not suggest changing upload speed.
 Copy includes all retained messages, even when warnings are hidden. Selection
 copy copies the selected visible text. Saved timestamp preferences apply to the
 journal. On narrow windows, Options holds the clear-on-action preferences so
@@ -769,9 +775,9 @@ MCU Flasher by Naph/
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
 
 ### 2. Opening, Selecting & Scaffolding Projects
-- Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Switching the current window prompts to save, discard or cancel when editor changes are unsaved. Choosing a new window keeps the current editor, terminal, build output and board/port state intact; new windows start with hardware unselected. The startup picker opens the first project directly.
-- **Open projects** lists running sketch windows and their folder paths. Use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
-- Right-click the project title or click its folder icon to reopen the picker. **Cancel** leaves the current editor and monitor sessions intact. Choose a new window to open another project while the current one compiles; choosing the current window is blocked while an action is in progress.
+- Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Project selection, project creation, and focusing another project are unavailable while any action is running, including compile, upload, clean, or reset. The controls become available again when the action finishes. When idle, switching the current window prompts to save, discard or cancel when editor changes are unsaved. New windows start with hardware unselected. The startup picker opens the first project directly.
+- **Open projects** lists running sketch windows and their folder paths. When idle, use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
+- Right-click the project title or click its folder icon to reopen the picker when idle. **Cancel** leaves the current editor and monitor sessions intact.
 - **Existing project → Browse** always starts in your system's Documents folder, including redirected or localized Documents locations. Every click starts there; cancelling keeps the selected project path unchanged.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
@@ -785,7 +791,7 @@ MCU Flasher by Naph/
 - **Vendor board indexes**: In the separate **Libraries & boards** downloader, open **Board indexes**, enter complete HTTP/HTTPS vendor URLs separated by commas or newlines, and choose **Apply & refresh**. URLs are normalized and deduplicated; malformed index structures and source failures are reported while usable cached catalogs remain available. A failed settings write preserves the previous URL list.
 - **Downloaded board support**: **Folder / Extracted** and **Both** automatically start background preparation after checksum verification and extraction. For an existing download or **Archive Only**, select that board version and choose **Prepare board support**. Preparation follows Queued, Downloading, Verifying, Extracting, Preparing and Refreshing stages as applicable. Failure or interruption stays visible and can be retried explicitly; closing the progress card does not cancel the work.
 - **Custom board support**: User-added index packages use their downloaded declarations to find unique exact targets in the installed and freshly queried PlatformIO registry catalogs. Preparation adds the matching platform to the existing plan and verifies the installed definition and exact builder. For a vendor's custom PlatformIO source, select **Custom platform…** to save its registry/version or HTTPS specification and optional Arduino-to-PlatformIO board ID mappings. Settings belong to the requested index, package and architecture; index-authored mappings cannot override them.
-- **Arduino CLI fallback**: Only a successful complete registry check with no exact PlatformIO board identity authorizes fallback. A notice explains that PlatformIO has no support for that exact board yet. The separate preparation worker installs the exact declared Arduino core/version, checks its FQBN and compiler, and certifies local core/tools. Compile and Upload then use the prepared Arduino CLI store with downloads disabled. Network failures, ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. Newly installed PlatformIO support disables the old fallback. Upload uses one explicit write attempt and checks the current board, port, source and firmware bytes before writing.
+- **Arduino CLI fallback**: Only a successful complete registry check with no exact PlatformIO board identity authorizes fallback. A notice explains that PlatformIO has no support for that exact board yet. The separate preparation worker installs the exact declared Arduino core/version, checks its FQBN and compiler, and certifies local core/tools. Independent board compile probes run concurrently within the machine's CPU, memory and storage budget; total concurrency is shared between workers and each compiler process. Core inventory validation accepts the supported Arduino CLI JSON layouts while still requiring the exact installed version; a boolean `installed` marker is never treated as a version. Compile and Upload then use the prepared Arduino CLI store with downloads disabled. Network failures, ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. Newly installed PlatformIO support disables the old fallback. Upload uses one explicit write attempt and checks the current board, port, source and firmware bytes before writing.
   Windows Bootstrap prepares the Arduino CLI executable. Ubuntu requires a
   native Arduino CLI installed on PATH before preparing fallback board support;
   missing-tool notices explain this prerequisite.

@@ -20,11 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, QRect, QTimer, QStandardPaths
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
 from main.qt.main_window import MCUMainWindow
 from main.qt.project_dialog import ProjectDialog, QFileDialog
+from main.qt.toolbar import PrimaryToolbar
 from main.qt.theme import build_stylesheet, register_fonts
 from main import web_bridge
 from src.modules.ui_metrics import WorkArea
@@ -226,7 +227,7 @@ class ProjectChecks(unittest.TestCase):
     def test_simultaneous_port_claim_has_exactly_one_owner(self):
         self.assertEqual(sorted(self.simultaneous("port")), [False, True])
 
-    def test_new_window_launch_preserves_busy_current_project_and_dirty_files(self):
+    def test_new_window_open_is_rejected_while_action_running(self):
         api = self.backend()
         before = (api.sketch_dir_path, api.active_file_path, api.current_board, api.current_port, api.modified_files.copy())
         child = Mock(pid=303)
@@ -236,13 +237,23 @@ class ProjectChecks(unittest.TestCase):
              patch("src.modules.private_python_guard.is_running_private_python", return_value=True), \
              patch.object(QTimer, "singleShot"):
             result = api.open_project_window(str(self.folder / "sketch/demo.ino"))
-        self.assertTrue(result["opened_new_window"])
-        self.assertIn("--new-window", spawn.call_args.args[0])
-        self.assertEqual(spawn.call_args.args[0][-1], str(self.folder / "sketch/demo.ino"))
+        self.assertFalse(result["success"])
+        self.assertIn("action is in progress", result["error"])
+        spawn.assert_not_called()
         self.assertEqual(before, (api.sketch_dir_path, api.active_file_path, api.current_board, api.current_port, api.modified_files))
+
+    def test_project_selector_entrypoints_reject_active_actions(self):
+        api = self.backend()
+        self.assertFalse(api.open_project(str(self.folder / "sketch"))["success"])
+        self.assertFalse(api.open_project_window(str(self.folder / "sketch"))["success"])
+        self.assertEqual(api.open_project_picker(), "")
+        result = api.create_project(str(self.folder), "blocked", open_in_new_window=True)
+        self.assertFalse(result["success"])
+        self.assertFalse((self.folder / "blocked").exists())
 
     def test_existing_project_focuses_without_launch_and_failed_child_is_reported(self):
         api = self.backend()
+        api.is_busy, api.active_operation = False, None
         with patch.object(web_bridge, "find_project_window", return_value={"pid": 202, "hwnd": 1}), \
              patch.object(web_bridge, "focus_project_window", return_value=True), \
              patch.object(web_bridge.subprocess, "Popen") as spawn:
@@ -273,10 +284,17 @@ class ProjectChecks(unittest.TestCase):
         self.assertEqual(sketch.read_bytes(), before)
         self.assertEqual(api.sketch_dir_path, self.folder / "original")
 
-    def test_new_project_never_overwrites_and_opens_independent_window_while_busy(self):
+    def test_new_project_creation_and_open_are_blocked_while_busy(self):
         api = self.backend()
         api.open_project_window = Mock(return_value={"success": True})
         with patch.object(web_bridge, "ensure_hidden_read_first_md"):
+            result = api.create_project(str(self.folder), "new", include_h=True, open_in_new_window=True)
+            self.assertFalse(result["success"])
+            self.assertIn("action is in progress", result["error"])
+            self.assertFalse((self.folder / "new").exists())
+            api.open_project_window.assert_not_called()
+
+            api.is_busy, api.active_operation = False, None
             result = api.create_project(str(self.folder), "new", include_h=True, open_in_new_window=True)
             self.assertTrue(result["success"])
             api.open_project_window.assert_called_once_with(str(self.folder / "new"))
@@ -306,6 +324,7 @@ class ProjectChecks(unittest.TestCase):
 
     def test_picker_routes_new_window_choice_and_lists_running_projects_in_all_themes(self):
         api = self.backend()
+        api.is_busy, api.active_operation = False, None
         api.get_recent_projects = Mock(return_value=[])
         api.open_project_window = Mock(return_value={"success": True})
         api.open_project = Mock()
@@ -332,6 +351,39 @@ class ProjectChecks(unittest.TestCase):
             dialog.deleteLater()
             parent.deleteLater()
             APP.processEvents()
+
+    def test_busy_project_picker_and_toolbar_are_blocked(self):
+        api = self.backend()
+        parent = QMainWindow()
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), parent=parent,
+                               open_in_new_window=True)
+        try:
+            self.assertTrue(dialog._is_busy())
+            with patch.object(QMessageBox, "warning") as warning:
+                self.assertEqual(dialog.exec(), QDialog.DialogCode.Rejected)
+            warning.assert_called_once()
+            self.assertIsNone(dialog._choose_project_window("blocked"))
+
+            toolbar = PrimaryToolbar(api, parent)
+            toolbar.on_operation_phase({"phase": "reset", "is_busy": True,
+                                        "can_stop": False, "op": "hard_reset"})
+            self.assertFalse(toolbar.btn_project.isEnabled())
+            self.assertFalse(toolbar.lbl_sketch_icon.isEnabled())
+            self.assertFalse(toolbar.lbl_sketch.isEnabled())
+            with patch("main.qt.project_dialog.ProjectDialog") as picker:
+                toolbar._on_new_project()
+                picker.assert_not_called()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_ctrl_o_does_not_construct_picker_while_action_running(self):
+        window = SimpleNamespace(_is_busy=lambda: True, _backend=self.backend())
+        with patch("main.qt.project_dialog.ProjectDialog") as picker:
+            MCUMainWindow._shortcut_open_project(window)
+        picker.assert_not_called()
 
     def test_picker_routes_current_window_choice_after_switch_guard(self):
         api = self.backend()
@@ -434,6 +486,7 @@ class ProjectChecks(unittest.TestCase):
 
     def test_destination_prompt_exposes_current_new_and_cancel_choices(self):
         api = self.backend()
+        api.is_busy, api.active_operation = False, None
         api.get_recent_projects = Mock(return_value=[])
         parent = QWidget()
         dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)

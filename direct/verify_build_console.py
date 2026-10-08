@@ -253,6 +253,178 @@ class BuildConsoleChecks(unittest.TestCase):
         self.assertIn("    ^~~~~", displayed)
         self.assertTrue(displayed.endswith("Writing [firmware.bin] 100%"))
 
+    def test_keyed_upload_rows_finish_across_output_and_diagnostics(self):
+        console = self.widget()
+        console.append_log({"text": "Hold BOOT now", "tag": "info", "progress_key": "1:upload-boot-hint", "timestamp": "[01:02:03]"})
+        console.append_log({"text": "Connecting 8/10", "tag": "magenta", "progress_key": "1:upload-connection", "timestamp": "[01:02:03]"})
+        flush(console)
+        intervening = [
+            ("Uploader output before failure", "dim"),
+            ("This chip is ESP32, not ESP32-S3", "error"),
+            ("  8 | Connecting appears in source", "normal"),
+        ]
+        for text, tag in intervening:
+            console.append_log({"text": text, "tag": tag, "timestamp": "[04:05:06]"})
+        flush(console)
+        console.append_log({"text": "BOOT polling ended", "tag": "info", "progress_key": "1:upload-boot-hint", "timestamp": "[07:08:09]"})
+        console.append_log({"text": "Connection failed", "tag": "error", "progress_key": "1:upload-connection", "timestamp": "[07:08:09]"})
+        flush(console)
+        expected = "\n".join(["BOOT polling ended", "Connection failed", *[text for text, _ in intervening]])
+        self.assertEqual(console.toPlainText(), expected)
+        self.assertEqual(console.get_content_for_clipboard(False), expected)
+        self.assertEqual(len(console._entries), 5)
+        for mode in ("default", "light", "solarized_dark"):
+            console.apply_theme(mode)
+            self.assertEqual(console.toPlainText(), expected)
+            color = console.document().find("Connection failed").charFormat().foreground().color().name()
+            self.assertEqual(color, themed_log_colors(mode)["error"])
+            console.set_timestamp_enabled(True)
+            stamped = "\n".join([
+                "[07:08:09] BOOT polling ended", "[07:08:09] Connection failed",
+                *["[04:05:06] " + text for text, _ in intervening],
+            ])
+            self.assertEqual(console.toPlainText(), stamped)
+            self.assertEqual(console.get_content_for_clipboard(True), stamped)
+            console.set_timestamp_enabled(False)
+            self.assertEqual(console.toPlainText(), expected)
+
+    def test_progress_keys_separate_operations_and_final_diagnostics_are_immutable(self):
+        console = self.widget()
+        for key in ("1:upload-connection", "2:upload-connection"):
+            console.append_log({"text": "Connecting 1/10", "tag": "magenta", "progress_key": key})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connecting 1/10\nConnecting 1/10")
+        console.append_log({"text": "Connection failed", "tag": "error", "progress_key": "1:upload-connection"})
+        console.append_log({"text": "Connected", "tag": "success", "progress_key": "2:upload-connection"})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connection failed\nConnected")
+        console.append_log({"text": "Late connecting update", "tag": "magenta", "progress_key": "1:upload-connection"})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connection failed\nConnected\nLate connecting update")
+        self.assertEqual(console.get_content_for_clipboard(False), console.toPlainText())
+
+    def test_keyed_stop_status_is_visible_with_warning_filter_and_clear_resets_identity(self):
+        console = self.widget()
+        console.set_hide_warnings(True)
+        console.append_log({"text": "Connecting", "tag": "magenta", "progress_key": "1:upload-connection"})
+        flush(console)
+        console.append_log({"text": "Ordinary warning", "tag": "warning"})
+        console.append_log({"text": "Connection stopped", "tag": "warning", "progress_key": "1:upload-connection"})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connection stopped")
+        self.assertIn("Ordinary warning", console.get_content_for_clipboard(False))
+        console.apply_theme("light")
+        self.assertEqual(console.toPlainText(), "Connection stopped")
+        console.clear()
+        self.assertFalse(console._keyed_progress)
+        console.append_log({"text": "Connecting again", "tag": "magenta", "progress_key": "1:upload-connection"})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connecting again")
+        self.assertEqual(console.get_content_for_clipboard(False), "Connecting again")
+
+    def test_keyed_replacement_is_bounded_and_never_matches_ordinary_patterns(self):
+        console = self.widget()
+        pattern = r"Connecting"
+        console.append_log({"text": "Connecting owned row", "replace_pattern": pattern, "progress_key": "1:upload-connection"})
+        console.append_log({"text": "Connecting ordinary row", "replace_pattern": pattern})
+        flush(console)
+        self.assertEqual(console.toPlainText(), "Connecting owned row\nConnecting ordinary row")
+        for number in range(251):
+            console.append_log({"text": f"retained output {number}"})
+        flush(console)
+        console.append_log({"text": "Connection failed", "tag": "error", "progress_key": "1:upload-connection"})
+        flush(console)
+        self.assertTrue(console.toPlainText().startswith("Connection failed\nConnecting ordinary row\n"))
+        self.assertNotIn("Connecting owned row", console.get_content_for_clipboard(False))
+        self.assertLessEqual(len(console._progress_blocks), 128)
+        self.assertLessEqual(console._entries.chars, console._entries.max_chars)
+
+    def test_keyed_upload_rows_survive_long_output_and_generic_block_cache_eviction(self):
+        console = self.widget()
+        console.append_log({"text": "Connecting 8/10", "tag": "magenta", "progress_key": "1:upload-connection"})
+        console.append_log({"text": "Hold BOOT now", "tag": "info", "progress_key": "1:upload-boot-hint"})
+        flush(console)
+        connection_id = console._keyed_progress["1:upload-connection"]["entry"]["id"]
+        for number in range(160):
+            console.append_log({"text": f"Generic progress {number}", "replace_pattern": rf"Generic progress {number}\b"})
+        for number in range(200):
+            console.append_log({"text": f"Unrelated uploader output {number}", "tag": "dim"})
+        console.append_log({"text": "Wrong chip diagnostic", "tag": "error"})
+        flush(console)
+        self.assertNotIn(connection_id, console._progress_blocks)
+        self.assertEqual(len(console._keyed_progress), 2)
+        # Theme and timestamp rebuilds must preserve the separate keyed block
+        # identities even though generic progress has exhausted its own cache.
+        console.apply_theme("light")
+        console.set_timestamp_enabled(True)
+        self.assertNotIn(connection_id, console._progress_blocks)
+        console.append_log({"text": "Board mismatch", "tag": "error", "progress_key": "1:upload-connection"})
+        console.append_log({"text": "Select the matching board", "tag": "info", "progress_key": "1:upload-boot-hint"})
+        flush(console)
+        console.set_timestamp_enabled(False)
+        displayed = console.toPlainText()
+        self.assertTrue(displayed.startswith("Board mismatch\nSelect the matching board\n"))
+        self.assertNotIn("Connecting", displayed)
+        self.assertNotIn("Hold BOOT", displayed)
+        self.assertIn("Generic progress 0", displayed)
+        self.assertIn("Wrong chip diagnostic", displayed)
+        self.assertEqual(console.get_content_for_clipboard(False), displayed)
+        self.assertEqual(len(console._entries), 363)
+
+    def test_keyed_progress_cache_is_bounded_and_expired_history_is_never_revived(self):
+        console = self.widget()
+        for number in range(300):
+            console.append_log({"text": f"Keyed progress {number}", "progress_key": f"{number}:upload-connection"})
+        flush(console)
+        self.assertEqual(len(console._keyed_progress), 128)
+        self.assertLessEqual(len(console._progress_blocks), 128)
+        console.clear()
+        console._entries.max_items = 5
+        console.setMaximumBlockCount(5)
+        key = "1:upload-connection"
+        console.append_log({"text": "Expired connecting row", "progress_key": key})
+        flush(console)
+        expired = console._keyed_progress[key]["entry"]
+        for number in range(10):
+            console.append_log({"text": f"New output {number}"})
+        flush(console)
+        self.assertLess(expired["id"], next(iter(console._entries))["id"])
+        console.append_log({"text": "Connection failed", "tag": "error", "progress_key": key})
+        flush(console)
+        self.assertEqual(expired["text"], "Expired connecting row")
+        self.assertNotEqual(console._keyed_progress[key]["entry"]["id"], expired["id"])
+        self.assertNotIn("Expired connecting row", console.toPlainText())
+        self.assertNotIn("Expired connecting row", console.get_content_for_clipboard(False))
+        self.assertEqual(console.toPlainText().count("Connection failed"), 1)
+        self.assertEqual(console.get_content_for_clipboard(False).count("Connection failed"), 1)
+        console.apply_theme("solarized_dark")
+        self.assertEqual(len(console._keyed_progress), 1)
+        self.assertEqual(console.toPlainText().count("Connection failed"), 1)
+
+    def test_progress_keys_are_bounded_and_only_single_line_rows_are_mutable(self):
+        console = self.widget()
+        for invalid in ("", "x" * 161, 42, ["invalid"]):
+            console.append_log({"text": "Invalid first", "progress_key": invalid})
+            console.append_log({"text": "Invalid second", "progress_key": invalid})
+        console.append_log({"text": "Multiline\ncontext", "progress_key": "valid"})
+        console.append_log({"text": "Separate single line", "progress_key": "valid"})
+        console.append_log({"text": "fragment", "newline": False, "progress_key": "valid"})
+        flush(console)
+        self.assertEqual(len(console._entries), 11)
+        self.assertIn("Multiline\ncontext\nSeparate single linefragment", console.toPlainText())
+        self.assertTrue(all(entry.get("progress_key") is None for entry in list(console._entries)[:8]))
+
+    def test_progress_coalescing_supports_legacy_tuples_and_distinct_keys(self):
+        from main.qt.log_buffer import coalesce_progress
+        legacy = ("Connecting first", "info", True, r"Connecting", "[01:02:03]")
+        legacy_last = ("Connecting last", "info", True, r"Connecting", "[01:02:04]")
+        first = ("Connecting 1", "info", True, None, "", "1:upload-connection")
+        first_last = ("Connecting 2", "info", True, None, "", "1:upload-connection")
+        second = ("Connecting 1", "info", True, None, "", "2:upload-connection")
+        final = ("Connection failed", "error", True, None, "", "2:upload-connection")
+        self.assertEqual(coalesce_progress([legacy, legacy_last, first, first_last, second, final]),
+                         [legacy_last, first_last, second, final])
+
     def test_invalid_patterns_fall_back_to_individual_messages(self):
         console = self.widget()
         for text in ("first fallback diagnostic", "second fallback diagnostic"):

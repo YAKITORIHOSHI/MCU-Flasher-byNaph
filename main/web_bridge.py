@@ -2554,7 +2554,8 @@ class MCUWebBackendAPI:
 
     def open_project(self, folder_path: str, active_file: Optional[str] = None) -> dict[str, Any]:
         """Open and switch to an existing sketch directory or code file."""
-        if self.is_busy or getattr(self, "active_operation", None) is not None:
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
             self.emit("notification", {
                 "title": "Action in Progress",
                 "message": "Changing project is not allowed while an action is in progress.",
@@ -2701,6 +2702,13 @@ class MCUWebBackendAPI:
 
     def open_project_window(self, folder_path: str) -> dict[str, Any]:
         """Explicitly open another sketch without changing this window's state."""
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
+            message = "Opening or changing projects is not allowed while an action is in progress."
+            self.emit("notification", {
+                "title": "Action in Progress", "message": message, "type": "warning",
+            })
+            return {"success": False, "error": message}
         target = Path(folder_path).resolve()
         folder = target.parent if target.is_file() else target
         if not folder.is_dir() or is_application_codebase_dir(folder):
@@ -2750,7 +2758,8 @@ class MCUWebBackendAPI:
 
     def open_project_picker(self) -> str:
         """Open native folder browser dialog."""
-        if self.is_busy or getattr(self, "active_operation", None) is not None:
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
             return ""
         if self._window and hasattr(self._window, "create_file_dialog"):
             try:
@@ -2844,7 +2853,8 @@ class MCUWebBackendAPI:
         open_in_new_window: bool = False,
     ) -> dict[str, Any]:
         """Create a new sketch folder with full scaffold (matching old ProjectSelectorDialog)."""
-        if not open_in_new_window and (self.is_busy or getattr(self, "active_operation", None) is not None):
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
             self.emit("notification", {
                 "title": "Action in Progress",
                 "message": "Creating or changing project is not allowed while an action is in progress.",
@@ -3810,6 +3820,7 @@ class MCUWebBackendAPI:
         """Reserve one cancellation identity before dispatching an operation."""
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         self._stop_requested = False
+        self._upload_connection_pending = False
 
     def compile_sketch(self):
         """Run sketch compilation on a background thread."""
@@ -5147,10 +5158,40 @@ class MCUWebBackendAPI:
         """Render a boxed chip-info panel into the build console."""
         self._print_info_box(f"{chip_model} Information", fields)
 
+    def _upload_status_key(self, kind: str) -> str:
+        """Keep mutable connection rows scoped to the current operation."""
+        return f"{getattr(self, '_op_session_id', 0)}:upload-{kind}"
+
+    def _append_upload_boot_hint(self, text: str, tag: str = "info") -> None:
+        self.emit("console:log", {
+            "text": text, "tag": tag, "newline": True,
+            "progress_key": self._upload_status_key("boot-hint"),
+        })
+
+    @staticmethod
+    def _esptool_chip_mismatch(output: str) -> tuple[str, str] | None:
+        match = re.search(
+            r"\bchip is\s+(ESP[0-9A-Z-]+)\s*,?\s+not\s+(ESP[0-9A-Z-]+)\b",
+            output, re.IGNORECASE,
+        )
+        return (match.group(1).upper(), match.group(2).upper()) if match else None
+
+    def _finish_upload_connection_status(self, *, stopped: bool = False,
+                                          reason: str = "", hint: str = "") -> None:
+        """Retire polling and its BOOT instruction on every terminal exit."""
+        if not getattr(self, "_upload_connection_pending", False) and reason != "Board mismatch":
+            return
+        self._append_connecting_progress(
+            0, 0, failed=not stopped, stopped=stopped, failure_reason=reason,
+        )
+        self._append_upload_boot_hint(hint or (
+            "  ℹ Upload stopped — you may release the BOOT button."
+            if stopped else "  ℹ Upload ended — you may release the BOOT button."
+        ))
+
     def _append_connecting_progress(self, current: int, total: int, bar_width: int = 30,
-                                    connected: bool = False, failed: bool = False):
-        if failed:
-            current = total
+                                    connected: bool = False, failed: bool = False,
+                                    stopped: bool = False, failure_reason: str = ""):
         current = max(0, min(total, current))
         if total > 0:
             multiplier = max(1, round(bar_width / total))
@@ -5161,21 +5202,24 @@ class MCUWebBackendAPI:
         filled = current * multiplier
         bar = "▰" * filled + "▱" * max(0, width - filled)
 
-        if failed:
-            text = f"  🔌 Connecting [ {bar} ] | FAILED >> 💡 Please hold 'BOOT' button on MCU physical board during attempt."
+        if stopped:
+            text = "  ■ Connection stopped"
+            tag = "info"
+        elif failed:
+            text = f"  ✖ {failure_reason or 'Connection failed'}"
             tag = "error"
         elif connected:
             text = "  ✔ Connected"
             tag = "success"
         else:
             text = f"  🔌 Connecting [ {bar} ] | {current}/{total}"
-            text += " >> 💡 Please hold 'BOOT' button on MCU physical board"
             tag = "magenta"
 
+        self._upload_connection_pending = not (connected or failed or stopped)
         self.emit("console:log", {
             "text": text,
             "tag": tag,
-            "replace_pattern": r"(?:connecting|connected).*",
+            "progress_key": self._upload_status_key("connection"),
             "newline": True
         })
 
@@ -5690,6 +5734,19 @@ class MCUWebBackendAPI:
         connection_poll_count = [max(1, min(_MAX_CONNECT_RETRIES, start_attempt))]
         flash_retry_used = False
 
+        def _fail_fast_attempt(error: str, attempts: int) -> tuple[bool, str, int]:
+            mismatch = self._esptool_chip_mismatch(error)
+            self._finish_upload_connection_status(
+                stopped=bool(getattr(self, "_stop_requested", False)),
+                reason="Board mismatch" if mismatch else "",
+                hint=(
+                    f"  💡 Detected {mismatch[0]}; selected target is {mismatch[1]}. "
+                    "Select the matching board in Controls, then upload again."
+                    if mismatch else ""
+                ),
+            )
+            return False, error, attempts
+
         def _set_fast_phase(name: str):
             if callable(phase_callback):
                 try:
@@ -5738,12 +5795,9 @@ class MCUWebBackendAPI:
             self._append_connecting_progress(
                 connection_poll_count[0], _MAX_CONNECT_RETRIES, connected=True
             )
-            self.emit("console:log", {
-                "text": "  ✔ Bootloader synced — you may release the BOOT button now.",
-                "tag": "success",
-                "replace_pattern": r"💡\s*Hold BOOT now.*",
-                "newline": True,
-            })
+            self._append_upload_boot_hint(
+                "  ✔ Bootloader synced — you may release the BOOT button now.", "success",
+            )
 
         def _before_fast_progress():
             _flip_fast_connected_bar()
@@ -5846,6 +5900,8 @@ class MCUWebBackendAPI:
 
         flash_retry_used = False  # True after the first post-connect retry at the chosen baud
         while True:
+            if getattr(self, "_stop_requested", False):
+                return _fail_fast_attempt("Upload stopped by user", _connect_retry_count)
             output_lines = []
             upload_progress_state = self._new_upload_progress_state(fast_bins)
             attempt_connected = False
@@ -5863,6 +5919,8 @@ class MCUWebBackendAPI:
                 if _connect_retry_count == max(0, start_attempt - 1):
                     time.sleep(0.75)
 
+                if getattr(self, "_stop_requested", False):
+                    return _fail_fast_attempt("Upload stopped by user", _connect_retry_count)
                 attempt_cmd = list(write_cmd)
 
                 creationflags = (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
@@ -5991,6 +6049,7 @@ class MCUWebBackendAPI:
 
                 rc = proc.returncode
                 joined = " ".join(l.rstrip().lower() for l in output_lines)
+                chip_mismatch = self._esptool_chip_mismatch(joined)
                 all_images_written = (
                     expected_image_count > 0
                     and len(completed_images) >= expected_image_count
@@ -6015,6 +6074,7 @@ class MCUWebBackendAPI:
                     and not upload_progress_state.get("stage_locked")
                     and not completed_images
                     and not cli_syntax_error
+                    and not chip_mismatch
                     and any(signature in joined for signature in _CONNECT_FAIL_SIGNATURES)
                 )
 
@@ -6045,7 +6105,7 @@ class MCUWebBackendAPI:
                                     port, attempt_cmd, return_code=rc,
                                     output_lines=output_lines, error=error_message,
                                 )
-                                return False, error_message, _connect_retry_count + 1
+                                return _fail_fast_attempt(error_message, _connect_retry_count + 1)
                         time.sleep(0.75 if port_reenumerating else 0.4)
                         continue
                     connection_poll_count[0] = _MAX_CONNECT_RETRIES
@@ -6064,7 +6124,7 @@ class MCUWebBackendAPI:
                     and not all_images_verified
                 )
                 self._last_fast_upload_write_started = writing_started
-                if (post_connect_transport_failure and self._fast_upload_retry_allowed(
+                if (post_connect_transport_failure and not chip_mismatch and self._fast_upload_retry_allowed(
                         return_code=rc,
                         attempt_connected=attempt_connected,
                         write_started=writing_started,
@@ -6083,7 +6143,7 @@ class MCUWebBackendAPI:
                                 port, attempt_cmd, return_code=rc,
                                 output_lines=output_lines, error=error_message,
                             )
-                            return False, error_message, _connect_retry_count + 1
+                            return _fail_fast_attempt(error_message, _connect_retry_count + 1)
 
                     chosen_speed = str(fast_bins.get("upload_speed") or "460800")
                     flash_retry_used = True
@@ -6123,12 +6183,9 @@ class MCUWebBackendAPI:
                         "tag": "info",
                         "newline": True,
                     })
-                    self.emit("console:log", {
-                        "text": "  💡 Hold the 'BOOT' button now if your board requires manual download mode.",
-                        "tag": "info",
-                        "replace_pattern": r"💡\s*Hold BOOT now.*",
-                        "newline": True,
-                    })
+                    self._append_upload_boot_hint(
+                        "  💡 Hold the 'BOOT' button now if your board requires manual download mode.",
+                    )
 
                     # Give the bootloader a moment, then retry with a fresh connection budget.
                     _connect_retry_count = 0
@@ -6224,7 +6281,9 @@ class MCUWebBackendAPI:
                 else:
                     error_message = f"esptool exit code {rc}: {detail}"
 
-                if is_conn_failure:
+                if chip_mismatch:
+                    self._last_fast_upload_failure_kind = "target"
+                elif is_conn_failure:
                     self._last_fast_upload_failure_kind = "connection"
                 elif writing_started or completed_images:
                     self._last_fast_upload_failure_kind = "flash"
@@ -6237,7 +6296,7 @@ class MCUWebBackendAPI:
                     port, attempt_cmd, return_code=rc,
                     output_lines=output_lines, error=error_message,
                 )
-                return False, error_message, _connect_retry_count + 1
+                return _fail_fast_attempt(error_message, _connect_retry_count + 1)
             except Exception as e:
                 # Missing reader telemetry is not evidence of untouched flash:
                 # the launched child can already be erasing/writing while we
@@ -6251,7 +6310,7 @@ class MCUWebBackendAPI:
                 self._record_fast_upload_diagnostic(
                     port, attempt_cmd, error=error_message,
                 )
-                return False, error_message, _connect_retry_count + 1
+                return _fail_fast_attempt(error_message, _connect_retry_count + 1)
             finally:
                 discard_output.set()
                 if proc is not None:
@@ -7578,12 +7637,10 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "  ⚡ Fast upload: polling the bootloader now…", "tag": "info", "newline": True})
                 self.emit("console:log", {"text": f"  ⚙ Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
                 self.emit("console:log", {"text": "", "newline": True})
-                self.emit("console:log", {
-                    "text": "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
-                    "tag": "info",
-                    "replace_pattern": r"💡\s*Hold BOOT now.*",
-                    "newline": True,
-                })
+                self._append_connecting_progress(1, _MAX_CONNECT_RETRIES)
+                self._append_upload_boot_hint(
+                    "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
+                )
 
                 fast_ok, fast_error, fast_attempts = self._soft_reset_esptool_write(fast_bins, port)
                 upload_duration = round(time.time() - upload_start, 2)
@@ -7602,18 +7659,15 @@ class MCUWebBackendAPI:
                     rc = 0
                     return
                 elif self._stop_requested:
+                    self._finish_upload_connection_status(stopped=True)
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {"text": "  ■ Upload stopped by user.", "tag": "warning", "newline": True})
                     rc = -1
                     return
                 else:
+                    self._finish_upload_connection_status()
                     failure_kind = getattr(self, "_last_fast_upload_failure_kind", "")
                     if failure_kind == "connection":
-                        self._append_connecting_progress(
-                            min(fast_attempts, _MAX_CONNECT_RETRIES),
-                            _MAX_CONNECT_RETRIES,
-                            failed=True,
-                        )
                         self.emit("console:log", {
                             "text": f"  ✖ Failed to connect to {board_name} on {port} after {fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
                             "tag": "error",
@@ -7655,7 +7709,7 @@ class MCUWebBackendAPI:
                     else:
                         self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {"text": f"  ✖ Fast upload failed: {fast_error}", "tag": "error", "newline": True})
-                        if str(upload_speed) in ("921600", "512000"):
+                        if failure_kind != "target" and str(upload_speed) in ("921600", "512000"):
                             self.emit("console:log", {
                                 "text": f"  💡 High upload speed ({upload_speed} baud) may exceed hardware limits for this USB bridge or cable. Try selecting 460800 or 115200 baud in the toolbar.",
                                 "tag": "warning",
@@ -7682,12 +7736,9 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": f"  ⚙ Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
                 self.emit("console:log", {"text": "", "newline": True})
                 self._append_connecting_progress(_connect_retry[0], _MAX_CONNECT_RETRIES)
-                self.emit("console:log", {
-                    "text": "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
-                    "tag": "info",
-                    "replace_pattern": r"💡\s*Hold BOOT now.*",
-                    "newline": True,
-                })
+                self._append_upload_boot_hint(
+                    "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
+                )
             pio_cmd = find_pio_executable()
             if not pio_cmd:
                 self.emit("console:log", {"text": "✖ PlatformIO not available for upload.", "tag": "error", "newline": True})
@@ -7760,6 +7811,7 @@ class MCUWebBackendAPI:
             _current_phase = ["Preparing"]
             _connection_started = [False]
             _chip_stopped_responding = [False]
+            _target_mismatch = [None]
             _pending_pre_box: list[tuple[str, str]] = []
 
             def _buffered_append(text: str, tag: str = "dim"):
@@ -7804,26 +7856,24 @@ class MCUWebBackendAPI:
                     self._append_connecting_progress(
                         _connect_retry[0], _MAX_CONNECT_RETRIES, connected=True
                     )
-                    self.emit("console:log", {
-                        "text": "  ✔ Bootloader synced — you may release the BOOT button now.",
-                        "tag": "success",
-                        "replace_pattern": r"💡\s*Hold BOOT now.*",
-                        "newline": True
-                    })
+                    self._append_upload_boot_hint(
+                        "  ✔ Bootloader synced — you may release the BOOT button now.", "success",
+                    )
 
             def _flip_to_failed_bar():
-                """Re-render the last progress line as a red '🔌 Connecting [...] | FAILED' bar."""
-                if is_esp and not _connected_bar_flipped[0] and not _connect_failed_flipped[0]:
+                """Retire live connection rows once, keeping the actual failure reason."""
+                if is_esp and not _connect_failed_flipped[0] and (
+                        not _connected_bar_flipped[0] or _target_mismatch[0]):
                     _connect_failed_flipped[0] = True
-                    self._append_connecting_progress(
-                        _connect_retry[0], _MAX_CONNECT_RETRIES, failed=True
+                    mismatch = _target_mismatch[0]
+                    self._finish_upload_connection_status(
+                        reason="Board mismatch" if mismatch else "",
+                        hint=(
+                            f"  💡 Detected {mismatch[0]}; selected target is {mismatch[1]}. "
+                            "Select the matching board in Controls, then upload again."
+                            if mismatch else ""
+                        ),
                     )
-                    self.emit("console:log", {
-                        "text": "  💡 If connection timed out, hold the BOOT button on the physical board while clicking Upload.",
-                        "tag": "warning",
-                        "replace_pattern": r"💡\s*Hold BOOT now.*",
-                        "newline": True
-                    })
 
             _fallback_upload_state = self._new_upload_progress_state()
 
@@ -7853,6 +7903,11 @@ class MCUWebBackendAPI:
                     continue
                 low = line_clean.lower()
                 _stripped = line_clean.strip()
+                if is_esp and (mismatch := self._esptool_chip_mismatch(line_clean)):
+                    _target_mismatch[0] = mismatch
+                    _flip_to_failed_bar()
+                    self.emit("console:log", {"text": f"  ✖ {_stripped}", "tag": "error", "newline": True})
+                    continue
                 upload_line_action, verdict = _classify_platformio_upload_line(line_clean)
                 if upload_line_action == "outcome":
                     tag = "success" if verdict == "SUCCESS" else "error"
@@ -8083,6 +8138,7 @@ class MCUWebBackendAPI:
             upload_duration = round(time.time() - upload_start, 2)
 
             if rc == 0:
+                _flip_to_connected_bar()
                 # Show chip-info box if not shown yet (e.g. AVR boards or unprobed chips)
                 if is_esp and not _chip_info_shown[0]:
                     _maybe_show_chip_info_box(force=True)
@@ -8114,13 +8170,16 @@ class MCUWebBackendAPI:
                 self._trigger_actual_board_reset(port, self.current_board, binfo)
             elif self._stop_requested:
                 _pending_pre_box.clear()
+                self._finish_upload_connection_status(stopped=True)
                 self.emit("console:log", {"text": "", "newline": True})
                 self.emit("console:log", {"text": "  ■ Upload stopped by user.", "tag": "warning", "newline": True})
             else:
                 _pending_pre_box.clear()
 
                 # Check if it was a connection failure
-                if is_esp and not _connected_bar_flipped[0]:
+                if _target_mismatch[0]:
+                    _flip_to_failed_bar()
+                elif is_esp and not _connected_bar_flipped[0]:
                     _flip_to_failed_bar()
                     self.emit("console:log", {
                         "text": "  ✔ Safe state: Existing firmware on your MCU was NOT erased or modified.",
@@ -8191,8 +8250,11 @@ class MCUWebBackendAPI:
                 self.emit("notification", {"title": "Upload Failed", "message": f"Upload failed with exit code {rc}", "type": "error"})
 
         except Exception as e:
+            self._finish_upload_connection_status(stopped=bool(self._stop_requested))
             self.emit("console:log", {"text": f"✖ Upload error: {e}", "tag": "error", "newline": True})
         finally:
+            if rc != 0:
+                self._finish_upload_connection_status(stopped=bool(self._stop_requested))
             try:
                 if cache_root and (cache_root / "esptool.cfg").exists():
                     (cache_root / "esptool.cfg").unlink(missing_ok=True)

@@ -119,16 +119,19 @@ class SourceChecks(unittest.TestCase):
     def test_all_visible_unrepresented_boards_prepare_exact_primary_fqbns(self):
         report = self.run_worker()
         self.assertEqual(report["total"], 3)
-        self.assertEqual(report["ready_count"], 2)
+        self.assertEqual(report["ready_count"], 1)
         self.assertEqual(report["unavailable_count"], 0)
+        self.assertEqual(report["ambiguous_count"], 1)
         self.assertEqual(report["not_required_count"], 1)
         self.installer.assert_called_once()
         requested = self.installer.call_args.args[3]
-        self.assertEqual({row["arduino_id"] for row in requested}, {"ambig", "absent"})
+        self.assertEqual({row["arduino_id"] for row in requested}, {"absent"})
         self.assertEqual({row["arduino_source_proof"]["fqbn"] for row in requested},
-                         {"fixture-vendor:fixturecpu:ambig", "fixture-vendor:fixturecpu:absent"})
+                         {"fixture-vendor:fixturecpu:absent"})
         self.assertEqual(self.row(report, "native")["status"], "not_required")
-        self.assertEqual(self.row(report, "ambig")["arduino_backend_role"], "primary")
+        self.assertEqual(self.row(report, "ambig")["status"], "ambiguous")
+        self.assertEqual(self.row(report, "ambig")["backend"], "platformio")
+        self.assertNotIn("arduino_backend_role", self.row(report, "ambig"))
         self.publisher.assert_called_once()
         self.loader.assert_called_once_with(self.core, force_read=True)
         self.parser.assert_called_once_with(self.archive, force_read=True)
@@ -137,20 +140,23 @@ class SourceChecks(unittest.TestCase):
         (self.archive / worker.RECEIPT).unlink()
         report = self.run_worker()
         self.assertEqual(report["ready_count"], 0)
-        self.assertEqual(report["unavailable_count"], 2)
-        self.assertIn("No verified", self.row(report, "ambig")["reason"])
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
+        self.assertIn("PlatformIO recognizes multiple", self.row(report, "ambig")["reason"])
         self.installer.assert_not_called()
 
     def test_changed_platform_source_receipt_blocks_primary_preparation(self):
         self.platform.write_text("name=changed\n", encoding="utf-8")
         report = self.run_worker()
-        self.assertEqual(report["unavailable_count"], 2)
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
         self.installer.assert_not_called()
 
     def test_mismatched_board_receipt_cannot_authorize_current_declarations(self):
         self.boards.write_text(self.boards.read_text(encoding="utf-8") + "# changed bytes\n", encoding="utf-8")
         report = self.run_worker()
-        self.assertEqual(report["unavailable_count"], 2)
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
         self.installer.assert_not_called()
 
     def test_valid_existing_primary_target_reuses_preparation(self):
@@ -162,7 +168,7 @@ class SourceChecks(unittest.TestCase):
                          "arduino_source_proof": arduino_cli_support.source_declaration_proof(record, self.receipt),
                          "platform": "fixture-vendor:fixturecpu", "board": "ambig"}
         report = self.run_worker()
-        self.assertEqual(self.row(report, "ambig")["status"], "ready")
+        self.assertEqual(self.row(report, "ambig")["status"], "ambiguous")
         requested = self.installer.call_args.args[3]
         self.assertEqual([row["arduino_id"] for row in requested], ["absent"])
 
@@ -213,15 +219,18 @@ class SourceChecks(unittest.TestCase):
     def test_traversal_receipt_cannot_escape_requested_root(self):
         self.receipt["source_files"]["../outside.txt"] = "b" * 64
         self.write_receipt()
-        self.assertEqual(self.run_worker()["unavailable_count"], 2)
+        report = self.run_worker()
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
         self.installer.assert_not_called()
 
     def test_install_failure_stays_unavailable_and_never_claims_primary_ready(self):
         self.installer.side_effect = RuntimeError("Fixture exact builder failed")
         report = self.run_worker()
         self.assertEqual(report["ready_count"], 0)
-        self.assertEqual(report["unavailable_count"], 2)
-        self.assertIn("Fixture exact builder failed", self.row(report, "ambig")["reason"])
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
+        self.assertIn("Fixture exact builder failed", self.row(report, "absent")["reason"])
 
     def test_multiple_source_roots_use_exact_file_identity_and_do_not_duplicate(self):
         report = self.run_worker([self.archive, self.archive])
@@ -238,7 +247,8 @@ class SourceChecks(unittest.TestCase):
         self.archives.add(other_archive)
         report = self.run_worker([self.archive, other_archive])
         self.assertEqual(report["total"], 6)
-        self.assertEqual(report["ready_count"], 4)
+        self.assertEqual(report["ready_count"], 2)
+        self.assertEqual(report["ambiguous_count"], 2)
         self.assertEqual(self.installer.call_count, 2)
         self.assertEqual({Path(call.args[1]) for call in self.installer.call_args_list}, self.archives)
 
@@ -253,7 +263,8 @@ class SourceChecks(unittest.TestCase):
         self.installer.side_effect = lambda _core, _directory, _metadata, rows, **_kwargs: copy.deepcopy(rows)
         report = self.run_worker()
         self.assertEqual(report["ready_count"], 0)
-        self.assertEqual(report["unavailable_count"], 2)
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
 
     def test_workspace_runtime_cannot_invoke_preparation(self):
         with patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1"}):
@@ -281,7 +292,9 @@ class SourceChecks(unittest.TestCase):
         self.receipt["index_url"] = "https://[malformed-index"
         self.write_receipt()
         self.assertEqual(worker.source_receipt_metadata(self.receipt), {})
-        self.assertEqual(self.run_worker()["unavailable_count"], 2)
+        report = self.run_worker()
+        self.assertEqual(report["unavailable_count"], 1)
+        self.assertEqual(report["ambiguous_count"], 1)
         self.installer.assert_not_called()
 
     def test_source_digest_work_is_bounded_per_source_file(self):
@@ -339,17 +352,19 @@ class SourceChecks(unittest.TestCase):
                 patch.object(toolchain, "find_arduino_cli_executable", return_value=str(cli)), \
                 patch("main.core.build_resources.get_optimal_compiler_jobs", return_value=2):
             first = self.run_worker()
-            self.assertEqual(first["ready_count"], 2, first)
+            self.assertEqual(first["ready_count"], 1, first)
+            self.assertEqual(first["ambiguous_count"], 1, first)
             persisted = _REAL_LOAD(self.core)
-            self.assertEqual({row["arduino_id"] for row in persisted}, {"ambig", "absent"})
+            self.assertEqual({row["arduino_id"] for row in persisted}, {"absent"})
             self.assertTrue(all(arduino_cli_support.source_target_proof(row) for row in persisted))
             probes = [command for command in commands if "compile" in command]
             self.assertEqual({command[command.index("--fqbn") + 1] for command in probes},
-                             {"fixture-vendor:fixturecpu:ambig", "fixture-vendor:fixturecpu:absent"})
+                             {"fixture-vendor:fixturecpu:absent"})
             self.assertFalse(any("upload" in command for command in commands))
             commands.clear()
             second = self.run_worker()
-            self.assertEqual(second["ready_count"], 2, second)
+            self.assertEqual(second["ready_count"], 1, second)
+            self.assertEqual(second["ambiguous_count"], 1, second)
             self.assertEqual(commands, [], "Valid source certificates must not reinstall or replay probes")
 
 

@@ -159,16 +159,22 @@ class DiagnosticLogBuffer(LogBuffer):
 def coalesce_progress(items):
     """Keep the latest adjacent equivalent progress update before rendering.
 
-    Items are (text, tag, newline, replace_pattern, timestamp) tuples. Ordinary
-    messages, changes in pattern/tag/newline and diagnostics remain barriers.
+    Items are (text, tag, newline, replace_pattern, timestamp) tuples with an
+    optional sixth producer-owned progress identity. Ordinary messages,
+    changes in identity/pattern/tag/newline and diagnostics remain barriers.
     """
     result = []
     patterns = {}
     for item in items:
-        equivalent = (result and item[3] and item[1] not in DIAGNOSTIC_TAGS
-                      and item[1:4] == result[-1][1:4])
+        key = item[5] if len(item) > 5 else None
+        previous_key = result[-1][5] if result and len(result[-1]) > 5 else None
+        equivalent = (result and (key or item[3]) and item[1] not in DIAGNOSTIC_TAGS
+                      and item[1:4] == result[-1][1:4] and key == previous_key)
         valid = False
-        if equivalent and isinstance(item[3], str):
+        if equivalent and key:
+            valid = (isinstance(key, str) and 0 < len(key) <= 160
+                     and item[2] and "\n" not in item[0] and "\n" not in result[-1][0])
+        elif equivalent and isinstance(item[3], str):
             pattern = item[3]
             if pattern not in patterns:
                 try:

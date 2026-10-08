@@ -152,7 +152,7 @@ generic.build.board=UNIQUE_BOARD
                           flags=f"-DARDUINO_{mcu.upper()}_DEV")
         return catalog._load_platformio_board_catalog(self.core, force_read=True)
 
-    def test_generic_s3_and_c3_remain_ambiguous_without_arbitrary_hardware_selection(self):
+    def test_generic_s3_and_c3_use_the_leading_platformio_identity_when_not_tied(self):
         candidates = self.development_targets()
         records = self.declarations("""
 esp32s3.name=ESP32S3 Dev Module
@@ -167,11 +167,19 @@ esp32c3.build.board=ESP32C3_DEV
 esp32c3.build.flash_size=4MB
 """)
         for record in records:
-            self.assertIsNone(catalog._resolve_arduino_board_record(record, candidates))
+            match = catalog._resolve_arduino_board_record(record, candidates)
+            self.assertIsNotNone(match)
             diagnosis = catalog.diagnose_arduino_board_record(record, candidates)
-            self.assertEqual(diagnosis["status"], "ambiguous")
+            self.assertEqual(diagnosis["status"], "resolved")
+            self.assertEqual(match["id"], diagnosis["match"]["id"])
+            self.assertEqual(match["mcu"], record["mcu"])
+            self.assertIn("variant", match["match_reasons"])
             self.assertEqual(len(diagnosis["candidates"]), 2)
             self.assertEqual(record["flash_size"], "4MB")
+            single = next(candidate for candidate in candidates if candidate["mcu"] == record["mcu"])
+            single_diagnosis = catalog.diagnose_arduino_board_record(record, [single])
+            self.assertEqual(single_diagnosis["status"], "resolved")
+            self.assertEqual(single_diagnosis["match"]["id"], single["id"])
 
     def test_exact_named_development_targets_still_resolve(self):
         candidates = self.development_targets()

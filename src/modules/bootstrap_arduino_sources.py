@@ -178,8 +178,8 @@ def prepare_sources(core, sources, *, emit, jobs=None):
     previous = load_prepared_targets(core)
     associations = prepared_target_index(previous)
     intentions = planned_source_target_index(previous)
-    prior_primary = {_identity(row.get("source_file", ""), row.get("arduino_id")) for row in previous
-                     if row.get("arduino_backend_role") == "primary"}
+    prior_cli = {_identity(row.get("source_file", ""), row.get("arduino_id")) for row in previous
+                 if row.get("backend") == "arduino-cli"}
     preferences = _platformio_preferences()
     receipt_cache = {}
     source_digests = {}
@@ -221,30 +221,41 @@ def prepare_sources(core, sources, *, emit, jobs=None):
                                                              validation_cache=validation_cache)
                 if metadata and _explicit_platformio(metadata, preferences):
                     row.update(status="not_required", reason="An explicit PlatformIO source association takes precedence.")
-                    # Retain verified PIO aliases. Only an older primary CLI
-                    # choice can conflict with this explicit user preference.
-                    if identity in prior_primary and not (prepared and prepared.get("backend") != "arduino-cli"):
+                    # Retain verified PIO aliases. Retire any older CLI
+                    # association when this source now has an explicit PIO target.
+                    if identity in prior_cli and not (prepared and prepared.get("backend") != "arduino-cli"):
                         affected.add(identity)
                         affected_directories.add(Path(source_file).parent)
                     continue
+                diagnosis = board_catalog.diagnose_arduino_board_record(record, catalog, match_features=features)
+                match = diagnosis.get("match")
+                if prepared and prepared.get("backend") != "arduino-cli":
+                    row.update(status="not_required", backend="platformio", platform=prepared.get("platform", ""),
+                               board=prepared.get("id", ""), reason="An exact prepared PlatformIO association is already available.")
+                    continue
+                if match:
+                    if identity in prior_cli:
+                        affected.add(identity)
+                        affected_directories.add(Path(source_file).parent)
+                    row.update(status="not_required", backend="platformio", platform=match.get("platform", ""),
+                               board=match.get("id", ""), reason="A unique installed PlatformIO definition represents this declaration.")
+                    continue
+                if diagnosis.get("status") == "ambiguous":
+                    if identity in prior_cli:
+                        affected.add(identity)
+                        affected_directories.add(Path(source_file).parent)
+                    row.update(status="ambiguous", backend="platformio",
+                               candidates=diagnosis.get("candidates") or [],
+                               reason="PlatformIO recognizes multiple concrete boards for this declaration; select an exact board or provide an explicit association.")
+                    continue
                 if prepared:
-                    if prepared.get("backend") == "arduino-cli":
-                        row.update(prepared)
-                        row.update(status="ready", reason="Exact prepared Arduino source target certificates reused.")
-                    else:
-                        row.update(status="not_required", backend="platformio", platform=prepared.get("platform", ""),
-                                   board=prepared.get("id", ""), reason="An exact prepared PlatformIO association is already available.")
+                    row.update(prepared)
+                    row.update(status="ready", reason="Exact prepared Arduino source target certificates reused.")
                     continue
                 if intended:
                     row.update(backend="arduino-cli", arduino_backend_role="primary",
                                arduino_source_proof=intended["arduino_source_proof"],
                                arduino_fqbn=intended["arduino_source_proof"]["fqbn"])
-                diagnosis = board_catalog.diagnose_arduino_board_record(record, catalog, match_features=features)
-                if diagnosis.get("match") and not intended:
-                    match = diagnosis["match"]
-                    row.update(status="not_required", backend="platformio", platform=match.get("platform", ""),
-                               board=match.get("id", ""), reason="A unique installed PlatformIO definition represents this declaration.")
-                    continue
                 row["candidates"] = diagnosis.get("candidates") or []
                 affected.add(identity)
                 affected_directories.add(Path(source_file).parent)
@@ -298,9 +309,12 @@ def prepare_sources(core, sources, *, emit, jobs=None):
     summary = {"schema": 1, "total": len(rows), "boards": rows,
                "ready_count": sum(row["status"] == "ready" for row in rows),
                "unavailable_count": sum(row["status"] == "unavailable" for row in rows),
+               "ambiguous_count": sum(row["status"] == "ambiguous" for row in rows),
                "not_required_count": sum(row["status"] == "not_required" for row in rows)}
     emit("preparing", message=(f"Arduino source targets: {summary['ready_count']} prepared; "
                                f"{summary['unavailable_count']} unavailable; "
+                               f"{summary['ambiguous_count']} need an exact PlatformIO board selection; "
                                f"{summary['not_required_count']} represented by PlatformIO or an explicit association."),
-         source_ready_count=summary["ready_count"], source_unavailable_count=summary["unavailable_count"])
+         source_ready_count=summary["ready_count"], source_unavailable_count=summary["unavailable_count"],
+         source_ambiguous_count=summary["ambiguous_count"])
     return summary

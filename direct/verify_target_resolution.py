@@ -231,24 +231,26 @@ class TargetResolutionChecks(unittest.TestCase):
         self.installed.return_value = candidates
         self.api._compile_worker = Mock()
         self.api._upload_worker = self.api._native_upload_worker = Mock()
-        for request in (self.api.compile_sketch, self.api.upload_sketch):
-            with self.subTest(request=request.__name__):
-                self.catalog.replace({name: selection})
-                self.events.clear()
-                request()
-                self.wait_idle()
-                self.api._compile_worker.assert_not_called()
-                self.api._upload_worker.assert_not_called()
-                logs = "\n".join(str(data.get("text", "")) for event, data in self.events
-                                 if event == "console:log")
-                self.assertIn("matches multiple PlatformIO definitions", logs)
-                self.assertIn("DevKitC", logs)
-                self.assertIn("DevKitM", logs)
-                self.assertNotIn("Prepare it in bootstrap while online", logs)
-                self.assertNotIn("Offline board definition unavailable", logs)
-                self.assertEqual(self.catalog[name]["board"], "")
-                self.assertEqual(self.catalog[name]["flash_mb"], 4)
-                self.assertEqual(self.catalog[name]["pio_resolution_status"], "ambiguous")
+        equal_score = lambda *_args, **_kwargs: (391.0, ["variant"])
+        with patch.object(catalog_module, "_score_arduino_to_pio_board", side_effect=equal_score):
+            for request in (self.api.compile_sketch, self.api.upload_sketch):
+                with self.subTest(request=request.__name__):
+                    self.catalog.replace({name: selection})
+                    self.events.clear()
+                    request()
+                    self.wait_idle()
+                    self.api._compile_worker.assert_not_called()
+                    self.api._upload_worker.assert_not_called()
+                    logs = "\n".join(str(data.get("text", "")) for event, data in self.events
+                                     if event == "console:log")
+                    self.assertIn("matches multiple PlatformIO definitions", logs)
+                    self.assertIn("DevKitC", logs)
+                    self.assertIn("DevKitM", logs)
+                    self.assertNotIn("Prepare it in bootstrap while online", logs)
+                    self.assertNotIn("Offline board definition unavailable", logs)
+                    self.assertEqual(self.catalog[name]["board"], "")
+                    self.assertEqual(self.catalog[name]["flash_mb"], 4)
+                    self.assertEqual(self.catalog[name]["pio_resolution_status"], "ambiguous")
         self.registry.assert_not_called()
 
         # An explicit physical model retains its own definition and memory.
@@ -266,7 +268,38 @@ class TargetResolutionChecks(unittest.TestCase):
         self.assertEqual(invoked[0]["board"], "esp32-s3-devkitc-1")
         self.assertEqual(invoked[0]["flash_mb"], 8)
 
-    def test_generic_s3_prepared_original_target_reaches_arduino_compile_and_upload(self):
+    def test_generic_s3_uses_best_platformio_match_from_successful_reference(self):
+        name = "ESP32S3 Dev Module"
+        selection = dict(stale_selection(), arduino_board_id="esp32s3", arduino_variant="esp32s3",
+                         arduino_build_board="ESP32S3_DEV", mcu="esp32s3", flash_mb=4)
+        candidate_m = dict(definitions()[0], id="esp32-s3-devkitm-1",
+                           name="Espressif ESP32-S3-DevKitM-1", mcu="esp32s3",
+                           variant="esp32s3", arduino_defines={"arduinoesp32s3dev"},
+                           flash_size="16MB", has_psram=True)
+        candidate_c = dict(candidate_m, id="esp32-s3-devkitc-1",
+                           name="Espressif ESP32-S3-DevKitC-1-N8",
+                           flash_size="8MB", has_psram=False)
+        self.api.current_board = name
+        self.installed.return_value = [candidate_c, candidate_m]
+        self.catalog.replace({name: selection})
+        invoked = []
+
+        def compile_boundary(upload=False):
+            invoked.append(self.api._resolve_board_info())
+            self.api._release_requested_operation()
+
+        self.api._compile_worker = compile_boundary
+        with patch("main.core.arduino_backend.run_arduino_operation") as arduino_operation:
+            self.api.compile_sketch()
+            self.wait_idle()
+
+        self.assertEqual(len(invoked), 1)
+        self.assertEqual(invoked[0]["backend"], "platformio")
+        self.assertEqual(invoked[0]["board"], "esp32-s3-devkitm-1")
+        self.assertEqual(invoked[0]["framework"], "arduino")
+        arduino_operation.assert_not_called()
+
+    def test_generic_s3_ambiguous_pio_models_override_prepared_cli_source_target(self):
         from src.modules.arduino_cli_support import source_declaration_proof
         name = "ESP32S3 Dev Module"
         selection = dict(stale_selection(), arduino_board_id="esp32s3", arduino_variant="esp32s3",
@@ -282,23 +315,30 @@ class TargetResolutionChecks(unittest.TestCase):
         base = dict(definitions()[0], mcu="esp32s3", variant="esp32s3", arduino_defines={"arduinoesp32s3dev"})
         self.installed.return_value = [dict(base, id="s3-a", name="Espressif ESP32-S3 DevKit A"),
                                        dict(base, id="s3-b", name="Espressif ESP32-S3 DevKit B")]
-        invoked = []
-        def arduino_boundary(api, *, upload=False):
-            invoked.append((threading.get_ident(), api._resolve_board_info(), upload))
-            api._release_requested_operation()
-            return True
+        self.api._compile_worker = Mock()
+        self.api._upload_worker = self.api._native_upload_worker = Mock()
+        equal_score = lambda *_args, **_kwargs: (391.0, ["variant"])
         with patch("src.modules.arduino_cli_support.prepared_target_for_record", return_value=prepared), \
-                patch("main.core.arduino_backend.run_arduino_operation", side_effect=arduino_boundary):
+                patch.object(catalog_module, "_score_arduino_to_pio_board", side_effect=equal_score), \
+                patch("main.core.arduino_backend.run_arduino_operation") as arduino_operation:
             for request in (self.api.compile_sketch, self.api.upload_sketch):
                 self.catalog.replace({name: selection})
+                self.events.clear()
                 request()
                 self.wait_idle()
-        self.assertEqual([item[2] for item in invoked], [False, True])
-        for thread, info, _upload in invoked:
-            self.assertNotEqual(thread, threading.get_ident())
-            self.assertEqual(info["arduino_fqbn"], "esp32:esp32:esp32s3")
-            self.assertEqual(info["arduino_backend_role"], "primary")
-            self.assertEqual(info["board"], "esp32s3")
+                self.api._compile_worker.assert_not_called()
+                self.api._upload_worker.assert_not_called()
+                self.api._native_upload_worker.assert_not_called()
+                logs = "\n".join(str(data.get("text", "")) for event, data in self.events
+                                 if event == "console:log")
+                self.assertIn("matches multiple PlatformIO definitions", logs)
+                self.assertIn("DevKit A", logs)
+                self.assertIn("DevKit B", logs)
+                info = self.api._resolve_board_info(name)
+                self.assertEqual(info["backend"], "platformio")
+                self.assertEqual(info["pio_resolution_status"], "ambiguous")
+                self.assertEqual(info["board"], "")
+            arduino_operation.assert_not_called()
         self.registry.assert_not_called()
 
     def test_ambiguous_row_and_wrong_framework_do_not_reach_compile(self):
@@ -310,8 +350,13 @@ class TargetResolutionChecks(unittest.TestCase):
                 candidates.append(dict(candidates[0], id="same-name-second-board"))
             self.installed.return_value = self.registry.return_value = candidates
             self.api._compile_worker = Mock()
-            self.api.compile_sketch()
-            self.wait_idle()
+            score_context = (patch.object(catalog_module, "_score_arduino_to_pio_board",
+                                          side_effect=lambda *_args, **_kwargs: (200.0, ["variant"]))
+                             if ambiguous else patch.object(catalog_module, "_score_arduino_to_pio_board",
+                                                            wraps=catalog_module._score_arduino_to_pio_board))
+            with score_context:
+                self.api.compile_sketch()
+                self.wait_idle()
             self.api._compile_worker.assert_not_called()
             self.assertIsNone(self.api.active_operation)
             self.assertTrue(self.toolbar.btn_compile.isEnabled())
