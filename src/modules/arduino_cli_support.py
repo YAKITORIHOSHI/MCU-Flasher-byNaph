@@ -191,8 +191,12 @@ def _configuration(core, index_url, *, store=None):
             pass
     if index_url and index_url not in urls:
         urls.append(index_url)
-    payload = {"directories": {"data": str(store / "data"), "downloads": str(store / "downloads"),
-                               "user": str(store / "user")},
+    # Arduino CLI's Windows hardware-platform scanner cannot reliably walk
+    # packages when these directories are reached through our short-path
+    # junction. Keep the config file/commands on the short app path, but give
+    # CLI the canonical physical paths for its own directories.
+    directories = {name: str((store / name).resolve()) for name in ("data", "downloads", "user")}
+    payload = {"directories": directories,
                "board_manager": {"additional_urls": urls}, "metrics": {"enabled": False},
                "updater": {"enable_notification": False}}
     _atomic_json(config, payload)

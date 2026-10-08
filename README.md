@@ -772,6 +772,9 @@ MCU Flasher by Naph/
   Windows Bootstrap prepares the Arduino CLI executable. Ubuntu requires a
   native Arduino CLI installed on PATH before preparing fallback board support;
   missing-tool notices explain this prerequisite.
+  Windows Arduino CLI configuration keeps the short app path for launch while
+  resolving its package directories to their physical paths, so installed cores
+  remain discoverable through the app's junction alias.
   Preparation retains the exact declaration bytes it parsed. Changed declarations
   or PlatformIO definitions invalidate readiness before publication, and older
   cached identities cannot borrow a newer preparation receipt. Arduino CLI builds
