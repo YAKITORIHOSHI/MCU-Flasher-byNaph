@@ -3845,18 +3845,20 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": f"  Resolving board definition for {name}…", "tag": "info", "newline": True})
             resolved = resolve_board_definition(name, info, _load_platformio_board_catalog())
             fallback = resolved.get("backend") == "arduino-cli"
-            if not fallback and (resolved.get("pio_resolved") is False or not resolved.get("board")):
+            if (not fallback and resolved.get("pio_resolution_status") != "ambiguous"
+                    and (resolved.get("pio_resolved") is False or not resolved.get("board"))):
                 from src.modules.offline_runtime import bootstrap_instruction
                 self.emit("console:log", {"text": bootstrap_instruction(f"Offline board definition unavailable: {name}"),
                                           "tag": "error", "newline": True})
-            if (fallback or (resolved.get("pio_resolved") and resolved.get("board"))) and resolved != info:
+            if resolved != info:
                 SUPPORTED_BOARDS.set_definition(name, resolved)
                 _revision, catalog = SUPPORTED_BOARDS.snapshot()
                 _save_board_catalog_cache(catalog)
                 self.emit("boards:updated", {"boards": catalog})
-                target = str(resolved.get("arduino_fqbn")) if fallback else f"{resolved['platform']}:{resolved['board']}"
-                self.emit("console:log", {"text": f"  Target: {target} ({self._resolve_board_info(name).get('framework', '')})",
-                                          "tag": "success", "newline": True})
+                if fallback or (resolved.get("pio_resolved") and resolved.get("board")):
+                    target = str(resolved.get("arduino_fqbn")) if fallback else f"{resolved['platform']}:{resolved['board']}"
+                    self.emit("console:log", {"text": f"  Target: {target} ({self._resolve_board_info(name).get('framework', '')})",
+                                              "tag": "success", "newline": True})
         return self._check_target(action, sketch=True)
 
     @guarded_package_operation

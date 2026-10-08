@@ -90,6 +90,7 @@ class CompatPanel(QWidget):
         # ── Output View ───────────────────────────────────────────────────────
         self._output = QPlainTextEdit()
         self._output.setReadOnly(True)
+        self._output.setUndoRedoEnabled(False)
         self._output.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self._output.setMinimumHeight(24)
         self._output.setFont(_MONO_FONT)
@@ -132,14 +133,17 @@ class CompatPanel(QWidget):
 
     def set_content(self, entries: list[tuple[str, str]]) -> None:
         """Set the full compatible devices content as (text, tag) pairs."""
-        self._full_text = entries
+        self._full_text = list(entries)
         self._apply_filter()
 
     def _apply_filter(self, _query: str | None = None) -> None:
         query = self.search_input.text().strip().lower()
-        self._output.clear()
-        cursor = self._output.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
+        # Replace through a document cursor so reading cursors and character
+        # formats remain valid while a filter or theme rebuilds the contents.
+        cursor = QTextCursor(self._output.document())
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.Document)
+        cursor.removeSelectedText()
 
         matched = 0
         for text, tag in self._full_text:
@@ -155,6 +159,7 @@ class CompatPanel(QWidget):
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(self._tag_colors["dim"]))
             cursor.insertText(f"No devices match '{query}'", fmt)
+        cursor.endEditBlock()
 
     @preserve_log_view(rebuild=True)
     def _recolor_content(self) -> None:
@@ -165,9 +170,10 @@ class CompatPanel(QWidget):
 
     def clear(self) -> None:
         self._full_text.clear()
-        self._output.clear()
-        self.lbl_status.setText("Please compile to see the list of compatible devices")
         self.search_input.clear()
+        self._apply_filter()
+        self._follow.reset()
+        self.lbl_status.setText("Please compile to see the list of compatible devices")
 
     def _copy_output(self) -> None:
         # pyrefly: ignore [missing-import]

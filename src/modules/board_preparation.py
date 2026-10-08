@@ -389,8 +389,10 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
         requested = [{"platform_spec": row.get("platform_spec"), "platform": row.get("platform"),
                       "board": row.get("board"), "record": record_by_source.get((row.get("source_file"), row["arduino_id"]))}
                      for row in report["boards"] if row["status"] == "preparation_required"]
+        from src.modules.bootstrap_board_coverage import retained_board_sources
         prepare(core, report["plan"], log=log_status,
-                jobs=jobs, event=emit, requested_targets=requested)
+                jobs=jobs, event=emit, requested_targets=requested,
+                board_sources=retained_board_sources(core, [directory]))
         if not ready(core, report["plan"]):
             raise RuntimeError("Offline preparation completed without a valid package readiness certificate")
     emit("refreshing", message="Checking every included board against installed definitions", progress=None)
@@ -428,7 +430,30 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
     if any(row.get("platformio_support") == "unsupported" for row in result["boards"]):
         result["boards"] = prepare_unsupported_boards(core, directory, _small_metadata(package_metadata),
                                                     result["boards"], emit=emit, jobs=jobs)
+    metadata = _small_metadata(package_metadata)
+    if (not metadata.get("platformio") and
+            ("frameworks" not in result["plan"] or "arduino" in result["plan"]["frameworks"])):
+        from src.modules.arduino_cli_support import source_declaration_proof, prepare_source_boards
+        # This is explicit online source preparation, independent of a failed
+        # runtime build or an absence claim about PlatformIO. The exact installed
+        # Arduino declaration bytes must match this archive before certification.
+        requested_sources = []
+        for row in result["boards"]:
+            if row["status"] == "ready" or row.get("platformio_support") != "unknown":
+                continue
+            proof = source_declaration_proof(row, metadata)
+            if proof:
+                requested_sources.append(dict(row, arduino_backend_role="primary", arduino_source_proof=proof))
+        if requested_sources:
+            prepared_sources = prepare_source_boards(core, directory, metadata, requested_sources, emit=emit, jobs=jobs)
+            replacements = {(row.get("source_file"), row.get("arduino_id")): row for row in prepared_sources}
+            result["boards"] = [replacements.get((row.get("source_file"), row.get("arduino_id")), row)
+                                for row in result["boards"]]
     publish_prepared_targets(core, directory, result["boards"])
+    from src.modules.bootstrap_board_coverage import retained_board_sources
+    from src.modules.offline_bootstrap import finalize_board_coverage
+    finalize_board_coverage(core, retained_board_sources(core, [directory]), plan=result["plan"],
+                            source_preparation=result, log=lambda message: emit("refreshing", message=message, progress=None))
     total = len(result["boards"])
     ready_count = sum(row["status"] == "ready" for row in result["boards"])
     arduino_cli_count = sum(row["status"] == "ready" and row.get("backend") == "arduino-cli" for row in result["boards"])
@@ -436,7 +461,7 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
     stage = "ready" if total and not unavailable else "unavailable"
     message = f"Prepared {ready_count} of {total} boards"
     if arduino_cli_count:
-        message += f"; {arduino_cli_count} use Arduino CLI because PlatformIO has no exact target yet"
+        message += f"; {arduino_cli_count} use their prepared Arduino compiler targets"
     if unavailable:
         message += f"; {unavailable} have no supported prepared target. See details."
     emit(stage, message=message, progress=100 if stage == "ready" else None,

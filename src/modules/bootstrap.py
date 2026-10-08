@@ -5811,6 +5811,218 @@ def prepare_platformio_board_toolchain(
 
 ESP32_BOARD_INDEX_URL = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
 ESP32_BOARD_INDEX_MIRROR_URL = "https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_esp32_index_cn.json"
+ARDUINO_BOARD_INDEX_URL = "https://downloads.arduino.cc/packages/package_index.json"
+_BOARD_SOURCE_RECEIPT = ".mcu-board-source.json"
+
+
+def _bootstrap_board_destination(directory, name):
+    """Choose a fresh owned extraction folder while retaining existing content."""
+    import uuid
+    directory = Path(directory)
+    candidate = directory / str(name)
+    candidate.resolve().relative_to(directory.resolve())
+    if candidate.exists():
+        warn(f"Existing board folder was retained: {candidate.name}. Preparing a separate verified copy.")
+        candidate = directory / f"{name}-bootstrap-{uuid.uuid4().hex[:12]}"
+        candidate.resolve().relative_to(directory.resolve())
+    if candidate.exists():
+        raise RuntimeError("Fresh bootstrap board destination is already occupied")
+    return candidate
+
+
+def _write_bootstrap_board_source_receipt(folder, *, package, architecture, version,
+                                         index_url, archive_sha256, authority="official-index"):
+    """Bind exact official package metadata to the verified extracted bytes."""
+    from main.core.file_utils import write_generated_text
+    from src.modules.bootstrap_arduino_sources import source_receipt_metadata
+    folder = Path(folder)
+    files = {}
+    for boards_file in sorted(folder.rglob("boards.txt")):
+        platform_file = boards_file.with_name("platform.txt")
+        if not platform_file.is_file():
+            continue
+        for path in (boards_file, platform_file):
+            path.resolve().relative_to(folder.resolve())
+            files[str(path.relative_to(folder))] = _file_sha256(path)
+    if not files:
+        raise RuntimeError("The extracted core has no complete boards.txt/platform.txt source pair")
+    receipt = {"schema": 1, "authority": authority, "package": package,
+               "architecture": architecture, "version": version, "index_url": index_url,
+               "name": "ESP32 Arduino" if package == "esp32" else "Arduino AVR Boards",
+               "source_files": files, "archive_sha256": archive_sha256}
+    if not source_receipt_metadata(receipt):
+        raise RuntimeError("Official Arduino source metadata could not be validated")
+    write_generated_text(folder / _BOARD_SOURCE_RECEIPT, json.dumps(receipt, indent=2))
+    return receipt
+
+
+def _verified_bootstrap_board_receipt(boards_file, source_root, package, architecture):
+    """Accept an earlier app receipt only while its exact source bytes match."""
+    from src.modules.bootstrap_arduino_sources import source_receipt_metadata
+    boards_file, source_root = Path(boards_file), Path(source_root)
+    directory = boards_file.parent
+    boards_file.resolve().relative_to(source_root.resolve())
+    while True:
+        receipt_file = directory / _BOARD_SOURCE_RECEIPT
+        if receipt_file.is_file():
+            try:
+                if receipt_file.stat().st_size > 1024 * 1024:
+                    return False
+                receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+                metadata = source_receipt_metadata(receipt)
+                if metadata.get("package") != package or metadata.get("architecture") != architecture:
+                    return False
+                files = receipt["source_files"]
+                if (str(boards_file.relative_to(directory)) not in files
+                        or str(boards_file.with_name("platform.txt").relative_to(directory)) not in files):
+                    return False
+                for relative, expected in files.items():
+                    candidate = directory / relative
+                    candidate.resolve().relative_to(directory.resolve())
+                    if _file_sha256(candidate) != expected:
+                        return False
+                return True
+            except (OSError, ValueError, KeyError, TypeError):
+                return False
+        if directory == source_root or directory.parent == directory:
+            break
+        directory = directory.parent
+    return False
+
+
+def _existing_bootstrap_board_source(source_root, *, package, architecture, index_url):
+    """Prefer every verified source before attempting legacy-folder adoption."""
+    source_root = Path(source_root)
+    if not source_root.is_dir():
+        return None
+    files = sorted(source_root.glob("**/boards.txt"), key=lambda path: str(path).casefold())
+    # Receipt identity, rather than a folder label, authorizes existing cores.
+    # A damaged/custom folder must not hide a verified source later in the tree.
+    for path in files:
+        if _verified_bootstrap_board_receipt(path, source_root, package, architecture):
+            ok(f"{package}:{architecture} board source is verified ({path.parent.name}).")
+            return True
+    legacy = []
+    for path in files:
+        names = [part.casefold() for part in path.relative_to(source_root).parts[:-1]]
+        if ((package == "esp32" and any("esp32" in name for name in names))
+                or (package == "arduino" and any("avr" in name or "uno" in name for name in names))):
+            legacy.append(path)
+    if not legacy:
+        return None
+    for path in legacy:
+        try:
+            if _adopt_existing_bootstrap_board_source(path, package=package,
+                    architecture=architecture, index_url=index_url):
+                ok(f"{package}:{architecture} board source is verified ({path.parent.name}).")
+                return True
+        except Exception as exc:
+            warn(f"Existing {package}:{architecture} source verification failed; its files were retained: {exc}")
+    warn(f"Existing {package}:{architecture} board sources could not be certified; their files were retained. "
+         "Download the exact official core in Board Downloader or restore verified source metadata.")
+    return False
+
+
+def _arduino_avr_release_from_index(data, version):
+    """Locate AVR's exact published archive instead of guessing a folder version."""
+    for package in data.get("packages", []) if isinstance(data, dict) else []:
+        if not isinstance(package, dict) or package.get("name") != "arduino":
+            continue
+        for entry in package.get("platforms", []):
+            if not isinstance(entry, dict) or entry.get("architecture") != "avr" or entry.get("version") != version:
+                continue
+            release = {"version": version, "version_base": version, "url": entry.get("url"),
+                       "archive": entry.get("archiveFileName"), "sha256": _normalize_sha256(entry.get("checksum"))}
+            try:
+                release["size"] = int(entry.get("size") or 0)
+            except (TypeError, ValueError):
+                return None
+            return release if release["url"] and release["archive"] and release["sha256"] else None
+    return None
+
+
+def _load_arduino_avr_board_release(version):
+    body = _fetch_url(ARDUINO_BOARD_INDEX_URL, timeout=30)
+    if not body:
+        return None
+    try:
+        return _arduino_avr_release_from_index(json.loads(body), version)
+    except (ValueError, TypeError):
+        return None
+
+
+def _archive_source_pairs(archive):
+    """Read official source pairs for adoption without extracting or changing them."""
+    import tarfile
+    import zipfile
+    pairs = {}
+    def retain(name, body):
+        normalized = str(name).replace("\\", "/")
+        parts = normalized.split("/")
+        if ".." in parts or normalized.startswith("/"):
+            raise ValueError("Unsafe source member in board archive")
+        filename = parts[-1]
+        if filename in ("boards.txt", "platform.txt"):
+            if len(body) > 16 * 1024 * 1024:
+                raise ValueError("Arduino source file exceeds adoption bounds")
+            pairs.setdefault("/".join(parts[:-1]), {})[filename] = hashlib.sha256(body).hexdigest()
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as bundle:
+            for entry in bundle.infolist():
+                if entry.filename.replace("\\", "/").split("/")[-1] in ("boards.txt", "platform.txt"):
+                    if entry.file_size > 16 * 1024 * 1024:
+                        raise ValueError("Arduino source file exceeds adoption bounds")
+                    retain(entry.filename, bundle.read(entry))
+    else:
+        with tarfile.open(archive, "r:*") as bundle:
+            for entry in bundle:
+                if entry.isfile() and entry.name.replace("\\", "/").split("/")[-1] in ("boards.txt", "platform.txt"):
+                    if entry.size > 16 * 1024 * 1024:
+                        raise ValueError("Arduino source file exceeds adoption bounds")
+                    stream = bundle.extractfile(entry)
+                    if stream is not None:
+                        with stream:
+                            retain(entry.name, stream.read(16 * 1024 * 1024 + 1))
+    return list(pairs.values())
+
+
+def _adopt_existing_bootstrap_board_source(boards_file, *, package, architecture, index_url):
+    """Verify a legacy folder against its exact official archive, retaining files."""
+    boards_file = Path(boards_file)
+    platform_file = boards_file.with_name("platform.txt")
+    if not platform_file.is_file():
+        return False
+    version = ""
+    for line in platform_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.fullmatch(r"\s*version\s*=\s*([A-Za-z0-9_.+-]+)\s*", line)
+        if match:
+            version = match.group(1)
+            break
+    if not version:
+        return False
+    if package == "esp32":
+        data = _load_esp32_index(ESP32_BOARD_INDEX_URL, "package_esp32_index.json", timeout=30)
+        release = _esp32_release_from_index(data, target_version=version)
+    else:
+        release = _load_arduino_avr_board_release(version)
+    if not release or not release.get("sha256"):
+        return False
+    scratch = SCRIPT_DIR / "temp/bootstrap-board-sources"
+    scratch.resolve().relative_to(SCRIPT_DIR.resolve())
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="verify-", dir=scratch) as temporary:
+        Path(temporary).resolve().relative_to(scratch.resolve())
+        archive = Path(temporary) / Path(release["archive"]).name
+        _download_file(release["url"], archive, timeout=300, attempts=4,
+                       expected_size=release.get("size", 0), expected_sha256=release["sha256"])
+        expected = {"boards.txt": _file_sha256(boards_file), "platform.txt": _file_sha256(platform_file)}
+        if expected not in _archive_source_pairs(archive):
+            warn("Existing Arduino core bytes do not match its exact official package; the folder was retained.")
+            return False
+        _write_bootstrap_board_source_receipt(boards_file.parent, package=package,
+            architecture=architecture, version=release["version_base"], index_url=index_url,
+            archive_sha256=_file_sha256(archive))
+    return True
 
 
 def _archive_folder_name(archive_name: str) -> str:
@@ -5991,15 +6203,14 @@ def ensure_esp32_board_folder() -> bool:
     separate package store; this is the app's portable Board Browser folder.
     """
     dest_dir = _get_board_download_dir() / "Boards"
-    if dest_dir.is_dir():
-        try:
-            for boards_txt in dest_dir.glob("**/boards.txt"):
-                rel = "/".join(part.lower() for part in boards_txt.relative_to(dest_dir).parts)
-                if "esp32" in rel:
-                    ok(f"ESP32 boards core is already downloaded as a folder ({boards_txt.parent.name}).")
-                    return True
-        except Exception:
-            pass
+    try:
+        existing = _existing_bootstrap_board_source(dest_dir, package="esp32",
+            architecture="esp32", index_url=ESP32_BOARD_INDEX_URL)
+        if existing is not None:
+            return existing
+    except Exception as exc:
+        warn(f"Existing ESP32 source verification failed; its files were retained: {exc}")
+        return False
 
     if not _is_network_reachable(timeout=2.0):
         warn("ESP32 board core is not yet downloaded and cannot be prepared while offline.")
@@ -6026,10 +6237,11 @@ def ensure_esp32_board_folder() -> bool:
     release.setdefault("source", "Espressif stable index")
     dest_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dest_dir / release["archive"]
-    folder_path = dest_dir / _archive_folder_name(release["archive"])
+    folder_path = _bootstrap_board_destination(dest_dir, _archive_folder_name(release["archive"]))
     partial_path = archive_path.with_name(archive_path.name + ".part")
 
     primary_error = None
+    source_authority = "official-index"
     try:
         status(f"Downloading ESP32 Boards {release['version']} (Folder Only)...")
         _download_file(
@@ -6081,6 +6293,7 @@ def ensure_esp32_board_folder() -> bool:
                     attempts=4,
                 )
                 primary_error = None
+                source_authority = "official-source-tag"
             except Exception as source_exc:
                 primary_error = RuntimeError(f"{primary_error}; source archive: {source_exc}")
 
@@ -6089,6 +6302,7 @@ def ensure_esp32_board_folder() -> bool:
         return False
 
     try:
+        archive_sha256 = _file_sha256(archive_path)
         status(f"Unpacking ESP32 Boards {release['version_base']} into {folder_path.name}...")
         if _gui:
             _gui.set_progress_percent(0)
@@ -6096,6 +6310,9 @@ def ensure_esp32_board_folder() -> bool:
             warn("ESP32 board-core archive was downloaded, but boards.txt could not be verified after extraction.")
             safe_rmtree(folder_path)
             return False
+        _write_bootstrap_board_source_receipt(folder_path, package="esp32", architecture="esp32",
+            version=release["version_base"], index_url=ESP32_BOARD_INDEX_URL,
+            archive_sha256=archive_sha256, authority=source_authority)
         ok(f"ESP32 Boards {release['version_base']} downloaded as folder: Boards/{folder_path.name}")
         return True
     except Exception as exc:
@@ -6105,12 +6322,14 @@ def ensure_esp32_board_folder() -> bool:
 def ensure_arduino_avr_board() -> bool:
     """Pre-download and extract Arduino AVR Boards framework if not present."""
     dest_dir = _get_board_download_dir() / "Boards"
-    if dest_dir.is_dir():
-        for p in dest_dir.glob("**/boards.txt"):
-            parent_name = p.parent.name.lower()
-            if "avr" in parent_name or "uno" in parent_name:
-                ok("Arduino AVR boards framework is already downloaded.")
-                return True
+    try:
+        existing = _existing_bootstrap_board_source(dest_dir, package="arduino",
+            architecture="avr", index_url=ARDUINO_BOARD_INDEX_URL)
+        if existing is not None:
+            return existing
+    except Exception as exc:
+        warn(f"Existing AVR source verification failed; its files were retained: {exc}")
+        return False
 
     if not _is_network_reachable(timeout=2.0):
         warn("Arduino AVR boards framework is not yet downloaded and cannot be prepared while offline.")
@@ -6119,11 +6338,11 @@ def ensure_arduino_avr_board() -> bool:
     section("Preparing Arduino AVR Boards")
     status("Preparing Arduino AVR Boards core (v1.8.6) to enable AVR compilation...")
 
-    candidate_urls = [
-        "https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2",
-        "https://downloads.arduino.cc/cores/avr-1.8.6.tar.bz2",
-        "https://downloads.arduino.cc/cores/avr-1.8.5.tar.bz2",
-    ]
+    release = _load_arduino_avr_board_release("1.8.6")
+    if not release:
+        warn("Could not verify the exact Arduino AVR archive from its official package index.")
+        return False
+    candidate_urls = [release["url"]]
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     download_success = False
@@ -6134,7 +6353,8 @@ def ensure_arduino_avr_board() -> bool:
         archive_name = url.rsplit("/", 1)[-1]
         candidate_path = dest_dir / archive_name
         try:
-            _download_file(url, candidate_path)
+            _download_file(url, candidate_path, expected_size=release.get("size", 0),
+                           expected_sha256=release["sha256"])
             download_success = True
             filepath = candidate_path
             break
@@ -6146,8 +6366,9 @@ def ensure_arduino_avr_board() -> bool:
         return False
 
     try:
+        archive_sha256 = _file_sha256(filepath)
         status("Extracting Arduino AVR Boards...")
-        folder_path = dest_dir / "avr-1.8.6"
+        folder_path = _bootstrap_board_destination(dest_dir, "avr-1.8.6")
         folder_path.mkdir(parents=True, exist_ok=True)
 
         import tarfile
@@ -6165,6 +6386,10 @@ def ensure_arduino_avr_board() -> bool:
                 nested.rmdir()
         except Exception:
             pass
+
+        _write_bootstrap_board_source_receipt(folder_path, package="arduino", architecture="avr",
+            version=release["version_base"], index_url=ARDUINO_BOARD_INDEX_URL,
+            archive_sha256=archive_sha256)
 
         try:
             filepath.unlink()
@@ -9225,6 +9450,8 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "qt" / "icons.py",
         SCRIPT_DIR / "src" / "modules" / "launcher.py",
         SCRIPT_DIR / "src" / "modules" / "offline_bootstrap.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_board_coverage.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_arduino_sources.py",
         SCRIPT_DIR / "src" / "modules" / "package_jobs.py",
         SCRIPT_DIR / "src" / "modules" / "board_preparation.py",
         SCRIPT_DIR / "src" / "modules" / "board_index_targets.py",
@@ -9242,6 +9469,8 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "core" / "board_catalog.py",
         SCRIPT_DIR / "main" / "core" / "package_activity.py",
         SCRIPT_DIR / "main" / "core" / "arduino_backend.py",
+        SCRIPT_DIR / "main" / "core" / "arduino_inputs.py",
+        SCRIPT_DIR / "main" / "qt" / "compat_panel.py",
         SCRIPT_DIR / "main" / "qt" / "package_progress.py",
         SCRIPT_DIR / "main" / "qt" / "package_coverage.py",
         SCRIPT_DIR / "main" / "core" / "target_profile.py",
@@ -9409,7 +9638,7 @@ def _write_startup_health_snapshot() -> bool:
 
 def _explicit_setup_requested() -> bool:
     """Return true when the caller intentionally requested repair/setup."""
-    requested = {"--repair", "--setup", "--force-setup", "--force-repair", "--reinstall", "--plan"}
+    requested = {"--repair", "--setup", "--force-setup", "--force-repair", "--reinstall", "--plan", "--board-source"}
     if any(str(arg).lower() in requested for arg in sys.argv[1:]):
         return True
     return (SCRIPT_DIR / ".force_rebuild").exists()
@@ -10301,6 +10530,11 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         offline_core = Path(os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR))
         from src.modules.platformio_locks import package_locks
         with _bootstrap_tool_store_lease(gui, offline_core), package_locks():
+            # Original source declarations may need Arduino's own compiler.
+            gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))
+            if not ensure_arduino_cli():
+                _fail_and_exit("Arduino-CLI", "Failed to install Arduino-CLI.")
+                return
             # Offer configured missing packages the verified release before normal
             # package setup; complete stores skip it. Invalid existing data stops
             # this step rather than allowing a fallback to replace those files.
@@ -10338,8 +10572,11 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             # All downloads belong to bootstrap. Prepare every declared package
             # variant in the configured board packs before launching the workspace.
             from src.modules.offline_bootstrap import clean_bootstrap_environment, ready, requested_plan
+            from src.modules.bootstrap_board_coverage import requested_board_sources
             offline_plan, offline_plan_path = requested_plan()
-            if not ready(offline_core, offline_plan if offline_plan_path else None):
+            offline_board_sources = requested_board_sources()
+            offline_packages_ready = ready(offline_core, offline_plan if offline_plan_path else None)
+            if offline_board_sources or _explicit_setup_requested() or not offline_packages_ready:
                 try:
                     opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
                 except Exception:
@@ -10348,6 +10585,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                            "--core", str(offline_core), "--jobs", str(opt_jobs)]
                 if offline_plan_path:
                     command += ["--plan", str(offline_plan_path)]
+                for source in offline_board_sources:
+                    command += ["--board-source", str(source)]
+                if offline_packages_ready:
+                    command += ["--coverage-only"]
                 gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))
                 bootstrap_env = clean_bootstrap_environment()
                 bootstrap_env["PYTHONUNBUFFERED"] = "1"
@@ -10358,12 +10599,6 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
                     _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
                     return
-
-        # ── Arduino-CLI ──────────────────────────────────────────────
-        gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))
-        if not ensure_arduino_cli():
-            _fail_and_exit("Arduino-CLI", "Failed to install Arduino-CLI.")
-            return
 
         # ── CP210x Driver ─────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking CP210x Driver"))

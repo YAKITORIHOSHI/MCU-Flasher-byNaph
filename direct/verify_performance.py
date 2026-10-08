@@ -802,9 +802,13 @@ class PerformanceChecks(unittest.TestCase):
             offline_core = fixture / "native-core"
             offline_core.mkdir()
             (offline_core / "fixture.json").write_text("{}")
+            from src.modules.bootstrap_board_coverage import REPORT
+            (offline_core / REPORT).write_text(json.dumps({"schema": 1, "boards": []}))
             certificate = {"schema": offline_bootstrap.SCHEMA, "plan": offline_bootstrap.plan_hash(offline_bootstrap.load_plan()),
                            "default_plan": offline_bootstrap.plan_hash(offline_bootstrap.load_plan()),
-                           "host": sys.platform, "architecture": host_platform.machine(), "files": ["fixture.json"]}
+                           "host": sys.platform, "architecture": host_platform.machine(), "files": ["fixture.json", REPORT],
+                           "board_coverage": {"schema": 1, "path": REPORT, "total": 0,
+                                              "ready_count": 0, "unavailable_count": 0}}
             (offline_core / offline_bootstrap.MARKER).write_text(json.dumps(certificate))
             with patch.object(sys, "argv", ["bootstrap.py"]), patch.dict(os.environ, {"PLATFORMIO_CORE_DIR": str(offline_core)}), patch.dict(sys.modules, {"crash_detector": SimpleNamespace(detect_previous_crash=lambda: {"crashed": False})}):
                 self.assertIsNone(scope["_read_startup_health_snapshot"]())

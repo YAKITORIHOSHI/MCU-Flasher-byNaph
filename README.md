@@ -204,6 +204,36 @@ environment before recording local readiness. Readiness certifies the configured
 plan; installed boards outside that plan may need further preparation.
 Incomplete preparation stops launch; a deleted package requires bootstrap repair.
 An older prepared store must run bootstrap again when the default plan changes.
+Bootstrap also audits every visible Arduino declaration in the discovered board
+sources and writes the complete `.mcu-bootstrap-board-coverage.json` report in
+the host's package store. Its summary distinguishes prepared exact targets,
+ambiguous identities, unavailable definitions and targets outside the package
+plan. Package preparation success does not mean every Arduino display name has
+an exact PlatformIO equivalent. Generic **ESP32S3 Dev Module** and **ESP32C3 Dev
+Module** entries can match multiple concrete DevKit models. Bootstrap prepares
+their original Arduino core/version/FQBN from a verified source receipt, keeping
+the source's default pin and memory settings. The installed Arduino declaration
+must exactly match the downloaded source bytes before a compile probe certifies
+it. This applies to any verified Arduino source without a unique PlatformIO
+target, rather than a list of special-case board names. Runtime uses that prepared
+target directly; it never changes compilers after a PlatformIO failure.
+If no verified source target is available, Compile and Upload report competing
+definitions instead of implying package repair can choose a physical model.
+Windows Bootstrap prepares Arduino CLI; Ubuntu requires native Arduino CLI on
+PATH for these source targets. Full coverage retains missing-tool/source reasons.
+Exact Arduino core versions and package indexes use separate prepared stores so
+one source version cannot replace another. Bootstrap reuses verified source
+receipts even when folders were renamed, and checks all existing candidates
+before attempting to certify an older folder. Final downloader results also
+refresh the aggregate coverage report and readiness certificate.
+An original Arduino target that loses its certificate stays unavailable in its
+source namespace until prepared again or explicitly associated with PlatformIO.
+It cannot silently become a different DevKit with different memory defaults.
+Arduino builds use both the libraries prepared by the package plan and those
+installed through Library Downloader. Build receipts verify the used library
+and compiler inputs before reusing firmware; changed inputs require a rebuild.
+Discovery excludes hidden Arduino USB-discovery rows and reads all build defines
+and both Arduino USB-ID property layouts. This behavior applies to every family.
 Compile, Upload and Reset hold shared package-store leases; explicit background
 board preparation reserves an exclusive lease and waits for existing users to
 finish. Further package operations report that preparation is active, while
@@ -948,7 +978,7 @@ MCU Flasher by Naph/
 - **`src/modules/offline_bootstrap.py`**: Prepares `direct/offline-packages.json` before workspace launch and certifies host-native dependencies. An explicit custom plan can be supplied with `direct/windows/run.vbs --repair --plan "path/to/plan.json"` or `python3 direct/ubuntu/setup.py --plan "path/to/plan.json"`. Changing the default plan requires bootstrap preparation again.
 - **`src/modules/board_preparation.py`**: Separate private-runtime worker for downloaded board packages. Preserves existing plan coverage, discovers exact registered targets, verifies requested builder/definition receipts and writes complete coverage.
 - **`src/modules/board_index_targets.py`**: Validates optional custom platform/board associations and distinguishes complete registry absence from failed discovery or ambiguity.
-- **`src/modules/arduino_cli_support.py`** and **`main/core/arduino_backend.py`**: Prepare and execute certified Arduino CLI targets only when PlatformIO has no exact board support; source/core/tool and firmware checks retain offline, single-attempt behavior.
+- **`src/modules/arduino_cli_support.py`** and **`main/core/arduino_backend.py`**: Prepare and execute certified original Arduino source targets, plus fallback targets with verified PlatformIO absence. Source/core/tool and firmware checks retain offline, single-attempt behavior.
 - **`src/modules/platformio_locks.py`**: Native Windows lock adaptation for app-owned tool stores, including concurrent builder checks and hidden lock files.
 - **`src/modules/package_jobs.py`**: Atomic bounded job snapshots, stage history, file-based metadata/report handoffs and cross-process package-store leases. Workspace readers remain independent; stopped preparation workers are reported as interrupted.
 - **`main/qt/package_progress.py`**: Window-owned, focus-preserving progress card anchored inside the workspace, with themed stage/progress display and a Notifications action.
@@ -1076,6 +1106,12 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py
 & src/_python/python.exe -B direct/verify_offline.py
+& src/_python/python.exe -B direct/verify_bootstrap_board_coverage.py
+& src/_python/python.exe -B direct/verify_bootstrap_arduino_sources.py
+& src/_python/python.exe -B direct/verify_arduino_source_targets.py
+& src/_python/python.exe -B direct/verify_arduino_library_inputs.py
+& src/_python/python.exe -B direct/verify_arduino_source_namespace.py
+& src/_python/python.exe -B direct/verify_board_declarations.py
 & src/_python/python.exe -B direct/verify_bootstrap_seed.py
 & src/_python/python.exe -B direct/verify_bootstrap_updates.py
 & src/_python/python.exe -B direct/verify_bootstrap_download_failure.py

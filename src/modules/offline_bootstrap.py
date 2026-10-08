@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-SCHEMA = 3
+SCHEMA = 4
 MARKER = ".mcu-offline-ready.json"
 ASSETS = (
     "src/editor/index.html", "src/editor/bundle.js", "src/editor/18.bundle.js",
@@ -203,6 +203,14 @@ def ready(core, plan=None):
         if not all((ROOT / item).is_file() for item in ASSETS):
             return False
         if not all((ROOT / item).is_file() for item in data.get("guards", [])):
+            return False
+        from src.modules.bootstrap_board_coverage import REPORT
+        coverage = data.get("board_coverage")
+        if not isinstance(coverage, dict) or coverage.get("schema") != 1 or coverage.get("path") != REPORT:
+            return False
+        counts = [coverage.get(name) for name in ("total", "ready_count", "unavailable_count")]
+        if (any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts)
+                or counts[0] != counts[1] + counts[2] or REPORT not in data["files"]):
             return False
         return all((Path(core) / item).is_file() for item in data["files"]) and bool(data["files"])
     except (OSError, ValueError, KeyError, TypeError):
@@ -459,16 +467,91 @@ def _requested_builder_probes(core, specification, platform_name, probes, reques
     return extended
 
 
-def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None):
+def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None, board_sources=()):
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
     from src.modules.platformio_locks import package_locks
     with archive_paths(), package_locks():
-        return _prepare(core, plan, log, jobs=jobs, event=event, requested_targets=requested_targets)
+        return _prepare(core, plan, log, jobs=jobs, event=event,
+                        requested_targets=requested_targets, board_sources=board_sources)
 
 
-def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None):
+def refresh_board_coverage(core, sources, *, plan=None, log=print, jobs=None):
+    """Refresh original Arduino targets while reusing certified PIO packages."""
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        raise RuntimeError("Bootstrap board coverage belongs to the preparation worker")
+    from src.modules.bootstrap_arduino_sources import prepare_sources
+    core = Path(os.path.abspath(core))
+    sources = tuple(sources)
+    marker = core / MARKER
+    if marker.stat().st_size > 16 * 1024 * 1024:
+        raise RuntimeError("Offline preparation certificate exceeds supported bounds")
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    actual_plan = _validate_plan(data["prepared_plan"])
+    if not ready(core, actual_plan) or (plan is not None and plan_hash(plan) != plan_hash(actual_plan)):
+        raise RuntimeError("Coverage refresh requires a valid certificate for the exact prepared package plan")
+    sources_by_platform = data.get("platform_sources")
+    manifests = data.get("board_manifests")
+    if (not isinstance(sources_by_platform, dict) or not sources_by_platform
+            or not all(isinstance(spec, str) and isinstance(name, str) for spec, name in sources_by_platform.items())
+            or not isinstance(manifests, dict)):
+        raise RuntimeError("Offline preparation certificate lacks exact platform/manifest receipts")
+    # A failed mutation must not leave the previous success certificate behind.
+    marker.unlink()
+    source_preparation = None
+    if "frameworks" not in actual_plan or "arduino" in actual_plan["frameworks"]:
+        source_preparation = prepare_sources(core, sources, emit=lambda stage, **details: log(details.get("message", stage)), jobs=jobs)
+    return _publish_board_coverage(core, sources, data, log=log, source_preparation=source_preparation)
+
+
+def _publish_board_coverage(core, sources, data, *, log=print, source_preparation=None):
+    from src.modules.bootstrap_board_coverage import REPORT, report_coverage, required_native_files
+    from main.core.file_utils import write_generated_text
+    core = Path(core)
+    coverage = report_coverage(core, sources, plan=data["prepared_plan"],
+                               platform_sources=data["platform_sources"], board_manifests=data["board_manifests"],
+                               log=log, source_preparation=source_preparation)
+    native_files, native_guards = required_native_files(core, coverage)
+    data["files"] = sorted((set(data["files"]) - set(data.get("native_files", []))) | set(native_files) | {REPORT})
+    data["guards"] = sorted((set(data.get("guards", [])) - set(data.get("native_guards", []))) | set(native_guards))
+    data["native_files"] = native_files
+    data["native_guards"] = native_guards
+    data["board_coverage"] = {"schema": 1, "path": REPORT, "total": coverage["total"],
+                              "ready_count": coverage["ready_count"],
+                              "unavailable_count": coverage["unavailable_count"], "sources": coverage["sources"]}
+    write_generated_text(core / MARKER, json.dumps(data, indent=2))
+    log("Bootstrap board coverage refreshed using the prepared offline packages.")
+    return coverage
+
+
+def finalize_board_coverage(core, sources, *, plan, source_preparation=None, log=print):
+    """Certify final downloader results after all target associations are published."""
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
+        raise RuntimeError("Bootstrap board coverage belongs to the preparation worker")
+    from src.modules.bootstrap_board_coverage import report_coverage
+    core = Path(os.path.abspath(core))
+    marker = core / MARKER
+    data = None
+    try:
+        if marker.stat().st_size <= 16 * 1024 * 1024:
+            candidate = json.loads(marker.read_text(encoding="utf-8"))
+            if (ready(core, plan) and isinstance(candidate.get("platform_sources"), dict)
+                    and isinstance(candidate.get("board_manifests"), dict)):
+                data = candidate
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    if marker.exists():
+        marker.unlink()
+    if data is not None:
+        return _publish_board_coverage(core, sources, data, log=log, source_preparation=source_preparation)
+    # Native targets can be certified without a complete PlatformIO certificate.
+    # Keep that report truthful without manufacturing aggregate package readiness.
+    return report_coverage(core, sources, plan=plan, platform_sources={}, board_manifests={},
+                           log=log, source_preparation=source_preparation)
+
+
+def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, board_sources=()):
     from platformio.package.manager.platform import PlatformPackageManager
     from platformio.package.manager.tool import ToolPackageManager
     from platformio.package.manager.library import LibraryPackageManager
@@ -478,6 +561,7 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None):
     from src.modules import bootstrap_builders
     import subprocess
     import time
+    board_sources = tuple(board_sources)
 
     if jobs is not None and (not isinstance(jobs, int) or isinstance(jobs, bool) or jobs <= 0):
         raise ValueError("Bootstrap builder jobs must be a positive integer")
@@ -645,14 +729,36 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None):
                                                             for name in unavailable}
     (core / ".mcu-offline-catalog.json").write_text(json.dumps(records), encoding="utf-8")
     files.add(".mcu-offline-catalog.json")
+    from src.modules.bootstrap_board_coverage import REPORT, report_coverage, required_native_files
+    from src.modules.bootstrap_arduino_sources import prepare_sources
+    source_preparation = None
+    if "frameworks" not in plan or "arduino" in plan["frameworks"]:
+        def emit_source_preparation(stage, **details):
+            report(stage, **details)
+            if details.get("message"):
+                log(str(details["message"]))
+        source_preparation = prepare_sources(core, board_sources, emit=emit_source_preparation, jobs=jobs)
+    report("refreshing", message="Checking Arduino declaration coverage against prepared definitions", progress=None)
+    coverage = report_coverage(core, board_sources, plan=plan, platform_sources=platform_sources,
+                               board_manifests=board_manifests, log=log, source_preparation=source_preparation)
+    files.add(REPORT)
+    native_files, native_guards = required_native_files(core, coverage)
+    files.update(native_files)
     guards = install_runtime_guard(core)
     guards.extend(["src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake", "src/modules/mbed_compat.py",
                    "src/modules/platformio_locks.py", "src/modules/board_index_targets.py",
-                   "src/modules/arduino_cli_support.py", "main/core/arduino_backend.py"])
+                   "src/modules/arduino_cli_support.py", "src/modules/bootstrap_board_coverage.py",
+                   "src/modules/bootstrap_arduino_sources.py",
+                   "main/core/arduino_backend.py", "main/core/arduino_inputs.py"])
+    guards.extend(native_guards)
     payload = {"schema": SCHEMA, "plan": plan_hash(plan), "host": sys.platform,
                "default_plan": plan_hash(load_plan()), "prepared_plan": plan,
                "architecture": host_platform.machine(), "files": sorted(files), "guards": guards,
+               "native_files": native_files, "native_guards": native_guards,
                "board_manifests": board_manifests,
+               "board_coverage": {"schema": 1, "path": REPORT, "total": coverage["total"],
+                                  "ready_count": coverage["ready_count"],
+                                  "unavailable_count": coverage["unavailable_count"], "sources": coverage["sources"]},
                "platform_sources": platform_sources,
                "exact_builder_targets": [{"platform": platform, "board": board, "framework": framework}
                                           for platform, board, framework in sorted(exact_builder_targets)],
@@ -669,9 +775,20 @@ def main(argv=None):
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--jobs", type=int, default=None, help="Number of parallel builder workers")
+    parser.add_argument("--board-source", type=Path, action="append",
+                        help="Arduino declaration source root; repeat for multiple roots")
+    parser.add_argument("--coverage-only", action="store_true",
+                        help="Prepare changed original Arduino targets and refresh coverage while reusing certified PlatformIO packages")
     args = parser.parse_args(argv)
     try:
-        prepare(args.core, load_plan(args.plan), jobs=args.jobs)
+        if any(not source.is_dir() for source in args.board_source or ()):
+            raise ValueError("Every --board-source must name an existing Arduino board source directory")
+        from src.modules.bootstrap_board_coverage import default_board_sources, retained_board_sources
+        sources = retained_board_sources(args.core, [*default_board_sources(), *(args.board_source or ())])
+        if args.coverage_only:
+            refresh_board_coverage(args.core, sources, plan=load_plan(args.plan) if args.plan else None, jobs=args.jobs)
+        else:
+            prepare(args.core, load_plan(args.plan), jobs=args.jobs, board_sources=sources)
         return 0
     except Exception as exc:
         print(f"Offline bootstrap failed: {exc}", file=sys.stderr)

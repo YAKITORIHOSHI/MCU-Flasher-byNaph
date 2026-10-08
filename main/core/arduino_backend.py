@@ -1,4 +1,4 @@
-"""Single-attempt Arduino CLI builds/uploads for certified PIO-absent boards."""
+"""Single-attempt Arduino CLI builds/uploads for certified exact source boards."""
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from src.modules.arduino_cli_support import runtime_command, sha256_file
+from main.core import arduino_inputs
 
 
 def _log(api, text, tag="info"):
@@ -86,13 +87,21 @@ def _stage_sources(api, staging):
     return staged_sources, staged_bytes
 
 
-def _receipt_matches(path, source_hash, fqbn, build):
+def _receipt_matches(path, source_hash, fqbn, build, inputs, *, inputs_only=False):
     try:
-        if path.stat().st_size > 128 * 1024:
+        if path.stat().st_size > 16 * 1024 * 1024:
             return False
         receipt = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(receipt, dict):
+            return False
         files = receipt.get("files")
-        if receipt.get("source_hash") != source_hash or receipt.get("fqbn") != fqbn or not isinstance(files, dict) or not files or len(files) > 128:
+        if receipt.get("fqbn") != fqbn:
+            return False
+        if not arduino_inputs.matches(receipt.get("inputs"), inputs):
+            return False
+        if inputs_only:
+            return True
+        if receipt.get("source_hash") != source_hash or not isinstance(files, dict) or not files or len(files) > 128:
             return False
         for name, digest in files.items():
             if Path(name).name != name or sha256_file(build / name) != digest:
@@ -112,15 +121,24 @@ def run_arduino_operation(api, *, upload=False):
     try:
         info = api._resolve_board_info(board)
         command, environment, fqbn = runtime_command(info)
-        _log(api, "PlatformIO does not support this exact board yet. Using the verified Arduino CLI fallback.", "warning")
-        api.emit("notification", {"title": "Arduino CLI fallback", "message": f"PlatformIO does not support {board} yet. Using Arduino CLI.", "type": "warning"})
+        if info.get("arduino_backend_role") == "primary":
+            _log(api, f"Using the prepared original Arduino target {fqbn} with its declared defaults.", "info")
+            api.emit("notification", {"title": "Arduino source target", "message": f"Using the prepared original Arduino definition for {board}.", "type": "info"})
+        else:
+            _log(api, "PlatformIO does not support this exact board yet. Using the verified Arduino CLI fallback.", "warning")
+            api.emit("notification", {"title": "Arduino CLI fallback", "message": f"PlatformIO does not support {board} yet. Using Arduino CLI.", "type": "warning"})
         source_hash = api._hash_sources(board)
         key = hashlib.sha256(json.dumps({"fqbn": fqbn, "core": info.get("arduino_cli")}, sort_keys=True).encode()).hexdigest()[:16]
         workspace = api._effective_cache_root(api.sketch_dir_path) / "arduino-cli" / key
         staging, build = workspace / "sketch/FallbackSketch", workspace / "build"
         receipt = workspace / "build-receipt.json"
-        can_skip = bool(upload and getattr(api, "_active_skip_compile", False) and _receipt_matches(receipt, source_hash, fqbn, build))
+        collections, library_flags = arduino_inputs.library_collections(command, info)
+        inputs = arduino_inputs.snapshot(collections, byte_hashes=False)
+        previous_inputs_valid = _receipt_matches(receipt, source_hash, fqbn, build, inputs, inputs_only=True)
+        previous_valid = _receipt_matches(receipt, source_hash, fqbn, build, inputs)
+        can_skip = bool(upload and getattr(api, "_active_skip_compile", False) and previous_valid)
         if not can_skip:
+            external_inputs = arduino_inputs.previous_dependency_bytes(receipt, collections)
             receipt.unlink(missing_ok=True)
             api.is_busy = True
             api.active_operation = "upload" if upload else "compile"
@@ -137,25 +155,34 @@ def run_arduino_operation(api, *, upload=False):
                 if path.is_file() and path.suffix.lower() in (".hex", ".bin", ".uf2", ".elf"):
                     path.unlink()
             compile_command = command + ["compile", "--fqbn", fqbn, "--build-path", str(build), "--jobs", str(api._get_jobs()), str(staging)]
-            # Shared downloaded Arduino libraries are read as installed inputs.
-            from main.core.board_catalog import _get_download_dir
-            libraries = Path(_get_download_dir()) / "Libs"
-            if libraries.is_dir():
-                compile_command += ["--libraries", str(libraries)]
+            # Arduino supports repeated collection flags. Both stores were
+            # prepared by Bootstrap/downloader; this worker never installs.
+            compile_command += library_flags
+            if not previous_inputs_valid:
+                # Coarse-timestamp library edits must not reuse stale objects.
+                compile_command += ["--clean"]
+            before_inputs = arduino_inputs.snapshot(collections)
+            before_inputs["files"].update(external_inputs)
             api.emit("console:progress", {"action": "Compiling"})
             _stream(api, compile_command, environment, workspace)
             if api._hash_sources(board) != source_hash or api.current_board != board:
                 raise RuntimeError("The sketch or board changed during compilation. Compile again before uploading")
             if any(sha256_file(staging / name) != digest for name, digest in staged_bytes.items()):
                 raise RuntimeError("Staged sketch bytes changed during compilation. Compile again before uploading")
+            selected_inputs = arduino_inputs.selected_inputs(build, workspace, before_inputs)
+            inputs = arduino_inputs.snapshot(collections, byte_hashes=False)
+            if not arduino_inputs.matches(selected_inputs, inputs):
+                raise RuntimeError("Arduino library inputs changed during compilation. Compile again before uploading")
             binaries = {path.name: sha256_file(path) for path in build.iterdir() if path.is_file() and path.suffix.lower() in (".hex", ".bin", ".uf2", ".elf")}
             if not binaries or len(binaries) > 128:
                 raise RuntimeError("Arduino CLI completed without a firmware output")
-            receipt.write_text(json.dumps({"source_hash": source_hash, "fqbn": fqbn, "files": binaries}, sort_keys=True), encoding="utf-8")
+            from main.core.file_utils import write_generated_text
+            write_generated_text(receipt, json.dumps({"source_hash": source_hash, "fqbn": fqbn, "files": binaries,
+                                                       "inputs": selected_inputs}, sort_keys=True))
             api._last_source_hash, api._last_compiled_board = source_hash, board
             _log(api, "Arduino CLI compilation completed.", "success")
         else:
-            _log(api, "Verified unchanged source and firmware bytes; reusing the Arduino CLI build.", "info")
+            _log(api, "Verified unchanged sketch, library and firmware bytes; reusing the Arduino CLI build.", "info")
         if not upload:
             api.emit("notification", {"title": "Build completed", "message": "Arduino CLI compiled the exact selected board.", "type": "success"})
             api.emit("console:progress", {"action": "Completed", "percent": 100})
@@ -169,8 +196,10 @@ def run_arduino_operation(api, *, upload=False):
             raise RuntimeError(f"Port {port} is in use by another window (PID {owner})")
         # Re-check preparation and source/firmware bytes at the write boundary.
         runtime_command(info)
-        if api._hash_sources(board) != source_hash or not _receipt_matches(receipt, source_hash, fqbn, build):
-            raise RuntimeError("Sketch or firmware bytes changed before upload. Compile again")
+        current_collections, _ = arduino_inputs.library_collections(command, info)
+        inputs = arduino_inputs.snapshot(current_collections, byte_hashes=False)
+        if api._hash_sources(board) != source_hash or not _receipt_matches(receipt, source_hash, fqbn, build, inputs):
+            raise RuntimeError("Sketch, library or firmware bytes changed before upload. Compile again")
         if api._stop_requested:
             raise InterruptedError("Upload cancelled before writing")
         if api.current_port != port or api.current_board != board:

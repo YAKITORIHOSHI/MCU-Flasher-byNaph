@@ -33,7 +33,11 @@ def rendered_color(widget, text: str) -> str:
     cursor = widget.document().find(text)
     if cursor.isNull():
         raise AssertionError(f"Missing rendered text {text!r}")
-    return cursor.charFormat().foreground().color().name()
+    # Hold Qt value objects through the brush/color inspection.
+    formatting = cursor.charFormat()
+    brush = formatting.foreground()
+    color = brush.color()
+    return color.name()
 
 
 def select_text(widget, text: str) -> None:
@@ -99,6 +103,33 @@ class PanelReadabilityChecks(unittest.TestCase):
         for mode in MODES:
             panel.apply_theme(mode)
             self.assert_readable(rendered_color(panel._output, "No devices match"), get_palette(mode)["BG_DARKEST"])
+
+    def test_selected_compatibility_rows_survive_repeated_empty_filter_theme_rebuilds(self):
+        panel = self.widget(CompatPanel())
+        panel.resize(520, 210)
+        panel.show()
+        self.assertFalse(panel._output.isUndoRedoEnabled())
+        entries = [("selected fixture device", "normal"), ("second fixture device", "warning")]
+        panel.set_content(entries)
+        for cycle in range(20):
+            panel.search_input.setText("fixture device")
+            select_text(panel._output, "selected fixture device")
+            APP.processEvents()
+            panel.apply_theme(MODES[cycle % len(MODES)])
+            self.assertEqual(panel._output.textCursor().selectedText(), "selected fixture device")
+            panel.search_input.setText("missing fixture")
+            for mode in MODES:
+                panel.apply_theme(mode)
+                APP.processEvents()
+                self.assertIn("No devices match 'missing fixture'", panel._output.toPlainText())
+                self.assert_readable(rendered_color(panel._output, "No devices match"),
+                                     get_palette(mode)["BG_DARKEST"])
+            panel.clear()
+            APP.processEvents()
+            self.assertEqual(panel._output.toPlainText(), "")
+            self.assertEqual(panel.search_input.text(), "")
+            panel.apply_theme(MODES[cycle % len(MODES)])
+            panel.set_content(entries)
 
     def test_syntax_severity_and_status_recolor_without_losing_selected_rows(self):
         panel = self.widget(SyntaxPanel())

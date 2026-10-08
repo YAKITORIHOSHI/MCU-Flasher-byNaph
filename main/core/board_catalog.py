@@ -231,18 +231,23 @@ def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool
         file_records: list[dict] = []
         for board_id, props in props_by_id.items():
             name = str(props.get("name") or "").strip()
-            if not name:
+            if not name or str(props.get("hide") or "").strip().casefold() == "true":
                 continue
 
             hwids: set[tuple[int, int]] = set()
-            usb_parts: dict[str, dict[str, int]] = {}
+            usb_parts: dict[tuple[str, str], dict[str, int]] = {}
             for key, value in props.items():
                 match = re.match(r"^(?:upload_port\.)?(vid|pid)\.(\d+)$", key, re.IGNORECASE)
-                if not match:
-                    continue
-                field, index = match.groups()
+                if match:
+                    field, index = match.groups()
+                else:
+                    match = re.match(r"^upload_port\.(\d+)\.(vid|pid)$", key, re.IGNORECASE)
+                    if not match:
+                        continue
+                    index, field = match.groups()
                 try:
-                    usb_parts.setdefault(index, {})[field.lower()] = int(str(value), 0)
+                    namespace = "upload_port" if key.lower().startswith("upload_port.") else "usb"
+                    usb_parts.setdefault((namespace, index), {})[field.lower()] = int(str(value), 0)
                 except ValueError:
                     continue
             for pair in usb_parts.values():
@@ -289,7 +294,7 @@ def _parse_downloaded_arduino_board_files(boards_path: Path, *, force_read: bool
     return records
 
 
-_BOARD_CATALOG_CACHE_VERSION = 5
+_BOARD_CATALOG_CACHE_VERSION = 6
 _CATALOG_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _REVIEWED_UNAVAILABLE_PROVIDERS = {
     "ebyte_e77_dev": ("zephyr", "framework-zephyr", "3.40402.0"),
@@ -732,16 +737,14 @@ def _load_platformio_board_catalog(core_dir: str | Path | None = None, *, force_
         extra_flags = build.get("extra_flags") or []
         if isinstance(extra_flags, str):
             extra_flags = [extra_flags]
+        arduino_flags = arduino_build.get("extra_flags") or []
+        if isinstance(arduino_flags, str):
+            arduino_flags = [arduino_flags]
         defines = {
             _normalize_board_identity(match.group(1))
-            for flag in extra_flags
-            for match in [re.search(r"-D\s*([A-Za-z0-9_]+)", str(flag))]
-            if match
+            for flag in list(extra_flags) + list(arduino_flags)
+            for match in re.finditer(r"-D\s*([A-Za-z0-9_]+)", str(flag))
         }
-        for flag in arduino_build.get("extra_flags", []) if isinstance(arduino_build.get("extra_flags"), list) else []:
-            match = re.search(r"-D\s*([A-Za-z0-9_]+)", str(flag))
-            if match:
-                defines.add(_normalize_board_identity(match.group(1)))
 
         record = {
             "id": manifest_path.stem,
@@ -873,8 +876,23 @@ def _score_arduino_to_pio_board(record: dict, candidate: dict, *,
 
 
 def _resolve_arduino_board_record(record: dict, catalog: list[dict], *,
-                                  match_features: dict[int, dict] | None = None) -> dict | None:
+                                  match_features: dict[int, dict] | None = None,
+                                  diagnosis: dict | None = None) -> dict | None:
     """Resolve an Arduino board to a PlatformIO board, rejecting ambiguous guesses."""
+    result = diagnose_arduino_board_record(record, catalog, match_features=match_features)
+    if diagnosis is not None:
+        diagnosis.update(result)
+    return result["match"]
+
+
+def diagnose_arduino_board_record(record: dict, catalog: list[dict], *,
+                                  match_features: dict[int, dict] | None = None) -> dict:
+    """Explain missing identity separately from conflicting installed targets.
+
+    Keep the same scoring, threshold and ambiguity margin as resolution. A
+    package repair cannot choose between concrete boards sharing an Arduino
+    variant; retain a bounded description for bootstrap coverage and Controls.
+    """
     ranked: list[tuple[float, dict, list[str]]] = []
     record_features = _arduino_match_features(record)
     for candidate in catalog:
@@ -885,25 +903,32 @@ def _resolve_arduino_board_record(record: dict, catalog: list[dict], *,
         if score >= 0:
             ranked.append((score, candidate, reasons))
     if not ranked:
-        return None
+        return {"status": "unavailable", "match": None, "candidates": []}
     ranked.sort(key=lambda row: (-row[0], str(row[1].get("platform", "")), str(row[1].get("id", ""))))
     best_score, best, reasons = ranked[0]
     second_score = ranked[1][0] if len(ranked) > 1 else -999.0
     strong = any(x in reasons for x in ("id", "variant", "name", "usb", "arduino-define"))
     if best_score < (120.0 if strong else 105.0):
-        return None
+        return {"status": "unavailable", "match": None, "candidates": []}
+    candidates = [{"platform": str(candidate.get("platform") or ""),
+                   "id": str(candidate.get("id") or ""),
+                   "name": str(candidate.get("name") or ""),
+                   "score": round(score, 2), "reasons": evidence}
+                  for score, candidate, evidence in ranked[:3]
+                  if best_score - score < 18.0]
     if best_score - second_score < 18.0:
-        return None
-    return {
+        return {"status": "ambiguous", "match": None, "candidates": candidates}
+    match = {
         **best,
         "match_score": round(best_score, 2),
         "match_reasons": reasons,
     }
+    return {"status": "resolved", "match": match, "candidates": candidates}
 
 
 def resolve_board_definition(display_name: str, info: dict, catalog: list[dict], *,
                              match_features: dict[int, dict] | None = None,
-                             prepared_targets=None, prepared_validation=None) -> dict:
+                             prepared_targets=None, prepared_validation=None, planned_targets=None) -> dict:
     """Repair one cached row using canonical definitions, without family guesses.
 
     This also works before downloaded-core discovery completes: the cached
@@ -916,6 +941,7 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
              str(row.get("platform") or "").lower() == platform and
              str(row.get("id") or "").lower() == board_id]
     match = exact[0] if len(exact) == 1 else None
+    diagnosis = {"status": "unavailable", "match": None, "candidates": []}
     if match is None and info.get("arduino_board_id"):
         record = {
             "name": display_name, "arduino_id": info.get("arduino_board_id"),
@@ -923,26 +949,46 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
             "build_board": info.get("arduino_build_board"), "hwids": info.get("hwids") or set(),
         }
         candidates = [row for row in catalog if not platform or str(row.get("platform") or "").lower() == platform]
-        match = _resolve_arduino_board_record(record, candidates, match_features=match_features)
-    from src.modules.arduino_cli_support import prepared_target_for_record, arduino_catalog_entry
+        diagnosis = diagnose_arduino_board_record(record, candidates, match_features=match_features)
+        match = diagnosis["match"]
+    from src.modules.arduino_cli_support import (prepared_target_for_record, arduino_catalog_entry,
+        source_namespace_target_for_record, source_target_proof)
     record = {"name": display_name, "arduino_id": info.get("arduino_board_id"),
               "source_file": info.get("arduino_source_file"), "mcu": info.get("mcu"),
               "source_sha256": info.get("arduino_source_sha256"),
               "variant": info.get("arduino_variant"), "build_board": info.get("arduino_build_board"),
               "source_core": info.get("source_core")}
     prepared = prepared_target_for_record(record, catalog, rows=prepared_targets, validation_cache=prepared_validation)
+    planned = source_namespace_target_for_record(record, rows=planned_targets, validation_cache=prepared_validation)
     if prepared and prepared.get("backend") != "arduino-cli":
         match = prepared
+    elif prepared and prepared.get("arduino_backend_role") == "primary":
+        return arduino_catalog_entry(record, prepared)
+    elif planned or source_target_proof(info):
+        # Losing a compiler certificate cannot turn an original Arduino
+        # declaration into a newly installed concrete PlatformIO model.
+        intended = planned or info
+        blocked = arduino_catalog_entry(record, dict(intended, arduino_cli=None))
+        blocked.update(pio_resolution_status="unavailable", pio_resolution_candidates=diagnosis["candidates"],
+                       fallback_notice=(intended.get("reason") if intended.get("status") == "unavailable" else "") or
+                       "The original Arduino source target requires preparation again; its compiler certificate is unavailable.")
+        return blocked
     if not match:
         if prepared and prepared.get("backend") == "arduino-cli":
             return arduino_catalog_entry(record, prepared)
         if resolved.get("backend") == "arduino-cli":
-            for key in ("backend", "arduino_cli", "arduino_fqbn", "platformio_support", "platformio_support_proof", "fallback_notice"):
+            for key in ("backend", "arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+                        "platformio_support", "platformio_support_proof", "fallback_notice"):
                 resolved.pop(key, None)
+        resolved["pio_resolution_status"] = diagnosis["status"]
+        resolved["pio_resolution_candidates"] = diagnosis["candidates"]
         return resolved
-    for key in ("arduino_cli", "arduino_fqbn", "platformio_support", "platformio_support_proof", "fallback_notice"):
+    for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+                "platformio_support", "platformio_support_proof", "fallback_notice"):
         resolved.pop(key, None)
     resolved["backend"] = "platformio"
+    resolved.pop("pio_resolution_status", None)
+    resolved.pop("pio_resolution_candidates", None)
     frameworks = sorted(match.get("frameworks") or [])
     resolved.update({
         "platform": str(match.get("platform") or ""), "board": str(match.get("id") or ""),
@@ -964,6 +1010,42 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
     if flash:
         resolved["flash_mb"] = float(flash.group(1))
     return resolved
+
+
+def _arduino_source_key(row):
+    source = row.get("source_file") or row.get("arduino_source_file")
+    identifier = row.get("arduino_id") or row.get("arduino_board_id")
+    if not source or not identifier:
+        return None
+    return os.path.normcase(os.path.abspath(str(source))), str(identifier)
+
+
+def _arduino_display_name(base, record, boards, source_names, *, proof=None):
+    """Keep every exact source visible and retain its label across refreshes."""
+    identity = _arduino_source_key(record)
+    existing_name = source_names.get(identity)
+    if existing_name in boards:
+        return existing_name
+    prior = boards.get(base)
+    identifier = str(record.get("arduino_id") or record.get("arduino_board_id") or "board")
+    if base not in boards or (isinstance(prior, dict) and prior.get("arduino_board_id") == identifier
+                              and not prior.get("arduino_source_file")):
+        source_names[identity] = base
+        return base
+    if isinstance(proof, dict) and proof.get("core") and proof.get("version"):
+        tag = f"{proof['core']}@{proof['version']}"
+    else:
+        source_core = str(record.get("source_core") or Path(identity[0]).parent.name)
+        tag = f"{identifier}, {source_core}"
+    candidate = f"{base} [{tag}]"
+    if candidate in boards:
+        # Equal core versions can exist at distinct source roots. Include a
+        # bounded folder hint and a stable source-path digest for that case.
+        folder = Path(identity[0]).parent.name[:40]
+        key = hashlib.sha256(identity[0].encode("utf-8")).hexdigest()[:10]
+        candidate = f"{base} [{tag}, {folder}, {key}]"
+    source_names[identity] = candidate
+    return candidate
 
 
 def _fallback_platform_from_mcu(mcu: str) -> str:
@@ -1224,27 +1306,39 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         records.extend(_parse_downloaded_arduino_board_files(search_root, force_read=invalidate_parsed))
     match_features = {id(candidate): _arduino_match_features(candidate, candidate=True)
                       for candidate in catalog}
-    from src.modules.arduino_cli_support import load_prepared_targets, prepared_target_for_record, arduino_catalog_entry, prepared_target_index
-    prepared_targets = prepared_target_index(load_prepared_targets())
+    from src.modules.arduino_cli_support import (load_prepared_targets, prepared_target_for_record,
+        arduino_catalog_entry, prepared_target_index, source_namespace_target_for_record, planned_source_target_index)
+    prior_targets = load_prepared_targets()
+    prepared_targets = prepared_target_index(prior_targets)
+    planned_targets = planned_source_target_index(prior_targets)
     prepared_validation = {}
     # Empty board IDs in an older Arduino row cannot be refreshed by the
     # native (platform, board ID) merge below. Resolve their retained identity.
     boards = {name: resolve_board_definition(name, info, catalog, match_features=match_features,
-                                           prepared_targets=prepared_targets, prepared_validation=prepared_validation)
+                                           prepared_targets=prepared_targets, prepared_validation=prepared_validation,
+                                           planned_targets=planned_targets)
               if info.get("pio_resolved") is False or not info.get("board") else info
               for name, info in boards.items()}
 
     resolved_rows: list[tuple[dict, dict | None]] = []
+    diagnostic_results = {}
     fallback_rows = {}
     for position, record in enumerate(records):
         if position % 32 == 0:
             delivery.checkpoint()
-        match = _resolve_arduino_board_record(record, catalog, match_features=match_features)
+        diagnosis = {}
+        match = _resolve_arduino_board_record(record, catalog, match_features=match_features, diagnosis=diagnosis)
+        diagnostic_results[id(record)] = diagnosis
         prepared = prepared_target_for_record(record, catalog, rows=prepared_targets, validation_cache=prepared_validation) if prepared_targets else None
+        intended = source_namespace_target_for_record(record, rows=planned_targets, validation_cache=prepared_validation) if planned_targets else None
         if prepared and prepared.get("backend") != "arduino-cli":
             match = prepared
-        elif prepared and not match:
+        elif prepared and (not match or prepared.get("arduino_backend_role") == "primary"):
             fallback_rows[id(record)] = prepared
+            match = None
+        elif intended:
+            fallback_rows[id(record)] = dict(intended, arduino_cli=None)
+            match = None
         resolved_rows.append((record, match))
 
     # Infer the PlatformIO platform for an entire downloaded Arduino core from
@@ -1275,14 +1369,19 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
                 inferred_source_platform[src] = fb
 
     used_names: set[str] = set(boards)
+    source_names = {_arduino_source_key(info): name for name, info in boards.items() if _arduino_source_key(info)}
     for record, match in resolved_rows:
         display_name = str(record.get("name") or record.get("arduino_id") or "Unknown board")
         if id(record) in fallback_rows:
-            entry = arduino_catalog_entry(record, fallback_rows[id(record)])
-            existing = boards.get(display_name)
-            if existing and (existing.get("arduino_board_id") != entry["arduino_board_id"]
-                             or existing.get("arduino_source_file") not in (None, entry["arduino_source_file"])):
-                display_name = f"{display_name} ({entry['arduino_board_id']})"
+            prepared = fallback_rows[id(record)]
+            entry = arduino_catalog_entry(record, prepared)
+            if not prepared.get("arduino_cli"):
+                entry.update(pio_resolution_status="unavailable",
+                             pio_resolution_candidates=diagnostic_results[id(record)].get("candidates", []),
+                             fallback_notice=(prepared.get("reason") if prepared.get("status") == "unavailable" else "") or
+                             "The original Arduino source target requires preparation again; its compiler certificate is unavailable.")
+            display_name = _arduino_display_name(display_name, record, boards, source_names,
+                                                 proof=prepared.get("arduino_source_proof"))
             boards[display_name] = entry
             used_names.add(display_name)
             delivery.add(display_name, entry)
@@ -1299,19 +1398,10 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         pio_id = raw_id
         pio_resolved = bool(match and platform and raw_id)
 
-        if display_name in used_names:
-            existing = boards.get(display_name)
-            if (
-                isinstance(existing, dict)
-                and existing.get("arduino_board_id") == arduino_id
-                and str(existing.get("platform", "")).lower() == platform.lower()
-            ):
-                if not match and existing.get("pio_resolved"):
-                    continue  # Preserve a verified registry row during offline discovery.
-            else:
-                display_name = f"{display_name} ({arduino_id})"
-                if display_name in used_names:
-                    continue
+        display_name = _arduino_display_name(display_name, record, boards, source_names)
+        existing = boards.get(display_name)
+        if not match and isinstance(existing, dict) and existing.get("pio_resolved"):
+            continue  # Preserve this exact source's verified row while offline.
         used_names.add(display_name)
 
         entry: dict = {
@@ -1323,6 +1413,8 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "pio_resolved": pio_resolved,
             "pio_match_score": (match or {}).get("match_score", 0.0),
             "pio_match_reasons": list((match or {}).get("match_reasons") or []),
+            **({"pio_resolution_status": diagnostic_results[id(record)].get("status", "unavailable"),
+                "pio_resolution_candidates": diagnostic_results[id(record)].get("candidates", [])} if not match else {}),
             "arduino_board_id": arduino_id,
             "arduino_source_file": str(record.get("source_file") or ""),
             "arduino_source_sha256": str(record.get("source_sha256") or ""),

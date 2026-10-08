@@ -19,6 +19,8 @@ def main(argv=None) -> int:
     parser.add_argument("--project", help="Sketch folder to open after setup")
     parser.add_argument("--new-window", action="store_true")
     parser.add_argument("--plan", type=Path, help="Offline board/library package plan")
+    parser.add_argument("--board-source", type=Path, action="append",
+                        help="Arduino declaration source root; repeat for multiple roots")
     args = parser.parse_args(argv)
     if not sys.platform.startswith("linux"):
         print("This setup is for Ubuntu/Linux. Use direct/windows/run.vbs on Windows.", file=sys.stderr)
@@ -56,6 +58,12 @@ def main(argv=None) -> int:
                    "--core", str(core)]
         if args.plan:
             command += ["--plan", str(args.plan)]
+        for source in args.board_source or ():
+            command += ["--board-source", str(source)]
+        # Existing package certificates need only a fresh declaration audit.
+        from src.modules.offline_bootstrap import load_plan, ready
+        if ready(core, load_plan(args.plan) if args.plan else None):
+            command += ["--coverage-only"]
         from src.modules.package_jobs import package_store_lease
         with package_store_lease(core, mode="prepare", wait=True,
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):

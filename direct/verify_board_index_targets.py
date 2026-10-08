@@ -38,6 +38,12 @@ def candidate(identifier="future", name="Future Board", platform="futureplatform
 
 class CustomIndexChecks(unittest.TestCase):
     def setUp(self):
+        # Native source preparation has its own byte-bound fixtures. Keep this
+        # registry/association suite's new online entry point isolated too.
+        original_sources = patch("src.modules.arduino_cli_support.prepare_source_boards",
+            side_effect=lambda core, directory, metadata, rows, **kwargs: rows)
+        original_sources.start()
+        self.addCleanup(original_sources.stop)
         scratch = ROOT / "temp/audit/board-index-targets"
         scratch.mkdir(parents=True, exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=scratch)
@@ -243,15 +249,19 @@ class CustomIndexChecks(unittest.TestCase):
         plan = dict(BASE, platforms=BASE["platforms"] + ["platformio/futureplatform"])
         certificate = {"schema": offline_bootstrap.SCHEMA, "host": sys.platform,
             "prepared_plan": plan, "platform_sources": {"platformio/futureplatform": "futureplatform"},
+            "files": [str(manifest.relative_to(self.core))], "guards": [],
             "exact_builder_targets": [{"platform": "futureplatform", "board": "future", "framework": "arduino"}],
             "board_manifests": {str(manifest.relative_to(self.core)): hashlib.sha256(manifest.read_bytes()).hexdigest()}}
         events = []
+        installed = False
         def prepare(*args, **kwargs):
+            nonlocal installed
             (self.core / offline_bootstrap.MARKER).write_text(json.dumps(certificate), encoding="utf-8")
+            installed = True
         with patch.object(offline_bootstrap, "load_plan", return_value=BASE), \
                 patch.object(offline_bootstrap, "prepare", side_effect=prepare), \
-                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True]), \
-                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=[[], catalog]), \
+                patch.object(offline_bootstrap, "ready", side_effect=lambda *args, **kwargs: (self.core / offline_bootstrap.MARKER).is_file()), \
+                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=lambda *args, **kwargs: catalog if installed else []), \
                 patch.object(targets, "fetch_preparation_catalog", return_value=[candidate()]), \
                 patch("src.modules.arduino_cli_support.publish_prepared_targets") as publish:
             result = worker.run_preparation(self.core, self.archive, package_metadata=CUSTOM,
@@ -259,6 +269,9 @@ class CustomIndexChecks(unittest.TestCase):
         self.assertEqual(events[-1][0], "ready")
         self.assertEqual(result["boards"][0]["manifest_sha256"], certificate["board_manifests"][str(manifest.relative_to(self.core))])
         publish.assert_called_once()
+        final = json.loads((self.core / offline_bootstrap.MARKER).read_text(encoding="utf-8"))
+        self.assertEqual(final["board_coverage"]["ready_count"], 1)
+        self.assertIn(final["board_coverage"]["path"], final["files"])
 
     def test_exact_requested_aliases_extend_shared_builder_coverage(self):
         one = candidate(identifier="one", name="Board One")
@@ -314,7 +327,7 @@ class CustomIndexChecks(unittest.TestCase):
                 emit=lambda stage, **details: events.append((stage, details)))
         self.assertEqual(result["boards"][0]["backend"], "arduino-cli")
         self.assertEqual(events[-1][0], "ready")
-        self.assertIn("PlatformIO has no exact target", events[-1][1]["message"])
+        self.assertIn("prepared Arduino compiler targets", events[-1][1]["message"])
         self.assertEqual(events[-1][1]["arduino_cli_count"], 1)
 
     def test_known_avr_family_absent_exact_board_queries_registry_and_authorizes_cli(self):
@@ -350,15 +363,19 @@ class CustomIndexChecks(unittest.TestCase):
         (folder.parent / "platform.json").write_text('{"name":"atmelavr"}', encoding="utf-8")
         manifest.write_text(json.dumps({"name": "Future Board", "frameworks": ["arduino"], "build": {"mcu": "custommcu"}}), encoding="utf-8")
         installed = board_catalog._load_platformio_board_catalog(self.core, force_read=True)
+        prepared = False
         def prepare(*args, **kwargs):
+            nonlocal prepared
             (self.core / offline_bootstrap.MARKER).write_text(json.dumps({"schema": offline_bootstrap.SCHEMA,
                 "host": sys.platform, "prepared_plan": BASE,
+                "platform_sources": {"atmelavr": "atmelavr"}, "files": [str(manifest.relative_to(self.core))], "guards": [],
                 "exact_builder_targets": [{"platform": "atmelavr", "board": "future", "framework": "arduino"}],
                 "board_manifests": {str(manifest.relative_to(self.core)): hashlib.sha256(manifest.read_bytes()).hexdigest()}}), encoding="utf-8")
+            prepared = True
         with patch.object(offline_bootstrap, "load_plan", return_value=BASE), \
-                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True]), \
+                patch.object(offline_bootstrap, "ready", side_effect=lambda *args, **kwargs: (self.core / offline_bootstrap.MARKER).is_file()), \
                 patch.object(offline_bootstrap, "prepare", side_effect=prepare) as pio_prepare, \
-                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=[[], installed]), \
+                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=lambda *args, **kwargs: installed if prepared else []), \
                 patch.object(targets, "fetch_preparation_catalog", return_value=[registered]) as registry, \
                 patch("src.modules.arduino_cli_support.prepare_unsupported_boards") as cli_prepare, \
                 patch("src.modules.arduino_cli_support.publish_prepared_targets"):
@@ -368,6 +385,8 @@ class CustomIndexChecks(unittest.TestCase):
         cli_prepare.assert_not_called()
         self.assertEqual(result["boards"][0]["backend"], "platformio")
         self.assertEqual(result["boards"][0]["status"], "ready")
+        final = json.loads((self.core / offline_bootstrap.MARKER).read_text(encoding="utf-8"))
+        self.assertEqual(final["board_coverage"]["ready_count"], 1)
 
     def test_known_family_registry_failure_never_authorizes_cli(self):
         metadata = dict(CUSTOM, package="arduino", architecture="avr", version="1.2.3")

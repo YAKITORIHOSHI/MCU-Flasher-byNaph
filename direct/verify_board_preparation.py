@@ -107,7 +107,8 @@ class PreparationChecks(unittest.TestCase):
         self.assertEqual(report["boards"][0]["name"], "Mystery Board")
         # Publishing an empty source-bound target report is app metadata, not
         # a platform/core installation. No tools or package directories exist.
-        self.assertEqual({path.name for path in empty_store.iterdir()}, {".mcu-index-targets.json"})
+        self.assertEqual({path.name for path in empty_store.iterdir()},
+                         {".mcu-index-targets.json", ".mcu-bootstrap-board-coverage.json"})
 
     def test_both_nodemcu_revisions_resolve_to_independent_exact_ids(self):
         report = worker.preparation_plan(self.records, package_metadata=METADATA, catalog=self.catalog, base_plan=BASE)
@@ -192,8 +193,8 @@ class PreparationChecks(unittest.TestCase):
         events = []
         with patch.object(offline_bootstrap, "load_plan", return_value=BASE), \
                 patch.object(offline_bootstrap, "prepare") as prepare, \
-                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True]), \
-                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=[[], self.catalog]):
+                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True, True]), \
+                patch.object(board_catalog, "_load_platformio_board_catalog", side_effect=[[], self.catalog, self.catalog]):
             result = worker.run_preparation(self.core, self.archive, package_metadata=METADATA,
                                            emit=lambda stage, **details: events.append((stage, details)))
         prepare.assert_called_once()
@@ -205,7 +206,7 @@ class PreparationChecks(unittest.TestCase):
         events = []
         with patch.object(offline_bootstrap, "load_plan", return_value=BASE), \
                 patch.object(offline_bootstrap, "prepare"), \
-                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True]), \
+                patch.object(offline_bootstrap, "ready", side_effect=[False, True, True, True]), \
                 patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]):
             result = worker.run_preparation(self.core, self.archive, package_metadata=METADATA,
                                            emit=lambda stage, **details: events.append((stage, details)))

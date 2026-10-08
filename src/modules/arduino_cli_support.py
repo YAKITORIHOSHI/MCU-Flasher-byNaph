@@ -1,4 +1,4 @@
-"""Prepared Arduino CLI fallback, authorized only by exact PlatformIO absence.
+"""Prepared exact Arduino source targets and verified PlatformIO-absence fallback.
 
 Online core installation runs in the separate board preparation process. The
 workspace consumes byte-checked, app-owned certificates and never installs.
@@ -61,6 +61,78 @@ def unsupported_proof(row):
                 and isinstance(proof.get("checked_at"), str) and proof["checked_at"])
 
 
+def source_declaration_proof(record, metadata):
+    """Plan an original Arduino target from caller-verified source metadata.
+
+    The bootstrap caller validates the downloaded source receipt. Planning is
+    not readiness: preparation must also verify matching installed declaration
+    bytes, exact core/version and a successful compile of this original FQBN.
+    """
+    if not isinstance(record, dict) or not isinstance(metadata, dict):
+        return {}
+    package, architecture, version = (str(metadata.get(key) or "") for key in ("package", "architecture", "version"))
+    identifier = str(record.get("arduino_id") or record.get("arduino_board_id") or "")
+    digest = record.get("source_sha256") or record.get("arduino_source_sha256")
+    if (not _IDENTIFIER.fullmatch(package) or not _IDENTIFIER.fullmatch(architecture)
+            or not _VERSION.fullmatch(version) or not _IDENTIFIER.fullmatch(identifier)
+            or not isinstance(digest, str) or not _HEX.fullmatch(digest)):
+        return {}
+    index_url = metadata.get("index_url") or ""
+    if not isinstance(index_url, str):
+        return {}
+    if index_url:
+        try:
+            parsed = urlsplit(index_url)
+            if (parsed.scheme not in ("http", "https") or not parsed.netloc
+                    or parsed.username or parsed.password or parsed.fragment):
+                return {}
+        except ValueError:
+            return {}
+    return {"schema": 1, "kind": "arduino-source-declaration", "core": f"{package}:{architecture}",
+            "version": version, "index_url": index_url, "source_sha256": digest,
+            "fqbn": f"{package}:{architecture}:{identifier}"}
+
+
+def source_target_proof(row):
+    """Recognize primary source identity without claiming PlatformIO absence."""
+    proof = row.get("arduino_source_proof")
+    if row.get("arduino_backend_role") != "primary" or not isinstance(proof, dict):
+        return False
+    parts = str(proof.get("core") or "").split(":")
+    if len(parts) != 2:
+        return False
+    expected = source_declaration_proof(row, {"package": parts[0], "architecture": parts[1],
+        "version": proof.get("version"), "index_url": proof.get("index_url")})
+    return bool(expected and proof == expected
+                and row.get("arduino_fqbn", expected["fqbn"]) == expected["fqbn"])
+
+
+def source_namespace_proof(row):
+    """Recognize prior source intent without authorizing current source bytes."""
+    proof = row.get("arduino_source_proof")
+    return bool(isinstance(proof, dict) and source_target_proof(dict(row, source_sha256=proof.get("source_sha256"))))
+
+
+def prepare_source_boards(core, directory, metadata, rows, *, emit, jobs=None):
+    """Proactively prepare original declarations from a verified source receipt.
+
+    The caller supplies only declarations without a unique PlatformIO mapping.
+    Existing ready/explicit PlatformIO associations retain their backend. No
+    runtime matching failure invokes this online preparation operation.
+    """
+    planned = [dict(row) for row in rows]
+    for row in planned:
+        if (row.get("platformio_support") == "supported" or row.get("explicit_board_id")
+                or row.get("status") == "ready" and row.get("backend") == "platformio"):
+            continue
+        proof = source_declaration_proof(row, metadata)
+        if not proof or row.get("arduino_source_proof") not in (None, proof):
+            row.update(status="unavailable", reason="The original Arduino source declaration is unverified. Prepare board support again.")
+            continue
+        row.update(arduino_backend_role="primary", arduino_source_proof=proof)
+    return prepare_unsupported_boards(core, directory, metadata, planned, emit=emit, jobs=jobs)
+
+
 def _cli_environment(*, online=False):
     environment = os.environ.copy()
     for key in list(environment):
@@ -91,9 +163,20 @@ def _run_json(command, *, timeout=120, online=False, parse=True):
     return json.loads(result.stdout) if parse else None
 
 
-def _configuration(core, index_url):
-    store = Path(core) / "arduino-cli"
+def _source_store(core, proof):
+    """Isolate exact source versions and package-index namespaces."""
+    identity = {key: proof[key] for key in ("core", "version", "index_url")}
+    # Keep native compiler paths short; certificates retain the full identity.
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    return Path(core) / "arduino-cli/targets" / key
+
+
+def _configuration(core, index_url, *, store=None):
+    store = Path(store) if store is not None else Path(core) / "arduino-cli"
     config = store / "arduino-cli.yaml"
+    if (not _within(store, core) or not _within(config, store)
+            or any(not _within(store / name, store) for name in ("data", "downloads", "user"))):
+        raise ValueError("Arduino CLI configuration escapes its app-owned store")
     for folder in (store / "data", store / "downloads", store / "user"):
         folder.mkdir(parents=True, exist_ok=True)
     urls = []
@@ -114,6 +197,21 @@ def _configuration(core, index_url):
                "updater": {"enable_notification": False}}
     _atomic_json(config, payload)
     return config
+
+
+def _store_configuration_valid(store):
+    try:
+        config = Path(store) / "arduino-cli.yaml"
+        if not _within(config, store) or config.stat().st_size > 1024 * 1024:
+            return False
+        payload = json.loads(config.read_text(encoding="utf-8"))
+        directories = payload.get("directories", {})
+        return isinstance(directories, dict) and set(directories) == {"data", "downloads", "user"} and all(
+                   _within(Path(store) / key, store)
+                   and Path(str(directories.get(key) or "")).resolve() == (Path(store) / key).resolve()
+                   for key in ("data", "downloads", "user"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def _verify_core_version(command, core_id, version, *, online=False):
@@ -149,10 +247,10 @@ def _atomic_bytes(path, payload):
         temporary.unlink(missing_ok=True)
 
 
-def _tool_inventory(core, details):
-    """Check installed dependencies, including uploader/compiler executables."""
+def _tool_inventory(core, details, *, store=None, hardware=None):
+    """Check installed tools and the selected hardware core's build inputs."""
     core = Path(core)
-    package_root = core / "arduino-cli/data/packages"
+    package_root = (Path(store) if store is not None else core / "arduino-cli") / "data/packages"
     dependencies = details.get("tools_dependencies") or []
     roots = []
     if dependencies:
@@ -166,8 +264,26 @@ def _tool_inventory(core, details):
     else:
         # Older CLI releases omit this field. Inspect the app-owned tools only.
         roots = [path for path in package_root.glob("*/tools/*/*") if path.is_dir()]
+    # CLI initialization also consumes shared builtin tools, which board
+    # details can omit from the core's compiler/uploader dependencies.
+    roots.extend(path for path in (package_root / "builtin/tools").glob("*/*") if path.is_dir())
+    if not roots:
+        raise RuntimeError("No installed Arduino CLI compiler/uploader tools were found")
+    if hardware is not None:
+        roots.append(Path(hardware))
     inventory = {}
+    seen_roots = set()
+    core_bytes = 0
+    core_suffixes = {".h", ".hpp", ".hh", ".hxx", ".c", ".cpp", ".cc", ".cxx", ".ino", ".s",
+                     ".asm", ".inc", ".ipp", ".tpp", ".ld", ".csv", ".bin", ".txt", ".properties",
+                     ".json", ".py", ".sh", ".bat", ".cmd", ".cmake", ".mk", ".yaml", ".yml"}
     for folder in roots:
+        if not _within(folder, package_root):
+            raise ValueError("Arduino tool path escapes its prepared store")
+        identity = os.path.normcase(str(folder.resolve()))
+        if identity in seen_roots:
+            continue
+        seen_roots.add(identity)
         for path in folder.rglob("*"):
             if not path.is_file():
                 continue
@@ -175,9 +291,14 @@ def _tool_inventory(core, details):
                 raise ValueError("Arduino tool path escapes its prepared store")
             stat = path.stat()
             entry = {"size": stat.st_size}
-            # Byte-check runnable tools; content libraries retain normal package
-            # existence checks, like the PlatformIO offline preparation store.
-            if path.suffix.casefold() in (".exe", ".dll", ".so", ".dylib", ".py", ".sh", ".bat", ".cmd", ".json") or (sys.platform != "win32" and stat.st_mode & 0o111):
+            core_input = hardware is not None and _within(path, hardware) and path.suffix.casefold() in core_suffixes
+            if core_input:
+                core_bytes += stat.st_size
+                if core_bytes > 256 * 1024 * 1024:
+                    raise ValueError("Arduino hardware core source inventory exceeds supported byte bounds")
+            # Core source, variant and recipe bytes influence the firmware.
+            # Unused SDK archives retain bounded size/existence checks.
+            if core_input or path.suffix.casefold() in (".exe", ".dll", ".so", ".dylib", ".py", ".sh", ".bat", ".cmd", ".json") or (sys.platform != "win32" and stat.st_mode & 0o111):
                 entry["sha256"] = sha256_file(path)
             inventory[str(path.relative_to(core))] = entry
             if len(inventory) > 50000:
@@ -188,18 +309,20 @@ def _tool_inventory(core, details):
 
 
 def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=None):
-    """Install the declared Arduino core only for definitively unsupported rows.
+    """Prepare source-primary rows or legacy definitively unsupported rows.
 
     Returns independent row copies; failures retain ready PIO results and expose
     the fallback preparation reason. The caller holds the package-store lease.
     """
     prepared = [dict(row) for row in rows]
-    targets = [row for row in prepared if unsupported_proof(row)]
+    targets = [row for row in prepared if source_target_proof(row) or unsupported_proof(row)]
     if not targets:
         return prepared
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Arduino core preparation belongs to the separate online worker")
-    notice = "PlatformIO does not support these exact boards yet; preparing Arduino CLI fallback."
+    notice = ("Preparing original Arduino source targets with Arduino CLI. Board identities and vendor defaults are preserved."
+              if any(source_target_proof(row) for row in targets) else
+              "PlatformIO does not support these exact boards yet; preparing Arduino CLI fallback.")
     emit("preparing", message=notice, progress=None, fallback_boards=[row.get("name") for row in targets])
     try:
         if jobs is not None and (not isinstance(jobs, int) or isinstance(jobs, bool) or jobs <= 0):
@@ -219,17 +342,23 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
         cli = find_arduino_cli_executable()
         if not cli or not Path(cli).is_file():
             raise RuntimeError(_missing_cli_message())
-        config = _configuration(core, index_url)
+        primary_rows = [row for row in targets if source_target_proof(row)]
+        store = _source_store(core, primary_rows[0]["arduino_source_proof"]) if primary_rows else Path(core) / "arduino-cli"
+        if primary_rows and any(_source_store(core, row["arduino_source_proof"]) != store for row in primary_rows):
+            raise ValueError("Arduino primary preparation requires one exact source core version and index")
+        config = _configuration(core, index_url, store=store)
         command = [str(cli), "--config-file", str(config), "--json"]
         emit("downloading", message=f"Preparing Arduino CLI core {package}:{architecture}@{version}…", progress=None)
         _run_json(command + ["core", "update-index"], timeout=300, online=True, parse=False)
         _run_json(command + ["core", "install", f"{package}:{architecture}@{version}"], timeout=1800, online=True, parse=False)
         _verify_core_version(command, f"{package}:{architecture}", version, online=True)
-        platform_dir = Path(core) / "arduino-cli/data/packages" / package / "hardware" / architecture / version
+        platform_dir = store / "data/packages" / package / "hardware" / architecture / version
         proof_paths = [platform_dir / name for name in ("boards.txt", "platform.txt")]
         if not all(path.is_file() for path in proof_paths):
             raise RuntimeError("Arduino CLI did not install the exact declared core")
         proof_files = {str(path.relative_to(Path(core))): sha256_file(path) for path in proof_paths}
+        installed_source_digest = proof_files[str(proof_paths[0].relative_to(Path(core)))]
+        source_digests = {}
         # board details validates FQBN, installed core and its tool dependencies.
         for row in targets:
             arduino_id = str(row.get("arduino_id") or "")
@@ -238,6 +367,20 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                 continue
             fqbn = f"{package}:{architecture}:{arduino_id}"
             try:
+                primary = source_target_proof(row)
+                if primary:
+                    proof = row["arduino_source_proof"]
+                    if proof != source_declaration_proof(row, metadata) or proof["fqbn"] != fqbn:
+                        raise RuntimeError("The original Arduino source metadata changed before preparation")
+                    source = str(row.get("source_file") or "")
+                    if not source or not _within(source, directory):
+                        raise RuntimeError("The original Arduino declaration escapes its verified source folder")
+                    if source not in source_digests:
+                        source_digests[source] = sha256_file(source)
+                    if source_digests[source] != proof["source_sha256"]:
+                        raise RuntimeError("The original Arduino board declarations changed before preparation")
+                    if installed_source_digest != proof["source_sha256"]:
+                        raise RuntimeError("The exact installed Arduino core does not match the original source declaration bytes")
                 details = _run_json(command + ["board", "details", "--fqbn", fqbn], timeout=120, online=True)
                 if not isinstance(details, dict) or details.get("fqbn") != fqbn:
                     raise RuntimeError("Arduino CLI did not confirm the exact requested board")
@@ -250,10 +393,13 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                     (sketch / "Probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
                     _run_json(command + ["compile", "--fqbn", fqbn, "--build-path", str(Path(probe_directory) / "build"),
                                          "--jobs", str(compiler_jobs), str(sketch)], timeout=900, online=True, parse=False)
-                tool_files = _tool_inventory(core, details)
+                tool_files = _tool_inventory(core, details, store=store, hardware=platform_dir)
                 certificate = {"schema": 1, "host": sys.platform, "core": f"{package}:{architecture}",
                                "version": version, "proof_files": proof_files, "tool_files": tool_files,
-                               "cli_sha256": sha256_file(cli), "fqbn": fqbn}
+                               "cli_sha256": sha256_file(cli), "cli_path": str(Path(cli).resolve()), "fqbn": fqbn,
+                               "store": str(store.relative_to(Path(core)))}
+                if primary:
+                    certificate.update(arduino_backend_role="primary", arduino_source_proof=dict(row["arduino_source_proof"]))
                 certificate_bytes = json.dumps(certificate, sort_keys=True).encode("utf-8")
                 certificate_digest = hashlib.sha256(certificate_bytes).hexdigest()
                 certificate_path = Path(core) / "arduino-cli/certificates" / (certificate_digest + ".json")
@@ -262,14 +408,18 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                 row.update(status="ready", backend="arduino-cli", platform=f"{package}:{architecture}", board=arduino_id, arduino_fqbn=fqbn,
                            arduino_cli={"fqbn": fqbn, "core": f"{package}:{architecture}", "version": version,
                                         "certificate": str(certificate_path.relative_to(Path(core))),
-                                        "certificate_sha256": certificate_digest, "cli_sha256": certificate["cli_sha256"]},
+                                        "certificate_sha256": certificate_digest, "cli_sha256": certificate["cli_sha256"],
+                                        "cli_path": certificate["cli_path"], "store": certificate["store"]},
                            require_upload_port=True,
-                           reason="PlatformIO does not support this exact board yet. Ready through Arduino CLI.")
+                           reason=("Ready through the original Arduino source target using Arduino CLI; vendor board defaults are preserved."
+                                   if primary else "PlatformIO does not support this exact board yet. Ready through Arduino CLI."))
             except Exception as exc:
-                row.update(status="unavailable", reason=f"PlatformIO does not support this exact board yet. Arduino CLI preparation failed: {exc}")
+                prefix = "Original Arduino source target preparation failed" if source_target_proof(row) else "PlatformIO does not support this exact board yet. Arduino CLI preparation failed"
+                row.update(status="unavailable", reason=f"{prefix}: {exc}")
     except Exception as exc:
         for row in targets:
-            row.update(status="unavailable", reason=f"PlatformIO does not support this exact board yet. Arduino CLI preparation failed: {exc}")
+            prefix = "Original Arduino source target preparation failed" if source_target_proof(row) else "PlatformIO does not support this exact board yet. Arduino CLI preparation failed"
+            row.update(status="unavailable", reason=f"{prefix}: {exc}")
     return prepared
 
 
@@ -284,10 +434,11 @@ def publish_prepared_targets(core, directory, rows):
     for item in rows:
         source_file = str(item.get("source_file") or "")
         arduino_id = str(item.get("arduino_id") or "")
+        primary_intent = source_namespace_proof(item) and item.get("status") == "unavailable"
         if (not source_file or not _within(source_file, source_root) or not _IDENTIFIER.fullmatch(arduino_id)
-                or item.get("status") != "ready"):
+                or item.get("status") != "ready" and not primary_intent):
             continue
-        if item.get("backend") == "arduino-cli" and not unsupported_proof(item):
+        if item.get("backend") == "arduino-cli" and not (source_target_proof(item) or unsupported_proof(item) or primary_intent):
             continue
         try:
             source_digest = item.get("source_sha256")
@@ -297,7 +448,7 @@ def publish_prepared_targets(core, directory, rows):
             if sha256_file(source_file) != source_digest:
                 item.update(status="unavailable", reason="Board declarations changed during preparation. Prepare board support again.")
                 continue
-            if item.get("backend") != "arduino-cli":
+            if item.get("backend") != "arduino-cli" and not primary_intent:
                 manifest = str(item.get("manifest") or "")
                 manifest_digest = item.get("manifest_sha256")
                 if (not manifest or not _within(manifest, core / "platforms")
@@ -308,7 +459,10 @@ def publish_prepared_targets(core, directory, rows):
             row = {key: value for key, value in item.items() if key in {
                 "name", "arduino_id", "source_file", "platform", "board", "platform_spec", "match_reasons",
                 "manifest", "manifest_sha256", "backend", "arduino_fqbn", "arduino_cli",
+                "arduino_backend_role", "arduino_source_proof",
                 "platformio_support", "platformio_support_proof", "status", "require_upload_port", "reason", "source_sha256"}}
+            if primary_intent:
+                row.update(backend="arduino-cli", arduino_fqbn=item["arduino_source_proof"]["fqbn"])
             row["source_file"] = str(Path(source_file).resolve())
             row.setdefault("backend", "platformio")
             values.append(row)
@@ -341,6 +495,78 @@ def prepared_target_index(rows):
             key = (os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))), str(row.get("arduino_id") or ""))
             index.setdefault(key, []).append(row)
     return index
+
+
+def planned_source_target_index(rows):
+    index = {}
+    for row in rows:
+        if source_namespace_proof(row):
+            key = (os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))),
+                   str(row.get("arduino_id") or ""))
+            index.setdefault(key, []).append(row)
+    return index
+
+
+def planned_source_target_for_record(record, *, core=None, rows=None, validation_cache=None):
+    """Retain an original source namespace without claiming compiler readiness."""
+    source = str(record.get("source_file") or record.get("arduino_source_file") or "")
+    identifier = str(record.get("arduino_id") or record.get("arduino_board_id") or "")
+    parsed_digest = record.get("source_sha256") or record.get("arduino_source_sha256")
+    if not source or not identifier or not isinstance(parsed_digest, str) or not _HEX.fullmatch(parsed_digest):
+        return None
+    source_key = os.path.normcase(os.path.abspath(source))
+    values = planned_source_target_index(load_prepared_targets(core)) if rows is None else rows
+    if isinstance(values, dict):
+        values = values.get((source_key, identifier), [])
+    choices = [row for row in values if source_target_proof(row)
+               and os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))) == source_key
+               and str(row.get("arduino_id") or "") == identifier
+               and row.get("source_sha256") == parsed_digest]
+    if len(choices) != 1:
+        return None
+    try:
+        key = ("file-sha256", source)
+        digest = validation_cache.get(key) if validation_cache is not None else None
+        if digest is None:
+            digest = sha256_file(source)
+            if validation_cache is not None:
+                validation_cache[key] = digest
+        return dict(choices[0]) if digest == parsed_digest else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def source_namespace_target_for_record(record, *, core=None, rows=None, validation_cache=None):
+    """Block namespace substitution after source edits, without reusing old proof."""
+    source = str(record.get("source_file") or record.get("arduino_source_file") or "")
+    identifier = str(record.get("arduino_id") or record.get("arduino_board_id") or "")
+    parsed_digest = record.get("source_sha256") or record.get("arduino_source_sha256")
+    if not source or not identifier or not isinstance(parsed_digest, str) or not _HEX.fullmatch(parsed_digest):
+        return None
+    source_key = os.path.normcase(os.path.abspath(source))
+    values = planned_source_target_index(load_prepared_targets(core)) if rows is None else rows
+    if isinstance(values, dict):
+        values = values.get((source_key, identifier), [])
+    choices = [row for row in values if source_namespace_proof(row)
+               and os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))) == source_key
+               and str(row.get("arduino_id") or "") == identifier]
+    if len(choices) != 1:
+        return None
+    try:
+        key = ("file-sha256", source)
+        digest = validation_cache.get(key) if validation_cache is not None else None
+        if digest is None:
+            digest = sha256_file(source)
+            if validation_cache is not None:
+                validation_cache[key] = digest
+        if digest != parsed_digest:
+            return None
+        intent = dict(choices[0], status="unavailable", source_sha256=parsed_digest,
+                      reason="The original Arduino source target needs preparation; its exact compiler certificate is unavailable.")
+        intent.pop("arduino_cli", None)
+        return intent
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def prepared_target_for_record(record, catalog, *, core=None, rows=None, validation_cache=None):
@@ -380,18 +606,37 @@ def prepared_target_for_record(record, catalog, *, core=None, rows=None, validat
             return None
         if row.get("backend") == "arduino-cli":
             from src.modules.board_index_targets import hardware_identity_present
-            if catalog and hardware_identity_present(record, catalog):
+            primary = source_target_proof(row)
+            if not primary and catalog and hardware_identity_present(record, catalog):
                 return None
-            if not unsupported_proof(row):
+            if not primary and not unsupported_proof(row):
                 return None
             arduino = row.get("arduino_cli")
             if (not isinstance(arduino, dict) or not valid_fqbn(arduino.get("fqbn"))
                     or arduino["fqbn"].split(":")[-1] != arduino_id
                     or ":".join(arduino["fqbn"].split(":")[:2]) != arduino.get("core")):
                 return None
+            if primary:
+                store = _source_store(core, row["arduino_source_proof"])
+                if (arduino.get("store") != str(store.relative_to(core)) or not _within(store, core / "arduino-cli")
+                        or not _store_configuration_valid(store)):
+                    return None
+                package, architecture = row["arduino_source_proof"]["core"].split(":")
+                hardware = store / "data/packages" / package / "hardware" / architecture
+                installed = [path.name for path in hardware.iterdir() if path.is_dir()]
+                if installed != [row["arduino_source_proof"]["version"]]:
+                    return None
+                cli_path = arduino.get("cli_path")
+                if (not isinstance(cli_path, str) or not Path(cli_path).is_absolute()
+                        or not Path(cli_path).is_file() or not _HEX.fullmatch(str(arduino.get("cli_sha256") or ""))
+                        or digest_file(cli_path) != arduino["cli_sha256"]):
+                    return None
             certificate_path = core / str(arduino.get("certificate") or "")
             certificate_key = (str(certificate_path), arduino.get("certificate_sha256"), arduino.get("fqbn"),
-                               arduino.get("core"), arduino.get("version"), arduino.get("cli_sha256"))
+                               arduino.get("core"), arduino.get("version"), arduino.get("cli_sha256"),
+                               arduino.get("store"),
+                               arduino.get("cli_path") if primary else None,
+                               json.dumps(row.get("arduino_source_proof") if primary else None, sort_keys=True))
             if validation_cache is not None and validation_cache.get(certificate_key):
                 return dict(row)
             if (not _within(certificate_path, core / "arduino-cli/certificates")
@@ -403,19 +648,35 @@ def prepared_target_for_record(record, catalog, *, core=None, rows=None, validat
                     or certificate.get("core") != arduino.get("core") or certificate.get("version") != arduino.get("version")
                     or certificate.get("cli_sha256") != arduino.get("cli_sha256") or certificate.get("fqbn") != arduino.get("fqbn")):
                 return None
+            if primary and (certificate.get("arduino_backend_role") != "primary"
+                            or certificate.get("store") != arduino.get("store")
+                            or certificate.get("cli_path") != arduino.get("cli_path")
+                            or certificate.get("arduino_source_proof") != row.get("arduino_source_proof")
+                            or certificate.get("core") != row["arduino_source_proof"]["core"]
+                            or certificate.get("version") != row["arduino_source_proof"]["version"]
+                            or certificate.get("fqbn") != row["arduino_source_proof"]["fqbn"]):
+                return None
             proof_files = certificate.get("proof_files")
             if not isinstance(proof_files, dict) or len(proof_files) < 2 or len(proof_files) > 128:
                 return None
+            if primary:
+                package, architecture = row["arduino_source_proof"]["core"].split(":")
+                platform_dir = store / "data/packages" / package / "hardware" / architecture / row["arduino_source_proof"]["version"]
+                declarations = str((platform_dir / "boards.txt").relative_to(core))
+                platform_recipe = str((platform_dir / "platform.txt").relative_to(core))
+                if (proof_files.get(declarations) != source_digest or platform_recipe not in proof_files):
+                    return None
             for relative, digest in proof_files.items():
                 path = core / relative
-                if not _within(path, core / "arduino-cli") or not _HEX.fullmatch(str(digest)) or digest_file(path) != digest:
+                if not _within(path, store if primary else core / "arduino-cli") or not _HEX.fullmatch(str(digest)) or digest_file(path) != digest:
                     return None
             tool_files = certificate.get("tool_files")
             if not isinstance(tool_files, dict) or not tool_files or len(tool_files) > 50000:
                 return None
             for relative, entry in tool_files.items():
                 path = core / relative
-                if not isinstance(entry, dict) or not _within(path, core / "arduino-cli/data/packages") or path.stat().st_size != entry.get("size"):
+                package_root = store / "data/packages" if primary else core / "arduino-cli/data/packages"
+                if not isinstance(entry, dict) or not _within(path, package_root) or path.stat().st_size != entry.get("size"):
                     return None
                 if "sha256" in entry and (not _HEX.fullmatch(str(entry["sha256"])) or digest_file(path) != entry["sha256"]):
                     return None
@@ -456,20 +717,23 @@ def arduino_catalog_entry(record, prepared):
             "arduino_build_board": str(record.get("build_board") or ""),
             "source_core": str(record.get("source_core") or ""), "mcu": str(record.get("mcu") or ""),
             "arduino_fqbn": prepared.get("arduino_fqbn"), "arduino_cli": prepared.get("arduino_cli"),
-            "platformio_support": "unsupported", "platformio_support_proof": prepared.get("platformio_support_proof"),
+            "platformio_support": prepared.get("platformio_support", "unknown"), "platformio_support_proof": prepared.get("platformio_support_proof"),
+            "arduino_backend_role": prepared.get("arduino_backend_role"), "arduino_source_proof": prepared.get("arduino_source_proof"),
             "require_upload_port": True, "fallback_notice": prepared.get("reason")}
 
 
 def runtime_command(info, *, core=None):
-    """Validate a ready fallback against current bytes before invoking the CLI."""
+    """Validate an exact prepared Arduino target before invoking its offline CLI."""
     core = _core_directory(core)
     from main.core.board_catalog import _load_platformio_board_catalog
     catalog = _load_platformio_board_catalog(core, force_read=True)
     record = {**info, "name": info.get("arduino_name") or "", "mcu": info.get("mcu"),
               "variant": info.get("arduino_variant"), "build_board": info.get("arduino_build_board")}
     prepared = prepared_target_for_record(record, catalog, core=core)
-    if not prepared or prepared.get("backend") != "arduino-cli" or not unsupported_proof(info):
-        raise RuntimeError("Arduino CLI fallback is not verified for this exact board. Prepare board support again")
+    if (not prepared or prepared.get("backend") != "arduino-cli"
+            or not (source_target_proof(info) or unsupported_proof(info))
+            or source_target_proof(info) and info.get("arduino_source_proof") != prepared.get("arduino_source_proof")):
+        raise RuntimeError("Arduino CLI target is not verified for this exact board. Prepare board support again")
     if info.get("framework") != "arduino":
         raise RuntimeError("Arduino CLI fallback requires the Arduino framework")
     from main.core.toolchain import find_arduino_cli_executable
@@ -478,14 +742,12 @@ def runtime_command(info, *, core=None):
         raise RuntimeError(_missing_cli_message())
     if sha256_file(cli) != prepared["arduino_cli"].get("cli_sha256"):
         raise RuntimeError("The prepared Arduino CLI executable changed. Prepare board support again")
-    config = core / "arduino-cli/arduino-cli.yaml"
+    store = _source_store(core, prepared["arduino_source_proof"]) if source_target_proof(prepared) else core / "arduino-cli"
+    config = store / "arduino-cli.yaml"
     if not config.is_file():
         raise RuntimeError("The prepared Arduino CLI configuration is unavailable")
     # Configuration is validated too: it must never switch to a user/global store.
-    payload = json.loads(config.read_text(encoding="utf-8"))
-    expected = {"data": core / "arduino-cli/data", "user": core / "arduino-cli/user", "downloads": core / "arduino-cli/downloads"}
-    actual = payload.get("directories", {})
-    if any(Path(str(actual.get(key) or "")).resolve() != path.resolve() for key, path in expected.items()):
+    if not _store_configuration_valid(store):
         raise RuntimeError("The prepared Arduino CLI store configuration changed. Prepare board support again")
     _verify_core_version([str(cli), "--config-file", str(config), "--json"],
                          prepared["arduino_cli"]["core"], prepared["arduino_cli"]["version"])

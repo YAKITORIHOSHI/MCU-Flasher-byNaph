@@ -67,6 +67,17 @@ the exact model and one of its declared frameworks. An Arduino `.ino` project
 requires Arduino; other frameworks require suitable C/C++ sources and libraries.
 Unresolved or ambiguous Arduino definitions block compilation with an
 explanation instead of substituting another board.
+Bootstrap writes a complete per-declaration board coverage report in the native
+package store (`.mcu-bootstrap-board-coverage.json`). For generic Arduino entries
+without a unique PlatformIO equivalent, Bootstrap can prepare the original exact
+Arduino core/version/FQBN from verified source metadata. Native Arduino CLI must
+be installed on PATH first. Source bytes and a real preparation compile are
+verified before runtime uses this backend; the generic declaration keeps its
+default pin and memory settings. Missing metadata/tools remain unavailable with
+an explicit reason, rather than selecting another physical model automatically.
+Prepared original Arduino targets keep separate stores for exact core versions
+and package indexes. Their builds also use the libraries prepared by the package
+plan and Library Downloader, with byte checks before firmware reuse.
 
 Linux builds and uploads use native PlatformIO packages under
 `${XDG_DATA_HOME:-$HOME/.local/share}/mcu-flasher/platformio/<architecture>`.
@@ -75,8 +86,8 @@ with native Linux locations; it never trusts a copied Windows readiness marker.
 The main app and its build/upload/reset subprocesses prohibit downloads. Missing
 packages report the bootstrap command. Edit `direct/offline-packages.json` to
 add a custom platform or a registry library specification, then run setup while
-online. The default plan includes all major families, their declared framework
-and upload/debug package variants, and Servo, ESP32Servo and ArduinoJson.
+online. The default plan includes AVR, ESP32 and ESP8266 with Arduino, their
+upload/debug package variants, and Servo, ESP32Servo and ArduinoJson.
 An arbitrary sketch may need additional libraries in that plan. Initial setup
 can take substantial time and storage; subsequent launches need no network
 probe. To use a separate plan, run `python3 direct/ubuntu/setup.py --plan "/path/to/plan.json"`.

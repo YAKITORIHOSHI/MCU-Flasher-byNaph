@@ -14,7 +14,10 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# These cases exercise clipboard ownership through process shutdown. Windows'
+# offscreen plugin can crash while releasing transferred QMimeData; use the
+# native clipboard, with its original MIME data restored once after the suite.
+os.environ.setdefault("QT_QPA_PLATFORM", "windows" if os.name == "nt" else "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QTimer, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextCursor, QTextOption
 from PySide6.QtTest import QTest

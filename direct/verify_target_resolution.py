@@ -104,7 +104,8 @@ class TargetResolutionChecks(unittest.TestCase):
         self.addCleanup(self.dispose)
 
     def dispose(self):
-        for thread in self.workers:
+        worker = getattr(self.api, "_operation_worker", None)
+        for thread in self.workers + ([worker] if worker is not None else []):
             thread.join(timeout=3)
         self.window.close()
         self.window.deleteLater()
@@ -112,9 +113,11 @@ class TargetResolutionChecks(unittest.TestCase):
 
     def wait_idle(self):
         deadline = time.monotonic() + 3
-        while self.api.is_busy and time.monotonic() < deadline:
+        worker = getattr(self.api, "_operation_worker", None)
+        while (self.api.is_busy or (worker is not None and worker.is_alive())) and time.monotonic() < deadline:
             QTest.qWait(5)
         self.assertFalse(self.api.is_busy)
+        self.assertFalse(worker is not None and worker.is_alive())
         QTest.qWait(10)
 
     def test_compile_click_repairs_selected_cached_row_and_reaches_build_worker(self):
@@ -215,6 +218,88 @@ class TargetResolutionChecks(unittest.TestCase):
         self.registry.assert_not_called()
         self.assertEqual(invoked, [])
         self.assertTrue(any("bootstrap" in str(data) for _, data in self.events))
+
+    def test_generic_s3_compile_and_upload_report_ambiguity_without_repair_loop(self):
+        name = "ESP32S3 Dev Module"
+        selection = dict(stale_selection(), arduino_board_id="esp32s3", arduino_variant="esp32s3",
+                         arduino_build_board="ESP32S3_DEV", mcu="esp32s3", flash_mb=4)
+        base = dict(definitions()[0], mcu="esp32s3", variant="esp32s3", flash_size="8MB",
+                    arduino_defines={"arduinoesp32s3dev"})
+        candidates = [dict(base, id="esp32-s3-devkitc-1", name="Espressif ESP32-S3-DevKitC-1-N8"),
+                      dict(base, id="esp32-s3-devkitm-1", name="Espressif ESP32-S3-DevKitM-1")]
+        self.api.current_board, self.api.current_port = name, "SIMULATED"
+        self.installed.return_value = candidates
+        self.api._compile_worker = Mock()
+        self.api._upload_worker = self.api._native_upload_worker = Mock()
+        for request in (self.api.compile_sketch, self.api.upload_sketch):
+            with self.subTest(request=request.__name__):
+                self.catalog.replace({name: selection})
+                self.events.clear()
+                request()
+                self.wait_idle()
+                self.api._compile_worker.assert_not_called()
+                self.api._upload_worker.assert_not_called()
+                logs = "\n".join(str(data.get("text", "")) for event, data in self.events
+                                 if event == "console:log")
+                self.assertIn("matches multiple PlatformIO definitions", logs)
+                self.assertIn("DevKitC", logs)
+                self.assertIn("DevKitM", logs)
+                self.assertNotIn("Prepare it in bootstrap while online", logs)
+                self.assertNotIn("Offline board definition unavailable", logs)
+                self.assertEqual(self.catalog[name]["board"], "")
+                self.assertEqual(self.catalog[name]["flash_mb"], 4)
+                self.assertEqual(self.catalog[name]["pio_resolution_status"], "ambiguous")
+        self.registry.assert_not_called()
+
+        # An explicit physical model retains its own definition and memory.
+        native_name = candidates[0]["name"]
+        native_info = catalog_module._native_board_entry(candidates[0])
+        self.catalog.replace({native_name: native_info})
+        self.api.current_board = native_name
+        invoked = []
+        def compile_boundary(upload=False):
+            invoked.append(self.api._resolve_board_info())
+            self.api._release_requested_operation()
+        self.api._compile_worker = compile_boundary
+        self.api.compile_sketch()
+        self.wait_idle()
+        self.assertEqual(invoked[0]["board"], "esp32-s3-devkitc-1")
+        self.assertEqual(invoked[0]["flash_mb"], 8)
+
+    def test_generic_s3_prepared_original_target_reaches_arduino_compile_and_upload(self):
+        from src.modules.arduino_cli_support import source_declaration_proof
+        name = "ESP32S3 Dev Module"
+        selection = dict(stale_selection(), arduino_board_id="esp32s3", arduino_variant="esp32s3",
+                         arduino_build_board="ESP32S3_DEV", mcu="esp32s3",
+                         arduino_source_file=str(self.sandbox / "boards.txt"), arduino_source_sha256="a" * 64)
+        record = {"arduino_id": "esp32s3", "source_sha256": "a" * 64}
+        proof = source_declaration_proof(record, {"package": "esp32", "architecture": "esp32", "version": "3.3.11"})
+        prepared = dict(record, status="ready", backend="arduino-cli", platform="esp32:esp32",
+                        board="esp32s3", arduino_fqbn="esp32:esp32:esp32s3",
+                        arduino_backend_role="primary", arduino_source_proof=proof,
+                        arduino_cli={"fqbn": "esp32:esp32:esp32s3", "version": "3.3.11"})
+        self.api.current_board, self.api.current_port = name, "SIMULATED"
+        base = dict(definitions()[0], mcu="esp32s3", variant="esp32s3", arduino_defines={"arduinoesp32s3dev"})
+        self.installed.return_value = [dict(base, id="s3-a", name="Espressif ESP32-S3 DevKit A"),
+                                       dict(base, id="s3-b", name="Espressif ESP32-S3 DevKit B")]
+        invoked = []
+        def arduino_boundary(api, *, upload=False):
+            invoked.append((threading.get_ident(), api._resolve_board_info(), upload))
+            api._release_requested_operation()
+            return True
+        with patch("src.modules.arduino_cli_support.prepared_target_for_record", return_value=prepared), \
+                patch("main.core.arduino_backend.run_arduino_operation", side_effect=arduino_boundary):
+            for request in (self.api.compile_sketch, self.api.upload_sketch):
+                self.catalog.replace({name: selection})
+                request()
+                self.wait_idle()
+        self.assertEqual([item[2] for item in invoked], [False, True])
+        for thread, info, _upload in invoked:
+            self.assertNotEqual(thread, threading.get_ident())
+            self.assertEqual(info["arduino_fqbn"], "esp32:esp32:esp32s3")
+            self.assertEqual(info["arduino_backend_role"], "primary")
+            self.assertEqual(info["board"], "esp32s3")
+        self.registry.assert_not_called()
 
     def test_ambiguous_row_and_wrong_framework_do_not_reach_compile(self):
         for ambiguous in (True, False):

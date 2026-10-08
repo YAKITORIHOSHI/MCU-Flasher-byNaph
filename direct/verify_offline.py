@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.modules import offline_bootstrap as setup, offline_runtime as runtime
+from src.modules.bootstrap_board_coverage import REPORT
 
 
 class OfflineChecks(unittest.TestCase):
@@ -121,7 +122,9 @@ class OfflineChecks(unittest.TestCase):
         manifest.parent.mkdir(parents=True)
         manifest.write_text("{}")
         payload = {"schema": setup.SCHEMA, "plan": setup.plan_hash(plan), "default_plan": setup.plan_hash(plan),
-                   "host": sys.platform, "architecture": platform.machine(), "files": ["packages/demo/package.json"]}
+                   "host": sys.platform, "architecture": platform.machine(), "files": ["packages/demo/package.json", REPORT],
+                   "board_coverage": {"schema": 1, "path": REPORT, "total": 0, "ready_count": 0, "unavailable_count": 0}}
+        (self.core / REPORT).write_text("{}")
         marker = self.core / setup.MARKER
         marker.write_text(json.dumps(payload))
         self.assertTrue(setup.ready(self.core, plan))
@@ -141,8 +144,10 @@ class OfflineChecks(unittest.TestCase):
         hook.write_text("# isolated guard fixture")
         payload = {"schema": setup.SCHEMA, "plan": setup.plan_hash(setup.load_plan()),
                    "default_plan": setup.plan_hash(setup.load_plan()), "host": sys.platform,
-                   "architecture": platform.machine(), "files": ["package.json"],
+                   "architecture": platform.machine(), "files": ["package.json", REPORT],
+                   "board_coverage": {"schema": 1, "path": REPORT, "total": 0, "ready_count": 0, "unavailable_count": 0},
                    "guards": [str(hook.relative_to(ROOT))]}
+        (self.core / REPORT).write_text("{}")
         (self.core / setup.MARKER).write_text(json.dumps(payload))
         self.assertTrue(setup.ready(self.core))
         hook.unlink()
@@ -150,6 +155,47 @@ class OfflineChecks(unittest.TestCase):
         hook.write_text("# isolated guard fixture")
         with patch.object(setup, "ASSETS", ("temp/nonexistent-offline-editor-asset",)):
             self.assertFalse(setup.ready(self.core))
+
+    def test_coverage_refresh_reuses_package_receipts_without_installers_or_builders(self):
+        plan = {"schema": 1, "platforms": ["demo"], "frameworks": ["arduino"], "libraries": []}
+        manifest = self.core / "package.json"
+        manifest.write_text("{}")
+        (self.core / REPORT).write_text("{}")
+        payload = {"schema": setup.SCHEMA, "plan": setup.plan_hash(plan), "default_plan": setup.plan_hash(plan),
+                   "host": sys.platform, "architecture": platform.machine(), "files": ["package.json", REPORT],
+                   "prepared_plan": plan, "platform_sources": {"demo": "demo"}, "board_manifests": {},
+                   "board_coverage": {"schema": 1, "path": REPORT, "total": 0, "ready_count": 0, "unavailable_count": 0}}
+        (self.core / setup.MARKER).write_text(json.dumps(payload))
+        package_stamp = manifest.stat().st_mtime_ns
+        from src.modules import bootstrap_arduino_sources
+        with patch.object(bootstrap_arduino_sources, "prepare_sources", return_value={}) as primary, \
+                patch.object(setup, "_prepare", side_effect=AssertionError("Package preparation was replayed")) as install:
+            result = setup.refresh_board_coverage(self.core, (), log=lambda message: None)
+        primary.assert_called_once()
+        install.assert_not_called()
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(manifest.stat().st_mtime_ns, package_stamp)
+        self.assertTrue(setup.ready(self.core, plan))
+        with self.assertRaisesRegex(RuntimeError, "exact prepared package plan"):
+            setup.refresh_board_coverage(self.core, (), plan=dict(plan, libraries=["new/library"]))
+
+    def test_ready_requires_valid_full_coverage_summary_and_report(self):
+        plan = {"schema": 1, "platforms": ["demo"], "libraries": []}
+        (self.core / REPORT).write_text("{}")
+        payload = {"schema": setup.SCHEMA, "plan": setup.plan_hash(plan), "default_plan": setup.plan_hash(plan),
+                   "host": sys.platform, "architecture": platform.machine(), "files": [REPORT],
+                   "board_coverage": {"schema": 1, "path": REPORT, "total": 3, "ready_count": 1, "unavailable_count": 2}}
+        marker = self.core / setup.MARKER
+        marker.write_text(json.dumps(payload))
+        self.assertTrue(setup.ready(self.core, plan))
+        for invalid in ({}, dict(payload["board_coverage"], total=4),
+                        dict(payload["board_coverage"], ready_count=True),
+                        dict(payload["board_coverage"], path="other.json")):
+            marker.write_text(json.dumps(dict(payload, board_coverage=invalid)))
+            self.assertFalse(setup.ready(self.core, plan))
+        marker.write_text(json.dumps(payload))
+        (self.core / REPORT).unlink()
+        self.assertFalse(setup.ready(self.core, plan))
 
     def test_custom_plan_changes_certificate_identity_and_rejects_invalid_lists(self):
         path = self.root / "custom-plan.json"

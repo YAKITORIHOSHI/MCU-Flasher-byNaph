@@ -379,6 +379,7 @@ class PackageJobChecks(unittest.TestCase):
                          ensure_webview2_runtime=Mock(return_value=True),
                          _get_safe_platformio_core_dir=Mock(return_value=str(self.core)),
                          _apply_bootstrap_compiler_budget=Mock(return_value=2),
+                         _explicit_setup_requested=Mock(return_value=False),
                          _stream_offline_setup_output=Mock(), _cp210x_driver_status_message=Mock(return_value=(True, 'Fixture')),
                          check_cp210x_driver=Mock(return_value=True), check_opencode_cli=Mock(return_value=True),
                          ensure_opencode_cli=Mock(return_value=True), run_update_checks=Mock(),
@@ -401,11 +402,10 @@ class PackageJobChecks(unittest.TestCase):
             calls.append('after-repair')
             return True
         for name in ('_configure_platformio_environment', '_neutralize_conflicting_global_platformio_config',
-                     'ensure_platformio', 'ensure_arduino_avr_board', 'ensure_esp32_board_folder'):
+                     'ensure_platformio', 'ensure_arduino_avr_board', 'ensure_esp32_board_folder', 'ensure_arduino_cli'):
             namespace[name] = guarded_stage(name)
         namespace['_ensure_platformio_core_prebuilt'] = guarded_stage('seed', seed_error)
         namespace['_stream_offline_setup_output'] = guarded_stage('offline-packs')
-        namespace['ensure_arduino_cli'] = after_repair
         namespace['_spawn_main_gui'] = Mock(side_effect=lambda: (SimpleNamespace(poll=lambda: None), None)
                                              if after_repair() else None)
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), namespace)
@@ -423,7 +423,8 @@ class PackageJobChecks(unittest.TestCase):
         self.assertIn('seed', calls)
         self.assertIn('ensure_platformio', calls)
         self.assertIn('offline-packs', calls)
-        self.assertEqual(calls[-2:], ['after-repair', 'after-repair'])
+        self.assertIn('ensure_arduino_cli', calls)
+        self.assertEqual(calls[-1], 'after-repair')
         namespace['_spawn_main_gui'].assert_called_once()
         gui.show_error.assert_not_called()
 
