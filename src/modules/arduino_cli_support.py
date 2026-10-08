@@ -561,8 +561,16 @@ def source_namespace_target_for_record(record, *, core=None, rows=None, validati
                 validation_cache[key] = digest
         if digest != parsed_digest:
             return None
-        intent = dict(choices[0], status="unavailable", source_sha256=parsed_digest,
-                      reason="The original Arduino source target needs preparation; its exact compiler certificate is unavailable.")
+        prior = choices[0]
+        reason = "The original Arduino source target needs preparation; its exact compiler certificate is unavailable."
+        # Keep a concrete preparation failure with the blocked namespace so
+        # Compile/Upload can tell the user why retrying preparation is needed.
+        # A stale "Ready" reason is never valid after its certificate failed.
+        if prior.get("status") == "unavailable":
+            detail = " ".join(str(prior.get("reason") or "").split())[:600]
+            if detail and not detail.casefold().startswith("ready"):
+                reason = detail
+        intent = dict(prior, status="unavailable", source_sha256=parsed_digest, reason=reason)
         intent.pop("arduino_cli", None)
         return intent
     except (OSError, ValueError, TypeError):

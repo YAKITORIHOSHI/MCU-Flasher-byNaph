@@ -12,7 +12,19 @@ def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
     if info and info.get("backend") == "arduino-cli":
         from src.modules.arduino_cli_support import source_target_proof, unsupported_proof, valid_fqbn
         if not (source_target_proof(info) or unsupported_proof(info)) or not valid_fqbn(info.get("arduino_fqbn")) or not isinstance(info.get("arduino_cli"), Mapping):
-            return "Arduino CLI target is not verified for this exact board. Prepare board support again."
+            detail = info.get("fallback_notice")
+            if isinstance(detail, str):
+                detail = " ".join(detail.split())[:600]
+            if detail and detail.casefold().startswith("ready"):
+                detail = ""
+            name = str(info.get("arduino_name") or info.get("board") or "Selected Arduino board")
+            fqbn = str(info.get("arduino_fqbn") or "")
+            target = f" ({fqbn})" if fqbn else ""
+            if detail:
+                return (f"{name}{target} has no current verified Arduino CLI preparation: {detail} "
+                        "Run Bootstrap Repair while online, then refresh boards.")
+            return (f"{name}{target} has no current verified Arduino CLI preparation. "
+                    "Run Bootstrap Repair while online, then refresh boards.")
         if info.get("framework") != "arduino":
             return "This board's prepared Arduino target requires the Arduino framework."
         return ""
