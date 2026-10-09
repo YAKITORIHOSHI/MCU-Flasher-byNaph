@@ -130,8 +130,11 @@ MCU-FLASHER-SRC/
 MCU_FLASHER_SRC/
 
 # === Development & Dangerous Reset Scripts ===
-cleaner/
-DANGER-ZONE/
+# Maintenance utilities are source; generated diagnostic captures stay local.
+DANGER-ZONE/CrashReport_*.txt
+DANGER-ZONE/FixesApplied_*.txt
+cleaner/**/__pycache__/
+DANGER-ZONE/**/__pycache__/
 ___TESTEST___.py
 ___*.py
 

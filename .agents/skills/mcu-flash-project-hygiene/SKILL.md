@@ -83,6 +83,42 @@ Classify paths before changing attributes or deleting anything:
 - Patch `SCRIPT_DIR`, temp-path helpers, and deletion helpers in tests so a test
   cannot remove live caches.
 
+## Native maintenance utilities
+
+- Keep `cleaner/windows/maintenance.ps1` and `cleaner/ubuntu/maintenance.py`
+  separate. Compatibility wrappers in `cleaner/` and `DANGER-ZONE/` resolve
+  from their own location, preserve exit codes and default to a read-only plan.
+  Mutation requires `-Apply` / `--apply` and exact typed acknowledgement.
+- Maintenance preserves sketches, all settings, generic logs, protected project
+  build/IDE caches and every AI recovery journal. Do not describe it as a
+  complete user-state wipe. Source bytecode scans prune protected/runtime trees
+  before recursion and preserve unknown cache content.
+- Windows Fresh retains portable Python; Runtime additionally resets its
+  recognized private runtime. Both use only local Windows env/store/extras
+  targets. Normalize drive-root boundaries correctly; aliases are nonrecursive
+  unlink targets only when their destination belongs to this checkout's exact
+  Windows store or modules. Revalidate markers, receipts and reviewed targets
+  after confirmation. Refuse unknown envs, linked roots and changed plans.
+- Ubuntu uses system Python to remove its validated `.venv-linux`; Runtime also
+  handles receipt-authenticated native tools/extras. Removing the shared XDG
+  store needs `--include-native-store` and a current Linux/architecture receipt.
+  Retain other architectures, all Windows resources and system packages.
+  Native descriptor-relative deletion must not follow venv interpreter links.
+- Cleanup refuses running app/package operations and never kills them to unlock
+  files. The separate legacy Windows Stop entry point requires explicit
+  acknowledgement, captured creation identity and exact owned entry/executable
+  boundaries. A root appearing in another program's arguments proves nothing.
+- Driver and Windows system reset/repair entry points remain native and explicit;
+  preview does not elevate or run repair. Driver selection requires a supported
+  original INF and exact OEM package identity. FullReset is a separate opt-in
+  for shared dependencies, with closed-program and installer preflight.
+  Diagnostic captures belong under `temp/audit/crash-diagnostic`.
+- Verify with `direct/verify_windows_maintenance.py` and
+  `direct/verify_ubuntu_maintenance.py` using disposable fixtures under `temp/`.
+  Mock process/hardware calls and exercise link, ownership, interruption and
+  read-only preview boundaries. Never run a live cleaner or system repair for
+  verification. Record native cases skipped on the current host.
+
 ## File distribution conventions
 
 Files generated at runtime or holding user-specific state belong in dedicated
@@ -123,7 +159,9 @@ path references, and fallback logic in the same operation.
 5. Verify cleanup is allowlist-based and cannot escape its project/cache root.
 6. Add focused `unittest` coverage with temporary directories and mocked Win32
    attribute calls. Do not require a board, COM port, PlatformIO download, or GUI.
-7. Run the focused tests, then `python -m unittest discover -s tests -v`.
+7. Run focused hardware-free verifiers with the app's private runtime; keep all
+   persistence and deletion fixtures under `temp/`. Use the maintenance verifiers
+   for standalone cleanup utilities and the app verifiers for GUI Clean changes.
 
 ## Low-end device constraints
 

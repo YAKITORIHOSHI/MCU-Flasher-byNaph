@@ -242,6 +242,16 @@ preparation children before releasing package storage, and cannot mark setup
 ready or open the workspace afterward. Delayed termination keeps Bootstrap
 alive until its writer processes have exited.
 
+Maintenance utilities in [cleaner/](cleaner/README.md) and `DANGER-ZONE/` preview
+their targets by default. Windows and Ubuntu use separate resource plans;
+applying a plan requires an explicit flag and confirmation. Close running app,
+terminal and package operations first. Cleanup preserves sketches, settings,
+logs, protected build caches and AI recovery history. Windows aliases are
+unlinked only after ownership checks; Ubuntu's shared native package store
+requires a separate opt-in. Windows driver removal, shared dependency reset
+and system repair remain explicit actions. See the maintenance guide for the
+native commands and confirmation phrases.
+
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
 can consume many gigabytes and substantial time. Close other project windows
 before changing modes. Disabling confirms removal of app-owned offline records
@@ -837,13 +847,18 @@ MCU Flasher by Naph/
 │   └── soft_reset_project_renesas/  # Minimal PlatformIO reset template for Renesas RA (UNO R4) boards
 │
 ├── cleaner/                         # Maintenance Utilities
-│   ├── clean_fresh.bat              # Workspace refresh cleaner
-│   ├── clean_pycache.bat            # Recursive Python cache cleaner
-│   └── terminate_all_python.exe-task.bat # Kill background Python processes
+│   ├── clean_fresh.bat / .sh        # Host-specific dependency refresh preview
+│   ├── clean_pycache.bat / .sh      # Scoped app-source bytecode cleanup preview
+│   ├── windows/maintenance.ps1      # Checked Windows plans and process ownership
+│   ├── ubuntu/maintenance.py        # Separate native Ubuntu plans and receipts
+│   ├── remove_mcu_drivers.bat       # Explicit Windows driver removal
+│   └── terminate_all_python.exe-task.bat # Explicit stop of captured app-owned processes
 │
 ├── DANGER-ZONE/                     # Destructive Reset Utilities (Use with Caution)
-│   ├── DELETE_EVERYTHING_DO_NOT_RUN.ps1 # Full environment teardown script
-│   └── runReset.cmd                 # Reset launcher
+│   ├── DELETE_EVERYTHING_DO_NOT_RUN.ps1 # Windows runtime / optional shared reset
+│   ├── runReset.cmd                 # Windows reset preview launcher
+│   ├── reset_ubuntu.sh              # Native Ubuntu runtime reset preview
+│   └── RUN_Crash_Diagnostic.cmd      # Explicit Windows diagnostics and repair
 │
 ├── index_json/                      # Board and library index caches
 ├── .mcu_flasher_build_cache/        # Per-board build caches and workspaces (hidden, gitignored)
@@ -1336,6 +1351,8 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_board_search.py --render-dir temp/audit/board-search --benchmark temp/audit/board-search/timing.json
 & src/_python/python.exe -B direct/verify_target_resolution.py
 & src/_python/python.exe -B direct/verify_windows_board_setup.py
+& src/_python/python.exe -B direct/verify_windows_maintenance.py
+& src/_python/python.exe -B direct/verify_ubuntu_maintenance.py
 & src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
 & src/_python/python.exe -B direct/verify_package_jobs.py
