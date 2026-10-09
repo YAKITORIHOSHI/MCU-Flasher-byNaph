@@ -5908,7 +5908,9 @@ class MCUWebBackendAPI:
                 connection_poll_count[0], _MAX_CONNECT_RETRIES, connected=True
             )
             self._append_upload_boot_hint(
-                "  ✔ Bootloader synced — you may release the BOOT button now.", "success",
+                ("  ✔ Bootloader synced — you may release the BOOT button now."
+                 if connection_poll_count[0] > 1 else "  ✔ Bootloader synced."),
+                "success",
             )
 
         def _before_fast_progress():
@@ -8016,7 +8018,9 @@ class MCUWebBackendAPI:
                         _connect_retry[0], _MAX_CONNECT_RETRIES, connected=True
                     )
                     self._append_upload_boot_hint(
-                        "  ✔ Bootloader synced — you may release the BOOT button now.", "success",
+                        ("  ✔ Bootloader synced — you may release the BOOT button now."
+                         if _connect_retry[0] > 1 else "  ✔ Bootloader synced."),
+                        "success",
                     )
 
             def _flip_to_failed_bar():

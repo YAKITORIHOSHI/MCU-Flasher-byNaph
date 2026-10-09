@@ -162,6 +162,9 @@ For explicitly requested assistant delegation, use the local
   hold; resume on release, including outside the view/lost grab. Auto OFF retains
   the reading anchor. Omit only the routine unexpanded ESP32 objcopy recipe and
   quiet build notice, preserving diagnostics and cancellation polling.
+- On ESP bootloader sync, replace the BOOT hint row with plain success for
+  numbered attempt 1; add the release-BOOT reminder only for attempts 2–10.
+  Use the worker's actual attempt counter, never infer retries from esptool dots.
 - Reviewed AVR and exact ESP8266 Arduino checks share one bounded worker pool
   after installers complete. Source/package signatures must match; unknown/native
   builders remain serial. Failure cancels siblings and leaves readiness uncertified.

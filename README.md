@@ -487,7 +487,9 @@ when programmer output first indicates erase/write. A failed flash is never
 replayed automatically.
 ESP bootloader polling ends with a compact Connected, Connection failed,
 Connection stopped or Board mismatch status. Its BOOT prompt updates with the
-result in both the display and copied log. A reported chip mismatch identifies
+result in both the display and copied log. First-attempt sync reports only
+**Bootloader synced**; success on a later numbered attempt adds the reminder
+to release BOOT. A reported chip mismatch identifies
 the detected chip and selected target and directs you to select the matching
 board in Controls; it does not suggest changing upload speed.
 Copy includes all retained messages, even when warnings are hidden. Selection
