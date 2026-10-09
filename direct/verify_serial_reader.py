@@ -257,6 +257,44 @@ class ReaderChecks(unittest.TestCase):
         self.assertTrue(all(not value for port in (old_port, new_port)
                             for _, value in port.line_changes))
 
+    def test_delayed_old_clear_does_not_clear_replacement_connection(self):
+        old_port = FakePort([b"old history"], close_when_empty=False)
+        new_port = FakePort([b"new history"], close_when_empty=False)
+        api, events = backend_fixture(old_port)
+        clear_entered, release_clear = threading.Event(), threading.Event()
+        clearer = None
+        try:
+            api._start_serial_monitor()
+            self.assertTrue(old_port.idle_entered.wait(1))
+            old_flush = api._serial_log_flush
+
+            def delayed_flush(**kwargs):
+                clear_entered.set()
+                release_clear.wait(1)
+                old_flush(**kwargs)
+
+            api._serial_log_flush = delayed_flush
+            clearer = threading.Thread(target=api.clear_serial_output, daemon=True)
+            clearer.start()
+            self.assertTrue(clear_entered.wait(1))
+            SERIAL.Serial = Mock(return_value=new_port)
+            api._start_serial_monitor()
+            self.assertTrue(new_port.idle_entered.wait(1))
+            release_clear.set()
+            clearer.join(1)
+            self.assertFalse(clearer.is_alive())
+            # idle_entered marks the next read, before its timeout publishes
+            # the coalesced new text. Snapshot those already decoded bytes.
+            api.flush_serial_output()
+            self.assertFalse(any(name == "serial:clear" for name, _ in events))
+            self.assertTrue(api.serial_running)
+            self.assertEqual(device_text(events), "old historynew history")
+        finally:
+            release_clear.set()
+            if clearer:
+                clearer.join(1)
+            api._stop_serial_monitor()
+
     def test_clear_retires_buffer_without_reset_or_losing_decoder_continuity(self):
         port = FakePort([b"old\xf0\x9f"], close_when_empty=False)
         api, events = backend_fixture(port)
@@ -579,6 +617,38 @@ class ReaderChecks(unittest.TestCase):
         api, events = self.start_and_finish(FakePort([b"tail", OSError("removed")]))
         self.assertEqual(device_text(events), "tail")
         api._schedule_serial_recovery.assert_called_once()
+
+    def test_reader_close_failure_preserves_original_error_and_status(self):
+        class BrokenClosePort(FakePort):
+            def close(self):
+                super().close()
+                raise RuntimeError("close failed")
+
+        port = BrokenClosePort([b"tail", OSError("device removed")])
+        api, events = self.start_and_finish(port)
+        self.assertEqual(device_text(events), "tail")
+        statuses = [payload for name, payload in events if name == "serial:status"]
+        self.assertFalse(statuses[-1]["connected"])
+        api._schedule_serial_recovery.assert_called_once()
+        self.assertEqual(str(api._schedule_serial_recovery.call_args.args[-1]), "device removed")
+
+    def test_open_and_close_failures_keep_original_open_diagnostic(self):
+        class BrokenOpenPort(FakePort):
+            def open(self):
+                raise OSError("device unavailable")
+
+            def close(self):
+                super().close()
+                raise RuntimeError("close failed")
+
+        api, events = backend_fixture(BrokenOpenPort())
+        api._start_serial_monitor()
+        self.assertFalse(api.serial_running)
+        self.assertIsNone(api._serial_conn)
+        self.assertTrue(any(name == "serial:log" and "device unavailable" in payload["text"]
+                            for name, payload in events))
+        api._schedule_serial_recovery.assert_called_once()
+        self.assertEqual(str(api._schedule_serial_recovery.call_args.args[-1]), "device unavailable")
 
     def test_thread_start_failure_closes_port_and_reports_error(self):
         port = FakePort(close_when_empty=False)

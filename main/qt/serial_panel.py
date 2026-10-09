@@ -36,6 +36,8 @@ _BAUD_RATES = [b for b in ["9600", "19200", "38400", "57600", "74880", "115200",
 _LINE_ENDINGS = [("None", "none"), ("\\n", "nl"), ("\\r", "cr"), ("\\r\\n", "both")]
 
 _SERIAL_CONTROLS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")
+_SERIAL_TIMESTAMP_RE = re.compile(r"^\[[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?\] ")
+_LONG_LINE_MARKER = "[Long line display truncated] "
 
 
 def _visible_serial_controls(text: str) -> str:
@@ -201,6 +203,7 @@ class SerialOutputView(QPlainTextEdit):
         bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
         self._tag_colors = themed_log_colors(theme_name)
+        self._serial_formats = {}
         self._theme_name = theme_name
         hover = pal.get("BG_HOVER", bg)
         bright = pal.get("TEXT_BRIGHT", fg)
@@ -233,7 +236,7 @@ class SerialOutputView(QPlainTextEdit):
         self.setToolTip(f"{status} Right-click for Wrap lines and Copy options.")
         self.setAccessibleDescription("Read-only serial output. Wrap lines changes display only and preserves copied line breaks.")
 
-    @preserve_log_view()
+    @preserve_log_view(rebuild=True)
     def set_line_wrap_enabled(self, enabled: bool) -> None:
         """Reflow the visible document without changing retained device lines."""
         enabled = bool(enabled)
@@ -364,11 +367,65 @@ class SerialOutputView(QPlainTextEdit):
                     line_start = True
         return [("".join(parts), tag) for parts, tag in groups], line_start
 
-    def _insert_chunks(self, cursor, chunks):
-        for text, tag in chunks:
+    def _text_format(self, tag):
+        key = tag if tag in self._tag_colors else "normal"
+        fmt = self._serial_formats.get(key)
+        if fmt is None:
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor(self._tag_colors.get(tag, self._tag_colors["normal"])))
-            cursor.insertText(text, fmt)
+            fmt.setForeground(QColor(self._tag_colors[key]))
+            self._serial_formats[key] = fmt
+        return fmt
+
+    @staticmethod
+    def _utf16_tail(text, units):
+        encoded = text.encode("utf-16-le")
+        start = max(0, len(encoded) - units * 2)
+        if start and 0xdc00 <= int.from_bytes(encoded[start:start + 2], "little") <= 0xdfff:
+            start += 2
+        return encoded[start:].decode("utf-16-le")
+
+    def _insert_chunks(self, cursor, chunks):
+        """Bound every paragraph before Qt shapes it, including closed lines.
+
+        Only the visual prefix is removed. The bounded received journal remains
+        intact for Copy. Once shortened, keep a stable tail through appends and
+        rebuilds instead of repeatedly growing and reshaping the same line.
+        """
+        for text, tag in chunks:
+            fmt = self._text_format(tag)
+            # Most records are short; keep their normal insertion as one call.
+            current = cursor.block()
+            if current.length() + len(text) * 2 <= 16384 and _LONG_LINE_MARKER not in current.text():
+                cursor.insertText(text, fmt)
+                continue
+            parts = text.split("\n")
+            for index, part in enumerate(parts):
+                if part:
+                    block = cursor.block()
+                    old = block.text()
+                    prefix_match = _SERIAL_TIMESTAMP_RE.match(old) if self._timestamp_enabled else None
+                    prefix = prefix_match.group() if prefix_match else ""
+                    shortened = old[len(prefix):].startswith(_LONG_LINE_MARKER)
+                    part_units = len(part.encode("utf-16-le")) // 2
+                    old_units = block.length() - 1
+                    limit = len(prefix) + len(_LONG_LINE_MARKER) + 8191 if shortened else 16383
+                    if old_units + part_units > limit:
+                        # Leave room for the incoming tail before inserting it;
+                        # never create a giant QTextBlock and trim it afterward.
+                        keep_old = max(0, 8191 - part_units)
+                        cut = max(len(prefix), old_units - keep_old)
+                        encoded = old.encode("utf-16-le")
+                        if cut < old_units and 0xdc00 <= int.from_bytes(encoded[cut * 2:cut * 2 + 2], "little") <= 0xdfff:
+                            cut += 1
+                        cursor.setPosition(block.position() + len(prefix))
+                        cursor.setPosition(block.position() + cut, QTextCursor.MoveMode.KeepAnchor)
+                        cursor.removeSelectedText()
+                        cursor.insertText(_LONG_LINE_MARKER, self._text_format("warning"))
+                        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                        part = self._utf16_tail(part, 8191)
+                    cursor.insertText(part, fmt)
+                if index < len(parts) - 1:
+                    cursor.insertText("\n", fmt)
 
     @staticmethod
     def _visual_entries(entries, timestamps=False):

@@ -197,6 +197,9 @@ def main() -> int:
         if task_holder and not loop.is_closed():
             loop.call_soon_threadsafe(task_holder[0].cancel)
         worker.join(5)
+        assert not worker.is_alive(), "Local terminal server did not stop"
+        assert server.httpd is None or server.httpd.socket.fileno() == -1, "Terminal HTTP listener leaked after shutdown"
+        print("Terminal shutdown: server worker stopped and HTTP listener closed OK")
 
 
 if __name__ == "__main__":

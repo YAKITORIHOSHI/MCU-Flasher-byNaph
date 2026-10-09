@@ -20,13 +20,15 @@ class LogFollow(QObject):
         super().__init__(view)
         self.view = view
         self.enabled = bool(enabled)
-        # Serial follows whenever Auto is enabled, pausing only during a hold.
+        # Live logs follow new output, pausing during a hold. Idle wheel/key
+        # navigation must remain where the reader left it until output arrives.
         # Other logs can retain their independent reading-position policy.
         self.hold_to_pause = bool(hold_to_pause)
         self.resume_on_release = bool(resume_on_release or hold_to_pause)
         self.scrollbar_held = False
         self.user_scrolled_up = False
         self._depth = 0
+        self._content_revision = 0
         self._plain = isinstance(view, QPlainTextEdit)
         self._pending_scroll = None
         self._resize_state = None
@@ -43,6 +45,7 @@ class LogFollow(QObject):
         bar.sliderPressed.connect(self._press)
         bar.sliderReleased.connect(self._release)
         view.selectionChanged.connect(self._selection_changed)
+        view.document().contentsChange.connect(self._on_content_changed)
         bar.installEventFilter(self)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
@@ -60,9 +63,12 @@ class LogFollow(QObject):
         if not self._depth:
             self._cancel_settle()
             self.user_scrolled_up = not self._at_bottom()
-            if (self.hold_to_pause and self.enabled and self.user_scrolled_up
-                    and not self.scrollbar_held and not self._bar.isSliderDown()):
-                self._resume_timer.start(0)
+
+    def _on_content_changed(self, _position, removed, added):
+        # QTextDocument.revision() also advances for empty edit blocks. Only
+        # real content changes should make an idle output transaction follow.
+        if removed or added:
+            self._content_revision += 1
 
     def _press(self):
         self._cancel_settle()
@@ -86,9 +92,8 @@ class LogFollow(QObject):
         # Coalesce that layout work without polling or one callback per line.
         if self._depth or not self._wrapped() or self.scrollbar_held or self._bar.isSliderDown():
             return
-        if (self._pending_scroll is None and self.enabled
-                and (self.hold_to_pause or not self.user_scrolled_up)):
-            self._pending_scroll = self._capture(False)
+        if self._pending_scroll is None and self.enabled and not self.user_scrolled_up:
+            self._pending_scroll = self._capture(False, follow_output=False)
         if self._pending_scroll is not None:
             self._settle_timer.start(0)
 
@@ -134,10 +139,7 @@ class LogFollow(QObject):
 
     def _sync_scroll(self):
         if isValid(self.view) and not self._depth:
-            if self.hold_to_pause and self.enabled:
-                self._resume_scroll()
-            else:
-                self.user_scrolled_up = not self._at_bottom()
+            self.user_scrolled_up = not self._at_bottom()
 
     def eventFilter(self, obj, event):
         # Child scrollbars receive destruction events after their view is gone.
@@ -162,6 +164,7 @@ class LogFollow(QObject):
         elif obj in (self.view, self.view.viewport()) and kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):
             # QAbstractScrollArea routes wheel input through its viewport.
             self._cancel_settle()
+            self._resume_timer.stop()
             QTimer.singleShot(0, self._sync_scroll)
         return super().eventFilter(obj, event)
 
@@ -181,12 +184,13 @@ class LogFollow(QObject):
         self.scrollbar_held = self.scrollbar_held or self._bar.isSliderDown()
         self.user_scrolled_up = False
 
-    def _capture(self, rebuild):
+    def _capture(self, rebuild, *, follow_output=True):
         view = self.view
         bar = view.verticalScrollBar()
         wrapped = self._wrapped()
         following = (self.enabled and not self.scrollbar_held and not bar.isSliderDown()
-                     and (self.hold_to_pause or (not self.user_scrolled_up and (wrapped or self._at_bottom()))))
+                     and ((self.hold_to_pause and follow_output)
+                          or (not self.user_scrolled_up and (wrapped or self._at_bottom()))))
         if self._plain and not wrapped:
             anchor = QTextCursor(view.firstVisibleBlock())
         else:
@@ -204,6 +208,7 @@ class LogFollow(QObject):
                 points.append((point.blockNumber(), point.positionInBlock(), point.block().text()))
         return {
             "following": following, "anchor": anchor,
+            "content_revision": self._content_revision,
             "block": anchor.blockNumber(), "y": view.cursorRect(anchor).top(),
             "horizontal": view.horizontalScrollBar().value(), "selection": endpoints,
             "rebuild": rebuild, "empty": view.document().isEmpty(),
@@ -263,6 +268,7 @@ class LogFollow(QObject):
                 bar.setValue(bar.maximum())
                 if bar.value() == bar.maximum():
                     break
+            self.user_scrolled_up = False
         elif self._wrapped():
             bar.setValue(0 if state["empty"] else self._visual_row(state["anchor"]) + state["row_offset"])
         elif self._plain:
@@ -279,7 +285,7 @@ class LogFollow(QObject):
     def update(self, *, rebuild=False, resize=False):
         outer = not self._depth
         state = (self._resize_state if resize and self._resize_state is not None
-                 else self._capture(rebuild)) if outer else None
+                 else self._capture(rebuild, follow_output=not (resize or rebuild))) if outer else None
         if outer:
             # Keep the original character through repeated width changes;
             # recapturing each newly wrapped row would accumulate drift.
@@ -289,7 +295,7 @@ class LogFollow(QObject):
             yield
         finally:
             try:
-                if outer:
+                if outer and (resize or rebuild or self._content_revision != state["content_revision"]):
                     self._restore(state)
                     if self._wrapped() and not self.scrollbar_held and not self._bar.isSliderDown():
                         self._pending_scroll = state

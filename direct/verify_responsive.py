@@ -25,7 +25,7 @@ from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixt
 from PySide6.QtCore import QRect, QPoint, QObject, Signal, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
-                              QLineEdit, QToolButton, QStyle, QStyleOptionToolButton,
+                              QLineEdit, QToolButton,
                               QApplication)
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
@@ -226,15 +226,13 @@ class QtResponsiveChecks(ControlChecks):
         layout = QVBoxLayout(host)
         panel, sent = self.terminal(host)
         layout.addWidget(panel)
-        # Keep the initial fixture empty; real add_session remains enabled for
-        # the subsequent mouse clicks, with only process/IPC work mocked.
-        with patch.object(panel, 'add_session'):
-            host.show()
-            pump()
+        host.show()
+        pump()
         button = panel._btn_add_tab
         self.assertIsInstance(button, QToolButton)
-        self.assertEqual(button.popupMode(), QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.assertEqual(button.popupMode(), QToolButton.ToolButtonPopupMode.InstantPopup)
         self.assertIs(button.menu(), panel._add_menu)
+        pwsh_action = next(action for action in panel._add_menu.actions() if 'pwsh' in action.text().lower())
         cmd_action = next(action for action in panel._add_menu.actions() if 'cmd' in action.text().lower())
 
         def new_payload():
@@ -266,41 +264,57 @@ class QtResponsiveChecks(ControlChecks):
                     if width in (1920, 480):
                         capture(host, f'terminal-{mode}-{width}-empty')
 
-                    option = QStyleOptionToolButton()
-                    button.initStyleOption(option)
-                    arrow_rect = button.style().subControlRect(
-                        QStyle.ComplexControl.CC_ToolButton, option,
-                        QStyle.SubControl.SC_ToolButtonMenu, button)
-                    main_point = QPoint(max(1, arrow_rect.left() // 2), button.rect().center().y())
-                    self.assertFalse(arrow_rect.contains(main_point))
                     sent.reset_mock()
-                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=main_point)
+                    menu_was_visible = []
+                    def dismiss_chooser():
+                        menu_was_visible.append(panel._add_menu.isVisible())
+                        panel._add_menu.close()
+                    QTimer.singleShot(0, dismiss_chooser)
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=button.rect().center())
                     pump()
-                    self.assertEqual(new_payload()['kind'], 'pwsh',
-                                     'The main + click must open PowerShell directly')
+                    self.assertEqual(menu_was_visible, [True])
+                    self.assertFalse(any(call.args[0] == 'new' for call in sent.call_args_list),
+                                     'Opening or dismissing + must not start a shell')
+                    self.assertEqual(panel._tab_bar.count(), 0)
+
+                    pwsh_action.trigger()
+                    pump()
+                    self.assertEqual(new_payload()['kind'], 'pwsh')
                     self.assertEqual(panel._tab_bar.count(), 1)
                     self.assertTrue(panel._tab_bar.isVisible())
-                    tab_rect = QRect(panel._tab_bar.mapTo(panel._header, QPoint()), panel._tab_bar.size())
-                    gap = button.mapTo(panel._header, QPoint()).x() - tab_rect.right() - 1
+                    # QSS can reserve a wide tab-bar size while painting a much
+                    # shorter tab. Measure the painted tab, not the outer bar.
+                    tab_rect = panel._tab_bar.tabRect(0)
+                    tab_right = panel._tab_bar.mapTo(panel._header, tab_rect.topRight()).x()
+                    gap = button.mapTo(panel._header, QPoint()).x() - tab_right - 1
                     self.assertGreaterEqual(gap, 0)
-                    self.assertLessEqual(gap, panel._header_layout.spacing(),
-                                         '+ must follow the session tabs without consuming spare width')
+                    self.assertLessEqual(gap, panel._header_layout.spacing() + 4,
+                                         '+ must follow the actual painted tab without reserved blank width')
+                    self.assertLessEqual(abs(button.geometry().center().y() - tab_rect.center().y()
+                                             - panel._tab_bar.geometry().y()), 2,
+                                         '+ must be vertically aligned with the actual session tab')
 
                     menu_was_visible = []
                     def choose_cmd():
                         menu_was_visible.append(panel._add_menu.isVisible())
                         cmd_action.trigger()
                         panel._add_menu.close()
-                    # QToolButton runs the arrow menu's event loop during the
-                    # click. Choose CMD there instead of starting a real shell.
+                    # The chooser runs a nested event loop. Choose CMD there
+                    # with all process/IPC calls still mocked.
                     QTimer.singleShot(0, choose_cmd)
-                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=arrow_rect.center())
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=button.rect().center())
                     pump()
-                    self.assertEqual(menu_was_visible, [True], 'The arrow click must open the shell menu')
+                    self.assertEqual(menu_was_visible, [True], '+ must open the shell menu')
                     self.assertEqual(new_payload()['kind'], 'cmd')
                     self.assertEqual(panel._tab_bar.count(), 2)
                     self.contained(panel._tab_bar, panel._header)
                     self.contained(button, panel._header)
+                    last_tab_rect = panel._tab_bar.tabRect(panel._tab_bar.count() - 1)
+                    last_tab_right = panel._tab_bar.mapTo(panel._header, last_tab_rect.topRight()).x()
+                    gap = button.mapTo(panel._header, QPoint()).x() - last_tab_right - 1
+                    self.assertGreaterEqual(gap, 0)
+                    self.assertLessEqual(gap, panel._header_layout.spacing() + 4,
+                                         '+ must remain adjacent to the last actual tab after adding another shell')
                     if width in (1920, 480):
                         capture(host, f'terminal-{mode}-{width}-sessions')
 
@@ -314,21 +328,68 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertFalse(panel._btn_clear.isEnabled())
                     self.assertFalse(panel._btn_kill.isEnabled())
 
-    def test_terminal_show_reveal_and_project_reset_default_to_powershell(self):
+    def test_terminal_show_reveal_and_project_reset_preserve_zero_tabs(self):
         panel, sent = self.terminal()
         panel.resize(800, 240)
         panel.show()
         pump()
-        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
-        panel._on_tab_close_requested(0)
+        self.assertEqual(panel._tab_bar.count(), 0)
         panel._on_tab_revealed()
-        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
-        panel.reset_for_project(str(ROOT / 'temp/audit/terminal-default'))
-        self.assertEqual(panel._tab_bar.count(), 1)
-        self.assertEqual(next(iter(panel._sessions_meta.values()))['kind'], 'pwsh')
+        panel.reset_for_project(str(ROOT / 'temp/audit/terminal-empty'))
+        self.assertEqual(panel._tab_bar.count(), 0)
+        self.assertFalse(panel._sessions_meta)
+        self.assertIs(panel._stack.currentWidget(), panel._empty_card)
+        self.assertTrue(panel._tab_bar.isHidden())
+        self.assertFalse(panel._btn_clear.isEnabled())
+        self.assertFalse(panel._btn_kill.isEnabled())
         new_calls = [call for call in sent.call_args_list if call.args[0] == 'new']
-        self.assertEqual(len(new_calls), 3)
-        self.assertTrue(all(call.kwargs['extra']['kind'] == 'pwsh' for call in new_calls))
+        self.assertEqual(new_calls, [])
+
+    def test_terminal_many_tabs_scroll_without_pushing_add_button_outside_header(self):
+        host = self.own(QWidget())
+        layout = QVBoxLayout(host)
+        panel, sent = self.terminal(host)
+        layout.addWidget(panel)
+        host.show()
+        pump()
+        for index in range(16):
+            panel.add_session('pwsh' if index % 2 == 0 else 'cmd')
+        for mode in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(mode))
+            panel.apply_theme(mode)
+            for width in (1920, 800, 480, 320, 800):
+                with self.subTest(theme=mode, width=width):
+                    host.resize(width, 140)
+                    panel._tab_bar.setCurrentIndex(0)
+                    pump()
+                    panel._tab_bar.setCurrentIndex(panel._tab_bar.count() - 1)
+                    pump()
+                    self.assertLessEqual(host.width(), width)
+                    self.contained(panel._tab_bar, panel._header)
+                    self.contained(panel._btn_add_tab, panel._header)
+                    add_left = panel._btn_add_tab.mapTo(panel._header, QPoint()).x()
+                    visible_rects = [panel._tab_bar.tabRect(index).intersected(panel._tab_bar.rect())
+                                     for index in range(panel._tab_bar.count())]
+                    visible_rects = [rect for rect in visible_rects if not rect.isEmpty()]
+                    self.assertTrue(visible_rects)
+                    painted_right = max(panel._tab_bar.mapTo(panel._header, rect.topRight()).x()
+                                        for rect in visible_rects)
+                    # Overflow scroll arrows are real chrome after the final
+                    # painted tab. Include those visible controls, while still
+                    # rejecting any extra reserved blank width after them.
+                    scroll_buttons = [button for button in panel._tab_bar.findChildren(QToolButton)
+                                      if button.isVisible()]
+                    chrome_right = max([painted_right] + [
+                        button.mapTo(panel._header, button.rect().topRight()).x()
+                        for button in scroll_buttons])
+                    gap = add_left - chrome_right - 1
+                    self.assertGreaterEqual(gap, 0)
+                    self.assertLessEqual(gap, panel._header_layout.spacing() + 4)
+                    for button in (panel._btn_clear, panel._btn_kill):
+                        self.contained(button, panel._header)
+                        self.assertGreater(button.geometry().left(), panel._btn_add_tab.geometry().right())
+                    if width == 480:
+                        capture(host, f'terminal-{mode}-many-tabs')
 
     def test_build_console_original_journal_preserves_saved_fonts(self):
         from main.core import config

@@ -92,6 +92,16 @@ class _EmbedContainer(QWidget):
             QTimer.singleShot(250, self._panel.focus_terminal)
 
 
+class _SessionTabBar(QTabBar):
+    def minimumSizeHint(self):
+        # Qt's scroll-button reservation can exceed a single tab's width.
+        # Keep short strips intrinsic; retain the normal scrolling minimum
+        # when several sessions need more room than the header can provide.
+        hint = super().minimumSizeHint()
+        hint.setWidth(min(hint.width(), self.sizeHint().width()))
+        return hint
+
+
 class TerminalPanel(QWidget):
     """
     Bottom dock tab displaying multi-session tabbed Project Terminals.
@@ -165,7 +175,8 @@ class TerminalPanel(QWidget):
         self._header_layout = hl
 
         # ── Left: Session Tabs ([ pwsh ✕ ] [ cmd ✕ ]) ─────────────────────────
-        self._tab_bar = QTabBar()
+        self._tab_bar = _SessionTabBar(header)
+        self._tab_bar.setObjectName("terminal-session-tabs")
         self._tab_bar.setTabsClosable(True)
         self._tab_bar.setMovable(True)
         self._tab_bar.setDrawBase(False)
@@ -178,10 +189,10 @@ class TerminalPanel(QWidget):
             QTabBar::tab {
                 background: #111620; color: #8fa1b3; border: 1px solid #1c2636;
                 border-radius: 3px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
-                font-size: 11px; font-weight: 600; margin-right: 4px; min-height: 18px;
+                font-size: 11px; font-weight: 600; margin: 0 4px 0 0; min-height: 18px;
             }
             QTabBar::tab:selected {
-                background: #1c2636; color: #56cfbf; border: 1px solid #3d5069;
+                background: #1c2636; color: #56cfbf; border: 1px solid #3d5069; border-bottom: 1px solid #3d5069;
             }
             QTabBar::tab:hover:!selected {
                 background: #161e2a; color: #cdd6f4;
@@ -197,23 +208,24 @@ class TerminalPanel(QWidget):
         self._tab_bar.setCursor(Qt.CursorShape.ArrowCursor)
         hl.addWidget(self._tab_bar)
 
-        # Main click opens PowerShell; the arrow retains explicit shell choices.
+        # A single compact chooser requires an explicit shell selection.
         self._btn_add_tab = QToolButton(header)
         self._btn_add_tab.setText("+")
         self._btn_add_tab.setObjectName("btn-terminal-add")
-        self._btn_add_tab.setFixedSize(32, 20)
-        self._btn_add_tab.setToolTip("New PowerShell terminal. Use the arrow to choose PowerShell or Command Prompt.")
-        self._btn_add_tab.setAccessibleName("New PowerShell terminal")
-        self._btn_add_tab.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._btn_add_tab.setFixedSize(24, 22)
+        self._btn_add_tab.setToolTip("New terminal: choose PowerShell or Command Prompt")
+        self._btn_add_tab.setAccessibleName("Choose a new terminal shell")
+        self._btn_add_tab.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._btn_add_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_add_tab.setStyleSheet("""
             QToolButton#btn-terminal-add {
                 background: #10151c; color: #8fa1b3; border: 1px solid #1c2636;
-                border-radius: 3px; font-size: 11px; font-weight: bold; padding: 0 2px;
+                border-radius: 3px; font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 600; padding: 0;
             }
             QToolButton#btn-terminal-add:hover {
                 background: #1c2636; color: #56cfbf; border-color: #56cfbf;
             }
+            QToolButton#btn-terminal-add::menu-indicator { image: none; width: 0; height: 0; }
         """)
         self._add_menu = QMenu(self._btn_add_tab)
         act_p = self._add_menu.addAction("PowerShell (pwsh)")
@@ -221,7 +233,6 @@ class TerminalPanel(QWidget):
         act_c = self._add_menu.addAction("Command Prompt (cmd)")
         act_c.triggered.connect(lambda: self.add_session("cmd"))
         self._btn_add_tab.setMenu(self._add_menu)
-        self._btn_add_tab.clicked.connect(lambda: self.add_session())
         hl.addWidget(self._btn_add_tab)
 
         hl.addStretch()
@@ -232,11 +243,11 @@ class TerminalPanel(QWidget):
         self._status_dot.setObjectName("terminal-status-dot")
         self._status_dot.setFixedSize(14, 20)
         self._status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_dot.setToolTip("Project Terminal: Ready")
+        self._status_dot.setToolTip("Project Terminal: No active sessions")
         self._status_dot.setStyleSheet("""
             QLabel#terminal-status-dot {
                 background: transparent; border: none;
-                color: #4ec994; font-size: 10px; margin-right: 2px;
+                color: #64748b; font-size: 10px; margin-right: 2px;
             }
         """)
         hl.addWidget(self._status_dot)
@@ -412,8 +423,8 @@ class TerminalPanel(QWidget):
 
     # ── Startup & Embedding ──────────────────────────────────────────────────
     def ensure_started(self) -> None:
-        """Ensure the project terminal child process is running."""
-        if not self._is_active:
+        """Start the engine only for already requested terminal sessions."""
+        if self._sessions_meta and not self._is_active:
             self._start_terminal()
 
     def _start_terminal(self) -> None:
@@ -562,9 +573,9 @@ class TerminalPanel(QWidget):
             if not self._is_ready:
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
                 self._resize_embedded_terminal(show=False)
-                self._stack.setCurrentWidget(self._loader_card)
+                self._stack.setCurrentWidget(self._loader_card if self._sessions_meta else self._empty_card)
             else:
-                should_show = self.isVisible()
+                should_show = self.isVisible() and bool(self._sessions_meta)
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW if should_show else win32con.SW_HIDE)
                 self._resize_embedded_terminal(show=should_show)
                 if len(self._sessions_meta) > 0:
@@ -575,6 +586,7 @@ class TerminalPanel(QWidget):
                     "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
                 )
                 self._status_dot.setToolTip("Project Terminal: Ready")
+            self._update_buttons_state()
         except Exception as e:
             print(f"[MCU Flasher] Error embedding Project Terminal window: {e}")
 
@@ -621,16 +633,18 @@ class TerminalPanel(QWidget):
             else:
                 self._stack.setCurrentWidget(self._empty_card)
 
+            status_color = "#4ec994" if has_sessions else "#64748b"
             self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
+                f"QLabel#terminal-status-dot {{ background: transparent; border: none; color: {status_color}; font-size: 10px; margin-right: 2px; }}"
             )
-            self._status_dot.setToolTip("Project Terminal: Ready")
+            self._status_dot.setToolTip("Project Terminal: Ready" if has_sessions else "Project Terminal: No active sessions")
             self._update_buttons_state()
 
     # ── Session Management ───────────────────────────────────────────────────
     def add_session(self, kind: str = "pwsh") -> None:
         """Create and append a new terminal session (Command Prompt or PowerShell)."""
-        self.ensure_started()
+        if kind not in ("pwsh", "cmd"):
+            return
         self._session_counter += 1
         num = self._session_counter
         session_id = f"{kind}_{num}"
@@ -642,6 +656,7 @@ class TerminalPanel(QWidget):
             "kind": kind,
             "title": title,
         }
+        self.ensure_started()
 
         # Add tab to QTabBar
         self._tab_bar.blockSignals(True)
@@ -695,10 +710,6 @@ class TerminalPanel(QWidget):
                     win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
                 except Exception:
                     pass
-            self._status_dot.setStyleSheet(
-                "QLabel#terminal-status-dot { background: transparent; border: none; color: #64748b; font-size: 10px; margin-right: 2px; }"
-            )
-            self._status_dot.setToolTip("Project Terminal: No active sessions")
         else:
             curr_idx = self._tab_bar.currentIndex()
             if curr_idx >= 0:
@@ -727,6 +738,11 @@ class TerminalPanel(QWidget):
         self._btn_kill.setCursor(Qt.CursorShape.PointingHandCursor if has_active else Qt.CursorShape.ArrowCursor)
         self._btn_clear.setEnabled(has_active)
         self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor if has_active else Qt.CursorShape.ArrowCursor)
+        if not self._sessions_meta:
+            self._status_dot.setStyleSheet(
+                "QLabel#terminal-status-dot { background: transparent; border: none; color: #64748b; font-size: 10px; margin-right: 2px; }"
+            )
+            self._status_dot.setToolTip("Project Terminal: No active sessions")
 
     # ── Control Message Protocol ─────────────────────────────────────────────
     def _send_control(self, action: str, shell_id: Optional[str] = None, extra: Optional[dict] = None) -> None:
@@ -801,6 +817,8 @@ class TerminalPanel(QWidget):
     # ── Geometry & Sizing ────────────────────────────────────────────────────
     def focus_terminal(self) -> None:
         """Focus the embedded native terminal window so keyboard input flows directly to ConPTY."""
+        if not self.isVisible() or not self._is_ready or not self._sessions_meta:
+            return
         if not self._term_hwnd or win32gui is None or win32con is None:
             return
         if not win32gui.IsWindow(int(self._term_hwnd)):
@@ -849,25 +867,24 @@ class TerminalPanel(QWidget):
 
     def refresh_terminal(self) -> None:
         """Self-refresh the terminal view, geometry, and xterm layout."""
+        if not self._sessions_meta:
+            self._stack.setCurrentWidget(self._empty_card)
+            self._resize_embedded_terminal(show=False)
+            self._update_buttons_state()
+            return
         if not self._is_active:
             self.ensure_started()
             return
-        has_sessions = len(self._sessions_meta) > 0
-        if has_sessions:
-            self._stack.setCurrentWidget(self._embed_container)
-            if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
-                win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_SHOW)
-                self._resize_embedded_terminal(show=True)
-                QTimer.singleShot(30, lambda: self._resize_embedded_terminal(show=True))
-                QTimer.singleShot(100, lambda: self._resize_embedded_terminal(show=True))
-                QTimer.singleShot(250, self.focus_terminal)
-        else:
-            self._stack.setCurrentWidget(self._empty_card)
-            if self._is_embedded and self._term_hwnd and win32gui and win32gui.IsWindow(int(self._term_hwnd)):
-                try:
-                    win32gui.ShowWindow(int(self._term_hwnd), win32con.SW_HIDE)
-                except Exception:
-                    pass
+        if not self._is_ready:
+            self._stack.setCurrentWidget(self._loader_card)
+            self._resize_embedded_terminal(show=False)
+            return
+        self._stack.setCurrentWidget(self._embed_container)
+        if self._is_embedded and self._term_hwnd:
+            self._resize_embedded_terminal(show=True)
+            QTimer.singleShot(30, lambda: self._resize_embedded_terminal(show=True))
+            QTimer.singleShot(100, lambda: self._resize_embedded_terminal(show=True))
+            QTimer.singleShot(250, self.focus_terminal)
         if self._port and self._is_ready:
             self._send_control("fit")
 
@@ -890,7 +907,9 @@ class TerminalPanel(QWidget):
                 h = max(self._stack.height(), self.height() - 28, 60)
 
             has_sessions = len(self._sessions_meta) > 0
-            should_show = (self.isVisible() and self._is_ready and has_sessions) if show is None else show
+            # Delayed resize callbacks may arrive after hiding or closing the
+            # last tab. Explicit show requests must obey the current state too.
+            should_show = self.isVisible() and self._is_ready and has_sessions and show is not False
             hwnd = int(self._term_hwnd)
 
             flags = (
@@ -928,11 +947,7 @@ class TerminalPanel(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if len(self._sessions_meta) == 0:
-            self.add_session()
-        else:
-            self.ensure_started()
-            self.refresh_terminal()
+        self.refresh_terminal()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
@@ -947,11 +962,8 @@ class TerminalPanel(QWidget):
 
     def _on_tab_revealed(self) -> None:
         """Called when bottom dock notebook switches onto this tab."""
-        if len(self._sessions_meta) == 0:
-            self.add_session()
-        else:
-            self.ensure_started()
-            self.refresh_terminal()
+        self.refresh_terminal()
+        if self._sessions_meta:
             QTimer.singleShot(100, self.focus_terminal)
 
     def _on_tab_hidden(self) -> None:
@@ -993,10 +1005,10 @@ class TerminalPanel(QWidget):
                 QTabBar::tab {{
                     background: {bg_dark}; color: {text_dim}; border: 1px solid {border};
                     border-radius: 3px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
-                    font-size: 11px; font-weight: 600; margin-right: 4px; min-height: 18px;
+                    font-size: 11px; font-weight: 600; margin: 0 4px 0 0; min-height: 18px;
                 }}
                 QTabBar::tab:selected {{
-                    background: {bg_hover}; color: {cyan}; border: 1px solid {cyan};
+                    background: {bg_hover}; color: {cyan}; border: 1px solid {cyan}; border-bottom: 1px solid {cyan};
                 }}
                 QTabBar::tab:hover:!selected {{
                     background: {bg_hover}; color: {text_bright};
@@ -1013,11 +1025,12 @@ class TerminalPanel(QWidget):
             self._btn_add_tab.setStyleSheet(f"""
                 QToolButton#btn-terminal-add {{
                     background: {bg_dark}; color: {text_dim}; border: 1px solid {border};
-                    border-radius: 3px; font-size: 13px; font-weight: bold; padding: 0;
+                    border-radius: 3px; font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 600; padding: 0;
                 }}
                 QToolButton#btn-terminal-add:hover {{
                     background: {bg_hover}; color: {cyan}; border-color: {cyan};
                 }}
+                QToolButton#btn-terminal-add::menu-indicator {{ image: none; width: 0; height: 0; }}
             """)
 
         self._add_menu.setStyleSheet(f"""
@@ -1071,16 +1084,18 @@ class TerminalPanel(QWidget):
         """Update xterm.js theme and Qt container styles on theme change."""
         self._current_theme = theme_name
         self._apply_panel_theme(theme_name)
-        payload = self._build_terminal_theme_payload(theme_name)
-        self._send_control("theme", extra={"theme": payload})
-        self._send_control("font", extra={"size": self._current_font_size})
+        if self._is_active:
+            payload = self._build_terminal_theme_payload(theme_name)
+            self._send_control("theme", extra={"theme": payload})
+            self._send_control("font", extra={"size": self._current_font_size})
 
     def set_font_size(self, size: int) -> None:
         try:
             self._current_font_size = max(6, min(48, int(size)))
         except (ValueError, TypeError):
             self._current_font_size = 14
-        self._send_control("font", extra={"size": self._current_font_size})
+        if self._is_active:
+            self._send_control("font", extra={"size": self._current_font_size})
 
     def connect_signals(self, sig_bus, *, connect_theme=True) -> None:
         if hasattr(sig_bus, "font_size_changed"):
@@ -1091,7 +1106,6 @@ class TerminalPanel(QWidget):
     # ── Project Realignment ──────────────────────────────────────────────────
     def reset_for_project(self, new_project_dir: str) -> None:
         """Reset terminal state on project change."""
-        was_visible = self.isVisible()
         if self._is_active:
             self._stop_shell()
         self._is_active = False
@@ -1107,8 +1121,6 @@ class TerminalPanel(QWidget):
         self._tab_bar.blockSignals(False)
         self._stack.setCurrentWidget(self._empty_card)
         self._update_buttons_state()
-        if was_visible:
-            self.add_session()
 
     # ── Cleanup & Shutdown ───────────────────────────────────────────────────
     def _stop_shell(self) -> None:

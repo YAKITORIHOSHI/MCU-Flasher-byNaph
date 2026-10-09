@@ -3391,7 +3391,7 @@ class MCUWebBackendAPI:
                 if self._serial_conn:
                     try:
                         self._serial_conn.close()
-                    except serial.SerialException:
+                    except Exception:
                         pass
                     self._serial_conn = None
                 self.emit("serial:status", {
@@ -3450,7 +3450,7 @@ class MCUWebBackendAPI:
                 pieces.clear()
                 piece_chars = 0
                 next_flush = time.monotonic() + 0.03
-                if clear:
+                if clear and generation == self._serial_generation:
                     # No reader publication can overtake this clear. The
                     # codec retains incomplete UTF-8 for subsequent reads.
                     self.emit("serial:clear", None)
@@ -3517,7 +3517,7 @@ class MCUWebBackendAPI:
                     self._serial_conn = None
                 try:
                     conn.close()
-                except serial.SerialException:
+                except Exception:
                     pass
                 self.emit("serial:status", {
                     "generation": generation,

@@ -1270,6 +1270,11 @@ class ProjectTerminalServer:
                 self.httpd.shutdown()
             except Exception:
                 pass
+            try:
+                # shutdown() stops serving but leaves the listening socket open.
+                self.httpd.server_close()
+            except Exception:
+                pass
 
 
 

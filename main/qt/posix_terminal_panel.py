@@ -8,10 +8,10 @@ import select
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QStackedWidget
 
 from main.qt.log_colors import themed_terminal_colors
 from src.modules.runtime_resources import performance_profile
@@ -154,18 +154,35 @@ class PosixTerminalPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         header = QHBoxLayout()
-        self._label = QLabel("Project terminal")
+        self._label = QLabel("Project terminal", self)
         header.addWidget(self._label, 1)
+        self._session_actions = []
         for label, handler in (("New Bash", self.add_session), ("Clear", self._clear), ("End session", self._end_current)):
-            button = QPushButton(label)
+            button = QPushButton(label, self)
             button.clicked.connect(handler)
             header.addWidget(button)
+            if label != "New Bash":
+                self._session_actions.append(button)
+                button.setEnabled(False)
         layout.addLayout(header)
-        self._tabs = QTabWidget()
+        self._stack = QStackedWidget(self)
+        self._empty = QLabel("No terminal sessions\nChoose New Bash to start a shell in this project.", self._stack)
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setWordWrap(True)
+        self._stack.addWidget(self._empty)
+        self._tabs = QTabWidget(self._stack)
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._close_tab)
-        layout.addWidget(self._tabs, 1)
+        self._tabs.currentChanged.connect(self._update_session_state)
+        self._stack.addWidget(self._tabs)
+        layout.addWidget(self._stack, 1)
         self._label.setToolTip("Commands run in the selected sketch directory. Sessions never restart or replay commands automatically.")
+
+    def _update_session_state(self, index=None):
+        has_session = bool(self._sessions)
+        self._stack.setCurrentWidget(self._tabs if has_session else self._empty)
+        for button in self._session_actions:
+            button.setEnabled(has_session)
 
     def _cwd(self):
         project = self._project_dir or str(getattr(self._backend, "sketch_dir_path", "") or ROOT)
@@ -188,6 +205,7 @@ class PosixTerminalPanel(QWidget):
         view.loadFinished.connect(lambda ok: self._configure(view) if ok else self._label.setText("Terminal assets failed to load."))
         self._sessions[view] = (session, channel)
         self._tabs.setCurrentIndex(self._tabs.addTab(view, label))
+        self._update_session_state()
         view.setUrl(QUrl.fromLocalFile(str(ROOT / "src" / "editor" / "terminal.html")))
 
     def _configure(self, view):
@@ -206,15 +224,16 @@ class PosixTerminalPanel(QWidget):
 
     def _close_tab(self, index):
         view = self._tabs.widget(index)
+        if view is None:
+            return
         if view in self._sessions:
             self._sessions.pop(view)[0].close()
         self._tabs.removeTab(index)
-        if view:
-            view.deleteLater()
+        self._update_session_state()
+        view.deleteLater()
 
     def _on_tab_revealed(self):
-        if not self._sessions:
-            self.add_session()
+        self._resize_embedded_terminal()
 
     def _on_tab_hidden(self):
         pass

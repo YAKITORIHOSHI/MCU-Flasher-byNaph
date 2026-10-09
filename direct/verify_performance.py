@@ -276,6 +276,126 @@ class PerformanceChecks(unittest.TestCase):
         self.assertIn("compile error", widget.toPlainText())
         widget.deleteLater()
 
+    def test_log_follow_idle_wheel_and_keyboard_then_new_output(self):
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtWidgets import QPlainTextEdit
+        from main.qt.console_panel import ConsolePanel
+        from main.qt.serial_panel import SerialOutputView
+        for cls in (ConsolePanel, SerialOutputView):
+            for wrapped in (False, True):
+                with self.subTest(view=cls.__name__, wrapped=wrapped):
+                    widget = cls()
+                    widget.resize(360, 160)
+                    widget.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth if wrapped
+                                           else QPlainTextEdit.LineWrapMode.NoWrap)
+                    widget.show()
+                    try:
+                        QTest.qWait(30)
+                        for number in range(100):
+                            widget.append_log({"text": f"Row {number:03d} " + "readable fixture " * 15})
+                        while widget._queue:
+                            widget._flush_queue()
+                        QTest.qWait(30)
+                        bar = widget.verticalScrollBar()
+                        self.assertEqual(bar.value(), bar.maximum())
+                        point = QPointF(40, 40)
+                        wheel = QWheelEvent(point, point, QPoint(), QPoint(0, 120),
+                                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                            Qt.ScrollPhase.NoScrollPhase, False)
+                        APP.sendEvent(widget.viewport(), wheel)
+                        self.assertLess(bar.value(), bar.maximum(), "The real wheel event must move the view")
+                        first = widget.firstVisibleBlock().text()
+                        wheel_position = bar.value()
+                        # Process queued scroll/layout callbacks without producing any text.
+                        QTest.qWait(60)
+                        self.assertEqual(bar.value(), wheel_position, "Idle Auto-scroll must not undo the wheel")
+                        self.assertEqual(widget.firstVisibleBlock().text(), first)
+                        self.assertFalse(widget._queue)
+                        widget.setFocus()
+                        reading_position = widget.cursorForPosition(QPoint(0, 1)).position()
+                        QTest.keyClick(widget, Qt.Key.Key_PageUp)
+                        # Earlier wrapped blocks can raise Qt's estimated scrollbar
+                        # range and value while the source position moves backward.
+                        self.assertLess(widget.cursorForPosition(QPoint(0, 1)).position(), reading_position,
+                                        "Page Up must move the idle reading view")
+                        key_position = bar.value()
+                        first = widget.firstVisibleBlock().text()
+                        QTest.qWait(60)
+                        self.assertEqual(bar.value(), key_position, "Idle Auto-scroll must not undo Page Up")
+                        self.assertEqual(widget.firstVisibleBlock().text(), first)
+                        reading_position = widget.cursorForPosition(QPoint(0, 1)).position()
+                        widget._flush_queue()
+                        QTest.qWait(30)
+                        self.assertEqual(widget.cursorForPosition(QPoint(0, 1)).position(), reading_position,
+                                         "An empty flush must not move the reading view")
+                        self.assertLess(bar.value(), bar.maximum())
+                        if isinstance(widget, SerialOutputView):
+                            for control in ("\x1b[3", "1m"):
+                                widget.append_log({"text": control, "newline": False})
+                                widget._flush_queue()
+                                QTest.qWait(30)
+                                self.assertEqual(widget.cursorForPosition(QPoint(0, 1)).position(), reading_position,
+                                                 "ANSI-only data must not move the reading view")
+                                self.assertEqual(widget.firstVisibleBlock().text(), first)
+                        widget.append_log({"text": "New output resumes Auto-scroll"})
+                        widget._flush_queue()
+                        QTest.qWait(30)
+                        self.assertEqual(bar.value(), bar.maximum())
+                    finally:
+                        widget.close()
+                        widget.deleteLater()
+
+    def test_log_follow_idle_resize_and_display_rebuild_keep_reading_anchor(self):
+        from PySide6.QtWidgets import QPlainTextEdit
+        from main.qt.console_panel import ConsolePanel
+        from main.qt.serial_panel import SerialOutputView
+        for cls in (ConsolePanel, SerialOutputView):
+            with self.subTest(view=cls.__name__):
+                widget = cls()
+                widget.resize(360, 160)
+                widget.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+                widget.show()
+                try:
+                    QTest.qWait(30)
+                    for number in range(100):
+                        widget.append_log({"text": f"Row {number:03d} " + "readable fixture " * 15})
+                    while widget._queue:
+                        widget._flush_queue()
+                    QTest.qWait(30)
+                    bar = widget.verticalScrollBar()
+                    bar.setValue(bar.maximum() // 2)
+                    QTest.qWait(30)
+                    first = widget.firstVisibleBlock().text()
+                    self.assertLess(bar.value(), bar.maximum())
+                    widget.resize(290, 160)
+                    QTest.qWait(30)
+                    self.assertEqual(widget.firstVisibleBlock().text(), first, "Idle resize must preserve the visible text")
+                    self.assertLess(bar.value(), bar.maximum())
+                    widget.apply_theme("solarized_dark")
+                    QTest.qWait(30)
+                    self.assertEqual(widget.firstVisibleBlock().text(), first, "Theme rebuild must preserve the visible text")
+                    self.assertLess(bar.value(), bar.maximum())
+                    widget.set_timestamp_enabled(True)
+                    QTest.qWait(30)
+                    self.assertTrue(widget.firstVisibleBlock().text().endswith(first), "Timestamp rebuild must retain the reading anchor")
+                    self.assertLess(bar.value(), bar.maximum())
+                    widget.set_timestamp_enabled(False)
+                    QTest.qWait(30)
+                    self.assertEqual(widget.firstVisibleBlock().text(), first)
+                    widget.append_log({"text": "Real output after display changes " * 30})
+                    widget._flush_queue()
+                    QTest.qWait(30)
+                    self.assertEqual(bar.value(), bar.maximum())
+                    self.assertFalse(widget._follow.user_scrolled_up)
+                    widget.resize(250, 160)
+                    QTest.qWait(30)
+                    self.assertEqual(bar.value(), bar.maximum(),
+                                     "Resizing after Auto resumes must keep the latest output visible")
+                finally:
+                    widget.close()
+                    widget.deleteLater()
+
     def test_log_follow_wheel_hold_off_and_return_to_bottom(self):
         from PySide6.QtCore import QPoint, QPointF, Qt
         from PySide6.QtGui import QWheelEvent
@@ -283,7 +403,6 @@ class PerformanceChecks(unittest.TestCase):
         from main.qt.serial_panel import SerialOutputView
         for cls in (ConsolePanel, SerialOutputView):
             widget = cls()
-            serial = isinstance(widget, SerialOutputView)
             widget.resize(360, 160)
             widget.show()
             try:
@@ -299,7 +418,8 @@ class PerformanceChecks(unittest.TestCase):
                 wheel = QWheelEvent(point, point, QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton,
                                     Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
                 APP.sendEvent(widget.viewport(), wheel)
-                visible = widget.firstVisibleBlock().text()
+                QTest.qWait(30)
+                self.assertLess(bar.value(), bar.maximum())
                 widget.append_log({"text": "Output during wheel scroll"})
                 widget._flush_queue()
                 APP.processEvents()
@@ -314,6 +434,19 @@ class PerformanceChecks(unittest.TestCase):
                 bar.setValue(bar.maximum())
                 widget.append_log({"text": "Output after returning to bottom"})
                 widget._flush_queue()
+                self.assertEqual(bar.value(), bar.maximum())
+                QTest.mousePress(widget.viewport(), Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.NoModifier, QPoint(20, 20))
+                visible = widget.firstVisibleBlock().text()
+                for number in range(4):
+                    widget.append_log({"text": f"Continuous output during mouse hold {number}"})
+                    widget._flush_queue()
+                    QTest.qWait(10)
+                    self.assertEqual(widget.firstVisibleBlock().text(), visible)
+                # A release delivered outside the viewport must still resume Auto.
+                QTest.mouseRelease(widget, Qt.MouseButton.LeftButton,
+                                   Qt.KeyboardModifier.NoModifier, QPoint(2, 2))
+                QTest.qWait(30)
                 self.assertEqual(bar.value(), bar.maximum())
                 widget.set_autoscroll(False)
                 visible = widget.firstVisibleBlock().text()

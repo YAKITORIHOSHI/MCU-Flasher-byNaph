@@ -439,6 +439,68 @@ class SerialViewChecks(unittest.TestCase):
                     view.deleteLater()
                     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
+    def test_live_bursts_bound_each_paragraph_before_insertion_and_keep_copy(self):
+        for timestamps in (False, True):
+            with self.subTest(timestamps=timestamps):
+                self.view.clear()
+                self.view.set_timestamp_enabled(timestamps)
+                text = "🌍" * 20000 + "\nnext device line\n" + "x" * 20000 + "\nlast\n"
+                for offset in range(0, len(text), 8000):
+                    self.view.append_log({"text": text[offset:offset + 8000], "newline": False,
+                                          "timestamp": "01:02:03"})
+                original = self.view._insert_chunks
+                inserted = []
+
+                class CheckedCursor:
+                    def __init__(inner, cursor):
+                        inner.cursor = cursor
+
+                    def __getattr__(inner, name):
+                        return getattr(inner.cursor, name)
+
+                    def insertText(inner, content, fmt):
+                        inserted.append(content)
+                        inner.cursor.insertText(content, fmt)
+                        block = self.view.document().firstBlock()
+                        while block.isValid():
+                            self.assertLessEqual(block.length(), 16384,
+                                                 "A live insert must never shape an oversized paragraph")
+                            block = block.next()
+
+                with patch.object(self.view, "_insert_chunks",
+                                  side_effect=lambda cursor, chunks: original(CheckedCursor(cursor), chunks)):
+                    while self.view._queue:
+                        self.view._flush_queue()
+                self.assertTrue(inserted)
+                copied = self.view.get_content_for_clipboard(include_timestamp=False)
+                self.assertEqual(copied, text)
+                visible = self.view.toPlainText()
+                self.assertIn("next device line", visible)
+                self.assertTrue(visible.endswith("last\n"))
+                self.assertEqual(visible.count("[Long line display truncated] "), 2)
+                self.assertNotRegex(visible, r"[\ud800-\udfff]")
+                if timestamps:
+                    self.assertEqual(visible.count("[01:02:03] "), 4)
+                self.view.apply_theme("solarized_dark")
+                self.assertEqual(self.view.toPlainText(), visible)
+                self.assertEqual(self.view.get_content_for_clipboard(False), text)
+
+    def test_shortened_live_line_keeps_stable_tail_and_reuses_formats(self):
+        text = "first " + "🌍" * 12000
+        for offset in range(0, len(text), 8000):
+            self.feed(text[offset:offset + 8000])
+        self.feed("latest suffix")
+        expected = self.view.toPlainText()
+        self.assertLessEqual(self.view.document().lastBlock().length(), 8300)
+        self.assertTrue(expected.endswith("latest suffix"))
+        format_before = self.view._text_format("normal")
+        for _ in range(30):
+            self.assertIs(self.view._text_format("normal"), format_before)
+        self.view.apply_theme("light")
+        self.assertEqual(self.view.toPlainText(), expected)
+        self.assertIsNot(self.view._text_format("normal"), format_before)
+        self.assertEqual(self.view.get_content_for_clipboard(False), text + "latest suffix")
+
     def test_theme_keeps_selected_prefix_of_existing_truncated_ascii_line(self):
         target = "KEEP_ME_NEAR_VISIBLE_BOUNDARY"
         text = "x" * 15859 + target
