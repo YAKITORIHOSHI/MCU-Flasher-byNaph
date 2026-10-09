@@ -5,13 +5,98 @@ import difflib
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont
+from PySide6.QtCore import QEvent, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QPainter
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
     QTreeWidgetItem, QSplitter, QPlainTextEdit, QMessageBox, QTextEdit, QHeaderView)
 
 from main.qt.icons import ActionButton
 from main.qt.signals import signals
+
+
+class _LineNumberArea(QWidget):
+    def __init__(self, preview):
+        super().__init__(preview)
+        self._preview = preview
+        self.setAccessibleName("Source line numbers")
+
+    def paintEvent(self, event):
+        self._preview.paint_line_numbers(event)
+
+
+class CodePreview(QPlainTextEdit):
+    """Read-only source preview with a gutter tied to document block geometry."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setMinimumSize(0, 0)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._number_background = QColor("#151922")
+        self._number_foreground = QColor("#adc0d3")
+        self._number_border = QColor("#425e79")
+        self._number_area = _LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_number_width)
+        self.updateRequest.connect(self._update_number_area)
+        self._update_number_width()
+
+    def _number_width(self):
+        digits = len(str(max(1, self.blockCount())))
+        return 14 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def _update_number_width(self, *_):
+        width = self._number_width()
+        self.setViewportMargins(width, 0, 0, 0)
+        rect = self.contentsRect()
+        self._number_area.setGeometry(rect.left(), rect.top(), width, rect.height())
+        self._number_area.update()
+
+    def _update_number_area(self, rect, dy):
+        if dy:
+            self._number_area.scroll(0, dy)
+        else:
+            self._number_area.update(0, rect.y(), self._number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_number_width()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_number_width()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange and hasattr(self, "_number_area"):
+            self._update_number_width()
+
+    def _number_rows(self):
+        block = self.firstVisibleBlock()
+        while block.isValid():
+            top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+            bottom = top + self.blockBoundingRect(block).height()
+            if top > self.viewport().height():
+                break
+            if block.isVisible() and bottom >= 0:
+                yield block.blockNumber() + 1, top, bottom
+            block = block.next()
+
+    def paint_line_numbers(self, event):
+        painter = QPainter(self._number_area)
+        painter.fillRect(event.rect(), self._number_background)
+        painter.setPen(self._number_border)
+        painter.drawLine(self._number_area.width() - 1, event.rect().top(),
+                         self._number_area.width() - 1, event.rect().bottom())
+        painter.setFont(self.font())
+        painter.setPen(self._number_foreground)
+        height = self.fontMetrics().height()
+        for number, top, _ in self._number_rows():
+            painter.drawText(QRectF(0, top, self._number_area.width() - 7, height),
+                             Qt.AlignmentFlag.AlignRight, str(number))
+
+    def apply_theme(self, palette):
+        self._number_background = QColor(palette["BG_DARK"])
+        self._number_foreground = QColor(palette["TEXT_DIM"])
+        self._number_border = QColor(palette["BORDER"])
+        self._number_area.update()
 
 
 class AIChangesPanel(QWidget):
@@ -77,16 +162,23 @@ class AIChangesPanel(QWidget):
         column = QVBoxLayout(panel)
         column.setContentsMargins(4, 0, 0, 0)
         column.addWidget(QLabel(title, panel))
-        text = QPlainTextEdit(panel)
-        text.setReadOnly(True)
-        text.setMinimumSize(0, 0)
-        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        text = CodePreview(panel)
+        text.setAccessibleName(f"{title} code preview")
         from main.core.config import get_monitor_font_size
         size = get_monitor_font_size()
         text.setFont(QFont("Consolas", size))
         column.addWidget(text, 1)
         layout.addWidget(panel, 1)
         return text
+
+    @staticmethod
+    def _prompt_title(record):
+        title = str(record.get("prompt", "Assistant changes"))
+        # The legacy fallback was emitted only by the integrated PTY tracker.
+        # Other unknown external edits retain their explicit unknown-source title.
+        cli = (str(record.get("promptSource", "")).casefold() == "cli"
+               or title == "Assistant prompt (title unavailable)")
+        return "Assistant Prompt (CLI)" if cli else title
 
     def refresh(self, *_):
         manager = getattr(self._backend, "ai_review_manager", None)
@@ -99,7 +191,7 @@ class AIChangesPanel(QWidget):
         for record in reversed(list(self._records.values())):
             group_id = record.get("groupId", "")
             if group_id not in groups:
-                group = QTreeWidgetItem([record.get("prompt", "Assistant changes"), "", ""])
+                group = QTreeWidgetItem([self._prompt_title(record), "", ""])
                 group.setToolTip(0, record.get("prompt", ""))
                 self._tree.addTopLevelItem(group)
                 group.setFirstColumnSpanned(True)
@@ -130,8 +222,10 @@ class AIChangesPanel(QWidget):
     def _select(self, item=None, *_):
         record = self._records.get(item.data(0, Qt.ItemDataRole.UserRole), {}) if item else {}
         before, after = str(record.get("beforeContent", "")), str(record.get("content", ""))
-        self._before.setPlainText(before)
-        self._after.setPlainText(after)
+        if self._before.toPlainText() != before:
+            self._before.setPlainText(before)
+        if self._after.toPlainText() != after:
+            self._after.setPlainText(after)
         self._delete.setEnabled(bool(record) and not self._busy)
         manager = getattr(self._backend, "ai_review_manager", None)
         self._review.setEnabled(bool(record and manager and manager.has_pending_ai_edit(record["path"])))
@@ -206,6 +300,8 @@ class AIChangesPanel(QWidget):
         from main.qt.theme import get_palette
         pal = get_palette(mode or Theme.active_theme)
         self.setStyleSheet(f"#ai-changes-panel {{ background: {pal['BG_DARK']}; color: {pal['TEXT']}; }}")
+        for preview in (self._before, self._after):
+            preview.apply_theme(pal)
         self._added = pal.get("GREEN", "#2e9d61")
         self._removed = pal.get("RED", "#c74b4b")
         # Muted fills retain the theme's readable text foreground.

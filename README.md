@@ -92,6 +92,18 @@ toolbar; it does not create a separate desktop window. **Detach Editor** opens
 the full code editor only on request. Closing it attaches the same editor and
 its unsaved buffers back to the main workspace.
 Settings reset and system-theme fallback resolve the current glass theme names.
+The private developer ticket portal follows all three workspace themes with
+cached beveled glass cards, Montserrat text and circuit icons. Login, ticket
+creation/editing and Firebase settings share readable form surfaces and keyboard
+focus. Narrow forms stack their fields; short windows scroll while edit and cloud
+actions stay visible. Theme changes retain drafts, search and filters. Failed
+Firebase settings writes keep the form open with an explanation.
+Firebase follows the current app session's Offline Mode network policy. Blocked
+sign-in explains how to turn the mode off and restart, instead of suggesting
+package repair or reporting invalid credentials. Cloud status distinguishes
+configuration from a Firebase sign-in; endpoint tests verify reachability and
+leave credential and ticket-access checks to sign-in. Passwords are sent exactly
+as entered, and failed attempts clear the earlier cloud session.
 The downloader shows cached catalogs before network refreshes and keeps compact
 grouped metadata in an automatically rebuilt cache. Fresh local indexes need no
 connectivity probe. Installed-package and detail scans run in bounded workers;
@@ -913,14 +925,44 @@ screens. Explicit Blink remains available.
 
 The **AI Changes** tool tab retains recent timestamped file previews grouped by
 submitted prompt. Each file has its own Accept/Reject review with a queue counter
-and Previous/Next navigation. Before and AI-edit panes highlight removed and
-added lines. Delete card and Delete all affect display history only, preserving
+and Previous/Next navigation. Before and AI-edit panes have independent source
+line-number gutters and highlight removed and added lines. The gutters follow
+scrolling, wrapping, fonts and themes. Delete card and Delete all affect display history only, preserving
 pending reviews and recovery copies. History survives reopening the project and
 is bounded to 200 cards / 4 MiB; large previews are marked as truncated.
-Integrated assistant input supplies prompt titles when reconstructable. Changes
-from an external CLI without prompt metadata are grouped by settled activity and
-explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
+Integrated terminal edits display **Assistant Prompt (CLI)**; captured prompt text
+remains available in the group tooltip. Unidentified external changes are grouped
+by settled activity and explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
 registered as manual operations before disk changes and never become AI reviews.
+
+Double-click an error or warning in **Syntax Check** to open its exact root source
+and select the reported range at the top of the editor, including wrapped and
+final lines. Navigation reveals a hidden editor or brings its detached window
+forward. Checks include unsaved buffers and discard results from older editor
+revisions; Unicode columns match Monaco selections.
+
+Live checking recognizes C and C++ literals, comments, brackets, includes,
+preprocessor continuations, known inactive branches and probable missing
+semicolons/colons. It reads current bytes once in a worker, catches edits on
+coarse-timestamp storage and waits for typing to settle before retrying stale
+checks. Unreadable sources and exceeded resource limits report a failure or
+warning. Project checks allow 256 root sources and 16 MiB of source text; each
+source is capped at 4 MiB characters, with bounded nesting and diagnostics.
+**Compile** supplies complete target preprocessing, symbol, type and library
+diagnostics; live checking does not run a compiler.
+
+Monaco selects **C** for `.c` files, with separate C keywords, highlighting,
+standard-header suggestions, snippets and brace indentation. Keyword suggestions
+identify their C version. `.ino`, `.cpp`, `.h` and `.hpp` retain C++ behavior.
+Both languages work from the bundled offline assets.
+
+The **AI Review / History** bar has a **Hide** action. Use the control beside the
+source tabs to show it again. Its hidden state survives editor reloads during
+the session while pending reviews, highlights and history actions stay intact.
+Diffs use green for additions, blue for changed lines and red for removals in
+Glass Smoked Dark, Glass Frosted Light and Solarized Dark. Removed lines leave a
+red gutter mark and boundary at their former position; a whole deleted file is
+red throughout. Theme changes update highlight colors without moving ranges.
 
 Compile, Upload, Reset and Clean reserve distinct operation identities. A delayed
 Stop callback only acts on its original worker and process; Clean waits for that
@@ -1158,6 +1200,11 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_runtime.py --preview-cpus 6
 & src/_python/python.exe -B direct/verify_terminal.py
 & src/_python/python.exe -B direct/verify_performance.py
+& src/_python/python.exe -B direct/verify_syntax_navigation.py
+& src/_python/python.exe -B direct/verify_syntax_checker.py
+& src/_python/python.exe -B direct/verify_editor_c.py
+& src/_python/python.exe -B direct/verify_ai_line_diff.py
+& src/_python/python.exe -B direct/verify_editor_review_ui.py --render-dir temp/audit/editor-review
 & src/_python/python.exe -B direct/verify_cursor.py
 & src/_python/python.exe -B direct/verify_preferences.py
 & src/_python/python.exe -B direct/verify_upload_workers.py
@@ -1196,6 +1243,8 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_package_progress.py
 & src/_python/python.exe -B direct/verify_package_coverage.py
 & src/_python/python.exe -B direct/verify_responsive.py
+& src/_python/python.exe -B direct/verify_owner_tickets.py
+& src/_python/python.exe -B direct/verify_owner_ticket_service.py
 & src/_python/python.exe -B direct/verify_projects.py --render-dir temp/audit/projects
 node direct/verify_editor_preferences.js
 ```

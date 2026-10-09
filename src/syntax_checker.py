@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import re
 import threading
 from pathlib import Path
@@ -28,12 +29,57 @@ def get_syntax_executor() -> ThreadPoolExecutor:
             )
         return _SYNTAX_EXECUTOR
 
-# In-memory RAM cache: (hash(code), len(code), file_name) -> errors
+# Content-bound RAM caches; callers always receive their own diagnostic copies.
 _CACHE_LOCK = threading.Lock()
-_SYNTAX_CODE_CACHE: dict[tuple[int, int, str], list[dict]] = {}
-_SYNTAX_FILE_CACHE: dict[tuple[str, int, int], list[dict]] = {}
+_SYNTAX_CODE_CACHE: dict[tuple, list[dict]] = {}
+_SYNTAX_FILE_CACHE: dict[tuple, list[dict]] = {}
 _MAX_CACHE_ENTRIES = 64
 _MAX_CACHE_DIAGNOSTICS = 8192
+_MAX_SOURCE_CHARACTERS = 4 * 1024 * 1024
+_MAX_BRACKET_DEPTH = 1024
+_MAX_STRUCTURAL_TOKENS = 65536
+
+
+class _Diagnostics(list):
+    """Bound diagnostics while scanning, including severely malformed sources."""
+    def __init__(self):
+        super().__init__()
+        self.omitted = 0
+
+    def append(self, diagnostic):
+        if len(self) < max(1, _MAX_CACHE_DIAGNOSTICS - 1):
+            super().append(diagnostic)
+        else:
+            self.omitted += 1
+
+
+def _directive_comment_start(line: str, already_open=False) -> int | None:
+    """Find an unfinished block comment outside a directive's quoted literals."""
+    i, quote, comment = 0, '', 0 if already_open else None
+    while i < len(line):
+        if comment is not None:
+            end = line.find('*/', i)
+            if end < 0:
+                return comment
+            comment, i = None, end + 2
+            continue
+        char = line[i]
+        if quote:
+            if char == '\\':
+                i += 2
+                continue
+            if char == quote:
+                quote = ''
+        elif char in ('"', "'"):
+            quote = char
+        elif line.startswith('//', i):
+            break
+        elif line.startswith('/*', i):
+            comment = i
+            i += 2
+            continue
+        i += 1
+    return comment
 
 
 def _remember_diagnostics(cache, key, errors):
@@ -41,7 +87,7 @@ def _remember_diagnostics(cache, key, errors):
     if len(errors) > _MAX_CACHE_DIAGNOSTICS:
         return
     cache.pop(key, None)
-    cache[key] = errors
+    cache[key] = [dict(error) for error in errors]
     total = sum(len(value) for value in cache.values())
     while len(cache) > _MAX_CACHE_ENTRIES or total > _MAX_CACHE_DIAGNOSTICS:
         old = cache.pop(next(iter(cache)))
@@ -147,6 +193,13 @@ def _strip_trailing_line_comment(text: str) -> str:
             continue
         if c == '/' and i + 1 < n and text[i + 1] == '/':
             return text[:i]
+        if c == '/' and i + 1 < n and text[i + 1] == '*':
+            end = text.find('*/', i + 2)
+            if end == -1:
+                return text[:i]
+            text = text[:i] + ' ' * (end + 2 - i) + text[end + 2:]
+            i = end + 2
+            continue
         i += 1
     return text
 
@@ -162,7 +215,7 @@ def check_include_directive(line: str, line_no: int, file_path: Path | str):
     if not match:
         return None
 
-    remainder = _strip_trailing_line_comment(match.group(1)).rstrip()
+    remainder = _strip_trailing_line_comment(match.group(1)).strip()
 
     if not remainder:
         return {
@@ -247,6 +300,10 @@ def check_include_directive(line: str, line_no: int, file_path: Path | str):
             }
         return None
 
+    # Macro-expanded include targets are resolved by the actual preprocessor.
+    if re.fullmatch(r'[A-Za-z_]\w*(?:\s*\(.*\))?', remainder):
+        return None
+
     return {
         "file": file_path.name,
         "line": line_no,
@@ -264,7 +321,7 @@ def analyze_cpp_syntax(
     all_defined_functions: set[str] | None = None
 ) -> list[dict]:
     """
-    Analyzes C++/Arduino code for syntax errors:
+    Checks C/C++/Arduino source structure without executing a compiler:
       - Bracket closure & balance ({}, (), []) with block/function context
       - Missing closing parentheses before '{' in control conditions
       - Missing colons after 'case', 'default', and class access specifiers
@@ -272,19 +329,26 @@ def analyze_cpp_syntax(
         assignments, do-while loops, and struct/class/enum definitions
       - Preprocessor directives and multiline backslash continuations
       - Raw string literals R"delim(...)delim" and escape sequences
-    Utilizes in-memory RAM caching for instant 0.001 ms repeated lookups.
+    Keeps content-bound, bounded caches and exact codepoint ranges. Target
+    preprocessing, symbol/type resolution and library checks belong to Compile.
     """
     if not isinstance(file_path, Path):
         file_path = Path(file_path)
 
     file_name = file_path.name if hasattr(file_path, "name") else str(file_path)
-    cache_key = (hash(code), len(code), file_name)
+    language = "c" if file_path.suffix.lower() == ".c" else "cpp"
+    if len(code) > _MAX_SOURCE_CHARACTERS:
+        return [{"file": file_name, "line": 1, "col": 1, "endLine": 1, "endCol": 1,
+                 "message": "Source exceeds the live syntax checker size limit; Compile checks the complete file.",
+                 "severity": "warning", "columnEncoding": "codepoint"}]
+    cache_key = (hashlib.blake2b(code.encode('utf-8', errors='surrogatepass'), digest_size=16).digest(),
+                 len(code), os.path.normcase(os.path.abspath(file_path)), language)
     with _CACHE_LOCK:
         cached = _SYNTAX_CODE_CACHE.get(cache_key)
         if cached is not None:
             return [dict(e) for e in cached]
 
-    errors = []
+    errors = _Diagnostics()
     lines = code.splitlines()
 
     # Pass 1: Scanner for literals, comments, raw strings, and bracket closure
@@ -297,6 +361,32 @@ def analyze_cpp_syntax(
     string_start = (0, 0)
     char_start = (0, 0)
     block_comment_start = (0, 0)
+    raw_string_start = (0, 0)
+    preprocessor_stack = []
+    active = True
+    preprocessor_continuation = False
+    literal_continuation_lines = set()
+    initializer_closed_lines = set()
+    type_closures = []
+    nesting_exceeded = False
+    structural_tokens = 0
+
+    def report(line_no, column, message, severity="error", width=1):
+        errors.append({"file": file_name, "line": line_no, "col": column,
+                       "endLine": line_no, "endCol": column + width,
+                       "message": message, "severity": severity})
+
+    def condition_value(expression):
+        expression = _strip_trailing_line_comment(expression).strip()
+        while expression.startswith('(') and expression.endswith(')'):
+            expression = expression[1:-1].strip()
+        match = re.fullmatch(r'(!?)\s*(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*', expression)
+        if match:
+            value = int(match[2], 16 if match[2].lower().startswith('0x') else 10) != 0
+            return not value if match[1] else value
+        # Target macros are unavailable to this lightweight checker. Inspect
+        # one branch rather than combining mutually exclusive brace structures.
+        return True
 
     cleaned_lines = []
     do_block_closed_lines = set()
@@ -307,6 +397,61 @@ def analyze_cpp_syntax(
         i = 0
         clean_chars = []
         in_line_comment = False
+
+        if preprocessor_continuation:
+            comment = _directive_comment_start(line, in_block_comment)
+            if comment is not None and not in_block_comment:
+                block_comment_start = (line_no, comment + 1)
+            in_block_comment = comment is not None
+            preprocessor_continuation = line.rstrip().endswith('\\')
+            if active:
+                comment = _directive_comment_start(line)
+                if comment is not None:
+                    in_block_comment = True
+                    block_comment_start = (line_no, comment + 1)
+            cleaned_lines.append(' ' * n)
+            continue
+
+        directive = (re.match(r'^\s*#\s*(\w+)\b(.*)', line)
+                     if not (in_block_comment or in_raw_string or in_string or in_char) else None)
+        if directive:
+            name, argument = directive[1], directive[2]
+            if name in ('if', 'ifdef', 'ifndef'):
+                if len(preprocessor_stack) >= _MAX_BRACKET_DEPTH:
+                    report(line_no, line.find('#') + 1,
+                           "Preprocessor nesting exceeds the live syntax checker limit; Compile checks the complete file.", "warning")
+                    nesting_exceeded = True
+                    cleaned_lines.append(' ' * n)
+                    break
+                selected = condition_value(argument) if name == 'if' else True
+                preprocessor_stack.append([active, selected, False, line_no, line.find('#') + 1])
+                active = active and selected
+            elif name in ('elif', 'else'):
+                if not preprocessor_stack:
+                    report(line_no, line.find('#') + 1, f"#{name} has no matching #if")
+                else:
+                    branch = preprocessor_stack[-1]
+                    if branch[2]:
+                        report(line_no, line.find('#') + 1, f"#{name} cannot follow #else")
+                    selected = not branch[1] and (name == 'else' or condition_value(argument))
+                    active = branch[0] and selected
+                    branch[1] = branch[1] or selected
+                    branch[2] = branch[2] or name == 'else'
+            elif name == 'endif':
+                if not preprocessor_stack:
+                    report(line_no, line.find('#') + 1, "#endif has no matching #if")
+                else:
+                    active = preprocessor_stack.pop()[0]
+            elif active and name == 'include' and not line.rstrip().endswith('\\'):
+                inc_err = check_include_directive(line, line_no, file_path)
+                if inc_err:
+                    errors.append(inc_err)
+            preprocessor_continuation = line.rstrip().endswith('\\')
+            cleaned_lines.append(' ' * n)
+            continue
+        if not active:
+            cleaned_lines.append(' ' * n)
+            continue
 
         # Fast skip for #include
         if not in_block_comment and not in_raw_string and _INCLUDE_DIRECTIVE_RE.match(line):
@@ -334,6 +479,7 @@ def analyze_cpp_syntax(
                 if c == ')' and line[i:i + len(raw_string_delim) + 2] == f"){raw_string_delim}\"":
                     in_raw_string = False
                     clean_chars.extend([' '] * (len(raw_string_delim) + 1))
+                    clean_chars[-1] = '0'
                     i += len(raw_string_delim) + 2
                 else:
                     i += 1
@@ -351,7 +497,7 @@ def analyze_cpp_syntax(
                     i += 2
                 elif c == '"':
                     in_string = False
-                    clean_chars.append(' ')
+                    clean_chars.append('0')
                     i += 1
                 else:
                     clean_chars.append(' ')
@@ -365,7 +511,7 @@ def analyze_cpp_syntax(
                     i += 2
                 elif c == '\'':
                     in_char = False
-                    clean_chars.append(' ')
+                    clean_chars.append('0')
                     i += 1
                 else:
                     clean_chars.append(' ')
@@ -390,8 +536,10 @@ def analyze_cpp_syntax(
             # Check raw string: R"delim( ... )delim"
             if c == 'R' and i + 1 < n and line[i + 1] == '"':
                 paren_pos = line.find('(', i + 2)
-                if paren_pos != -1 and paren_pos - i <= 18:
+                if (paren_pos != -1 and paren_pos - i <= 18
+                        and re.fullmatch(r'[^\s()\\]*', line[i + 2:paren_pos])):
                     raw_string_delim = line[i + 2:paren_pos]
+                    raw_string_start = (line_no, i + 1)
                     in_raw_string = True
                     clean_chars.extend([' '] * (paren_pos - i + 1))
                     i = paren_pos + 1
@@ -401,35 +549,47 @@ def analyze_cpp_syntax(
             if c == '"':
                 in_string = True
                 string_start = (line_no, i + 1)
-                clean_chars.append(' ')
+                clean_chars.append('0')
                 i += 1
                 continue
 
             # Check char literal
             if c == '\'':
+                if (i + 1 < n and line[i + 1].isalnum()
+                        and re.search(r"\b(?:0[xX][0-9a-fA-F']+|0[bB][01']+|[0-9][0-9'eEpP.+-]*)$", line[max(0, i - 256):i])):
+                    clean_chars.append(c)
+                    i += 1
+                    continue  # C23/C++ numeric digit separator, not a character literal.
                 in_char = True
                 char_start = (line_no, i + 1)
-                clean_chars.append(' ')
+                clean_chars.append('0')
                 i += 1
                 continue
 
             # Check brackets
+            if c in '(){}[]':
+                structural_tokens += 1
+                if structural_tokens > _MAX_STRUCTURAL_TOKENS:
+                    report(line_no, i + 1,
+                           "Source complexity exceeds the live syntax checker limit; Compile checks the complete file.", "warning")
+                    nesting_exceeded = True
+                    break
             if c in ('(', '{', '['):
                 opener_context = ""
                 is_type_def = False
                 is_do_block = False
 
                 if c == '{':
-                    pre_text = line[:i].strip()
+                    pre_text = ''.join(clean_chars[-256:]).strip()
                     if not pre_text and line_idx > 0:
                         for prev_idx in range(line_idx - 1, max(-1, line_idx - 6), -1):
-                            prev_str = lines[prev_idx].split("//", 1)[0].strip()
+                            prev_str = cleaned_lines[prev_idx].strip()
                             if prev_str:
                                 pre_text = prev_str
                                 break
 
                     # Check for struct / class / enum / union
-                    if re.search(r'\b(struct|class|enum|union)\b', pre_text):
+                    if re.search(r'\b(struct|class|enum|union)\b[^;{}=()]*$', pre_text):
                         is_type_def = True
                         m_type = re.search(r'\b(struct|class|enum|union)\s+([A-Za-z_]\w*)?', pre_text)
                         opener_context = m_type.group(0) if m_type else "type definition"
@@ -441,6 +601,8 @@ def analyze_cpp_syntax(
                         opener_context = m_ctrl.group(0) if m_ctrl else "control block"
                     elif re.search(r'\belse\b', pre_text):
                         opener_context = "else block"
+                    elif '=' in pre_text or re.search(r'\(\s*(?:struct|union)\s+\w+\s*\)\s*$', pre_text):
+                        opener_context = "initializer"
                     else:
                         m_fn = re.search(r'([A-Za-z_]\w*)\s*\([^)]*\)', pre_text)
                         if m_fn:
@@ -451,7 +613,8 @@ def analyze_cpp_syntax(
                     # Check if an open parenthesis for if/while/for/switch is still unclosed!
                     if stack and stack[-1][0] == '(':
                         top_c, top_l, top_col, top_ctx, _, _ = stack[-1]
-                        if any(kw in top_ctx for kw in ('if', 'while', 'for', 'switch')):
+                        if (any(kw in top_ctx for kw in ('if', 'while', 'for', 'switch'))
+                                and not re.search(r'\]\s*(?:\([^)]*\)\s*)?(?:mutable\s*)?$', pre_text)):
                             errors.append({
                                 "file": file_name,
                                 "line": line_no,
@@ -464,8 +627,8 @@ def analyze_cpp_syntax(
                             stack.pop()
 
                 elif c == '(':
-                    pre_text = line[:i].strip()
-                    m_ctrl = re.search(r'\b(if|else\s+if|for|while|switch|catch)\b', pre_text)
+                    pre_text = ''.join(clean_chars[-256:]).strip()
+                    m_ctrl = re.search(r'\b(if|else\s+if|for|while|switch|catch)\s*$', pre_text)
                     if m_ctrl:
                         opener_context = f"'{m_ctrl.group(1)}' condition"
                     else:
@@ -475,6 +638,10 @@ def analyze_cpp_syntax(
                 elif c == '[':
                     opener_context = "array subscript / brackets"
 
+                if len(stack) >= _MAX_BRACKET_DEPTH:
+                    report(line_no, i + 1, "Nesting exceeds the live syntax checker limit; Compile checks the complete file.", "warning")
+                    nesting_exceeded = True
+                    break
                 stack.append((c, line_no, i + 1, opener_context, is_type_def, is_do_block))
                 clean_chars.append(c)
                 i += 1
@@ -515,36 +682,12 @@ def analyze_cpp_syntax(
                     else:
                         if c == '}' and is_do_block:
                             do_block_closed_lines.add(line_idx)
+                        if c == '}' and top_ctx == 'initializer':
+                            initializer_closed_lines.add(line_idx)
 
                         # If this '}' closed a struct / class / enum / union, check for missing semicolon after it!
                         if c == '}' and is_type_def:
-                            rest_of_line = line[i + 1:].split("//", 1)[0].strip()
-                            if not rest_of_line:
-                                next_line_idx = line_idx + 1
-                                while next_line_idx < len(lines) and not lines[next_line_idx].strip():
-                                    next_line_idx += 1
-                                if next_line_idx < len(lines):
-                                    next_str = lines[next_line_idx].split("//", 1)[0].strip()
-                                    if next_str and not next_str.startswith(';') and not next_str.startswith('}'):
-                                        errors.append({
-                                            "file": file_name,
-                                            "line": line_no,
-                                            "col": i + 1,
-                                            "endLine": line_no,
-                                            "endCol": i + 2,
-                                            "message": f"Missing semicolon ';' after {top_ctx} definition",
-                                            "severity": "error"
-                                        })
-                            elif not rest_of_line.startswith(';') and not rest_of_line.endswith(';') and not rest_of_line.endswith(','):
-                                errors.append({
-                                    "file": file_name,
-                                    "line": line_no,
-                                    "col": i + 1,
-                                    "endLine": line_no,
-                                    "endCol": i + 2,
-                                    "message": f"Missing semicolon ';' after {top_ctx} definition",
-                                    "severity": "error"
-                                })
+                            type_closures.append((line_idx, i, top_ctx))
                 i += 1
                 continue
 
@@ -576,6 +719,25 @@ def analyze_cpp_syntax(
             in_char = False
 
         cleaned_lines.append("".join(clean_chars))
+        if in_raw_string or in_string or in_char:
+            literal_continuation_lines.add(line_idx)
+        if nesting_exceeded:
+            break
+
+    for branch in preprocessor_stack:
+        if not nesting_exceeded:
+            report(branch[3], branch[4], "Unclosed preprocessor conditional (missing #endif)")
+    if in_raw_string:
+        report(raw_string_start[0], raw_string_start[1], "Unclosed raw string literal", width=2)
+    for line_idx, column, context in type_closures:
+        rest = cleaned_lines[line_idx][column + 1:column + 1025].strip()
+        following = line_idx + 1
+        while not rest and following < len(cleaned_lines):
+            rest = cleaned_lines[following].strip()
+            following += 1
+        next_declaration = re.match(r'^(?:void|int|long|short|unsigned|signed|char|float|double|bool|struct|class|enum|union)\b', rest)
+        if not rest or (not rest.startswith(';') and (next_declaration or rest.startswith('}'))):
+            report(line_idx + 1, column + 1, f"Missing semicolon ';' after {context} definition")
 
     if in_block_comment:
         errors.append({
@@ -589,7 +751,7 @@ def analyze_cpp_syntax(
         })
 
     # Unclosed brackets on stack
-    while stack:
+    while stack and not nesting_exceeded:
         c, line_no, col, ctx, _, _ = stack.pop()
         if c == '{':
             msg = f"{ctx.capitalize()} opened on line {line_no} is never closed (missing '}}')"
@@ -636,6 +798,8 @@ def analyze_cpp_syntax(
         raw_line = lines[line_idx]
         stripped = clean_line.strip()
         raw_stripped = raw_line.split("//", 1)[0].strip()
+        if line_idx in literal_continuation_lines:
+            continue
 
         # Handle preprocessor directives and their backslash-continuations
         if in_preprocessor_continuation:
@@ -657,7 +821,26 @@ def analyze_cpp_syntax(
 
         # Check for missing colons:
         # Case A: 'case <expr>' missing colon (check raw_stripped to preserve char literals like case 'A')
-        if re.match(r'^\s*case\s+[^:]+$', raw_stripped) and not any(raw_stripped.endswith(op) for op in _CONTINUATION_ENDS):
+        case_match = re.match(r'^\s*case\b', stripped)
+        has_case_colon = False
+        case_depth = ternary_depth = 0
+        if case_match:
+            for index, char in enumerate(stripped[case_match.end():], case_match.end()):
+                if char in '([':
+                    case_depth += 1
+                elif char in ')]':
+                    case_depth = max(0, case_depth - 1)
+                elif not case_depth:
+                    if char == '?':
+                        ternary_depth += 1
+                    elif char == ':' and not (stripped[index:index + 2] == '::' or stripped[max(0, index - 1):index + 1] == '::'):
+                        if ternary_depth:
+                            ternary_depth -= 1
+                        else:
+                            has_case_colon = True
+                            break
+        if (case_match and not has_case_colon and not case_depth
+                and not any(stripped.endswith(op) for op in _CONTINUATION_ENDS)):
             errors.append({
                 "file": file_name,
                 "line": line_no,
@@ -684,7 +867,7 @@ def analyze_cpp_syntax(
             continue
 
         # Case C: 'public', 'private', 'protected' missing colon
-        m_access = re.match(r'^\s*(public|private|protected)\s*$', stripped)
+        m_access = re.match(r'^\s*(public|private|protected)\s*$', stripped) if language == 'cpp' else None
         if m_access:
             errors.append({
                 "file": file_name,
@@ -727,7 +910,8 @@ def analyze_cpp_syntax(
         if (
             stripped.endswith(';')
             or stripped.endswith('{')
-            or stripped.endswith('}')
+            or (stripped.endswith('}') and line_idx not in initializer_closed_lines
+                and not re.match(r'^\s*(return|throw)\b', stripped))
             or stripped.endswith(':')
             or stripped.endswith(',')
             or stripped.endswith('\\')
@@ -739,7 +923,8 @@ def analyze_cpp_syntax(
             continue
 
         # If ends with operator, line is continued on next line
-        if any(stripped.endswith(op) for op in _CONTINUATION_ENDS):
+        if (not stripped.endswith(('++', '--'))
+                and any(stripped.endswith(op) for op in _CONTINUATION_ENDS)):
             continue
 
         # Check next line for continuation or block opener
@@ -751,6 +936,9 @@ def analyze_cpp_syntax(
                 continue
             if next_str.startswith('{'):
                 next_is_open_brace = True
+            elif (re.search(r'"\s*$', _strip_trailing_line_comment(raw_line).strip())
+                  and re.match(r'^\s*(?:u8|u|U|L)?(?:R)?"', lines[next_idx])):
+                next_is_continuation = True  # Adjacent literal concatenation.
             elif any(next_str.startswith(op) for op in _CONTINUATION_STARTS):
                 next_is_continuation = True
             break
@@ -763,7 +951,19 @@ def analyze_cpp_syntax(
         first_token = m_first.group(0) if m_first else ""
 
         if first_token in _CONTROL_KEYWORDS:
-            continue
+            header = re.match(r'^(?:if|for|while|switch)\s*\(', stripped)
+            if not header:
+                continue
+            depth = 1
+            cursor = header.end()
+            while cursor < len(stripped) and depth:
+                depth += (stripped[cursor] == '(') - (stripped[cursor] == ')')
+                cursor += 1
+            if depth or not stripped[cursor:].strip():
+                continue
+            stripped = stripped[cursor:].strip()
+            first_token = re.match(r'^[A-Za-z_]\w*', stripped)
+            first_token = first_token[0] if first_token else ''
 
         # Check if line looks like a statement that requires a semicolon:
         is_stmt = False
@@ -778,6 +978,9 @@ def analyze_cpp_syntax(
         elif stripped.endswith(')'):
             is_stmt = True
             stmt_reason = "function call / statement"
+        elif stripped.endswith(('++', '--')) or re.match(r'^(?:\+\+|--)\s*[A-Za-z_(]', stripped):
+            is_stmt = True
+            stmt_reason = "increment / decrement"
         elif re.match(r'^(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?\s+)+[A-Za-z_]\w*(?:\s*\[[^\]]*\])?$', stripped):
             is_stmt = True
             stmt_reason = "declaration"
@@ -793,7 +996,24 @@ def analyze_cpp_syntax(
                 "severity": "warning"
             })
 
-    errors.sort(key=lambda x: (x["line"], x["col"]))
+    omitted = errors.omitted
+    unique = {}
+    for error in errors:
+        row = min(max(1, error['line']), max(1, len(lines)))
+        end_row = min(max(row, error.get('endLine', row)), max(1, len(lines)))
+        max_column = len(lines[row - 1]) + 1 if lines else 1
+        end_max = len(lines[end_row - 1]) + 1 if lines else 1
+        error.update(line=row, endLine=end_row,
+                     col=min(max(1, error['col']), max_column),
+                     endCol=min(max(1, error.get('endCol', error['col'])), end_max),
+                     columnEncoding='codepoint')
+        unique[(row, error['col'], error['message'])] = error
+    errors = sorted(unique.values(), key=lambda x: (x['line'], x['col']))
+    if omitted or len(errors) > _MAX_CACHE_DIAGNOSTICS:
+        errors = errors[:_MAX_CACHE_DIAGNOSTICS - 1] + [{
+            'file': file_name, 'line': 1, 'col': 1, 'endLine': 1, 'endCol': 1,
+            'severity': 'warning', 'columnEncoding': 'codepoint',
+            'message': 'Further live syntax diagnostics omitted; Compile checks the complete file.'}]
     with _CACHE_LOCK:
         _remember_diagnostics(_SYNTAX_CODE_CACHE, cache_key, errors)
     return errors
@@ -808,24 +1028,22 @@ def analyze_file_syntax(
     file_path: Path | str,
     all_defined_functions: set[str] | None = None
 ) -> list[dict]:
-    """Analyze one source file with a bounded cache keyed by its stat signature."""
+    """Analyze current source bytes; matching file timestamps cannot hide edits."""
     fp = Path(file_path) if not isinstance(file_path, Path) else file_path
     try:
-        st = fp.stat()
-        file_key = (str(fp.resolve()), st.st_mtime_ns, st.st_size)
-    except OSError:
-        return []
+        code, digest = read_source_snapshot(fp)
+    except (OSError, ValueError) as exc:
+        return [{"file": fp.name, "line": 1, "col": 1, "endLine": 1, "endCol": 1,
+                 "message": f"Cannot read source: {str(exc)[:300]}", "severity": "error",
+                 "columnEncoding": "codepoint"}]
+    file_key = (os.path.normcase(os.path.abspath(fp)), digest)
 
     with _CACHE_LOCK:
         cached = _SYNTAX_FILE_CACHE.get(file_key)
         if cached is not None:
             return [dict(e) for e in cached]
 
-    try:
-        code = fp.read_text(encoding="utf-8", errors="replace")
-        errors = analyze_cpp_syntax(code, fp, all_defined_functions)
-    except Exception:
-        errors = []
+    errors = analyze_cpp_syntax(code, fp, all_defined_functions)
 
     with _CACHE_LOCK:
         _remember_diagnostics(_SYNTAX_FILE_CACHE, file_key, errors)
@@ -833,25 +1051,41 @@ def analyze_file_syntax(
     return errors
 
 
+def read_source_snapshot(file_path: Path | str) -> tuple[str, bytes]:
+    """Read bounded source bytes once in a worker, retaining their fingerprint."""
+    with Path(file_path).open('rb') as stream:
+        raw = stream.read(_MAX_SOURCE_CHARACTERS * 4 + 1)
+    code = raw.decode('utf-8', errors='replace')
+    return code, hashlib.blake2b(raw, digest_size=16).digest()
+
+
 def analyze_files_parallel(
     files: list[Path | str],
     all_defined_functions: set[str] | None = None,
-    max_workers: int | None = None
+    max_workers: int | None = None,
+    source_contents: dict[str, str] | None = None
 ) -> list[dict]:
     """Analyze root sources using the small shared background parser pool."""
     if not files:
         return []
+    def analyze(source):
+        content = (source_contents or {}).get(str(source))
+        return (analyze_cpp_syntax(content, source, all_defined_functions)
+                if content is not None else analyze_file_syntax(source, all_defined_functions))
     if max_workers == 1:
-        results = [diag for f in files for diag in analyze_file_syntax(f, all_defined_functions)]
+        results = [diag for f in files for diag in analyze(f)]
         return sorted(results, key=lambda x: (x.get("file", ""), x.get("line", 0)))
     executor = get_syntax_executor()
     all_errors = []
     for start in range(0, len(files), 16):
-        futures = [executor.submit(analyze_file_syntax, f, all_defined_functions) for f in files[start:start + 16]]
-        for fut in futures:
+        batch = files[start:start + 16]
+        futures = [executor.submit(analyze, f) for f in batch]
+        for source, fut in zip(batch, futures):
             try:
                 all_errors.extend(fut.result())
-            except Exception:
-                pass
+            except Exception as exc:
+                all_errors.append({"file": Path(source).name, "line": 1, "col": 1,
+                    "endLine": 1, "endCol": 1, "severity": "error", "columnEncoding": "codepoint",
+                    "message": f"Syntax check failed: {str(exc)[:300]}"})
     all_errors.sort(key=lambda x: (x.get("file", ""), x.get("line", 0)))
     return all_errors

@@ -74,7 +74,8 @@ class PromptInputTracker:
         target = cache / "ai_prompt.json"
         temp = cache / f".ai-prompt-{os.getpid()}-{uuid4().hex}.tmp"
         try:
-            payload = {"id": uuid4().hex, "prompt": prompt[:500], "time": time.time()}
+            payload = {"id": uuid4().hex, "prompt": prompt[:500], "time": time.time(),
+                       "source": "cli"}
             temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             from main.core.file_utils import ensure_file_writable
             ensure_file_writable(target)

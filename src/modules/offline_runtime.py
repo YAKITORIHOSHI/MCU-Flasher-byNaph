@@ -1,4 +1,4 @@
-"""Runtime download boundary. Bootstrap owns network and package installation."""
+"""Workspace network policy and bootstrap-only package installation."""
 from __future__ import annotations
 
 import ipaddress
@@ -13,6 +13,19 @@ _network_blocked = False
 
 class OfflineDependencyError(RuntimeError):
     pass
+
+
+def network_access_disabled():
+    """Report the current process policy, including an inherited child guard.
+
+    Saved preferences may already describe the next launch. An installed audit
+    hook keeps its original mode until the workspace is restarted.
+    """
+    return _network_blocked if _enabled else os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") == "1"
+
+
+def offline_network_instruction():
+    return "Network access is disabled in Offline Mode. Turn it off in Settings and restart MCU Flasher."
 
 
 def bootstrap_instruction(detail="Missing offline dependency"):
@@ -40,9 +53,9 @@ def _local_address(address):
 
 def _audit(event, args):
     if _network_blocked and event in ("socket.connect", "socket.sendto") and not _local_address(args[-1]):
-        raise OfflineDependencyError(bootstrap_instruction("Network downloads are disabled in the workspace"))
+        raise OfflineDependencyError(offline_network_instruction())
     if _network_blocked and event == "socket.getaddrinfo" and str(args[0]).lower() not in ("localhost", "127.0.0.1", "::1", "none"):
-        raise OfflineDependencyError(bootstrap_instruction("Online lookup is disabled in the workspace"))
+        raise OfflineDependencyError(offline_network_instruction())
     if event == "subprocess.Popen":
         command = args[1]
         from src.modules.windows_tool_paths import zephyr_cmake_environment

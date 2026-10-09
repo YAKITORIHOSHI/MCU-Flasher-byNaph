@@ -243,7 +243,10 @@ class EditorBridgeAPI(QObject):
                 self._syntax_finished.emit(result)
             except RuntimeError:
                 pass
-        get_syntax_executor().submit(analyze)
+        try:
+            get_syntax_executor().submit(analyze)
+        except Exception as exc:
+            self._finish_syntax({"generation": generation, "path": path, "error": str(exc)})
 
     @Slot(dict)
     def _finish_syntax(self, result):
@@ -907,6 +910,7 @@ class MonacoEditorPanel(QWidget):
         """Connect to global Qt signal bus."""
         sig_bus.editor_load_file.connect(self.open_file)
         sig_bus.editor_goto_line.connect(self.goto_line)
+        sig_bus.editor_goto_diagnostic.connect(self.goto_diagnostic)
         sig_bus.editor_set_theme.connect(self.set_theme)
         sig_bus.syntax_errors.connect(self.set_markers)
         sig_bus.project_updated.connect(self._on_project_updated)
@@ -956,30 +960,39 @@ class MonacoEditorPanel(QWidget):
         """Navigate to file and scroll to line in Monaco editor."""
         self.goto_location(file_path, line_no)
 
+    @Slot(dict)
+    def goto_diagnostic(self, diagnostic: dict) -> None:
+        """Reveal the exact diagnostic range at the top without reloading buffers."""
+        self._navigate_source({
+            "path": str(diagnostic.get("file") or ""),
+            "line": diagnostic.get("line", 1),
+            "column": diagnostic.get("col", 1),
+            "endLine": diagnostic.get("endLine"),
+            "endColumn": diagnostic.get("endCol"),
+            "columnEncoding": diagnostic.get("columnEncoding", "codepoint"),
+            "reveal": "top",
+        })
+
     def goto_location(self, file_path: str, line_no: int, column: int = 1, end_column: int = 1) -> None:
         """Wait for file activation before positioning a search/syntax result."""
-        path_json = json.dumps(str(file_path or ""))
         line_no, column = max(1, int(line_no)), max(1, int(column))
         end_column = max(column, int(end_column))
-        js = (
-            "(async () => {"
-            f" const path = {path_json};"
-            " if (path && window.activateProjectFile && !window.activateProjectFile(path)) {"
-            "   if (window.safeLoadProject) await window.safeLoadProject();"
-            "   if (!window.activateProjectFile?.(path)) return;"
-            " }"
-            " await new Promise(resolve => requestAnimationFrame(resolve));"
-            " const active = document.querySelector('#tab-bar .tab.active');"
-            " if (path && window.projectPathKey(active?._filePath) !== window.projectPathKey(path)) return;"
-            " const editor = window.editorInstance; if (!editor?.getModel()) return;"
-            f" editor.revealLineInCenter({line_no});"
-            f" editor.setSelection({{startLineNumber: {line_no}, startColumn: {column},"
-            f" endLineNumber: {line_no}, endColumn: {end_column}}});"
-            " editor.focus();"
-            "})()"
-        )
+        self._navigate_source({"path": str(file_path or ""), "line": line_no,
+                               "column": column, "endLine": line_no,
+                               "endColumn": end_column, "reveal": "center"})
+
+    def _navigate_source(self, location: dict) -> None:
+        host = self.window()
+        if host is not None:
+            if host.isMinimized():
+                host.showNormal()
+            reveal_editor = getattr(host, "reveal_editor_for_navigation", None)
+            if callable(reveal_editor):
+                reveal_editor()
+            host.raise_()
+            host.activateWindow()
         self._view.setFocus(Qt.FocusReason.OtherFocusReason)
-        self._view.page().runJavaScript(js)
+        self._view.page().runJavaScript(f"window.navigateToSource?.({json.dumps(location)})")
 
     def show_project_search(self) -> None:
         """Search current text without saving files or changing dirty tabs."""

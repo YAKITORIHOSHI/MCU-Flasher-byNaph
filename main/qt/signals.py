@@ -211,6 +211,8 @@ class MCUSignals(QObject):
     editor_load_file = Signal(str)
     # Request editor to navigate to a specific file and line
     editor_goto_line = Signal(str, int)
+    # Exact syntax source range; Python checker columns use Unicode code points.
+    editor_goto_diagnostic = Signal(dict)
     # Editor reports content changed (file_path)
     editor_content_changed = Signal(str)
     # Request editor theme change

@@ -29,6 +29,7 @@ from main.core.file_utils import (
     hide_hidden_attribute,
     ensure_file_writable,
 )
+from src.modules.offline_runtime import OfflineDependencyError, network_access_disabled
 
 _TICKETS_FILE_NAME = ".owner_tickets.json"
 _CONFIG_FILE_NAME  = ".owner_config.json"
@@ -44,6 +45,16 @@ _DEFAULT_RTDB_URL        = "https://mcu-flasher-c46e3-default-rtdb.asia-southeas
 _DEFAULT_PROJECT_ID      = "mcu-flasher-c46e3"
 _DEFAULT_API_KEY         = ""
 _DEFAULT_ROOT_COLLECTION = "owner"
+
+_CLOUD_OFFLINE_MESSAGE = (
+    "Firebase is blocked by Offline Mode in this app session. Turn Offline Mode off "
+    "in Settings, then restart MCU Flasher. If it is already off, restart the app."
+)
+
+
+def cloud_network_error() -> str:
+    """Explain effective runtime denial before probing or sending credentials."""
+    return _CLOUD_OFFLINE_MESSAGE if network_access_disabled() else ""
 
 
 def _derive_vault_keys() -> tuple[bytes, bytes]:
@@ -128,6 +139,8 @@ def is_internet_available(timeout: float = 0.5) -> bool:
     Must never throw exceptions and must never block for long.
     Returns False immediately if offline or on any connection failure.
     """
+    if network_access_disabled():
+        return False
     try:
         from src.modules.dedicated_AI import check_internet_connection
         return check_internet_connection(timeout=timeout)
@@ -326,10 +339,11 @@ class OwnerTicketService:
     def authenticate(self, email_or_user: str, password: str) -> tuple[bool, str]:
         """Authenticate with master developer key or Firebase Auth REST API."""
         try:
+            self.logout()
             email_clean = (email_or_user or "").strip()
-            pwd_clean = (password or "").strip()
+            pwd_clean = password or ""
 
-            if not pwd_clean:
+            if not pwd_clean.strip():
                 return False, "Password cannot be blank."
 
             cfg = self.get_config()
@@ -346,6 +360,8 @@ class OwnerTicketService:
 
             # 2. Firebase Cloud Authentication via REST API
             if cfg.get("use_firebase") and cfg.get("firebase_api_key"):
+                if message := cloud_network_error():
+                    return False, message
                 if not is_internet_available(timeout=0.6):
                     return False, "No internet connection available."
 
@@ -366,12 +382,18 @@ class OwnerTicketService:
                     )
                     with urllib.request.urlopen(req, timeout=5.0) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
-                        self._id_token = data.get("idToken")
+                        token = data.get("idToken") if isinstance(data, dict) else None
+                        uid = (data.get("localId") or data.get("uid")) if isinstance(data, dict) else None
+                        if not isinstance(token, str) or not token or not isinstance(uid, str) or not uid:
+                            return False, "Firebase returned an incomplete sign-in response. Please try again."
+                        self._id_token = token
                         self._refresh_token = data.get("refreshToken")
-                        self._uid = data.get("localId") or data.get("uid") or cfg.get("firebase_user_uid")
+                        self._uid = uid
                         self._user_email = data.get("email", email_clean)
                         self._is_authenticated = True
                         return True, "Firebase Cloud authentication successful."
+                except OfflineDependencyError:
+                    return False, _CLOUD_OFFLINE_MESSAGE
                 except urllib.error.HTTPError as e:
                     try:
                         err_json = json.loads(e.read().decode("utf-8"))
@@ -389,6 +411,8 @@ class OwnerTicketService:
     def send_password_reset_email(self, email: Optional[str] = None) -> tuple[bool, str]:
         """Send a password reset email via Firebase Identity Toolkit."""
         try:
+            if message := cloud_network_error():
+                return False, message
             cfg = self.get_config()
             api_key = cfg.get("firebase_api_key", _DEFAULT_API_KEY)
             target_email = (email or cfg.get("owner_email", "")).strip()
@@ -429,12 +453,17 @@ class OwnerTicketService:
             self._refresh_token = None
             self._uid = None
             self._user_email = None
+            self._active_root_collection = None
         except Exception:
             pass
 
     @property
     def is_authenticated(self) -> bool:
         return self._is_authenticated
+
+    @property
+    def is_cloud_authenticated(self) -> bool:
+        return bool(self._is_authenticated and self._id_token and self._uid)
 
     @property
     def current_user(self) -> str:
@@ -757,6 +786,8 @@ class OwnerTicketService:
     def test_firebase_connection(self, api_key: str, db_url: str) -> tuple[bool, str]:
         """Verify Firebase Realtime Database endpoint accessibility."""
         try:
+            if message := cloud_network_error():
+                return False, message
             if not is_internet_available(timeout=0.6):
                 return False, "No internet connection detected."
 
@@ -771,11 +802,11 @@ class OwnerTicketService:
                 req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-Test/1.0"})
                 with urllib.request.urlopen(req, timeout=4.0) as resp:
                     if resp.status in (200, 401, 403):
-                        return True, "Successfully reached Firebase Realtime Database!"
+                        return True, "Firebase database endpoint reached. Sign in to verify credentials and ticket access."
                     return False, f"Unexpected response status: {resp.status}"
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
-                    return True, "Firebase endpoint reachable (Security rules active & protected)."
+                    return True, "Firebase database endpoint reached; security rules require sign-in. Credentials and ticket access are not verified."
                 return False, f"HTTP error {e.code}: {e.reason}"
             except Exception as e:
                 return False, f"Connection failed: {e}"

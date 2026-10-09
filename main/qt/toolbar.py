@@ -787,6 +787,8 @@ class PrimaryToolbar(QToolBar):
             self.lbl_sketch.setStyleSheet(
                 f"color: {Theme.TEXT_DIM}; font-size: 12px; font-family: Consolas; background: transparent;"
             )
+        if self._owner_dialog is not None:
+            self._owner_dialog.apply_theme(theme_name)
         self.update()
 
     def is_compact(self) -> bool:

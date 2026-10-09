@@ -155,13 +155,37 @@
       height: 100%;
     }
 
+    #editor-tab-row {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      min-width: 0;
+      background: var(--bg-dark);
+      border-bottom: 1px solid var(--border);
+    }
+
+    #ai-banner-toggle {
+      display: none;
+      flex: 0 0 auto;
+      margin: 5px 8px 5px 0;
+      padding: 6px 9px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--bg-darkest);
+      color: var(--text);
+      font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
+      cursor: pointer;
+    }
+
+    #ai-banner-toggle:hover { border-color: var(--accent); }
+
     #tab-bar {
       display: flex;
       align-items: center;
       gap: 6px;
-      flex: 0 0 auto;
+      flex: 1 1 auto;
+      min-width: 0;
       background: var(--bg-dark);
-      border-bottom: 1px solid var(--border);
       overflow-x: auto;
       overflow-y: hidden;
       min-height: 46px;
@@ -692,6 +716,19 @@
       margin-left: 3px;
     }
 
+    .monaco-editor .ai-edit-removed-anchor-gutter::before {
+      content: '−';
+      color: var(--diff-remove-solid);
+      font-weight: bold;
+      font-size: 14px;
+      margin-left: 3px;
+    }
+
+    .monaco-editor .ai-edit-removed-anchor-line {
+      border-bottom: 2px solid var(--diff-remove-solid);
+      box-sizing: border-box;
+    }
+
     .ai-edit-modified-gutter::before {
       content: '~';
       color: var(--diff-modify-solid);
@@ -735,54 +772,33 @@
 
     #ai-diff-banner {
       position: absolute;
-      bottom: 20px;
+      bottom: 16px;
       left: 50%;
       z-index: 99999;
       display: none;
       align-items: center;
       justify-content: center;
-      gap: 12px;
-      background: linear-gradient(135deg, rgba(17, 24, 39, 0.82) 0%, rgba(13, 17, 23, 0.90) 100%);
-      border: 1px solid rgba(0, 210, 255, 0.28);
-      border-radius: 9999px;
-      padding: 7px 18px;
-      box-shadow: 
-        0 20px 48px -6px rgba(0, 0, 0, 0.75),
-        0 0 24px -2px rgba(0, 210, 255, 0.22),
-        inset 0 1px 1px 0 rgba(255, 255, 255, 0.18),
-        inset 0 0 16px 0 rgba(0, 210, 255, 0.08);
-      font-family: 'Montserrat', 'Segoe UI', -apple-system, sans-serif;
+      flex-wrap: wrap;
+      gap: 8px;
+      background: linear-gradient(135deg, var(--bg-dark), var(--bg-darkest));
+      border: 1px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 12px;
+      padding: 10px 12px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2), inset 0 1px 0 var(--tab-rim);
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
       font-size: 12px;
-      color: #e6edf3;
-      backdrop-filter: blur(20px) saturate(190%);
-      -webkit-backdrop-filter: blur(20px) saturate(190%);
-      animation: bannerSlideIn 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+      color: var(--text);
       transform: translateX(-50%);
       width: max-content;
-      max-width: min(calc(100% - 32px), 820px);
+      max-width: min(calc(100% - 24px), 820px);
       box-sizing: border-box;
-      transition: border-color 0.25s ease, box-shadow 0.25s ease;
-    }
-
-    #ai-diff-banner:hover {
-      border-color: rgba(0, 210, 255, 0.45);
-      box-shadow: 
-        0 24px 56px -6px rgba(0, 0, 0, 0.82),
-        0 0 32px 0 rgba(0, 210, 255, 0.32),
-        inset 0 1px 1px 0 rgba(255, 255, 255, 0.25),
-        inset 0 0 20px 0 rgba(0, 210, 255, 0.12);
     }
 
     #ai-diff-banner .review-title {
-      background: linear-gradient(135deg, #00f0ff 0%, #00b4d8 50%, #38bdf8 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      font-weight: 800;
-      font-size: 12px;
-      letter-spacing: 0.5px;
+      color: var(--accent);
+      font-weight: 700;
       white-space: nowrap;
-      filter: drop-shadow(0 0 8px rgba(0, 240, 255, 0.4));
     }
 
     #ai-diff-banner .review-file {
@@ -790,173 +806,85 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: #f1f5f9;
+      color: var(--text);
       font-weight: 600;
-      font-size: 11.5px;
-      background: rgba(255, 255, 255, 0.06);
-      padding: 3px 9px;
-      border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 3px 6px;
     }
 
     #ai-diff-banner .review-position {
-      color: #94a3b8;
+      color: var(--text-dim);
       font-size: 11px;
-      font-weight: 600;
-      background: rgba(0, 210, 255, 0.08);
-      padding: 2px 8px;
-      border-radius: 9999px;
-      border: 1px solid rgba(0, 210, 255, 0.2);
       white-space: nowrap;
     }
 
     #ai-diff-banner .review-message {
-      color: #fde047;
-      background: rgba(250, 204, 21, 0.1);
-      border: 1px solid rgba(250, 204, 21, 0.28);
-      padding: 2px 10px;
-      border-radius: 9999px;
+      color: var(--text);
       max-width: 260px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: 11px;
-      font-weight: 600;
-      box-shadow: 0 0 10px rgba(250, 204, 21, 0.12);
     }
 
     #ai-diff-banner .review-actions {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 8px;
-      margin-left: 2px;
+      gap: 6px;
     }
 
-    #ai-diff-banner .diff-badge-add {
-      background: linear-gradient(135deg, rgba(var(--diff-add-rgb), 0.14) 0%, rgba(var(--diff-add-rgb), 0.24) 100%);
-      color: var(--diff-add-solid);
-      border: 1px solid rgba(var(--diff-add-rgb), 0.38);
-      padding: 3px 10px;
-      border-radius: 9999px;
-      font-weight: 700;
-      font-size: 11px;
-      box-shadow: inset 0 0 8px rgba(var(--diff-add-rgb), 0.12), 0 2px 6px rgba(0, 0, 0, 0.25);
-    }
-
-    #ai-diff-banner .diff-badge-remove {
-      background: linear-gradient(135deg, rgba(var(--diff-remove-rgb), 0.14) 0%, rgba(var(--diff-remove-rgb), 0.24) 100%);
-      color: var(--diff-remove-solid);
-      border: 1px solid rgba(var(--diff-remove-rgb), 0.38);
-      padding: 3px 10px;
-      border-radius: 9999px;
-      font-weight: 700;
-      font-size: 11px;
-      box-shadow: inset 0 0 8px rgba(var(--diff-remove-rgb), 0.12), 0 2px 6px rgba(0, 0, 0, 0.25);
-    }
-
+    #ai-diff-banner .diff-badge-add,
+    #ai-diff-banner .diff-badge-remove,
     #ai-diff-banner .diff-badge-modify {
-      background: linear-gradient(135deg, rgba(0, 210, 255, 0.14) 0%, rgba(56, 189, 248, 0.24) 100%);
-      color: #00d2ff;
-      border: 1px solid rgba(0, 210, 255, 0.38);
-      padding: 3px 10px;
-      border-radius: 9999px;
-      font-weight: 700;
+      padding: 4px 7px;
+      border-radius: 6px;
+      font-weight: 600;
       font-size: 11px;
-      box-shadow: inset 0 0 8px rgba(0, 210, 255, 0.12), 0 2px 6px rgba(0, 0, 0, 0.25);
+      white-space: nowrap;
+    }
+    #ai-diff-banner .diff-badge-add {
+      background: rgba(var(--diff-add-rgb), 0.14);
+      color: var(--diff-add-text);
+      border: 1px solid rgba(var(--diff-add-rgb), 0.4);
+    }
+    #ai-diff-banner .diff-badge-remove {
+      background: rgba(var(--diff-remove-rgb), 0.14);
+      color: var(--diff-remove-text);
+      border: 1px solid rgba(var(--diff-remove-rgb), 0.4);
+    }
+    #ai-diff-banner .diff-badge-modify {
+      background: rgba(var(--diff-modify-rgb), 0.14);
+      color: var(--diff-modify-text);
+      border: 1px solid rgba(var(--diff-modify-rgb), 0.4);
     }
 
     #ai-diff-banner .review-btn {
-      background: rgba(255, 255, 255, 0.08);
-      color: #cbd5e1;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 9999px;
-      padding: 5px 14px;
+      background: var(--bg-darkest);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 10px;
       cursor: pointer;
-      font-size: 11.5px;
-      font-weight: 600;
-      font-family: inherit;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
       white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     }
-
     #ai-diff-banner .review-btn:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.16);
-      color: #ffffff;
-      border-color: rgba(0, 210, 255, 0.6);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 10px rgba(0, 210, 255, 0.25);
+      background: var(--bg-tab-hover);
+      border-color: var(--accent);
     }
-
-    #ai-diff-banner .review-btn:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
     #ai-diff-banner .review-btn:disabled {
-      opacity: 0.5;
-      cursor: wait;
+      color: var(--text-dim);
+      cursor: default;
     }
-
     #ai-diff-banner .review-btn.reject {
-      background: linear-gradient(135deg, rgba(231, 76, 60, 0.18) 0%, rgba(180, 40, 40, 0.28) 100%);
-      color: #ff9494;
-      border: 1px solid rgba(248, 81, 73, 0.4);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 2px 8px rgba(231, 76, 60, 0.15);
+      color: var(--diff-remove-text);
+      border-color: var(--diff-remove-solid);
+      background: rgba(var(--diff-remove-rgb), 0.12);
     }
-
-    #ai-diff-banner .review-btn.reject:hover:not(:disabled) {
-      background: linear-gradient(135deg, rgba(231, 76, 60, 0.4) 0%, rgba(200, 30, 30, 0.55) 100%);
-      color: #ffffff;
-      border-color: #ff6b6b;
-      box-shadow: 0 4px 16px rgba(231, 76, 60, 0.45), 0 0 12px rgba(248, 81, 73, 0.35);
-    }
-
     #ai-diff-banner .review-btn.accept {
-      background: linear-gradient(135deg, #059669 0%, #10b981 100%);
-      color: #ffffff;
-      border: 1px solid rgba(110, 231, 183, 0.65);
-      font-weight: 700;
-      box-shadow: 
-        0 2px 14px rgba(16, 185, 129, 0.42),
-        inset 0 1px 1px rgba(255, 255, 255, 0.35);
-    }
-
-    #ai-diff-banner .review-btn.accept:hover:not(:disabled) {
-      background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-      border-color: #a7f3d0;
-      box-shadow: 
-        0 4px 20px rgba(16, 185, 129, 0.65),
-        0 0 16px rgba(52, 211, 153, 0.5),
-        inset 0 1px 1px rgba(255, 255, 255, 0.45);
-    }
-
-    #ai-diff-banner .review-btn.undo {
-      background: linear-gradient(135deg, rgba(14, 116, 144, 0.7) 0%, rgba(2, 132, 199, 0.85) 100%);
-      color: #ffffff;
-      border: 1px solid rgba(56, 189, 248, 0.6);
-      font-weight: 700;
-      box-shadow: 0 2px 12px rgba(2, 132, 199, 0.35);
-    }
-
-    #ai-diff-banner .review-btn.undo:hover:not(:disabled) {
-      background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%);
-      border-color: #7dd3fc;
-      box-shadow: 0 4px 18px rgba(2, 132, 199, 0.55), 0 0 14px rgba(56, 189, 248, 0.4);
-    }
-
-    #ai-diff-banner .review-btn.redo {
-      background: linear-gradient(135deg, rgba(126, 34, 206, 0.6) 0%, rgba(147, 51, 234, 0.75) 100%);
-      color: #e9d5ff;
-      border: 1px solid rgba(192, 132, 252, 0.5);
-      font-weight: 700;
-      box-shadow: 0 2px 12px rgba(147, 51, 234, 0.3);
-    }
-
-    #ai-diff-banner .review-btn.redo:hover:not(:disabled) {
-      background: linear-gradient(135deg, #9333ea 0%, #a855f7 100%);
-      color: #ffffff;
-      border-color: #d8b4fe;
-      box-shadow: 0 4px 18px rgba(147, 51, 234, 0.5), 0 0 14px rgba(192, 132, 252, 0.35);
+      color: var(--diff-add-text);
+      border-color: var(--diff-add-solid);
+      background: rgba(var(--diff-add-rgb), 0.12);
     }
 
     @media (max-width: 700px) {
@@ -1031,7 +959,10 @@
       <button class="reload" data-action="reload">Reload</button>
       <button class="modify" data-action="modify">Modify</button>
     </div>
-    <div id="tab-bar" role="tablist" aria-label="Source files"></div>
+    <div id="editor-tab-row">
+      <div id="tab-bar" role="tablist" aria-label="Source files"></div>
+      <button id="ai-banner-toggle" type="button" aria-controls="ai-diff-banner" aria-expanded="false">AI Review</button>
+    </div>
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
@@ -1049,7 +980,7 @@
           <button id="ai-review-accept" class="review-btn accept" type="button">Accept</button>
           <button id="ai-history-undo" class="review-btn undo" type="button" style="display:none">Undo AI</button>
           <button id="ai-history-redo" class="review-btn redo" type="button" style="display:none">Redo AI</button>
-          <button id="ai-history-close" class="review-btn close-banner" type="button" style="display:none" aria-label="Close AI history banner" title="Close">✕</button>
+          <button id="ai-history-close" class="review-btn close-banner" type="button" aria-label="Hide AI review or history bar" title="Hide this bar; reopen it beside the source tabs">Hide</button>
         </span>
       </div>
     </div>
@@ -1147,7 +1078,7 @@
       window.__initQtWebChannel = initQtWebChannel;
     })();
   </script>
-  <!-- Local, C++-only trimmed Monaco bundle. No CDN / network dependency. -->
+  <!-- Local C-family Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
   <script>
     // Extend the offline C++ language after its lazy configuration loads.
@@ -1187,7 +1118,122 @@
         }
       }
       window.configureCppIndentation = configureCppIndentation;
-      configureCppIndentation();
+
+      // Give the registered C loader its own definition as well as configuring
+      // the current provider. Its first lazy registration can finish later than
+      // page setup, and must never restore the bundled shared C++ grammar.
+      const cppConfigurationReady = configureCppIndentation();
+      let cDefinitionPromise = null;
+      const cKeywordVersions = {
+        auto:'C', break:'C', case:'C', char:'C', const:'C', continue:'C', default:'C',
+        do:'C', double:'C', else:'C', enum:'C', extern:'C', float:'C', for:'C',
+        goto:'C', if:'C', int:'C', long:'C', register:'C', return:'C', short:'C',
+        signed:'C', sizeof:'C', static:'C', struct:'C', switch:'C', typedef:'C',
+        union:'C', unsigned:'C', void:'C', volatile:'C', while:'C',
+        inline:'C99', restrict:'C99', _Bool:'C99', _Complex:'C99', _Imaginary:'C99',
+        _Alignas:'C11', _Alignof:'C11', _Atomic:'C11', _Generic:'C11',
+        _Noreturn:'C11', _Static_assert:'C11', _Thread_local:'C11',
+        alignas:'C23', alignof:'C23', bool:'C23', constexpr:'C23', false:'C23',
+        nullptr:'C23', static_assert:'C23', thread_local:'C23', true:'C23',
+        typeof:'C23', typeof_unqual:'C23', _BitInt:'C23'
+      };
+      const cHeaders = ['assert.h','ctype.h','errno.h','float.h','inttypes.h','limits.h',
+        'locale.h','math.h','setjmp.h','signal.h','stdarg.h','stdbool.h','stddef.h',
+        'stdint.h','stdio.h','stdlib.h','string.h','time.h','wchar.h','wctype.h'];
+
+      function cCompletionItems(model, position) {
+        const prefix = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+        const include = prefix.match(/^\s*#\s*include\s*[<"]([^>"]*)$/);
+        if (include) {
+          return {suggestions:cHeaders.map(header => ({
+            label:header, kind:monaco.languages.CompletionItemKind.File,
+            insertText:header, detail:'Standard C header',
+            range:new monaco.Range(position.lineNumber, position.column - include[1].length,
+              position.lineNumber, position.column)
+          }))};
+        }
+        // Read the bundled model's cached token metadata, including multiline
+        // comments. Never copy or retokenize a whole file for each completion.
+        const tokenization = model.tokenization;
+        if (tokenization && tokenization.getLineTokens) {
+          tokenization.tokenizeIfCheap?.(position.lineNumber);
+          const tokens = tokenization.getLineTokens(position.lineNumber);
+          const type = tokens.getStandardTokenType(tokens.findTokenIndexAtOffset(Math.max(0, position.column - 2)));
+          if (type === 1 || type === 2) return {suggestions:[]};
+        } else {
+          const tokens = monaco.editor.tokenize(model.getLineContent(position.lineNumber), 'c')[0] || [];
+          const token = tokens.filter(item => item.offset < position.column - 1).pop();
+          if (token && /^(comment|string)/.test(token.type)) return {suggestions:[]};
+        }
+        const word = model.getWordUntilPosition(position);
+        const range = new monaco.Range(position.lineNumber, word.startColumn,
+          position.lineNumber, word.endColumn);
+        const suggestions = Object.entries(cKeywordVersions).map(([keyword, version]) => ({
+          label:keyword, kind:monaco.languages.CompletionItemKind.Keyword,
+          insertText:keyword, detail:version + ' keyword', range
+        }));
+        const snippets = [
+          ['if', 'if (${1:condition}) {\n\t$0\n}', 'If statement'],
+          ['for', 'for (${1:int i = 0}; ${2:i < count}; ${3:++i}) {\n\t$0\n}', 'For loop'],
+          ['while', 'while (${1:condition}) {\n\t$0\n}', 'While loop'],
+          ['switch', 'switch (${1:value}) {\n\tcase ${2:0}:\n\t\t$0\n\t\tbreak;\n\tdefault:\n\t\tbreak;\n}', 'Switch statement'],
+          ['struct', 'struct ${1:name} {\n\t$0\n};', 'Structure'],
+          ['function', '${1:void} ${2:function_name}(${3:void}) {\n\t$0\n}', 'C function']
+        ];
+        for (const [label, insertText, detail] of snippets) suggestions.push({
+          label, insertText, detail, kind:monaco.languages.CompletionItemKind.Snippet,
+          insertTextRules:monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, range
+        });
+        return {suggestions};
+      }
+
+      async function buildCLanguageDefinition() {
+        await cppConfigurationReady;
+        const cpp = monaco.languages.getLanguages().find(language => language.id === 'cpp');
+        const loaded = cpp && cpp.loader ? await cpp.loader() : null;
+        if (!loaded || !loaded.language) return false;
+        const shared = loaded.language;
+        const language = {
+          ...shared, tokenPostfix:'.c', keywords:Object.keys(cKeywordVersions),
+          tokenizer:{...shared.tokenizer, root:[
+            [/^\s*#\s*include/, {token:'keyword.directive.include', next:'@include'}],
+            [/^\s*#\s*\w+/, 'keyword.directive'],
+            [/[a-zA-Z_]\w*/, {cases:{'@keywords':{token:'keyword.$0'}, '@default':'identifier'}}],
+            {include:'@whitespace'},
+            [/[{}()\[\]]/, '@brackets'],
+            [/@symbols/, {cases:{'@operators':'delimiter', '@default':''}}],
+            [/0[xX](?:[\da-fA-F]+(?:\.[\da-fA-F]*)?|\.[\da-fA-F]+)[pP][+-]?\d+(@floatsuffix)/, 'number.float'],
+            [/(?:\d+\.\d*|\.\d+|\d+)[eE][+-]?\d+(@floatsuffix)/, 'number.float'],
+            [/(?:\d+\.\d*|\.\d+)(@floatsuffix)/, 'number.float'],
+            [/0[xX][0-9a-fA-F']+(@integersuffix)/, 'number.hex'],
+            [/0[bB][01']+(@integersuffix)/, 'number.binary'],
+            [/0[0-7']+(@integersuffix)/, 'number.octal'],
+            [/\d[\d']*(@integersuffix)/, 'number'],
+            [/[;,.]/, 'delimiter'],
+            [/@encoding?"([^"\\]|\\.)*$/, 'string.invalid'],
+            [/@encoding?"/, 'string', '@string'],
+            [/@encoding?'(?:[^\\'\r\n]|@escapes)+?'/, 'string'],
+            [/'/, 'string.invalid']
+          ]}
+        };
+        return {language, conf:{...loaded.conf}};
+      }
+      function loadCLanguageDefinition() {
+        if (!cDefinitionPromise) cDefinitionPromise = buildCLanguageDefinition();
+        return cDefinitionPromise;
+      }
+      const cEntry = monaco.languages.getLanguages().find(language => language.id === 'c');
+      if (cEntry) cEntry.loader = loadCLanguageDefinition;
+      window.editorCFamilyReady = loadCLanguageDefinition().then(definition => {
+        if (!definition) return false;
+        monaco.languages.setMonarchTokensProvider('c', definition.language);
+        monaco.languages.setLanguageConfiguration('c', definition.conf);
+        monaco.languages.registerCompletionItemProvider('c', {
+          triggerCharacters:['<','"'], provideCompletionItems:cCompletionItems
+        });
+        return true;
+      })
+        .catch(error => {console.error('C language configuration failed:', error); return false;});
 
       document.addEventListener('keydown', event => {
         if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey ||
@@ -1638,36 +1684,76 @@
         return true;
       };
 
+      window.normalizeEditorLocation = function (model, location) {
+        const count = Math.max(1, model.getLineCount());
+        const line = Math.min(count, Math.max(1, Math.trunc(Number(location.line) || 1)));
+        const endLine = Math.min(count, Math.max(line, Math.trunc(Number(location.endLine) || line)));
+        const columnAt = (number, value) => {
+          const text = model.getLineContent(number) || '';
+          let column = Math.max(1, Math.trunc(Number(value) || 1));
+          if (location.columnEncoding === 'codepoint') {
+            column = Array.from(text).slice(0, column - 1).join('').length + 1;
+          }
+          return Math.min(text.length + 1, column);
+        };
+        const column = columnAt(line, location.column);
+        const endColumn = location.endColumn == null
+          ? Math.min(model.getLineMaxColumn(endLine), column + 1)
+          : columnAt(endLine, location.endColumn);
+        return model.validateRange(new monaco.Range(line, column, endLine,
+          endLine === line ? Math.max(column, endColumn) : endColumn));
+      };
+
+      window.navigateToSource = async function (location) {
+        const revision = window.__sourceNavigationRevision = (window.__sourceNavigationRevision || 0) + 1;
+        const path = String(location.path || '');
+        if (path && !window.activateProjectFile?.(path)) {
+          if (window.safeLoadProject) await window.safeLoadProject();
+          if (revision !== window.__sourceNavigationRevision || !window.activateProjectFile?.(path)) return false;
+        }
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (revision !== window.__sourceNavigationRevision) return false;
+        const active = document.querySelector('#tab-bar .tab.active');
+        if (path && window.projectPathKey(active?._filePath) !== window.projectPathKey(path)) return false;
+        const editor = window.editorInstance;
+        const model = editor?.getModel();
+        if (!model) return false;
+        const range = window.normalizeEditorLocation(model, location);
+        editor.setSelection(range);
+        if (location.reveal === 'top') {
+          // Permit a final-line diagnostic to sit at the top too. Monaco
+          // computes logical view offsets, including wrapped lines and zones.
+          editor.updateOptions({ scrollBeyondLastLine: true });
+          editor.layout();
+          editor.setScrollTop(Math.max(0, editor.getTopForLineNumber(range.startLineNumber) - 4), monaco.editor.ScrollType.Immediate);
+        } else {
+          editor.revealRangeInCenter(range, monaco.editor.ScrollType.Immediate);
+        }
+        editor.focus();
+        return true;
+      };
+
       window.setEditorMarkers = function (errorsJsonStr) {
         if (!window.editorInstance) return;
         const model = window.editorInstance.getModel();
         if (!model) return;
         try {
           const errors = JSON.parse(errorsJsonStr);
-          const markers = errors.map(err => {
-            const lineContent = model.getLineContent(err.line) || "";
-            const maxCol = Math.max(1, lineContent.length + 1);
-            let startCol = Math.max(1, Math.min(err.col || 1, maxCol));
-            let endLine = err.endLine || err.line;
-            let endCol = err.endCol;
-            if (!endCol) {
-              endCol = startCol + 1;
-              if (startCol - 1 < lineContent.length) {
-                let idx = startCol - 1;
-                while (idx < lineContent.length && /\w/.test(lineContent[idx])) {
-                  idx++;
-                }
-                endCol = Math.max(startCol + 1, idx + 1);
-              }
-            }
-            endCol = Math.max(startCol + 1, Math.min(endCol, maxCol + 1));
+          const activePath = window.projectPathKey(document.querySelector('#tab-bar .tab.active')?._filePath || '');
+          const markers = errors.filter(err => {
+            const file = window.projectPathKey(err.file || '');
+            const basename = activePath.split('/').pop();
+            const relative = /^[a-z]:\//i.test(activePath) || activePath.startsWith('//') ? file.toLowerCase() : file;
+            return !file || file === activePath || (!file.includes('/') && relative === basename);
+          }).map(err => {
+            const range = window.normalizeEditorLocation(model, {
+              line: err.line, column: err.col, endLine: err.endLine,
+              endColumn: err.endCol, columnEncoding: err.columnEncoding || 'codepoint'
+            });
             return {
-              severity: err.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+              severity: String(err.severity).toLowerCase().includes('err') ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
               message: err.message,
-              startLineNumber: err.line,
-              startColumn: startCol,
-              endLineNumber: endLine,
-              endColumn: endCol
+              ...range
             };
           });
           monaco.editor.setModelMarkers(model, "owner_python_syntax", markers);
@@ -1757,7 +1843,9 @@
           targetLang = 'javascript';
         } else if (ext === 'ini') {
           targetLang = 'ini';
-        } else if (['ino', 'cpp', 'c', 'h', 'hpp'].includes(ext)) {
+        } else if (ext === 'c') {
+          targetLang = 'c';
+        } else if (['ino', 'cpp', 'h', 'hpp'].includes(ext)) {
           targetLang = 'cpp';
         } else {
           targetLang = 'plaintext';
@@ -1895,13 +1983,20 @@
         }
       }
 
+      const decorationSpecsByModel = new Map();
+
       function replaceDecorations(model, decorations) {
         if (!model) return;
         const key = model.uri.toString();
         const previous = decorationsByModel.get(key) || [];
         const next = model.deltaDecorations(previous, decorations || []);
-        if (next.length) decorationsByModel.set(key, next);
-        else decorationsByModel.delete(key);
+        if (next.length) {
+          decorationsByModel.set(key, next);
+          decorationSpecsByModel.set(key, decorations);
+        } else {
+          decorationsByModel.delete(key);
+          decorationSpecsByModel.delete(key);
+        }
       }
 
       function clearDecorations(model) {
@@ -1910,6 +2005,7 @@
         const ids = decorationsByModel.get(key) || [];
         if (ids.length) model.deltaDecorations(ids, []);
         decorationsByModel.delete(key);
+        decorationSpecsByModel.delete(key);
       }
 
       window.clearAiDiffHighlights = function () {
@@ -1917,8 +2013,7 @@
           for (const model of monaco.editor.getModels()) clearDecorations(model);
         }
         if (!currentReview) {
-          const banner = document.getElementById('ai-diff-banner');
-          if (banner) banner.style.display = 'none';
+          updateAiBannerVisibility();
         }
       };
 
@@ -1926,11 +2021,45 @@
         if (element) element.style.display = visible ? '' : 'none';
       }
 
-      let aiHistoryBannerDismissed = false;
       let aiHistoryBannerToken = '';
       let lastAiHistoryState = null;
       let aiHistoryBaselinePath = '';
       let aiHistoryBaselineVersion = null;
+      let aiBannerHidden = false;
+      try { aiBannerHidden = sessionStorage.getItem('mcu_ai_banner_hidden') === '1'; } catch (error) {}
+
+      function hasAiBannerContent() {
+        return !!currentReview || !!(lastAiHistoryState && (lastAiHistoryState.canUndo || lastAiHistoryState.canRedo));
+      }
+
+      function updateAiBannerVisibility() {
+        const banner = document.getElementById('ai-diff-banner');
+        const toggle = document.getElementById('ai-banner-toggle');
+        const available = hasAiBannerContent();
+        const visible = available && !aiBannerHidden;
+        if (banner) {
+          banner.style.display = visible ? 'flex' : 'none';
+          banner.setAttribute('aria-hidden', String(!visible));
+        }
+        if (toggle) {
+          toggle.style.display = available ? 'inline-flex' : 'none';
+          toggle.setAttribute('aria-expanded', String(visible));
+          const title = currentReview ? 'AI Review' : 'AI History';
+          const count = currentReview ? Number(currentReview.pendingCount) || 1 : 0;
+          toggle.textContent = visible ? 'Hide AI bar' : title + (count ? ` (${count})` : '');
+          toggle.title = visible ? 'Hide AI Review / History' : `Show ${title}${count ? ` — ${count} pending` : ''}`;
+          toggle.setAttribute('aria-label', toggle.title);
+        }
+      }
+
+      window.setAiBannerHidden = function (hidden) {
+        aiBannerHidden = !!hidden;
+        try { sessionStorage.setItem('mcu_ai_banner_hidden', aiBannerHidden ? '1' : '0'); } catch (error) {}
+        updateAiBannerVisibility();
+      };
+      window.toggleAiBanner = function () {
+        window.setAiBannerHidden(!aiBannerHidden);
+      };
 
       function captureAiHistoryBaseline() {
         const model = window.editorInstance && window.editorInstance.getModel
@@ -1949,10 +2078,7 @@
       }
 
       function dismissAiHistoryBanner() {
-        aiHistoryBannerDismissed = true;
-        const banner = document.getElementById('ai-diff-banner');
-        if (banner && !currentReview) banner.style.display = 'none';
-        restoreGlyphMargin();
+        window.setAiBannerHidden(true);
       }
 
       function currentAiHistoryToken(state) {
@@ -1990,13 +2116,12 @@
         setVisible(document.getElementById('ai-review-next'), true);
         setVisible(document.getElementById('ai-history-undo'), false);
         setVisible(document.getElementById('ai-history-redo'), false);
-        setVisible(document.getElementById('ai-history-close'), false);
+        setVisible(document.getElementById('ai-history-close'), true);
       }
 
       function showReviewBanner(snapshot, message) {
         const banner = document.getElementById('ai-diff-banner');
         if (!banner || !snapshot) return;
-        aiHistoryBannerDismissed = false;
         aiHistoryBannerToken = '';
         setBannerReviewMode();
         const diff = snapshot.diff || {};
@@ -2030,7 +2155,7 @@
           messageNode.title = stateMessage;
           messageNode.style.display = stateMessage ? 'inline' : 'none';
         }
-        banner.style.display = 'flex';
+        updateAiBannerVisibility();
       }
 
       async function refreshAiHistoryBanner(message) {
@@ -2039,10 +2164,12 @@
         if (!api || !api.get_ai_history_state) return null;
         try {
           const state = await api.get_ai_history_state();
+          if (currentReview || resolvingReview) return state;
           const banner = document.getElementById('ai-diff-banner');
           if (!banner) return state;
           if (!state || (!state.canUndo && !state.canRedo)) {
-            banner.style.display = 'none';
+            lastAiHistoryState = state;
+            updateAiBannerVisibility();
             restoreGlyphMargin();
             return state;
           }
@@ -2058,7 +2185,6 @@
           const historyToken = currentAiHistoryToken(state);
           if (historyToken !== aiHistoryBannerToken) {
             aiHistoryBannerToken = historyToken;
-            aiHistoryBannerDismissed = false;
             // The refreshed model state becomes the boundary between normal
             // Monaco typing undo and AI-decision undo. Ctrl+Z only crosses
             // into AI history when the editor is exactly at this boundary.
@@ -2108,8 +2234,7 @@
             messageNode.title = stateMessage;
             messageNode.style.display = stateMessage ? 'inline' : 'none';
           }
-          banner.style.display = aiHistoryBannerDismissed ? 'none' : 'flex';
-          if (aiHistoryBannerDismissed) restoreGlyphMargin();
+          updateAiBannerVisibility();
           return state;
         } catch (error) {
           console.error('Could not refresh AI history:', error);
@@ -2257,8 +2382,10 @@
           Math.max(1, Number(firstLine) || 1),
           Math.max(1, model.getLineCount())
         );
+        const navigationRevision = window.__sourceNavigationRevision || 0;
         const reveal = () => {
           if (window.editorInstance.getModel() !== model) return;
+          if ((window.__sourceNavigationRevision || 0) !== navigationRevision) return;
           window.editorInstance.revealLineInCenter(line);
           window.editorInstance.setPosition({ lineNumber: line, column: 1 });
           window.editorInstance.focus();
@@ -2283,6 +2410,29 @@
         glyphMarginWasEnabled = null;
       }
 
+      function diffOverviewColor(kind) {
+        const token = kind === 'added' ? 'add' : kind === 'removed' ? 'remove' : 'modify';
+        return getComputedStyle(document.body).getPropertyValue(`--diff-${token}-solid`).trim();
+      }
+
+      window.refreshAiDiffTheme = function () {
+        if (typeof monaco === 'undefined') return;
+        for (const model of monaco.editor.getModels()) {
+          const key = model.uri.toString();
+          const specs = decorationSpecsByModel.get(key);
+          if (!specs) continue;
+          const ids = decorationsByModel.get(key) || [];
+          replaceDecorations(model, specs.map((spec, index) => {
+            const range = model.getDecorationRange(ids[index]);
+            if (!range) return null;
+            const kind = /ai-edit-(added|removed|modified)/.exec(spec.options.className || '')?.[1];
+            if (!kind || !spec.options.overviewRuler) return { ...spec, range };
+            return { ...spec, range, options: { ...spec.options,
+              overviewRuler: { ...spec.options.overviewRuler, color: diffOverviewColor(kind) } } };
+          }).filter(Boolean));
+        }
+      };
+
       window.applyStructuredAiDiff = function (diff, model, snapshot) {
         if (!model || !diff || typeof monaco === 'undefined') return;
         enableReviewGlyphMargin();
@@ -2298,16 +2448,18 @@
             start = 1;
             end = lineCount;
           }
-          const color = kind === 'added' ? '#3fb950'
-            : (kind === 'removed' ? '#f85149' : '#58a6ff');
+          const color = diffOverviewColor(kind);
+          const anchor = kind === 'removed' && change.anchorOnly && snapshot?.afterExists !== false;
+          const gutter = anchor ? 'ai-edit-removed-anchor-gutter' : `ai-edit-${kind}-gutter`;
           decorations.push({
             range: new monaco.Range(start, 1, end, model.getLineMaxColumn(end)),
             options: {
               isWholeLine: true,
-              className: `ai-edit-${kind}-line`,
-              inlineClassName: `ai-edit-${kind}-inline`,
-              linesDecorationsClassName: `ai-edit-${kind}-gutter`,
-              glyphMarginClassName: `ai-edit-${kind}-gutter`,
+              className: anchor ? 'ai-edit-removed-anchor-line' : `ai-edit-${kind}-line`,
+              ...(anchor ? {} : { inlineClassName: `ai-edit-${kind}-inline` }),
+              linesDecorationsClassName: gutter,
+              glyphMarginClassName: gutter,
+              ...(anchor ? { glyphMarginHoverMessage: { value: `${Number(change.removedCount) || 1} line(s) removed here` } } : {}),
               overviewRuler: {
                 color,
                 position: monaco.editor.OverviewRulerLane.Full
@@ -2326,24 +2478,32 @@
           showReviewBanner(snapshot || currentReview);
           return;
         }
-        const oldLines = String(oldContent || '').split(/\r?\n/);
-        const newLines = String(newContent || '').split(/\r?\n/);
+        const lines = value => {
+          const text = String(value || '');
+          if (!text) return [];
+          const result = text.split(/\r?\n/);
+          if (text.endsWith('\n')) result.pop();
+          return result;
+        };
+        const oldLines = lines(oldContent);
+        const newLines = lines(newContent);
         let prefix = 0;
         const limit = Math.min(oldLines.length, newLines.length);
         while (prefix < limit && oldLines[prefix] === newLines[prefix]) prefix++;
+        let oldTail = oldLines.length, newTail = newLines.length;
+        while (oldTail > prefix && newTail > prefix && oldLines[oldTail - 1] === newLines[newTail - 1]) {
+          oldTail--; newTail--;
+        }
+        const oldCount = oldTail - prefix, newCount = newTail - prefix;
+        const shared = Math.min(oldCount, newCount);
         const firstLine = Math.min(Math.max(1, prefix + 1), model.getLineCount());
-        replaceDecorations(model, [{
-          range: new monaco.Range(firstLine, 1, model.getLineCount(), model.getLineMaxColumn(model.getLineCount())),
-          options: {
-            isWholeLine: true,
-            className: 'ai-edit-modified-line',
-            inlineClassName: 'ai-edit-modified-inline',
-            linesDecorationsClassName: 'ai-edit-modified-gutter',
-            glyphMarginClassName: 'ai-edit-modified-gutter'
-          }
-        }]);
-        showReviewBanner(snapshot || currentReview);
-        revealFirstChange(model, firstLine);
+        const changes = [];
+        if (shared) changes.push({ type: 'modified', startLine: prefix + 1, endLine: prefix + shared });
+        if (newCount > shared) changes.push({ type: 'added', startLine: prefix + shared + 1, endLine: newTail });
+        if (oldCount > shared) changes.push({ type: 'removed', startLine: Math.min(model.getLineCount(), prefix + shared + 1),
+          endLine: Math.min(model.getLineCount(), prefix + shared + 1), anchorOnly: true, removedCount: oldCount - shared });
+        const diff = { changes, firstLine, modified: shared, added: newCount - shared, removed: oldCount - shared };
+        window.applyStructuredAiDiff(diff, model, { ...(snapshot || currentReview || {}), diff });
       };
 
       function scheduleWorkspaceReload(preferredPath) {
@@ -2518,8 +2678,7 @@
                 if (reviews.length) {
                   await window.reloadActiveFileWithDiff(reviews[0].path);
                 } else {
-                  const banner = document.getElementById('ai-diff-banner');
-                  if (banner) banner.style.display = 'none';
+                  updateAiBannerVisibility();
                   restoreGlyphMargin();
                 }
               }
@@ -2558,8 +2717,7 @@
             } else {
               currentReview = null;
               currentReviewModel = null;
-              const banner = document.getElementById('ai-diff-banner');
-              if (banner) banner.style.display = 'none';
+              updateAiBannerVisibility();
               restoreGlyphMargin();
             }
             return;
@@ -2579,8 +2737,7 @@
           if (result.nextPath) {
             await window.reloadActiveFileWithDiff(result.nextPath);
           } else {
-            const banner = document.getElementById('ai-diff-banner');
-            if (banner) banner.style.display = 'none';
+            updateAiBannerVisibility();
             restoreGlyphMargin();
           }
         } catch (error) {
@@ -2604,16 +2761,14 @@
               if (reviews.length) {
                 await window.reloadActiveFileWithDiff(reviews[0].path);
               } else {
-                const banner = document.getElementById('ai-diff-banner');
-                if (banner) banner.style.display = 'none';
+                updateAiBannerVisibility();
                 restoreGlyphMargin();
               }
             } catch (refreshError) {
               console.error('AI review recovery error:', refreshError);
               currentReview = null;
               currentReviewModel = null;
-              const banner = document.getElementById('ai-diff-banner');
-              if (banner) banner.style.display = 'none';
+              updateAiBannerVisibility();
               restoreGlyphMargin();
             }
           }
@@ -2671,8 +2826,7 @@
         if (nextPath) {
           await window.reloadActiveFileWithDiff(nextPath);
         } else {
-          const banner = document.getElementById('ai-diff-banner');
-          if (banner) banner.style.display = 'none';
+          updateAiBannerVisibility();
           restoreGlyphMargin();
         }
       }
@@ -2691,8 +2845,7 @@
           if (currentReviewModel) clearDecorations(currentReviewModel);
           currentReview = null;
           currentReviewModel = null;
-          const banner = document.getElementById('ai-diff-banner');
-          if (banner) banner.style.display = 'none';
+          updateAiBannerVisibility();
         }
         if (resolvingReview) {
           // The decision's finally block performs this recovery after the
@@ -2709,7 +2862,6 @@
         workspaceReloadScheduled = false;
         currentReview = null;
         currentReviewModel = null;
-        aiHistoryBannerDismissed = false;
         aiHistoryBannerToken = '';
         lastAiHistoryState = null;
         aiHistoryBaselinePath = '';
@@ -2790,11 +2942,13 @@
       const undoButton = document.getElementById('ai-history-undo');
       const redoButton = document.getElementById('ai-history-redo');
       const closeHistoryButton = document.getElementById('ai-history-close');
+      const bannerToggleButton = document.getElementById('ai-banner-toggle');
       if (acceptButton) acceptButton.addEventListener('click', () => resolveCurrentReview(true));
       if (rejectButton) rejectButton.addEventListener('click', () => resolveCurrentReview(false));
       if (undoButton) undoButton.addEventListener('click', () => applyAiHistory('undo', false));
       if (redoButton) redoButton.addEventListener('click', () => applyAiHistory('redo', false));
       if (closeHistoryButton) closeHistoryButton.addEventListener('click', () => dismissAiHistoryBanner());
+      if (bannerToggleButton) bannerToggleButton.addEventListener('click', () => window.toggleAiBanner());
 
       // Ctrl+Z/Ctrl+Y behave like an IDE timeline. Monaco keeps priority while
       // the current model has user typing to undo/redo. Once the model returns
@@ -3887,7 +4041,7 @@
                 lines.push(`**${kindTitle}**${scopeStr} \`${sym.name}\``);
 
                 if (sym.prototype) {
-                  lines.push('```cpp\n' + sym.prototype + '\n```');
+                  lines.push('```' + (model.getLanguageId() === 'c' ? 'c' : 'cpp') + '\n' + sym.prototype + '\n```');
                 }
 
                 if (sym.value && (sym.kind === 'variable' || sym.kind === 'constant' || sym.kind === 'parameter')) {
@@ -4105,6 +4259,7 @@
             window.editorInstance.updateOptions({ theme: targetMonacoTheme });
           } catch (e) {}
         }
+        window.refreshAiDiffTheme?.();
       };
 
       window.setEditorFontSize = function (sz, persisted = true) {

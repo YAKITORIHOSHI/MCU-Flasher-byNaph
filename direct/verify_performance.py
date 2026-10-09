@@ -659,7 +659,7 @@ class PerformanceChecks(unittest.TestCase):
             panel = SyntaxPanel(SimpleNamespace(get_project_dir=lambda: current[0], is_busy=False))
             panel._bg_timer.stop()
             entered, release = threading.Event(), threading.Event()
-            def analyze(_files):
+            def analyze(_files, **_kwargs):
                 entered.set()
                 release.wait(2)
                 return [{"file": str(a / "sample.ino"), "message": "stale", "line": 1}]

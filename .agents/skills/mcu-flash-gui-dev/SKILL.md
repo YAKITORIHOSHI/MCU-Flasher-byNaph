@@ -29,6 +29,50 @@ For explicitly requested assistant delegation, use the local
   titles. Keep before/after previews, per-file Accept/Reject with navigation and
   counters, history bounds (200 cards / 4 MiB), truncated-preview notices and
   atomic replicas. Delete history never removes pending reviews or recovery copies.
+- AI Changes Before/AI edit previews use `CodePreview` with independently numbered
+  source blocks, not painted numbers inside copied text. Align gutters to real
+  QTextBlock geometry under scrolling/wrapping and update widths for fonts/digits.
+  Preserve unchanged preview text/scroll/selection through themes. PTY contexts
+  carry `source: "cli"`; journal cards retain `promptSource` and original prompt
+  text, displaying exactly `Assistant Prompt (CLI)` with text in the tooltip.
+  The exact legacy PTY fallback title may map to CLI at display time; unknown
+  external changes retain their unknown-source label. Verify with mocked
+  `direct/verify_ai_changes.py`; never migrate a live journal during verification.
+- Syntax Check double-clicks carry the exact canonical root file and full range
+  through `editor_goto_diagnostic`. Convert analyzer codepoint columns to Monaco
+  UTF-16, await exact tab/model activation and reveal the selected line at the top
+  even for wrapped/final lines. Reveal the existing hidden pane or raise its
+  detached host; preserve dirty models and tab order. Background project checks
+  overlay GUI-owned dirty snapshots and reject both changed snapshots and older
+  editor revisions. Verify with `direct/verify_syntax_navigation.py` and the real
+  offline renderer fixture `direct/verify_editor_review_ui.py`.
+- Live C/C++ checks scan structure and probable terminators; do not claim full
+  compiler/type resolution. Ignore directive replacement brackets and known
+  inactive branches; inspect one unresolved conditional branch, leaving target
+  macro evaluation to Compile. Preserve literal token boundaries and codepoint
+  columns, reject unfinished raw literals, and accept macro/commented includes.
+  Read source snapshots once off GUI, bind caches to actual bytes, return fresh
+  diagnostic dictionaries, and report read failures without Clean. Debounce stale
+  project retries with one parented timer; bound project checks to 256 root files /
+  16 MiB characters, each source to 4 MiB characters, nesting to 1024 and structural
+  tokens to 65536. Bound diagnostics during collection, not after an unbounded
+  list is built. Verify `direct/verify_syntax_checker.py`, navigation and performance.
+- `.c` Monaco models use their own C tokenizer, keyword-version suggestions,
+  standard headers, snippets and brace rules. Keep `.ino/.cpp/.h/.hpp` as C++.
+  Ensure the first lazy C load cannot replace C rules with the shared C++ grammar;
+  register completions once, preserve model identity/dirty buffers and reuse
+  cached token metadata. Verify cold/normal offline renderer startup with
+  `direct/verify_editor_c.py` and the editor resource verifier.
+- AI Review/History Hide and the source-tab toggle only change bar visibility.
+  Retain pending decisions, history actions, decorations, glyphs and read-only
+  state, remembering visibility in sessionStorage across renderer reloads.
+  Use static workspace theme tokens for the bar and diff ruler/gutter colors.
+  Split replacements into shared modified lines and excess added/removed lines;
+  removals anchor with red gutter/boundary without tinting surviving text, while
+  whole-file deletion retains red before-content. Theme changes must recolor the
+  current Monaco decoration ranges rather than replaying their original ranges.
+  Verify `direct/verify_ai_line_diff.py` and `direct/verify_editor_review_ui.py`
+  with synthetic models and mocked bridges; captures belong in `temp/`.
 - Offline mode defaults off. Online startup verifies the local runtime and SCons;
   missing exact targets use explicit board preparation. Both modes retain the
   bootstrap-only installer boundary. Offline enables network denial and full
@@ -37,6 +81,14 @@ For explicitly requested assistant delegation, use the local
   private helper waits for exit before native Bootstrap --repair. Report failure
   and roll back mode without dropping buffers. Cleanup authenticates per-host
   extras and rejects links/unknown content; preserve shared toolchains and sketches.
+- Firebase checks `offline_runtime.network_access_disabled()` before probes and
+  requests. A Windows adapter status cannot override the active process guard.
+  Blocked sign-in needs an Offline Mode/restart explanation, not package repair.
+  Distinguish configured, Firebase signed-in and local access; endpoint tests
+  prove reachability only. Preserve literal passwords, validate returned token
+  and UID, and clear an earlier session on a failed attempt. Verify service
+  behavior with `direct/verify_owner_ticket_service.py` using mocked vault,
+  configuration, probes and HTTP, together with the offline-mode verifier.
 - An additional healthy same-installation window skips source-fingerprint
   rechecks while retaining runtime/mode/crash validation and immediate-child
   failure checks. Keep session/crash records and spawn logs per process; mark clean
@@ -115,11 +167,12 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `icons.py`: Original theme-aware circuit-chip and action vectors without emoji font dependencies.
      - `setup_components.py`: Cached glass cards, vector glyphs, status chips and compact determinate progress rows.
      - `ai_panel.py`: Collapsible OpenCode AI assistant side panel.
-     - `syntax_panel.py`: Interactive AST syntax diagnostic tree with line jump navigation.
+     - `syntax_panel.py`: Interactive C/C++ syntax diagnostics with exact source-range navigation.
      - `compat_panel.py`: Board compatibility matrix and GPIO pinout inspector.
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
      - `project_dialog.py`: Project selector & new project scaffolding wizard.
+     - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login and Firebase settings; cached shared glass surfaces and responsive forms.
      - `modify_dialog.py`: Project sketch file management dialog (add, rename, delete).
      - `download_dialog.py`: Explicit handoff to the separate host bootstrap process.
      - `package_progress.py`: Window-owned, focus-preserving package job card with stage/progress display and a Notifications action.
@@ -127,6 +180,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `theme.py`: QSS generator for Glass Smoked Dark, Glass Frosted Light and Solarized Dark.
 
    **Theme and log readability**
+   - Developer tickets share the workspace's GlassCard/GlassWorkspace and original vectors. Use portal inks checked against actual reflected surfaces in all three palettes; retain keyboard focus, masked access keys, drafts and filters through theme changes. Stack classifications on narrow windows, scroll short forms and pin edit/cloud actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
    - Build and serial output, ANSI foregrounds, connection state and transient status-bar messages use semantic colors with readable contrast against the active theme. Recolor retained output after theme changes instead of leaving stale inline colors.
    - Check rendered compatibility logs, syntax severity/status brushes and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
    - The workspace owns one theme signal connection and one propagation pass. Hosted panels opt out of direct theme subscriptions; standalone panels retain them. Status timers are window-owned, restart for the latest message and never clear a newer operation status. Failed notification clears preserve history; filters use bounded retained records and apply to live events. Refresh external history off the GUI thread on panel reveal, discard stale project results and preserve unpersisted live events. Report failed history writes without recursively persisting the warning. Notification replacement must be atomic; verify failure preservation with the isolated notification persistence/writes verifiers.
@@ -238,9 +292,9 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - `direct/windows/run.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for machine-level setup that requires it. The old VBS path forwards here; preserve ASCII/CRLF for Windows Script Host.
    - `direct/ubuntu/setup.py` and `run.sh`: Native venv setup/launch with no system pip writes; `run.sh --repair` explicitly repairs dependencies. Preserve LF shell line endings, project paths with spaces, and `--new-window` forwarding.
 
-7. **Realtime C++ Syntax Linter (`src/syntax_checker.py`)**
-   - Lightweight C++ AST & regex engine for validating `.ino`, `.cpp`, and `.h` files without invoking full compiler runs.
-   - Parses missing semicolons, unmatched brackets/quotes, undeclared variables/functions, populating line-numbered diagnostics into the UI tree and Monaco markers.
+7. **Realtime C/C++ Syntax Linter (`src/syntax_checker.py`)**
+   - Bounded literal/comment/preprocessor scanner and structural heuristics for root `.ino/.cpp/.c/.h/.hpp`, without executing a compiler.
+   - Checks delimiters and probable missing terminators with accurate ranges; target preprocessing, undeclared symbols/types and library resolution belong to Compile.
 
 8. **Database & Notification Store (`src/dbs/` & `.mcu_flasher_build_cache/`)**
    - **Per-Sketch Notification Store**: Notifications are persisted per-project inside `<sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json`.

@@ -149,16 +149,65 @@ class ModeChecks(unittest.TestCase):
             self.assertIn("other", mode.transition_blocker())
 
     def test_online_network_is_allowed_but_installers_still_require_bootstrap(self):
+        external_events = (
+            ("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0)),
+            ("socket.connect", (None, ("192.0.2.1", 443))),
+            ("socket.sendto", (None, ("192.0.2.1", 443))),
+        )
+        local_events = (
+            ("socket.getaddrinfo", ("localhost", 443, 0, 0, 0)),
+            ("socket.getaddrinfo", ("127.0.0.1", 443, 0, 0, 0)),
+            ("socket.getaddrinfo", ("::1", 443, 0, 0, 0)),
+            ("socket.connect", (None, ("127.0.0.1", 443))),
+            ("socket.connect", (None, ("::1", 443, 0, 0))),
+            ("socket.sendto", (None, ("127.0.0.1", 443))),
+            ("socket.sendto", (None, ("::1", 443, 0, 0))),
+        )
+        installers = (
+            [sys.executable, "-m", "pip", "install", "fixture"],
+            ["npm", "install", "fixture"],
+            ["winget", "install", "fixture"],
+        )
         for blocked in (False, True):
             with patch.object(runtime, "_network_blocked", blocked):
-                if blocked:
-                    with self.assertRaises(runtime.OfflineDependencyError):
-                        runtime._audit("socket.connect", (None, ("192.0.2.1", 443)))
-                else:
-                    runtime._audit("socket.connect", (None, ("192.0.2.1", 443)))
-                with self.assertRaisesRegex(runtime.OfflineDependencyError, "bootstrap"):
-                    runtime._audit("subprocess.Popen", (sys.executable,
-                        [sys.executable, "-m", "pip", "install", "fixture"], None, {}))
+                for event, arguments in external_events:
+                    with self.subTest(blocked=blocked, event=event):
+                        if blocked:
+                            with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
+                                runtime._audit(event, arguments)
+                        else:
+                            runtime._audit(event, arguments)
+                for event, arguments in local_events:
+                    with self.subTest(blocked=blocked, local=arguments, event=event):
+                        runtime._audit(event, arguments)
+                for command in installers:
+                    with self.subTest(blocked=blocked, installer=command):
+                        with self.assertRaisesRegex(runtime.OfflineDependencyError, "bootstrap"):
+                            runtime._audit("subprocess.Popen", (command[0], command, None, {}))
+
+    def test_effective_network_policy_uses_active_guard_over_inherited_environment(self):
+        for blocked in (False, True):
+            for inherited in (None, "", "0", "1", "true"):
+                with self.subTest(blocked=blocked, inherited=inherited), \
+                        patch.object(runtime, "_enabled", True), \
+                        patch.object(runtime, "_network_blocked", blocked), \
+                        patch.dict(os.environ, {}, clear=True):
+                    if inherited is not None:
+                        os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = inherited
+                    self.assertEqual(runtime.network_access_disabled(), blocked)
+                    runtime.activate(not blocked)
+                    self.assertEqual(runtime.network_access_disabled(), blocked)
+
+    def test_effective_network_policy_before_activation_uses_explicit_environment_marker(self):
+        for inactive_value in (False, True):
+            for inherited in (None, "", "0", "1", "true"):
+                with self.subTest(inactive_value=inactive_value, inherited=inherited), \
+                        patch.object(runtime, "_enabled", False), \
+                        patch.object(runtime, "_network_blocked", inactive_value), \
+                        patch.dict(os.environ, {}, clear=True):
+                    if inherited is not None:
+                        os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = inherited
+                    self.assertEqual(runtime.network_access_disabled(), inherited == "1")
 
     def test_online_activation_also_guards_nested_python_package_managers(self):
         from platformio.package.manager._install import PackageManagerInstallMixin

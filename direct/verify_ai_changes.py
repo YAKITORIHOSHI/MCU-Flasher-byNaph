@@ -17,7 +17,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication
 from main.core.ai_review import AIReviewManager, AIEditWatcher
-from main.qt.ai_changes_panel import AIChangesPanel
+from main.qt.ai_changes_panel import AIChangesPanel, CodePreview
 from main.qt.console_panel import ConsolePanel
 from src.modules.ai_prompt_context import PromptInputTracker
 
@@ -176,6 +176,76 @@ class AIChangesChecks(unittest.TestCase):
         tracker.feed("Modify header\x1b[D\r")
         self.assertEqual(observed[-1], "Assistant prompt (title unavailable)")
 
+    def test_cli_prompt_context_identifies_source_without_rewriting_prompt(self):
+        import json
+        cache = self.root / ".mcu_flasher_build_cache"
+        cache.mkdir(exist_ok=True)
+        tracker = PromptInputTracker(self.root)
+        tracker.feed("Update Ω and header\r")
+        payload = json.loads((cache / "ai_prompt.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["source"], "cli")
+        self.assertEqual(payload["prompt"], "Update Ω and header")
+        self.assertTrue(payload["id"])
+
+    def test_cli_groups_have_exact_label_and_keep_known_prompt_tooltip(self):
+        known = {"id": "cli-1", "prompt": "Fix the sensor setup", "source": "cli"}
+        self.queue("CLI.ino", prompt=known)
+        self.queue("Legacy.cpp", prompt={"id": "legacy", "prompt": "Assistant prompt (title unavailable)"})
+        self.queue("Unknown.h")
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        groups = [panel._tree.topLevelItem(i) for i in range(panel._tree.topLevelItemCount())]
+        self.assertEqual([item.text(0) for item in groups].count("Assistant Prompt (CLI)"), 2)
+        self.assertIn("External assistant changes (prompt unavailable)", [item.text(0) for item in groups])
+        self.assertIn("Fix the sensor setup", [item.toolTip(0) for item in groups])
+        records = self.manager.get_ai_changes()
+        self.assertEqual(next(item for item in records if item["groupId"] == "cli-1")["prompt"], known["prompt"])
+        panel.close()
+        panel.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_code_preview_numbers_follow_scroll_wrap_and_font_metrics(self):
+        from PySide6.QtGui import QFont, QTextCursor
+        preview = CodePreview()
+        def cleanup():
+            preview.close()
+            preview.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.addCleanup(cleanup)
+        preview.setFont(QFont("Consolas", 11))
+        preview.resize(480, 160)
+        preview.setPlainText("\n".join(f"line {number}: " + "x" * 150 for number in range(1, 121)))
+        preview.show()
+        APP.processEvents()
+        width = preview._number_area.width()
+        self.assertGreaterEqual(preview.viewport().x(), width)
+        self.assertEqual(next(preview._number_rows())[0], 1)
+        preview.verticalScrollBar().setValue(57)
+        preview.horizontalScrollBar().setValue(40)
+        APP.processEvents()
+        number, top, _ = next(preview._number_rows())
+        self.assertEqual(number, preview.firstVisibleBlock().blockNumber() + 1)
+        self.assertGreater(number, 1)
+        cursor = QTextCursor(preview.document().findBlockByNumber(number - 1))
+        self.assertAlmostEqual(top, preview.cursorRect(cursor).top(), delta=1)
+        self.assertEqual(preview._number_area.x(), preview.contentsRect().x())
+        self.assertEqual(preview._number_area.width(), width)
+        preview.setFont(QFont("Consolas", 17))
+        APP.processEvents()
+        self.assertEqual(preview._number_area.width(), preview._number_width())
+        self.assertGreater(preview._number_area.width(), width)
+        preview.setFont(QFont("Consolas", 11))
+        preview.setLineWrapMode(CodePreview.LineWrapMode.WidgetWidth)
+        preview.setPlainText("wrapped " + "x" * 150 + "\nsecond source line\nthird source line")
+        preview.resize(240, 300)
+        APP.processEvents()
+        rows = list(preview._number_rows())
+        self.assertEqual([row[0] for row in rows], [1, 2, 3])
+        second = QTextCursor(preview.document().findBlockByNumber(1))
+        self.assertAlmostEqual(rows[1][1], preview.cursorRect(second).top(), delta=1)
+        self.assertGreater(rows[1][1] - rows[0][1], preview.fontMetrics().height())
+        self.assertTrue(preview.isReadOnly())
+
     def test_auto_follow_resumes_after_viewport_hold_and_outside_release(self):
         with patch("main.core.config.get_monitor_font_size", return_value=11), \
              patch("main.core.config.get_hide_build_console_warnings", return_value=False):
@@ -222,6 +292,14 @@ class AIChangesChecks(unittest.TestCase):
             APP.processEvents()
             self.assertEqual(len(panel._before.extraSelections()), 1)
             self.assertEqual(len(panel._after.extraSelections()), 1)
+            for preview in (panel._before, panel._after):
+                from main.qt.theme import get_palette
+                pal = get_palette(mode)
+                self.assertEqual(preview._number_foreground.name(), pal["TEXT_DIM"].lower())
+                self.assertEqual(preview._number_background.name(), pal["BG_DARK"].lower())
+                self.assertGreater(preview.viewport().x(), 0)
+                self.assertTrue(preview._number_area.isVisible())
+                self.assertEqual([row[0] for row in preview._number_rows()], [1, 2, 3])
             self.assertEqual(panel._splitter.orientation(), Qt.Orientation.Vertical)
             for button in (panel._review, panel._delete, panel._clear):
                 self.assertTrue(button.isVisible())

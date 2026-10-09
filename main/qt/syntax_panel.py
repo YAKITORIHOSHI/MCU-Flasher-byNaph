@@ -11,7 +11,8 @@ and periodic background syntax verification.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
+import os
 import threading
 
 # pyrefly: ignore [missing-import]
@@ -28,7 +29,7 @@ from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_colors import contrast_ratio, themed_log_colors
 
 from src import syntax_checker
-from main.core.file_utils import get_sketch_files_fast
+from main.core.file_utils import get_project_root_source_files
 from main.qt.signals import signals as sig_bus
 
 
@@ -39,12 +40,23 @@ class SyntaxPanel(QWidget):
     """
 
     _analysis_finished = Signal(dict)
+    _MAX_PROJECT_SOURCES = 256
+    _MAX_PROJECT_CHARACTERS = 16 * 1024 * 1024
 
     def __init__(self, backend=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._backend = backend
         self._all_diagnostics: List[Dict[str, Any]] = []
-        self._last_mtimes: Dict[str, tuple[int, int]] = {}
+        self._last_mtimes: Dict[str, tuple] = {}
+        self._buffer_provider: Callable[[], dict] | None = None
+        self._buffer_revision_provider: Callable[[], Any] | None = None
+        self._last_buffer_revision = None
+        self._retry_state = None
+        self._retry_manual = False
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.setInterval(400)
+        self._retry_timer.timeout.connect(self._retry_latest_analysis)
         self._is_checking = False
         self._status_kind = "dim"
         self._analysis_generation = 0
@@ -323,6 +335,7 @@ class SyntaxPanel(QWidget):
 
         self._badge_errors.setText(f"✖ {err_count}")
         self._badge_warnings.setText(f"⚠ {warn_count}")
+        self._lbl_status.setToolTip("")
 
         if not self._all_diagnostics:
             self._lbl_status.setText("Clean ✔")
@@ -382,6 +395,9 @@ class SyntaxPanel(QWidget):
 
             item_file = QTableWidgetItem(fname)
             item_file.setData(Qt.ItemDataRole.UserRole, fpath)
+            # Keep the diagnostic with the visible row: filtering must never
+            # turn a row index into a different source/range in the full list.
+            item_file.setData(Qt.ItemDataRole.UserRole + 1, dict(diag))
             item_line = QTableWidgetItem(str(line))
             item_line.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item_sev = QTableWidgetItem(sev_text)
@@ -396,23 +412,125 @@ class SyntaxPanel(QWidget):
         self._table.resizeRowsToContents()
 
     def _on_row_double_clicked(self, item: QTableWidgetItem) -> None:
-        """Navigate editor to target file and line on row double-click."""
+        """Open the exact root source and retain its complete diagnostic range."""
         row = item.row()
         file_item = self._table.item(row, 0)
-        line_item = self._table.item(row, 1)
-        if not file_item or not line_item:
+        if not file_item:
             return
+        diagnostic = file_item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(diagnostic, dict):
+            return
+        location = self._diagnostic_location(diagnostic)
+        if location is None:
+            self._lbl_status.setText("Source is outside this sketch")
+            self._status_kind = "warning"
+            self._refresh_status_color()
+            return
+        sig_bus.editor_goto_diagnostic.emit(location)
 
-        file_path = file_item.data(Qt.ItemDataRole.UserRole) or file_item.text()
+    @staticmethod
+    def _positive_position(value, default: int = 1) -> int:
         try:
-            line_no = int(line_item.text())
-        except ValueError:
-            line_no = 1
+            return max(1, int(value))
+        except (ValueError, TypeError, OverflowError):
+            return default
 
+    def _diagnostic_location(self, diagnostic: dict) -> dict | None:
+        """Expand parser basenames without scanning storage or guessing sources."""
+        source = str(diagnostic.get("file", "") or "")
+        path = self._root_source_path(source, verify_storage=True)
+        if path is None:
+            return None
+        line = self._positive_position(diagnostic.get("line"))
+        column = self._positive_position(diagnostic.get("col"))
+        end_line = max(line, self._positive_position(diagnostic.get("endLine"), line))
+        end_column = self._positive_position(diagnostic.get("endCol"), column)
+        if end_line == line:
+            end_column = max(column, end_column)
+        return {"file": str(path), "line": line, "col": column,
+                "endLine": end_line, "endCol": end_column,
+                "columnEncoding": diagnostic.get("columnEncoding", "codepoint")}
+
+    def _root_source_path(self, source: str, project: Path | None = None,
+                          *, verify_storage: bool = False) -> Path | None:
+        project = project if project is not None else self._get_project_dir()
+        if project is None or not source:
+            return None
+        root = Path(os.path.abspath(project))
+        path = Path(source)
+        if not path.is_absolute():
+            path = root / path
+        path = Path(os.path.abspath(path))
+        # Only the project's primary root sources belong to this checker. In
+        # particular, a nested/external basename must not open a same-name tab.
+        if (os.path.normcase(str(path.parent)) != os.path.normcase(str(root))
+                or path.suffix.lower() not in (".ino", ".c", ".cpp", ".h", ".hpp")):
+            return None
+        if verify_storage:
+            # Workers and explicit navigation can inspect storage. The regular
+            # GUI snapshot path remains lexical so typing never probes a share.
+            try:
+                if path.is_symlink() or path.resolve().parent != root.resolve():
+                    return None
+            except (OSError, RuntimeError):
+                return None
+        return path
+
+    def set_buffer_provider(self, provider: Callable[[], dict],
+                            revision_provider: Callable[[], Any] | None = None) -> None:
+        """Use GUI-owned dirty snapshots without saving or touching Monaco models."""
+        self._buffer_provider = provider
+        self._buffer_revision_provider = revision_provider
+        self._last_mtimes.clear()
+        self._last_buffer_revision = None
+
+    def _buffer_state(self) -> tuple[dict[str, str], Any]:
+        return (self._current_buffers(), self._buffer_revision_provider()
+                if self._buffer_revision_provider is not None else None)
+
+    def _schedule_latest_analysis(self, state: tuple[dict[str, str], Any],
+                                  *, is_manual: bool = False) -> None:
+        """Coalesce stale completions until edits have settled, with one timer."""
+        self._retry_manual = self._retry_manual or is_manual
+        self._retry_state = state
+        self._retry_timer.start()
+        self._lbl_status.setText("Waiting for current edits…")
+        self._status_kind = "info"
+        self._refresh_status_color()
+
+    @Slot()
+    def _retry_latest_analysis(self) -> None:
         try:
-            sig_bus.editor_goto_line.emit(str(file_path), line_no)
-        except Exception:
-            pass
+            state = self._buffer_state()
+            if state != self._retry_state:
+                self._retry_state = state
+                self._retry_timer.start()
+                return
+            if self._backend and getattr(self._backend, "is_busy", False):
+                self._retry_timer.start()
+                return
+        except Exception as exc:
+            self._retry_state = None
+            self._retry_manual = False
+            self._lbl_status.setText("Check failed — retry available")
+            self._lbl_status.setToolTip(str(exc))
+            self._status_kind = "error"
+            self._refresh_status_color()
+            return
+        is_manual = self._retry_manual
+        self._retry_manual = False
+        self._retry_state = None
+        self._execute_analysis(None, is_manual=is_manual)
+
+    def _current_buffers(self) -> dict[str, str]:
+        if self._buffer_provider is None:
+            return {}
+        buffers = {}
+        for source, text in dict(self._buffer_provider() or {}).items():
+            path = self._root_source_path(str(source))
+            if path is not None and isinstance(text, str):
+                buffers[str(path)] = text
+        return buffers
 
     def _get_project_dir(self) -> Optional[Path]:
         if self._backend and hasattr(self._backend, "get_project_dir"):
@@ -427,7 +545,7 @@ class SyntaxPanel(QWidget):
 
     def _on_bg_timer_tick(self) -> None:
         """Scan and parse off the UI thread, skipping unchanged root sources."""
-        if self._is_checking:
+        if self._is_checking or self._retry_timer.isActive():
             return
 
         # Skip if backend is compiling or uploading
@@ -451,28 +569,77 @@ class SyntaxPanel(QWidget):
         project = self._get_project_dir()
         if project is None or self._is_checking:
             return
+        self._retry_timer.stop()
+        self._retry_state = None
+        self._retry_manual = False
+        try:
+            buffers, buffer_revision = self._buffer_state()
+        except Exception as exc:
+            self._lbl_status.setText("Check failed — retry available")
+            self._lbl_status.setToolTip(str(exc))
+            self._status_kind = "error"
+            self._refresh_status_color()
+            return
         self._is_checking = True
         self._analysis_generation += 1
         generation = self._analysis_generation
         last_mtimes = dict(self._last_mtimes)
+        last_buffer_revision = self._last_buffer_revision
         self._lbl_status.setText("Checking…")
+        self._lbl_status.setToolTip("")
         self._status_kind = "info"
         self._refresh_status_color()
         if is_manual:
             sig_bus.console_progress.emit({"action": "Checking Syntax"})
 
         def _worker():
-            result = {"project": str(project), "generation": generation, "manual": is_manual}
+            result = {"project": str(project), "generation": generation, "manual": is_manual,
+                      "buffers": buffers, "buffer_revision": buffer_revision}
             try:
-                sources = files if files is not None else get_sketch_files_fast(project)
+                # One root directory read; internal/nested folders never take
+                # part in a sketch check. Dirty buffers also survive a disk file
+                # disappearing while the editor still owns its unsaved text.
+                if not Path(project).is_dir():
+                    raise OSError("The sketch folder is unavailable")
+                disk_sources = (files if files is not None else
+                                get_project_root_source_files(project, (".ino", ".cpp", ".c", ".h", ".hpp")))
+                sources = {os.path.normcase(str(path)): path for source in disk_sources
+                           if (path := self._root_source_path(str(source), project,
+                                                             verify_storage=True)) is not None}
+                valid_buffers = {os.path.normcase(path): (Path(path), text)
+                                 for path, text in buffers.items()
+                                 if self._root_source_path(path, project,
+                                                           verify_storage=True) is not None}
+                for key, (path, _) in valid_buffers.items():
+                    sources.setdefault(key, path)
+                if len(sources) > self._MAX_PROJECT_SOURCES:
+                    raise ValueError("This project exceeds the live syntax source limit; Compile checks the full project")
                 mtimes = {}
-                for p in sources:
-                    st = Path(p).stat()
-                    mtimes[str(p)] = (st.st_mtime_ns, st.st_size)
+                source_contents = {}
+                total_characters = 0
+                for key, source in sources.items():
+                    path = str(source)
+                    if key in valid_buffers:
+                        text = valid_buffers[key][1]
+                        mtimes[path] = ("buffer", hash(text), len(text))
+                    else:
+                        text, fingerprint = syntax_checker.read_source_snapshot(source)
+                        mtimes[path] = ("disk", fingerprint)
+                        source_contents[path] = text
+                    total_characters += len(text)
+                    if total_characters > self._MAX_PROJECT_CHARACTERS:
+                        raise ValueError("This project exceeds the live syntax memory limit; Compile checks the full project")
                 result["mtimes"] = mtimes
-                result["unchanged"] = not is_manual and last_mtimes == mtimes
+                result["unchanged"] = (not is_manual and last_mtimes == mtimes
+                                       and last_buffer_revision == buffer_revision)
                 if not result["unchanged"]:
-                    result["diagnostics"] = syntax_checker.analyze_files_parallel(sources)
+                    diagnostics = syntax_checker.analyze_files_parallel(
+                        [source for key, source in sources.items() if key not in valid_buffers],
+                        source_contents=source_contents)
+                    for key, (_, text) in valid_buffers.items():
+                        diagnostics.extend(syntax_checker.analyze_cpp_syntax(text, sources[key]))
+                    result["diagnostics"] = sorted(diagnostics,
+                        key=lambda diag: (diag.get("file", ""), diag.get("line", 0)))
             except Exception as exc:
                 result["error"] = str(exc)
             try:
@@ -486,13 +653,28 @@ class SyntaxPanel(QWidget):
             # No worker exists to deliver its queued completion in this case.
             # Release the GUI-owned reservation so a later explicit check works.
             self._finish_analysis({"project": str(project), "generation": generation,
-                                   "manual": is_manual, "error": str(exc)})
+                                   "manual": is_manual, "buffers": buffers,
+                                   "buffer_revision": buffer_revision, "error": str(exc)})
 
     @Slot(dict)
     def _finish_analysis(self, result: dict) -> None:
         """Queued Qt delivery guarantees widget updates run on the GUI thread."""
         self._is_checking = False
         if result["generation"] != self._analysis_generation or result["project"] != str(self._get_project_dir()):
+            return
+        try:
+            current_buffers, current_revision = self._buffer_state()
+        except Exception as exc:
+            result["error"] = str(exc)
+            current_buffers = result.get("buffers", {})
+            current_revision = result.get("buffer_revision")
+        if (result.get("buffers", {}) != current_buffers
+                or result.get("buffer_revision") != current_revision):
+            # An edit arrived during parsing. Deliver only its latest revision;
+            # edit-then-save can return snapshots to {}, so compare the monotonic
+            # editor revision too before replacing any live markers.
+            self._schedule_latest_analysis((current_buffers, current_revision),
+                                           is_manual=result["manual"])
             return
         if result.get("error"):
             self._lbl_status.setText("Check failed — retry available")
@@ -501,6 +683,7 @@ class SyntaxPanel(QWidget):
             self._refresh_status_color()
         elif not result.get("unchanged"):
             self._last_mtimes = result["mtimes"]
+            self._last_buffer_revision = result.get("buffer_revision")
             self.set_diagnostics(result.get("diagnostics", []))
             sig_bus.syntax_errors.emit(result.get("diagnostics", []))
         else:
@@ -515,7 +698,11 @@ class SyntaxPanel(QWidget):
     def clear(self) -> None:
         """Clear all entries in the syntax table."""
         self._analysis_generation += 1
+        self._retry_timer.stop()
+        self._retry_state = None
+        self._retry_manual = False
         self._last_mtimes.clear()
+        self._last_buffer_revision = None
         self._all_diagnostics.clear()
         self._table.setRowCount(0)
         self._badge_errors.setText("✖ 0")

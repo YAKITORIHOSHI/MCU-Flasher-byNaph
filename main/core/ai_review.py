@@ -39,7 +39,12 @@ from main.core.file_utils import (
 )
 
 def build_ai_line_diff(before_content: str, after_content: str) -> dict:
-    """Build compact Monaco decoration ranges for one external AI edit."""
+    """Build compact ranges in the after-model, with separate deletion anchors.
+
+    Removed text has no range in that model. Its red marker anchors to the next
+    surviving line (or the last line at EOF), without recoloring that line's
+    added/modified text. The original range remains available for its tooltip.
+    """
     before_lines = str(before_content or "").splitlines()
     after_lines = str(after_content or "").splitlines()
     if before_content == after_content:
@@ -57,7 +62,13 @@ def build_ai_line_diff(before_content: str, after_content: str) -> dict:
         while old_tail > prefix and new_tail > prefix and before_lines[old_tail - 1] == after_lines[new_tail - 1]:
             old_tail -= 1
             new_tail -= 1
-        opcodes = [("replace", prefix, old_tail, prefix, new_tail)]
+        if old_tail == prefix:
+            tag = "insert"
+        elif new_tail == prefix:
+            tag = "delete"
+        else:
+            tag = "replace"
+        opcodes = [(tag, prefix, old_tail, prefix, new_tail)]
     else:
         opcodes = difflib.SequenceMatcher(
             None, before_lines, after_lines, autojunk=False
@@ -66,27 +77,45 @@ def build_ai_line_diff(before_content: str, after_content: str) -> dict:
     changes = []
     added = removed = modified = 0
     first_line = None
+    line_count = max(1, len(after_lines))
+
+    def append_change(kind, start, end, **metadata):
+        nonlocal first_line
+        start = min(line_count, max(1, start))
+        end = min(line_count, max(start, end))
+        changes.append({"type": kind, "startLine": start, "endLine": end, **metadata})
+        first_line = start if first_line is None else min(first_line, start)
+
+    def append_removed(anchor, before_start, before_end):
+        append_change(
+            "removed", anchor, anchor, anchorOnly=True,
+            removedCount=before_end - before_start + 1,
+            beforeStartLine=before_start, beforeEndLine=before_end,
+        )
+
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             continue
         old_count, new_count = i2 - i1, j2 - j1
-        start = max(1, j1 + 1)
-        end = max(start, j2)
+        if not old_count and not new_count:
+            continue
         if tag == "insert":
-            kind = "added"
             added += new_count
+            append_change("added", j1 + 1, j2)
         elif tag == "delete":
-            kind = "removed"
             removed += old_count
-            end = start
+            append_removed(j1 + 1, i1 + 1, i2)
         else:
-            kind = "modified"
             shared = min(old_count, new_count)
-            modified += max(1, shared)
-            added += max(0, new_count - old_count)
-            removed += max(0, old_count - new_count)
-        changes.append({"type": kind, "startLine": start, "endLine": end})
-        first_line = start if first_line is None else min(first_line, start)
+            modified += shared
+            if shared:
+                append_change("modified", j1 + 1, j1 + shared)
+            if new_count > shared:
+                added += new_count - shared
+                append_change("added", j1 + shared + 1, j2)
+            if old_count > shared:
+                removed += old_count - shared
+                append_removed(j1 + shared + 1, i1 + shared + 1, i2)
 
     return {
         "changes": changes,
@@ -402,16 +431,19 @@ class AIReviewManager:
         context = context or {}
         group = str(context.get("id", ""))[:160]
         title = str(context.get("prompt", ""))[:500]
+        prompt_source = "cli" if context.get("source") == "cli" else ""
         if not group:
             if not self._change_group or now - self._change_group_time > 8:
                 self._change_group = f"external:{time.time_ns()}"
             group = self._change_group
             title = "External assistant changes (prompt unavailable)"
+            prompt_source = "external"
         self._change_group_time = now
         record_id = f"{group}:{self._path_key(payload['path'])}"
         existing = next((item for item in self._ai_changes if item.get("id") == record_id), None)
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         record = dict(payload, id=record_id, groupId=group, prompt=title or "Assistant changes",
+                      promptSource=prompt_source or (existing or {}).get("promptSource", ""),
                       timestamp=existing.get("timestamp", stamp) if existing else stamp,
                       updatedAt=stamp, status="pending", beforeContent=existing.get("beforeContent", before) if existing else before)
         if existing:

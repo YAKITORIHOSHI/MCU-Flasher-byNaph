@@ -506,6 +506,9 @@ class MCUMainWindow(QMainWindow):
 
         # ── Syntax Check tab ──────────────────────────────────────────────────
         self._syntax_panel = SyntaxPanel(self._backend)
+        self._syntax_panel.set_buffer_provider(
+            lambda: dict(self._editor_panel._bridge._buffer_snapshots),
+            lambda: self._editor_panel._bridge._syntax_generation)
         self._bottom_tabs.addTab(self._syntax_panel, "Syntax Check")
 
         # ── Terminal tab ──────────────────────────────────────────────────────
@@ -1351,6 +1354,12 @@ class MCUMainWindow(QMainWindow):
         self._sync_ai_and_editor_layout()
 
     # ── Pane and Editor Layout / Detachment handlers ─────────────────────────
+
+    def reveal_editor_for_navigation(self) -> None:
+        """Expose the existing embedded editor for an explicit source jump."""
+        if not self._editor_detached and not self._editor_pane_visible:
+            self._editor_pane_visible = True
+            self._sync_ai_and_editor_layout()
 
     def toggle_editor_pane(self) -> None:
         """Show/hide the embedded code editor pane.
