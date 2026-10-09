@@ -93,6 +93,65 @@ class PlatformChecks(unittest.TestCase):
             self.assertEqual(ubuntu._get_safe_platformio_core_dir(self.root), str(core))
         self.assertFalse(core.exists())
 
+    def test_host_package_and_retained_resource_directories_are_separate(self):
+        from src.modules import package_jobs, platform_runtime, offline_mode
+        with patch.object(package_jobs, "ROOT", self.root), \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root / "ubuntu-data"),
+                                        "PLATFORMIO_CORE_DIR": str(self.root / "foreign-store")}), \
+                patch.object(platform_runtime.platform, "machine", return_value="x86_64"):
+            with patch.object(sys, "platform", "win32"):
+                windows_store = package_jobs.package_core_directory()
+            with patch.object(sys, "platform", "linux"):
+                ubuntu_store = package_jobs.package_core_directory()
+            self.assertEqual(windows_store, self.root / "src/.platformio-mcu-gui")
+            self.assertEqual(ubuntu_store, self.root / "ubuntu-data/mcu-flasher/platformio/x86_64")
+            self.assertNotEqual(windows_store, ubuntu_store)
+            self.assertNotEqual(offline_mode.extras_directory(self.root, "win32"),
+                                offline_mode.extras_directory(self.root, "linux"))
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows resource environment")
+    def test_windows_setup_and_build_replace_inherited_ubuntu_resources(self):
+        from main.platforms import windows
+        core = self.root / "src/.platformio-mcu-gui"
+        names = ("CORE", "PLATFORMS", "PACKAGES", "CACHE", "BUILD_CACHE", "GLOBALLIB", "PENV")
+        foreign = {f"PLATFORMIO_{name}_DIR": "/home/copied-ubuntu/native-store" for name in names}
+        foreign["PLATFORMIO_PYTHON_EXE"] = "/home/copied-ubuntu/.venv-linux/bin/python"
+
+        def assert_bound():
+            for name in names:
+                self.assertTrue(Path(os.environ[f"PLATFORMIO_{name}_DIR"]).is_relative_to(core), name)
+            self.assertEqual(os.environ["PLATFORMIO_PYTHON_EXE"], sys.executable)
+            for name in ("TMP", "TEMP", "TMPDIR"):
+                self.assertEqual(Path(os.environ[name]), core / ".tmp")
+
+        with patch.dict(os.environ, foreign), \
+                patch.object(windows, "_get_safe_platformio_core_dir", return_value=str(core)), \
+                patch.object(windows, "_ensure_modules_junction", return_value=None), \
+                patch.object(windows, "unhide_hidden_attribute"), \
+                patch.object(windows, "_ensure_platformio_environment_for_build"):
+            windows._configure_platformio_environment(self.root)
+            assert_bound()
+            os.environ.update(foreign)
+            windows._refresh_platformio_core_environment(self.root)
+            assert_bound()
+            # Bootstrap has a separate Windows entry, bound to the same host
+            # resources. Extract only its environment function; no installers.
+            tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
+            function = next(row for row in tree.body if isinstance(row, ast.FunctionDef)
+                            and row.name == "_configure_platformio_environment")
+            namespace = dict(Path=Path, os=os, sys=sys,
+                             _ensure_codebase_visible=Mock(),
+                             _get_safe_platformio_core_dir=lambda _: str(core),
+                             _ensure_modules_junction=lambda _: None,
+                             _mcuflasher_app_root=lambda _: None,
+                             _PLATFORMIO_ALIAS_NAME=".platformio-mcu-gui",
+                             _MCUFLASHER_APP_DIRNAME=".mcuflasher-app")
+            exec(compile(ast.Module(body=[function], type_ignores=[]), "isolated_environment", "exec"), namespace)
+            os.environ.update(foreign)
+            namespace["_configure_platformio_environment"](self.root)
+            assert_bound()
+
     def test_ubuntu_uses_native_python_module_without_exe_or_bootstrap_fallback(self):
         runtime = SimpleNamespace(platform="linux", executable="/fixture/.venv-linux/bin/python")
         with patch.object(ubuntu, "sys", runtime), patch.object(ubuntu.importlib.util, "find_spec", return_value=object()):
@@ -219,7 +278,8 @@ class PlatformChecks(unittest.TestCase):
             wait=lambda: 0,
             poll=lambda: 0,
         )
-        with patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+        with patch.object(web_bridge, "sys", SimpleNamespace(platform="linux")), \
+                patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["/fixture/.venv-linux/bin/python", "-m", "platformio"]), \
                 patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \

@@ -9,6 +9,8 @@ import os
 import platform as host_platform
 import sys
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -506,12 +508,50 @@ def _requested_builder_probes(core, specification, platform_name, probes, reques
     return extended
 
 
+_BOOTSTRAP_HTTP_LOCK = threading.RLock()
+
+
+@contextmanager
+def _bootstrap_http_timeouts(connect_timeout=10, read_timeout=30):
+    """Bound only PlatformIO manager HTTP, leaving local work and TLS intact."""
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
+        raise RuntimeError("Package download timeouts belong to bootstrap")
+    from functools import wraps
+    from platformio import http
+    # The package-lock helper adapts OS lock methods; it does not serialize
+    # Python threads. Own this global adapter before capturing or restoring it.
+    with _BOOTSTRAP_HTTP_LOCK:
+        original = http.HTTPSession.request
+
+        def bounded(value, maximum):
+            if value is None:
+                return maximum
+            # Preserve invalid values for Requests' ordinary argument diagnostic.
+            return min(value, maximum) if isinstance(value, (int, float)) and value > 0 else value
+
+        @wraps(original)
+        def request(session, method, url, *args, **kwargs):
+            timeout = kwargs.get("timeout", http.__default_requests_timeout__)
+            if isinstance(timeout, tuple) and len(timeout) == 2:
+                connect, read = timeout
+            else:
+                connect = read = timeout
+            kwargs["timeout"] = (bounded(connect, connect_timeout), bounded(read, read_timeout))
+            return original(session, method, url, *args, **kwargs)
+
+        http.HTTPSession.request = request
+        try:
+            yield
+        finally:
+            http.HTTPSession.request = original
+
+
 def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None, board_sources=()):
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
     from src.modules.platformio_locks import package_locks
-    with archive_paths(), package_locks():
+    with _bootstrap_http_timeouts(), package_locks(), archive_paths():
         return _prepare(core, plan, log, jobs=jobs, event=event,
                         requested_targets=requested_targets, board_sources=board_sources)
 
@@ -834,7 +874,7 @@ def prepare_runtime(core, log=print):
     from src.modules.bootstrap_seed import prepare_scons
     from src.modules.platformio_locks import package_locks
     core = Path(os.path.abspath(core))
-    with archive_paths(), package_locks():
+    with _bootstrap_http_timeouts(), package_locks(), archive_paths():
         core.mkdir(parents=True, exist_ok=True)
         for name, directory in (("CORE", core), ("PACKAGES", core / "packages"),
                                 ("PLATFORMS", core / "platforms"), ("GLOBALLIB", core / "lib")):

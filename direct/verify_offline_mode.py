@@ -47,7 +47,8 @@ class ModeChecks(unittest.TestCase):
 
     def test_offline_is_explicitly_opt_in_and_pending_blocks_startup(self):
         self.online_inputs()
-        with patch.object(mode, "ROOT", self.root), patch.object(setup, "ASSETS", ()):
+        with patch.object(mode, "ROOT", self.root), patch.object(setup, "ASSETS", ()), \
+                patch.object(sys, "platform", "linux"):
             self.assertFalse(mode.offline_enabled({}))
             self.assertFalse(mode.offline_enabled({"shared": {"offline_enabled": "true"}}))
             self.assertTrue(mode.startup_ready(self.core, config={}))

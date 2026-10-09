@@ -514,6 +514,8 @@ class PreviewBackend:
         self.is_busy = self.serial_running = self.serial_paused = False
         self.active_operation = self._current_op_phase = self._active_reset_kind = None
         self._active_process = self.ai_review_manager = self.ai_watcher = None
+        self._operation_worker = None
+        self._op_session_id = 0
         self._framework_download_active = False
         self.modified_files = {}
         self.timestamp_enabled = self.skip_compile = self.reset_on_baud_change = False

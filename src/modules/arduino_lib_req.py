@@ -911,6 +911,183 @@ def _verify_download(filepath: str, expected_size=0, checksum="") -> None:
         )
 
 
+_PACKAGE_CONNECT_TIMEOUT = 5
+_PACKAGE_READ_TIMEOUT = 5
+
+
+class _DownloadInterrupted(OSError):
+    """A stopped network transfer whose owned checkpoint can be retried."""
+
+
+def _download_package_archive(url, partial_path, metadata, cancel, progress):
+    """Stream one explicit attempt; retain source-bound bytes after interruption.
+
+    Only append when the saved source/checksum and the HTTP range agree. A
+    changed or Range-ignoring response starts a fresh checkpoint, never a mix
+    of two archives. Final size/checksum verification remains with the caller.
+    """
+    import http.client
+    import urllib.error
+    import urllib.request
+
+    def check_cancelled():
+        if cancel.is_set():
+            raise InterruptedError("Package download cancelled; saved partial can be resumed")
+
+    def refused(status):
+        if status in (408, 425, 429, 500, 502, 503, 504):
+            raise _DownloadInterrupted(
+                f"Download interrupted by the server (HTTP {status}). "
+                "Saved partial retained; select Download again to resume.")
+        raise ValueError(f"Archive download was refused (HTTP {status})")
+
+    check_cancelled()
+    try:
+        expected_size = max(0, int(metadata.get("size", 0) or 0))
+    except (TypeError, ValueError):
+        expected_size = 0
+    checksum = _parse_checksum(metadata.get("checksum", ""))
+    identity = {"url": str(url), "size": expected_size, "checksum": list(checksum) if checksum else None}
+    checkpoint_path = partial_path + ".json"
+    for path in (partial_path, checkpoint_path):
+        if os.path.islink(path) or (os.path.lexists(path) and not os.path.isfile(path)):
+            raise ValueError("Download checkpoint is not an ordinary file")
+
+    checkpoint = {}
+    try:
+        if os.path.getsize(checkpoint_path) <= 8192:
+            with open(checkpoint_path, "r", encoding="utf-8") as source:
+                value = json.load(source)
+            if isinstance(value, dict) and value.get("schema") == 1 and value.get("source") == identity:
+                checkpoint = value
+    except (OSError, ValueError, TypeError):
+        pass
+    resume_from = os.path.getsize(partial_path) if os.path.isfile(partial_path) else 0
+    etag = str(checkpoint.get("etag") or "")
+    modified = str(checkpoint.get("modified") or "")
+    validator = etag if etag and not etag.startswith("W/") else modified
+    if not checkpoint or not (validator or checksum) or (expected_size and resume_from > expected_size):
+        resume_from = 0
+    # A completed, immutable checksum-bound checkpoint needs no new request.
+    if resume_from and checksum and expected_size and resume_from == expected_size:
+        try:
+            _verify_download(partial_path, expected_size, metadata.get("checksum", ""))
+        except ValueError:
+            resume_from = 0
+        else:
+            check_cancelled()
+            progress(resume_from, expected_size)
+            return
+
+    headers = dict(DEFAULT_HEADERS, **{"Accept-Encoding": "identity"})
+    if resume_from:
+        headers["Range"] = f"bytes={resume_from}-"
+        if validator:
+            headers["If-Range"] = validator
+    response = None
+    network_errors = (urllib.error.URLError, http.client.IncompleteRead, TimeoutError, ConnectionError)
+    if requests is not None:
+        from urllib3.exceptions import HTTPError as StreamError
+        network_errors += (requests.exceptions.RequestException, StreamError)
+    try:
+        check_cancelled()
+        if requests is not None:
+            response = requests.get(url, stream=True,
+                timeout=(_PACKAGE_CONNECT_TIMEOUT, _PACKAGE_READ_TIMEOUT),
+                headers=headers, allow_redirects=True)
+            status = response.status_code
+            read_available = getattr(getattr(response, "raw", None), "read1", None)
+            # read1 returns available bytes without waiting to fill a 16 KiB
+            # chunk. Even a trickling connection must let Cancel be checked.
+            chunks = (iter(lambda: read_available(16384, decode_content=False), b"")
+                      if callable(read_available) else response.iter_content(chunk_size=16384))
+        else:
+            response = urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                              timeout=_PACKAGE_READ_TIMEOUT)
+            status = response.getcode()
+            read_available = getattr(response, "read1", response.read)
+            chunks = iter(lambda: read_available(16384), b"")
+        check_cancelled()
+        if status not in (200, 206):
+            refused(status)
+        response_headers = {str(key).casefold(): str(value) for key, value in response.headers.items()}
+        if response_headers.get("content-encoding", "identity").casefold() not in ("", "identity"):
+            raise ValueError("Archive server returned an encoded response instead of resumable bytes")
+        response_etag = response_headers.get("etag", "")
+        response_modified = response_headers.get("last-modified", "")
+        total = expected_size
+        content_length = int(response_headers.get("content-length", "0") or 0)
+        if status == 206:
+            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response_headers.get("content-range", ""))
+            if not resume_from or not match or int(match[1]) != resume_from:
+                raise ValueError("Archive server returned an invalid resume range; retry Download")
+            start, end, remote_total = map(int, match.groups())
+            if end < start or end >= remote_total or (content_length and content_length != end - start + 1):
+                raise ValueError("Archive server returned an inconsistent resume range; retry Download")
+            if expected_size and remote_total != expected_size:
+                raise ValueError("Archive size changed; refresh its index before retrying Download")
+            returned_validator = response_etag if etag and not etag.startswith("W/") else response_modified
+            if validator and returned_validator != validator:
+                raise ValueError("Archive changed during resume; retry Download from the beginning")
+            total = total or remote_total
+        else:
+            resume_from = 0  # If-Range mismatch or a server that ignores Range.
+            if expected_size and content_length and content_length != expected_size:
+                raise ValueError("Archive response size differs from its index; refresh before retrying Download")
+            total = total or content_length
+        check_cancelled()
+        # Bind ownership before new bytes. Truncate a replaced source first so
+        # shutdown between these steps cannot bind its old bytes to a new URL.
+        record = {"schema": 1, "source": identity, "etag": response_etag,
+                  "modified": response_modified, "total": total}
+        serialized = json.dumps(record)
+        if len(serialized.encode("utf-8")) > 8192:
+            raise ValueError("Archive checkpoint identity exceeds the supported limit")
+        downloaded = resume_from
+        progress(downloaded, total)
+        with open(partial_path, "ab" if resume_from else "wb") as output:
+            temporary = checkpoint_path + f".tmp-{os.getpid()}-{threading.get_ident()}"
+            try:
+                with open(temporary, "w", encoding="utf-8") as destination:
+                    destination.write(serialized)
+                os.replace(temporary, checkpoint_path)
+            finally:
+                if os.path.isfile(temporary):
+                    os.remove(temporary)
+            for chunk in chunks:
+                check_cancelled()
+                if chunk:
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if total and downloaded > total:
+                        raise ValueError("Archive server sent more bytes than the declared size")
+                    progress(downloaded, total)
+        check_cancelled()
+        if total and downloaded != total:
+            raise _DownloadInterrupted(
+                f"Connection interrupted ({downloaded:,} of {total:,} bytes). "
+                "Saved partial retained; select Download again to resume.")
+        if not downloaded:
+            raise ValueError("Archive download produced an empty file")
+    except urllib.error.HTTPError as error:
+        error.close()
+        check_cancelled()
+        refused(error.code)
+    except network_errors as error:
+        check_cancelled()
+        raise _DownloadInterrupted(
+            "Connection interrupted while downloading. Saved partial retained; "
+            "select Download again to resume after the connection returns.") from error
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except (OSError, http.client.HTTPException) + network_errors:
+                # Closing a broken socket must not replace the interruption
+                # result and send its resumable checkpoint into error cleanup.
+                pass
+
+
 def _validate_archive_file(filepath: str) -> None:
     """Reject successful HTTP responses that are actually HTML/error pages."""
     import shutil
@@ -4422,81 +4599,30 @@ class ArduinoBrowser:
         filepath = os.path.join(dest_dir, archive)
         folder_path = os.path.join(dest_dir, _get_folder_name(archive))
         partial_path = f"{filepath}.part"
+        checkpoint_path = partial_path + ".json"
         extraction_path = f"{folder_path}.part-{os.getpid()}-{threading.get_ident()}"
-        resp = None
+        retain_partial = False
         try:
             os.makedirs(dest_dir, exist_ok=True)
             self._publish_job("queued", job_id=job_id, title=(package_metadata or {}).get("name"), message="Starting package download")
             self._publish_job("downloading", job_id=job_id, message="Downloading package archive")
             last_progress = time.monotonic()
 
-            resp = None
-            if requests is not None:
-                try:
-                    resp = requests.get(url, stream=True, timeout=(15, 120), headers=DEFAULT_HEADERS, allow_redirects=True)
-                    resp.raise_for_status()
-                except Exception:
-                    if resp is not None:
-                        resp.close()
-                    resp = None
+            determinate = False
 
-            if resp is not None:
-                total = int(resp.headers.get("content-length", 0))
-                downloaded = 0
-
-                if total:
+            def report_progress(downloaded, total):
+                nonlocal determinate, last_progress
+                if total and not determinate:
+                    determinate = True
                     self._post_ui(self._set_progress_determinate, total)
+                if total:
+                    self._post_ui(self._update_progress, downloaded, total)
+                if time.monotonic() - last_progress >= .25:
+                    self._publish_job("downloading", job_id=job_id, message="Downloading package archive",
+                                      progress=min(99, int(downloaded / total * 100)) if total else None)
+                    last_progress = time.monotonic()
 
-                with open(partial_path, "wb") as fh:
-                    for chunk in resp.iter_content(chunk_size=16384):
-                        if self._cancel_event.is_set():
-                            fh.close()
-                            try:
-                                if os.path.exists(partial_path):
-                                    os.remove(partial_path)
-                            except OSError:
-                                pass
-                            raise InterruptedError("Package download cancelled")
-
-                        if chunk:
-                            fh.write(chunk)
-                            downloaded += len(chunk)
-                            if total:
-                                self._post_ui(self._update_progress,
-                                                downloaded, total)
-                            if time.monotonic() - last_progress >= .25:
-                                self._publish_job("downloading", job_id=job_id, message="Downloading package archive",
-                                                  progress=int(downloaded / total * 100) if total else None)
-                                last_progress = time.monotonic()
-            else:
-                import urllib.request
-                req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
-                with urllib.request.urlopen(req, timeout=120) as uresp:
-                    total = int(uresp.headers.get("Content-Length", 0))
-                    downloaded = 0
-                    if total:
-                        self._post_ui(self._set_progress_determinate, total)
-                    with open(partial_path, "wb") as fh:
-                        while True:
-                            if self._cancel_event.is_set():
-                                fh.close()
-                                try:
-                                    if os.path.exists(partial_path):
-                                        os.remove(partial_path)
-                                except OSError:
-                                    pass
-                                raise InterruptedError("Package download cancelled")
-                            chunk = uresp.read(16384)
-                            if not chunk:
-                                break
-                            fh.write(chunk)
-                            downloaded += len(chunk)
-                            if total:
-                                self._post_ui(self._update_progress, downloaded, total)
-                            if time.monotonic() - last_progress >= .25:
-                                self._publish_job("downloading", job_id=job_id, message="Downloading package archive",
-                                                  progress=int(downloaded / total * 100) if total else None)
-                                last_progress = time.monotonic()
+            _download_package_archive(url, partial_path, package_metadata or {}, self._cancel_event, report_progress)
 
             if self._cancel_event.is_set():
                 raise InterruptedError("Package download cancelled")
@@ -4561,6 +4687,14 @@ class ArduinoBrowser:
                     progress=100)
             self._post_ui(self._download_done, tab, filepath if download_option != "folder" else folder_path, preparing)
 
+        except (InterruptedError, _DownloadInterrupted) as e:
+            retain_partial = True
+            if self._cancel_event.is_set():
+                self._publish_job("cancelled", job_id=job_id, message=str(e))
+                self._post_ui(self._download_cancelled, tab)
+            else:
+                self._publish_job("failed", job_id=job_id, message=str(e))
+                self._post_ui(self._download_error, tab, str(e))
         except OSError as e:
             if self._cancel_event.is_set():
                 self._publish_job("cancelled", job_id=job_id, message="Package download cancelled")
@@ -4578,9 +4712,8 @@ class ArduinoBrowser:
                 self._post_ui(self._download_error, tab,
                                f"Download failed:\n{e}")
         finally:
-            if resp is not None:
-                resp.close()
-            for leftover in (partial_path, extraction_path):
+            leftovers = (extraction_path,) if retain_partial else (partial_path, checkpoint_path, extraction_path)
+            for leftover in leftovers:
                 try:
                     if os.path.isfile(leftover):
                         os.remove(leftover)

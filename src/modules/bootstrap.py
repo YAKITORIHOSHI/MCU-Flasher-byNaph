@@ -840,7 +840,8 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     """Ensure all PlatformIO store directories (packages, cache, temp, libraries) live on the project's drive."""
     _ensure_codebase_visible(script_dir)
     core_dir = _get_safe_platformio_core_dir(script_dir)
-    os.environ["PLATFORMIO_CORE_DIR"] = core_dir
+    from main.platforms.windows import _bind_platformio_resources
+    _bind_platformio_resources(core_dir)
 
     # Build both aliases under one app-owned namespace.  Only after both
     # junctions exist do we remove the old top-level junction entries.
@@ -1350,6 +1351,8 @@ class BootstrapGUI:
         self._window: Optional[Any] = None
         self._native_window: Optional[Any] = None
         self._done_event = threading.Event()
+        self._offline_setup_done = threading.Event()
+        self._offline_setup_done.set()
 
         self._qt_promotion_request = None
         if HAS_PYSIDE6_BOOTSTRAP:
@@ -10189,9 +10192,63 @@ def _activate_bootstrap_venv(venv_dir: Path, venv_python: Path) -> bool:
 
 
 
-def _stream_offline_setup_output(gui, process):
-    """Read on the setup worker; preserve failures in bounded GUI delivery."""
+def _stop_offline_setup_process(process, descendants=()):
+    """Reap the original preparation child and identity-checked descendants."""
+    import psutil
+    captured = getattr(process, "_mcu_setup_descendants", {})
+    for child in descendants:
+        try:
+            captured[(child.pid, child.create_time())] = child
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
+    if process.poll() is None:
+        try:
+            for child in psutil.Process(process.pid).children(recursive=True):
+                captured[(child.pid, child.create_time())] = child
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
+    descendants = tuple(captured.values())
+    process._mcu_setup_descendants = captured
+    for child in reversed(descendants):
+        try:
+            child.kill()  # psutil checks creation identity before signalling.
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
+    if process.poll() is None:
+        if sys.platform != "win32":
+            import signal
+            try:
+                # Native children start in their own session. An unreaped
+                # live Popen still owns this PID; never signal an exited one.
+                if os.getpgid(process.pid) == process.pid:
+                    os.killpg(process.pid, signal.SIGTERM)
+                else:
+                    process.terminate()
+            except (ProcessLookupError, OSError):
+                pass
+        else:
+            process.terminate()  # The captured Windows process handle.
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=3)
+    if descendants:
+        _, remaining = psutil.wait_procs(descendants, timeout=1)
+        for child in remaining:
+            try:
+                if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                    raise TimeoutError("An owned board-preparation child has not stopped")
+            except psutil.NoSuchProcess:
+                pass
+
+
+def _stream_offline_setup_output(gui, process, *, completion_timeout=10, drain_timeout=2):
+    """Monitor one owned child without treating quiet local work as a stall."""
     from collections import deque
+    from queue import Empty, Full, Queue
+    import psutil
     from src.modules.bootstrap_output import PackageOutput, output_chunks
     signals = getattr(gui, "_signals", None)
     if threading.get_ident() == getattr(signals, "thread_id", None):
@@ -10212,6 +10269,8 @@ def _stream_offline_setup_output(gui, process):
             scheduled = False
             condition.notify_all()
         for kind, text in batch:
+            if closed():
+                return
             if kind == "progress":
                 gui.update_platformio_progress_block(text)
                 gui.set_status(text.splitlines()[0].strip())
@@ -10249,12 +10308,135 @@ def _stream_offline_setup_output(gui, process):
         if schedule:
             gui.root.after(0, flush)
 
+    if completion_timeout <= 0 or drain_timeout <= 0:
+        raise ValueError("Preparation completion bounds must be positive")
+    chunks = Queue(maxsize=32)
+    stopped = threading.Event()
+    done = getattr(gui, "_offline_setup_done", None)
+    if done is None:
+        done = gui._offline_setup_done = threading.Event()
+    done.clear()
+    descendants = {}
+    stream_done = False
+    eof_time = None
+    exit_time = None
+    exit_started = None
+    next_capture = 0.0
+    complete = False
+    reader = None
+    reader_started = False
     output = PackageOutput(enqueue)
-    for chunk in output_chunks(process.stdout):
-        if chunk:
-            _record_bootstrap_log("OFFLINE", chunk.rstrip())
-            output.feed(chunk)
-    output.finish()
+
+    def deliver(kind, text=""):
+        while not stopped.is_set():
+            try:
+                chunks.put((kind, text), timeout=.1)
+                return
+            except Full:
+                continue
+
+    def read_output():
+        try:
+            for chunk in output_chunks(process.stdout):
+                if stopped.is_set():
+                    return
+                for offset in range(0, len(chunk), 4096):
+                    deliver("data", chunk[offset:offset + 4096])
+        except (OSError, ValueError) as error:
+            deliver("error", str(error))
+        finally:
+            deliver("end")
+
+    try:
+        reader = threading.Thread(target=read_output, name="BootstrapBoardPackOutput", daemon=True)
+        reader.start()
+        reader_started = True
+        while True:
+            if closed():
+                raise InterruptedError("Board preparation stopped because Setup was closed")
+            now = time.monotonic()
+            code = process.poll()
+            if code is None and now >= next_capture:
+                next_capture = now + .25
+                try:
+                    for identity, child in tuple(descendants.items()):
+                        if not child.is_running() or child.status() == psutil.STATUS_ZOMBIE:
+                            descendants.pop(identity, None)
+                    for child in psutil.Process(process.pid).children(recursive=True):
+                        descendants[(child.pid, child.create_time())] = child
+                    if len(descendants) > 512:
+                        raise RuntimeError("Board preparation exceeded the supported child-process bound")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    pass
+            if code is not None and exit_time is None:
+                exit_time = now
+                exit_started = now
+            if exit_started is not None and now - exit_started >= drain_timeout:
+                # A surviving owned writer cannot extend teardown merely by
+                # printing. Separately allow completed output to drain below.
+                for child in descendants.values():
+                    try:
+                        if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                            raise RuntimeError("Board preparation exited before its owned children finished")
+                    except psutil.NoSuchProcess:
+                        pass
+            if stream_done and code is not None:
+                for child in descendants.values():
+                    try:
+                        if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                            raise RuntimeError("Board preparation exited before its owned children finished")
+                    except psutil.NoSuchProcess:
+                        pass
+                output.finish()
+                complete = True
+                return process.wait(timeout=completion_timeout)
+            if stream_done and now - eof_time >= completion_timeout:
+                raise TimeoutError("Board preparation closed its output but did not finish; its child was stopped")
+            if exit_time is not None and not stream_done and now - exit_time >= drain_timeout:
+                raise RuntimeError("Board preparation exited while a child still held its output; remaining children were stopped")
+            try:
+                kind, chunk = chunks.get(timeout=.1)
+            except Empty:
+                continue
+            if kind == "data":
+                # Draining a completed child's queued output is legitimate
+                # progress, even when parsing is slow on a constrained host.
+                if exit_time is not None:
+                    exit_time = time.monotonic()
+                _record_bootstrap_log("OFFLINE", chunk.rstrip())
+                output.feed(chunk)
+            elif kind == "error":
+                raise OSError(f"Board preparation output failed: {chunk}")
+            elif kind == "end":
+                stream_done = True
+                eof_time = time.monotonic()
+    finally:
+        stopped.set()
+        try:
+            if not complete:
+                reported = False
+                while True:
+                    try:
+                        _stop_offline_setup_process(process, descendants.values())
+                        break
+                    except (OSError, subprocess.TimeoutExpired, psutil.Error) as error:
+                        # Never release the package-store lease or let the
+                        # bootstrap host exit while a writer still runs.
+                        if not reported:
+                            _record_bootstrap_log("WARN", f"Waiting for owned board-preparation children to stop: {error}")
+                            reported = True
+                        time.sleep(.25)
+        finally:
+            try:
+                if reader_started:
+                    reader.join(timeout=1)
+                if not reader_started or not reader.is_alive():
+                    try:
+                        process.stdout.close()
+                    except (OSError, ValueError):
+                        pass
+            finally:
+                done.set()
 
 
 def _bootstrap_tool_store_lease(gui, core):
@@ -10542,8 +10724,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             # package setup; complete stores skip it. Invalid existing data stops
             # this step rather than allowing a fallback to replace those files.
             try:
-                from src.modules.offline_mode import offline_enabled
-                seeded = _ensure_platformio_core_prebuilt(gui) if offline_enabled() else True
+                seeded = _ensure_platformio_core_prebuilt(gui)
             except Exception as exc:
                 _record_bootstrap_exception("PlatformIO release seed preparation failed")
                 _fail_and_exit("PlatformIO release seed", str(exc))
@@ -10580,8 +10761,10 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             offline_plan, offline_plan_path = requested_plan()
             offline_board_sources = requested_board_sources()
             offline_packages_ready = ready(offline_core, offline_plan if offline_plan_path else None)
-            prepare_offline = offline_enabled() or bool(offline_plan_path or offline_board_sources)
-            if prepare_offline and (offline_board_sources or _explicit_setup_requested() or not offline_packages_ready):
+            # Online controls workspace networking, not whether its default
+            # boards can build. SCons alone cannot resolve ESP32 Dev Module.
+            # Both first-run and --repair must prepare the configured packs.
+            if offline_board_sources or _explicit_setup_requested() or not offline_packages_ready:
                 try:
                     opt_jobs = _apply_bootstrap_compiler_budget(os.environ.copy(), offline_core)
                 except Exception:
@@ -10594,23 +10777,33 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                     command += ["--board-source", str(source)]
                 if offline_packages_ready:
                     command += ["--coverage-only"]
-                gui.root.after(0, lambda: gui.log_section("Preparing complete offline board/library packs"))
+                gui.root.after(0, lambda: gui.log_section("Preparing configured board/library packs"))
                 bootstrap_env = clean_bootstrap_environment()
                 bootstrap_env["PYTHONUNBUFFERED"] = "1"
-                process = subprocess.Popen(command, env=bootstrap_env, stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                                           creationflags=subprocess.CREATE_NO_WINDOW)
-                _stream_offline_setup_output(gui, process)
-                if process.wait() or not ready(offline_core, offline_plan if offline_plan_path else None):
-                    _fail_and_exit("Offline board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
+                gui._offline_setup_done.clear()
+                if getattr(gui, "_closed", False):
+                    gui._offline_setup_done.set()
                     return
-            elif not prepare_offline:
-                # Online is the default: keep the local editor and build engine
-                # ready without installing every offline board/library variant.
-                from src.modules.offline_bootstrap import install_runtime_guard
-                install_runtime_guard(offline_core)
-                gui.root.after(0, lambda: gui.log_ok(
-                    "Online runtime ready; offline board/library preparation is disabled."))
+                child_options = {"env": bootstrap_env, "stdout": subprocess.PIPE,
+                                 "stderr": subprocess.STDOUT, "text": True,
+                                 "encoding": "utf-8", "errors": "replace"}
+                if sys.platform == "win32":
+                    child_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+                else:
+                    child_options["start_new_session"] = True
+                try:
+                    process = subprocess.Popen(command, **child_options)
+                except Exception:
+                    gui._offline_setup_done.set()
+                    raise
+                child_code = _stream_offline_setup_output(gui, process)
+                if getattr(gui, "_closed", False):
+                    return
+                if child_code or not ready(offline_core, offline_plan if offline_plan_path else None):
+                    _fail_and_exit("Board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
+                    return
+            if getattr(gui, "_closed", False):
+                return
             from src.modules.offline_mode import finish_bootstrap
             finish_bootstrap(offline_core)
 
@@ -10663,6 +10856,8 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         # ── Summary & launch ─────────────────────────────────────────
         def _finish():
+            if getattr(gui, "_closed", False):
+                return
             gui.log_ok("All dependencies ready!")
 
             # The next launch can now use the local fast path.  A failed write
@@ -10708,6 +10903,9 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         )
         bootstrap_hidden.wait(timeout=BOOTSTRAP_CLOSE_DELAY_S + 5.0)
 
+        # A closed Setup must not publish readiness or start a workspace later.
+        if getattr(gui, "_closed", False):
+            return
         # Spawn the detached main GUI process
         proc, gui_log = _spawn_main_gui()
 
@@ -10775,6 +10973,9 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # Destroy Tk window, quit event loop, and terminate bootstrap process
         gui.root.after(0, gui.close)
 
+    except InterruptedError as exc:
+        _record_bootstrap_log("CANCELLED", str(exc))
+        return
     except Exception as exc:
         _record_bootstrap_exception("Unhandled exception in bootstrap setup worker")
 
@@ -11107,6 +11308,14 @@ def main():
     t.start()
 
     gui.mainloop_until_done()
+    # The GUI never waits on child teardown. Keep the bootstrap host alive
+    # after its event loop exits until a cancelled board-pack child is reaped.
+    preparation_done = getattr(gui, "_offline_setup_done", None)
+    if preparation_done is not None:
+        if not preparation_done.wait(timeout=8):
+            _record_bootstrap_log("WARN", "Setup is closed; waiting for its owned board-preparation child to stop safely.")
+            while not preparation_done.wait(timeout=1):
+                pass
     _gui = None
     import gc
     gc.collect()

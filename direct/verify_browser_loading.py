@@ -499,7 +499,7 @@ class BrowserLoadingChecks(DownloaderChecks):
         data = data_stream.getvalue()
         metadata = dict(name="ESP8266", package="esp8266", architecture="esp8266", boards=["NodeMCU 1.0 (ESP-12E Module)"],
                         size=len(data), checksum="SHA-256:" + hashlib.sha256(data).hexdigest())
-        response = Mock(headers={"content-length": str(len(data))}, raise_for_status=Mock(),
+        response = Mock(status_code=200, raw=None, headers={"content-length": str(len(data))}, raise_for_status=Mock(),
                         iter_content=Mock(return_value=iter([data])), close=Mock())
         destination = self.folder / "download/Boards"
         app._active_package_job = "handoff-fixture"
@@ -566,7 +566,7 @@ class BrowserLoadingChecks(DownloaderChecks):
         with zipfile.ZipFile(payload, "w") as stream:
             stream.writestr("library.properties", "name=Sensor\n")
         data = payload.getvalue()
-        response = Mock(headers={"content-length": str(len(data))}, raise_for_status=Mock(),
+        response = Mock(status_code=200, raw=None, headers={"content-length": str(len(data))}, raise_for_status=Mock(),
                         iter_content=Mock(return_value=iter([data])), close=Mock())
         with patch("src.modules.package_jobs.publish_event", side_effect=OSError("Tracking journal read-only")), \
                 patch.object(browser.requests, "get", return_value=response), patch.object(browser.messagebox, "showerror") as error:
@@ -593,15 +593,19 @@ class BrowserLoadingChecks(DownloaderChecks):
             app._busy = True
             app._active_download_tab = app.lib_tab
             app._cancel_event.set() if cancel else app._cancel_event.clear()
-            response = Mock(headers={'content-length': str(len(data))}, raise_for_status=Mock(),
+            response = Mock(status_code=200, raw=None, headers={'content-length': str(len(data))}, raise_for_status=Mock(),
                             iter_content=Mock(return_value=iter([data])), close=Mock())
-            with patch.object(browser.requests, 'get', return_value=response), patch.object(browser.messagebox, 'showinfo'), \
+            with patch.object(browser.requests, 'get', return_value=response) as get, patch.object(browser.messagebox, 'showinfo'), \
                     patch.object(browser.messagebox, 'showerror') as failed:
                 app._tasks.start(app._download_worker, app.lib_tab, 'https://example.invalid/sensor.zip',
                                  'sensor.zip', destination, 'file', None, metadata)
                 self.until(lambda: not app._busy and app._tasks._timer is None)
                 failed.assert_not_called()
-                response.close.assert_called_once()
+                if cancel:
+                    get.assert_not_called()
+                    response.close.assert_not_called()
+                else:
+                    response.close.assert_called_once()
                 self.assertFalse((Path(destination) / 'sensor.zip.part').exists())
         self.assertEqual((Path(destination) / 'sensor.zip').read_bytes(), data)
 
@@ -642,7 +646,7 @@ class BrowserLoadingChecks(DownloaderChecks):
                     failure = RuntimeError(f'Cannot {stage} download worker')
                     factory = Mock(side_effect=failure) if stage == 'create' else Mock(
                         return_value=SimpleNamespace(start=Mock(side_effect=failure)))
-                    response = Mock(headers={'content-length': str(len(data))}, raise_for_status=Mock(),
+                    response = Mock(status_code=200, raw=None, headers={'content-length': str(len(data))}, raise_for_status=Mock(),
                                     iter_content=Mock(return_value=iter([data])), close=Mock())
                     with patch.object(app, '_prompt_download_option', return_value='zip'), \
                             patch.object(browser.requests, 'get', return_value=response) as get, \

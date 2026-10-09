@@ -18,22 +18,27 @@ def _log(api, text, tag="info"):
 
 def _stream(api, command, environment, cwd, *, upload=False):
     from main import web_bridge
+    from main.core.connection_loss import SerialConnectionGuard
     api._active_process = subprocess.Popen(
         command, cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         encoding="utf-8", errors="replace",
         **web_bridge._HOST_RUNTIME.process_options(priority=True, session=True))
+    guard = SerialConnectionGuard(api, api._active_process,
+                                  getattr(api, "_active_port_label", api.current_port),
+                                  dict(getattr(api, "_active_board_info", {}) or {})) if upload else None
     try:
         for raw in web_bridge._iter_process_output(
                 api._active_process, lambda: bool(api._stop_requested and not upload),
                 api._kill_active_process_tree,
-                lambda seconds: _log(api, f"Arduino CLI is still {'uploading' if upload else 'compiling'} ({seconds}s without new output)…", "dim")):
+                lambda seconds: _log(api, f"Arduino CLI is still {'uploading' if upload else 'compiling'} ({seconds}s without new output)…", "dim"),
+                on_poll=guard.poll if guard is not None else None):
             line = web_bridge._strip_terminal_escapes(raw).rstrip()
             if not line:
                 continue
             tag = "error" if re.search(r"\b(error|failed|failure|exception)\b", line, re.I) else "warning" if "warning" in line.lower() else "dim"
             _log(api, line, tag)
-        code = api._active_process.wait()
+        code = guard.wait() if guard is not None else api._active_process.wait()
         if api._stop_requested and not upload:
             raise InterruptedError("Compilation cancelled")
         if code:
@@ -45,9 +50,11 @@ def _stream(api, command, environment, cwd, *, upload=False):
                 api._kill_active_process_tree()
             if process.poll() is None:
                 # Never unlock a window while an upload child may still write.
-                process.wait()
+                guard.finish() if guard is not None else process.wait()
             if process.stdout is not None:
                 process.stdout.close()
+        if guard is not None:
+            guard.close()
         api._active_process = None
 
 
@@ -204,6 +211,7 @@ def run_arduino_operation(api, *, upload=False):
             raise InterruptedError("Upload cancelled before writing")
         if api.current_port != port or api.current_board != board:
             raise RuntimeError("The selected upload port or board changed during upload preparation")
+        api._check_write_connection(port, info)
         api._stop_serial_monitor()
         monitor_paused = True
         api.is_busy = True
@@ -225,10 +233,11 @@ def run_arduino_operation(api, *, upload=False):
         _log(api, f"Arduino CLI {'upload' if upload else 'build'} failed: {exc}", "error")
         if upload_started:
             _log(api, "The firmware may be incomplete. The upload was attempted once; stabilize the connection before retrying.", "warning")
-        api.emit("notification", {"title": "Upload failed" if upload else "Build failed", "message": str(exc), "type": "error"})
+        if not getattr(api, "_operation_connection_loss", ""):
+            api.emit("notification", {"title": "Upload failed" if upload else "Build failed", "message": str(exc), "type": "error"})
         return False
     finally:
         api._active_process = None
         api._release_requested_operation()
-        if monitor_paused and api.current_port == port:
+        if monitor_paused and api.current_port == port and not getattr(api, "_operation_connection_loss", ""):
             api._start_serial_monitor()

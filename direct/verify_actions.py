@@ -30,7 +30,7 @@ class ActionChecks(unittest.TestCase):
                    "_new_upload_progress_state", "_fast_upload_retry_allowed",
                    "compile_sketch", "upload_sketch", "_release_requested_operation",
                    "_start_resolved_upload", "set_timestamp_enabled",
-                   "_operation_worker_alive", "_begin_operation_session"}
+                   "_operation_worker_alive", "_begin_operation_session", "_check_write_connection"}
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in methods]
@@ -47,7 +47,7 @@ class ActionChecks(unittest.TestCase):
                        get_project_build_cache_root=lambda *a, **k: self.root / ".mcu_flasher_build_cache",
                        robust_rmtree=shutil.rmtree, _sketch_ram_cache=SimpleNamespace(invalidate=Mock()),
                        subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, CREATE_NO_WINDOW=0))
-        self.ns["_HOST_RUNTIME"] = SimpleNamespace(use_native_upload=lambda _: False)
+        self.ns["_HOST_RUNTIME"] = SimpleNamespace(use_native_upload=lambda _: False, process_options=lambda **_: {})
         self.ns["DEFAULT_UPLOAD_SPEED"] = 460800
         exec(compile(ast.Module(body=[cls], type_ignores=[]), "isolated_backend", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()
@@ -69,6 +69,9 @@ class ActionChecks(unittest.TestCase):
         b._block_if_pending_ai_edits = lambda _: False
         b._compile_requested_worker = Mock()
         b._upload_requested_worker = Mock()
+        # Loss polling itself has real-child coverage in verify_connection_loss;
+        # these action fixtures retain their isolated programmer transcripts.
+        b._iter_hardware_output = lambda process, *_, **__: iter(process.stdout.readline, "")
 
     def run_worker(self):
         self.pending.pop(0)()
@@ -176,7 +179,7 @@ class ActionChecks(unittest.TestCase):
         self.prepare_hard()
         b = self.api
         b.hard_reset()
-        b.current_board, b.current_port = "Changed", "COM100"
+        b.current_board = "Changed"
         self.run_worker()
         cmd = self.ns["subprocess"].Popen.call_args.args[0]
         self.assertIn("COM99", cmd)
@@ -185,6 +188,16 @@ class ActionChecks(unittest.TestCase):
         self.assertEqual((bins["board_name"], port), ("Demo", "COM99"))
         self.assertEqual(len(b._new_upload_progress_state(bins)["stages"]), 3)
         b._start_serial_monitor.assert_not_called()
+
+    def test_hard_reset_port_lost_during_preparation_never_erases(self):
+        self.prepare_hard()
+        self.api.hard_reset()
+        self.api.current_port = ""
+        self.run_worker()
+        self.ns["subprocess"].Popen.assert_not_called()
+        self.api._soft_reset_esptool_write.assert_not_called()
+        self.assertTrue(self.api._operation_connection_loss)
+        self.assertFalse(self.api.is_busy)
 
     def test_failed_preparation_never_erases(self):
         self.prepare_hard()

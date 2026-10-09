@@ -13,9 +13,10 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 
 class TrackingSerial:
@@ -36,6 +37,10 @@ class UploadWorkerChecks(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=audit)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        enumeration = patch("serial.tools.list_ports.comports", return_value=[SimpleNamespace(
+            device="COM99", serial_number="fixture", location="fixture-usb")])
+        enumeration.start()
+        self.addCleanup(enumeration.stop)
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         names = {"_soft_reset_esptool_write", "_write_esptool_connect_config",
@@ -43,7 +48,7 @@ class UploadWorkerChecks(unittest.TestCase):
                  "refresh_board_catalog", "update_skip_compile_availability", "stop_operation",
                  "_upload_status_key", "_append_upload_boot_hint",
                  "_finish_upload_connection_status", "_esptool_chip_mismatch",
-                 "_append_connecting_progress", "_upload_worker"}
+                 "_append_connecting_progress", "_upload_worker", "_check_write_connection"}
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
         cls.bases = []
         iterator = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
@@ -76,6 +81,7 @@ class UploadWorkerChecks(unittest.TestCase):
                        find_pio_executable=lambda: ["mock-platformio"],
                        _refresh_platformio_core_environment=lambda _: (self.root / "fixture-core", {}),
                        SCRIPT_DIR=self.root, DEFAULT_UPLOAD_SPEED="460800")
+        self.ns["_HOST_RUNTIME"] = SimpleNamespace(process_options=lambda **_: {})
         exec(compile(ast.Module(body=[iterator, upload_classifier, cls], type_ignores=[]),
                      "isolated_upload", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()
@@ -552,7 +558,7 @@ class UploadWorkerChecks(unittest.TestCase):
         before = {t.ident for t in threading.enumerate()}
         stream = io.StringIO("short line\n" * 5000)
         iterator = self.ns["_iter_process_output"](
-            SimpleNamespace(stdout=stream), lambda: False, lambda: None, lambda _: None,
+            SimpleNamespace(stdout=stream, poll=lambda: 0, returncode=0), lambda: False, lambda: None, lambda _: None,
             poll_interval=0.02)
         self.assertEqual(next(iterator), "short line\n")
         iterator.close()

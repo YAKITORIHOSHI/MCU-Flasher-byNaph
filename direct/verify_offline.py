@@ -129,6 +129,10 @@ class OfflineChecks(unittest.TestCase):
         marker.write_text(json.dumps(payload))
         self.assertTrue(setup.ready(self.core, plan))
         self.assertFalse(setup.ready(self.core, dict(plan, libraries=["new/library"])))
+        payload["host"] = "linux" if sys.platform == "win32" else "win32"
+        marker.write_text(json.dumps(payload))
+        self.assertFalse(setup.ready(self.core, plan))
+        payload["host"] = sys.platform
         payload["architecture"] = "foreign"
         marker.write_text(json.dumps(payload))
         self.assertFalse(setup.ready(self.core, plan))
@@ -697,16 +701,10 @@ class OfflineChecks(unittest.TestCase):
             setup.verify_package_dependencies(manager, packages["sensor"])
 
     def test_bootstrap_progress_burst_bounds_queued_gui_work(self):
-        import ast
-        import threading
-        tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
-        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == "_stream_offline_setup_output")
-        scope = {"threading": threading, "_record_bootstrap_log": lambda *args: None}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), "<isolated setup output>", "exec"), scope)
         callbacks, shown = [], []
         gui = SimpleNamespace(root=SimpleNamespace(after=lambda delay, callback: callbacks.append(callback)), log_dim=shown.append)
-        process = SimpleNamespace(stdout=(f"{index}:" + "x" * 4000 for index in range(10000)))
-        scope["_stream_offline_setup_output"](gui, process)
+        process = self._completed_output_process(f"{index}:" + "x" * 4000 for index in range(10000))
+        self._isolated_setup_output()(gui, process)
         self.assertEqual(len(callbacks), 1)
         callbacks.pop()()
         self.assertEqual(len(shown), 64)
@@ -717,12 +715,28 @@ class OfflineChecks(unittest.TestCase):
     def _isolated_setup_output():
         import ast
         import threading
+        import time
         tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
-        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef)
-                    and item.name == "_stream_offline_setup_output")
-        scope = {"threading": threading, "_record_bootstrap_log": lambda *args: None}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), "<isolated setup output>", "exec"), scope)
+        nodes = [item for item in tree.body if isinstance(item, ast.FunctionDef)
+                 and item.name in {"_stream_offline_setup_output", "_stop_offline_setup_process"}]
+        scope = {"threading": threading, "time": time, "subprocess": subprocess,
+                 "os": os, "sys": sys, "_record_bootstrap_log": lambda *args: None}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "<isolated setup output>", "exec"), scope)
         return scope["_stream_offline_setup_output"]
+
+    @staticmethod
+    def _completed_output_process(source):
+        """Finite output-only child; no external PID or installer is involved."""
+        if hasattr(source, "close"):
+            stream = source
+        else:
+            class FiniteLines:
+                def __iter__(self):
+                    return iter(source)
+                def close(self):
+                    pass
+            stream = FiniteLines()
+        return SimpleNamespace(stdout=stream, poll=lambda: 0, wait=Mock(return_value=0))
 
     def test_bootstrap_output_burst_retains_early_errors_and_warnings(self):
         import io
@@ -732,7 +746,7 @@ class OfflineChecks(unittest.TestCase):
                               log_fail=lambda text: shown.append(("fail", text)), set_status=Mock())
         lines = "Error: required package failed\nWarning: missing dependency\n"
         lines += "".join(f"Diagnostic line {index}\n" for index in range(1000))
-        self._isolated_setup_output()(gui, SimpleNamespace(stdout=io.StringIO(lines)))
+        self._isolated_setup_output()(gui, self._completed_output_process(io.StringIO(lines)))
         self.assertEqual(len(callbacks), 1)
         callbacks.pop()()
         self.assertEqual(shown, [("fail", "Error: required package failed"),
@@ -759,7 +773,7 @@ class OfflineChecks(unittest.TestCase):
         stream = self._isolated_setup_output()
         def produce():
             try:
-                stream(gui, SimpleNamespace(stdout=io.StringIO(lines)))
+                stream(gui, self._completed_output_process(io.StringIO(lines)))
             except Exception as error:
                 errors.append(error)
         worker = threading.Thread(target=produce, daemon=True)
@@ -794,9 +808,10 @@ class OfflineChecks(unittest.TestCase):
         gui = SimpleNamespace(root=SimpleNamespace(after=Mock()), _closed=False)
         stream = self._isolated_setup_output()
         errors = []
+        process = self._completed_output_process(io.StringIO("Warning: fixture\n" * 100))
         def produce():
             try:
-                stream(gui, SimpleNamespace(stdout=io.StringIO("Warning: fixture\n" * 100)))
+                stream(gui, process)
             except Exception as error:
                 errors.append(error)
             finally:
@@ -811,13 +826,16 @@ class OfflineChecks(unittest.TestCase):
                 gui._closed = True
                 worker.join(2)
         self.assertFalse(worker.is_alive(), "Closed setup left its output worker waiting")
-        self.assertEqual(errors, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], InterruptedError)
+        process.wait.assert_called()
+        self.assertTrue(gui._offline_setup_done.is_set())
 
     def test_bootstrap_output_refuses_gui_thread_and_failed_scheduler(self):
         import io
         import threading
         stream = self._isolated_setup_output()
-        process = SimpleNamespace(stdout=io.StringIO("Warning: fixture\n"))
+        process = self._completed_output_process(io.StringIO("Warning: fixture\n"))
         gui = SimpleNamespace(_signals=SimpleNamespace(thread_id=threading.get_ident()))
         with self.assertRaisesRegex(RuntimeError, "not the GUI thread"):
             stream(gui, process)
@@ -911,19 +929,13 @@ class OfflineChecks(unittest.TestCase):
         self.assertIn("display shortened", events[-1][1])
 
     def test_bootstrap_live_progress_burst_coalesces_gui_updates(self):
-        import ast
         import io
-        import threading
-        tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
-        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == "_stream_offline_setup_output")
-        scope = {"threading": threading, "_record_bootstrap_log": Mock()}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), "<isolated live output>", "exec"), scope)
         callbacks = []
         gui = SimpleNamespace(root=SimpleNamespace(after=lambda delay, callback: callbacks.append(callback)),
                               log_dim=Mock(), log_warn=Mock(), log_ok=Mock(), set_status=Mock(),
                               update_platformio_progress_block=Mock(), clear_platformio_progress_block=Mock())
         frames = "Tool Manager: Installing toolkit\nUnpacking 0%" + "".join(f" {i / 100:.2f}%" for i in range(10000))
-        scope["_stream_offline_setup_output"](gui, SimpleNamespace(stdout=io.StringIO(frames)))
+        self._isolated_setup_output()(gui, self._completed_output_process(io.StringIO(frames)))
         self.assertEqual(len(callbacks), 1)
         callbacks.pop()()
         gui.update_platformio_progress_block.assert_called_once()

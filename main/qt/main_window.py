@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import sys
 import os
+import time
 from pathlib import Path
 
 # pyrefly: ignore [missing-import]
@@ -80,6 +81,10 @@ class MCUMainWindow(QMainWindow):
         self._startup_complete = False
         self._startup_scheduled = False
         self._pending_catalog = None
+        self._pending_operation_close = None
+        self._operation_close_timer = QTimer(self)
+        self._operation_close_timer.setInterval(150)
+        self._operation_close_timer.timeout.connect(self._finish_operation_close)
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(60)
@@ -1616,6 +1621,62 @@ class MCUMainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _operation_children_alive(self) -> bool:
+        """A finished process can still have a resolving/cleanup worker."""
+        backend = self._backend
+        if backend is None:
+            return False
+        worker = getattr(backend, "_operation_worker", None)
+        process = getattr(backend, "_active_process", None)
+        try:
+            return bool((worker is not None and worker.is_alive()) or
+                        (process is not None and process.poll() is None))
+        except Exception:
+            return True
+
+    def _defer_operation_close(self) -> None:
+        """Wait on Qt's event loop after requesting safe cancellation."""
+        if self._pending_operation_close is not None:
+            return
+        backend = self._backend
+        self._pending_operation_close = (
+            getattr(backend, "_op_session_id", 0),
+            getattr(backend, "_operation_worker", None), time.monotonic() + 20.0,
+        )
+        try:
+            backend.stop_operation()
+        except Exception as exc:
+            self._pending_operation_close = None
+            backend.emit("console:log", {"text": f"Cannot close while the operation is running: {exc}",
+                                         "tag": "error", "newline": True})
+            return
+        self._operation_close_timer.start()
+
+    def _finish_operation_close(self) -> None:
+        pending = self._pending_operation_close
+        if pending is None:
+            self._operation_close_timer.stop()
+            return
+        backend = self._backend
+        session, worker, deadline = pending
+        phase = getattr(backend, "_current_op_phase", None)
+        changed = (getattr(backend, "_op_session_id", 0) != session or
+                   getattr(backend, "_operation_worker", None) is not worker)
+        unsafe = (phase in {"flashing", "writing", "erasing", "resetting", "cleaning"} or
+                  getattr(backend, "_framework_download_active", False))
+        if changed or unsafe or time.monotonic() >= deadline:
+            self._operation_close_timer.stop()
+            self._pending_operation_close = None
+            text = ("Close cancelled because the active operation changed." if changed or unsafe else
+                    "The operation is still stopping. The workspace remains open; close it again after the worker exits.")
+            backend.emit("console:log", {"text": text, "tag": "warning", "newline": True})
+            return
+        if self._operation_children_alive():
+            return
+        self._operation_close_timer.stop()
+        self._pending_operation_close = None
+        self.close()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         # ── Read current backend operation state ─────────────────────────
         phase = getattr(self._backend, "_current_op_phase", None) if self._backend else None
@@ -1640,7 +1701,7 @@ class MCUMainWindow(QMainWindow):
             event.ignore()
             return
 
-        if self._backend and self._backend.is_busy:
+        if self._backend and (self._backend.is_busy or self._operation_children_alive()):
             proc = getattr(self._backend, "_active_process", None)
 
             # ── Safe stale-busy auto-recovery ────────────────────────────
@@ -1649,6 +1710,7 @@ class MCUMainWindow(QMainWindow):
             # hasn't launched yet, so we must NOT clear busy in that window.
             stale = (
                 (proc is None or proc.poll() is not None)
+                and not self._operation_children_alive()
                 and op not in DESTRUCTIVE_OPS
                 and op != "upload"
                 and phase not in DESTRUCTIVE_PHASES
@@ -1658,13 +1720,13 @@ class MCUMainWindow(QMainWindow):
                 # Fall through to normal clean exit below.
 
             else:
-                # ── Compile-only: cancellable, allow exit ────────────────
-                if phase == "compiling" and op == "compile":
-                    try:
-                        self._backend.stop_operation()
-                    except Exception:
-                        pass
-                    # Fall through to normal clean exit.
+                # Safe cancellation must finish before child-panel teardown.
+                if ((op == "compile" and phase in {None, "resolving", "compiling"}) or
+                        (op == "upload" and phase in {"resolving", "compiling", "connecting"}) or
+                        (op is None and phase is None and proc is None)):
+                    self._defer_operation_close()
+                    event.ignore()
+                    return
 
                 else:
                     # ── Destructive operation — block the close ──────────

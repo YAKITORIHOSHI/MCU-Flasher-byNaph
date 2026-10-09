@@ -73,11 +73,12 @@ For explicitly requested assistant delegation, use the local
   current Monaco decoration ranges rather than replaying their original ranges.
   Verify `direct/verify_ai_line_diff.py` and `direct/verify_editor_review_ui.py`
   with synthetic models and mocked bridges; captures belong in `temp/`.
-- Offline mode defaults off. Online startup verifies the local runtime and SCons;
-  Ubuntu's native launcher additionally requires certified configured board packs.
-  missing exact targets use explicit board preparation. Both modes retain the
-  bootstrap-only installer boundary. Offline enables network denial and full
-  configured-plan readiness. Settings confirms disk/restart or removal of owned
+- Offline mode defaults off. Windows and Ubuntu startup require the local runtime
+  and certified configured board packs in both modes. SCons-only installations
+  enter Bootstrap automatically; Windows --repair must prepare the full plan,
+  reusing valid packages with --coverage-only. Additional exact targets use
+  explicit board preparation. Both modes retain the bootstrap-only installer
+  boundary; Offline additionally enables network denial. Settings confirms disk/restart or removal of owned
   extras, rechecks busy/other-window state, saves acknowledged buffers, then a
   private helper waits for exit before native Bootstrap --repair. Report failure
   and roll back mode without dropping buffers. Cleanup authenticates per-host
@@ -102,6 +103,55 @@ For explicitly requested assistant delegation, use the local
   during resolution. On Windows terminate the original Popen handle and checked
   descendants, never an exited process's PID. Verify real fixture children and
   delayed callbacks with `direct/verify_operation_lifecycle.py`.
+- Explicit close during Compile or pre-write Upload requests cancellation and
+  waits for both the operation worker and owned child to exit through one
+  parented Qt timer. Never treat a live resolving/cleanup worker as stale busy.
+  Scope deferred close to its session/worker; a newer operation, write phase or
+  bounded-wait expiry keeps the workspace and editor buffers open. Verify with
+  `direct/verify_operation_close.py`, mocking hardware, settings and panel cleanup.
+- Confirm serial loss in the operation worker even while tool output is quiet.
+  Scope failure to the captured session, port and Popen; stop/reap only that
+  child and fail without replaying upload/erase/reset or auto-resuming serial.
+  Ordinary Compile remains hardware-independent. Preserve declared USB bootloader
+  handoffs and observed Espressif native USB (VID 0x303A) with bounded grace;
+  require matching USB identity and exclude programmers that need no serial port.
+  Keep loss handling off Qt; connection failure leaves the workspace open. Verify
+  quiet real children, stale ownership, handoffs and upload/reset integrations
+  with `direct/verify_connection_loss.py` using mocked serial enumeration.
+  Keep programmer output draining after consumer/reader failure so a healthy
+  child can finish without pipe backpressure. Use native available-byte drainage
+  only when its reader is absent or dead; retain transport polling and never
+  kill a healthy write for output silence. Verify real harmless large-output
+  children and reader startup failures with `direct/verify_process_drain.py`.
+- Serial Send uses one persistent worker with a 16-message / 256 KiB active and
+  pending budget, a 64 KiB per-command limit and a finite 1-second driver write
+  timeout. Capture generation, connection identity, port and baud. Reject without
+  waiting for the serial state lock on Qt and retain rejected input; clear only
+  after queue acceptance. Never call unbounded driver flush or retry partial/
+  failed writes. Discard old pending commands on disconnect, port/baud change or
+  shutdown. A failed send closes only its captured connection off the state lock;
+  stale failures cannot disconnect a replacement. Verify blocked-driver GUI
+  responsiveness, queue bounds, partial/stale delivery and input retention with
+  `direct/verify_serial_send.py`, plus reader/delivery fixtures. A misbehaving
+  native driver must not create extra workers or unbounded pending commands.
+- Board/library archive downloads use bounded connect/read waits and available-byte
+  reads so cancellation remains responsive on both stalled and trickling streams.
+  Retain source/checksum/validator-bound partial checkpoints after interruption;
+  only an explicit Download retries or resumes with validated HTTP ranges.
+  Preserve verified archives and installed payloads until replacement succeeds;
+  interrupted downloads cannot trigger preparation or readiness. Verify real
+  loopback disconnects, stalls, cancellation and resume ownership with
+  `direct/verify_download_interruption.py` and browser loading fixtures.
+- Bootstrap PlatformIO managers use temporary, serialized HTTP connect/read
+  bounds, preserving shorter explicit limits, proxies and TLS. Restore the
+  adapter after failures; never alter installed packages or impose an output
+  silence deadline on local builds/extraction. Monitor board-pack output off
+  GUI with bounded queues and waits after EOF/child exit. A closed Setup cancels
+  its captured process tree and cannot certify readiness or launch a workspace;
+  retain the package-store lease and host lifetime until every owned writer
+  stops, even if termination is delayed or denied. Verify local children,
+  effective manager HTTP calls and restoration with
+  `direct/verify_bootstrap_interruption.py` and Windows board setup fixtures.
 - Install `GuiGarbageCollector` before backend/window construction. Disable
   automatic cyclic GC for the workspace lifetime; collect only on the GUI thread
   between events, outside modal/nested loops, at bounded intervals. Ordinary
@@ -143,8 +193,16 @@ For explicitly requested assistant delegation, use the local
   CI-only fixture CPU admission override, recorded in its result.
 - Keep host implementations in separate files: `main/platforms/windows.py` owns Windows paths and executable discovery; `main/platforms/ubuntu.py` owns native PlatformIO paths and POSIX process sessions. `main/core/toolchain.py` is the stable host-selecting API, and `main/core/build_resources.py` shares CPU/RAM/storage budgets. Core exports stay lazy to avoid Ubuntu-first import cycles and unnecessary board discovery. Runtime must never import bootstrap installers.
 - Windows uses the private portable Python runtime and `direct/windows/run.vbs`. Ubuntu uses `.venv-linux`, `direct/ubuntu/setup.py`, `direct/ubuntu/run.sh` and `direct/ubuntu/requirements.txt`. Older direct launch/setup paths remain compatibility forwarders. Detect the host through `src/modules/platform_runtime.py`; never run Windows executables or copied Windows PlatformIO packages on Linux. Ubuntu replaces inherited foreign package/cache/interpreter paths and uses native uploads for every family; setup repairs only the local venv.
+- Host runtime, toolchains, package/cache/temp paths and readiness certificates
+  must remain separate. Windows setup/build refresh binds every PlatformIO
+  resource directory and interpreter to its local Windows store; inherited
+  Ubuntu paths cannot override package/platform locations. Ubuntu retains its
+  XDG native store and clears copied Windows interpreter hints. Keep these
+  environment policies in their respective host implementations. Verify both
+  directions and disjoint resource selectors in `direct/verify_platforms.py`,
+  and reject foreign-host certificates in `direct/verify_offline.py`.
 - Ubuntu's native `MCU_Flasher` ELF wrapper comes from `src/launcher_ubuntu.c`; rebuild it with `direct/ubuntu/build_launcher.sh`. Resolve the executable's folder rather than cwd and forward literal arguments without shell interpolation. `direct/ubuntu/launch.py` checks native dependencies/private readiness, opens a first-run Bootstrap terminal only when needed, and launches the workspace with `.venv-linux`. `--check` stays read-only and opens no dialogs; `--install-shortcut` generates per-checkout desktop paths. Regenerate shortcuts after moves. Keep Windows launchers, installers and dependency ranges unchanged.
-- Ubuntu Bootstrap prepares the configured common Arduino platform/tool/library packs even in Online Mode; SCons-only runtime preparation cannot resolve or compile ESP32 Dev Module and other retained declarations. Use the existing `offline_bootstrap.py` full configured-plan path and reuse certified packs with `--coverage-only`; preserve the saved Online/Offline Mode. Ubuntu launcher readiness additionally requires native board-pack certification, upgrading old SCons-only installations automatically. Keep Windows setup policy unchanged. Use `direct/verify_target_resolution.py --compile-native-esp32 temp/.../core` for an explicitly provisioned native fixture and the actual Compile button; isolate package leases/events and all persistence under temp, never upload during verification.
+- Windows and Ubuntu Bootstrap prepare the configured common Arduino platform/tool/library packs even in Online Mode; SCons-only runtime preparation cannot resolve or compile ESP32 Dev Module and other retained declarations. Use the existing `offline_bootstrap.py` full configured-plan path and reuse certified packs with `--coverage-only`; preserve the saved Online/Offline Mode. Windows `startup_ready` and Ubuntu launcher readiness require host board-pack certification, upgrading old SCons-only installations automatically. Verify Windows Online/repair/source/failure paths with `direct/verify_windows_board_setup.py`, mocking all installers. Use `direct/verify_target_resolution.py --compile-native-esp32 temp/.../core` for an explicitly provisioned native fixture and the actual Compile button; isolate package leases/events and all persistence under temp, never upload during verification.
 - `direct/ubuntu/preflight.py` checks Tk/native libraries/tools before setup mutations and validates Qt6/PySide6/WebEngine plus Qt5/QScintilla in separate processes. Missing system packages enter Ubuntu Bootstrap automatically. `system_setup.py` refreshes apt indexes and installs only detected, allowlisted prerequisites (including Ubuntu's ALSA package rename) through visible OS-owned sudo/pkexec authentication. Elevate only absolute apt-get commands; keep setup Python and the GUI under the desktop user. Recheck prerequisites before private setup; stop on cancellation, apt errors or failed rechecks without automatic retries. `run.sh` can install missing system Python through the same visible terminal flow; `--check` never authenticates or installs. Reject unsupported non-amd64 desktop wheels. Repair only owned venv interpreter links; preserve packages and refuse external symlink paths/unrecognized content. Verify with isolated `direct/verify_ubuntu_bootstrap.py`, `direct/verify_ubuntu_system_setup.py` and `direct/verify_ubuntu_launcher.py`; mock apt/elevation and do not run live setup during checks.
 - Ubuntu folder/source pickers use parented Qt dialogs. POSIX PTY input drains a bounded nonblocking byte queue, retaining partial writes, UTF-8, capability replies and paste. Report an input rejected by the 4 MiB bound; never replay queued input after close. Verify Linux pickers and a real local PTY with `direct/verify_ubuntu_runtime.py`, without hardware or authenticated assistant commands.
 - Ubuntu's AI pane is `main/qt/posix_ai_panel.py`, a dedicated OpenCode TUI with one protected native PTY. Keep `posix_terminal_panel.py` as the separate project terminal that starts empty until New Bash. Hide/reveal retain the same assistant session and independent container closes are ignored; owning workspace shutdown tears it down. An explicit `/exit` starts a fresh PTY without replaying input. Bound unexpected exit recovery to two restarts per minute, then show Retry OpenCode. Discover native OpenCode off the GUI thread through `main/platforms/ubuntu_opencode.py`, using account PATH and standard user directories without shell startup or downloads. Preserve the Windows assistant path. Verify discovery/lifecycle with `direct/verify_ubuntu_opencode.py` and `direct/verify_ubuntu_ai_panel.py`; run its `--native-renderer` probe under xcb/Xvfb with real Qt/PTY and a fake CLI, never authentication, AI requests, hardware or live caches.
@@ -494,7 +552,7 @@ MCU Flasher by Naph/
 
 ### 3. Toolchain & Serial Monitor Execution Pipeline
 - **PlatformIO targets**: Validate the exact board and declared framework through `target_profile.py`; never silently substitute a family default. `.ino` projects require Arduino. Runtime refresh reads only installed/cache definitions. Firmware cache fingerprints include host, board/framework/platform, manifests and sources.
-- **Bootstrap-Only Board Toolchain Preparation**: Explicit offline mode prepares its complete configured plan before launch; online default prepares runtime/SCons and uses explicit board preparation for missing targets. Compile, Upload and Reset never call installers.
+- **Bootstrap-Only Board Toolchain Preparation**: Both modes prepare and certify the configured board/library plan before launch; additional targets use explicit board preparation. Online permits workspace networking and Offline denies it. Compile, Upload and Reset never call installers.
 - **Process Scheduling Priority**: Background compiler subprocesses are launched with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`) on Windows, ensuring the Qt event loop, Monaco editor, and serial monitor remain responsive under full CPU load.
 - **Operation Phase Scoping**:
   - `_active_operation == "compile"`: Serial Monitor, Reset DTR/RTS pulse, Baud Rate selection, and Send bar remain **fully functional and active**.
@@ -581,6 +639,7 @@ Use the app's private runtime. On Windows:
 & src/_python/python.exe -B direct/verify_build_log_routing.py
 & src/_python/python.exe -B direct/verify_build_console.py
 & src/_python/python.exe -B direct/verify_platforms.py
+& src/_python/python.exe -B direct/verify_windows_board_setup.py
 & src/_python/python.exe -B direct/verify_offline.py
 & src/_python/python.exe -B direct/verify_bootstrap_board_coverage.py
 & src/_python/python.exe -B direct/verify_bootstrap_arduino_sources.py

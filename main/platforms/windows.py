@@ -482,6 +482,24 @@ def _ensure_modules_junction(script_dir: Path) -> str | None:
         return None
 
 
+def _bind_platformio_resources(core_dir: str | Path) -> None:
+    """Replace inherited foreign paths with this Windows store and interpreter."""
+    core = Path(core_dir)
+    locations = {
+        "PLATFORMIO_CORE_DIR": core,
+        "PLATFORMIO_PLATFORMS_DIR": core / "platforms",
+        "PLATFORMIO_PACKAGES_DIR": core / "packages",
+        "PLATFORMIO_CACHE_DIR": core / ".cache",
+        "PLATFORMIO_BUILD_CACHE_DIR": core / ".cache/build",
+        "PLATFORMIO_GLOBALLIB_DIR": core / "lib",
+        "PLATFORMIO_PENV_DIR": core / "penv",
+        "TMP": core / ".tmp", "TEMP": core / ".tmp", "TMPDIR": core / ".tmp",
+    }
+    for name, value in locations.items():
+        os.environ[name] = str(value)
+    os.environ["PLATFORMIO_PYTHON_EXE"] = str(sys.executable)
+
+
 def _configure_platformio_environment(script_dir: Path) -> str:
     """Ensure all PlatformIO store directories (packages, cache, temp, libraries) live on the project's drive."""
     try:
@@ -491,7 +509,7 @@ def _configure_platformio_environment(script_dir: Path) -> str:
     except Exception:
         pass
     core_dir = _get_safe_platformio_core_dir(script_dir)
-    os.environ["PLATFORMIO_CORE_DIR"] = core_dir
+    _bind_platformio_resources(core_dir)
 
     # Build both aliases under one app-owned namespace.  Only after both
     # junctions exist do we remove the old top-level junction entries.
@@ -607,7 +625,7 @@ def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple
     except Exception:
         pass
 
-    os.environ["PLATFORMIO_CORE_DIR"] = str(effective_path)
+    _bind_platformio_resources(effective_path)
     return effective_path, (not configured_valid or not refreshed_valid)
 
 # Serialize every read/modify/write cycle that touches a generated platformio.ini.

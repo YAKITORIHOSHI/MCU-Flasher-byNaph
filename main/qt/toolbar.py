@@ -1768,6 +1768,10 @@ class ControlsBar(QWidget):
     def on_ports_updated(self, ports: list) -> None:
         """Refresh port combo from signal, preserving selection if still present."""
         current_port = self.port_combo.currentData() or (self._backend.current_port if self._backend else "")
+        if (current_port and self._backend
+                and not any(p.get("device") == current_port for p in ports)
+                and getattr(self._backend, "_serial_handoff_pending", lambda _: False)(current_port)):
+            ports = list(ports) + [{"device": current_port, "description": "Waiting for USB bootloader"}]
 
         # Diff against existing items to prevent closing an open popup or unnecessary redraws
         existing_items = []

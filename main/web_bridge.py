@@ -41,7 +41,7 @@ SCRIPT_DIR = _project_root
 def _iter_process_output(process, stop_requested, stop_process, on_silence,
                          *, poll_interval: float = 0.2,
                          notice_after: float = 15.0,
-                         notice_every: float = 20.0):
+                         notice_every: float = 20.0, on_poll=None):
     """Yield child output without blocking cancellation or quiet-build reporting.
 
     A reader thread drains the pipe into a bounded queue. The operation worker
@@ -69,27 +69,40 @@ def _iter_process_output(process, stop_requested, stop_process, on_silence,
     def _read_pipe():
         try:
             for output_line in iter(lambda: stdout.readline(8192), ""):
-                if not _publish(("line", output_line)):
-                    break
+                # A consumer failure can occur while the programmer is writing.
+                # Continue draining this pipe after abandonment so it can exit.
+                _publish(("line", output_line))
         except Exception as exc:
             _publish(("error", exc))
         finally:
             _publish(("eof", sentinel))
             finished.set()
 
+    killed_for_stop = False
+
+    def _poll_operation():
+        nonlocal killed_for_stop
+        if on_poll is not None:
+            on_poll()
+        if stop_requested() and not killed_for_stop:
+            killed_for_stop = True
+            try:
+                stop_process()
+            except Exception:
+                pass
+
     reader = threading.Thread(target=_read_pipe, name="MCU_BuildOutputReader", daemon=True)
-    reader.start()
+    try:
+        reader.start()
+    except Exception:
+        from main.core.process_drain import finish_with_output_drain
+        finish_with_output_drain(process, on_poll=_poll_operation)
+        raise
     last_output = time.monotonic()
     next_notice = last_output + max(0.1, float(notice_after))
-    killed_for_stop = False
     try:
         while True:
-            if stop_requested() and not killed_for_stop:
-                killed_for_stop = True
-                try:
-                    stop_process()
-                except Exception:
-                    pass
+            _poll_operation()
 
             try:
                 kind, value = records.get(timeout=max(0.02, float(poll_interval)))
@@ -115,6 +128,9 @@ def _iter_process_output(process, stop_requested, stop_process, on_silence,
         # Early consumer exit must not strand a reader on a full queue.
         abandoned.set()
         reader.join(timeout=0.25)
+        if not reader.is_alive() and process.poll() is None:
+            from main.core.process_drain import finish_with_output_drain
+            finish_with_output_drain(process, on_poll=_poll_operation)
 
 
 def _classify_platformio_upload_line(raw_line: str) -> tuple[str, str | None]:
@@ -448,6 +464,8 @@ class MCUWebBackendAPI:
         self.serial_running = False
         self.serial_paused = False
         self._serial_lock = threading.Lock()
+        from main.core.serial_send import SerialSendQueue
+        self._serial_send_queue = SerialSendQueue(self)
         # Debounce token: incremented each time a reconnect is requested.
         # Only the call whose token matches the latest wins; stale callers abort early.
         self._serial_reconnect_token: int = 0
@@ -667,6 +685,9 @@ class MCUWebBackendAPI:
         self._stop_telemetry.set()
         self._stop_port_monitor.set()
         self._stop_serial_notifications()
+        sender = getattr(self, "_serial_send_queue", None)
+        if sender is not None:
+            sender.stop()
         try:
             self._stop_serial_monitor()
         except Exception:
@@ -899,31 +920,38 @@ class MCUWebBackendAPI:
                                 "message": f"USB device disconnected: {dev}",
                                 "type": "warning",
                             })
-                            if self.current_port == dev:
-                                self._stop_serial_monitor()
-                                self.current_port = ""
-                                if not claim_serial_port(""):
-                                    self.emit("notification", {
-                                        "title": "Port settings unavailable",
-                                        "message": "The device disconnected, but its saved port selection could not be cleared.",
-                                        "type": "warning",
-                                    })
-                                self.emit("port:selected", {"port": ""})
-                                self.emit("serial:status", {
-                                    "connected": False,
-                                    "port": "",
-                                    "baud": self.current_baud,
-                                })
-                                self._sync_project_hardware_state()
+                            if self.current_port == dev and not self._serial_handoff_pending(dev):
+                                self._clear_disconnected_port(dev)
                     # Publish after clearing disconnected selections, so the
                     # GUI cannot race cleanup with a stale combo selection.
                     self.emit("ports:updated", ports)
+                # A declared USB reset can defer clearing the selection. Once
+                # its guard finishes/expires, clear it even without another
+                # inventory change; stale selections must not enable Upload.
+                selected = self.current_port
+                if selected and selected not in current_devs and not self._serial_handoff_pending(selected):
+                    self._clear_disconnected_port(selected)
             except Exception:
                 pass  # never crash the monitor; back-off handled by wait below
 
             # Adaptive poll interval: back off during active build/flash operations
             poll_interval = 3.0 if getattr(self, "is_busy", False) else 1.5
             self._stop_port_monitor.wait(timeout=poll_interval)
+
+    def _clear_disconnected_port(self, port: str) -> None:
+        if self.current_port != port:
+            return
+        self._stop_serial_monitor()
+        self.current_port = ""
+        if not claim_serial_port(""):
+            self.emit("notification", {
+                "title": "Port settings unavailable",
+                "message": "The device disconnected, but its saved port selection could not be cleared.",
+                "type": "warning",
+            })
+        self.emit("port:selected", {"port": ""})
+        self.emit("serial:status", {"connected": False, "port": "", "baud": self.current_baud})
+        self._sync_project_hardware_state()
 
     def _init_hardware(self):
         """Detect initial COM ports and emit the list.
@@ -1732,7 +1760,7 @@ class MCUWebBackendAPI:
             else:
                 import signal
                 if os.getpgid(pid) == pid:
-                    os.killpg(pid, signal.SIGTERM)
+                    os.killpg(pid, signal.SIGKILL)
                 else:
                     proc.kill()
         except Exception:
@@ -3365,6 +3393,9 @@ class MCUWebBackendAPI:
         with self._serial_lock:
             if _expected_generation is not None and _expected_generation != self._serial_generation:
                 return
+            sender = getattr(self, "_serial_send_queue", None)
+            if sender is not None:
+                sender.discard()
             finish_previous = getattr(self, "_serial_log_finalize", None)
             if finish_previous:
                 finish_previous()
@@ -3397,6 +3428,7 @@ class MCUWebBackendAPI:
                 self._serial_conn.port = self.current_port
                 self._serial_conn.baudrate = self.current_baud
                 self._serial_conn.timeout = 0.04
+                self._serial_conn.write_timeout = 1.0
                 self._serial_conn.dsrdtr = False
                 self._serial_conn.rtscts = False
                 self._serial_conn.dtr = False
@@ -3698,6 +3730,9 @@ class MCUWebBackendAPI:
         """Stop and close the serial monitor before upload/flash."""
         old_thread = None
         with self._serial_lock:
+            sender = getattr(self, "_serial_send_queue", None)
+            if sender is not None:
+                sender.discard()
             finish_previous = getattr(self, "_serial_log_finalize", None)
             if finish_previous:
                 finish_previous()
@@ -3825,27 +3860,14 @@ class MCUWebBackendAPI:
             self.emit("serial:log", {"text": f"Reset pulse could not start: {exc}",
                                      "tag": "warning", "newline": True})
 
-    def serial_send(self, text: str, line_ending: str = "both"):
-        """Transmit text command to the connected microcontroller."""
-        if not self._serial_conn or not self._serial_conn.is_open:
-            self.emit("serial:log", {"text": "✖ Cannot send: Serial port not connected", "tag": "error", "newline": True})
-            return
-
-        endings = {
-            "both": "\r\n",
-            "nl": "\n",
-            "cr": "\r",
-            "none": "",
-        }
-        suffix = endings.get(line_ending, "\r\n")
-        data = (text + suffix).encode("utf-8", errors="replace")
-
-        try:
-            self._serial_conn.write(data)
-            self._serial_conn.flush()
-            self.emit("serial:log", {"text": f"❯ {text}", "tag": "dim", "newline": True})
-        except Exception as e:
-            self.emit("serial:log", {"text": f"✖ Send error: {e}", "tag": "error", "newline": True})
+    def serial_send(self, text: str, line_ending: str = "both") -> bool:
+        """Accept one bounded, captured serial send without blocking the GUI."""
+        from main.core.serial_send import SerialSendQueue
+        sender = getattr(self, "_serial_send_queue", None)
+        if sender is None:
+            sender = SerialSendQueue(self)
+            self._serial_send_queue = sender
+        return sender.submit(text, line_ending)
 
     # ──────────────────────────────────────────────────────────
     # JS-RPC: COMPILATION PIPELINE (PlatformIO)
@@ -3860,6 +3882,42 @@ class MCUWebBackendAPI:
         self._op_session_id = getattr(self, "_op_session_id", 0) + 1
         self._stop_requested = False
         self._upload_connection_pending = False
+        self._operation_connection_loss = ""
+        self._operation_serial_guard = None
+
+    def _serial_handoff_pending(self, port: str) -> bool:
+        """Cheap GUI/monitor check; never enumerate hardware or read manifests."""
+        guard = getattr(self, "_operation_serial_guard", None)
+        return bool(guard is not None and guard.defer_selection_clear(port))
+
+    def _check_write_connection(self, port: str, info: dict) -> None:
+        from main.core.connection_loss import check_write_connection
+        check_write_connection(self, port, info)
+
+    def _iter_hardware_output(self, process, port: str, info: dict,
+                              *, expected_handoff=False):
+        """Read one owned hardware child with confirmed serial-loss handling."""
+        from main.core.connection_loss import SerialConnectionGuard
+        guard = SerialConnectionGuard(self, process, port, info,
+                                      expected_handoff=expected_handoff)
+        try:
+            yield from _iter_process_output(
+                process, lambda: False, lambda: None,
+                lambda seconds: self.emit("console:log", {
+                    "text": f"The programmer has not emitted output for {seconds}s; waiting for the current step.",
+                    "tag": "dim", "newline": True,
+                    "replace_pattern": r"The programmer has not emitted output for \d+s",
+                }), on_poll=guard.poll,
+            )
+            guard.wait()
+        finally:
+            # A read failure is not proof a writer has stopped. Continue its
+            # transport checks until it exits or a genuine loss reaps it.
+            try:
+                if process.poll() is None:
+                    guard.finish()
+            finally:
+                guard.close()
 
     def compile_sketch(self):
         """Run sketch compilation on a background thread."""
@@ -5718,6 +5776,7 @@ class MCUWebBackendAPI:
         esptool_cmd_base = self._get_esptool_cmd()
         board_name = fast_bins.get("board_name") or self.current_board or ""
         board_info = dict(fast_bins.get("board_info") or self._resolve_board_info(board_name) or {})
+        self._check_write_connection(port, board_info)
         chip_name, _bootloader_address = self._esptool_target(
             board_name, board_info
         )
@@ -5966,6 +6025,7 @@ class MCUWebBackendAPI:
             verification_complete_seen = False
             proc = None
             reader_thread = None
+            connection_guard = None
             discard_output = threading.Event()
 
             try:
@@ -5976,13 +6036,15 @@ class MCUWebBackendAPI:
                     return _fail_fast_attempt("Upload stopped by user", _connect_retry_count)
                 attempt_cmd = list(write_cmd)
 
-                creationflags = (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
                 proc = subprocess.Popen(
                     attempt_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, encoding="utf-8", errors="replace",
-                    creationflags=creationflags, env=launch_env,
+                    env=launch_env, **_HOST_RUNTIME.process_options(priority=True, session=True),
                 )
                 self._active_process = proc
+                from main.core.connection_loss import SerialConnectionGuard
+                connection_guard = SerialConnectionGuard(
+                    self, proc, port, board_info, expected_handoff=(reset_mode == "usb-reset"))
                 _start = time.monotonic()
                 output_queue: queue.Queue = queue.Queue(maxsize=128)
 
@@ -6022,6 +6084,7 @@ class MCUWebBackendAPI:
                 # only covers the pre-connection phase.
                 _SILENCE_WATCHDOG_SECS = 30
                 while not reader_done:
+                    connection_guard.poll()
                     try:
                         line = output_queue.get(timeout=0.10)
                     except queue.Empty:
@@ -6371,16 +6434,20 @@ class MCUWebBackendAPI:
                     # write is safe to kill. Drain and await it before unlocking.
                     if proc.poll() is None:
                         if reader_thread is None or not reader_thread.is_alive():
-                            if proc.stdout is not None:
-                                for _unused in iter(lambda: proc.stdout.readline(8192), ""):
-                                    pass
-                        proc.wait()
+                            from main.core.process_drain import finish_with_output_drain
+                            finish_with_output_drain(proc, connection_guard)
+                        elif connection_guard is not None:
+                            connection_guard.finish()
+                        else:
+                            proc.wait()
                     if reader_thread is not None and reader_thread.is_alive():
                         reader_thread.join(timeout=0.5)
                     if proc.stdout is not None:
                         proc.stdout.close()
                     if getattr(self, "_active_process", None) is proc:
                         self._active_process = None
+                if connection_guard is not None:
+                    connection_guard.close()
 
     def _validate_entry_points(self) -> tuple[bool, str]:
         """Validate that setup() and loop() are defined in the sketch files."""
@@ -6660,6 +6727,7 @@ class MCUWebBackendAPI:
         upload_log = None
         upload_started = None
         upload_log_finished = False
+        connection_guard = None
         try:
             owner = port_occupied_owner(monitor_port) if monitor_port else None
             if owner:
@@ -6674,6 +6742,7 @@ class MCUWebBackendAPI:
             port = monitor_port if requires_upload_port(info) else ""
             if info and requires_upload_port(info) and (not port or self.current_port != port):
                 raise RuntimeError("The selected serial upload port disconnected or changed during compilation.")
+            self._check_write_connection(port, info)
             command = list(find_pio_executable() or [])
             if not command:
                 raise RuntimeError("PlatformIO is unavailable. Repair the application runtime.")
@@ -6712,6 +6781,8 @@ class MCUWebBackendAPI:
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
+            from main.core.connection_loss import SerialConnectionGuard
+            connection_guard = SerialConnectionGuard(self, self._active_process, port, info)
 
             def _report_upload_silence(seconds: int) -> None:
                 self.emit("console:log", {
@@ -6731,6 +6802,7 @@ class MCUWebBackendAPI:
                 lambda: bool(self._stop_requested),
                 _stop_upload_if_safe,
                 _report_upload_silence,
+                on_poll=connection_guard.poll,
             ):
                 line_clean = line.rstrip("\r\n")
                 if not line_clean:
@@ -6764,7 +6836,7 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": line_clean, "tag": tag, "newline": True})
             if self._active_process.stdout:
                 self._active_process.stdout.close()
-            code = self._active_process.wait()
+            code = connection_guard.wait()
             if self._stop_requested and not write_started:
                 if upload_log is not None:
                     upload_log.finish(False, time.monotonic() - upload_started, stopped=True)
@@ -6800,12 +6872,15 @@ class MCUWebBackendAPI:
             if upload_log is not None and not upload_log_finished:
                 upload_log.finish(False, time.monotonic() - upload_started if upload_started is not None else 0.0)
             self.emit("console:log", {"text": f"Upload failed: {exc}", "tag": "error", "newline": True})
-            self.emit("notification", {"title": "Upload failed", "message": str(exc), "type": "error"})
+            if not getattr(self, "_operation_connection_loss", ""):
+                self.emit("notification", {"title": "Upload failed", "message": str(exc), "type": "error"})
         finally:
             process = self._active_process
             if process is not None and process.poll() is None:
                 # A read/log failure must not unlock the window during a write.
-                process.wait()
+                connection_guard.finish() if connection_guard is not None else process.wait()
+            if connection_guard is not None:
+                connection_guard.close()
             self._active_process = None
             self.is_busy = False
             self.active_operation = None
@@ -6813,7 +6888,7 @@ class MCUWebBackendAPI:
             self.emit("operation:phase", {"phase": "idle", "is_busy": False})
             self.emit("window:closable", {"closable": True})
             self._unmap_unc_after_build()
-            if monitor_paused and self.current_port == monitor_port:
+            if monitor_paused and self.current_port == monitor_port and not getattr(self, "_operation_connection_loss", ""):
                 self._start_serial_monitor()
 
     def _get_jobs(self) -> int:
@@ -7698,7 +7773,9 @@ class MCUWebBackendAPI:
 
         _MAX_CONNECT_RETRIES = 10
         rc: int | None = None
+        connection_guard = None
         try:
+            self._check_write_connection(port, binfo)
             # ── Fast direct ESP upload check ──────────────────────────────
             fast_bins = None
             if is_esp:
@@ -7880,6 +7957,8 @@ class MCUWebBackendAPI:
                 cwd=str(cache_root),
                 env=launch_env,
             )
+            from main.core.connection_loss import SerialConnectionGuard
+            connection_guard = SerialConnectionGuard(self, self._active_process, port, binfo)
 
             # ── Chip-info capture from esptool output ───────────────
             _chip_info: dict[str, str] = {}
@@ -7977,6 +8056,7 @@ class MCUWebBackendAPI:
                 lambda: bool(self._stop_requested),
                 _stop_cancellable_upload,
                 _report_upload_silence,
+                on_poll=connection_guard.poll,
             ):
                 line_clean = line.rstrip("\r\n")
                 if not line_clean:
@@ -8214,7 +8294,7 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": f"  {line_clean}", "tag": "dim", "newline": True})
 
             self._active_process.stdout.close()
-            rc = self._active_process.wait()
+            rc = connection_guard.wait()
             upload_duration = round(time.time() - upload_start, 2)
 
             if rc == 0:
@@ -8333,6 +8413,12 @@ class MCUWebBackendAPI:
             self._finish_upload_connection_status(stopped=bool(self._stop_requested))
             self.emit("console:log", {"text": f"✖ Upload error: {e}", "tag": "error", "newline": True})
         finally:
+            process = getattr(self, "_active_process", None)
+            if process is not None and process.poll() is None:
+                connection_guard.finish() if connection_guard is not None else process.wait()
+            if connection_guard is not None:
+                connection_guard.close()
+            self._active_process = None
             if rc != 0:
                 self._finish_upload_connection_status(stopped=bool(self._stop_requested))
             try:
@@ -8352,11 +8438,11 @@ class MCUWebBackendAPI:
                 "success": is_success,
             })
             self.emit("window:closable", {"closable": True})
-            if not is_success:
+            if not is_success and not getattr(self, "_operation_connection_loss", ""):
                 # Release DTR/RTS without resetting the board. A partial flash
                 # must not be rebooted automatically after a transport failure.
                 self._release_port_lines(port, pulse_reset=False)
-            if is_success or was_monitoring:
+            if (is_success or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
                 time.sleep(0.5)
                 self._start_serial_monitor()
 
@@ -8633,6 +8719,7 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "", "newline": True})
 
                 if reset_strategy == "avr_bootloader":
+                    self._check_write_connection(port, binfo)
                     pio_path = find_pio_executable()
                     if not pio_path:
                         pio_path = find_pio_executable()
@@ -8668,13 +8755,11 @@ class MCUWebBackendAPI:
                         encoding="utf-8",
                         errors="replace",
                         env=launch_env,
-                        creationflags=(
-                            (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
-                        ),
+                        **_HOST_RUNTIME.process_options(priority=True, session=True),
                     )
                     self._active_process = proc
                     if proc.stdout:
-                        for line in iter(proc.stdout.readline, ""):
+                        for line in self._iter_hardware_output(proc, port, binfo):
                             stripped = line.rstrip()
                             if stripped:
                                 tag = "error" if "error" in stripped.lower() or "failed" in stripped.lower() else "normal"
@@ -8692,6 +8777,7 @@ class MCUWebBackendAPI:
                     return
 
                 elif reset_strategy == "esp8266_erase":
+                    self._check_write_connection(port, binfo)
                     self._emit_boot_connection_progress(0)
                     self.emit("console:progress", {"action": "Erasing flash"})
                     erase_cmd = self._get_esptool_cmd() + [
@@ -8718,15 +8804,13 @@ class MCUWebBackendAPI:
                         encoding="utf-8",
                         errors="replace",
                         env=launch_env,
-                        creationflags=(
-                            (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
-                        ),
+                        **_HOST_RUNTIME.process_options(priority=True, session=True),
                     )
                     self._active_process = proc
                     connected = False
                     connection_step = 0
                     if proc.stdout:
-                        for raw in iter(proc.stdout.readline, ""):
+                        for raw in self._iter_hardware_output(proc, port, binfo):
                             line = raw.strip()
                             if not line:
                                 continue
@@ -8786,6 +8870,7 @@ class MCUWebBackendAPI:
                     target_mcu, _ = self._esptool_target(board_name, binfo)
                     target_mcu = target_mcu or "esp32"
                     baud_rate = getattr(self, "upload_speed", "460800") or "460800"
+                    self._check_write_connection(port, binfo)
                     erase_cmd = self._get_esptool_cmd() + [
                         "--chip", target_mcu,
                         "--port", port,
@@ -8811,9 +8896,7 @@ class MCUWebBackendAPI:
                         encoding="utf-8",
                         errors="replace",
                         env=launch_env,
-                        creationflags=(
-                            (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
-                        ),
+                        **_HOST_RUNTIME.process_options(priority=True, session=True),
                     )
                     self._active_process = proc
 
@@ -8853,7 +8936,7 @@ class MCUWebBackendAPI:
                             self.emit("console:log", {"text": f"  {line}", "tag": "info", "newline": True})
 
                     if proc.stdout:
-                        for raw_line in iter(proc.stdout.readline, ""):
+                        for raw_line in self._iter_hardware_output(proc, port, binfo, expected_handoff=is_native):
                             if self._stop_requested:
                                 try:
                                     proc.kill()
@@ -8921,7 +9004,7 @@ class MCUWebBackendAPI:
                 })
                 self.emit("window:closable", {"closable": True})
                 self.emit("console:progress", {"action": "Completed" if hard_reset_success else "Failed"})
-                if hard_reset_success or was_monitoring:
+                if (hard_reset_success or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
                     time.sleep(0.5)
                     if not self.is_busy and self.current_board == board_name and self.current_port == port:
                         self._start_serial_monitor()
@@ -9239,6 +9322,7 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": f"  Executing soft reset upload on {target_label}...", "tag": "info", "newline": True})
 
                     while True:
+                        self._check_write_connection(port, binfo)
                         cmd = pio_cmd + [
                             "run", "-e", "mcu_flash", "-t", "upload",
                             "-j", str(jobs),
@@ -9252,12 +9336,12 @@ class MCUWebBackendAPI:
                             text=True,
                             cwd=str(project_dir),
                             env=launch_env,
-                            creationflags=(subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
+                            **_HOST_RUNTIME.process_options(priority=True, session=True)
                         )
                         self._active_process = proc
                         output_lines = []
                         if proc.stdout:
-                            for line in iter(proc.stdout.readline, ""):
+                            for line in self._iter_hardware_output(proc, port if needs_port else "", binfo):
                                 l = line.rstrip("\r\n")
                                 if not l:
                                     continue
@@ -9349,7 +9433,7 @@ class MCUWebBackendAPI:
                 })
                 self.emit("window:closable", {"closable": True})
                 self.emit("console:progress", {"action": "Completed" if ok else "Failed"})
-                if ok or was_monitoring:
+                if (ok or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
                     time.sleep(0.5)
                     if not self.is_busy and self.current_board == board_name and port and self.current_port == port:
                         self._start_serial_monitor()

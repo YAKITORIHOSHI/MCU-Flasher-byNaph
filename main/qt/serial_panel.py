@@ -1147,8 +1147,8 @@ class SerialPanel(QWidget):
             return
         idx = self.line_ending_combo.currentIndex()
         ending_key = _LINE_ENDINGS[idx][1] if idx < len(_LINE_ENDINGS) else "both"
-        self._backend.serial_send(text, ending_key)
-        self.input_field.clear()
+        if self._backend.serial_send(text, ending_key):
+            self.input_field.clear()
 
     def _on_auto_clear_changed(self, state: int) -> None:
         is_checked = self.cb_auto_clear.isChecked()

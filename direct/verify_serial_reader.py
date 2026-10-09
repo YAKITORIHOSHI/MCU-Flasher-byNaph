@@ -160,6 +160,12 @@ class DecoderChecks(unittest.TestCase):
 
 
 class ReaderChecks(unittest.TestCase):
+    def test_serial_write_timeout_is_finite(self):
+        port = FakePort()
+        api, _events = backend_fixture(port)
+        api._start_serial_monitor()
+        self.assertEqual(port.write_timeout, 1.0)
+
     def tearDown(self):
         while ACTIVE_BACKENDS:
             api = ACTIVE_BACKENDS.pop()

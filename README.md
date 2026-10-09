@@ -208,18 +208,47 @@ Compiler concurrency also respects physical core count when the OS reports it.
 ### Startup and resource limits
 
 All application dependency downloads belong to bootstrap. **Offline mode** in
-Settings is disabled by default. Online setup prepares the local application
-runtime and SCons. Ubuntu also prepares the configured common Arduino board
-packs, because it needs native platform definitions and compilers. Use Boards &
+Settings is disabled by default. Windows and Ubuntu setup prepare the local
+application runtime, SCons and the configured common Arduino board packs.
+Startup checks the host's board-package certificate in either mode; older
+SCons-only installations enter Bootstrap on their next launch. Use Boards &
 Libraries Manager to prepare additional exact targets.
 Compile, Upload and Reset always use installed packages and never run installers.
+
+Connection loss affects only work that needs that connection. Ordinary Compile
+continues when a USB device is unplugged. Upload and Reset report a confirmed
+serial disconnect, stop their owned tool process and finish as failed; they never
+repeat a hardware write or reset automatically. Declared bootloader port changes
+receive a bounded handoff interval, and programmers that do not use serial are
+unaffected. The workspace stays open with its editor buffers and logs available.
+Closing during compilation or upload preparation requests cancellation and waits
+for the worker and child process to exit before shutting down. A newer operation,
+active write or slow cancellation keeps the window open.
+
+Serial Send runs in the background with a bounded queue and driver timeout.
+Rejected commands remain in the input field. A failed or partial send reports
+that delivery may be incomplete, discards queued commands for that connection,
+and never retries them. Commands queued for an earlier connection cannot follow
+you to another port or baud rate.
+
+Board and library downloads stop after a bounded connection stall and preserve
+their partial files. Select Download again when the connection returns to
+resume a verified checkpoint. Interrupted transfers preserve installed packages
+and cannot report readiness or start preparation.
+
+Bootstrap board-package downloads also use bounded network waits. Quiet local
+builds and extraction may continue normally. Closing Setup stops its owned
+preparation children before releasing package storage, and cannot mark setup
+ready or open the workspace afterward. Delayed termination keeps Bootstrap
+alive until its writer processes have exited.
+
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
 can consume many gigabytes and substantial time. Close other project windows
 before changing modes. Disabling confirms removal of app-owned offline records
 and retained archives, while preserving shared toolchains, projects and recovery
 history. Failed saves or restart handoffs leave the workspace open.
 
-For offline mode, the package plan in
+In either mode, the package plan in
 [direct/offline-packages.json](direct/offline-packages.json) prepares AVR,
 ESP32 and ESP8266 with Arduino, including their required package variants and
 optional upload/debug tools. Add platform specifications for megaAVR, SAM/SAMD,
@@ -228,8 +257,8 @@ preparation to those declared frameworks; omit it to prepare every framework
 declared by the configured platforms. Bootstrap checks each distinct builder
 environment before recording local readiness. Readiness certifies the configured
 plan; installed boards outside that plan may need further preparation.
-Incomplete offline preparation stops launch; a deleted required package needs
-bootstrap repair. An offline store must be prepared again when its plan changes.
+Incomplete package preparation stops launch; a deleted required package needs
+bootstrap repair. The store must be prepared again when its plan changes.
 Bootstrap also audits every visible Arduino declaration in the discovered board
 sources and writes the complete `.mcu-bootstrap-board-coverage.json` report in
 the host's package store. Its summary distinguishes prepared exact targets,
@@ -592,6 +621,17 @@ Ubuntu's Serial port list hides unidentified `N/A` entries. Available devices us
 their description, product/manufacturer details or hardware ID; discovery stays
 passive and handles refresh and hotplug through the same filtered list.
 
+Windows Bootstrap prepares the configured AVR, ESP32 and ESP8266 Arduino packs
+in Online Mode too. Relaunching a SCons-only installation automatically enters
+setup; `direct/windows/run.vbs --repair` also prepares missing board definitions
+and tools. Certified packages are reused, and the saved Online/Offline Mode is
+preserved. Windows packages remain in this copy's project-local store; Ubuntu
+uses its separate native store. Windows setup and build refresh replace
+inherited package, platform, cache, temporary and interpreter paths with
+the Windows store. Ubuntu clears copied Windows resource hints and uses
+its native runtime and toolchains. Readiness certificates are bound to
+the host and architecture.
+
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only
 installations enter Bootstrap automatically on their next launch. `--repair`
@@ -634,7 +674,7 @@ Setup starts at 70% of the active monitor's width and height. Qt logical sizing,
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
 4. **Pre-Built Toolchain Seeding**: Seeds the pre-built PlatformIO core (~1.7GB fast download with resume & SHA-256 verification) and Arduino CLI binaries.
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
-6. **Package Preparation**: Online mode verifies the runtime and local editor/terminal assets. Explicit offline mode prepares the configured framework, uploader/debugger and library plan, then records readiness only after every required check succeeds.
+6. **Package Preparation**: Both modes verify the runtime and local editor/terminal assets and prepare the configured framework, uploader/debugger and library plan. Readiness is recorded only after every required check succeeds; Offline Mode additionally disables workspace networking.
 7. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition. Direct GUI entry points require bootstrap readiness and never run installers.
 
 > [!IMPORTANT]
@@ -1295,6 +1335,7 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_controls.py
 & src/_python/python.exe -B direct/verify_board_search.py --render-dir temp/audit/board-search --benchmark temp/audit/board-search/timing.json
 & src/_python/python.exe -B direct/verify_target_resolution.py
+& src/_python/python.exe -B direct/verify_windows_board_setup.py
 & src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
 & src/_python/python.exe -B direct/verify_package_jobs.py

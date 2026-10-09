@@ -36,16 +36,16 @@ def transition_pending(config=None):
 
 
 def startup_ready(core, plan=None, *, config=None, ignore_pending=False):
-    """Use complete certification only for an explicitly enabled offline mode."""
+    """Require Windows board packs even when workspace networking is enabled."""
     data = _configuration() if config is None else config
     if not ignore_pending and transition_pending(data):
         return False
     from src.modules.offline_bootstrap import ASSETS, ready
-    if offline_enabled(data):
+    if sys.platform == "win32" or offline_enabled(data):
         return ready(core, plan)
     core = Path(core)
-    # A normal online workspace still uses installed-only build tools. Missing
-    # boards are prepared through the explicit Downloader/Bootstrap flow.
+    # Ubuntu's native launcher separately checks its configured board packs.
+    # Keep this lower-level online runtime check for its setup/transition flow.
     return all((ROOT / name).is_file() for name in ASSETS) and all(
         (core / name).is_file() for name in (
             "packages/tool-scons/package.json", "packages/tool-scons/.piopm",
