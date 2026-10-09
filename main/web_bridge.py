@@ -5091,13 +5091,19 @@ class MCUWebBackendAPI:
 
         return {}
 
-    def _check_target(self, action: str, *, sketch: bool = False) -> bool:
+    def _check_target(self, action: str, *, sketch: bool = False,
+                      log_event: str = "console:log") -> bool:
         from main.core.target_profile import target_problem
-        has_ino = bool(sketch and self.sketch_dir_path and next(self.sketch_dir_path.glob("*.ino"), None))
-        problem = target_problem(self._resolve_board_info(), arduino_sketch=has_ino)
+        no_board = not getattr(self, "current_board", "")
+        if no_board:
+            problem = "Select a board in Controls first."
+        else:
+            has_ino = bool(sketch and self.sketch_dir_path and next(self.sketch_dir_path.glob("*.ino"), None))
+            problem = target_problem(self._resolve_board_info(), arduino_sketch=has_ino)
         if not problem:
             return True
-        self.emit("console:log", {"text": f"{action} unavailable: {problem}", "tag": "error", "newline": True})
+        self.emit(log_event, {"text": f"{action} unavailable: {problem}",
+                              "tag": "warning" if no_board else "error", "newline": True})
         self.emit("notification", {"title": f"{action} unavailable", "message": problem, "type": "warning"})
         return False
 
@@ -8458,7 +8464,7 @@ class MCUWebBackendAPI:
         if self.is_busy and self.active_operation != "compile":
             self.emit("serial:log", {"text": "--- ⚠ Cannot reset MCU: Operation currently in progress. ---", "tag": "warning", "newline": True})
             return
-        if not self._check_target("Reset"):
+        if not self._check_target("Reset", log_event="serial:log"):
             return
         if str(self._resolve_board_info().get("platform", "")).lower() not in {
             "atmelavr", "espressif32", "espressif8266", "ststm32", "raspberrypi", "ch32v", "samd",

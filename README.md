@@ -942,6 +942,9 @@ MCU Flasher by Naph/
 
 ### 5. Live Serial Monitor & Post-Upload Auto-Reset
 - View real-time MCU serial output in the bottom **Serial Monitor** tab.
+- Serial Monitor **Reset** reports missing or unverified board selections in
+  the Serial Monitor. If no board is selected, it asks you to select one in
+  Controls and preserves serial history without resetting the device.
 - **Upload & Reset Parity**:
   - Upon a successful upload, hard reset, or soft reset, the application automatically switches the bottom view to the **Serial Monitor** after a 500ms grace delay.
   - After upload completion, MCU Flasher requests a silent DTR/RTS reset pulse
