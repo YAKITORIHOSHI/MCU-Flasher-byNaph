@@ -94,8 +94,8 @@ class FallbackChecks(unittest.TestCase):
 
     def test_missing_cli_guidance_matches_native_host(self):
         with patch.object(support.sys, "platform", "linux"):
-            self.assertIn("Install Arduino CLI for Linux", support._missing_cli_message())
-            self.assertNotIn("Bootstrap", support._missing_cli_message())
+            self.assertIn("Ubuntu Bootstrap", support._missing_cli_message())
+            self.assertIn("bash direct/ubuntu/run.sh --repair", support._missing_cli_message())
         with patch.object(support.sys, "platform", "win32"):
             self.assertIn("Repair Bootstrap", support._missing_cli_message())
 

@@ -546,7 +546,7 @@ class MCUMainWindow(QMainWindow):
 
         # ── AI side panel (hidden by default) ─────────────────────────────────
         if sys.platform.startswith("linux"):
-            from main.qt.posix_terminal_panel import PosixAIPanel as AIPanel
+            from main.qt.posix_ai_panel import PosixAIPanel as AIPanel
         else:
             from main.qt.ai_panel import AIPanel
         self._ai_panel = AIPanel(self._backend, self)
@@ -715,6 +715,17 @@ class MCUMainWindow(QMainWindow):
         self._find_all_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self,
                                           activated=self._editor_panel.show_project_search)
         self._project_shortcut = QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_project)
+        if sys.platform.startswith("linux"):
+            # Native coding CLIs own these keys while their Qt view is focused,
+            # just as Windows' embedded foreign assistant receives them.
+            self._native_cli_shortcuts = self.findChildren(QShortcut)
+            QApplication.instance().focusChanged.connect(self._update_native_cli_shortcuts)
+
+    def _update_native_cli_shortcuts(self, *_args):
+        focused = any(getattr(panel, "has_input_focus", lambda: False)()
+                      for panel in (self._ai_panel, self._terminal_panel))
+        for shortcut in self._native_cli_shortcuts:
+            shortcut.setEnabled(not focused)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Signal connections
@@ -1761,9 +1772,15 @@ class MCUMainWindow(QMainWindow):
             app = QApplication.instance()
             top_levels = [w for w in app.topLevelWidgets() if isinstance(w, MCUMainWindow) and w is not self] if app else []
             if not top_levels:
-                exit_trigger = Path(_project_root) / "index_json" / ".dm_force_exit"
-                exit_trigger.parent.mkdir(parents=True, exist_ok=True)
-                exit_trigger.write_text("exit", encoding="utf-8")
+                if sys.platform.startswith("linux"):
+                    from main.core.config import clean_instance_config
+                    from src.modules.ubuntu_download_manager import quit_if_last_workspace
+                    clean_instance_config()
+                    quit_if_last_workspace(_project_root, os.getpid())
+                else:
+                    exit_trigger = Path(_project_root) / "index_json" / ".dm_force_exit"
+                    exit_trigger.parent.mkdir(parents=True, exist_ok=True)
+                    exit_trigger.write_text("exit", encoding="utf-8")
         except Exception:
             pass
 

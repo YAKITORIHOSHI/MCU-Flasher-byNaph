@@ -138,14 +138,10 @@ class PosixTerminalStateChecks(unittest.TestCase):
         self.assert_empty(panel)
         self.assertIn("Install Bash", panel._label.text())
 
-    def test_assistant_reveal_behavior_is_preserved(self):
-        panel = self.panel(terminal.PosixAIPanel)
-        self.assert_empty(panel)
-        panel._on_tab_revealed()
-        self.assertEqual(panel._tabs.count(), 1)
-        self.assertEqual(next(iter(panel._sessions.values()))[0].argv, ["/usr/bin/opencode"])
-        panel._on_tab_revealed()
-        self.assertEqual(panel._tabs.count(), 1)
+    def test_assistant_compatibility_import_uses_the_dedicated_panel(self):
+        from main.qt.posix_ai_panel import PosixAIPanel
+        self.assertIs(terminal.PosixAIPanel, PosixAIPanel)
+        self.assertFalse(issubclass(PosixAIPanel, terminal.PosixTerminalPanel))
 
 
 if __name__ == "__main__":

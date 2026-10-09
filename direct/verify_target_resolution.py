@@ -34,6 +34,7 @@ from main.core import board_catalog as catalog_module
 from main import web_bridge
 from main.qt.signals import MCUSignals
 from main.qt.toolbar import PrimaryToolbar
+from src.modules import package_jobs
 
 APP = QApplication.instance() or QApplication([])
 NAME = "ESP32 Dev Module"
@@ -69,6 +70,10 @@ class TargetResolutionChecks(unittest.TestCase):
         root = ROOT / "temp/audit/target-resolution"
         root.mkdir(parents=True, exist_ok=True)
         self.sandbox = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=root)))
+        self.stack.enter_context(patch.dict(os.environ, {
+            "MCU_PACKAGE_EVENTS_ROOT": str(self.sandbox / "package-events"),
+        }))
+        self.stack.enter_context(patch.object(package_jobs, "package_core_directory", return_value=self.sandbox / "core"))
         (self.sandbox / "probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
         self.catalog = catalog_module.BoardCatalog({NAME: stale_selection()})
         self.stack.enter_context(patch.object(catalog_module, "SUPPORTED_BOARDS", self.catalog))
@@ -385,7 +390,8 @@ class TargetResolutionChecks(unittest.TestCase):
         self.api.compile_sketch()
         self.wait_idle()
         self.api._compile_worker.assert_not_called()
-        self.assertTrue(any("Offline" in str(data) for _, data in self.events))
+        expected_kind = "Native" if sys.platform.startswith("linux") else "Offline"
+        self.assertTrue(any(f"{expected_kind} board definition unavailable" in str(data) for _, data in self.events))
         self.registry.assert_not_called()
         self.assertIsNone(self.api.active_operation)
 
@@ -535,12 +541,14 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         return original_popen(*args, **kwargs)
     with ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, {
+            "MCU_PACKAGE_EVENTS_ROOT": str(sandbox / "package-events"),
             "PLATFORMIO_CORE_DIR": str(core), "PLATFORMIO_PACKAGES_DIR": str(core / "packages"),
             "PLATFORMIO_PLATFORMS_DIR": str(core / "platforms"), "PLATFORMIO_GLOBALLIB_DIR": str(core / "lib"),
             "PLATFORMIO_CACHE_DIR": str(core / ".cache"), "TMPDIR": str(core / ".tmp"),
             "PLATFORMIO_BUILD_CACHE_DIR": str(core / ".cache/build"),
             "TMP": str(core / ".tmp"), "TEMP": str(core / ".tmp"),
         }))
+        stack.enter_context(patch.object(package_jobs, "package_core_directory", return_value=core))
         for owner, name, value in ((catalog_module, "SUPPORTED_BOARDS", isolated_catalog),
                                   (web_bridge, "SUPPORTED_BOARDS", isolated_catalog),
                                   (web_bridge, "_project_root", sandbox)):
@@ -599,6 +607,27 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         print(f"Application Compile {display_name} -> convert .ino -> PlatformIO -> {artifact}: OK", flush=True)
 
 
+def compile_native_esp32(core):
+    """Compile an explicitly prepared native fixture; never install or upload."""
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("The native ESP32 fixture probe requires Ubuntu.")
+    core = Path(core).resolve()
+    if core.name != "core" or not core.is_relative_to((ROOT / "temp").resolve()):
+        raise RuntimeError("Native ESP32 verification requires an isolated temp/ fixture named core.")
+    manifest = core / "platforms/espressif32/boards/esp32dev.json"
+    if not manifest.is_file():
+        raise RuntimeError(f"Native ESP32 board definition is absent: {manifest}. The probe will not install it.")
+    needed = ["framework-arduinoespressif32", "toolchain-xtensa-esp32", "tool-esptoolpy", "tool-scons"]
+    for name in needed:
+        if not (core / "packages" / name / "package.json").is_file():
+            raise RuntimeError(f"Native ESP32 package {name} is absent. The probe will not install it.")
+    compiler = core / "packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++"
+    with compiler.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            raise RuntimeError("The fixture requires a native ELF compiler; Windows packages cannot be used on Ubuntu.")
+    verify_built_pipeline(core.parent)
+
+
 def compile_installed_avr(store=None):
     """Prove three non-ESP targets with copied host-native packages and Compile clicks."""
     if store is None:
@@ -648,12 +677,16 @@ def compile_installed_avr(store=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--compile-installed-esp32", action="store_true")
+    parser.add_argument("--compile-native-esp32", type=Path,
+                        help="Compile ESP32 through the actual Qt button using an explicitly prepared temp/ fixture core")
     parser.add_argument("--compile-installed-avr", action="store_true")
     parser.add_argument("--avr-core", type=Path, help="Explicit native fixture store for the AVR probe (read-only)")
     parser.add_argument("--verify-built-pipeline", type=Path)
     args, remaining = parser.parse_known_args()
     if args.compile_installed_esp32:
         compile_installed_esp32()
+    elif args.compile_native_esp32:
+        compile_native_esp32(args.compile_native_esp32)
     elif args.compile_installed_avr:
         compile_installed_avr(args.avr_core)
     elif args.verify_built_pipeline:

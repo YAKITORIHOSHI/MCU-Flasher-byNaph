@@ -9,6 +9,49 @@ permissions:
   contents: read
 
 jobs:
+  ubuntu-first-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ubuntu first-launch prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep xclip wl-clipboard
+          sudo apt-get install -y xvfb python3-venv python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
+          sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
+          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
+            sudo apt-get install -y libasound2t64 libglib2.0-0t64
+          else
+            sudo apt-get install -y libasound2 libglib2.0-0
+          fi
+      - name: Empty native runtime and full default board store
+        run: |
+          bash direct/ubuntu/build_launcher.sh
+          # Real installers run only in the disposable application copy.
+          # CPU admission is overridden only in that copy for smaller runners.
+          xvfb-run -a /usr/bin/python3 -B direct/verify_ubuntu_first_run.py --execute --allow-small-runner --timeout 2400
+      - name: Ubuntu first-launch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-launch-${{ matrix.os }}
+          path: |
+            temp/audit/ubuntu-first-run/*/*.json
+            temp/audit/ubuntu-first-run/*/*.log
+            temp/audit/ubuntu-first-run/*/*.png
+            temp/audit/ubuntu-first-run/*/runtime-captures/*.png
+            temp/audit/ubuntu-first-run/*/app/logs/offline-builders-*/*.log
+            temp/audit/ubuntu-first-run/*/app/temp/audit/first-compile/application-compile.log
+          if-no-files-found: ignore
   runtime:
     strategy:
       fail-fast: false
@@ -35,17 +78,22 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb python3-tk libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
+          sudo apt-get install -y ripgrep xclip wl-clipboard
+          sudo apt-get install -y xvfb python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
+          sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
           if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
-            sudo apt-get install -y libasound2t64
+            sudo apt-get install -y libasound2t64 libglib2.0-0t64
           else
-            sudo apt-get install -y libasound2
+            sudo apt-get install -y libasound2 libglib2.0-0
           fi
       - name: Linux runtime and verification
         if: runner.os == 'Linux'
         run: |
           bash -n direct/ubuntu/run.sh
+          bash -n direct/ubuntu/build_launcher.sh
           bash -n direct/runThisOnUbuntu.sh
+          bash direct/ubuntu/build_launcher.sh
+          ./MCU_Flasher --help
           # Verification may run on a runner below the desktop's CPU minimum.
           python -m venv .venv-linux
           .venv-linux/bin/python -m pip install -r direct/ubuntu/requirements.txt
@@ -63,6 +111,21 @@ jobs:
           print('Native Qt X11 plugin dependencies are available')
           PY
           .venv-linux/bin/python -B direct/verify_platforms.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_system_setup.py
+          .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_runtime.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_arduino_cli.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_opencode_setup.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_download_manager.py
+          .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_resets.py
+          .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_pty_lifecycle.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_opencode.py
+          .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_ai_panel.py
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_ai_panel.py --native-renderer
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_ai_panel.py --workspace-renderer
+          .venv-linux/bin/python -B direct/verify_ubuntu_ports.py
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_event_filters.py
           .venv-linux/bin/python -B direct/verify_offline.py
           .venv-linux/bin/python -B direct/verify_target_resolution.py
           .venv-linux/bin/python -B direct/verify_board_families.py
@@ -78,8 +141,10 @@ jobs:
           .venv-linux/bin/python -B direct/verify_catalog_io.py
           .venv-linux/bin/python -B direct/verify_upload_workers.py
           .venv-linux/bin/python -B direct/verify_build_log_routing.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_logging.py
           .venv-linux/bin/python -B direct/verify_serial_reader.py
-          .venv-linux/bin/python -B direct/verify_serial_view.py
+          # Clipboard ownership needs a native platform through process exit.
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_serial_view.py
           .venv-linux/bin/python -B direct/verify_serial_wrap.py
           .venv-linux/bin/python -B direct/verify_serial_delivery.py
           node direct/verify_editor_preferences.js
@@ -112,6 +177,27 @@ jobs:
           .venv-linux/bin/python -B -m platformio run -d temp/audit/ci-native-avr-project -j 2
           .venv-linux/bin/python -B -m platformio pkg install -g -t platformio/tool-avrdude
           .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-installed-avr --avr-core temp/audit/ci-native-avr-core
+      - name: Native Ubuntu ESP32 Compile-button integration
+        if: runner.os == 'Linux'
+        env:
+          PLATFORMIO_CORE_DIR: ${{ github.workspace }}/temp/audit/ci-native-esp32/core
+          PLATFORMIO_PACKAGES_DIR: ${{ github.workspace }}/temp/audit/ci-native-esp32/core/packages
+          PLATFORMIO_PLATFORMS_DIR: ${{ github.workspace }}/temp/audit/ci-native-esp32/core/platforms
+          PLATFORMIO_GLOBALLIB_DIR: ${{ github.workspace }}/temp/audit/ci-native-esp32/core/lib
+          PLATFORMIO_CACHE_DIR: ${{ github.workspace }}/temp/audit/ci-native-esp32/core/.cache
+          MCU_PACKAGE_EVENTS_ROOT: ${{ github.workspace }}/temp/audit/ci-native-esp32/events
+          PLATFORMIO_NO_TELEMETRY: '1'
+          PLATFORMIO_DISABLE_UPGRADE_CHECK: '1'
+        run: |
+          .venv-linux/bin/python - <<'PY'
+          from pathlib import Path
+          project = Path('temp/audit/ci-native-esp32/project')
+          (project / 'src').mkdir(parents=True, exist_ok=True)
+          (project / 'platformio.ini').write_text('[env:mcu_env]\nplatform = platformio/espressif32\nboard = esp32dev\nframework = arduino\n')
+          (project / 'src/main.cpp').write_text('#include <Arduino.h>\nvoid setup() {}\nvoid loop() {}\n')
+          PY
+          .venv-linux/bin/python -B -m platformio pkg install -d temp/audit/ci-native-esp32/project
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-native-esp32 temp/audit/ci-native-esp32/core
       - name: Windows runtime and verification
         if: runner.os == 'Windows'
         shell: pwsh

@@ -15,6 +15,7 @@ Features:
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime
 from itertools import chain
 from collections import deque
@@ -614,7 +615,10 @@ class SerialOutputView(QPlainTextEdit):
         self._paused_dirty = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
-        super().clear()
+        if sys.platform.startswith("linux"):
+            self._follow.clear_document(super().clear)
+        else:
+            super().clear()
         self._follow.reset()
 
 

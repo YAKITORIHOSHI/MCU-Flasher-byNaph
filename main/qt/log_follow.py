@@ -1,10 +1,11 @@
 """Follow live output without interrupting the reader's scroll or selection."""
 from contextlib import contextmanager
 from functools import wraps
+import sys
 
 from PySide6.QtCore import QObject, QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QPlainTextEdit, QApplication
+from PySide6.QtWidgets import QPlainTextEdit, QApplication, QWidget
 from shiboken6 import isValid
 
 
@@ -32,6 +33,11 @@ class LogFollow(QObject):
         self._plain = isinstance(view, QPlainTextEdit)
         self._pending_scroll = None
         self._resize_state = None
+        if sys.platform.startswith("linux"):
+            self._retired_scroll_states = {}
+            self._retire_scroll_timer = QTimer(self)
+            self._retire_scroll_timer.setSingleShot(True)
+            self._retire_scroll_timer.timeout.connect(self._retired_scroll_states.clear)
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._settle_scroll)
@@ -52,8 +58,48 @@ class LogFollow(QObject):
         # A drag can finish outside the scrollbar or viewport. Observe release
         # at the application boundary so a lost grab cannot leave Auto anchored.
         app = QApplication.instance()
-        if app is not None:
+        if sys.platform.startswith("linux"):
+            # Application filters force Shiboken to wrap every Qt-internal
+            # QObject, including objects still under construction. Native
+            # Linux WebEngine can reenter that wrapper conversion and crash.
+            # Observe only already-constructed widgets during a mouse hold.
+            self._release_widgets = {}
+            self._release_scan_timer = QTimer(self)
+            self._release_scan_timer.setSingleShot(True)
+            self._release_scan_timer.timeout.connect(self._watch_release_widgets)
+        elif app is not None:
             app.installEventFilter(self)
+
+    def _watch_release_widgets(self):
+        if not sys.platform.startswith("linux"):
+            return
+        if not self.scrollbar_held or not isValid(self.view):
+            return
+        app = QApplication.instance()
+        windows = app.topLevelWidgets() if app is not None else [self.view.window()]
+        widgets = [widget for window in windows
+                   for widget in (window, *window.findChildren(QWidget))]
+        existing = {id(self.view), id(self.view.viewport()), id(self._bar)}
+        current = {id(widget) for widget in widgets}
+        for key, widget in tuple(self._release_widgets.items()):
+            if not isValid(widget) or key not in current:
+                if isValid(widget):
+                    widget.removeEventFilter(self)
+                self._release_widgets.pop(key, None)
+        for widget in widgets:
+            if id(widget) in existing or not isValid(widget):
+                continue
+            existing.add(id(widget))
+            if id(widget) not in self._release_widgets:
+                widget.installEventFilter(self)
+                self._release_widgets[id(widget)] = widget
+
+    def _unwatch_release_widgets(self):
+        self._release_scan_timer.stop()
+        for widget in tuple(self._release_widgets.values()):
+            if isValid(widget):
+                widget.removeEventFilter(self)
+        self._release_widgets.clear()
 
     def _at_bottom(self):
         bar = self.view.verticalScrollBar()
@@ -74,6 +120,9 @@ class LogFollow(QObject):
         self._cancel_settle()
         self._resume_timer.stop()
         self.scrollbar_held = True
+        if sys.platform.startswith("linux"):
+            # Do not traverse native widget trees inside an input event filter.
+            self._release_scan_timer.start(0)
 
     def _selection_changed(self):
         if not self._depth:
@@ -84,8 +133,22 @@ class LogFollow(QObject):
 
     def _cancel_settle(self):
         self._settle_timer.stop()
+        self._retire_scroll_states(self._pending_scroll, self._resize_state)
         self._pending_scroll = None
         self._resize_state = None
+
+    def _retire_scroll_states(self, *states):
+        if not sys.platform.startswith("linux"):
+            return
+        # Qt can emit scrollbar signals while finishEdit() still iterates its
+        # QTextCursorPrivate list. Dropping a captured cursor in that signal
+        # frees an entry the native iterator will use next. Retire references
+        # between events, while clearing the logical follow state immediately.
+        for state in states:
+            if state is not None:
+                self._retired_scroll_states[id(state)] = state
+        if self._retired_scroll_states and not self._retire_scroll_timer.isActive():
+            self._retire_scroll_timer.start(0)
 
     def _on_range_changed(self, _minimum, _maximum):
         # QPlainTextEdit can finish wrapping after the output transaction.
@@ -110,6 +173,8 @@ class LogFollow(QObject):
 
     def _release(self):
         self.scrollbar_held = False
+        if sys.platform.startswith("linux"):
+            self._unwatch_release_widgets()
         # The scrollbar applies its final drag/track position after its event
         # filter and can also emit sliderReleased during that handler.
         self._resume_timer.start(0)
@@ -132,6 +197,7 @@ class LogFollow(QObject):
             try:
                 self._restore_scroll(state)
                 if self._wrapped():
+                    self._retire_scroll_states(self._pending_scroll)
                     self._pending_scroll = state
                     self._settle_timer.start(0)
             finally:
@@ -146,6 +212,10 @@ class LogFollow(QObject):
         if not isValid(self.view):
             return False
         kind = event.type()
+        if (sys.platform.startswith("linux") and self.scrollbar_held
+                and kind in (QEvent.Type.ChildRemoved, QEvent.Type.ChildPolished,
+                             QEvent.Type.ParentChange)):
+            self._release_scan_timer.start(0)
         if (self.scrollbar_held and kind == QEvent.Type.MouseButtonRelease
                 and event.button() == Qt.MouseButton.LeftButton):
             self._release()
@@ -183,6 +253,17 @@ class LogFollow(QObject):
         # Clearing output must not release a scrollbar the reader still holds.
         self.scrollbar_held = self.scrollbar_held or self._bar.isSliderDown()
         self.user_scrolled_up = False
+
+    def clear_document(self, clear):
+        """Keep retained cursors alive until a native document clear finishes."""
+        # Qt emits scrollbar changes while finishEdit still walks its cursor
+        # list. Dropping a pending anchor from that synchronous signal frees a
+        # QTextCursorPrivate underneath the Linux Qt implementation.
+        self._depth += 1
+        try:
+            clear()
+        finally:
+            self._depth -= 1
 
     def _capture(self, rebuild, *, follow_output=True):
         view = self.view
@@ -289,6 +370,7 @@ class LogFollow(QObject):
         if outer:
             # Keep the original character through repeated width changes;
             # recapturing each newly wrapped row would accumulate drift.
+            self._retire_scroll_states(self._resize_state)
             self._resize_state = state if resize else None
         self._depth += 1
         try:
@@ -298,6 +380,7 @@ class LogFollow(QObject):
                 if outer and (resize or rebuild or self._content_revision != state["content_revision"]):
                     self._restore(state)
                     if self._wrapped() and not self.scrollbar_held and not self._bar.isSliderDown():
+                        self._retire_scroll_states(self._pending_scroll)
                         self._pending_scroll = state
                         self._settle_timer.start(0)
                     else:

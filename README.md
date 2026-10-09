@@ -160,9 +160,11 @@ bounded recovery; these recovery paths never replay uploads, erases, resets,
 or commands.
 
 See [Ubuntu and recovery details](direct/UBUNTU.md) and
-[hardware-free verification](direct/verify_runtime.py). Windows regression and
-Qt preview checks pass locally; native Ubuntu CI and hardware flashing remain
-unverified in this workspace.
+[hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04
+runtime, Qt/Monaco, terminal, crash-regression and responsive checks pass locally
+using an isolated Xvfb display. Windows paths retain their existing behavior;
+physical board compilation/upload and the full two-version Ubuntu CI remain
+separate verification requirements.
 
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
@@ -207,7 +209,9 @@ Compiler concurrency also respects physical core count when the OS reports it.
 
 All application dependency downloads belong to bootstrap. **Offline mode** in
 Settings is disabled by default. Online setup prepares the local application
-runtime and SCons; use Boards & Libraries Manager to prepare missing exact targets.
+runtime and SCons. Ubuntu also prepares the configured common Arduino board
+packs, because it needs native platform definitions and compilers. Use Boards &
+Libraries Manager to prepare additional exact targets.
 Compile, Upload and Reset always use installed packages and never run installers.
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
 can consume many gigabytes and substantial time. Close other project windows
@@ -241,8 +245,9 @@ prepared Arduino CLI source target cannot override an ambiguous PIO match. CLI
 is used only as a verified fallback when PlatformIO has no compatible target,
 never after a PlatformIO build failure. A current compatible PlatformIO match
 takes precedence over older Arduino CLI associations.
-Windows Bootstrap prepares Arduino CLI; Ubuntu requires native Arduino CLI on
-PATH for these source targets. Full coverage retains missing-tool/source reasons.
+Windows Bootstrap prepares Arduino CLI. Ubuntu Bootstrap verifies a native
+installation or prepares its own executable in `.ubuntu-tools/` for these source
+targets. Full coverage retains missing-tool/source reasons.
 Exact Arduino core versions and package indexes use separate prepared stores so
 one source version cannot replace another. Bootstrap reuses verified source
 receipts even when folders were renamed, and checks all existing candidates
@@ -430,6 +435,14 @@ Native PlatformIO uploads use the same bounded output reader and scan-noise
 filter as optimized Windows uploads. Dependency graphs and routine build scans
 stay hidden while programmer output, diagnostics and the final result remain
 visible; quiet upload phases receive a throttled waiting status.
+Ubuntu uses the Windows-style **UPLOADING (PlatformIO)** banner, board/port/speed
+row, boxed chip details, image progress bars and **Upload Summary**. Compile
+also shows a **Board Information** box with the exact selected target and the
+platform, hardware and package versions reported by PlatformIO. Chip model,
+features, crystal and MAC come from the existing upload output; logging does
+not open another connection. Native USB/programmer uploads show their declared
+protocol without a serial baud rate. Unknown messages and diagnostics remain
+visible, and failed or cancelled uploads never receive a success summary.
 Stop remains available during scans and connection attempts, then disables
 when programmer output first indicates erase/write. A failed flash is never
 replayed automatically.
@@ -573,7 +586,23 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu:** follow [native setup and compatibility notes](direct/UBUNTU.md). Run `python3 direct/ubuntu/setup.py`, then `bash direct/ubuntu/run.sh`. Repair with `bash direct/ubuntu/run.sh --repair`. Setup and native dependencies live in `direct/ubuntu/`.
+**Ubuntu (64-bit Intel/AMD):** open **`MCU_Flasher`**, the native Linux executable beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+
+Ubuntu's Serial port list hides unidentified `N/A` entries. Available devices use
+their description, product/manufacturer details or hardware ID; discovery stays
+passive and handles refresh and hotplug through the same filtered list.
+
+Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
+platform definitions and native tools in Online Mode. Existing SCons-only
+installations enter Bootstrap automatically on their next launch. `--repair`
+prepares those board packs too, so the repair command can resolve a missing
+ESP32 Dev Module definition. The saved Online/Offline Mode is preserved.
+Ubuntu preparation excludes the unused Windows-only ESP32 menuconfig package
+that otherwise stops first-run setup with a `tool-mconf` registry error.
+The Ubuntu entry point applies the saved Online/Offline Mode before installing
+its process guard, retaining network access for an Online launch.
+
+Rebuild the Linux executable and local shortcut with `bash direct/ubuntu/build_launcher.sh`. Add an Applications menu entry with `./MCU_Flasher --install-shortcut`; regenerate it after moving the application folder. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. The executable is a folder-based launcher, so it requires `main/`, `src/` and `direct/` beside it.
 
 Windows files live in `direct/windows/`. Host toolchain implementations are separate in `main/platforms/windows.py` and `main/platforms/ubuntu.py`; they share the editor, project windows and CPU/RAM budgets. Ubuntu uses its native virtual environment and architecture-specific PlatformIO store. The older launch paths remain compatibility forwarders.
 
@@ -631,6 +660,8 @@ Below is the complete architectural layout of the MCU Flasher ecosystem:
 ```
 MCU Flasher by Naph/
 ├── MCU_Flasher.exe                   # Native Windows launcher (compiled from src/launcher.cs)
+├── MCU_Flasher                       # Native Ubuntu amd64 launcher (src/launcher_ubuntu.c)
+├── MCU Flasher.desktop               # Generated local Ubuntu shortcut (regenerate after moves)
 ├── mcu_flash_gui.py                 # Root application entry point forwarder
 ├── README.md                         # Comprehensive documentation, user guide & architecture
 ├── LICENSE                           # MIT license terms
@@ -652,7 +683,8 @@ MCU Flasher by Naph/
 │   │   ├── console_panel.py         # Colorized build and upload console output with ANSI regex parsing
 │   │   ├── serial_panel.py          # Real-time serial monitor with baud control, send bar & timestamp
 │   │   ├── terminal_panel.py        # Embedded multi-session terminal panel (PowerShell & CMD tabs)
-│   │   ├── posix_terminal_panel.py  # Native Linux PTY terminal and optional OpenCode assistant
+│   │   ├── posix_terminal_panel.py  # Native Linux multi-session Bash terminal
+│   │   ├── posix_ai_panel.py        # Native Linux protected OpenCode assistant session
 │   │   ├── glass.py                 # Static workspace surface and focused tool-tab navigation
 │   │   ├── icons.py                 # Theme-aware vector action icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel with session management
@@ -807,9 +839,10 @@ MCU Flasher by Naph/
 - **Downloaded board support**: **Folder / Extracted** and **Both** automatically start background preparation after checksum verification and extraction. For an existing download or **Archive Only**, select that board version and choose **Prepare board support**. Preparation follows Queued, Downloading, Verifying, Extracting, Preparing and Refreshing stages as applicable. Failure or interruption stays visible and can be retried explicitly; closing the progress card does not cancel the work.
 - **Custom board support**: User-added index packages use their downloaded declarations to find unique exact targets in the installed and freshly queried PlatformIO registry catalogs. Preparation adds the matching platform to the existing plan and verifies the installed definition and exact builder. For a vendor's custom PlatformIO source, select **Custom platform…** to save its registry/version or HTTPS specification and optional Arduino-to-PlatformIO board ID mappings. Settings belong to the requested index, package and architecture; index-authored mappings cannot override them.
 - **Arduino CLI fallback**: Only a successful complete registry check with no exact PlatformIO board identity authorizes fallback. A notice explains that PlatformIO has no support for that exact board yet. The separate preparation worker installs the exact declared Arduino core/version, checks its FQBN and compiler, and certifies local core/tools. Independent board compile probes run concurrently within the machine's CPU, memory and storage budget; total concurrency is shared between workers and each compiler process. Core inventory validation accepts the supported Arduino CLI JSON layouts while still requiring the exact installed version; a boolean `installed` marker is never treated as a version. Compile and Upload then use the prepared Arduino CLI store with downloads disabled. Network failures, ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. Newly installed PlatformIO support disables the old fallback. Upload uses one explicit write attempt and checks the current board, port, source and firmware bytes before writing.
-  Windows Bootstrap prepares the Arduino CLI executable. Ubuntu requires a
-  native Arduino CLI installed on PATH before preparing fallback board support;
-  missing-tool notices explain this prerequisite.
+  Windows Bootstrap prepares the Arduino CLI executable. Ubuntu Bootstrap
+  verifies an installed native executable or prepares a pinned release in
+  `.ubuntu-tools/` before preparing fallback board support; missing-tool notices
+  direct Ubuntu users to Bootstrap repair.
   Windows Arduino CLI configuration keeps the short app path for launch while
   resolving its package directories to their physical paths, so installed cores
   remain discoverable through the app's junction alias.
@@ -993,8 +1026,8 @@ cleanup remains immediate. Verify these boundaries with
 
 Hardware-free checks for these behaviors are `direct/verify_project_search.py`,
 `direct/verify_ai_changes.py`, `direct/verify_offline_mode.py` and
-`direct/verify_sessions.py`. Native board compilation/upload and Ubuntu execution
-require their own hardware/host verification.
+`direct/verify_sessions.py`. Ubuntu host execution has hardware-free native
+verification; board compilation/upload still requires separate target checks.
 - **Monaco Editor (VS Code Engine)**:
   - Embedded offline via `QWebEngineView` and `QWebChannel` (`src/editor/qwebchannel.js`).
   - 100% offline: zero CDN dependencies, local bundled scripts, web workers, and font assets.
@@ -1019,13 +1052,18 @@ require their own hardware/host verification.
 - **Zero-Session Idle State**: Showing, refreshing, resizing and switching projects never create a session. Closing the last tab restores the empty panel; reopening it stays empty. Theme/font choices are retained without queuing work for an engine that has not been started.
 - **Windows**: PowerShell/CMD use real ConPTY sessions (`pywinpty`) in an isolated child process with WebView2/xterm.js rendering. Each session receives its own window dimensions.
 - Terminal shutdown closes its local HTTP listener as well as stopping the server, releasing the port without an unclosed-socket warning.
-- **Ubuntu**: **New Bash** explicitly starts a native PTY with Qt WebEngine and offline xterm.js. The terminal starts empty and preserves PATH so installed coding CLIs can run.
+- **Ubuntu**: **New Bash** explicitly starts a native PTY with Qt WebEngine and offline xterm.js. The terminal starts empty and preserves PATH so installed coding CLIs can run. PTY creation uses `openpty` and native `Popen` session setup; the separate supervisor acquires its controlling terminal after exec, avoiding Python's deprecated `forkpty` inside the threaded workspace.
 - Capability replies, alternate screens, Ctrl+C, Unicode and bracketed paste pass through the PTY. Output acknowledgements limit queued data when the renderer is slow. Shell failures are visible; sessions and commands are never automatically replayed.
 - Hardware-free lifecycle and layout checks: `direct/verify_terminal_startup.py`, `direct/verify_posix_terminal_state.py` and `direct/verify_responsive.py`. These mock child processes and IPC; `direct/verify_terminal.py` separately checks the Windows PTY/renderer protocol. Native Linux execution requires its own host verification.
 
 ### 9. OpenCode AI Assistant & Pulsating Diff Glow
 - Click the **`🤖 AI Assistant`** button on the toolbar to open the embedded AI side panel.
 - Chat with OpenCode, generate code, or request refactoring.
+- **Ubuntu** uses a dedicated OpenCode TUI with one protected session. **Hide** and reveal retain the same running session; closing the assistant container independently is ignored. The separate **Terminal** tab still starts empty and creates Bash sessions only through **New Bash**.
+- On Ubuntu, `/exit` starts a fresh OpenCode PTY without replaying input. Unexpected exits allow at most two automatic restarts in one minute, then show **Retry OpenCode**. Closing the owning workspace ends the assistant.
+- Ubuntu discovers its certified `.ubuntu-tools/opencode` binary first, then installed native `opencode` commands through the desktop account's PATH or standard user installation directories (`~/.opencode/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`). Runtime discovery does not download or install the CLI; unavailable installations show a retry message.
+- Ubuntu Bootstrap verifies working installed OpenCode and Arduino CLI tools, or prepares checksum-verified native releases in `.ubuntu-tools/`. It also prepares esptool for reset actions, ripgrep for assistant search, and X11/Wayland clipboard utilities. The workspace uses these prepared tools without installing packages.
+- Ubuntu waits for current project instructions and the exact saved hardware-state revision before starting OpenCode. Assistant and Bash views receive their own keyboard shortcuts; prompt-history writes and tool cleanup run off the GUI thread. A native PTY supervisor also stops detached tools when their command exits. A failed assistant renderer shows a fresh-session Retry action without replaying submitted commands.
 - **Live AI Diff & Pulsating Glow**: When the AI modifies files in your sketch, Monaco Editor automatically detects the change, reloads the file, and highlights modifications with pulsating glowing animations:
   - 🟢 **Green Glow** on added / modified lines.
   - 🔴 **Red Glow** on removed lines.
@@ -1035,6 +1073,7 @@ require their own hardware/host verification.
 - **Soft Reset**: Flashes a minimal Arduino routine through a resolved board definition that declares Arduino support. Other frameworks and unresolved targets receive an explanation. This writes firmware and is not a generic reset for arbitrary hardware.
 - **Hard Reset**: ESP32 validates/builds exact-board recovery images before erasing, then restores the bootloader, partitions and boot_app0 without application firmware. ESP8266 erases SPI flash and retains its ROM bootloader. Other targets, including AVR bootloader burning without a configured programmer workflow, are unavailable in Settings.
 - Reset confirmations recheck board, framework, port and busy state. Workers reserve the operation before starting, retain the confirmed target, and report preparation/erase/write failures. Reset writes are not automatically replayed after a connected write failure.
+- Ubuntu uses the prepared private esptool runtime. Its v5 commands and chip connector avoid deprecated aliases, while v4 syntax and Windows command paths remain compatible.
 - **Actions**: Save All acknowledges completed editor saves before Compile/Upload. Failed saves stop the action. Reload uses Monaco's reload and dirty-tab bookkeeping. Clean removes known generated build/reset caches while preserving source folders, project settings and AI edit history; locked or failed cleanup is reported.
 - Hardware-free reset/action regressions: `src/_python/python.exe -B direct/verify_actions.py` and `direct/verify_controls.py`. Physical reset/flash verification requires the selected board and port.
 
@@ -1051,6 +1090,8 @@ require their own hardware/host verification.
 - **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without prompting for unnecessary Administrator elevation.
 - **`direct/windows/run.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations. `direct/runThisOnWindows.vbs` forwards here for existing executable launchers.
 - **`direct/ubuntu/setup.py` / `run.sh`**: Native Ubuntu setup and launch. Create/repair `.venv-linux`, preserve project arguments and keep system Python unchanged; `run.sh --repair` explicitly repairs the runtime.
+- **`MCU_Flasher` / `src/launcher_ubuntu.c`**: Native Ubuntu executable. Resolves its application folder independently of the working directory and forwards arguments to the separate Linux launcher. Rebuild with `direct/ubuntu/build_launcher.sh`.
+- **`direct/ubuntu/launch.py` / `preflight.py` / `system_setup.py` / `install_desktop.py`**: Read-only diagnostics, automatic first-run Bootstrap, desktop launch logging and checkout-specific desktop shortcuts. Missing system prerequisites install through Ubuntu's visible sudo/pkexec authentication; only apt-get receives administrator rights. Python dependencies install into `.venv-linux`, and the GUI stays under the desktop user. Cancelled or failed system setup stops before launch. Qt5 sample-viewer validation runs in a separate process from Qt6.
 - **`mcu_flash_gui.py`**: Root entry point forwarder. Enforces private Python execution via `private_python_guard.py`, installs console-hiding hooks, and delegates directly to `main.mcu_flash_gui.main()`.
 
 ---
@@ -1066,7 +1107,8 @@ require their own hardware/host verification.
   - **`console_panel.py`**: Colorized build output with regex ANSI color parsing and autoscroll.
   - **`serial_panel.py`**: High-performance real-time serial monitor with line ending selector, baud rate dropdown, timestamp toggling, and quick send bar.
   - **`terminal_panel.py`**: Multi-session integrated terminal panel supporting PowerShell and CMD tabs.
-  - **`posix_terminal_panel.py`**: Native Linux Bash PTYs and optional OpenCode integration using Qt WebEngine/xterm.js.
+  - **`posix_terminal_panel.py`**: Native Linux multi-session Bash PTYs using Qt WebEngine/xterm.js.
+  - **`posix_ai_panel.py`**: Native Linux dedicated OpenCode TUI, one protected PTY, retained hide/reveal and bounded restart recovery.
   - **`glass.py` / `icons.py`**: Static glass workspace, focused tool tabs and theme-aware vector icons.
   - **`detached_editor.py`**: Explicit editor window and themed attach placeholder; closing reattaches the same editor.
   - **`ai_panel.py`**: Collapsible OpenCode AI assistant side panel.
@@ -1086,6 +1128,11 @@ require their own hardware/host verification.
 - **`main/core/config.py` / `config_store.py`**: Manage portable/per-user preferences, atomic project/serial-port ownership and recent projects. Locked snapshot merging preserves registrations and unrelated preferences when multiple sketch windows save at once.
 - **`main/core/file_utils.py`**: Low-level Windows file operations (`attrib +h`, `ensure_file_writable`, `robust_rmtree`), UNC share detection (`is_unc_or_network_path`), and AI review history backups (`AIEditBackupStore`).
 - **`main/core/toolchain.py`**: Stable API selecting `main/platforms/windows.py` or `main/platforms/ubuntu.py`. Windows owns executable discovery and short-path junctions; Ubuntu owns native package paths and POSIX process sessions. Both implementations use guarded, installed-only PlatformIO commands. Ubuntu replaces inherited Windows PlatformIO paths and uses native upload for every board family.
+- **`main/platforms/ubuntu_logs.py`**: Ubuntu-only compile metadata and native upload presentation, sharing the existing Windows box/progress renderers while parsing the current programmer output. Verify without hardware using `direct/verify_ubuntu_logging.py`.
+- **`main/platforms/ubuntu_assistant.py` / `ubuntu_pty.py` / `ubuntu_esptool.py`**: Ubuntu project-context readiness, bounded background prompt observation, owned tool-process cleanup and private-runtime reset tools. Windows controllers remain separate.
+- **`main/platforms/ubuntu_pty_process.py` / `ubuntu_pty_supervisor.py`**: Native PTY and original process-handle ownership without a Python fork callback in Qt; the standalone Linux child subreaper acquires the controlling terminal, preserves signals/job control and reaps detached tools before session exit.
+- **`direct/ubuntu/arduino_cli.py` / `opencode_setup.py`**: Bootstrap-only native CLI release preparation with pinned checksums, version probes and recovery of the previous owned installation.
+- **`src/modules/ubuntu_download_manager.py`**: Ubuntu Download Manager reuse, wake-up and final-workspace shutdown through same-account IPC, including cleanup of owned sample windows.
 - **`main/core/build_resources.py`**: Shared compiler/background CPU, RAM and storage budgets.
 - **`main/core/board_catalog.py`**: Dynamic board catalog parser (merging PlatformIO and Arduino index boards), USB VID/PID mapping table, and unit-aware `_parse_byte_size` for modern `esptool`.
 - **`main/core/board_compat.py`**: Heuristic board compatibility analyzer and pinout GPIO conflict checker.
@@ -1188,7 +1235,7 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11; native Ubuntu support is implemented, with Ubuntu 22.04/24.04 CI targets (native Linux verification pending).
+- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 has local native hardware-free verification, with Ubuntu 22.04/24.04 CI targets.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
 - **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
@@ -1320,11 +1367,17 @@ paths, setup argument forwarding, upload process options and Bash/Windows Script
 Host syntax without running installers or launchers. The compatibility workflow
 also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04, then
 checks the actual Compile button for Uno, Nano and Mega using copied native
-packages. Native Ubuntu results remain pending until that workflow runs.
+packages. Local native Ubuntu GUI/runtime checks pass; these actual firmware
+build integrations remain separate CI results.
 The workflow also runs the recent cursor, preference, catalog, storage and
 worker regressions on both Ubuntu versions, with explicit Node-based editor
 checks and native Qt xcb rendering under Xvfb. Local Windows simulations do
 not substitute for those native results.
+Ubuntu assistant discovery and lifecycle checks use `direct/verify_ubuntu_opencode.py`
+and `direct/verify_ubuntu_ai_panel.py`. The latter's `--native-renderer` probe uses
+real Qt WebEngine/xterm.js and a local fake CLI over a real PTY, with isolated
+fixtures and no authenticated AI session, hardware access or live cache changes.
+Run it with `xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_ai_panel.py --native-renderer`.
 
 For native setup/downloader screenshots, run the controls verifier with
 `QT_QPA_PLATFORM=windows` and `--render-dir temp/audit/controls`. On Ubuntu use

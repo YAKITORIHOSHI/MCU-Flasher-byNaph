@@ -41,12 +41,21 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
             )
         return False
 
+    if sys.platform.startswith("linux"):
+        from src.modules.ubuntu_download_manager import request
+        if request(ROOT, "wake"):
+            sig_bus.notification.emit({
+                "message": "⚡ Restored Download Manager instantly from memory.",
+                "type": "info",
+            })
+            return True
+
     index_json_dir = ROOT / "index_json"
     index_json_dir.mkdir(parents=True, exist_ok=True)
 
     # Purge stale exit trigger
     exit_trigger = index_json_dir / ".dm_force_exit"
-    if exit_trigger.exists():
+    if sys.platform == "win32" and exit_trigger.exists():
         try:
             exit_trigger.unlink()
         except Exception:

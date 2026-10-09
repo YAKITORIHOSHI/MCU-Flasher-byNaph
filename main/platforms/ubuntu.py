@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import sys
 import threading
 from pathlib import Path
@@ -85,8 +84,8 @@ def prepare_platformio_board_toolchain(platform, board_id, framework="arduino", 
 
 
 def find_arduino_cli_executable() -> str | None:
-    candidate = shutil.which("arduino-cli")
-    return candidate if candidate and not candidate.lower().endswith(".exe") else None
+    from main.platforms.ubuntu_arduino import find_arduino_cli
+    return find_arduino_cli()
 
 
 def _bootstrap_find_arduino_cli():
@@ -102,7 +101,8 @@ def _bootstrap_get_last_arduino_cli_error():
 
 
 def is_opencode_installed() -> bool:
-    return shutil.which("opencode") is not None
+    from main.platforms.ubuntu_opencode import find_opencode_cli
+    return find_opencode_cli() is not None
 
 
 def process_options(*, priority: bool = False, session: bool = False) -> dict:

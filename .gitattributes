@@ -23,6 +23,7 @@
 *.sys binary
 *.cat binary
 *.ttf binary
+MCU_Flasher binary
 
 # Git LFS binary installers
 installers/*.exe filter=lfs diff=lfs merge=lfs -text

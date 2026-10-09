@@ -29,14 +29,16 @@ class ActionChecks(unittest.TestCase):
         methods = {"_start_reset_worker", "hard_reset", "soft_reset", "clean_cache",
                    "_new_upload_progress_state", "_fast_upload_retry_allowed",
                    "compile_sketch", "upload_sketch", "_release_requested_operation",
-                   "_start_resolved_upload", "set_timestamp_enabled"}
+                   "_start_resolved_upload", "set_timestamp_enabled",
+                   "_operation_worker_alive", "_begin_operation_session"}
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in methods]
         cls.bases = []
         self.pending = []
         self.ns = dict(Path=Path, os=os, sys=sys, time=SimpleNamespace(sleep=lambda _: None),
-                       threading=SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: self.pending.append(kw["target"]))),
+                       threading=SimpleNamespace(Thread=lambda **kw: SimpleNamespace(
+                           start=lambda: self.pending.append(kw["target"]), is_alive=lambda: False)),
                        board_reset_capabilities=board_reset_capabilities, load_gui_config=lambda: {},
                        port_occupied_owner=lambda _: None, _try_acquire_reset_cache_lock=lambda: object(),
                        _release_reset_cache_lock=Mock(), SCRIPT_DIR=self.root,
@@ -53,6 +55,8 @@ class ActionChecks(unittest.TestCase):
         b._package_event_root = self.root / "events"
         b.is_busy = False
         b.active_operation = None
+        b._operation_worker = None
+        b._stop_requested = False
         b.current_board, b.current_port = "Demo", "COM99"
         b.sketch_dir_path = self.root
         b.emit = Mock()

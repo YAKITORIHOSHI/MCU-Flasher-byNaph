@@ -198,6 +198,66 @@ class ModeChecks(unittest.TestCase):
                     runtime.activate(not blocked)
                     self.assertEqual(runtime.network_access_disabled(), blocked)
 
+    def _root_entrypoint_policy(self, host, saved_offline):
+        source = (ROOT / "mcu_flash_gui.py").read_text(encoding="utf-8")
+        observed = {}
+        def main():
+            observed["before_main"] = runtime.network_access_disabled()
+            # The delegated production entry point activates the saved mode
+            # again. Its idempotent guard must already have the correct policy.
+            runtime.activate(mode.offline_enabled())
+            observed["after_main"] = runtime.network_access_disabled()
+            return 0
+        with ExitStack() as stack:
+            stack.enter_context(patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True))
+            stack.enter_context(patch("src.modules.private_python_guard.enforce_private_python"))
+            stack.enter_context(patch("src.modules.windows_tool_paths.install_espidf_component_relpaths"))
+            stack.enter_context(patch("src.modules.mbed_compat.install_mbed_compat"))
+            guard = stack.enter_context(patch.object(runtime, "guard_platformio"))
+            audit = stack.enter_context(patch.object(sys, "addaudithook"))
+            stack.enter_context(patch.object(runtime, "_enabled", False))
+            stack.enter_context(patch.object(runtime, "_network_blocked", False))
+            activation = stack.enter_context(patch.object(runtime, "activate", wraps=runtime.activate))
+            stack.enter_context(patch.object(mode, "_configuration", return_value={
+                "shared": {"offline_enabled": saved_offline}}))
+            stack.enter_context(patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1", "PIP_NO_INDEX": "1"}))
+            stack.enter_context(patch.object(sys, "path", sys.path[:]))
+            stack.enter_context(patch.object(sys, "platform", host))
+            stack.enter_context(patch.dict(sys.modules, {
+                "main.mcu_flash_gui": SimpleNamespace(main=main),
+                "win_subprocess_hide": SimpleNamespace(install=Mock(), install_venv_site_hook=Mock()),
+            }))
+            namespace = {"__name__": "__main__", "__file__": str(ROOT / "mcu_flash_gui.py")}
+            with self.assertRaises(SystemExit) as exited:
+                exec(compile(source, namespace["__file__"], "exec"), namespace)
+            self.assertEqual(exited.exception.code, 0)
+            guard.assert_called_once()
+            audit.assert_called_once_with(runtime._audit)
+            initial_arguments = activation.call_args_list[0].args
+            observed["offline_environment"] = os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME")
+            observed["pip_no_index"] = os.environ.get("PIP_NO_INDEX")
+            # No socket is opened: exercise the installed audit policy directly.
+            command = [sys.executable, "-m", "pip", "install", "fixture"]
+            with self.assertRaisesRegex(runtime.OfflineDependencyError, "bootstrap"):
+                runtime._audit("subprocess.Popen", (command[0], command, None, {}))
+        return initial_arguments, observed
+
+    def test_ubuntu_root_entrypoint_activates_saved_mode_before_main_handoff(self):
+        for saved_offline in (False, True):
+            with self.subTest(saved_offline=saved_offline):
+                initial, observed = self._root_entrypoint_policy("linux", saved_offline)
+                self.assertEqual(initial, (saved_offline,))
+                self.assertEqual(observed["before_main"], saved_offline)
+                self.assertEqual(observed["after_main"], saved_offline)
+                self.assertEqual(observed["offline_environment"], "1" if saved_offline else None)
+                self.assertEqual(observed["pip_no_index"], "1" if saved_offline else None)
+
+    def test_windows_root_entrypoint_retains_original_activation_call(self):
+        initial, observed = self._root_entrypoint_policy("win32", False)
+        self.assertEqual(initial, ())
+        self.assertTrue(observed["before_main"])
+        self.assertTrue(observed["after_main"])
+
     def test_effective_network_policy_before_activation_uses_explicit_environment_marker(self):
         for inactive_value in (False, True):
             for inherited in (None, "", "0", "1", "true"):

@@ -2076,20 +2076,34 @@ class MCUWebBackendAPI:
                 return False
 
             try:
-                esp = esptool.get_default_connected_device(
-                    serial_list=[port],
-                    port=port,
-                    connect_attempts=3,
-                    initial_baud=115200,
-                )
+                if sys.platform.startswith("linux"):
+                    from main.platforms.ubuntu_esptool import connect_chip
+                    esp = connect_chip(
+                        esptool, serial_list=[port], port=port,
+                        connect_attempts=3, initial_baud=115200,
+                    )
+                else:
+                    esp = esptool.get_default_connected_device(
+                        serial_list=[port],
+                        port=port,
+                        connect_attempts=3,
+                        initial_baud=115200,
+                    )
             except Exception:
                 time.sleep(0.5)
-                esp = esptool.get_default_connected_device(
-                    serial_list=[port],
-                    port=port,
-                    connect_attempts=3,
-                    initial_baud=115200,
-                )
+                if sys.platform.startswith("linux"):
+                    from main.platforms.ubuntu_esptool import connect_chip
+                    esp = connect_chip(
+                        esptool, serial_list=[port], port=port,
+                        connect_attempts=3, initial_baud=115200,
+                    )
+                else:
+                    esp = esptool.get_default_connected_device(
+                        serial_list=[port],
+                        port=port,
+                        connect_attempts=3,
+                        initial_baud=115200,
+                    )
 
             if esp is None:
                 return False
@@ -2761,6 +2775,13 @@ class MCUWebBackendAPI:
         if (self.is_busy or getattr(self, "active_operation", None) is not None
                 or getattr(self, "_current_op_phase", None) is not None):
             return ""
+        if sys.platform.startswith("linux"):
+            from PySide6.QtWidgets import QFileDialog, QWidget
+            parent = self._window if isinstance(self._window, QWidget) else None
+            selected = QFileDialog.getExistingDirectory(parent, "Open sketch project", str(self.sketch_dir_path))
+            if selected and Path(selected).is_dir() and not is_application_codebase_dir(selected):
+                return selected
+            return ""
         if self._window and hasattr(self._window, "create_file_dialog"):
             try:
                 import webview
@@ -2795,6 +2816,16 @@ class MCUWebBackendAPI:
 
     def open_file_picker(self) -> str:
         """Open native file browser dialog for .ino, .cpp, .c, .h files."""
+        if sys.platform.startswith("linux"):
+            from PySide6.QtWidgets import QFileDialog, QWidget
+            parent = self._window if isinstance(self._window, QWidget) else None
+            selected, _ = QFileDialog.getOpenFileName(
+                parent, "Open sketch source", str(self.sketch_dir_path),
+                "Arduino & C/C++ Files (*.ino *.cpp *.c *.h *.hpp);;All files (*)",
+            )
+            if selected and Path(selected).is_file() and not is_application_codebase_dir(Path(selected).parent):
+                return selected
+            return ""
         if self._window and hasattr(self._window, "create_file_dialog"):
             try:
                 import webview
@@ -2965,6 +2996,12 @@ class MCUWebBackendAPI:
         # 1. Primary discovery via pyserial SetupAPI enumeration
         try:
             for p in serial.tools.list_ports.comports():
+                if sys.platform.startswith("linux"):
+                    from main.platforms.ubuntu_ports import port_entry
+                    entry = port_entry(p)
+                    if entry is not None:
+                        ports.append(entry)
+                    continue
                 dev = str(p.device or "").strip()
                 if not dev:
                     continue
@@ -3034,7 +3071,7 @@ class MCUWebBackendAPI:
         match = re.match(r"(COM\d+|/dev/\S+)", str(text).strip())
         return match.group(1) if match else str(text).strip().split()[0]
 
-    def _sync_project_hardware_state(self, target_dir: Optional[str | Path] = None) -> None:
+    def _sync_project_hardware_state(self, target_dir: Optional[str | Path] = None) -> Optional[tuple]:
         """Write current target board, port, and serial settings to
         <sketch_dir>/.mcu_flasher_build_cache/project_state.json so AI assistants (OpenCode & Antigravity)
         can instantly know the active MCU architecture, pinouts, and COM connection in real-time.
@@ -3118,6 +3155,8 @@ class MCUWebBackendAPI:
 
             payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
             self._queue_hardware_state_write(sketch_dir, state_payload, payload_text)
+            if sys.platform.startswith("linux"):
+                return state_payload  # Native assistant waits for this exact durable revision.
         except Exception as exc:
             self.emit("console:log", {"text": f"Project connection state could not be saved: {exc}",
                                       "tag": "warning", "newline": True})
@@ -3881,7 +3920,8 @@ class MCUWebBackendAPI:
             if (not fallback and resolved.get("pio_resolution_status") != "ambiguous"
                     and (resolved.get("pio_resolved") is False or not resolved.get("board"))):
                 from src.modules.offline_runtime import bootstrap_instruction
-                self.emit("console:log", {"text": bootstrap_instruction(f"Offline board definition unavailable: {name}"),
+                definition_kind = "Native" if sys.platform.startswith("linux") else "Offline"
+                self.emit("console:log", {"text": bootstrap_instruction(f"{definition_kind} board definition unavailable: {name}"),
                                           "tag": "error", "newline": True})
             if resolved != info:
                 SUPPORTED_BOARDS.set_definition(name, resolved)
@@ -4237,6 +4277,10 @@ class MCUWebBackendAPI:
             )
 
             output_lines: list[str] = []
+            _ubuntu_build_info = None
+            if sys.platform.startswith("linux"):
+                from main.platforms.ubuntu_logs import UbuntuBuildInfo
+                _ubuntu_build_info = UbuntuBuildInfo(self, binfo, self.current_board or "")
             _dependency_graph_active = [False]
             _in_error_block = [False]
             _error_block_type = ["error"]
@@ -4503,6 +4547,13 @@ class MCUWebBackendAPI:
                     else:
                         _error_block_type[0] = "error"
 
+                if _ubuntu_build_info is not None:
+                    if (is_linker_error or is_gcc_diagnostic or is_context_header or _in_error_block[0]
+                            or is_generic_error or is_generic_warning):
+                        _ubuntu_build_info.flush()
+                    elif _ubuntu_build_info.consume(line_clean):
+                        continue
+
                 pct_match = re.search(r'\[\s*(\d+)%\s*\]', line_clean)
                 if pct_match:
                     self.emit("console:progress", {"action": "Compiling"})
@@ -4667,6 +4718,8 @@ class MCUWebBackendAPI:
                     # outside GCC's syntax. Do not silently lose unknown stdout.
                     self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
 
+            if _ubuntu_build_info is not None:
+                _ubuntu_build_info.flush()
             self._active_process.stdout.close()
             rc = self._active_process.wait()
 
@@ -6604,6 +6657,9 @@ class MCUWebBackendAPI:
         monitor_port = str(self._active_port_label or "")
         monitor_paused = False
         write_started = False
+        upload_log = None
+        upload_started = None
+        upload_log_finished = False
         try:
             owner = port_occupied_owner(monitor_port) if monitor_port else None
             if owner:
@@ -6641,7 +6697,16 @@ class MCUWebBackendAPI:
             env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
             env["PLATFORMIO_RUN_JOBS"] = str(jobs)
             env["SCONSFLAGS"] = f"-j{jobs}"
-            self.emit("console:log", {"text": "Uploading through the selected board's PlatformIO programmer protocol…", "tag": "info", "newline": True})
+            if sys.platform.startswith("linux"):
+                from main.platforms.ubuntu_logs import UbuntuUploadLog
+                upload_log = UbuntuUploadLog(
+                    self, info, getattr(self, "current_board", "") or "", port,
+                    str(getattr(self, "upload_speed", None) or info.get("upload_speed") or ""),
+                )
+                upload_log.start()
+            else:
+                self.emit("console:log", {"text": "Uploading through the selected board's PlatformIO programmer protocol…", "tag": "info", "newline": True})
+            upload_started = time.monotonic()
             self._active_process = subprocess.Popen(
                 command, cwd=str(cache_root), env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
@@ -6677,6 +6742,10 @@ class MCUWebBackendAPI:
                         "phase": "flash", "is_busy": True,
                         "can_stop": False, "op": "upload",
                     })
+                # Presentation follows the write gate; formatting never drives
+                # cancellation, retries, programmer commands or board reset.
+                if upload_log is not None and upload_log.consume(line_clean):
+                    continue
                 action, verdict = _classify_platformio_upload_line(line_clean)
                 if action == "outcome":
                     tag = "success" if verdict == "SUCCESS" else "error"
@@ -6697,6 +6766,9 @@ class MCUWebBackendAPI:
                 self._active_process.stdout.close()
             code = self._active_process.wait()
             if self._stop_requested and not write_started:
+                if upload_log is not None:
+                    upload_log.finish(False, time.monotonic() - upload_started, stopped=True)
+                    upload_log_finished = True
                 self.emit("console:log", {
                     "text": "Upload cancelled before flash erase/write began.",
                     "tag": "warning", "newline": True,
@@ -6719,9 +6791,14 @@ class MCUWebBackendAPI:
                         "tag": "info", "newline": True,
                     })
                 raise RuntimeError(f"PlatformIO upload exited with code {code}. Review the console for the programmer or device requirement.")
+            if upload_log is not None:
+                upload_log.finish(True, time.monotonic() - upload_started)
+                upload_log_finished = True
             self.emit("notification", {"title": "Upload completed", "message": "PlatformIO reported a successful upload.", "type": "success"})
             self.emit("console:progress", {"action": "Completed", "percent": 100})
         except Exception as exc:
+            if upload_log is not None and not upload_log_finished:
+                upload_log.finish(False, time.monotonic() - upload_started if upload_started is not None else 0.0)
             self.emit("console:log", {"text": f"Upload failed: {exc}", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Upload failed", "message": str(exc), "type": "error"})
         finally:
@@ -6806,6 +6883,9 @@ class MCUWebBackendAPI:
 
     def _get_esptool_cmd(self) -> list[str]:
         """Dynamically resolve the most reliable esptool command across Windows environments."""
+        if sys.platform.startswith("linux"):
+            from main.platforms.ubuntu_esptool import esptool_command
+            return esptool_command()
         try:
             from importlib import util as importlib_util
             if importlib_util.find_spec("esptool") is not None:
@@ -8505,6 +8585,9 @@ class MCUWebBackendAPI:
         def _worker():
             plat = str(binfo.get("platform", "")).lower()
 
+            if sys.platform.startswith("linux"):
+                from main.platforms.ubuntu_esptool import subcommand
+
             owner_pid = port_occupied_owner(port)
             if owner_pid:
                 self.emit("console:log", {
@@ -8618,7 +8701,7 @@ class MCUWebBackendAPI:
                         "--before", "default-reset",
                         "--after", "no-reset",
                         "--connect-attempts", "30",
-                        "erase_flash",
+                        subcommand("erase_flash") if sys.platform.startswith("linux") else "erase_flash",
                     ]
                     launch_env = os.environ.copy()
                     erase_cfg_path = self._write_esptool_connect_config(
@@ -8710,7 +8793,7 @@ class MCUWebBackendAPI:
                         "--before", before_reset,
                         "--after", "no-reset",
                         "--connect-attempts", "30",
-                        "erase_flash",
+                        subcommand("erase_flash") if sys.platform.startswith("linux") else "erase_flash",
                     ]
 
                     launch_env = os.environ.copy()

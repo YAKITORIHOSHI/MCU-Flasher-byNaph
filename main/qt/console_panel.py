@@ -9,6 +9,7 @@ Semantic colors, autoscroll, full retained-log copy and clear are built in.
 from __future__ import annotations
 
 import re
+import sys
 import time
 from itertools import islice
 
@@ -557,7 +558,10 @@ class ConsolePanel(QPlainTextEdit):
         self._patterns.clear()
         self._entry_number = 0
         self._flush_timer.stop()
-        super().clear()
+        if sys.platform.startswith("linux"):
+            self._follow.clear_document(super().clear)
+        else:
+            super().clear()
         self._follow.reset()
 
 

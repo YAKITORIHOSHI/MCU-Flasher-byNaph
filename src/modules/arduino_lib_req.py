@@ -698,7 +698,10 @@ def _launch_code_viewer(file_path, all_paths=None, parent=None, *, python_exe=No
         if font_size is not None:
             environment["MCU_FLASHER_VIEWER_FONT_SIZE"] = str(font_size)
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        subprocess.Popen(cmd, creationflags=creationflags, env=environment)
+        process = subprocess.Popen(cmd, creationflags=creationflags, env=environment)
+        if sys.platform.startswith("linux"):
+            from src.modules.ubuntu_download_manager import remember_viewer
+            remember_viewer(process)
     except Exception as e:
         _open_fallback_editor(file_path, parent=parent, reason=f"Failed to launch QScintilla viewer:\n{e}")
 
@@ -2366,7 +2369,7 @@ class InstalledTab:
 class ArduinoBrowser:
     """Main application window with Libraries, Boards, and Installed tabs."""
 
-    def __init__(self):
+    def __init__(self, *, linux_channel=None):
         # DPI awareness on Windows
         if sys.platform == "win32":
             try:
@@ -2376,6 +2379,7 @@ class ArduinoBrowser:
                 pass
 
         self.root = tk.Tk()
+        self._linux_channel = linux_channel
         self.root.title("Arduino Library & Board Browser")
 
         # Set AppUserModelID so Windows taskbar groups it with the main MCU Flasher window
@@ -2473,15 +2477,16 @@ class ArduinoBrowser:
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
         # Save window HWND for instant Win32 unhide
-        try:
-            hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
-            with open(hwnd_file, "w", encoding="utf-8") as f:
-                f.write(str(self.root.winfo_id()))
-        except Exception:
-            pass
+        if sys.platform == "win32":
+            try:
+                hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
+                with open(hwnd_file, "w", encoding="utf-8") as f:
+                    f.write(str(self.root.winfo_id()))
+            except Exception:
+                pass
 
         # Clean up any stale trigger files left over from prior abnormal shutdowns
-        for stale_name in (".dm_force_exit", ".show_dm_trigger"):
+        for stale_name in ((".dm_force_exit", ".show_dm_trigger") if sys.platform == "win32" else ()):
             stale_file = os.path.join(INDEX_CACHE_DIR, stale_name)
             if os.path.exists(stale_file):
                 try:
@@ -2507,6 +2512,15 @@ class ArduinoBrowser:
 
     def _check_show_trigger(self):
         """Poll for wake-up or force-exit trigger file sent by main MCU Flasher GUI."""
+        if sys.platform.startswith("linux"):
+            channel = getattr(self, "_linux_channel", None)
+            for command in channel.poll() if channel is not None else ():
+                if command == "quit":
+                    self._force_exit()
+                    return
+                self._unhide_window()
+            self.root.after(150, self._check_show_trigger)
+            return
         # If the main app is shutting down, it writes a force-exit trigger so
         # this sleeping Download Manager process doesn't remain as an orphan.
         force_exit_file = os.path.join(INDEX_CACHE_DIR, ".dm_force_exit")
@@ -2588,16 +2602,25 @@ class ArduinoBrowser:
 
     def _force_exit(self):
         """Permanently close process and purge memory."""
+        if sys.platform.startswith("linux"):
+            self._cancel_event.set()
+            channel = getattr(self, "_linux_channel", None)
+            if channel is not None:
+                channel.close()
+                self._linux_channel = None
+            from src.modules.ubuntu_download_manager import close_viewers
+            close_viewers()
         try:
             self.root.withdraw()
         except Exception:
             pass
-        try:
-            hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
-            if os.path.exists(hwnd_file):
-                os.remove(hwnd_file)
-        except Exception:
-            pass
+        if sys.platform == "win32":
+            try:
+                hwnd_file = os.path.join(INDEX_CACHE_DIR, ".dm_hwnd")
+                if os.path.exists(hwnd_file):
+                    os.remove(hwnd_file)
+            except Exception:
+                pass
         self.root.destroy()
         sys.exit(0)
 
@@ -4660,5 +4683,18 @@ if __name__ == "__main__":
     from src.modules.runtime_resources import enforce_minimum_cpu_requirement
     if not enforce_minimum_cpu_requirement():
         raise SystemExit(2)
-    app = ArduinoBrowser()
-    app.run()
+    if sys.platform.startswith("linux"):
+        from src.modules.ubuntu_download_manager import AlreadyRunning, DownloadManagerChannel, close_viewers, request
+        try:
+            channel = DownloadManagerChannel(SCRIPT_DIR)
+        except AlreadyRunning:
+            raise SystemExit(0 if request(SCRIPT_DIR, "wake") else 1)
+        try:
+            app = ArduinoBrowser(linux_channel=channel)
+            app.run()
+        finally:
+            channel.close()
+            close_viewers()
+    else:
+        app = ArduinoBrowser()
+        app.run()

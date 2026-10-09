@@ -142,10 +142,14 @@ class PlatformChecks(unittest.TestCase):
         with patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=(3, 11), stderr=sys.stderr)), \
                 patch.object(setup.os, "geteuid", return_value=1000, create=True), \
                 patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
+                patch("direct.ubuntu.preflight.host_preflight"), \
                 patch.object(platform, "_uname_cache", None), \
                 patch.object(platform, "machine", return_value="x86_64") as architecture, \
                 patch("src.modules.offline_mode.offline_enabled", return_value=False), \
                 patch("src.modules.offline_mode.finish_bootstrap") as finished, \
+                patch("src.modules.offline_bootstrap.ready", return_value=False), \
+                patch("direct.ubuntu.arduino_cli.ensure_arduino_cli", return_value="fixture-arduino"), \
+                patch("direct.ubuntu.opencode_setup.ensure_opencode_cli", return_value="fixture-opencode"), \
                 patch.object(setup.venv, "EnvBuilder") as builder, \
                 patch.object(setup.subprocess, "run") as run, patch.object(setup.subprocess, "call", return_value=0) as launch:
             # A cold Windows platform probe may itself use subprocess.run.
@@ -158,13 +162,13 @@ class PlatformChecks(unittest.TestCase):
         architecture.assert_called_once_with()
         final_command = run.call_args_list[-1].args[0]
         self.assertEqual(Path(final_command[final_command.index("--core") + 1]).name, "x86_64")
-        self.assertIn("--runtime-only", final_command)
+        self.assertNotIn("--runtime-only", final_command)
         finished.assert_called_once()
         command = run.call_args_list[0].args[0]
         self.assertEqual(command[0], str(setup.ENV_DIR / "bin/python"))
         self.assertEqual(command[-1], str(self.root / "direct/ubuntu/requirements.txt"))
         provider_check = run.call_args_list[1]
-        self.assertIn("prepare_dependencies()", provider_check.args[0][-1])
+        self.assertIn("runtime_preflight()", provider_check.args[0][-1])
         self.assertEqual(provider_check.kwargs["cwd"], self.root)
         self.assertEqual(launch.call_args.args[0][-3:], ["--project", "/fixture/Sketch With Spaces", "--new-window"])
 
@@ -189,6 +193,7 @@ class PlatformChecks(unittest.TestCase):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api.current_port = api._active_port_label = "/dev/ttyACM0"
+        api.current_board, api.upload_speed = "Fixture Arduino Uno", "115200"
         api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
         api.sketch_dir_path = self.root
@@ -242,6 +247,79 @@ class PlatformChecks(unittest.TestCase):
         self.assertTrue(any(phase.get("can_stop") for phase in phases))
         self.assertTrue(any(phase.get("phase") == "flash" and not phase.get("can_stop")
                             for phase in phases))
+        self.assertIn("  ⬆  UPLOADING (PlatformIO)", shown_text)
+        self.assertIn("Board : Fixture Arduino Uno", shown_text)
+        self.assertIn("Upload Summary", shown_text)
+
+    def native_log_fixture(self, lines, code=0, host="linux"):
+        from main import web_bridge
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.current_port = api._active_port_label = "/dev/fixture0"
+        api.current_board, api.upload_speed = "Fixture ESP32 Dev Module", "921600"
+        api._active_board_info = dict(platform="espressif32", board="esp32dev", framework="arduino", require_upload_port=True)
+        api._resolve_board_info = lambda name=None: api._active_board_info
+        api.sketch_dir_path = self.root
+        api._effective_cache_root = lambda path: self.root
+        api._generate_platformio_ini = api._stop_serial_monitor = api._start_serial_monitor = Mock()
+        api._unmap_unc_after_build = Mock()
+        api._probe_chip_info = Mock(side_effect=AssertionError("Logging probed hardware"))
+        api._trigger_actual_board_reset = Mock(side_effect=AssertionError("Logging reset hardware"))
+        api._get_jobs = lambda: 2
+        api._stop_requested = False
+        api.emit = Mock()
+        process = SimpleNamespace(stdout=io.StringIO("\n".join(lines) + "\n"), wait=lambda: code, poll=lambda: code)
+        with patch.object(web_bridge, "sys", SimpleNamespace(platform=host)), \
+                patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(web_bridge, "port_occupied_owner", return_value=None), \
+                patch.object(web_bridge, "find_pio_executable", return_value=["fixture-platformio"]), \
+                patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
+                patch.object(web_bridge.subprocess, "Popen", return_value=process) as launch:
+            api._native_upload_worker(can_skip=True)
+        self.assertEqual(launch.call_count, 1)
+        api._probe_chip_info.assert_not_called()
+        api._trigger_actual_board_reset.assert_not_called()
+        return [call.args for call in api.emit.call_args_list]
+
+    def test_ubuntu_esp_upload_uses_windows_presentation_without_extra_hardware_work(self):
+        events = self.native_log_fixture([
+            "Connecting....", "Chip is ESP32-D0WD-V3 (revision v3.1)",
+            "Features: WiFi, BT, Dual Core, 240MHz", "Crystal is 40MHz", "MAC: 00:11:22:33:44:55",
+            "Uploading stub...", "Flash will be erased from 0x00010000 to 0x00049fff...",
+            "Compressed 233616 bytes to 129328...", "Writing at 0x00010000... (12 %)",
+            "Writing at 0x00049fff... (100 %)", "Hash of data verified.",
+            "Hard resetting via RTS pin...", "================ [SUCCESS] Took 1.20 seconds ================",
+        ])
+        text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
+        for expected in ("UPLOADING (PlatformIO)", "Upload Speed : 921600", "ESP32-D0WD-V3 (revision v3.1) Information",
+                         "00:11:22:33:44:55", "Flashing [4/4] Firmware", "Upload Summary", "Upload successful"):
+            self.assertIn(expected, text)
+        phases = [payload for name, payload in events if name == "operation:phase"]
+        self.assertTrue(any(phase.get("phase") == "flash" and not phase.get("can_stop") for phase in phases))
+        self.assertTrue(any(name == "notification" and payload.get("title") == "Upload completed"
+                            for name, payload in events))
+
+    def test_ubuntu_failed_write_has_no_success_summary_or_retry(self):
+        events = self.native_log_fixture([
+            "Chip is ESP32-D0WD-V3 (revision v3.1)", "Uploading stub...",
+            "Writing at 0x00010000... (12 %)", "A fatal error occurred: Serial data stream stopped",
+        ], code=2)
+        text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
+        self.assertIn("Serial data stream stopped", text)
+        self.assertIn("firmware may be incomplete", text)
+        self.assertNotIn("Upload successful", text)
+        self.assertNotIn("Upload Summary", text)
+
+    def test_windows_native_upload_keeps_its_existing_console_presentation(self):
+        events = self.native_log_fixture([
+            "Chip is ESP32-D0WD-V3 (revision v3.1)", "Writing at 0x00010000... (100 %)",
+            "================ [SUCCESS] Took 1.20 seconds ================",
+        ], host="win32")
+        text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
+        self.assertIn("Uploading through the selected board's PlatformIO programmer protocol…", text)
+        self.assertIn("Chip is ESP32-D0WD-V3", text)
+        self.assertIn("Writing at 0x00010000", text)
+        self.assertNotIn("UPLOADING (PlatformIO)", text)
+        self.assertNotIn("Upload Summary", text)
 
     def test_ubuntu_native_upload_can_cancel_before_flash_write(self):
         from main import web_bridge

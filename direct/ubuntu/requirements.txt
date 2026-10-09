@@ -1,6 +1,8 @@
-# Native Ubuntu runtime; excludes Windows DLLs, pywin32, pywinpty and WebView2.
+# Native amd64 Ubuntu runtime; excludes Windows DLLs, pywin32, pywinpty and WebView2.
 PySide6>=6.7,<7
 pyserial>=3.5,<4
+# Workspace ESP chip inspection and Soft/Hard Reset; independent of PIO tools.
+esptool>=4.11,<6
 psutil>=5.9,<8
 platformio>=6.1,<7
 # Mbed 6.17 requires legacy distutils APIs and a future release without imp.reload.
@@ -8,5 +10,6 @@ setuptools==80.9.0
 future==1.0.0
 ptyprocess>=0.7,<1
 requests>=2.31,<3
+# The Library Downloader opens read-only samples in its separate Qt5 process.
 PyQt5>=5.15,<6
 QScintilla>=2.14,<3

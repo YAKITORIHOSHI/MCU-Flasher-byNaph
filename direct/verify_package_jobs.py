@@ -474,10 +474,13 @@ class PackageJobChecks(unittest.TestCase):
         with patch.object(setup, 'sys', SimpleNamespace(platform='linux', version_info=(3, 11), stderr=sys.stderr)), \
                 patch.object(setup.os, 'geteuid', return_value=1000, create=True), \
                 patch('src.modules.runtime_resources.enforce_minimum_cpu_requirement', return_value=True), \
+                patch('direct.ubuntu.preflight.host_preflight'), \
                 patch('src.modules.platform_runtime.native_platformio_dir', return_value=self.core), \
                 patch('src.modules.offline_bootstrap.clean_bootstrap_environment', return_value={}), \
                 patch('src.modules.offline_mode.offline_enabled', return_value=False), \
                 patch('src.modules.offline_mode.finish_bootstrap'), \
+                patch('direct.ubuntu.arduino_cli.ensure_arduino_cli', return_value='fixture-arduino'), \
+                patch('direct.ubuntu.opencode_setup.ensure_opencode_cli', return_value='fixture-opencode'), \
                 patch.object(setup.venv, 'EnvBuilder') as builder, \
                 patch.object(setup.subprocess, 'run', side_effect=run), \
                 patch.object(setup.subprocess, 'call', side_effect=launch), \

@@ -349,6 +349,7 @@ def package_plan(platform, boards, log=None, unavailable=None, allowed_framework
         raise RuntimeError("No declared board/framework matches the configured offline framework filter: "
                            + ", ".join(sorted(allowed_frameworks)))
     omitted_gperf = False
+    omitted_mconf = False
     for spec, bare, kind in optional_specs:
         if bare:
             owners = primary_owners.get((spec.name, str(spec.requirements)), set())
@@ -366,9 +367,21 @@ def package_plan(platform, boards, log=None, unavailable=None, allowed_framework
                 and (spec.owner, spec.name) not in active_packages):
             omitted_gperf = True
             continue
+        # ESP-IDF's Windows menuconfig executable is listed as an optional
+        # platform default even on Linux. This reviewed release has Windows
+        # archives only; preserve required/custom/newer declarations instead
+        # of suppressing arbitrary package installation failures.
+        if (sys.platform.startswith("linux") and not spec.external
+                and (spec.owner, spec.name, str(spec.requirements)) ==
+                ("platformio", "tool-mconf", "~1.4060000.0")
+                and (spec.owner, spec.name) not in active_packages):
+            omitted_mconf = True
+            continue
         specs.setdefault(spec.humanize(), spec)
     if omitted_gperf and log:
         log("Skipping optional platformio/tool-gperf: no selected configuration requires this Unix-only package on Windows.")
+    if omitted_mconf and log:
+        log("Skipping optional platformio/tool-mconf @ ~1.4060000.0: this Windows-only menuconfig package is not required on Ubuntu.")
     if allowed_frameworks is not None:
         excluded = excluded_framework_packages - selected_framework_packages
         specs = {identity: spec for identity, spec in specs.items()

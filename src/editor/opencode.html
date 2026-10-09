@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenCode AI Assistant</title>
+  <link rel="stylesheet" href="../assets/xterm/xterm.css">
+  <style>
+    html, body, #assistant { height: 100%; margin: 0; overflow: hidden; background: #101b2a; }
+    #assistant { padding: 8px; box-sizing: border-box; }
+    #error { padding: 16px; color: #e3edf6; font: 14px sans-serif; }
+  </style>
+  <script src="../assets/xterm/xterm.js"></script>
+  <script src="../assets/xterm/xterm-addon-fit.js"></script>
+  <script src="qwebchannel.js"></script>
+</head>
+<body>
+  <div id="assistant" aria-label="Dedicated OpenCode AI Assistant"></div>
+  <script>
+    (() => {
+      if (!window.Terminal || !window.FitAddon || !window.QWebChannel) {
+        document.body.innerHTML = '<p id="error">OpenCode assets are missing. Restore the application assets and retry.</p>';
+        return;
+      }
+      const term = new Terminal({scrollback: 5000, fontFamily: 'Ubuntu Mono, DejaVu Sans Mono, monospace', fontSize: 14,
+        minimumContrastRatio: 4.5,
+        theme: {background: '#101b2a', foreground: '#e3edf6', cursor: '#80d9ce'}});
+      const fit = new FitAddon.FitAddon();
+      term.loadAddon(fit);
+      term.open(document.getElementById('assistant'));
+      let bridge = null, generation = 0, lastSize = '', fitPending = false;
+      window.focusOpenCode = () => term.focus();
+      window.fitOpenCode = () => {
+        const host = document.getElementById('assistant');
+        if (host.offsetWidth < 50 || host.offsetHeight < 50) return;
+        fit.fit();
+        const size = term.rows + 'x' + term.cols;
+        if (bridge && size !== lastSize) { lastSize = size; bridge.resize(term.rows, term.cols); }
+      };
+      window.configureOpenCode = (theme, size, scrollback = 5000) => {
+        term.options.theme = theme; term.options.fontSize = size; term.options.scrollback = scrollback;
+        document.body.style.background = theme.background;
+        window.fitOpenCode();
+      };
+      new QWebChannel(qt.webChannelTransport, channel => {
+        bridge = channel.objects.assistantBridge;
+        bridge.reset_view.connect(epoch => { generation = epoch; term.reset(); lastSize = ''; window.fitOpenCode(); });
+        bridge.output.connect((epoch, data) => {
+          if (epoch !== generation) return;
+          term.write(data, () => bridge.consumed(epoch, data.length));
+        });
+        term.onData(data => bridge.write(generation, data));
+        window.fitOpenCode();
+        bridge.start();
+      });
+      new ResizeObserver(() => {
+        if (fitPending) return;
+        fitPending = true;
+        requestAnimationFrame(() => { fitPending = false; window.fitOpenCode(); });
+      }).observe(document.getElementById('assistant'));
+    })();
+  </script>
+</body>
+</html>

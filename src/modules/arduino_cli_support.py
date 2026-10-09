@@ -33,7 +33,8 @@ def _core_directory(core=None):
 
 def _missing_cli_message():
     if sys.platform.startswith("linux"):
-        return "Native Arduino CLI is unavailable. Install Arduino CLI for Linux, then choose Prepare board support again"
+        return ("Native Arduino CLI is unavailable. Prepare it in Ubuntu Bootstrap while online: "
+                "bash direct/ubuntu/run.sh --repair. Then choose Prepare board support again")
     return "Arduino CLI is unavailable. Repair Bootstrap, then choose Prepare board support again"
 
 

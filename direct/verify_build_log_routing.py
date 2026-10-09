@@ -12,6 +12,7 @@ import io
 import queue
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -19,9 +20,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
-def parser_fixture():
+def parser_fixture(host="win32"):
     source = ROOT / "main/web_bridge.py"
     tree = ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
     method = next(node for node in ast.walk(tree)
@@ -52,6 +54,8 @@ def parser_fixture():
             module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
             namespace = {
                 "Path": Path, "re": re, "time": time,
+                "sys": SimpleNamespace(platform=host),
+                "binfo": {"platform": "espressif32", "board": "esp32dev", "framework": "arduino"},
                 "_iter_process_output": lambda process, *_args, **_kwargs: iter(process.stdout.readline, ""),
             }
             exec(compile(module, str(source), "exec"), namespace)
@@ -60,6 +64,7 @@ def parser_fixture():
 
 
 ROUTE = parser_fixture()
+LINUX_ROUTE = parser_fixture("linux")
 
 
 def process_output_fixture():
@@ -112,13 +117,19 @@ class ParserBackend:
         self._stop_requested = False
         self._framework_download_active = False
         self.active_operation = "compile"
+        self.current_board = "Fixture ESP32 Dev Module"
         self.events = []
+        self.boxes = []
 
     def emit(self, event, payload):
         self.events.append((event, payload))
 
     def _kill_active_process_tree(self):
         raise AssertionError("The isolated parser must never terminate a process")
+
+    def _print_info_box(self, title, fields):
+        self.boxes.append((title, fields))
+        self.emit("console:log", {"text": title + "\n" + "\n".join(f"{key}: {value}" for key, value in fields)})
 
 
 class BuildLogRoutingChecks(unittest.TestCase):
@@ -212,6 +223,55 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "================= [FAILED] Took 1.20 seconds ==================",
         )
         self.assertEqual(records, [])
+
+    def test_ubuntu_metadata_is_boxed_before_compile_progress(self):
+        lines = [
+            "Processing mcu_env (platform: espressif32; board: esp32dev; framework: arduino)",
+            "PLATFORM: Espressif 32 (6.12.0) > Espressif ESP32 Dev Module",
+            "HARDWARE: ESP32 240MHz, 320KB RAM, 4MB Flash",
+            "DEBUG: Current (esp-prog) External (cmsis-dap, esp-prog)",
+            "PACKAGES:",
+            " - framework-arduinoespressif32 @ 3.20017.0 (2.0.17)",
+            " - toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch5",
+            "Building in release mode...",
+            "Compiling .pio/build/mcu_env/src/example.ino.cpp.o",
+        ]
+        backend = ParserBackend(lines)
+        self.assertEqual(LINUX_ROUTE(backend), lines)
+        self.assertEqual(len(backend.boxes), 1)
+        title, fields = backend.boxes[0]
+        self.assertEqual(title, "Board Information")
+        details = dict(fields)
+        self.assertEqual(details["Target"], "espressif32:esp32dev")
+        self.assertEqual(details["Hardware"], "ESP32 240MHz, 320KB RAM, 4MB Flash")
+        self.assertIn("framework-arduinoespressif32", details["Packages"])
+        records = [payload["text"] for event, payload in backend.events if event == "console:log"]
+        board_index = next(i for i, value in enumerate(records) if value.startswith("Board Information"))
+        progress_index = next(i for i, value in enumerate(records) if "Compiling example.ino.cpp.o" in value)
+        self.assertLess(board_index, progress_index)
+        # The same stdout retains the original Windows presentation.
+        windows_backend = ParserBackend(lines)
+        ROUTE(windows_backend)
+        self.assertEqual(windows_backend.boxes, [])
+
+    def test_ubuntu_keeps_diagnostics_that_look_like_metadata(self):
+        lines = [
+            "PLATFORM: Espressif 32 (6.12.0) > Espressif ESP32 Dev Module",
+            "PACKAGES:",
+            " - tool-esptoolpy @ 2.41100.0",
+            "src/main.cpp:3:1: error: bad field",
+            "PLATFORM: custom diagnostic value",
+            "  3 | HARDWARE: actual source excerpt",
+            "     | ^~~~~~~~",
+            "Compiling .pio/build/mcu_env/src/main.cpp.o",
+        ]
+        backend = ParserBackend(lines)
+        LINUX_ROUTE(backend)
+        shown = "\n".join(payload["text"] for event, payload in backend.events if event == "console:log")
+        self.assertIn("PLATFORM: custom diagnostic value", shown)
+        self.assertIn("3 | HARDWARE: actual source excerpt", shown)
+        self.assertIn("^~~~~~~~", shown)
+        self.assertEqual(len(backend.boxes), 1)
 
     def test_progress_looking_sentences_and_unnumbered_source_remain_exact(self):
         lines = (

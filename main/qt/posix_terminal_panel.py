@@ -6,6 +6,8 @@ import json
 import os
 import select
 import shutil
+import sys
+from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal, Slot
@@ -14,6 +16,8 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QStackedWidget
 
 from main.qt.log_colors import themed_terminal_colors
+from main.platforms.ubuntu_pty import PromptObserver, close_pty_tree
+from main.platforms.ubuntu_pty_process import NativePtyProcess
 from src.modules.runtime_resources import performance_profile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,18 +34,23 @@ class PtySession(QObject):
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._performance = performance_profile()
         self._pending_chars = 0
+        self._input_chunks = deque()
+        self._input_offset = 0
+        self._input_bytes = 0
+        self._input_overflow_notified = False
         self._dimensions = (24, 80)
         self.timer = QTimer(self)
         self.timer.setInterval(self._performance.terminal_interval_ms)
         self.timer.timeout.connect(self._drain)
         self._closed = False
+        self._prompt_observer = None
+        self.assistant_active = None
 
     @Slot(result=bool)
     def start(self):
         if self.process or self._closed:
             return False
         try:
-            from ptyprocess import PtyProcess
             env = os.environ.copy()
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
@@ -51,7 +60,16 @@ class PtySession(QObject):
             if "NO_COLOR" in env:
                 env.pop("FORCE_COLOR", None)
             env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="MCUFlasher")
-            self.process = PtyProcess.spawn(self.argv, cwd=self.cwd, env=env, dimensions=self._dimensions)
+            # The private supervisor adopts detached tool descendants when a
+            # shell or assistant exits, so they cannot outlive this session.
+            supervisor = ROOT / "main/platforms/ubuntu_pty_supervisor.py"
+            if not supervisor.is_file():
+                raise OSError("The Ubuntu terminal supervisor is missing")
+            command = [sys.executable, "-I", "-B", str(supervisor), "--", *self.argv]
+            self.process = NativePtyProcess.spawn(command, cwd=self.cwd, env=env, dimensions=self._dimensions)
+            # A full PTY input buffer must never block Qt during a large paste.
+            # Partial writes are retained and drained by the session timer.
+            os.set_blocking(self.process.fd, False)
             self.timer.start()
             return True
         except (ImportError, OSError) as exc:
@@ -61,20 +79,47 @@ class PtySession(QObject):
     @Slot(str)
     def write(self, data):
         if self.process and not self._closed:
+            encoded = data.encode("utf-8")
+            if self._input_bytes + len(encoded) > 4 * 1024 * 1024:
+                if not self._input_overflow_notified:
+                    self._input_overflow_notified = True
+                    self._send_output("\r\nTerminal input is busy; this input was not sent. Wait for the command to read its input before pasting again.\r\n")
+                return
+            if not encoded:
+                return
+            self._input_chunks.append(encoded)
+            self._input_bytes += len(encoded)
             try:
-                from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_active
-                if not hasattr(self, "_prompt_tracker"):
-                    self._prompt_tracker = PromptInputTracker(self.cwd)
-                active = getattr(self, "_assistant_input_active", False)
-                if "\r" in data or "\n" in data:
-                    active = self._assistant_input_active = assistant_process_active(self.process.pid)
-                self._prompt_tracker.feed(data, active=active)
+                if self._prompt_observer is None:
+                    self._prompt_observer = PromptObserver(self.cwd, active=self.assistant_active)
+                self._prompt_observer.feed(data, self.process.pid)
             except Exception:
                 pass
-            try:
-                self.process.write(data.encode("utf-8"))
-            except (OSError, EOFError) as exc:
-                self._finish(str(exc))
+            self._flush_input()
+
+    def _flush_input(self):
+        if not self.process or self._closed:
+            return
+        try:
+            for _ in range(4 if self._performance.constrained else 8):
+                if not self._input_chunks:
+                    break
+                chunk = self._input_chunks[0]
+                written = os.write(self.process.fd, chunk[self._input_offset:self._input_offset + 4096])
+                if written <= 0:
+                    break
+                self._input_bytes -= written
+                self._input_offset += written
+                if self._input_offset == len(chunk):
+                    self._input_chunks.popleft()
+                    self._input_offset = 0
+        except (BlockingIOError, InterruptedError):
+            # Keep the exact remaining bytes for the next timer tick.
+            pass
+        except OSError as exc:
+            self._finish(str(exc))
+        if self._input_bytes < 2 * 1024 * 1024:
+            self._input_overflow_notified = False
 
     @Slot(int, int)
     def resize(self, rows, columns):
@@ -98,6 +143,7 @@ class PtySession(QObject):
             self.output.emit(text)
 
     def _drain(self):
+        self._flush_input()
         if not self.process or self._closed or self._pending_chars >= 128_000:
             return
         chunks = []
@@ -107,11 +153,16 @@ class PtySession(QObject):
                 if not select.select([self.process.fd], [], [], 0)[0]:
                     break
                 raw = self.process.read(4096)
+                if raw is None:
+                    break
                 if not raw:
                     raise EOFError
                 text = self._decoder.decode(raw)
                 if text:
                     chunks.append(text)
+        except (BlockingIOError, InterruptedError):
+            # Readiness can change after select; this is temporary backpressure.
+            pass
         except (OSError, EOFError):
             tail = self._decoder.decode(b"", final=True)
             if tail:
@@ -130,12 +181,16 @@ class PtySession(QObject):
             return
         self._closed = True
         self.timer.stop()
+        self._input_chunks.clear()
+        self._input_bytes = self._input_offset = 0
+        if self._prompt_observer:
+            self._prompt_observer.close()
         if self.process:
-            try:
-                self.process.close(force=True)
-            except (OSError, EOFError):
-                pass
-            self.process = None
+            process, self.process = self.process, None
+            import threading
+            # Python waits for this bounded cleanup on exit; a daemon could
+            # disappear before killing an assistant's still-running tools.
+            threading.Thread(target=close_pty_tree, args=(process,), name="MCU_ClosePtyTree", daemon=False).start()
 
 
 class PosixTerminalPanel(QWidget):
@@ -246,6 +301,11 @@ class PosixTerminalPanel(QWidget):
     def set_responsive_width(self, width):
         self._resize_embedded_terminal()
 
+    def has_input_focus(self):
+        from PySide6.QtWidgets import QApplication
+        widget = QApplication.focusWidget()
+        return bool(widget and self.isVisible() and (widget is self or self.isAncestorOf(widget)))
+
     def set_font_size(self, size):
         self._font_size = max(6, min(48, int(size)))
         for view in self._sessions:
@@ -277,27 +337,9 @@ class PosixTerminalPanel(QWidget):
         super().closeEvent(event)
 
 
-class PosixAIPanel(PosixTerminalPanel):
-    """Use the same native PTY for an installed OpenCode CLI on Linux."""
-
-    def __init__(self, backend=None, parent=None):
-        super().__init__(backend, parent)
-        self._label.setText("OpenCode assistant")
-
-    def ensure_started(self):
-        if self._sessions:
-            return
-        executable = shutil.which("opencode")
-        if not executable:
-            self._label.setText("Install OpenCode and add it to PATH, then reopen this panel.")
-            return
-        self.add_session(argv=[executable], label="OpenCode")
-
-    def _on_tab_revealed(self):
-        self.ensure_started()
-
-    def _resize_embedded_ai(self):
-        self._resize_embedded_terminal()
-
-    def _stop_ai(self):
-        self._stop_shell()
+def __getattr__(name):
+    # Keep the older import available without a circular eager dependency.
+    if name == "PosixAIPanel":
+        from main.qt.posix_ai_panel import PosixAIPanel
+        return PosixAIPanel
+    raise AttributeError(name)

@@ -139,6 +139,9 @@ ___*.py
 .opencode/node_modules/
 node_modules/
 .venv-linux/
+.ubuntu-tools/
+# Shortcuts contain a local checkout path; regenerate after moving the folder.
+/MCU Flasher.desktop
 
 # === Tests ===
 test/

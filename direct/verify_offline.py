@@ -619,6 +619,65 @@ class OfflineChecks(unittest.TestCase):
         self.assertEqual(sum((spec.owner, spec.name) == ("vendor", "tool-gperf") for spec in specs), 2)
         log.assert_not_called()
 
+    def _host_mconf_plan(self, host, *, owner="platformio", raw_required=False,
+                         required_framework=None, version="~1.4060000.0"):
+        baseline = {
+            "tool-mconf": {"owner": owner, "version": version, "optional": not raw_required},
+            "tool-mconf-extra": {"owner": "platformio", "version": "1.0", "optional": True},
+            "tool-idf": {"owner": "platformio", "version": "~1.0.1", "optional": True},
+            "tool-cmake": {"owner": "platformio", "version": "~3.30.0", "optional": True},
+            "tool-ninja": {"owner": "platformio", "version": "^1.7.0", "optional": True},
+            "uploader": {"owner": "vendor", "version": "1.0", "optional": True, "type": "uploader"},
+            "debugger": {"owner": "vendor", "version": "1.0", "optional": True, "type": "debugger"},
+        }
+        arduino, espidf = copy.deepcopy(baseline), copy.deepcopy(baseline)
+        # A later board must not erase a raw-manifest requirement.
+        for framework, packages in (("arduino", arduino), ("espidf", espidf)):
+            packages["tool-mconf"]["optional"] = framework != required_framework
+        log = Mock()
+        with patch.object(setup.sys, "platform", host):
+            from platformio.platform.factory import PlatformFactory
+            class Board:
+                id = "demo"
+                def get(self, key, default=None):
+                    return {"frameworks": ["arduino", "espidf"], "build.mcu": "esp32"}.get(key, default)
+            class NativePlatform:
+                def __init__(self): self.packages = copy.deepcopy(baseline)
+                def configure_default_packages(self, options, targets):
+                    self.packages = copy.deepcopy(arduino if options["framework"] == ["arduino"] else espidf)
+            with patch.object(PlatformFactory, "new", side_effect=lambda *_: NativePlatform()):
+                specs, probes = setup.package_plan(object(), {"demo": Board()}, log=log)
+        return specs, probes, log
+
+    def test_linux_omits_only_reviewed_unused_windows_mconf_package(self):
+        specs, probes, log = self._host_mconf_plan("linux")
+        self.assertEqual({spec.name for spec in specs}, {
+            "tool-mconf-extra", "tool-idf", "tool-cmake", "tool-ninja", "uploader", "debugger"})
+        self.assertEqual(set(probes), {("demo", "arduino"), ("demo", "espidf")})
+        log.assert_called_once()
+        self.assertIn("Windows-only menuconfig", log.call_args.args[0])
+
+    def test_windows_retains_optional_mconf_package(self):
+        specs, _, log = self._host_mconf_plan("win32")
+        self.assertIn(("platformio", "tool-mconf"), {(spec.owner, spec.name) for spec in specs})
+        log.assert_not_called()
+
+    def test_linux_retains_mconf_required_by_any_selected_framework_or_manifest(self):
+        for kwargs in ({"raw_required": True}, {"required_framework": "arduino"},
+                       {"required_framework": "espidf"}):
+            with self.subTest(**kwargs):
+                specs, _, log = self._host_mconf_plan("linux", **kwargs)
+                self.assertIn("tool-mconf", {spec.name for spec in specs})
+                log.assert_not_called()
+
+    def test_linux_retains_unreviewed_or_custom_mconf_declarations(self):
+        for kwargs in ({"owner": "vendor"}, {"version": "~1.4070000.0"},
+                       {"version": "https://example.invalid/custom-mconf.zip"}):
+            with self.subTest(**kwargs):
+                specs, _, log = self._host_mconf_plan("linux", **kwargs)
+                self.assertIn("tool-mconf", {spec.name for spec in specs})
+                log.assert_not_called()
+
     def test_dependency_completeness_handles_builtin_libraries_and_cycles(self):
         from platformio.package.manager.base import BasePackageManager
         packages = {name: SimpleNamespace(path=str(self.root / name)) for name in ("sensor", "transport")}
