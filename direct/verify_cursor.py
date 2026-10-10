@@ -14,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget, QLineEdit, QVBoxLayout
+from main.qt import cursor_visibility
 from main.qt.cursor_visibility import WorkspacePointerGuard
 
 APP = QApplication.instance() or QApplication([])
@@ -61,15 +62,26 @@ class CursorChecks(unittest.TestCase):
         unrelated = QWidget()
         unrelated.setCursor(Qt.CursorShape.BlankCursor)
         self.assertEqual(unrelated.cursor().shape(), Qt.CursorShape.BlankCursor)
+        if sys.platform.startswith("linux"):
+            detached = self._assert_owned_detached_pointer_is_restored()
+        else:
+            # Exercise the Linux tree-scanner path on Windows too, where the
+            # app-wide event filter would otherwise restore the cursor first.
+            APP.removeEventFilter(self.guard)
+            with patch.object(cursor_visibility.sys, "platform", "linux"):
+                WorkspacePointerGuard(self.owner)
+                detached = self._assert_owned_detached_pointer_is_restored()
+        detached.close()
+        unrelated.close()
+
+    def _assert_owned_detached_pointer_is_restored(self):
         detached = QWidget(self.owner, Qt.WindowType.Window)
         child = QWidget(detached)
         child.setCursor(Qt.CursorShape.BlankCursor)
-        # Ubuntu's guard scans newly-owned window trees on the next event-loop
-        # turn to avoid reentering QWidget construction from ChildAdded.
+        # Ubuntu's guard defers scans until widget construction has returned.
         APP.processEvents()
         self.assertEqual(child.cursor().shape(), Qt.CursorShape.ArrowCursor)
-        detached.close()
-        unrelated.close()
+        return detached
 
     def test_editor_restores_focus_without_reloading_or_changing_position(self):
         from main.qt.editor_panel import MonacoEditorPanel

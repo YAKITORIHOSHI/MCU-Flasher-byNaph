@@ -64,11 +64,10 @@ class WorkspacePointerGuard(QObject):
     def eventFilter(self, watched, event):
         if sys.platform.startswith("linux"):
             kind = event.type()
-            if kind in (QEvent.Type.ChildRemoved, QEvent.Type.ChildPolished,
-                        QEvent.Type.ParentChange):
-                # Ignore ChildAdded while the constructor is incomplete.
-                # Even ChildPolished can reenter a native widget's setup, so
-                # scan after dispatch; never inspect event.child().
+            if kind in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved,
+                        QEvent.Type.ChildPolished, QEvent.Type.ParentChange):
+                # Defer the scan until widget construction has returned; never
+                # inspect event.child() while Qt may still be polishing it.
                 self._scan_timer.start(0)
             if (not self._restoring and isValid(watched) and isinstance(watched, QWidget)
                     and kind in (QEvent.Type.CursorChange, QEvent.Type.Enter, QEvent.Type.MouseMove)):
