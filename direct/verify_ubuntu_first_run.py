@@ -340,7 +340,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     # that production's minimum-CPU admission policy still rejects undersized hosts.
     verification_env.pop("MCU_FIRST_RUN_ALLOW_SMALL_RUNNER", None)
     runtime_checked = _run([str(python), "-B", str(app / "direct/verify_runtime.py"),
-                            "--render-dir", str(fixture / "runtime-captures")],
+                            "--render-dir", str(fixture / "runtime-captures"), "--no-finalize"],
                            cwd=app, env=verification_env, log=runtime_log, timeout=120)
     if runtime_checked:
         raise RuntimeError(f"The newly bootstrapped private runtime failed hardware-free checks; see {runtime_log}")

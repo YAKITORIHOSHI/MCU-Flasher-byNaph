@@ -520,17 +520,20 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     api._board_frameworks = {}
     api.is_busy = False
     api.active_operation = api._current_op_phase = api._active_process = None
-    api._block_if_pending_ai_edits = Mock(return_value=False)
+    api._block_if_pending_ai_edits = lambda: False
     api._effective_cache_root = lambda _path: workspace
     api._scan_includes_for_libs = lambda: []
     api._get_jobs = lambda: 4
     api._unmap_unc_after_build = lambda: None
     from main.core import compiled_cache
-    api._save_compile_cache = Mock(side_effect=lambda board, source_hash, build_metadata=None, build_inputs=None:
-        compiled_cache.write_receipt(api._board_workspace_dir(board), board_key=api._board_cache_key(board),
-                                     board_name=board, source_hash=source_hash, metadata=build_metadata,
-                                     build_inputs=build_inputs))
-    api.update_skip_compile_availability = Mock()
+    saved_receipts = []
+    def save_compile_cache(board, source_hash, build_metadata=None, build_inputs=None):
+        saved_receipts.append((board, source_hash))
+        return compiled_cache.write_receipt(api._board_workspace_dir(board), board_key=api._board_cache_key(board),
+                                            board_name=board, source_hash=source_hash, metadata=build_metadata,
+                                            build_inputs=build_inputs)
+    api._save_compile_cache = save_compile_cache
+    api.update_skip_compile_availability = lambda: None
     bus = MCUSignals()
     events = []
     def emit(event, data):
@@ -553,7 +556,7 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
             "PLATFORMIO_BUILD_CACHE_DIR": str(core / ".cache/build"),
             "TMP": str(core / ".tmp"), "TEMP": str(core / ".tmp"),
         }))
-        stack.enter_context(patch.object(package_jobs, "package_core_directory", return_value=core))
+        stack.enter_context(patch.object(package_jobs, "package_core_directory", new=lambda *_args, **_kwargs: core))
         for owner, name, value in ((catalog_module, "SUPPORTED_BOARDS", isolated_catalog),
                                   (web_bridge, "SUPPORTED_BOARDS", isolated_catalog),
                                   (web_bridge, "_project_root", sandbox)):
@@ -568,13 +571,16 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
                                   (catalog_module, "_save_board_catalog_cache", None),
                                   (web_bridge, "hide_generated_directory", None),
                                   (web_bridge, "ensure_file_writable", None)):
-            stack.enter_context(patch.object(owner, name, return_value=value))
-        stack.enter_context(patch.object(web_bridge, "prepare_platformio_board_toolchain", side_effect=AssertionError("Probe must not install")))
-        stack.enter_context(patch.object(web_bridge.subprocess, "Popen", side_effect=launch))
-        stack.enter_context(patch.object(Path, "home", return_value=sandbox))
-        stack.enter_context(patch.object(web_bridge.os.path, "expanduser", side_effect=lambda value:
+            stack.enter_context(patch.object(owner, name, new=lambda *_args, _result=value, **_kwargs: _result))
+        def forbidden_prepare(*_args, **_kwargs):
+            raise AssertionError("Probe must not install")
+        stack.enter_context(patch.object(web_bridge, "prepare_platformio_board_toolchain", new=forbidden_prepare))
+        stack.enter_context(patch.object(web_bridge.subprocess, "Popen", new=launch))
+        stack.enter_context(patch.object(Path, "home", new=lambda: sandbox))
+        stack.enter_context(patch.object(web_bridge.os.path, "expanduser", new=lambda value:
                                         str(sandbox) if value == "~" else original_expanduser(value)))
-        stack.enter_context(patch("main.core.config._load_raw_config", return_value={"shared": {}, "instances": {}}))
+        from main.core import config
+        stack.enter_context(patch.object(config, "_load_raw_config", new=lambda: {"shared": {}, "instances": {}}))
         window = QMainWindow()
         toolbar = PrimaryToolbar(api, window)
         window.addToolBar(toolbar)
@@ -600,7 +606,7 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         if not succeeded:
             print("\n".join(messages[-15:]), flush=True)
             raise AssertionError(f"Application compile failed; see {log}")
-        api._save_compile_cache.assert_called_once()
+        assert len(saved_receipts) == 1, f"Expected one isolated compile receipt, received {saved_receipts!r}"
         firmware = api._board_build_dir() / artifact
         assert firmware.is_file()
         assert api.check_can_skip_compile(), "Successful real compiler output must be reusable for this board"
@@ -691,6 +697,8 @@ if __name__ == "__main__":
     parser.add_argument("--verify-built-pipeline", type=Path)
     parser.add_argument("--compile-button-only", type=Path,
                         help="Run only the real Compile-button integration in an explicitly prepared temp/ fixture")
+    parser.add_argument("--no-finalize", action="store_true",
+                        help="Exit without PySide interpreter finalization after all checks and fixture cleanup")
     args, remaining = parser.parse_known_args()
     if args.compile_installed_esp32:
         compile_installed_esp32()
@@ -718,4 +726,9 @@ if __name__ == "__main__":
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     APP.processEvents()
     gc.collect()
-    raise SystemExit(0 if checks.result.wasSuccessful() else 1)
+    exit_code = 0 if checks.result.wasSuccessful() else 1
+    if args.no_finalize:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+    raise SystemExit(exit_code)

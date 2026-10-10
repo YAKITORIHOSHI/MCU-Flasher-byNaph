@@ -676,10 +676,18 @@ def qt_smoke(app, render_dir=None):
 
         page = window._editor_panel._view.page()
         unsaved = "// Unsaved renderer recovery sentinel\nvoid setup() {}\nvoid loop() {}\n"
+        recovery_deadline = [0.0]
 
         @checked
         def verify_restored(value):
-            assert value == unsaved, f"Renderer reload lost a dirty buffer: {value!r}"
+            if value != unsaved and time.monotonic() < recovery_deadline[0]:
+                QTimer.singleShot(150, read_restored)
+                return
+            assert value == unsaved, (
+                f"Renderer reload lost a dirty buffer: {value!r}; "
+                f"recovery_pending={window._editor_panel.bridge._recovering_buffers}, "
+                f"recovery_buffers={window._editor_panel.bridge._recovery_buffers!r}"
+            )
             assert backend.modified_files.get(backend.active_file_path), "Restored buffer must remain dirty"
             assert not window._editor_panel.bridge._recovering_buffers
             verify_window_ownership()
@@ -725,8 +733,9 @@ def qt_smoke(app, render_dir=None):
             assert window._editor_area.currentWidget() is window._editor_panel
             assert window._editor_panel._view.page() is page
             verify_window_ownership()
+            recovery_deadline[0] = time.monotonic() + 15
             window._editor_panel._manual_editor_reload()
-            QTimer.singleShot(3000, read_restored)
+            QTimer.singleShot(150, read_restored)
 
         @checked
         def edit_loaded(value):

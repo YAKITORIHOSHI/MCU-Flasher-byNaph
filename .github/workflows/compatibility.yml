@@ -178,7 +178,7 @@ jobs:
           PY
           .venv-linux/bin/python -B -m platformio run -d temp/audit/ci-native-avr-project -j 2
           .venv-linux/bin/python -B -m platformio pkg install -g -t platformio/tool-avrdude
-          .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-installed-avr --avr-core temp/audit/ci-native-avr-core
+          .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-installed-avr --avr-core temp/audit/ci-native-avr-core --no-finalize
       - name: Native Ubuntu ESP32 Compile-button integration
         if: runner.os == 'Linux'
         env:
@@ -199,7 +199,7 @@ jobs:
           (project / 'src/main.cpp').write_text('#include <Arduino.h>\nvoid setup() {}\nvoid loop() {}\n')
           PY
           .venv-linux/bin/python -B -m platformio pkg install -d temp/audit/ci-native-esp32/project
-          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-native-esp32 temp/audit/ci-native-esp32/core
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_target_resolution.py --compile-native-esp32 temp/audit/ci-native-esp32/core --no-finalize
       - name: Windows runtime and verification
         if: runner.os == 'Windows'
         shell: pwsh

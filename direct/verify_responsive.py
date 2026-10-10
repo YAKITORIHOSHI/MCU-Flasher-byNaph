@@ -855,8 +855,13 @@ class TkResponsiveChecks(DownloaderChecks):
         self.pump()
         app.board_tab.detail_canvas.yview_moveto(1)
         self.pump()
+        # On short panes, controls at the top and bottom cannot all be mapped
+        # at once. Verify each one is reachable at its scroll position.
         for control in (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn):
-            self.assertTrue(control.winfo_ismapped())
+            app.board_tab.detail_canvas.yview_moveto(1 if control is app.board_tab.prepare_btn else 0)
+            self.pump()
+            self.assertTrue(control.winfo_ismapped(),
+                            f'{control.winfo_class()} is not mapped at scroll position {app.board_tab.detail_canvas.yview()}')
             self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
         app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
         app.sources_btn.invoke()
