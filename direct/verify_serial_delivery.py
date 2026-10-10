@@ -333,4 +333,12 @@ class SerialDeliveryChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if "--no-finalize" in sys.argv:
+        # Preserve and restore native clipboard data in unittest cleanup, then
+        # avoid the PySide refcount failure seen only during interpreter exit.
+        sys.argv.remove("--no-finalize")
+        checks = unittest.main(verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(verbosity=2)
