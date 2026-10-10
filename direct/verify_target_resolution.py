@@ -593,13 +593,17 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         toolbar.btn_compile.click()
         deadline = time.monotonic() + 240
         while api.is_busy and time.monotonic() < deadline:
-            QTest.qWait(10)
+            time.sleep(0.01)
         if api.is_busy:
             api.stop_operation()
             raise AssertionError("Application compile exceeded probe timeout")
+        worker = getattr(api, "_operation_worker", None)
+        if worker is not None:
+            worker.join(timeout=10)
+            if worker.is_alive():
+                raise AssertionError("Application compile worker did not exit after releasing the operation")
         for payload in phase_events:
             toolbar.on_operation_phase(payload)
-        QTest.qWait(20)
         messages = [str(data.get("text", "")) for event, data in events if event == "console:log"]
         log = sandbox / ("application-compile.log" if workspace_name == "project" else workspace_name + "-compile.log")
         log.write_text("\n".join(messages) + "\n", encoding="utf-8")
