@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import gc
 import json
 import os
 import re
@@ -697,4 +698,14 @@ if __name__ == "__main__":
         compile_installed_avr(args.avr_core)
     elif args.verify_built_pipeline:
         verify_built_pipeline(args.verify_built_pipeline)
-    unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)
+    checks = unittest.main(argv=[sys.argv[0], *remaining], verbosity=2, exit=False)
+    # Some Linux/PySide combinations keep deferred widgets alive through
+    # interpreter finalization, which can abort with none_dealloc after the
+    # successful test summary. Drain Qt's deferred-delete queue while Python is
+    # still active so this verifier reports its actual test result reliably.
+    APP.closeAllWindows()
+    APP.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    APP.processEvents()
+    gc.collect()
+    raise SystemExit(0 if checks.result.wasSuccessful() else 1)

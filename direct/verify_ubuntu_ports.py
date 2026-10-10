@@ -49,9 +49,12 @@ class UbuntuPortChecks(unittest.TestCase):
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         backend = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                        and node.name == "MCUWebBackendAPI")
-        names = {"_scan_ports", "refresh_ports", "_port_monitor_loop", "_init_hardware"}
+        names = {"_scan_ports", "refresh_ports", "_port_monitor_loop", "_init_hardware",
+                 "_serial_handoff_pending", "_clear_disconnected_port"}
         functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
                      and node.name in names]
+        if {node.name for node in functions} != names:
+            raise AssertionError("The isolated monitor fixture must include every cleanup helper")
         cls.fixture_tree = ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(
             name="PortFixture", bases=[], keywords=[], body=functions, decorator_list=[]
         )], type_ignores=[]))

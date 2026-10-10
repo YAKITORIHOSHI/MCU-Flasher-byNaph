@@ -48,8 +48,12 @@ aggregate writes through a private server and restrict direct client writes.
 Windows uses the current user's **Credential Manager** generic credentials.
 Ubuntu uses the desktop **Secret Service** through `secret-tool` from
 `libsecret-tools`, normally backed by GNOME Keyring. A missing or locked keyring
-produces a visible saving error. There is no plaintext or fixed-key fallback.
-Credentials never travel with a sketch or a copied application folder.
+produces a visible error when an old saved session cannot be cleared or a new
+credential cannot be stored. A temporary sign-in is allowed when this provider
+has never saved credentials on this OS account. A small, empty marker outside
+the installation records that encrypted credential storage has been used; it
+contains no account, password or token. There is no plaintext or fixed-key
+fallback. Credentials never travel with a sketch or a copied application folder.
 
 **Save login** stores the email and literal password in the OS vault for filling
 the login form. **Remember me** separately stores a refresh token for restoring
@@ -58,7 +62,10 @@ arguments. Signing out removes the remembered session; **Forget saved login**
 also removes the saved password. Without either option, tokens live only in the
 current process. An independent cloud window may need another login when
 Remember me is disabled. Passwords are sent only over verified HTTPS to Firebase;
-the client does not implement its own encryption protocol.
+the operating system protects saved values at rest. The client does not implement
+its own encryption protocol, and machine owners retain access to their own OS
+credential vault. Firebase web API keys identify the project and are not private
+authentication secrets.
 
 User cloud projects and pull recovery copies are outside the installation:
 

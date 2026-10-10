@@ -168,6 +168,47 @@ class CloudChecks(unittest.TestCase):
             self.login(remember_me=True)
         self.assertFalse(self.service.is_authenticated)
 
+    def test_locked_vault_cannot_reuse_a_prior_saved_session(self):
+        scope = self.service._scope()
+        self.store.values["session:" + scope] = {
+            "uid": "old-user", "email": "old@example.invalid", "refresh_token": "old-refresh",
+        }
+        self.store.delete = Mock(side_effect=SecureStorageError("Fixture keyring is locked"))
+        with self.assertRaisesRegex(cloud.CloudError, "locked"):
+            self.login()
+        with self.assertRaisesRegex(cloud.CloudError, "locked"):
+            self.service.create_account("new@example.invalid", "fixture password")
+        self.assertFalse(self.http.calls)
+        self.assertFalse(self.service.is_authenticated)
+
+    def test_missing_vault_blocks_ephemeral_login_if_this_provider_has_saved_credentials(self):
+        self.login(save_login=True)
+        marker = next((self.folder / "user-cloud").glob(".credential-store-*"))
+        self.assertEqual(marker.read_bytes(), b"")
+        marker_content = b"".join(path.read_bytes() for path in (self.folder / "user-cloud").glob(".credential-store-*"))
+        self.assertNotIn(b"literal password", marker_content)
+        self.assertNotIn(b"fixture-refresh-token", marker_content)
+        self.store.status = False, "Fixture keyring is unavailable"
+        child = self.make_service()
+        self.http.calls.clear()
+        with self.assertRaisesRegex(cloud.CloudError, "saved credentials"):
+            child.sign_in("other@example.invalid", "other password")
+        self.assertFalse(self.http.calls)
+
+    def test_credential_marker_tracks_remaining_saved_vault_entries(self):
+        scope = self.service._scope()
+        marker = self.folder / "user-cloud" / (".credential-store-" + scope)
+        self.login(remember_me=True)
+        self.assertTrue(marker.is_file())
+        self.service.sign_out()
+        self.assertFalse(marker.exists())
+
+        self.login(save_login=True, remember_me=True)
+        self.service.sign_out()
+        self.assertTrue(marker.is_file())
+        self.service.sign_out(forget_saved=True)
+        self.assertFalse(marker.exists())
+
     def test_error_never_exposes_credential_url_or_arbitrary_remote_message(self):
         original = self.http.__call__
         def malicious(request, **kwargs):

@@ -396,9 +396,43 @@ class CloudSketchService:
 
     def _persist_session(self) -> None:
         if self._remember:
-            self._store.set("session:" + self._scope(), {
+            scope = self._scope()
+            self._mark_credentials_persisted(scope)
+            self._store.set("session:" + scope, {
                 "uid": self._uid, "email": self._email, "refresh_token": self._refresh_token,
             })
+
+    def _credential_marker(self, scope: str) -> Path:
+        return self._data_dir / (".credential-store-" + scope)
+
+    def _has_persisted_credentials(self, scope: str) -> bool:
+        marker = self._credential_marker(scope)
+        try:
+            return os.path.lexists(marker)
+        except OSError:
+            # An unreadable marker is treated as prior credential use.
+            return True
+
+    def _mark_credentials_persisted(self, scope: str) -> None:
+        marker = self._credential_marker(scope)
+        try:
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            if marker.is_symlink():
+                raise OSError("linked marker")
+            if not marker.exists():
+                descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(descriptor)
+        except OSError:
+            raise SecureStorageError("Could not record secure credential use outside the application folder.") from None
+
+    def _clear_credentials_marker(self, scope: str) -> None:
+        marker = self._credential_marker(scope)
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            # A stale marker only prevents unsafe temporary sign-in if the vault
+            # later becomes unavailable; it contains no credential material.
+            pass
 
     def sign_in(self, email: str, password: str, *, save_login=False, remember_me=False) -> dict:
         with self._lock:
@@ -407,15 +441,20 @@ class CloudSketchService:
             if not clean_email or not isinstance(password, str) or not password:
                 raise CloudError("Enter your email and password.")
             try:
-                if (save_login or remember_me) and not self._store.status[0]:
-                    raise SecureStorageError(self._store.status[1])
                 scope = self._scope()
-                # Failed sign-in cannot silently revive an earlier remembered account.
-                try:
+                secure_storage = bool(self._store.status[0])
+                if (save_login or remember_me) and not secure_storage:
+                    raise SecureStorageError(self._store.status[1])
+                if secure_storage:
+                    # Never authenticate over an old remembered session. A locked
+                    # vault is a visible failure even when the new session is
+                    # intended to be temporary.
                     self._store.delete("session:" + scope)
-                except SecureStorageError:
-                    if remember_me:
-                        raise
+                elif self._has_persisted_credentials(scope):
+                    raise SecureStorageError(
+                        "Secure credential storage is unavailable, and this provider has saved credentials "
+                        "that cannot be cleared. Unlock or restore the OS credential vault, then try again."
+                    )
                 value = self._auth_request("signInWithPassword", {
                     "email": clean_email, "password": password, "returnSecureToken": True,
                 })
@@ -424,12 +463,13 @@ class CloudSketchService:
                 self._session_scope = scope
                 self._remember = bool(remember_me)
                 if save_login:
+                    self._mark_credentials_persisted(scope)
                     self._store.set("login:" + scope, {"email": self._email, "password": password})
                 else:
-                    try:
+                    if secure_storage:
                         self._store.delete("login:" + scope)
-                    except SecureStorageError:
-                        pass
+                if not (save_login or remember_me) and secure_storage:
+                    self._clear_credentials_marker(scope)
                 self._persist_session()
                 return self.account_info
             except SecureStorageError as error:
@@ -445,26 +485,38 @@ class CloudSketchService:
             clean_email = (email or "").strip()
             if not clean_email or not isinstance(password, str) or len(password) < 6:
                 raise CloudError("Enter an email and a password with at least six characters.")
-            if (save_login or remember_me) and not self._store.status[0]:
-                raise CloudError(self._store.status[1])
             scope = self._scope()
+            secure_storage = bool(self._store.status[0])
+            if (save_login or remember_me) and not secure_storage:
+                raise CloudError(self._store.status[1])
+            try:
+                if secure_storage:
+                    self._store.delete("session:" + scope)
+                elif self._has_persisted_credentials(scope):
+                    raise SecureStorageError(
+                        "Secure credential storage is unavailable, and this provider has saved credentials "
+                        "that cannot be cleared. Unlock or restore the OS credential vault, then try again."
+                    )
+            except SecureStorageError as error:
+                raise CloudError(str(error)) from None
             value = self._auth_request("signUp", {"email": clean_email, "password": password, "returnSecureToken": True})
             self._email = clean_email
             self._session(value)
             self._session_scope = scope
             self._remember = bool(remember_me)
             try:
-                self._store.delete("session:" + scope)
                 if save_login:
+                    self._mark_credentials_persisted(scope)
                     self._store.set("login:" + scope, {"email": self._email, "password": password})
-                else:
+                elif secure_storage:
                     self._store.delete("login:" + scope)
+                if not (save_login or remember_me) and secure_storage:
+                    self._clear_credentials_marker(scope)
                 self._persist_session()
             except SecureStorageError as error:
-                if save_login or remember_me:
-                    self._clear_session()
-                    raise CloudError("Account created, but secure saving failed. Sign in again without saving, "
-                                     "or unlock your OS keyring.") from None
+                self._clear_session()
+                raise CloudError("Account created, but secure credential cleanup or saving failed. "
+                                 "Unlock your OS keyring and sign in again.") from None
             return self.account_info
 
     def _refresh(self) -> None:
@@ -522,6 +574,8 @@ class CloudSketchService:
                     self._store.delete("session:" + scope)
                     if forget_saved:
                         self._store.delete("login:" + scope)
+                    if forget_saved or not self._store.get("login:" + scope):
+                        self._clear_credentials_marker(scope)
             except SecureStorageError as error:
                 raise CloudError(str(error)) from None
 

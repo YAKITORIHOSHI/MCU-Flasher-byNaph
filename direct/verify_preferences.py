@@ -204,6 +204,13 @@ class PreferenceChecks(unittest.TestCase):
 
     def test_both_terminal_hosts_restore_font_without_starting_sessions(self):
         from main.qt.terminal_panel import TerminalPanel
+        # This is a Qt preference check on both hosts, with no native PTY.
+        # Windows cannot import fcntl; inject the process boundary explicitly.
+        spawn = Mock(side_effect=AssertionError("Preference restoration must not start a PTY"))
+        native_pty = SimpleNamespace(NativePtyProcess=SimpleNamespace(spawn=spawn))
+        self.stack.enter_context(patch.dict(sys.modules, {
+            "main.platforms.ubuntu_pty_process": native_pty,
+        }))
         from main.qt.posix_terminal_panel import PosixTerminalPanel
         self.assertTrue(config.set_monitor_font_size(21))
         with patch.object(TerminalPanel, "ensure_started") as windows_start, \
@@ -216,6 +223,7 @@ class PreferenceChecks(unittest.TestCase):
             self.assertFalse(posix._is_active)
             windows_start.assert_not_called()
             posix_start.assert_not_called()
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__":

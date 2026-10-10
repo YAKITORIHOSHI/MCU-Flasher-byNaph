@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import ast
+import ctypes
+import ctypes.util
 import os
 from pathlib import Path
 import re
@@ -359,9 +361,23 @@ class LauncherChecks(unittest.TestCase):
         self.assertTrue(os.access(self.root / "MCU Flasher.desktop", os.X_OK))
 
     def test_desktop_parser_launches_moved_folder_without_script_execute_permission(self):
-        gio = shutil.which("gio")
-        if not gio:
-            self.skipTest("GLib desktop-entry launcher unavailable")
+        library = ctypes.util.find_library("gio-2.0")
+        if not library:
+            self.skipTest("GLib desktop-entry API unavailable")
+        gio = ctypes.CDLL(library)
+        gio.g_desktop_app_info_new_from_filename.argtypes = [ctypes.c_char_p]
+        gio.g_desktop_app_info_new_from_filename.restype = ctypes.c_void_p
+        gio.g_app_info_launch.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.POINTER(ctypes.c_void_p)]
+        gio.g_app_info_launch.restype = ctypes.c_int
+        gio.g_object_unref.argtypes = [ctypes.c_void_p]
+        gio.g_object_unref.restype = None
+        gio.g_error_free.argtypes = [ctypes.c_void_p]
+        gio.g_error_free.restype = None
+
+        class GError(ctypes.Structure):
+            _fields_ = [("domain", ctypes.c_uint), ("code", ctypes.c_int), ("message", ctypes.c_char_p)]
+
         folder = self.root / 'Ubuntu Ω %folder $cash `literal` "quoted"'
         folder.mkdir()
         (folder / "direct/ubuntu").mkdir(parents=True)
@@ -377,16 +393,25 @@ class LauncherChecks(unittest.TestCase):
         folder.rename(moved)
         desktop = moved / "fixture.desktop"
         receipt = self.root / "receipt.txt"
-        env = os.environ.copy()
-        env["MCU_LAUNCHER_FIXTURE_RECEIPT"] = str(receipt)
-        result = subprocess.run([gio, "launch", str(desktop)], cwd=self.root, env=env,
-                                capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        # GLib's gio CLI through 2.80 creates this object from a keyfile without
+        # its filename property, silently dropping %k. Use the desktop API,
+        # which preserves the actual filename on Ubuntu 22/24/26 alike.
+        app_info = gio.g_desktop_app_info_new_from_filename(os.fsencode(desktop))
+        self.assertTrue(app_info, "GLib could not parse the generated desktop entry")
+        error = ctypes.c_void_p()
+        try:
+            with patch.dict(os.environ, {"MCU_LAUNCHER_FIXTURE_RECEIPT": str(receipt)}):
+                launched = gio.g_app_info_launch(app_info, None, None, ctypes.byref(error))
+            message = ctypes.cast(error, ctypes.POINTER(GError)).contents.message.decode(errors="replace") if error.value else ""
+            self.assertTrue(launched, message)
+        finally:
+            if error.value:
+                gio.g_error_free(error)
+            gio.g_object_unref(app_info)
         deadline = time.monotonic() + 3
         while not receipt.exists() and time.monotonic() < deadline:
             time.sleep(.02)
-        self.assertTrue(receipt.is_file(), "Desktop child did not record launch; "
-                        f"gio stdout={result.stdout!r}; stderr={result.stderr!r}")
+        self.assertTrue(receipt.is_file(), "The native desktop API launched its child without a receipt")
         self.assertEqual(receipt.read_text(), "launched")
 
     def test_foreign_runtime_variables_are_removed_but_cli_path_is_retained(self):

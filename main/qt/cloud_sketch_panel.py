@@ -40,6 +40,7 @@ class CloudSketchPanel(QWidget):
         self._waiting_for_save = False
         self._generation = 0
         self._state = {}
+        self._saved_login_exists = False
         self._cards = []
         self._forms = []
         self._job_buttons = []
@@ -80,8 +81,8 @@ class CloudSketchPanel(QWidget):
 
     def _setup_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(6, 8, 6, 6)
-        outer.setSpacing(8)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(5)
         self._scroll = QScrollArea(self)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setWidgetResizable(True)
@@ -91,11 +92,14 @@ class CloudSketchPanel(QWidget):
         content.setMinimumWidth(0)
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(0, 0, 4, 0)
-        self._content_layout.setSpacing(10)
+        self._content_layout.setSpacing(7)
         self._scroll.setWidget(content)
         outer.addWidget(self._scroll, 1)
 
+        self._content_layout.addStretch(1)
         self._account_card, account = self._card(content)
+        account.setContentsMargins(10, 8, 10, 8)
+        account.setSpacing(6)
         heading = QHBoxLayout()
         self._account_title = self._label("Cloud sketches", self._account_card)
         self._account_title.setObjectName("cloud-heading")
@@ -105,10 +109,17 @@ class CloudSketchPanel(QWidget):
         account.addLayout(heading)
         self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card)
         account.addWidget(self._account_summary)
-        self._login_fields = QWidget(self._account_card)
+        self._auth_pages = QWidget(self._account_card)
+        auth_pages_layout = QVBoxLayout(self._auth_pages)
+        auth_pages_layout.setContentsMargins(0, 0, 0, 0)
+        self._login_fields = QWidget(self._auth_pages)
         login = QVBoxLayout(self._login_fields)
         login.setContentsMargins(0, 0, 0, 0)
+        login.setSpacing(5)
         form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setVerticalSpacing(5)
+        form.setHorizontalSpacing(9)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._forms.append(form)
         self._email = QLineEdit(self._login_fields)
@@ -122,21 +133,79 @@ class CloudSketchPanel(QWidget):
         form.addRow("Email", self._email)
         form.addRow("Password", self._password)
         login.addLayout(form)
-        self._save_login = QCheckBox("Save credentials", self._login_fields)
+        self._save_login = QCheckBox("Save credentials", self._account_card)
         self._save_login.setToolTip("Store your login encrypted in your operating system's credential vault")
-        self._remember = QCheckBox("Remember me", self._login_fields)
+        self._remember = QCheckBox("Remember me", self._account_card)
         self._remember.setToolTip("Restore your encrypted sign-in session on your next launch")
-        login.addWidget(self._save_login)
-        login.addWidget(self._remember)
-        login_actions = QHBoxLayout()
         self._sign_in_btn = self._button("Sign in", self._sign_in, self._login_fields)
         self._sign_in_btn.setProperty("cloudPrimary", True)
-        self._create_btn = self._button("Create account", self._create_account, self._login_fields)
+        self._create_btn = self._button("Create account", self._show_create_account, self._login_fields)
+        auth_pages_layout.addWidget(self._login_fields)
+
+        self._register_fields = QWidget(self._auth_pages)
+        register = QVBoxLayout(self._register_fields)
+        register.setContentsMargins(0, 0, 0, 0)
+        register.setSpacing(5)
+        register_heading = self._label("Create your cloud account", self._register_fields)
+        register_heading.setObjectName("cloud-heading")
+        register.addWidget(register_heading)
+        register_form = QFormLayout()
+        register_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        register_form.setContentsMargins(0, 0, 0, 0)
+        register_form.setVerticalSpacing(5)
+        self._forms.append(register_form)
+        self._register_email = QLineEdit(self._register_fields)
+        self._register_email.setPlaceholderText("Email address")
+        self._register_email.setAccessibleName("New cloud account email")
+        self._register_password = QLineEdit(self._register_fields)
+        self._register_password.setPlaceholderText("At least 6 characters")
+        self._register_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._register_password.setAccessibleName("New cloud account password")
+        self._register_password.returnPressed.connect(self._create_account)
+        self._register_confirm = QLineEdit(self._register_fields)
+        self._register_confirm.setPlaceholderText("Enter password again")
+        self._register_confirm.setEchoMode(QLineEdit.EchoMode.Password)
+        self._register_confirm.setAccessibleName("Confirm new cloud account password")
+        self._register_confirm.returnPressed.connect(self._create_account)
+        register_form.addRow("Email", self._register_email)
+        register_form.addRow("Password", self._register_password)
+        register_form.addRow("Confirm", self._register_confirm)
+        register.addLayout(register_form)
+        self._register_btn = self._button("Create account", self._create_account, self._register_fields)
+        self._register_btn.setProperty("cloudPrimary", True)
+        self._back_to_sign_in = self._button("Back to sign in", self._show_sign_in, self._register_fields)
+        auth_pages_layout.addWidget(self._register_fields)
+        self._register_fields.hide()
+        account.addWidget(self._auth_pages)
+        auth_options = QHBoxLayout()
+        auth_options.setContentsMargins(0, 0, 0, 0)
+        auth_options.addWidget(self._save_login)
+        auth_options.addWidget(self._remember)
+        auth_options.addStretch(1)
+        account.addLayout(auth_options)
+        self._auth_action_pages = QWidget(self._account_card)
+        auth_actions_layout = QVBoxLayout(self._auth_action_pages)
+        auth_actions_layout.setContentsMargins(0, 0, 0, 0)
+        self._login_action_page = QWidget(self._auth_action_pages)
+        self._sign_in_btn.setParent(self._login_action_page)
+        self._create_btn.setParent(self._login_action_page)
+        login_actions = QHBoxLayout(self._login_action_page)
+        login_actions.setContentsMargins(0, 0, 0, 0)
         login_actions.addWidget(self._sign_in_btn)
         login_actions.addWidget(self._create_btn)
-        login.addLayout(login_actions)
-        account.addWidget(self._login_fields)
+        auth_actions_layout.addWidget(self._login_action_page)
+        self._register_action_page = QWidget(self._auth_action_pages)
+        self._register_btn.setParent(self._register_action_page)
+        self._back_to_sign_in.setParent(self._register_action_page)
+        register_actions = QHBoxLayout(self._register_action_page)
+        register_actions.setContentsMargins(0, 0, 0, 0)
+        register_actions.addWidget(self._register_btn)
+        register_actions.addWidget(self._back_to_sign_in)
+        auth_actions_layout.addWidget(self._register_action_page)
+        self._register_action_page.hide()
+        account.addWidget(self._auth_action_pages)
         self._signed_in_actions = QWidget(self._account_card)
+        self._signed_in_actions.hide()
         account_actions = QHBoxLayout(self._signed_in_actions)
         account_actions.setContentsMargins(0, 0, 0, 0)
         self._sign_out_btn = self._button("Sign out", self._sign_out, self._signed_in_actions)
@@ -145,13 +214,27 @@ class CloudSketchPanel(QWidget):
         account_actions.addWidget(self._delete_account_btn)
         account_actions.addStretch()
         account.addWidget(self._signed_in_actions)
-        self._security = self._label("Passwords stay encrypted outside the app folder. Connections use HTTPS.", self._account_card)
+        self._security = self._label("Saved passwords and sessions use your OS credential vault. Cloud traffic uses HTTPS.", self._account_card)
         self._security.setObjectName("cloud-secondary")
         account.addWidget(self._security)
         self._forget_btn = self._button("Forget saved login", self._forget_login, self._account_card)
+        self._forget_btn.hide()
         account.addWidget(self._forget_btn)
+        self._auth_screen = 0
 
-        sketches_card, sketches = self._card(content)
+        self._management = QWidget(content)
+        management = QVBoxLayout(self._management)
+        management.setContentsMargins(0, 0, 0, 0)
+        management.setSpacing(7)
+        self._content_layout.addWidget(self._management)
+        self._management.hide()
+
+        sketches_card = GlassCard(self._management, radius=9)
+        self._cards.append(sketches_card)
+        sketches = QVBoxLayout(sketches_card)
+        sketches.setContentsMargins(10, 8, 10, 8)
+        sketches.setSpacing(6)
+        management.addWidget(sketches_card)
         sketches.addWidget(self._label("Your sketches", sketches_card))
         self._sketches = QListWidget(sketches_card)
         self._sketches.setAccessibleName("Cloud sketch list")
@@ -176,7 +259,12 @@ class CloudSketchPanel(QWidget):
         sketches.addWidget(self._history_box)
         self._history_box.hide()
 
-        upload_card, upload = self._card(content)
+        upload_card = GlassCard(self._management, radius=9)
+        self._cards.append(upload_card)
+        upload = QVBoxLayout(upload_card)
+        upload.setContentsMargins(10, 8, 10, 8)
+        upload.setSpacing(6)
+        management.addWidget(upload_card)
         upload.addWidget(self._label("Upload a local project", upload_card))
         row = QHBoxLayout()
         self._local_path = QLineEdit(upload_card)
@@ -197,7 +285,12 @@ class CloudSketchPanel(QWidget):
 
         self._configure_toggle = QCheckBox("Cloud connection settings", content)
         self._content_layout.addWidget(self._configure_toggle)
-        self._configuration_card, configuration = self._card(content)
+        self._configuration_card = GlassCard(content, radius=9)
+        self._cards.append(self._configuration_card)
+        configuration = QVBoxLayout(self._configuration_card)
+        configuration.setContentsMargins(10, 8, 10, 8)
+        configuration.setSpacing(6)
+        self._content_layout.addWidget(self._configuration_card)
         config_form = QFormLayout()
         config_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._forms.append(config_form)
@@ -217,10 +310,13 @@ class CloudSketchPanel(QWidget):
         self._save_config_btn = self._button("Save connection", self._save_configuration, self._configuration_card)
         configuration.addWidget(self._save_config_btn)
         self._configuration_card.hide()
-        self._configure_toggle.toggled.connect(self._configuration_card.setVisible)
+        self._configure_toggle.toggled.connect(self._configuration_visibility_changed)
         self._content_layout.addStretch()
 
-        footer = QGridLayout()
+        self._sync_actions = QWidget(self)
+        self._sync_actions.hide()
+        footer = QGridLayout(self._sync_actions)
+        footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(6)
         self._refresh_btn = self._button("Refresh", self._refresh)
         self._upload_btn = self._button("Upload local", self._upload_local)
@@ -240,8 +336,8 @@ class CloudSketchPanel(QWidget):
             for column, button in enumerate(buttons):
                 footer.addWidget(button, row_index, column)
                 footer.setColumnStretch(column, 1)
-        outer.addLayout(footer)
-        self._status = self._label("Cloud sketches always open in a separate window.")
+        outer.addWidget(self._sync_actions)
+        self._status = self._label("Sign in to manage cloud sketches.")
         self._status.setAccessibleName("Cloud operation status")
         outer.addWidget(self._status)
         for field in self.findChildren(QLineEdit):
@@ -302,6 +398,10 @@ class CloudSketchPanel(QWidget):
     def _request(self, kind, message, operation, *, project_io=False, include_saved=False,
                  include_config=False, redactions=()):
         if self._closed or self._busy or self._waiting_for_save:
+            return False
+        if kind in {"refresh", "upload", "open", "push", "pull", "restore", "history"} \
+                and not self._state.get("authenticated"):
+            self._status.setText("Sign in to manage cloud sketches.")
             return False
         if project_io and not self._can_change_project():
             return False
@@ -414,6 +514,8 @@ class CloudSketchPanel(QWidget):
                 refresh_link()
         elif kind in {"sign_in", "create"}:
             self._password.clear()
+            self._register_password.clear()
+            self._register_confirm.clear()
             self._status.setText("Signed in. Cloud sketches are ready.")
         elif kind in {"sign_out", "forget", "delete"}:
             self._password.clear()
@@ -531,11 +633,17 @@ class CloudSketchPanel(QWidget):
         self._state.update({key: value for key, value in state.items()
                             if key not in {"saved_login", "configuration"}})
         authenticated = self._state.get("authenticated", False)
-        self._login_fields.setVisible(not authenticated)
+        self._auth_pages.setVisible(not authenticated)
+        self._auth_action_pages.setVisible(not authenticated)
+        self._management.setVisible(authenticated)
+        self._sync_actions.setVisible(authenticated)
         self._signed_in_actions.setVisible(authenticated)
+        self._configure_toggle.setVisible(not authenticated)
+        self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
         self._connection.setText("Signed in" if authenticated else "Sign in required" if self._state.get("configured") else "Connection not configured")
         email = self._state.get("account", {}).get("email", "")
-        self._account_summary.setText(f"Signed in as {email}" if authenticated else "Sign in to keep your sketches in your private cloud account.")
+        self._account_summary.setText(f"Signed in as {email}" if authenticated else
+                                      "Sign in to access your private cloud sketches.")
         secure, detail = self._state.get("secure", (False, "Credential storage is unavailable."))
         self._save_login.setEnabled(secure)
         self._remember.setEnabled(secure)
@@ -545,10 +653,18 @@ class CloudSketchPanel(QWidget):
             self._remember.setChecked(False)
         if "saved_login" in state:
             saved = state["saved_login"]
+            self._saved_login_exists = bool(saved)
             self._email.setText(saved.get("email", "") or email)
             self._password.setText(saved.get("password", ""))
+            self._register_email.setText(saved.get("email", ""))
             self._save_login.setChecked(bool(saved) and secure)
             self._remember.setChecked(bool(self._state.get("account", {}).get("remember_me")) and secure)
+            self._forget_btn.setVisible(bool(saved) and secure)
+        if authenticated:
+            self._set_auth_screen(0)
+        storage_warning = self._state.get("account", {}).get("storage_warning", "")
+        if storage_warning and not self._state.get("secure", (False, ""))[0]:
+            self._security.setText("Login encryption: " + storage_warning)
         if "configuration" in state:
             cfg = state["configuration"]
             self._api_key.setText(cfg.get("firebase_api_key", ""))
@@ -573,6 +689,7 @@ class CloudSketchPanel(QWidget):
         link = self._state.get("link")
         self._linked.setText(f"Current project: {Path(self._state.get('root', '')).name}   Cloud revision {link['revision']}" if link else
                              "Push, Pull and History apply to the current cloud-linked project.")
+        self._update_controls()
 
     def _selected_sketch(self):
         item = self._sketches.currentItem()
@@ -588,8 +705,12 @@ class CloudSketchPanel(QWidget):
             button.setEnabled(idle)
         for field in (self._email, self._password, self._api_key, self._database_url, self._project_id, self._name):
             field.setEnabled(idle)
+        for field in (self._register_email, self._register_password, self._register_confirm):
+            field.setEnabled(idle)
         self._sign_in_btn.setEnabled(idle and self._state.get("configured", False))
         self._create_btn.setEnabled(self._sign_in_btn.isEnabled())
+        self._register_btn.setEnabled(idle and self._state.get("configured", False))
+        self._back_to_sign_in.setEnabled(idle)
         self._open_btn.setEnabled(idle and authenticated and bool(self._selected_sketch()) and not self._backend_busy())
         self._upload_btn.setEnabled(idle and authenticated and not self._backend_busy())
         link = self._state.get("link")
@@ -603,7 +724,9 @@ class CloudSketchPanel(QWidget):
         self._save_config_btn.setEnabled(idle and secure and not authenticated)
         self._forget_btn.setEnabled(idle and secure)
         self._forget_btn.setText("Sign out and forget" if authenticated else "Forget saved login")
-        self._configure_toggle.setEnabled(idle)
+        self._forget_btn.setVisible(secure and self._saved_login_exists)
+        self._forget_btn.setEnabled(idle and secure and self._saved_login_exists)
+        self._configure_toggle.setEnabled(idle and not authenticated)
         self._refresh_btn.setText("Retry reload" if self._reload_pending else "Refresh")
         if self._reload_pending:
             self._refresh_btn.setEnabled(not self._reload_running)
@@ -611,18 +734,47 @@ class CloudSketchPanel(QWidget):
     def _sign_in(self):
         self._authenticate(False)
 
+    def _show_create_account(self):
+        if not self._state.get("configured"):
+            self._status.setText("Set up the cloud connection before creating an account.")
+            return
+        if not self._register_email.text().strip():
+            self._register_email.setText(self._email.text().strip())
+        self._register_password.clear()
+        self._register_confirm.clear()
+        self._set_auth_screen(1)
+        self._register_email.setFocus()
+
+    def _show_sign_in(self):
+        self._set_auth_screen(0)
+
+    def _set_auth_screen(self, index):
+        self._auth_screen = 1 if index else 0
+        self._login_fields.setVisible(self._auth_screen == 0)
+        self._register_fields.setVisible(self._auth_screen == 1)
+        self._login_action_page.setVisible(self._auth_screen == 0)
+        self._register_action_page.setVisible(self._auth_screen == 1)
+        self._auth_pages.updateGeometry()
+        self._auth_action_pages.updateGeometry()
+
     def _create_account(self):
         self._authenticate(True)
 
     def _authenticate(self, create):
-        email, password = self._email.text().strip(), self._password.text()
+        email = (self._register_email.text() if create else self._email.text()).strip()
+        password = self._register_password.text() if create else self._password.text()
         if not email or not password:
             self._status.setText("Enter your email address and password.")
+            return
+        if create and password != self._register_confirm.text():
+            self._status.setText("The two passwords do not match.")
+            self._register_confirm.setFocus()
             return
         save, remember = self._save_login.isChecked(), self._remember.isChecked()
         operation = self._service.create_account if create else self._service.sign_in
         self._request("create" if create else "sign_in", "Creating account…" if create else "Signing in…",
-                      lambda: operation(email, password, save_login=save, remember_me=remember), redactions=(password,))
+                      lambda: operation(email, password, save_login=save, remember_me=remember),
+                      include_saved=True, redactions=(password, self._register_confirm.text()))
 
     def _sign_out(self):
         self._request("sign_out", "Signing out…", self._service.sign_out)
@@ -631,6 +783,9 @@ class CloudSketchPanel(QWidget):
         self._request("forget", "Removing saved login…", lambda: self._service.sign_out(forget_saved=True), include_saved=True)
 
     def _delete_account(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in before deleting a cloud account.")
+            return
         if QMessageBox.question(self, "Delete cloud account", "Permanently delete this account and all its cloud sketches? Local sketch files are kept.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
@@ -652,7 +807,13 @@ class CloudSketchPanel(QWidget):
             save_cloud_configuration(cfg, getattr(self._service, "_store", None))
         self._request("configuration", "Saving cloud connection…", save, include_config=True, redactions=(cfg["firebase_api_key"],))
 
+    def _configuration_visibility_changed(self, visible):
+        self._configuration_card.setVisible(bool(visible) and not self._state.get("authenticated", False))
+
     def _refresh(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to manage cloud sketches.")
+            return
         if self._reload_pending:
             self._reload_current()
         elif not self._initialized:
@@ -697,6 +858,9 @@ class CloudSketchPanel(QWidget):
             failed()
 
     def _upload_local(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to upload a local sketch.")
+            return
         root, name = self._local_path.text().strip(), self._name.text().strip() or None
         if not root:
             self._status.setText("Choose a local sketch folder to upload.")
@@ -709,6 +873,9 @@ class CloudSketchPanel(QWidget):
         self._with_saved_project(root, lambda: self._request("upload", "Uploading local sketch…", upload, project_io=True))
 
     def _open_cloud(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to open cloud sketches.")
+            return
         row = self._selected_sketch()
         if not row or self._backend_busy():
             return
@@ -729,6 +896,9 @@ class CloudSketchPanel(QWidget):
         return dict(self._state["link"])
 
     def _push_current(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to push cloud changes.")
+            return
         link = self._current_link()
         if link:
             root = self._active_root()
@@ -744,6 +914,9 @@ class CloudSketchPanel(QWidget):
             self._pull_revision(revision)
 
     def _pull_revision(self, revision):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to pull cloud changes.")
+            return
         link = self._current_link()
         if not link or not self._can_change_project():
             return
@@ -763,6 +936,9 @@ class CloudSketchPanel(QWidget):
         self._request("restore" if revision else "pull", "Restoring cloud source files…", pull, project_io=True)
 
     def _load_history(self):
+        if not self._state.get("authenticated"):
+            self._status.setText("Sign in to view cloud history.")
+            return
         link = self._current_link()
         if link:
             self._request("history", "Loading cloud revision history…", lambda: self._service.list_revisions(link["sketch_id"]))

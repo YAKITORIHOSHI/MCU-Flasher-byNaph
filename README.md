@@ -947,7 +947,9 @@ MCU Flasher by Naph/
 
 Open **Project → Cloud** or the toolbar's **Cloud** action to sign in, create an
 account, manage cloud sketches, or delete your account after confirming your
-current password. **Save login** fills your email/password on the next sign-in;
+current password. Sign-in and account creation open as separate sections within
+the Cloud tab; cloud sketch lists, uploads, Push, Pull and history appear only
+after a successful sign-in. **Save credentials** fills your email/password on the next sign-in;
 **Remember me** restores a session using its refresh token. **Forget saved
 login** removes saved credentials. Both options use Windows Credential Manager
 or Ubuntu's Secret Service with an unlocked desktop keyring. They never store

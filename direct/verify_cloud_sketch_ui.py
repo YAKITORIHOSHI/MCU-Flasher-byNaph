@@ -214,9 +214,41 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(call[1][1], "  fixture pass  ")
         self.assertEqual(call[2], {"save_login": True, "remember_me": True})
         self.assertEqual(panel._password.text(), "")
+        self.assertTrue(panel._management.isVisible())
+        self.assertTrue(panel._push_btn.isVisible())
         panel._forget_login()
         self.wait(lambda: not panel._busy)
         self.assertTrue(next(row for row in self.service.calls if row[0] == "sign_out")[2]["forget_saved"])
+
+    def test_auth_screens_are_separate_and_sketch_actions_require_sign_in(self):
+        self.service.authenticated = False
+        panel = self.panel()
+        self.assertTrue(panel._login_fields.isVisible())
+        self.assertFalse(panel._register_fields.isVisible())
+        self.assertTrue(panel._create_btn.isVisible())
+        self.assertFalse(panel._management.isVisible())
+        self.assertFalse(panel._sync_actions.isVisible())
+        for button in (panel._refresh_btn, panel._upload_btn, panel._open_btn,
+                       panel._push_btn, panel._pull_btn, panel._history_btn):
+            self.assertFalse(button.isVisible(), button.text())
+        before = len(self.service.calls)
+        panel._upload_local()
+        panel._open_cloud()
+        panel._push_current()
+        panel._pull_current()
+        panel._load_history()
+        self.assertEqual(len(self.service.calls), before)
+        panel._show_create_account()
+        self.assertFalse(panel._login_fields.isVisible())
+        self.assertTrue(panel._register_fields.isVisible())
+        self.assertTrue(panel._register_btn.isVisible())
+        self.assertTrue(panel._back_to_sign_in.isVisible())
+        panel._register_email.setText("new@example.invalid")
+        panel._register_password.setText("secret1")
+        panel._register_confirm.setText("different")
+        panel._create_account()
+        self.assertIn("do not match", panel._status.text())
+        self.assertEqual(len(self.service.calls), before)
 
     def test_open_uses_separate_window_and_preserves_existing_working_copy(self):
         panel = self.panel()
@@ -442,6 +474,11 @@ class CloudUIChecks(unittest.TestCase):
         panel._scroll.ensureWidgetVisible(panel._configuration_card)
         APP.processEvents()
         self.assertTrue(panel.grab().save(str(self.output / "connection-fields.png")))
+        panel._configure_toggle.setChecked(False)
+        panel._show_create_account()
+        APP.processEvents()
+        self.assertTrue(panel._register_fields.isVisible())
+        self.assertTrue(panel.grab().save(str(self.output / "create-account.png")))
 
     def test_palettes_compact_actions_and_sensitive_field_capture_masking(self):
         panel = self.panel()

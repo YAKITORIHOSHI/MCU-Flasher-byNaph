@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import os
+import platform
 import sys
 import tempfile
 import unittest
@@ -52,6 +54,12 @@ class BoardFamilyChecks(unittest.TestCase):
         audit.mkdir(parents=True, exist_ok=True)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit))).resolve()
         assert self.root.is_relative_to((ROOT / "temp").resolve())
+        # Cold Windows architecture discovery may launch `ver`. It must not
+        # consume any simulated programmer process in these target fixtures.
+        self.stack.enter_context(patch.object(platform, "_uname_cache", None))
+        self.stack.enter_context(patch.object(platform, "machine", return_value="x86_64"))
+        self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
+                                            return_value=str(self.root / "native-core")))
         self.api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         self.api.current_board, self.api.current_port = "Fixture", "COM99"
         self.api.current_baud, self.api.upload_speed = 115200, "460800"
@@ -335,7 +343,8 @@ class BoardFamilyChecks(unittest.TestCase):
                 self.api._get_jobs = lambda: 2
                 self.api._compile_worker = Mock(return_value=True)
                 self.api._needs_recompile = Mock(return_value=(False, "isolated protocol fixture"))
-                process = SimpleNamespace(stdout=["Simulated successful write"], wait=lambda: 0, poll=lambda: 0)
+                self.api.emit.reset_mock()
+                process = SimpleNamespace(stdout=io.StringIO("Simulated successful write\n"), wait=lambda: 0, poll=lambda: 0)
                 with patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                         patch.object(web_bridge, "find_pio_executable", return_value=["SIMULATED_PIO"]), \
                         patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root / "core", False)), \
@@ -343,9 +352,15 @@ class BoardFamilyChecks(unittest.TestCase):
                     self.api._native_upload_worker(can_skip=False)
                 command = launch.call_args.args[0]
                 self.assertEqual(launch.call_count, 1)
+                self.assertEqual(command[0], "SIMULATED_PIO")
                 self.assertEqual("--upload-port" in command, row[5])
+                if row[5]:
+                    self.assertEqual(command[-2:], ["--upload-port", "COM99"])
                 self.api._compile_worker.assert_called_once_with(is_upload=True)
                 self.assertFalse(self.api.is_busy)
+                notifications = [call.args[1] for call in self.api.emit.call_args_list
+                                 if call.args and call.args[0] == "notification"]
+                self.assertTrue(any(item.get("title") == "Upload completed" for item in notifications))
 
     def test_upload_does_not_start_after_compile_failure(self):
         self.api._active_board_info = info_for(TARGETS[3])
@@ -373,12 +388,14 @@ class BoardFamilyChecks(unittest.TestCase):
             return True
         self.api._compile_worker = compile_target
         self.api._needs_recompile = Mock(return_value=(False, "isolated protocol fixture"))
-        process = SimpleNamespace(stdout=[], wait=lambda: 0, poll=lambda: 0)
+        process = SimpleNamespace(stdout=io.StringIO(), wait=lambda: 0, poll=lambda: 0)
         with patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["SIMULATED_PIO"]), \
                 patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
                 patch.object(web_bridge.subprocess, "Popen", return_value=process) as launch:
             self.api._native_upload_worker(can_skip=False)
+        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(launch.call_args.args[0][0], "SIMULATED_PIO")
         self.assertNotIn("--upload-port", launch.call_args.args[0])
 
     def test_serial_port_loss_during_compile_cancels_native_worker_upload(self):
@@ -446,7 +463,7 @@ class BoardFamilyChecks(unittest.TestCase):
                 stack.enter_context(patch.object(web_bridge.threading, "Thread", InlineThread))
                 stack.enter_context(patch.object(web_bridge, "find_pio_executable", return_value=["SIMULATED_PIO"]))
                 stack.enter_context(patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)))
-                process = SimpleNamespace(stdout=[], wait=lambda: 0, poll=lambda: 0)
+                process = SimpleNamespace(stdout=io.StringIO(), wait=lambda: 0, poll=lambda: 0)
                 launch = stack.enter_context(patch.object(web_bridge.subprocess, "Popen", return_value=process))
                 window = QMainWindow()
                 toolbar = PrimaryToolbar(self.api, window)
@@ -457,6 +474,7 @@ class BoardFamilyChecks(unittest.TestCase):
                     self.assertIn("native", toolbar.btn_upload.toolTip())
                     toolbar.btn_upload.click()
                     self.assertEqual(launch.call_count, 1)
+                    self.assertEqual(launch.call_args.args[0][0], "SIMULATED_PIO")
                     self.assertNotIn("--upload-port", launch.call_args.args[0])
                 else:
                     self.api.upload_sketch()

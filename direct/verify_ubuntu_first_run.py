@@ -334,9 +334,14 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     if not build_result.get("success") or not firmware.is_file():
         raise RuntimeError("The actual Compile button did not produce firmware")
     runtime_log = fixture / "runtime-verifier.log"
+    verification_env = dict(env)
+    # The override only admits small CI runners through the *fresh bootstrap*.
+    # The copied runtime verifier must see the real CPU count so it can verify
+    # that production's minimum-CPU admission policy still rejects undersized hosts.
+    verification_env.pop("MCU_FIRST_RUN_ALLOW_SMALL_RUNNER", None)
     runtime_checked = _run([str(python), "-B", str(app / "direct/verify_runtime.py"),
                             "--render-dir", str(fixture / "runtime-captures")],
-                           cwd=app, env=env, log=runtime_log, timeout=120)
+                           cwd=app, env=verification_env, log=runtime_log, timeout=120)
     if runtime_checked:
         raise RuntimeError(f"The newly bootstrapped private runtime failed hardware-free checks; see {runtime_log}")
     report.update(success=True, actual_gui=gui_result, core=str(core),
