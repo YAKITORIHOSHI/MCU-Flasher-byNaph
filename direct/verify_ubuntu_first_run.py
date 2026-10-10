@@ -135,7 +135,9 @@ def _copy_source(destination: Path) -> None:
     database.mkdir(parents=True)
     for source in (ROOT / "src/dbs").glob("*.py"):
         shutil.copy2(source, database / source.name)
-    for name in ("MCU_Flasher", "mcu_flash_gui.py", "AGENTS.md", "README.md"):
+    # AGENTS.md is generated local guidance, ignored by Git. A clean checkout
+    # must not require it or inherit another sketch's live hardware state.
+    for name in ("MCU_Flasher", "mcu_flash_gui.py", "README.md"):
         shutil.copy2(ROOT / name, destination / name)
     (destination / "src/__init__.py").write_text(HOME_ISOLATION, encoding="utf-8")
     # Direct verifiers can import main before src. Redirect home first there too.

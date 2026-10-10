@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -81,8 +82,19 @@ def _source_name(value: Any) -> str:
     return value
 
 
+def _io_path(value: Path | str) -> Path:
+    """Extend Windows file-operation paths only; keep UI/Linux path identities."""
+    path = Path(value)
+    if sys.platform != "win32":
+        return path
+    native = os.path.abspath(os.fspath(path))
+    if native.startswith("\\\\?\\"):
+        return Path(native)
+    return Path("\\\\?\\UNC\\" + native[2:] if native.startswith("\\\\") else "\\\\?\\" + native)
+
+
 def read_project_link(root: Path | str) -> dict[str, Any] | None:
-    path = Path(root) / LINK_NAME
+    path = _io_path(Path(root) / LINK_NAME)
     try:
         if path.is_symlink() or path.stat().st_size > 64 * 1024:
             return None
@@ -109,6 +121,7 @@ def read_project_link(root: Path | str) -> dict[str, Any] | None:
 
 
 def _atomic_json(path: Path, value: Any) -> None:
+    path = _io_path(path)
     if path.is_symlink():
         raise CloudError("A linked cloud file cannot be a symbolic link.")
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
@@ -123,7 +136,7 @@ def _atomic_json(path: Path, value: Any) -> None:
 
 
 def _root_snapshot(root: Path | str) -> dict[str, dict[str, str]]:
-    folder = Path(root)
+    folder = _io_path(root)
     if folder.is_symlink() or not folder.is_dir():
         raise CloudError("Select a real sketch project folder.")
     result = {}
@@ -682,40 +695,42 @@ class CloudSketchService:
                 raise CloudError("The requested cloud revision is no longer available.")
             sources = _validate_snapshot(record["versions"]["r" + str(wanted)].get("files"))
             root = Path(destination) if destination is not None else self.working_directory(sketch_id)
-            if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
+            io_root = _io_path(root)
+            if io_root.is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents):
                 raise CloudError("A cloud working folder cannot use symbolic links.")
-            root.mkdir(parents=True, exist_ok=True)
-            root_identity = root.stat()
+            io_root.mkdir(parents=True, exist_ok=True)
+            root_identity = io_root.stat()
             old_link = read_project_link(root)
             if (old_link and (old_link["uid"] != self._uid or old_link["sketch_id"] != sketch_id
                               or old_link.get("provider") != self._scope())):
                 raise CloudError("This folder belongs to another cloud sketch or account.")
             tracked = set(old_link["files"] if old_link else [])
             for filename in sources:
-                path = root / filename
+                path = io_root / filename
                 if path.exists() and filename not in tracked:
                     raise CloudError("Pull would overwrite an unlinked local file. Choose an empty cloud folder.")
             # Never follow links, overwrite directories, or delete an unknown file.
             touched = tracked | set(sources)
             old_files: dict[str, bytes] = {}
             for filename in touched:
-                path = root / _source_name(filename)
+                path = io_root / _source_name(filename)
                 if path.is_symlink() or (path.exists() and not path.is_file()):
                     raise CloudError("A linked source path is not a regular file. No local files were changed.")
                 if path.exists():
                     if path.stat().st_size > MAX_FILE_BYTES:
                         raise CloudError("A local source is too large to preserve safely before pulling.")
                     old_files[filename] = path.read_bytes()
-            link_path = root / LINK_NAME
+            link_path = io_root / LINK_NAME
             if link_path.exists() and old_link is None:
                 raise CloudError("The local cloud link is damaged. Choose another empty folder.")
             old_link_bytes = link_path.read_bytes() if old_link else None
             backup = self._data_dir / "recovery" / self._scope()[:16] / self._account_folder() / sketch_id / uuid.uuid4().hex[:16]
-            backup.mkdir(parents=True, exist_ok=False)
+            io_backup = _io_path(backup)
+            io_backup.mkdir(parents=True, exist_ok=False)
             for filename, content in old_files.items():
-                (backup / filename).write_bytes(content)
+                (io_backup / filename).write_bytes(content)
             if old_link_bytes is not None:
-                (backup / LINK_NAME).write_bytes(old_link_bytes)
+                (io_backup / LINK_NAME).write_bytes(old_link_bytes)
             _atomic_json(backup / "recovery.json", {"schema": 1, "source_revision": wanted,
                                                     "files": list(old_files), "created_at": int(time.time() * 1000)})
             staged: dict[str, Path] = {}
@@ -730,18 +745,18 @@ class CloudSketchService:
                     raise CloudError("Review pending AI changes before pulling or reverting this sketch.") from None
             try:
                 for filename, content in sources.items():
-                    temporary = root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
+                    temporary = io_root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
                     with temporary.open("xb") as stream:
                         stream.write(content)
                         stream.flush()
                         os.fsync(stream.fileno())
                     staged[filename] = temporary
-                current_identity = root.stat()
-                if (root.is_symlink() or any(parent.is_symlink() for parent in root.parents)
+                current_identity = io_root.stat()
+                if (io_root.is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents)
                         or (current_identity.st_dev, current_identity.st_ino) != (root_identity.st_dev, root_identity.st_ino)):
                     raise CloudError("The working folder changed during pull. No source files were replaced.")
                 for filename in touched:
-                    path = root / filename
+                    path = io_root / filename
                     if (path.is_symlink() or (path.exists() and not path.is_file())
                             or (filename in old_files and (not path.exists() or path.stat().st_size > MAX_FILE_BYTES
                                                          or path.read_bytes() != old_files[filename]))
@@ -753,10 +768,10 @@ class CloudSketchService:
                         or (old_link_bytes is None and link_path.exists())):
                     raise CloudError("The local cloud link changed during pull. Try again after checking the project.")
                 for filename, temporary in staged.items():
-                    os.replace(temporary, root / filename)
+                    os.replace(temporary, io_root / filename)
                     changed.append(filename)
                 for filename in tracked - set(sources):
-                    (root / filename).unlink(missing_ok=True)
+                    (io_root / filename).unlink(missing_ok=True)
                     changed.append(filename)
                 link_change_attempted = True
                 self._link(root, record["meta"], list(sources), source_revision=wanted)
@@ -764,9 +779,9 @@ class CloudSketchService:
                 rollback_failed = False
                 for filename in changed:
                     try:
-                        target = root / filename
+                        target = io_root / filename
                         if filename in old_files:
-                            recovery_temp = root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
+                            recovery_temp = io_root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
                             recovery_temp.write_bytes(old_files[filename])
                             os.replace(recovery_temp, target)
                         else:

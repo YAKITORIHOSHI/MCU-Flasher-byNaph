@@ -96,7 +96,7 @@ class CloudChecks(unittest.TestCase):
         audit = ROOT / "temp" / "audit"
         audit.mkdir(parents=True, exist_ok=True)
         self.folder = Path(tempfile.mkdtemp(prefix="cloud-service-", dir=audit))
-        self.addCleanup(shutil.rmtree, self.folder)
+        self.addCleanup(shutil.rmtree, cloud._io_path(self.folder))
         self.store = MemoryStore()
         self.http = MemoryHTTP()
         self.service = self.make_service()
@@ -299,7 +299,7 @@ class CloudChecks(unittest.TestCase):
         calls = 0
         def failing_replace(src, dst):
             nonlocal calls
-            if Path(dst).parent == folder and Path(dst).suffix == ".h":
+            if Path(dst).parent == cloud._io_path(folder) and Path(dst).suffix == ".h":
                 calls += 1
                 if calls == 1:
                     raise OSError("Fixture storage failure")
@@ -401,7 +401,7 @@ class CloudChecks(unittest.TestCase):
         source_calls = 0
         def failed_rollback(src, dst):
             nonlocal source_calls
-            if Path(dst).parent == folder and Path(dst).suffix in (".ino", ".h"):
+            if Path(dst).parent == cloud._io_path(folder) and Path(dst).suffix in (".ino", ".h"):
                 source_calls += 1
                 if source_calls >= 2:
                     raise OSError("Fixture rollback failure")
@@ -422,6 +422,24 @@ class CloudChecks(unittest.TestCase):
         (self.local / "Sketch.ino").write_bytes(b"\n \t")
         with self.assertRaisesRegex(cloud.CloudError, "nonempty root"):
             self.service.upload_project(self.local)
+
+    def test_deep_windows_paths_preserve_source_and_recovery_operations(self):
+        deep = self.folder / ("a" * 70) / ("b" * 70) / ("c" * 70)
+        cloud._io_path(deep).mkdir(parents=True)
+        filename = "Long-" + "n" * 100 + ".ino"
+        cloud._io_path(deep / filename).write_bytes(b"void setup() {}\nvoid loop() {}\n")
+        self.login()
+        meta = self.service.upload_project(deep)
+        self.service._data_dir = deep / "cloud-working"
+        working = self.service.pull_project(meta["id"])
+        self.assertEqual(cloud._io_path(working / filename).read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+        cloud._io_path(working / filename).write_bytes(b"// changed\n")
+        self.service.push_project(working, meta["id"], 1)
+        self.service.pull_project(meta["id"], working, revision=1)
+        self.assertEqual(cloud._io_path(working / filename).read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+        self.assertEqual(cloud.read_project_link(working)["revision"], 2)
+        with patch.object(cloud.sys, "platform", "linux"):
+            self.assertEqual(cloud._io_path(deep), deep)
 
 
 if __name__ == "__main__":

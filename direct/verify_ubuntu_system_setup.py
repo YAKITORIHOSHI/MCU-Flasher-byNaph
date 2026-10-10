@@ -19,6 +19,20 @@ sys.path.insert(0, str(ROOT))
 from direct.ubuntu import preflight, setup, system_setup
 
 
+class UbuntuReleaseInstallerChecks(unittest.TestCase):
+    def test_ubuntu_26_uses_allowlisted_t64_packages_with_no_gui_or_real_apt(self):
+        with patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "26.04"}), \
+                patch.object(system_setup, "sys", SimpleNamespace(platform="linux", stdin=SimpleNamespace(isatty=lambda: True))), \
+                patch.object(system_setup.os, "geteuid", return_value=1000, create=True), \
+                patch.object(system_setup.os, "access", return_value=True), \
+                patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run, \
+                redirect_stdout(io.StringIO()):
+            system_setup.install_system_packages(["libasound2", "libglib2.0-0", "libasound2t64"])
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0][-2:], ["libasound2t64", "libglib2.0-0t64"])
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Ubuntu system-package bootstrap")
 class SystemSetupChecks(unittest.TestCase):
     def setUp(self):

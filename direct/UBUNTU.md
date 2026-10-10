@@ -22,7 +22,10 @@ host implementation through `main/core/toolchain.py`:
 Use a normal desktop account and a writable checkout on 64-bit Intel/AMD Ubuntu.
 Python 3.10 or newer,
 four CPU cores, and enough space for native board toolchains are
-required. Ubuntu 22.04 and 24.04 are the compatibility workflow targets.
+required. Ubuntu 22.04, 24.04 and 26.04 are the compatibility workflow targets.
+The first-launch job uses each release's system Python, including Python 3.14
+on 26.04. Native 26.04 compatibility still requires a completed CI run; the
+existing local native verification covers 24.04.
 
 Open `MCU_Flasher`, or run `./MCU_Flasher`. Bootstrap detects missing desktop
 dependencies, opens a setup terminal and asks for Ubuntu administrator
@@ -47,10 +50,15 @@ sudo apt install python3-venv python3-tk build-essential git libegl1 libgl1 libn
 ```
 
 Qt also needs ALSA and GLib: install `libasound2` and `libglib2.0-0` on Ubuntu
-22.04, or `libasound2t64` and `libglib2.0-0t64` on Ubuntu 24.04.
+22.04, or `libasound2t64` and `libglib2.0-0t64` on Ubuntu 24.04 and 26.04.
 Bootstrap selects these names automatically. See Qt's
 [Linux requirements](https://doc.qt.io/qtforpython-6/overviews/qtdoc-linux-requirements.html)
 for other distributions or missing system libraries.
+
+Ubuntu 26.04's GNOME desktop uses Wayland and retains XWayland for X11 apps.
+Bootstrap accepts either desktop display and prepares both clipboard backends.
+The CI renderer checks currently use X11 through Xvfb; they do not prove native
+Wayland behavior. See the [Ubuntu 26.04 release notes](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/#wayland-session).
 
 From the project directory:
 
@@ -398,7 +406,7 @@ full default Bootstrap, opens the actual Monaco workspace, verifies a prepared
 launch, clicks Compile for ESP32 and runs the runtime checks. It redirects home
 paths in the fixture and prohibits serial opens; installers run normally only
 inside the fixture. It leaves logs and firmware there and never installs system
-packages. CI runs this separately on Ubuntu 22.04/24.04; its explicit
+packages. CI runs this separately on Ubuntu 22.04/24.04/26.04; its explicit
 `--allow-small-runner` override affects only the disposable copy's CPU admission.
 
 ```bash

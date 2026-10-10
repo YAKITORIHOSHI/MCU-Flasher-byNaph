@@ -105,6 +105,9 @@ recovery journals are never touched. On a storage failure, the previous linked
 files are restored when possible and the recovery folder is retained.
 The folder identity, cloud link and touched source bytes are checked again after
 staging; an external edit during preparation rejects the pull before replacement.
+Cloud filesystem operations support extended Windows paths for deep project and
+recovery folders. The extension is restricted to Windows I/O; visible project
+paths, AI watcher paths and native Ubuntu paths retain their normal spelling.
 
 Pulling an older revision restores that source locally while retaining the
 latest cloud revision as the next push's comparison base. The next explicit

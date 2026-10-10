@@ -186,7 +186,7 @@ See [Ubuntu and recovery details](direct/UBUNTU.md) and
 [hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04
 runtime, Qt/Monaco, terminal, crash-regression and responsive checks pass locally
 using an isolated Xvfb display. Windows paths retain their existing behavior;
-physical board compilation/upload and the full two-version Ubuntu CI remain
+physical board compilation/upload and the full Ubuntu 22.04/24.04/26.04 CI remain
 separate verification requirements.
 
 The project terminal passes xterm capability replies and bracketed paste to
@@ -1426,7 +1426,7 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 has local native hardware-free verification, with Ubuntu 22.04/24.04 CI targets.
+- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 has local native hardware-free verification, with Ubuntu 22.04/24.04/26.04 CI targets. Ubuntu 26.04 native results require a completed CI run.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
 - **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
@@ -1567,12 +1567,12 @@ checks never install packages or write to physical hardware.
 `direct/verify_platforms.py` checks host selection/import order, native package
 paths, setup argument forwarding, upload process options and Bash/Windows Script
 Host syntax without running installers or launchers. The compatibility workflow
-also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04, then
+also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04/26.04, then
 checks the actual Compile button for Uno, Nano and Mega using copied native
 packages. Local native Ubuntu GUI/runtime checks pass; these actual firmware
 build integrations remain separate CI results.
 The workflow also runs the recent cursor, preference, catalog, storage and
-worker regressions on both Ubuntu versions, with explicit Node-based editor
+worker regressions on all three Ubuntu targets, with explicit Node-based editor
 checks and native Qt xcb rendering under Xvfb. Local Windows simulations do
 not substitute for those native results.
 Ubuntu assistant discovery and lifecycle checks use `direct/verify_ubuntu_opencode.py`

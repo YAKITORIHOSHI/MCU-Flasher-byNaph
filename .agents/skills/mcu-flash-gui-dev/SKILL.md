@@ -797,6 +797,11 @@ On Ubuntu use `.venv-linux/bin/python -B direct/verify_runtime.py`. The Windows
 terminal probe exercises the real PTY and local xterm renderer, including installed
 CLI version commands; it does not authenticate or request AI work. CPU previews
 simulate policy and cannot prove timing on a physical low-end machine.
+The compatibility workflow targets Ubuntu 22.04/24.04/26.04. Its first-launch
+job uses the native system Python (3.14 on 26.04); package selection must use
+`direct.ubuntu.preflight.normalize_packages` rather than an exact 24.04 branch.
+Cross-host OS-release fixtures do not prove native 26.04 or Wayland execution;
+report those results separately.
 Ubuntu assistant discovery and lifecycle use `direct/verify_ubuntu_opencode.py`
 and `direct/verify_ubuntu_ai_panel.py`. Run the native renderer probe with
 `xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_ai_panel.py --native-renderer`;

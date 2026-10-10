@@ -19,6 +19,37 @@ sys.path.insert(0, str(ROOT))
 from direct.ubuntu import preflight, setup
 
 
+class UbuntuReleasePackageChecks(unittest.TestCase):
+    """OS-release/package fixtures also run on Windows, without Linux syscalls."""
+
+    def test_release_packages_cover_22_24_and_26_without_installing(self):
+        for version, expected in (("22.04", ("libasound2", "libglib2.0-0")),
+                                  ("24.04", ("libasound2t64", "libglib2.0-0t64")),
+                                  ("26.04", ("libasound2t64", "libglib2.0-0t64"))):
+            with self.subTest(version=version), \
+                    patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": version}), \
+                    patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
+                missing = preflight.MissingSystemDependencies(["libasound2", "libglib2.0-0", "libasound2"])
+                self.assertEqual(missing.packages, expected)
+                self.assertIn("sudo apt install " + " ".join(expected), str(missing))
+
+    def test_ubuntu_26_python_314_wayland_host_reports_precise_missing_packages(self):
+        # Every platform, native loader and package lookup is a fixture.
+        with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 14))), \
+                patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "26.04"}), \
+                patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="x86_64"), create=True), \
+                patch.object(preflight.importlib.util, "find_spec", return_value=object()), \
+                patch.object(preflight, "_check_tk"), \
+                patch.object(preflight.shutil, "which", return_value="/fixture/tool"), \
+                patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: None if name in {"asound", "glib-2.0"} else name), \
+                patch.object(preflight.ctypes, "CDLL", return_value=object()), \
+                patch.dict(os.environ, {"DISPLAY": "", "WAYLAND_DISPLAY": "wayland-fixture"}), \
+                patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
+            with self.assertRaises(preflight.MissingSystemDependencies) as missing:
+                preflight.host_preflight(require_display=True)
+        self.assertEqual(missing.exception.packages, ("libglib2.0-0t64", "libasound2t64"))
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Native Linux venv and SONAME fixtures")
 class UbuntuBootstrapChecks(unittest.TestCase):
     def setUp(self):

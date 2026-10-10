@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -21,27 +21,26 @@ jobs:
       PYTHONFAULTHANDLER: '1'
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Ubuntu first-launch prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep xclip wl-clipboard libsecret-tools
           sudo apt-get install -y xvfb python3-venv python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
           sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
-          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
-            sudo apt-get install -y libasound2t64 libglib2.0-0t64
-          else
-            sudo apt-get install -y libasound2 libglib2.0-0
-          fi
+          # Use Bootstrap's host detection for the 24.04/26.04 t64 names.
+          read -r -a qt_runtime_packages <<< "$(/usr/bin/python3 -c 'from direct.ubuntu.preflight import normalize_packages; print(" ".join(normalize_packages(["libasound2", "libglib2.0-0"])))')"
+          sudo apt-get install -y "${qt_runtime_packages[@]}"
       - name: Empty native runtime and full default board store
         run: |
           bash direct/ubuntu/build_launcher.sh
           # Real installers run only in the disposable application copy.
           # CPU admission is overridden only in that copy for smaller runners.
+          # The system Python covers 3.12 on 24.04 and 3.14 on 26.04.
           xvfb-run -a /usr/bin/python3 -B direct/verify_ubuntu_first_run.py --execute --allow-small-runner --timeout 2400
       - name: Ubuntu first-launch evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: first-launch-${{ matrix.os }}
           path: |
@@ -56,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04, ubuntu-24.04]
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -65,15 +64,16 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONFAULTHANDLER: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           lfs: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          package-manager-cache: false
       - name: Linux desktop libraries
         if: runner.os == 'Linux'
         run: |
@@ -81,11 +81,8 @@ jobs:
           sudo apt-get install -y ripgrep xclip wl-clipboard libsecret-tools
           sudo apt-get install -y xvfb python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
           sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
-          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
-            sudo apt-get install -y libasound2t64 libglib2.0-0t64
-          else
-            sudo apt-get install -y libasound2 libglib2.0-0
-          fi
+          read -r -a qt_runtime_packages <<< "$(/usr/bin/python3 -c 'from direct.ubuntu.preflight import normalize_packages; print(" ".join(normalize_packages(["libasound2", "libglib2.0-0"])))')"
+          sudo apt-get install -y "${qt_runtime_packages[@]}"
       - name: Linux runtime and verification
         if: runner.os == 'Linux'
         run: |
@@ -251,7 +248,7 @@ jobs:
           exit $LASTEXITCODE
       - name: Desktop previews
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: desktop-${{ matrix.os }}
           path: |

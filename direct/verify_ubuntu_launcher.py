@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import os
 from pathlib import Path
 import re
@@ -20,6 +21,38 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct.ubuntu import launch, install_desktop, preflight
+
+
+class FirstLaunchPackagingChecks(unittest.TestCase):
+    def test_clean_checkout_copy_does_not_require_or_inherit_generated_guidance(self):
+        tree = ast.parse((ROOT / "direct/verify_ubuntu_first_run.py").read_text(encoding="utf-8"))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_copy_source")
+        scratch = ROOT / "temp/audit/ubuntu-launcher"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            source = Path(temporary) / "source"
+            for relative in ("main", "direct", "src/modules", "src/editor", "src/assets", "src/fonts", "src/dbs"):
+                (source / relative).mkdir(parents=True, exist_ok=True)
+            for name in ("MCU_Flasher", "mcu_flash_gui.py", "README.md"):
+                (source / name).write_text("fixture", encoding="utf-8")
+            for name in ("verify_runtime.py", "verify_target_resolution.py"):
+                (source / "direct" / name).write_text('sys.path.insert(0, str(ROOT))\n', encoding="utf-8")
+            (source / "main/mcu_flash_gui.py").write_text(
+                'from main.web_bridge import MCUWebBackendAPI\n'
+                'def launch():\n        window.show()\n', encoding="utf-8")
+            scope = {"ROOT": source, "Path": Path, "shutil": shutil,
+                     "HOME_ISOLATION": "# isolated home\n", "GUI_SERIAL_ISOLATION": "# isolated serial\n",
+                     "GUI_SMOKE": "        # isolated smoke\n"}
+            exec(compile(ast.Module(body=[function], type_ignores=[]), "<first-launch-copy>", "exec"), scope)
+            for has_guidance in (False, True):
+                with self.subTest(local_guidance_present=has_guidance):
+                    if has_guidance:
+                        (source / "AGENTS.md").write_text("Local hardware/settings fixture", encoding="utf-8")
+                    destination = Path(temporary) / ("with-guidance" if has_guidance else "clean-checkout")
+                    scope["_copy_source"](destination)
+                    self.assertTrue((destination / "MCU_Flasher").is_file())
+                    self.assertFalse((destination / "AGENTS.md").exists())
+                    self.assertIn("isolated home", (destination / "src/__init__.py").read_text())
 
 
 def desktop_command(text: str, *, action: bool = False) -> list[str]:
@@ -333,9 +366,9 @@ class LauncherChecks(unittest.TestCase):
         folder.mkdir()
         (folder / "direct/ubuntu").mkdir(parents=True)
         recorder = folder / "direct/ubuntu/run.sh"
-        recorder.write_text('#!/bin/bash\nexec /usr/bin/python3 -c '
-                            "'from pathlib import Path; import os; "
-                            "Path(os.environ[\"MCU_LAUNCHER_FIXTURE_RECEIPT\"]).write_text(\"launched\")'\n",
+        # Check desktop path dispatch independently of the runner's separately
+        # installed Python and inherited setup-python environment.
+        recorder.write_text('#!/bin/bash\nprintf launched > "$MCU_LAUNCHER_FIXTURE_RECEIPT"\n',
                             encoding="utf-8")
         recorder.chmod(0o644)
         desktop = folder / "fixture.desktop"
@@ -352,6 +385,8 @@ class LauncherChecks(unittest.TestCase):
         deadline = time.monotonic() + 3
         while not receipt.exists() and time.monotonic() < deadline:
             time.sleep(.02)
+        self.assertTrue(receipt.is_file(), "Desktop child did not record launch; "
+                        f"gio stdout={result.stdout!r}; stderr={result.stderr!r}")
         self.assertEqual(receipt.read_text(), "launched")
 
     def test_foreign_runtime_variables_are_removed_but_cli_path_is_retained(self):

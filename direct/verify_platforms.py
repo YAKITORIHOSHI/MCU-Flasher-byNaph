@@ -283,10 +283,14 @@ class PlatformChecks(unittest.TestCase):
         )
         with patch.object(web_bridge, "sys", SimpleNamespace(platform="linux")), \
                 patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(platform, "_uname_cache", None), \
+                patch.object(platform, "machine", return_value="x86_64"), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["/fixture/.venv-linux/bin/python", "-m", "platformio"]), \
                 patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
                 patch.object(web_bridge.subprocess, "Popen", return_value=process) as launch:
+            # A cold Windows platform.machine() can launch `ver`. Keep host
+            # discovery outside the fake programmer process, even on CI.
             api._native_upload_worker(can_skip=True)
         args, kwargs = launch.call_args.args[0], launch.call_args.kwargs
         self.assertEqual(args[-2:], ["--upload-port", "/dev/ttyACM0"])
@@ -337,6 +341,8 @@ class PlatformChecks(unittest.TestCase):
         process = SimpleNamespace(stdout=io.StringIO("\n".join(lines) + "\n"), wait=lambda: code, poll=lambda: code)
         with patch.object(web_bridge, "sys", SimpleNamespace(platform=host)), \
                 patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(platform, "_uname_cache", None), \
+                patch.object(platform, "machine", return_value="x86_64"), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["fixture-platformio"]), \
                 patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
@@ -424,6 +430,8 @@ class PlatformChecks(unittest.TestCase):
         process.wait = lambda: process.returncode or 0
         api._kill_active_process_tree = Mock(side_effect=lambda: setattr(process, "returncode", -15))
         with patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(platform, "_uname_cache", None), \
+                patch.object(platform, "machine", return_value="x86_64"), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["/fixture/.venv-linux/bin/python", "-m", "platformio"]), \
                 patch.object(web_bridge, "_refresh_platformio_core_environment", return_value=(self.root, False)), \
