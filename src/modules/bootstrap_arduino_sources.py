@@ -167,6 +167,7 @@ def prepare_sources(core, sources, *, emit, jobs=None):
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Arduino source preparation belongs to the separate bootstrap worker")
     from main.core import board_catalog
+    from src.modules.arduino_board_selection import board_selected, load_preferences
     from src.modules.arduino_cli_support import (load_prepared_targets, prepared_target_index,
         prepared_target_for_record, source_declaration_proof, prepare_source_boards, publish_prepared_targets,
         planned_source_target_index, source_namespace_target_for_record)
@@ -181,6 +182,7 @@ def prepare_sources(core, sources, *, emit, jobs=None):
     prior_cli = {_identity(row.get("source_file", ""), row.get("arduino_id")) for row in previous
                  if row.get("backend") == "arduino-cli"}
     preferences = _platformio_preferences()
+    cli_preferences = load_preferences(force_read=True)
     receipt_cache = {}
     source_digests = {}
     validation_cache = {}
@@ -249,6 +251,13 @@ def prepare_sources(core, sources, *, emit, jobs=None):
                                reason="PlatformIO recognizes multiple concrete boards for this declaration; select an exact board or provide an explicit association.")
                     continue
                 if prepared:
+                    if not metadata or not board_selected(metadata, row["arduino_id"], cli_preferences):
+                        if identity in prior_cli:
+                            affected.add(identity)
+                            affected_directories.add(Path(source_file).parent)
+                        row.update(status="unavailable", backend="", reason=(receipt_reason if not metadata else
+                            "Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support."))
+                        continue
                     row.update(prepared)
                     row.update(status="ready", reason="Exact prepared Arduino source target certificates reused.")
                     continue
@@ -261,6 +270,11 @@ def prepare_sources(core, sources, *, emit, jobs=None):
                 affected_directories.add(Path(source_file).parent)
                 if not metadata:
                     row["reason"] = receipt_reason
+                    continue
+                if not board_selected(metadata, row["arduino_id"], cli_preferences):
+                    row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+                    for key in ("arduino_backend_role", "arduino_source_proof", "arduino_fqbn"):
+                        row.pop(key, None)
                     continue
                 proof = source_declaration_proof(record, metadata)
                 if not proof:

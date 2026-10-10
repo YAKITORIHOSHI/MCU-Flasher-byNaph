@@ -320,6 +320,8 @@ def _prepared_catalog_fingerprint(core_dir: str | Path | None = None) -> tuple:
                 fingerprint.extend((str(metadata), *_manifest_stat_identity(stat)))
             except OSError:
                 fingerprint.extend((str(metadata), 0, 0, 0, 0, 0))
+        from src.modules.arduino_board_selection import preferences_fingerprint
+        fingerprint.extend(("arduino_cli_selections", preferences_fingerprint()))
         return tuple(fingerprint)
     except (OSError, TypeError, ValueError):
         return ()
@@ -957,6 +959,7 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
         match = diagnosis["match"]
     from src.modules.arduino_cli_support import (prepared_target_for_record, arduino_catalog_entry,
         source_namespace_target_for_record, source_target_proof)
+    from src.modules.arduino_board_selection import selection_for_row
     record = {"name": display_name, "arduino_id": info.get("arduino_board_id"),
               "source_file": info.get("arduino_source_file"), "mcu": info.get("mcu"),
               "source_sha256": info.get("arduino_source_sha256"),
@@ -971,7 +974,7 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
         # while PlatformIO recognizes multiple concrete hardware models.
         # Preserve the PIO ambiguity so the user can select the exact native
         # board or add an explicit mapping.
-        for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+        for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection",
                     "platformio_support", "platformio_support_proof", "fallback_notice"):
             resolved.pop(key, None)
         resolved.update(backend="platformio", pio_resolved=False, board="",
@@ -980,7 +983,7 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
         return resolved
     elif match is None and prepared and prepared.get("arduino_backend_role") == "primary":
         return arduino_catalog_entry(record, prepared)
-    elif match is None and (planned or source_target_proof(info)):
+    elif match is None and (planned or source_target_proof(info) and selection_for_row(info)):
         # Losing a compiler certificate cannot turn an original Arduino
         # declaration into a fuzzy concrete PlatformIO model. A current
         # unambiguous compatible definition above takes precedence.
@@ -994,13 +997,14 @@ def resolve_board_definition(display_name: str, info: dict, catalog: list[dict],
         if prepared and prepared.get("backend") == "arduino-cli":
             return arduino_catalog_entry(record, prepared)
         if resolved.get("backend") == "arduino-cli":
-            for key in ("backend", "arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+            for key in ("backend", "arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection",
                         "platformio_support", "platformio_support_proof", "fallback_notice"):
                 resolved.pop(key, None)
+            resolved.update(backend="platformio", pio_resolved=False, board="", platform="")
         resolved["pio_resolution_status"] = diagnosis["status"]
         resolved["pio_resolution_candidates"] = diagnosis["candidates"]
         return resolved
-    for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof",
+    for key in ("arduino_cli", "arduino_fqbn", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection",
                 "platformio_support", "platformio_support_proof", "fallback_notice"):
         resolved.pop(key, None)
     resolved["backend"] = "platformio"

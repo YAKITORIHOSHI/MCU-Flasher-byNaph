@@ -843,7 +843,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     guards = install_runtime_guard(core)
     guards.extend(["src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake", "src/modules/mbed_compat.py",
                    "src/modules/platformio_locks.py", "src/modules/board_index_targets.py",
-                   "src/modules/arduino_cli_support.py", "src/modules/bootstrap_board_coverage.py",
+                   "src/modules/arduino_cli_support.py", "src/modules/arduino_board_selection.py",
+                   "src/modules/bootstrap_board_coverage.py",
                    "src/modules/bootstrap_arduino_sources.py",
                    "main/core/arduino_backend.py", "main/core/arduino_inputs.py"])
     guards.extend(native_guards)

@@ -20,6 +20,7 @@ AUDIT.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(dir=AUDIT) as _import_directory, \
         patch("src.modules.platform_runtime.app_cache_dir", return_value=Path(_import_directory)):
     from src.modules import arduino_cli_support as support
+    from src.modules import arduino_board_selection as selection
     from main.core import board_catalog, target_profile, toolchain
 
 
@@ -47,6 +48,11 @@ esp32c3.build.board=ESP32C3_DEV
         self.row.update(status="ambiguous", backend="platformio", platformio_support="unknown")
         self.metadata = {"package": "esp32", "architecture": "esp32", "version": "3.3.11",
                          "index_url": "https://example.invalid/verified-source-index.json"}
+        self.cli_preferences = {selection.association_key(self.metadata): ["esp32s3", "esp32c3"]}
+        self.stack.enter_context(patch.object(selection, "load_preferences",
+                                             side_effect=lambda **_kwargs: dict(self.cli_preferences)))
+        self.stack.enter_context(patch.object(support, "load_preferences",
+                                             side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         self.store = support._source_store(self.core, support.source_declaration_proof(self.record, self.metadata))
         self.platform = self.store / "data/packages/esp32/hardware/esp32/3.3.11"
         self.platform.mkdir(parents=True)
@@ -116,14 +122,40 @@ esp32c3.build.board=ESP32C3_DEV
         self.assertEqual(probe[probe.index("--fqbn") + 1], "esp32:esp32:esp32s3")
         self.assertFalse(any("upload" in command for command, _ in self.commands))
 
+    def test_source_declarations_and_receipts_do_not_opt_in_by_themselves(self):
+        self.cli_preferences.clear()
+        metadata = dict(self.metadata, board_arduino_cli_selections={"esp32s3": True},
+                        arduino_cli_selected=True)
+        result = support.prepare_source_boards(
+            self.core, self.download, metadata, [self.row], emit=self.emit)[0]
+        self.assertNotEqual(result["status"], "ready")
+        self.runner.assert_not_called()
+
+    def test_removing_choice_discards_prepared_and_planned_namespace(self):
+        row = self.ready()
+        info = support.arduino_catalog_entry(self.record, row)
+        validation_cache = {}
+        self.assertIsNotNone(support.prepared_target_for_record(
+            self.record, [], core=self.core, validation_cache=validation_cache))
+        self.assertIsNotNone(support.planned_source_target_for_record(self.record, core=self.core))
+        self.cli_preferences.clear()
+        self.assertIsNone(support.prepared_target_for_record(
+            self.record, [], core=self.core, validation_cache=validation_cache))
+        self.assertIsNone(support.planned_source_target_for_record(self.record, core=self.core))
+        self.assertIsNone(support.source_namespace_target_for_record(self.record, core=self.core))
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]):
+            with self.assertRaises(RuntimeError):
+                support.runtime_command(info, core=self.core)
+        self.assertTrue(self.platform.exists())
+
     def test_source_primary_does_not_override_a_resolved_platformio_definition(self):
         result = self.ready()
         candidates = self.candidates()
         match = board_catalog._resolve_arduino_board_record(self.record, candidates)
         self.assertIsNotNone(match)
         prepared = support.prepared_target_for_record(self.record, candidates, core=self.core)
-        self.assertEqual(prepared["arduino_fqbn"], result["arduino_fqbn"])
-        info = support.arduino_catalog_entry(self.record, prepared)
+        self.assertIsNone(prepared)
+        info = support.arduino_catalog_entry(self.record, result)
         resolved = board_catalog.resolve_board_definition(self.record["name"], info, candidates)
         self.assertEqual(resolved["backend"], "platformio")
         self.assertEqual(resolved["board"], match["id"])

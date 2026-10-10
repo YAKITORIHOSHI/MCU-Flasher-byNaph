@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.modules import arduino_cli_support as support
+from src.modules import arduino_board_selection as selection
 from main.core import board_catalog, target_profile, arduino_backend, toolchain
 from main import web_bridge
 
@@ -51,6 +52,11 @@ class FallbackChecks(unittest.TestCase):
                     "platformio_support_proof": dict(PROOF)}
         self.metadata = {"package": "vendor", "architecture": "newarch", "version": "2.0.0",
                          "index_url": "https://example.invalid/vendor_index.json"}
+        self.cli_preferences = {selection.association_key(self.metadata): ["future", "future2", "second"]}
+        self.stack.enter_context(patch.object(selection, "load_preferences",
+                                             side_effect=lambda **_kwargs: dict(self.cli_preferences)))
+        self.stack.enter_context(patch.object(support, "load_preferences",
+                                             side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         self.stack.enter_context(patch.object(toolchain, "find_arduino_cli_executable", return_value=str(self.cli)))
         self.stack.enter_context(patch("main.core.build_resources.get_optimal_compiler_jobs", return_value=2))
         self.stack.enter_context(patch("src.modules.package_jobs.package_core_directory", return_value=self.core))
@@ -85,6 +91,59 @@ class FallbackChecks(unittest.TestCase):
             actual = support.prepare_unsupported_boards(self.core, self.download, self.metadata, [row], emit=self.emit)
             self.assertEqual(actual, [row])
         self.runner.assert_not_called()
+
+    def test_default_disabled_never_installs_despite_verified_absence(self):
+        self.cli_preferences.clear()
+        rows = support.prepare_unsupported_boards(
+            self.core, self.download, self.metadata, [self.row], emit=self.emit)
+        self.assertNotEqual(rows[0]["status"], "ready")
+        self.runner.assert_not_called()
+        self.assertFalse((self.core / "arduino-cli/arduino-cli.yaml").exists())
+
+    def test_one_selected_board_does_not_prepare_its_siblings(self):
+        self.cli_preferences[selection.association_key(self.metadata)] = ["future"]
+        rows = support.prepare_unsupported_boards(
+            self.core, self.download, self.metadata,
+            [self.row, dict(self.row, arduino_id="future2", name="Future Board 2")], emit=self.emit)
+        self.assertEqual(rows[0]["status"], "ready")
+        self.assertNotEqual(rows[1]["status"], "ready")
+        probes = [command for command in self.commands if "compile" in command]
+        self.assertEqual([command[command.index("--fqbn") + 1] for command in probes],
+                         ["vendor:newarch:future"])
+
+    def test_removing_selection_revokes_warm_receipt_and_runtime_without_deleting_tools(self):
+        row = self.ready()
+        info = support.arduino_catalog_entry(self.record(), row)
+        validation_cache = {}
+        self.assertIsNotNone(support.prepared_target_for_record(
+            self.record(), [], core=self.core, validation_cache=validation_cache))
+        self.cli_preferences.clear()
+        self.assertIsNone(support.prepared_target_for_record(
+            self.record(), [], core=self.core, validation_cache=validation_cache))
+        with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]):
+            with self.assertRaises(RuntimeError):
+                support.runtime_command(info, core=self.core)
+        self.assertTrue(self.tool.exists())
+        self.assertTrue((self.core / support.TARGETS_FILE).exists())
+
+    def test_old_namespace_free_receipt_cannot_enable_cli(self):
+        row = self.ready()
+        row.pop("arduino_cli_selection", None)
+        support.publish_prepared_targets(self.core, self.download, [row])
+        self.assertIsNone(support.prepared_target_for_record(self.record(), [], core=self.core))
+
+    def test_warm_certificate_cannot_be_relabelled_to_another_selected_index(self):
+        row = self.ready()
+        another = dict(self.metadata, index_url="https://another.invalid/vendor_index.json")
+        self.cli_preferences[selection.association_key(another)] = ["future"]
+        validation_cache = {}
+        self.assertIsNotNone(support.prepared_target_for_record(
+            self.record(), [], core=self.core, validation_cache=validation_cache))
+        relabelled = dict(row, arduino_cli_selection=selection.selection_identity(another))
+        support.publish_prepared_targets(self.core, self.download, [relabelled])
+        self.assertTrue(selection.selection_for_row(relabelled, self.cli_preferences))
+        self.assertIsNone(support.prepared_target_for_record(
+            self.record(), [], core=self.core, validation_cache=validation_cache))
 
     def test_cached_identity_without_exact_parsed_receipt_cannot_borrow_prepared_target(self):
         self.ready()

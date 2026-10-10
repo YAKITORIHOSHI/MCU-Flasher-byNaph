@@ -21,6 +21,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from main.core import board_catalog
 from src.modules import arduino_cli_support
+from src.modules import arduino_board_selection as selection
 from src.modules import bootstrap_arduino_sources as worker
 
 _REAL_PREPARE = arduino_cli_support.prepare_source_boards
@@ -66,9 +67,14 @@ class SourceChecks(unittest.TestCase):
         self.prepared = None
         self.events = []
         self.preferences = {}
+        self.cli_preferences = {selection.association_key(self.receipt): ["absent", "ambig", "native"]}
         self.archives = {self.archive}
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch.object(selection, "load_preferences",
+                                         side_effect=lambda **_kwargs: dict(self.cli_preferences)))
+        stack.enter_context(patch.object(arduino_cli_support, "load_preferences",
+                                         side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         stack.enter_context(patch.dict(os.environ, {"MCU_PACKAGE_EVENTS_ROOT": str(self.root / "events")}))
         self.loader = stack.enter_context(patch.object(board_catalog, "_load_platformio_board_catalog",
                                                        side_effect=lambda *_a, **_k: copy.deepcopy(self.catalog)))
@@ -135,6 +141,23 @@ class SourceChecks(unittest.TestCase):
         self.publisher.assert_called_once()
         self.loader.assert_called_once_with(self.core, force_read=True)
         self.parser.assert_called_once_with(self.archive, force_read=True)
+
+    def test_default_policy_does_not_prepare_unrepresented_source_targets(self):
+        self.cli_preferences.clear()
+        self.receipt[selection.FIELD] = {selection.association_key(self.receipt): ["absent"]}
+        self.write_receipt()
+        report = self.run_worker()
+        self.assertEqual(report["ready_count"], 0)
+        self.assertNotEqual(self.row(report, "absent")["status"], "ready")
+        self.installer.assert_not_called()
+
+    def test_selection_for_another_index_cannot_enable_this_core(self):
+        self.cli_preferences.clear()
+        self.cli_preferences[selection.association_key(dict(
+            self.receipt, index_url="https://another.invalid/package_index.json"))] = ["absent"]
+        report = self.run_worker()
+        self.assertEqual(report["ready_count"], 0)
+        self.installer.assert_not_called()
 
     def test_missing_receipt_exposes_each_unavailable_board_without_installing(self):
         (self.archive / worker.RECEIPT).unlink()

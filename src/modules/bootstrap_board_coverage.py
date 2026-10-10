@@ -113,6 +113,7 @@ def report_coverage(core, sources, *, plan, platform_sources, board_manifests, l
     from src.modules.arduino_cli_support import (load_prepared_targets,
         prepared_target_index, prepared_target_for_record, planned_source_target_for_record, planned_source_target_index,
         source_namespace_target_for_record, source_namespace_proof)
+    from src.modules.arduino_board_selection import load_preferences, selection_for_row
 
     # Keep the verified short Windows package-store spelling.
     core = Path(os.path.abspath(core))
@@ -124,6 +125,7 @@ def report_coverage(core, sources, *, plan, platform_sources, board_manifests, l
     associations = prepared_target_index(prepared_rows)
     primary_associations = planned_source_target_index(prepared_rows)
     validation_cache = {}
+    cli_preferences = load_preferences(force_read=True)
     digest_cache = {}
     covered_platforms = set(platform_sources.values())
     arduino_selected = "frameworks" not in plan or "arduino" in plan["frameworks"]
@@ -183,7 +185,8 @@ def report_coverage(core, sources, *, plan, platform_sources, board_manifests, l
                 if not primary_intent:
                     primary_intent = source_namespace_target_for_record(record, core=core, rows=primary_associations,
                                                                         validation_cache=validation_cache)
-                if not primary_intent and failure and source_namespace_proof(failure):
+                if (not primary_intent and failure and source_namespace_proof(failure)
+                        and selection_for_row(failure, cli_preferences)):
                     primary_intent = failure
                 match = (prepared if prepared and prepared.get("backend") != "arduino-cli"
                          else diagnosis.get("match"))

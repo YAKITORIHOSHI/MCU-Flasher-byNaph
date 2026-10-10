@@ -84,12 +84,12 @@ class SourceNamespaceChecks(unittest.TestCase):
         self.assert_original_unavailable(self.refresh(candidates=[])[self.record["name"]])
 
     def test_exact_platformio_id_supersedes_saved_arduino_primary(self):
-        self.ready()
+        row = self.ready()
         candidate = self.candidates()[0]
         candidate.update(id="esp32s3", name="ESP32S3 Dev Module")
         with patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[candidate]):
-            info = support.arduino_catalog_entry(self.record, support.prepared_target_for_record(
-                self.record, [candidate], core=self.core))
+            self.assertIsNone(support.prepared_target_for_record(self.record, [candidate], core=self.core))
+            info = support.arduino_catalog_entry(self.record, row)
             actual = board_catalog.resolve_board_definition(self.record["name"], info, [candidate])
         self.assertEqual(actual["backend"], "platformio")
         self.assertEqual(actual["board"], "esp32s3")

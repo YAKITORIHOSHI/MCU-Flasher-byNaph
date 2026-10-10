@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 from src.modules import board_index_targets as targets
 from src.modules import board_preparation as worker
+from src.modules import arduino_board_selection as selection
+from src.modules import arduino_cli_support
 from src.modules import offline_bootstrap
 from main.core import board_catalog
 
@@ -55,6 +57,13 @@ class CustomIndexChecks(unittest.TestCase):
         self.archive.mkdir()
         (self.archive / "boards.txt").write_text("future.name=Future Board\nfuture.build.mcu=custommcu\n", encoding="utf-8")
         self.records = board_catalog._parse_downloaded_arduino_board_files(self.archive, force_read=True)
+        self.cli_preferences = {selection.association_key(metadata): ["future"] for metadata in
+            (CUSTOM, dict(CUSTOM, package="arduino", architecture="avr"))}
+        for module in (selection, arduino_cli_support):
+            preference_reader = patch.object(module, "load_preferences",
+                                             side_effect=lambda **_kwargs: dict(self.cli_preferences))
+            preference_reader.start()
+            self.addCleanup(preference_reader.stop)
 
     def test_unknown_family_resolves_from_exact_registered_board(self):
         report = worker.preparation_plan(self.records, package_metadata=CUSTOM, registry_catalog=[candidate()], base_plan=BASE)
@@ -329,6 +338,24 @@ class CustomIndexChecks(unittest.TestCase):
         self.assertEqual(events[-1][0], "ready")
         self.assertIn("prepared Arduino compiler targets", events[-1][1]["message"])
         self.assertEqual(events[-1][1]["arduino_cli_count"], 1)
+
+    def test_confirmed_absence_and_index_flags_cannot_opt_in_a_board(self):
+        self.cli_preferences.clear()
+        metadata = dict(CUSTOM, version="1.2.3", arduino_cli_selected=True,
+                        board_arduino_cli_selections={selection.association_key(CUSTOM): ["future"]})
+        unrelated = candidate(identifier="unrelated", name="Other Hardware", mcu="othermcu")
+        with patch.object(offline_bootstrap, "load_plan", return_value=BASE), \
+                patch.object(offline_bootstrap, "ready", return_value=False), \
+                patch.object(board_catalog, "_load_platformio_board_catalog", return_value=[]), \
+                patch.object(targets, "fetch_preparation_catalog", return_value=[unrelated]), \
+                patch.object(arduino_cli_support, "_run_json") as native, \
+                patch("main.core.toolchain.find_arduino_cli_executable") as find_cli, \
+                patch("src.modules.arduino_cli_support.publish_prepared_targets"):
+            result = worker.run_preparation(self.core, self.archive, package_metadata=metadata, emit=Mock())
+        self.assertEqual(result["boards"][0]["platformio_support"], "unsupported")
+        self.assertNotEqual(result["boards"][0]["status"], "ready")
+        native.assert_not_called()
+        find_cli.assert_not_called()
 
     def test_known_avr_family_absent_exact_board_queries_registry_and_authorizes_cli(self):
         metadata = dict(CUSTOM, package="arduino", architecture="avr", version="1.2.3")

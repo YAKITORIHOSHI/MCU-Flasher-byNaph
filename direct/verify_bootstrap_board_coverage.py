@@ -20,6 +20,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from main.core import board_catalog
 from src.modules import arduino_cli_support
+from src.modules import arduino_board_selection as selection
 from src.modules import bootstrap_board_coverage as coverage
 
 
@@ -60,6 +61,16 @@ class CoverageChecks(unittest.TestCase):
 
         stack = ExitStack()
         self.addCleanup(stack.close)
+        self.settings = self.root / "arduino-browser-settings.json"
+        self.settings.write_text(json.dumps({selection.FIELD: {
+            selection.association_key({"package": "esp32", "architecture": "esp32",
+                "index_url": "https://fixture.invalid/exact-source.json"}): ["esp32s3"],
+            selection.association_key({"package": "arduino", "architecture": "avr",
+                "index_url": "https://fixture.invalid/arduino-source.json"}): ["uno"],
+        }}), encoding="utf-8")
+        stack.enter_context(patch.object(selection, "settings_file", return_value=self.settings))
+        selection.invalidate_preferences()
+        self.addCleanup(selection.invalidate_preferences)
         stack.enter_context(patch.dict(os.environ, {
             "MCU_PACKAGE_EVENTS_ROOT": str(self.root / "package-events"),
         }))
@@ -225,6 +236,28 @@ class CoverageChecks(unittest.TestCase):
         self.assertEqual(row["status"], "unavailable")
         self.assertEqual(row["backend"], "arduino-cli")
         self.assertEqual(row["reason"], failure["reason"])
+
+    def test_disabled_board_cannot_resurrect_namespace_from_failed_source_report(self):
+        failure = self.primary_intention()
+        self.settings.write_text("{}", encoding="utf-8")
+        selection.invalidate_preferences()
+        self.catalog.remove(self.s3_second)
+        self.catalog.remove(self.s3_first)
+        row = self.row(self.report(source_preparation={"boards": [failure]}), "esp32s3")
+        self.assertEqual(row["status"], "unavailable")
+        self.assertNotEqual(row.get("backend"), "arduino-cli")
+        self.assertNotIn("arduino_source_proof", row)
+
+    def test_disabled_board_cannot_resurrect_namespace_from_old_prepared_rows(self):
+        self.prepared_rows = [self.primary_intention()]
+        self.settings.write_text("{}", encoding="utf-8")
+        selection.invalidate_preferences()
+        self.catalog.remove(self.s3_second)
+        self.catalog.remove(self.s3_first)
+        row = self.row(self.report(), "esp32s3")
+        self.assertEqual(row["status"], "unavailable")
+        self.assertNotEqual(row.get("backend"), "arduino-cli")
+        self.assertNotIn("arduino_source_proof", row)
 
     def test_verified_explicit_platformio_mapping_supersedes_failed_primary_source_plan(self):
         self.prepared_rows = [{"status": "ready", "backend": "platformio", "arduino_id": "esp32s3",

@@ -3404,7 +3404,10 @@ class ArduinoBrowser:
         tab.mapping_btn = make_flat_button(prepare_row, "Custom platform…",
             lambda: self._edit_board_platform(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
         tab.mapping_btn.pack(anchor="w", pady=(5, 0))
-        hint = tk.Label(dc, text="Board support is matched automatically. Arduino CLI is prepared only when PlatformIO has no support for the exact board.",
+        tab.arduino_cli_btn = make_flat_button(prepare_row, "Choose Arduino CLI boards…",
+            lambda: self._edit_arduino_cli_boards(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+        tab.arduino_cli_btn.pack(anchor="w", pady=(5, 0))
+        hint = tk.Label(dc, text="PlatformIO is used first. Arduino CLI is prepared only for boards you choose when no exact PlatformIO target is available.",
                         font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         hint.pack(fill="x", pady=(2, 4))
         tab._wrapping_labels.append(hint)
@@ -3454,6 +3457,26 @@ class ArduinoBrowser:
             if configuration:
                 metadata['platformio'] = configuration
         return metadata
+
+    def _edit_arduino_cli_boards(self, tab):
+        if self._busy:
+            return
+        selection = tab.listbox.curselection()
+        if not selection or selection[0] >= len(tab.filtered_names):
+            return
+        item = tab.all_items.get(tab.filtered_names[selection[0]])
+        if not item:
+            return
+        version = next((entry for entry in item.get('versions', [])
+                        if entry.get('version') == tab.version_var.get()), None)
+        if version is None:
+            return
+        metadata = {**item, **version}
+        archive = _archive_filename(metadata.get('url', ''), metadata.get('archiveFileName', ''))
+        folder = os.path.join(self._download_dir, 'Boards', _get_folder_name(archive))
+        from src.modules.arduino_board_chooser import open_board_chooser
+        open_board_chooser(self, tab, metadata, folder, theme=Theme, button=make_flat_button,
+                           load_settings=_load_settings, save_settings=_save_settings)
 
     def _edit_board_platform(self, tab):
         if self._busy:

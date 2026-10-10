@@ -257,7 +257,7 @@ def preparation_plan(records, *, package_metadata=None, catalog=None, base_plan=
                 and not hardware_identity_present(record, catalog, features)):
             row.update(status="unsupported", platformio_support="unsupported", backend="",
                        platformio_support_proof=dict(registry_proof),
-                       reason="The complete PlatformIO catalog has no exact definition for this Arduino board. Preparing Arduino CLI support instead.")
+                       reason="The complete PlatformIO catalog has no exact definition for this Arduino board. Enable it with Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
         rows.append(row)
     # Index names are useful even when a malformed archive has no boards.txt.
     # Their names alone never grant a target identity or readiness.
@@ -333,6 +333,7 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
     from src.modules.board_index_targets import (fetch_preparation_catalog, platform_source_bindings,
                                                 installed_platform_specifications, registered_catalog_proof)
     from src.modules.arduino_cli_support import prepare_unsupported_boards, publish_prepared_targets
+    from src.modules.arduino_board_selection import board_selected, load_preferences
     directory = Path(board_directory)
     if not directory.is_dir():
         raise ValueError("Downloaded board directory is unavailable")
@@ -431,6 +432,7 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
         result["boards"] = prepare_unsupported_boards(core, directory, _small_metadata(package_metadata),
                                                     result["boards"], emit=emit, jobs=jobs)
     metadata = _small_metadata(package_metadata)
+    cli_preferences = load_preferences(force_read=True)
     if (not metadata.get("platformio") and
             ("frameworks" not in result["plan"] or "arduino" in result["plan"]["frameworks"])):
         from src.modules.arduino_cli_support import source_declaration_proof, prepare_source_boards
@@ -440,6 +442,8 @@ def run_preparation(core, board_directory, *, package_metadata=None, emit, jobs=
         requested_sources = []
         for row in result["boards"]:
             if row["status"] == "ready" or row.get("platformio_support") != "unknown":
+                continue
+            if not board_selected(metadata, row.get("arduino_id"), cli_preferences):
                 continue
             proof = source_declaration_proof(row, metadata)
             if proof:

@@ -172,3 +172,10 @@ path references, and fallback logic in the same operation.
 - Keep attribute calls best-effort; a cosmetic hiding failure must not block a
   compile, save, upload, reset, or project open.
 - Preserve shared frameworks/toolchains and exact-board incremental state.
+- Arduino CLI board choices are local user settings scoped to vendor index,
+  package, architecture and exact board ID. Default to PlatformIO and no CLI
+  choices; do not migrate old prepared targets into automatic opt-ins. Disabling
+  a board retires its CLI routing and future preparation, preserving already
+  installed cores, download archives and certificates until explicit cleanup.
+  A chosen board can still require its vendor's shared compiler package. Keep
+  Windows and Ubuntu native tools/stores separate during preparation and cleanup.

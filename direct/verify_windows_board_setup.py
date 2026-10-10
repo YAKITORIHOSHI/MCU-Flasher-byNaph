@@ -244,5 +244,35 @@ class WindowsBoardSetupChecks(unittest.TestCase):
             self.assertFalse(mode.startup_ready(self.core, config={}))
 
 
+class ArduinoExecutableSetupChecks(unittest.TestCase):
+    def ensure_cli(self, *, existing):
+        source = ROOT / "src/modules/bootstrap.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "ensure_arduino_cli")
+        cache = Mock()
+        installer = Mock(return_value=True)
+        spawn = Mock(side_effect=AssertionError("Executable setup cannot install Arduino cores"))
+        scope = dict(Path=Path, SCRIPT_DIR=ROOT / "temp/audit/windows-board-setup",
+                     find_arduino_cli=Mock(side_effect=["fixture-arduino-cli.exe"] if existing else
+                                           [None, "fixture-arduino-cli.exe"]),
+                     _cache_arduino_cli_path=cache, _is_valid_msi=Mock(return_value=True),
+                     _refresh_bundled_msi=Mock(), _run_arduino_cli_msi=installer,
+                     subprocess=SimpleNamespace(run=spawn, Popen=spawn),
+                     _prewarm_arduino_cli_cores=spawn,
+                     section=Mock(), ok=Mock(), warn=Mock(), fail=Mock())
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), scope)
+        self.assertTrue(scope["ensure_arduino_cli"]())
+        cache.assert_called_once_with("fixture-arduino-cli.exe")
+        spawn.assert_not_called()
+        return installer
+
+    def test_existing_cli_does_not_prewarm_global_arduino_core(self):
+        self.ensure_cli(existing=True).assert_not_called()
+
+    def test_new_cli_installs_only_executable(self):
+        self.ensure_cli(existing=False).assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

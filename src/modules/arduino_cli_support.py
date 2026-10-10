@@ -18,10 +18,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from src.modules.arduino_board_selection import (board_selected, load_preferences,
+    selection_for_row, selection_identity)
+
 TARGETS_FILE = ".mcu-index-targets.json"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,159}$")
 _HEX = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _selection_preferences(validation_cache=None):
+    key = ("arduino-cli-selection-preferences",)
+    if validation_cache is not None and key in validation_cache:
+        return validation_cache[key]
+    preferences = load_preferences()
+    if validation_cache is not None:
+        validation_cache[key] = preferences
+    return preferences
 
 
 def _core_directory(core=None):
@@ -124,9 +137,15 @@ def prepare_source_boards(core, directory, metadata, rows, *, emit, jobs=None):
     runtime matching failure invokes this online preparation operation.
     """
     planned = [dict(row) for row in rows]
+    preferences = load_preferences(force_read=True)
     for row in planned:
         if (row.get("platformio_support") == "supported" or row.get("explicit_board_id")
                 or row.get("status") == "ready" and row.get("backend") == "platformio"):
+            continue
+        if not board_selected(metadata, row.get("arduino_id"), preferences):
+            row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+            for key in ("arduino_cli", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection"):
+                row.pop(key, None)
             continue
         proof = source_declaration_proof(row, metadata)
         if not proof or row.get("arduino_source_proof") not in (None, proof):
@@ -366,7 +385,24 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
     the fallback preparation reason. The caller holds the package-store lease.
     """
     prepared = [dict(row) for row in rows]
-    targets = [row for row in prepared if source_target_proof(row) or unsupported_proof(row)]
+    preferences = load_preferences(force_read=True)
+    targets = []
+    for row in prepared:
+        if not (source_target_proof(row) or unsupported_proof(row)):
+            continue
+        if (row.get("platformio_support") == "supported" or row.get("explicit_board_id")
+                or row.get("status") == "ready" and row.get("backend") == "platformio"):
+            continue
+        if not board_selected(metadata, row.get("arduino_id"), preferences):
+            row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+            for key in ("arduino_cli", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection"):
+                row.pop(key, None)
+            continue
+        if source_target_proof(row) and row["arduino_source_proof"] != source_declaration_proof(row, metadata):
+            row.update(status="unavailable", reason="The original Arduino source namespace changed before preparation.")
+            continue
+        row["arduino_cli_selection"] = selection_identity(metadata)
+        targets.append(row)
     if not targets:
         return prepared
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
@@ -474,7 +510,8 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                 certificate = {"schema": 1, "host": sys.platform, "core": f"{package}:{architecture}",
                                "version": version, "proof_files": proof_files, "tool_files": tool_files,
                                "cli_sha256": cli_digest, "cli_path": cli_path, "fqbn": fqbn,
-                               "store": str(store.relative_to(Path(core)))}
+                               "store": str(store.relative_to(Path(core))),
+                               "arduino_cli_selection": selection_identity(metadata)}
                 if primary:
                     certificate.update(arduino_backend_role="primary", arduino_source_proof=dict(row["arduino_source_proof"]))
                 certificate_bytes = json.dumps(certificate, sort_keys=True).encode("utf-8")
@@ -523,6 +560,7 @@ def publish_prepared_targets(core, directory, rows):
     core = _core_directory(core)
     path = core / TARGETS_FILE
     values = load_prepared_targets(core)
+    preferences = load_preferences(force_read=True)
     source_root = Path(directory).resolve()
     # Changed/unavailable targets invalidate prior certificates for this source.
     values = [row for row in values if not _within(row.get("source_file", ""), source_root)]
@@ -534,6 +572,8 @@ def publish_prepared_targets(core, directory, rows):
                 or item.get("status") != "ready" and not primary_intent):
             continue
         if item.get("backend") == "arduino-cli" and not (source_target_proof(item) or unsupported_proof(item) or primary_intent):
+            continue
+        if (item.get("backend") == "arduino-cli" or primary_intent) and not selection_for_row(item, preferences):
             continue
         try:
             source_digest = item.get("source_sha256")
@@ -554,7 +594,7 @@ def publish_prepared_targets(core, directory, rows):
             row = {key: value for key, value in item.items() if key in {
                 "name", "arduino_id", "source_file", "platform", "board", "platform_spec", "match_reasons",
                 "manifest", "manifest_sha256", "backend", "arduino_fqbn", "arduino_cli",
-                "arduino_backend_role", "arduino_source_proof",
+                "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection",
                 "platformio_support", "platformio_support_proof", "status", "require_upload_port", "reason", "source_sha256"}}
             if primary_intent:
                 row.update(backend="arduino-cli", arduino_fqbn=item["arduino_source_proof"]["fqbn"])
@@ -585,8 +625,9 @@ def load_prepared_targets(core=None):
 
 def prepared_target_index(rows):
     index = {}
+    preferences = load_preferences()
     for row in rows:
-        if row.get("status") == "ready":
+        if row.get("status") == "ready" and (row.get("backend") != "arduino-cli" or selection_for_row(row, preferences)):
             key = (os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))), str(row.get("arduino_id") or ""))
             index.setdefault(key, []).append(row)
     return index
@@ -594,8 +635,9 @@ def prepared_target_index(rows):
 
 def planned_source_target_index(rows):
     index = {}
+    preferences = load_preferences()
     for row in rows:
-        if source_namespace_proof(row):
+        if source_namespace_proof(row) and selection_for_row(row, preferences):
             key = (os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))),
                    str(row.get("arduino_id") or ""))
             index.setdefault(key, []).append(row)
@@ -613,7 +655,8 @@ def planned_source_target_for_record(record, *, core=None, rows=None, validation
     values = planned_source_target_index(load_prepared_targets(core)) if rows is None else rows
     if isinstance(values, dict):
         values = values.get((source_key, identifier), [])
-    choices = [row for row in values if source_target_proof(row)
+    preferences = _selection_preferences(validation_cache)
+    choices = [row for row in values if source_target_proof(row) and selection_for_row(row, preferences)
                and os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))) == source_key
                and str(row.get("arduino_id") or "") == identifier
                and row.get("source_sha256") == parsed_digest]
@@ -642,7 +685,8 @@ def source_namespace_target_for_record(record, *, core=None, rows=None, validati
     values = planned_source_target_index(load_prepared_targets(core)) if rows is None else rows
     if isinstance(values, dict):
         values = values.get((source_key, identifier), [])
-    choices = [row for row in values if source_namespace_proof(row)
+    preferences = _selection_preferences(validation_cache)
+    choices = [row for row in values if source_namespace_proof(row) and selection_for_row(row, preferences)
                and os.path.normcase(os.path.abspath(str(row.get("source_file") or ""))) == source_key
                and str(row.get("arduino_id") or "") == identifier]
     if len(choices) != 1:
@@ -710,6 +754,15 @@ def prepared_target_for_record(record, catalog, *, core=None, rows=None, validat
         if row.get("backend") == "arduino-cli":
             from src.modules.board_index_targets import hardware_identity_present
             primary = source_target_proof(row)
+            if row.get("platformio_support") == "supported" or row.get("explicit_board_id"):
+                return None
+            if not selection_for_row(row, _selection_preferences(validation_cache)):
+                return None
+            if catalog:
+                from main.core.board_catalog import diagnose_arduino_board_record
+                diagnosis = diagnose_arduino_board_record(record, catalog)
+                if diagnosis.get("match") or diagnosis.get("status") == "ambiguous":
+                    return None
             if not primary and catalog and hardware_identity_present(record, catalog):
                 return None
             if not primary and not unsupported_proof(row):
@@ -739,6 +792,7 @@ def prepared_target_for_record(record, catalog, *, core=None, rows=None, validat
                                arduino.get("core"), arduino.get("version"), arduino.get("cli_sha256"),
                                arduino.get("store"),
                                arduino.get("cli_path") if primary else None,
+                               json.dumps(row.get("arduino_cli_selection"), sort_keys=True),
                                json.dumps(row.get("arduino_source_proof") if primary else None, sort_keys=True))
             if validation_cache is not None and validation_cache.get(certificate_key):
                 return dict(row)
@@ -750,6 +804,8 @@ def prepared_target_for_record(record, catalog, *, core=None, rows=None, validat
             if (certificate.get("schema") != 1 or certificate.get("host") != sys.platform
                     or certificate.get("core") != arduino.get("core") or certificate.get("version") != arduino.get("version")
                     or certificate.get("cli_sha256") != arduino.get("cli_sha256") or certificate.get("fqbn") != arduino.get("fqbn")):
+                return None
+            if not primary and certificate.get("arduino_cli_selection") != row.get("arduino_cli_selection"):
                 return None
             if primary and (certificate.get("arduino_backend_role") != "primary"
                             or certificate.get("store") != arduino.get("store")
@@ -822,19 +878,25 @@ def arduino_catalog_entry(record, prepared):
             "arduino_fqbn": prepared.get("arduino_fqbn"), "arduino_cli": prepared.get("arduino_cli"),
             "platformio_support": prepared.get("platformio_support", "unknown"), "platformio_support_proof": prepared.get("platformio_support_proof"),
             "arduino_backend_role": prepared.get("arduino_backend_role"), "arduino_source_proof": prepared.get("arduino_source_proof"),
+            "arduino_cli_selection": prepared.get("arduino_cli_selection"),
             "require_upload_port": True, "fallback_notice": prepared.get("reason")}
 
 
 def runtime_command(info, *, core=None):
     """Validate an exact prepared Arduino target before invoking its offline CLI."""
     core = _core_directory(core)
+    preferences = load_preferences(force_read=True)
+    if not selection_for_row(info, preferences):
+        raise RuntimeError("Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support again")
     from main.core.board_catalog import _load_platformio_board_catalog
     catalog = _load_platformio_board_catalog(core, force_read=True)
     record = {**info, "name": info.get("arduino_name") or "", "mcu": info.get("mcu"),
               "variant": info.get("arduino_variant"), "build_board": info.get("arduino_build_board")}
-    prepared = prepared_target_for_record(record, catalog, core=core)
+    prepared = prepared_target_for_record(record, catalog, core=core,
+        validation_cache={("arduino-cli-selection-preferences",): preferences})
     if (not prepared or prepared.get("backend") != "arduino-cli"
             or not (source_target_proof(info) or unsupported_proof(info))
+            or not source_target_proof(info) and info.get("arduino_cli_selection") != prepared.get("arduino_cli_selection")
             or source_target_proof(info) and info.get("arduino_source_proof") != prepared.get("arduino_source_proof")):
         raise RuntimeError("Arduino CLI target is not verified for this exact board. Prepare board support again")
     if info.get("framework") != "arduino":

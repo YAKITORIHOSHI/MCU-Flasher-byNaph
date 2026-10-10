@@ -7820,29 +7820,9 @@ def _run_arduino_cli_msi(msi_path: Path) -> bool:
     return False
 
 
-def _prewarm_arduino_cli_cores(cli_path: str):
-    """Pre-install Arduino AVR core (and update core index) via arduino-cli
-    inside bootstrap setup so compiling with Arduino-CLI never stalls in the GUI."""
-    try:
-        status("Checking Arduino-CLI core packages...")
-        _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        # Fast path: check if arduino:avr is already installed locally to avoid network delays on every start
-        res = subprocess.run([cli_path, "core", "list"], capture_output=True, text=True, timeout=10, creationflags=_cf)
-        if res.returncode == 0 and "arduino:avr" in res.stdout:
-            ok("Arduino AVR core is already installed.")
-            return
-
-        subprocess.run([cli_path, "core", "update-index"], capture_output=True, timeout=30, creationflags=_cf)
-        res = subprocess.run([cli_path, "core", "install", "arduino:avr"], capture_output=True, text=True, timeout=120, creationflags=_cf)
-        if res.returncode == 0:
-            ok("Arduino AVR core pre-installed via Arduino-CLI.")
-    except Exception:
-        pass
-
-
 def ensure_arduino_cli() -> bool:
     """
-    Make sure Arduino-CLI is installed.
+    Prepare only the Arduino CLI executable; exact selected cores use the worker.
 
     Priority:
       1. Already on PATH / known install dirs → nothing to do.
@@ -7857,7 +7837,6 @@ def ensure_arduino_cli() -> bool:
     if cli:
         ok("Arduino-CLI is already installed")
         _cache_arduino_cli_path(cli)
-        _prewarm_arduino_cli_cores(cli)
         return True
 
     section("Installing Arduino-CLI")
@@ -7882,7 +7861,6 @@ def ensure_arduino_cli() -> bool:
     if cli:
         ok(f"Arduino-CLI installed successfully: {cli}")
         _cache_arduino_cli_path(cli)
-        _prewarm_arduino_cli_cores(cli)
         return True
     else:
         _LAST_ARDUINO_CLI_ERROR = (
@@ -9459,6 +9437,7 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "src" / "modules" / "board_preparation.py",
         SCRIPT_DIR / "src" / "modules" / "board_index_targets.py",
         SCRIPT_DIR / "src" / "modules" / "arduino_cli_support.py",
+        SCRIPT_DIR / "src" / "modules" / "arduino_board_selection.py",
         SCRIPT_DIR / "src" / "modules" / "platformio_locks.py",
         SCRIPT_DIR / "src" / "modules" / "offline_runtime.py",
         SCRIPT_DIR / "src" / "modules" / "offline_mode.py",

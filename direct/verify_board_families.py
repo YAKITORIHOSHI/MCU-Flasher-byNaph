@@ -413,8 +413,17 @@ class BoardFamilyChecks(unittest.TestCase):
         class InlineThread:
             def __init__(self, target, args=(), **kwargs):
                 self.target, self.args = target, args
+                self._running = False
             def start(self):
-                self.target(*self.args)
+                self._running = True
+                try:
+                    self.target(*self.args)
+                finally:
+                    self._running = False
+            def is_alive(self):
+                return self._running
+            def join(self, timeout=None):
+                pass
         self.api._block_if_pending_ai_edits = Mock(return_value=False)
         self.api.check_can_skip_compile_for_upload = Mock(return_value=False)
         self.api._compile_worker = Mock(return_value=True)

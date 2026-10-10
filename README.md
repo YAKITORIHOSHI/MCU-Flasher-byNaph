@@ -280,10 +280,13 @@ build-define evidence may select the leading PlatformIO model even when its
 score lead is small; exact score ties remain unresolved and list the competing
 models. The supplied successful ESP32-S3 reference resolved to
 `espressif32:esp32-s3-devkitm-1` and compiled/uploaded through PlatformIO. A
-prepared Arduino CLI source target cannot override an ambiguous PIO match. CLI
-is used only as a verified fallback when PlatformIO has no compatible target,
-never after a PlatformIO build failure. A current compatible PlatformIO match
-takes precedence over older Arduino CLI associations.
+prepared Arduino CLI source target cannot override an ambiguous PIO match.
+PlatformIO is the default for every board. Arduino CLI is available only for
+exact boards explicitly enabled through **Choose Arduino CLI boards…** in the
+**Libraries & boards** downloader, and only when PlatformIO has no compatible
+target. Older prepared CLI targets stay inactive until selected. A current
+compatible PlatformIO match takes precedence over CLI associations; a failed
+PlatformIO build never switches compilers.
 Windows Bootstrap prepares Arduino CLI. Ubuntu Bootstrap verifies a native
 installation or prepares its own executable in `.ubuntu-tools/` for these source
 targets. Full coverage retains missing-tool/source reasons.
@@ -292,8 +295,9 @@ one source version cannot replace another. Bootstrap reuses verified source
 receipts even when folders were renamed, and checks all existing candidates
 before attempting to certify an older folder. Final downloader results also
 refresh the aggregate coverage report and readiness certificate.
-An original Arduino target that loses its certificate stays in its source
-namespace until prepared again or resolved to a compatible PlatformIO target.
+An enabled original Arduino target that loses its certificate stays in its
+source namespace until prepared again or resolved to a compatible PlatformIO
+target. Disabling that board's CLI choice retires its CLI routing.
 Tied PIO models remain unavailable rather than silently selecting a different
 DevKit with different memory defaults.
 Arduino builds use both the libraries prepared by the package plan and those
@@ -895,7 +899,13 @@ MCU Flasher by Naph/
 - **Vendor board indexes**: In the separate **Libraries & boards** downloader, open **Board indexes**, enter complete HTTP/HTTPS vendor URLs separated by commas or newlines, and choose **Apply & refresh**. URLs are normalized and deduplicated; malformed index structures and source failures are reported while usable cached catalogs remain available. A failed settings write preserves the previous URL list.
 - **Downloaded board support**: **Folder / Extracted** and **Both** automatically start background preparation after checksum verification and extraction. For an existing download or **Archive Only**, select that board version and choose **Prepare board support**. Preparation follows Queued, Downloading, Verifying, Extracting, Preparing and Refreshing stages as applicable. Failure or interruption stays visible and can be retried explicitly; closing the progress card does not cancel the work.
 - **Custom board support**: User-added index packages use their downloaded declarations to find unique exact targets in the installed and freshly queried PlatformIO registry catalogs. Preparation adds the matching platform to the existing plan and verifies the installed definition and exact builder. For a vendor's custom PlatformIO source, select **Custom platform…** to save its registry/version or HTTPS specification and optional Arduino-to-PlatformIO board ID mappings. Settings belong to the requested index, package and architecture; index-authored mappings cannot override them.
-- **Arduino CLI fallback**: Only a successful complete registry check with no exact PlatformIO board identity authorizes fallback. A notice explains that PlatformIO has no support for that exact board yet. The separate preparation worker installs the exact declared Arduino core/version, checks its FQBN and compiler, and certifies local core/tools. Independent board compile probes run concurrently within the machine's CPU, memory and storage budget; total concurrency is shared between workers and each compiler process. Core inventory validation accepts the supported Arduino CLI JSON layouts while still requiring the exact installed version; a boolean `installed` marker is never treated as a version. Compile and Upload then use the prepared Arduino CLI store with downloads disabled. Network failures, ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. Newly installed PlatformIO support disables the old fallback. Upload uses one explicit write attempt and checks the current board, port, source and firmware bytes before writing.
+- **Selective Arduino CLI support**: PlatformIO is the default. Select a downloaded board package in **Libraries & boards**, choose **Choose Arduino CLI boards…**, and enable only the exact boards that need CLI support. Save the choice, then choose **Prepare board support** while online. Choices belong to the exact vendor index, package, architecture and board ID; downloaded index metadata cannot enable them. Previously prepared CLI targets stay inactive without this choice. A verified original source declaration or a successful complete registry absence check must still authorize the target; ambiguous matches, conflicting hardware, unsupported frameworks and ordinary PlatformIO build/upload errors never trigger fallback. A compatible PlatformIO definition always takes precedence. The separate preparation worker installs the exact declared Arduino core/version, checks the selected FQBNs and compiler, and certifies local core/tools. Independent compile probes stay within the shared CPU, memory and storage budget. Compile and Upload use the prepared local store with downloads disabled, and Upload makes one explicit write attempt after checking the current board, port, source and firmware bytes.
+  Enabling one board can still install its vendor's shared core and compilers;
+  selection limits which targets are prepared rather than trimming files inside
+  a core. Disabling a board stops its CLI use and future automatic preparation,
+  while preserving already installed packages. Removing those packages is a
+  separate cleanup action. Windows and Ubuntu keep their own native tools and
+  package stores; neither host reuses or removes the other's resources.
   Windows Bootstrap prepares the Arduino CLI executable. Ubuntu Bootstrap
   verifies an installed native executable or prepares a pinned release in
   `.ubuntu-tools/` before preparing fallback board support; missing-tool notices
@@ -1207,7 +1217,7 @@ verification; board compilation/upload still requires separate target checks.
 - **`src/modules/offline_bootstrap.py`**: Prepares `direct/offline-packages.json` before workspace launch and certifies host-native dependencies. An explicit custom plan can be supplied with `direct/windows/run.vbs --repair --plan "path/to/plan.json"` or `python3 direct/ubuntu/setup.py --plan "path/to/plan.json"`. Changing the default plan requires bootstrap preparation again.
 - **`src/modules/board_preparation.py`**: Separate private-runtime worker for downloaded board packages. Preserves existing plan coverage, discovers exact registered targets, verifies requested builder/definition receipts and writes complete coverage.
 - **`src/modules/board_index_targets.py`**: Validates optional custom platform/board associations and distinguishes complete registry absence from failed discovery or ambiguity.
-- **`src/modules/arduino_cli_support.py`** and **`main/core/arduino_backend.py`**: Prepare and execute certified original Arduino source targets, plus fallback targets with verified PlatformIO absence. Source/core/tool and firmware checks retain offline, single-attempt behavior.
+- **`src/modules/arduino_board_selection.py`**, **`src/modules/arduino_cli_support.py`** and **`main/core/arduino_backend.py`**: Read explicit exact per-board CLI choices, then prepare and execute only authorized certified Arduino targets when PlatformIO has no compatible definition. Source/core/tool and firmware checks retain offline, single-attempt behavior.
 - **`src/modules/platformio_locks.py`**: Native Windows lock adaptation for app-owned tool stores, including concurrent builder checks and hidden lock files.
 - **`src/modules/package_jobs.py`**: Atomic bounded job snapshots, stage history, file-based metadata/report handoffs and cross-process package-store leases. Workspace readers remain independent; stopped preparation workers are reported as interrupted.
 - **`main/qt/package_progress.py`**: Window-owned, focus-preserving progress card anchored inside the workspace, with themed stage/progress display and a Notifications action.
@@ -1364,6 +1374,8 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_board_preparation.py
 & src/_python/python.exe -B direct/verify_board_index_targets.py
 & src/_python/python.exe -B direct/verify_arduino_fallback.py
+& src/_python/python.exe -B direct/verify_arduino_board_selection.py
+& src/_python/python.exe -B direct/verify_arduino_board_chooser.py --render-dir temp/audit/arduino-board-chooser
 & src/_python/python.exe -B direct/verify_platformio_locks.py
 & src/_python/python.exe -B direct/verify_custom_board_dialog.py --render-dir temp/audit/custom-board-dialog
 & src/_python/python.exe -B direct/verify_package_progress.py
@@ -1389,13 +1401,18 @@ Board-preparation verification mocks installers and certifiers while checking
 both exact NodeMCU variants, custom-source mapping, plan preservation, failed
 preparation, unsupported frameworks and every board in large coverage reports.
 Custom-index and Arduino CLI checks mock registry/core installation and hardware
-writes while exercising exact absence, failed lookup/ambiguity rejection,
-source-bound publication, runtime routing and changed-byte upload rejection.
+writes while exercising default-off selection, exact per-board scope, preference
+changes, exact absence, failed lookup/ambiguity rejection, source-bound
+publication, runtime routing and changed-byte upload rejection.
 Native Windows lock checks use temporary hidden/read-only files and four real
 child workers with repeated acquisitions; no live package store is changed.
 Custom platform dialog checks mock settings writes and verify literal source
 specifications, preserved unrelated settings, failed-save recovery, cancellation,
 all palettes, scrolling and native frame placement including negative coordinates.
+The Arduino CLI chooser checks exact board IDs, default-off choices, unrelated
+settings preservation, failed-save retry, cancellation and busy-state rejection
+with mocked persistence and local source fixtures. Binary setup checks prove
+that preparing the CLI executable does not install an unselected AVR core.
 The progress-card checks cover focus, stale events, multiple jobs, dismissal,
 themes and compact placement; coverage-viewer checks cover asynchronous loading,
 filtering, report validation and explicit notification links.
