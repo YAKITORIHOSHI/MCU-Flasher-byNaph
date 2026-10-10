@@ -419,7 +419,7 @@ class FallbackChecks(unittest.TestCase):
         api._release_requested_operation = Mock()
         api._compile_worker = Mock()
         self.operations = []
-        def stream(owner, command, environment, cwd, *, upload=False):
+        def stream(owner, command, environment, cwd, *, upload=False, upload_log=None):
             self.operations.append((command, upload))
             if not upload:
                 build = Path(command[command.index("--build-path") + 1])

@@ -79,9 +79,11 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertEqual([row["text"] for row in logs[:4]],
                          ["", "=" * 50, "  ⬆  UPLOADING (PlatformIO)", "=" * 50])
         self.assertEqual(logs[2]["tag"], "header")
-        self.assertEqual(logs[4]["tag"], "port_highlight")
-        self.assertEqual(logs[4]["text"],
-                         "  Port : /dev/fixture0 | Board : Fixture ESP32 Dev Module | Upload Speed : 921600")
+        details = dict(api.boxes[0][1])
+        self.assertEqual(api.boxes[0][0], "Upload Target")
+        self.assertEqual(details["Port"], "/dev/fixture0")
+        self.assertEqual(details["Board"], "Fixture ESP32 Dev Module")
+        self.assertEqual(details["Upload Speed"], "921600 baud (selected)")
         log.start()
         self.assertEqual(len(api.logs()), len(logs))
 
@@ -145,7 +147,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
                 log.finish(False, 5.0, stopped=stopped)
                 self.assertNotIn("Upload successful", api.text())
                 self.assertNotIn("Upload Summary", api.text())
-                self.assertEqual(api.boxes, [])
+                self.assertEqual([title for title, _ in api.boxes], ["Upload Target"])
                 self.assertIn("Connection stopped" if stopped else "Connection failed", api.text())
 
     def test_v5_image_stage_remains_locked_as_the_write_pointer_advances(self):
@@ -164,11 +166,12 @@ class UbuntuLoggingChecks(unittest.TestCase):
         api = Collector(info, "Fixture STM32")
         log = UbuntuUploadLog(api, info, api.current_board, "", "921600")
         log.start()
-        for line in ("ST-LINK serial 123456", "Writing flash", "Chip is custom board"):
+        for line in ("ST-LINK serial 123456", "Chip is custom board"):
             self.assertFalse(log.consume(line), line)
+        self.assertTrue(log.consume("Writing flash"))
         log.finish(True, 1.1)
         text = api.text()
-        self.assertIn("Upload Protocol : stlink", text)
+        self.assertIn("stlink", text)
         self.assertNotIn("baud", text)
         self.assertNotIn("Upload Speed", text)
         self.assertNotIn("Upload Port", text)

@@ -12,6 +12,19 @@ For explicitly requested assistant delegation, use the local
 
 ## Search, review and preparation modes
 
+- Use `main/core/upload_log.py` for every upload backend on both hosts. Preserve
+  boxed Upload Target/Summary, keyed AVR write/verify progress and recognized
+  BOSSA/DFU/OpenOCD stages; diagnostics and unknown records must remain visible.
+  Format after raw erase/write detection, never use presentation for replay,
+  cancellation or hardware control. Resolve baud with `serial_upload_speed`:
+  exact board defaults for AVR, selected capped ESP baud, no invented baud for
+  USB/programmers or Arduino CLI recipes. Controls, headers, summaries and saved
+  hardware state must agree; monitor baud stays independent. Only report verified
+  data when the programmer reports verification. Verify representative output,
+  real mocked Windows AVR dispatch, native-host contracts and all three console
+  palettes using `direct/verify_upload_logging.py --render`, upload workers,
+  Ubuntu logging and Arduino backend fixtures. Keep host resources separate.
+
 - Ctrl+Shift+F opens the owned modeless Find All dialog. Search only root editable
   sketch sources/text notes, overlay dirty Monaco snapshots, use literal case/word
   options and UTF-16 locations. Keep one background worker, discard stale queries,

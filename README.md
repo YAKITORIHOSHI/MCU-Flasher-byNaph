@@ -484,12 +484,24 @@ banner, each individual compiling filename, and the boxed timing breakdown.
 All rows use the saved monospace content size so frames and columns stay aligned.
 Warnings, errors, source excerpts and unfamiliar build messages remain visible;
 routine PlatformIO promotional/status boilerplate stays out of the journal.
-Native PlatformIO uploads use the same bounded output reader and scan-noise
-filter as optimized Windows uploads. Dependency graphs and routine build scans
-stay hidden while programmer output, diagnostics and the final result remain
-visible; quiet upload phases receive a throttled waiting status.
-Ubuntu uses the Windows-style **UPLOADING (PlatformIO)** banner, board/port/speed
-row, boxed chip details, image progress bars and **Upload Summary**. Compile
+All upload paths on Windows and Ubuntu, including the two supported Arduino CLI
+targets, share a colored banner, boxed **Upload Target**, progress stages and
+**Upload Summary**. AVR output shows one connection row and separate reading,
+writing and verification bars; recognized BOSSA, DFU and OpenOCD stages use the
+same presentation. Routine dependency scans, protocol listings and repeated
+AVR file chatter stay hidden. Warnings, failures and unfamiliar programmer output
+remain visible; quiet upload phases receive a throttled waiting status.
+The speed in Controls, upload details, summary and saved board state comes from
+the exact target: AVR keeps its board-defined bootloader speed, ESP serial
+uploads use the selected speed, and native USB/programmers have no serial baud.
+An Arduino CLI recipe with no verified baud is labeled **Board recipe default**.
+An observed programmer baud is retained in the final summary. Serial Monitor
+baud is independent: match it to the running sketch's `Serial.begin(...)`. A
+yellow non-UTF-8 message means some received bytes could not be decoded as text;
+a baud mismatch or binary firmware output can cause it. Original bytes remain
+copyable as `\xNN`. Verify these paths without hardware using
+`direct/verify_upload_logging.py --render` (captures under `temp/audit/upload-logging/`).
+Ubuntu also retains boxed chip details and ESP image progress bars. Compile
 also shows a **Board Information** box with the exact selected target and the
 platform, hardware and package versions reported by PlatformIO. Chip model,
 features, crystal and MAC come from the existing upload output; logging does

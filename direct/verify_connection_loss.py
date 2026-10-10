@@ -307,7 +307,7 @@ class ConnectionLossChecks(unittest.TestCase):
     def test_native_upload_halts_once_and_does_not_resume_monitor(self):
         api = self.api
         api._kill_active_process_tree = lambda child=None: API._kill_active_process_tree(api, child)
-        api._resolve_board_info = lambda: dict(INFO)
+        api._resolve_board_info = lambda *_: dict(INFO)
         api.sketch_dir_path = self.root
         api._effective_cache_root = lambda _: self.root
         api._board_workspace_dir = lambda: self.root

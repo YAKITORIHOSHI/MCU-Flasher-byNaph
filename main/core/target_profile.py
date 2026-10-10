@@ -81,6 +81,22 @@ def requires_upload_port(info: Mapping) -> bool:
     return True
 
 
+def serial_upload_speed(info: Mapping, requested_speed: str = "") -> str:
+    """Report only the baud used by this target, never another board's preference.
+
+    CLI recipes and nonserial programmers own their transport configuration.
+    An empty result means no known serial baud; callers must not invent one.
+    """
+    if info.get("backend") == "arduino-cli" or not requires_upload_port(info):
+        return ""
+    is_esp = str(info.get("platform") or "").lower() in {"espressif32", "espressif8266"}
+    value = requested_speed if is_esp else info.get("upload_speed")
+    text = str(value or "").strip()
+    if not text.isascii() or not text.isdigit() or len(text) > 10 or int(text) <= 0:
+        return ""
+    return str(min(int(text), MAX_BAUD_RATE) if is_esp else int(text))
+
+
 def upload_configuration(info: Mapping, requested_speed: str = "") -> str:
     """Preserve board bootloader defaults; only ESP serial paths expose baud overrides."""
     lines = []
@@ -88,12 +104,9 @@ def upload_configuration(info: Mapping, requested_speed: str = "") -> str:
     if protocol:
         lines.append(f"upload_protocol = {protocol}")
     if str(info.get("platform")) in {"espressif32", "espressif8266"} and requires_upload_port(info):
-        try:
-            speed = int(requested_speed)
-            if speed > 0:
-                lines.append(f"upload_speed = {min(speed, MAX_BAUD_RATE)}")
-        except (TypeError, ValueError):
-            pass
+        speed = serial_upload_speed(info, requested_speed)
+        if speed:
+            lines.append(f"upload_speed = {speed}")
     # Other builders read their own upload.speed from the exact board manifest.
     return "".join(line + "\n" for line in lines)
 

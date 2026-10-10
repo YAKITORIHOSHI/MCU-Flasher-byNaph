@@ -2901,7 +2901,8 @@ class MCUWebBackendAPI:
             board_info = self._resolve_board_info(board_name) if board_selected else {}
 
             baud_val = getattr(self, "current_baud", 115200)
-            upload_spd_val = getattr(self, "_active_upload_speed", "460800") or "460800"
+            from main.core.target_profile import serial_upload_speed
+            upload_spd_val = serial_upload_speed(board_info, str(getattr(self, "upload_speed", None) or DEFAULT_UPLOAD_SPEED))
 
             state_payload = (
                 Path(sketch_dir).name,
@@ -2918,7 +2919,7 @@ class MCUWebBackendAPI:
                     "port": port_device if mcu_connected else None,
                     "port_label": port_label if mcu_connected else None,
                     "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
-                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "upload_speed": int(upload_spd_val) if upload_spd_val else None,
                     "flash_mb": board_info.get("flash_mb") if board_selected else None,
                     "has_psram": board_info.get("has_psram", False) if board_selected else False,
                 }.items())),
@@ -2939,7 +2940,7 @@ class MCUWebBackendAPI:
                     "port": port_device if mcu_connected else None,
                     "port_label": port_label if mcu_connected else None,
                     "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
-                    "upload_speed": int(upload_spd_val) if str(upload_spd_val).isdigit() else 460800,
+                    "upload_speed": int(upload_spd_val) if upload_spd_val else None,
                     "flash_mb": board_info.get("flash_mb") if board_selected else None,
                     "has_psram": board_info.get("has_psram", False) if board_selected else False,
                 },
@@ -6485,10 +6486,12 @@ class MCUWebBackendAPI:
         selected_board_info = dict(self._resolve_board_info(selected_board) or {})
         self._active_board_name = selected_board
         self._active_board_info = selected_board_info
-        self._active_upload_speed = str(getattr(self, "upload_speed", None) or cfg.get("upload_speed", DEFAULT_UPLOAD_SPEED))
+        from main.core.target_profile import serial_upload_speed
+        self._active_upload_speed = serial_upload_speed(
+            selected_board_info, str(getattr(self, "upload_speed", None) or cfg.get("upload_speed", DEFAULT_UPLOAD_SPEED)))
         self._active_skip_compile = bool(getattr(self, "skip_compile", False))
         self._active_clear_serial_on_upload = bool(getattr(self, "clear_serial_on_action", cfg.get("clear_serial_on_action", False)))
-        self._active_monitor_baud = str(getattr(self, "serial_baud", None) or cfg.get("serial_baud", 115200))
+        self._active_monitor_baud = str(getattr(self, "current_baud", None) or cfg.get("baud_rate", 115200))
         self._active_port_label = str(self.current_port or "")
         self._active_reset_kind = None
         self._mcu_detached_during_compile = None
@@ -6568,15 +6571,12 @@ class MCUWebBackendAPI:
             env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
             env["PLATFORMIO_RUN_JOBS"] = str(jobs)
             env["SCONSFLAGS"] = f"-j{jobs}"
-            if sys.platform.startswith("linux"):
-                from main.platforms.ubuntu_logs import UbuntuUploadLog
-                upload_log = UbuntuUploadLog(
-                    self, info, getattr(self, "current_board", "") or "", port,
-                    str(getattr(self, "upload_speed", None) or info.get("upload_speed") or ""),
-                )
-                upload_log.start()
-            else:
-                self.emit("console:log", {"text": "Uploading through the selected board's PlatformIO programmer protocol…", "tag": "info", "newline": True})
+            from main.core.upload_log import UploadLog
+            upload_log = UploadLog(
+                self, info, getattr(self, "current_board", "") or "", port,
+                str(getattr(self, "upload_speed", None) or info.get("upload_speed") or ""),
+            )
+            upload_log.start()
             upload_started = time.monotonic()
             self._active_process = subprocess.Popen(
                 command, cwd=str(cache_root), env=env, stdout=subprocess.PIPE,
@@ -7550,20 +7550,13 @@ class MCUWebBackendAPI:
         platform_str = str(binfo.get("platform", "")).lower()
         is_avr = platform_str == "atmelavr"
         is_esp = platform_str in ("espressif32", "espressif8266")
-        upload_speed = str(getattr(self, "upload_speed", None)
-                          or load_gui_config().get("upload_speed", DEFAULT_UPLOAD_SPEED))
-
-        # ── Upload header banner ─────────────────────────────────────
-        self.emit("console:log", {"text": "", "newline": True})
-        self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
-        self.emit("console:log", {"text": "  ⬆  UPLOADING (PlatformIO)", "tag": "header", "newline": True})
-        self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
-        board_label = f" | Board : {board_name}" if board_name else ""
-        self.emit("console:log", {
-            "text": f"  Port : {port}{board_label} | Upload Speed : {upload_speed}",
-            "tag": "port_highlight",
-            "newline": True
-        })
+        from main.core.target_profile import serial_upload_speed
+        from main.core.upload_log import UploadLog
+        requested_speed = str(getattr(self, "upload_speed", None)
+                              or load_gui_config().get("upload_speed", DEFAULT_UPLOAD_SPEED))
+        upload_speed = serial_upload_speed(binfo, requested_speed)
+        upload_log = UploadLog(self, binfo, board_name, port, requested_speed)
+        upload_log.start()
 
         _MAX_CONNECT_RETRIES = 10
         rc: int | None = None
@@ -7599,13 +7592,7 @@ class MCUWebBackendAPI:
                 fast_ok, fast_error, fast_attempts = self._soft_reset_esptool_write(fast_bins, port)
                 upload_duration = round(time.time() - upload_start, 2)
                 if fast_ok:
-                    self.emit("console:log", {"text": "", "newline": True})
-                    self.emit("console:log", {"text": f"  ✔ Upload successful! {board_name} is running…", "tag": "success", "newline": True})
-                    upload_fields = [
-                        ("Upload Port", f"{port} @ {upload_speed} baud"),
-                        ("Upload Time", f"{upload_duration}s"),
-                    ]
-                    self._print_info_box("Upload Summary", upload_fields)
+                    upload_log.finish(True, upload_duration)
                     self.emit("console:progress", {"action": "Completed"})
                     self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})
                     time.sleep(0.5)
@@ -7875,6 +7862,17 @@ class MCUWebBackendAPI:
                 if upload_line_action == "suppress":
                     continue
 
+                if not is_esp:
+                    if upload_log.consume(line_clean):
+                        continue
+                    # Recognized programmer records are formatted above. Keep
+                    # every diagnostic and unfamiliar line, including AVR output.
+                    tag = "error" if re.search(
+                        r"\b(error|failed|failure|exception|timed?\s*out|cannot|can't)\b", low
+                    ) else "warning" if "warning" in low else "dim"
+                    self.emit("console:log", {"text": f"  {line_clean}", "tag": tag, "newline": True})
+                    continue
+
                 # ── Chip-info capture from esptool ──────────────────
                 if is_esp:
                     m = re.search(r'chip (?:is|type)\s*:?\s+(.+)$', line_clean, re.IGNORECASE)
@@ -8035,22 +8033,6 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": f"  ✔ Successfully created {chip_name} image ({label})", "tag": "success", "newline": True})
                     continue
 
-                # ── AVR-specific handling ────────────────────────────
-                if is_avr:
-                    if "avr device initialized" in low or "device signature" in low:
-                        self.emit("console:log", {"text": f"  🔌 Connected to {board_name}", "tag": "success", "newline": True})
-                    elif "writing flash" in low or "writing eeprom" in low:
-                        self.emit("console:log", {"text": f"  ⚙ {line_clean.strip()}", "tag": "info", "newline": True})
-                    elif "verifying flash" in low or "verifying eeprom" in low:
-                        self.emit("console:log", {"text": f"  ✔ {line_clean.strip()}", "tag": "success", "newline": True})
-                    elif "avrdude done" in low or "bytes of flash" in low or "bytes written" in low:
-                        self.emit("console:log", {"text": f"  ✔ {line_clean.strip()}", "tag": "success", "newline": True})
-                    elif "error" in low or "failed" in low:
-                        self.emit("console:log", {"text": f"  ✖ {line_clean.strip()}", "tag": "error", "newline": True})
-                    else:
-                        self.emit("console:log", {"text": f"  {line_clean}", "tag": "dim", "newline": True})
-                    continue
-
                 # ── Suppress RAM/Flash during upload (already logged during compile) ─
                 if "ram:" in low or "flash:" in low:
                     continue
@@ -8104,22 +8086,11 @@ class MCUWebBackendAPI:
 
                 self.emit("console:log", {"text": "", "newline": True})
                 self.emit("console:log", {
-                    "text": "  ✔ Flash write and verification completed. Reset will continue through the Serial Monitor.",
-                    "tag": "success",
+                    "text": "  ℹ Reset will continue through the Serial Monitor.",
+                    "tag": "info",
                     "newline": True
                 })
-                self.emit("console:log", {
-                    "text": f"  ✔ Upload successful! {board_name} is running…",
-                    "tag": "success",
-                    "newline": True
-                })
-
-                # Upload time breakdown
-                upload_fields = [
-                    ("Upload Port", f"{port} @ {upload_speed} baud"),
-                    ("Upload Time", f"{upload_duration}s"),
-                ]
-                self._print_info_box("Upload Summary", upload_fields)
+                upload_log.finish(True, upload_duration)
 
                 self.emit("console:progress", {"action": "Completed"})
                 self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from src.modules.arduino_cli_support import runtime_command, sha256_file
@@ -16,7 +17,7 @@ def _log(api, text, tag="info"):
     api.emit("console:log", {"text": text, "tag": tag, "newline": True})
 
 
-def _stream(api, command, environment, cwd, *, upload=False):
+def _stream(api, command, environment, cwd, *, upload=False, upload_log=None):
     from main import web_bridge
     from main.core.connection_loss import SerialConnectionGuard
     api._active_process = subprocess.Popen(
@@ -35,6 +36,8 @@ def _stream(api, command, environment, cwd, *, upload=False):
                 on_poll=guard.poll if guard is not None else None):
             line = web_bridge._strip_terminal_escapes(raw).rstrip()
             if not line:
+                continue
+            if upload_log is not None and upload_log.consume(line):
                 continue
             tag = "error" if re.search(r"\b(error|failed|failure|exception)\b", line, re.I) else "warning" if "warning" in line.lower() else "dim"
             _log(api, line, tag)
@@ -155,6 +158,8 @@ def run_arduino_operation(api, *, upload=False):
     port = str(getattr(api, "_active_port_label", api.current_port) or "") if upload else ""
     monitor_paused = False
     upload_started = False
+    upload_log = None
+    upload_time = None
     try:
         info = api._resolve_board_info(board)
         command, environment, fqbn = runtime_command(info)
@@ -251,15 +256,24 @@ def run_arduino_operation(api, *, upload=False):
         api.emit("window:closable", {"closable": False})
         api.emit("console:progress", {"action": "Uploading"})
         upload_started = True
-        _stream(api, command + ["upload", "--fqbn", fqbn, "--port", port, "--input-dir", str(build), str(staging)], environment, workspace, upload=True)
+        from main.core.upload_log import UploadLog
+        upload_log = UploadLog(api, info, board, port, "", backend="Arduino CLI")
+        upload_log.start()
+        upload_time = time.monotonic()
+        _stream(api, command + ["upload", "--fqbn", fqbn, "--port", port, "--input-dir", str(build), str(staging)], environment, workspace, upload=True, upload_log=upload_log)
+        upload_log.finish(True, time.monotonic() - upload_time)
         api.emit("notification", {"title": "Upload completed", "message": "Arduino CLI reported a successful upload.", "type": "success"})
         api.emit("console:progress", {"action": "Completed", "percent": 100})
         return True
     except InterruptedError as exc:
+        if upload_log is not None:
+            upload_log.finish(False, time.monotonic() - upload_time if upload_time is not None else 0, stopped=True)
         _log(api, str(exc), "warning")
         api.emit("console:progress", {"action": "Cancelled"})
         return False
     except Exception as exc:
+        if upload_log is not None:
+            upload_log.finish(False, time.monotonic() - upload_time if upload_time is not None else 0)
         _log(api, f"Arduino CLI {'upload' if upload else 'build'} failed: {exc}", "error")
         if upload_started:
             _log(api, "The firmware may be incomplete. The upload was attempted once; stabilize the connection before retrying.", "warning")

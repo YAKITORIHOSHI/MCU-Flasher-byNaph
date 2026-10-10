@@ -544,7 +544,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
                 time.sleep(0.15)
                 return ""
 
-        process = SimpleNamespace(stdout=DelayedStdout())
+        process = SimpleNamespace(stdout=DelayedStdout(), poll=lambda: 0)
         quiet = []
         lines = list(ITER_PROCESS_OUTPUT(
             process, lambda: False, lambda: self.fail("Unexpected process termination"),
@@ -568,7 +568,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         try:
             started = time.monotonic()
             list(ITER_PROCESS_OUTPUT(
-                SimpleNamespace(stdout=BlockingStdout()), stop.is_set,
+                SimpleNamespace(stdout=BlockingStdout(), poll=lambda: 0), stop.is_set,
                 lambda: (terminated.append(True), released.set()), lambda _seconds: None,
                 poll_interval=0.005, notice_after=1.0,
             ))

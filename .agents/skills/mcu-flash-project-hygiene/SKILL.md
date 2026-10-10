@@ -16,6 +16,12 @@ adds application development rules only to application checkouts. Verify the
 distinction in isolated fixtures without running metadata generation against
 live caches or modifying AI backup journals.
 
+Saved hardware `upload_speed` describes the current target through
+`serial_upload_speed`, never the last ESP upload. Store null for unknown recipe
+baud, Arduino CLI and nonserial programmers. Keep `baud_rate` as the independent
+Serial Monitor setting. Verify payloads with a mocked metadata queue in
+`direct/verify_upload_logging.py`; do not generate them against live projects.
+
 ## Preserve ownership boundaries
 
 Classify paths before changing attributes or deleting anything:

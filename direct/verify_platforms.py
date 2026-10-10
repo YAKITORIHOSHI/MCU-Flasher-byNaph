@@ -252,6 +252,9 @@ class PlatformChecks(unittest.TestCase):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api.current_port = api._active_port_label = "/dev/ttyACM0"
+        api._active_process = None
+        api._check_write_connection = Mock()
+        api._needs_recompile = Mock(return_value=(False, "fixture verified"))
         api.current_board, api.upload_speed = "Fixture Arduino Uno", "115200"
         api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
@@ -308,13 +311,17 @@ class PlatformChecks(unittest.TestCase):
         self.assertTrue(any(phase.get("phase") == "flash" and not phase.get("can_stop")
                             for phase in phases))
         self.assertIn("  ⬆  UPLOADING (PlatformIO)", shown_text)
-        self.assertIn("Board : Fixture Arduino Uno", shown_text)
+        self.assertIn("Fixture Arduino Uno", shown_text)
+        self.assertIn("Upload Target", shown_text)
         self.assertIn("Upload Summary", shown_text)
 
     def native_log_fixture(self, lines, code=0, host="linux"):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api.current_port = api._active_port_label = "/dev/fixture0"
+        api._active_process = None
+        api._check_write_connection = Mock()
+        api._needs_recompile = Mock(return_value=(False, "fixture verified"))
         api.current_board, api.upload_speed = "Fixture ESP32 Dev Module", "921600"
         api._active_board_info = dict(platform="espressif32", board="esp32dev", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
@@ -369,22 +376,25 @@ class PlatformChecks(unittest.TestCase):
         self.assertNotIn("Upload successful", text)
         self.assertNotIn("Upload Summary", text)
 
-    def test_windows_native_upload_keeps_its_existing_console_presentation(self):
+    def test_windows_native_upload_uses_the_same_formatted_presentation(self):
         events = self.native_log_fixture([
             "Chip is ESP32-D0WD-V3 (revision v3.1)", "Writing at 0x00010000... (100 %)",
             "================ [SUCCESS] Took 1.20 seconds ================",
         ], host="win32")
         text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
-        self.assertIn("Uploading through the selected board's PlatformIO programmer protocol…", text)
-        self.assertIn("Chip is ESP32-D0WD-V3", text)
-        self.assertIn("Writing at 0x00010000", text)
-        self.assertNotIn("UPLOADING (PlatformIO)", text)
-        self.assertNotIn("Upload Summary", text)
+        self.assertIn("ESP32-D0WD-V3", text)
+        self.assertIn("Flashing", text)
+        self.assertIn("UPLOADING (PlatformIO)", text)
+        self.assertIn("Upload Summary", text)
 
     def test_ubuntu_native_upload_can_cancel_before_flash_write(self):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.current_board = "Fixture Arduino Uno"
         api.current_port = api._active_port_label = "/dev/ttyACM0"
+        api._active_process = None
+        api._check_write_connection = Mock()
+        api._needs_recompile = Mock(return_value=(False, "fixture verified"))
         api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
         api.sketch_dir_path = self.root

@@ -1558,6 +1558,7 @@ class ControlsBar(QWidget):
         """Apply board family defaults for monitor baud and upload speed."""
         from main.core.board_catalog import SUPPORTED_BOARDS
         from main.core.constants import default_monitor_baud, board_reset_capabilities
+        from main.core.target_profile import requires_upload_port, serial_upload_speed
 
         b_info = SUPPORTED_BOARDS.get(board_name)
         if not b_info:
@@ -1581,7 +1582,7 @@ class ControlsBar(QWidget):
             return
 
         previous = self.upload_speed_combo.blockSignals(True)
-        if fam in {"espressif32", "espressif8266"}:
+        if fam in {"espressif32", "espressif8266"} and requires_upload_port(b_info):
             self.upload_speed_combo.setEnabled(True)
             self.upload_speed_combo.setToolTip("Serial upload speed for this ESP board.")
             pref_spd = str(getattr(self._backend, "upload_speed", "") or "460800") if self._backend else "460800"
@@ -1590,12 +1591,14 @@ class ControlsBar(QWidget):
             else:
                 self.upload_speed_combo.setCurrentText("460800")
         else:
-            speed = str(b_info.get("upload_speed") or "Auto")
+            speed = serial_upload_speed(b_info) or "Auto"
             if self.upload_speed_combo.findText(speed) < 0:
                 self.upload_speed_combo.addItem(speed)
             self.upload_speed_combo.setCurrentText(speed)
             self.upload_speed_combo.setEnabled(False)
-            self.upload_speed_combo.setToolTip("Uses the selected board's bootloader/programmer defaults.")
+            self.upload_speed_combo.setToolTip(
+                f"Fixed by this board's bootloader: {speed} baud. Serial Monitor baud is separate."
+                if speed != "Auto" else "Uses this board's USB/programmer recipe; no user-selected upload baud.")
         self.upload_speed_combo.blockSignals(previous)
         if not update_monitor:
             return
