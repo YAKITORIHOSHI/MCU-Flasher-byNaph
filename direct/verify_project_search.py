@@ -22,6 +22,7 @@ from PySide6.QtCore import QUrl, Qt, QTimer, QPoint, QRect
 from PySide6.QtWidgets import QApplication, QScrollArea
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings
+from PySide6.QtTest import QTest
 from main.qt.theme import register_fonts
 from main.qt import project_search
 from main.qt.project_search import ProjectSearchDialog, search_project
@@ -113,6 +114,7 @@ class SearchChecks(unittest.TestCase):
         panel = SimpleNamespace(_bridge=SimpleNamespace(_buffer_snapshots={path: "old bridge"}),
                                 _search_active_snapshot=dict(original))
         self.assertEqual(MonacoEditorPanel._search_buffers(panel)[path], "latest renderer")
+        self.assertEqual(MonacoEditorPanel._search_buffers(panel)[path], "latest renderer")
         self.assertEqual(panel._bridge._buffer_snapshots[path], "old bridge")
         panel._bridge._buffer_snapshots[path] = "newer bridge"
         panel._search_active_snapshot = dict(original)
@@ -146,11 +148,130 @@ class SearchChecks(unittest.TestCase):
             self.assertEqual(item.data(0, Qt.ItemDataRole.UserRole)["preview"], "unsaved target")
             dialog._activate_result(item)
             navigate.assert_called_once_with(str(self.main), 1, 9, 15)
-            self.assertFalse(dialog.isVisible())
+            self.assertTrue(dialog.isVisible())
             dialog.open_search()
             dialog.close()
             until(lambda: not dialog._running)
             self.assertTrue(dialog._closed)
+
+    def test_buffer_snapshot_failure_reports_and_allows_retry(self):
+        buffers = Mock(side_effect=[RuntimeError("Editor snapshot unavailable"), {}])
+        dialog = ProjectSearchDialog(self.project, buffers, Mock())
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        dialog.open_search("motor")
+        dialog._search_now()
+        self.assertFalse(dialog._running)
+        self.assertIn("Editor snapshot unavailable", dialog.status.text())
+        dialog._search_now()
+        until(lambda: not dialog._running and dialog.results.topLevelItemCount() == 5)
+        self.assertIn("5 matches", dialog.status.text())
+
+    def test_automatic_search_and_empty_results_do_not_stay_searching(self):
+        dialog = ProjectSearchDialog(self.project, dict, Mock())
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        dialog.open_search()
+        QTest.keyClicks(dialog.query, "112500")
+        until(lambda: dialog.status.text().startswith("0 matches"))
+        self.assertFalse(dialog._running)
+        self.assertFalse(dialog.next_button.isEnabled())
+        self.assertEqual(dialog.position.text(), "0 of 0")
+        QTest.keyClick(dialog.query, Qt.Key.Key_Return)
+        until(lambda: not dialog._running and not dialog._timer.isActive())
+        self.assertTrue(dialog.isVisible())
+        dialog.query.setText("motor")
+        until(lambda: dialog.results.topLevelItemCount() == 5)
+        self.assertEqual(dialog.position.text(), "1 of 5")
+
+    def test_navigation_cycles_four_results_with_buttons_and_keyboard(self):
+        navigate = Mock()
+        dialog = ProjectSearchDialog(self.project, lambda: {str(self.main): "😀hit hit\nhit\nhit"}, navigate)
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        dialog.open_search("hit")
+        until(lambda: dialog.results.topLevelItemCount() == 4)
+        self.assertEqual(dialog.position.text(), "1 of 4")
+        self.assertTrue(dialog.next_button.isEnabled())
+        dialog.next_button.click()
+        self.assertEqual(dialog.position.text(), "2 of 4")
+        navigate.assert_called_with(str(self.main), 1, 7, 10)
+        dialog.previous_button.click()
+        self.assertEqual(dialog.position.text(), "1 of 4")
+        navigate.assert_called_with(str(self.main), 1, 3, 6)
+        dialog.previous_button.click()
+        self.assertEqual(dialog.position.text(), "4 of 4")
+        navigate.assert_called_with(str(self.main), 3, 1, 4)
+        dialog.next_button.click()
+        self.assertEqual(dialog.position.text(), "1 of 4")
+        dialog.query.setFocus()
+        QTest.keyClick(dialog.query, Qt.Key.Key_F3)
+        self.assertEqual(dialog.position.text(), "2 of 4")
+        QTest.keyClick(dialog.query, Qt.Key.Key_F3, Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(dialog.position.text(), "1 of 4")
+        QTest.keyClick(dialog.query, Qt.Key.Key_Return)
+        self.assertEqual(dialog.position.text(), "2 of 4")
+        self.assertTrue(dialog.isVisible())
+        dialog.query.clear()
+        self.assertEqual(dialog.position.text(), "0 of 0")
+        self.assertFalse(dialog.previous_button.isEnabled())
+        calls = navigate.call_count
+        dialog._step_result(1)
+        self.assertEqual(navigate.call_count, calls)
+
+    def test_reopening_the_same_query_starts_a_fresh_search(self):
+        dialog = ProjectSearchDialog(self.project, dict, Mock())
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        gate, entered = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+        actual = project_search.search_project
+        calls = []
+        def slow(*args, **kwargs):
+            calls.append(args[1])
+            if len(calls) == 1:
+                entered.set()
+                gate.wait(2)
+            return actual(*args, **kwargs)
+        with patch.object(project_search, "search_project", side_effect=slow):
+            dialog.open_search("motor")
+            until(entered.is_set)
+            dialog.close()
+            dialog.open_search("motor")
+            until(lambda: dialog._pending)
+            gate.set()
+            until(lambda: not dialog._running and dialog.results.topLevelItemCount() == 5)
+        self.assertEqual(calls, ["motor", "motor"])
+        self.assertEqual(dialog.position.text(), "1 of 5")
+
+    def test_stalled_storage_reports_waiting_and_keeps_one_worker_until_retry(self):
+        dialog = ProjectSearchDialog(self.project, dict, Mock())
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        gate, entered = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+        actual = project_search.search_project
+        calls = []
+        def slow(*args, **kwargs):
+            calls.append(args[1])
+            if len(calls) == 1:
+                entered.set()
+                gate.wait(2)
+            return actual(*args, **kwargs)
+        with patch.object(project_search, "search_project", side_effect=slow):
+            dialog.open_search("old")
+            until(entered.is_set)
+            dialog._search_waiting()
+            self.assertIn("storage is not responding", dialog.status.text())
+            self.assertTrue(dialog._cancel.is_set())
+            dialog.query.setText("motor")
+            dialog.search_button.click()
+            self.assertEqual(calls, ["old"])
+            self.assertTrue(dialog._pending)
+            self.assertIn("previous search", dialog.status.text())
+            gate.set()
+            until(lambda: not dialog._running and dialog.results.topLevelItemCount() == 5)
+        self.assertEqual(calls, ["old", "motor"])
 
     def test_modify_default_primary_sketch_name_and_short_dialogs_all_themes(self):
         backend = SimpleNamespace(
@@ -179,16 +300,24 @@ class SearchChecks(unittest.TestCase):
                 if CAPTURES:
                     dialog.grab().save(str(CAPTURES / f"modify-{theme}-{size[0]}.png"))
         dialog.close()
-        search = ProjectSearchDialog(self.project, dict, Mock())
+        search = ProjectSearchDialog(self.project, lambda: {str(self.main): "motor\n" * 2000}, Mock())
         self.addCleanup(search.deleteLater)
         for theme in ("default", "light", "solarized"):
             search._apply_theme(theme)
             search.open_search("motor")
             until(lambda: not search._running and not search._timer.isActive())
-            search.resize(680, 440)
-            APP.processEvents()
-            if CAPTURES:
-                search.grab().save(str(CAPTURES / f"search-{theme}.png"))
+            self.assertEqual(search.results.topLevelItemCount(), 2000)
+            search.results.setCurrentItem(search.results.topLevelItem(1999))
+            for width, height in ((680, 440), (350, 280)):
+                search.resize(width, height)
+                APP.processEvents()
+                self.assertEqual(search.width(), width)
+                for widget in (search.query, search.match_case, search.whole_word, search.search_button,
+                               search.previous_button, search.next_button, search.position, search.close_button):
+                    self.assertTrue(search.rect().contains(QRect(widget.mapTo(search, QPoint()), widget.size())),
+                                    (theme, width, type(widget).__name__))
+                if CAPTURES:
+                    search.grab().save(str(CAPTURES / f"search-{theme}-{width}.png"))
         search.close()
 
     def test_real_monaco_brace_enter_preserves_indent_and_undo(self):
@@ -256,32 +385,52 @@ class SearchChecks(unittest.TestCase):
             "document.querySelectorAll('#tab-bar .tab.active').forEach(tab => tab.classList.remove('active'));"
             "const tab = document.createElement('div'); tab.className = 'tab active';"
             f"tab._filePath = {path}; document.getElementById('tab-bar').appendChild(tab);"
-            "window.editorInstance.getModel().setValue('unsaved sentinel');"
+            "window.editorInstance.getModel().setValue('😀sentinel sentinel');"
             " return JSON.stringify({content: window.editorInstance.getValue(),"
             " path: document.querySelector('#tab-bar .tab.active')?._filePath});"
             " } catch(error) { return JSON.stringify({error:String(error)}); } })()", prepared.append
         )
         until(lambda: prepared)
-        self.assertEqual(json.loads(prepared[0]).get("content"), "unsaved sentinel", prepared)
+        self.assertEqual(json.loads(prepared[0]).get("content"), "😀sentinel sentinel", prepared)
         panel = SimpleNamespace(
             _backend=SimpleNamespace(sketch_dir_path=self.project), _view=view,
             _bridge=SimpleNamespace(_buffer_snapshots={str(self.main): "old bridge"}),
             window=lambda: view, goto_location=Mock(),
         )
         panel._search_buffers = lambda: MonacoEditorPanel._search_buffers(panel)
+        panel._navigate_source = lambda location: MonacoEditorPanel._navigate_source(panel, location)
+        panel.goto_location = lambda *args: MonacoEditorPanel.goto_location(panel, *args)
+        view.show()
         MonacoEditorPanel.show_project_search(panel)
         until(lambda: hasattr(panel, "_search_dialog"))
         dialog = panel._search_dialog
         self.addCleanup(dialog.deleteLater)
-        self.assertEqual(panel._search_active_snapshot.get("content"), "unsaved sentinel", panel._search_active_snapshot)
+        self.assertEqual(panel._search_active_snapshot.get("content"), "😀sentinel sentinel", panel._search_active_snapshot)
         dialog.query.setText("sentinel")
-        dialog._search_now()
-        until(lambda: not dialog._running)
-        self.assertEqual(dialog.results.topLevelItemCount(), 1, dialog.status.text())
+        until(lambda: not dialog._running and dialog.results.topLevelItemCount() == 2)
+        self.assertEqual(dialog.position.text(), "1 of 2")
         self.assertTrue(dialog.results.topLevelItem(0).data(0, Qt.ItemDataRole.UserRole)["unsaved"])
+        dialog.next_button.click()
+        location = []
+        def positioned():
+            if not location:
+                view.page().runJavaScript(
+                    "(() => { const selection = window.editorInstance.getSelection();"
+                    " if (selection.startColumn !== 12 || selection.endColumn !== 20) return null;"
+                    " return JSON.stringify({selection, text: window.editorInstance.getValue()}); })()",
+                    lambda value: location.append(json.loads(value)) if value else None)
+            return bool(location)
+        until(positioned)
+        self.assertEqual(location[0]["text"], "😀sentinel sentinel")
+        self.assertEqual(dialog.position.text(), "2 of 2")
+        self.assertTrue(dialog.isVisible())
+        # A second query must retain the unacknowledged renderer snapshot.
+        dialog.query.setText("😀sentinel")
+        until(lambda: not dialog._running and dialog.results.topLevelItemCount() == 1)
         self.assertEqual(panel._bridge._buffer_snapshots[str(self.main)], "old bridge")
         self.assertNotIn("sentinel", self.main.read_text(encoding="utf-8"))
         dialog.close()
+        view.close()
 
 
 if __name__ == "__main__":

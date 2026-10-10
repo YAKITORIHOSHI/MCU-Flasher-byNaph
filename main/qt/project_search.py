@@ -9,6 +9,7 @@ import time
 from typing import Callable
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -157,6 +158,8 @@ class ProjectSearchDialog(QDialog):
         self._buffers_provider, self._navigate = buffers_provider, navigate
         self._generation = 0
         self._running = self._pending = self._closed = False
+        self._completed_generation = -1
+        self._waiting_for_storage = False
         self._cancel = None
         self.setWindowTitle("Find all in project")
         self.setModal(False)
@@ -177,12 +180,18 @@ class ProjectSearchDialog(QDialog):
         options.addWidget(self.match_case)
         options.addWidget(self.whole_word)
         options.addStretch()
+        self.search_button = QPushButton("Search", self)
+        self.search_button.clicked.connect(self._search_now)
+        options.addWidget(self.search_button)
         root.addLayout(options)
         self.results = QTreeWidget(self)
         self.results.setHeaderLabels(["File", "Line", "Match"])
         self.results.setRootIsDecorated(False)
         self.results.setUniformRowHeights(True)
         self.results.setAlternatingRowColors(True)
+        # Size the line column from visible rows, rather than repeatedly
+        # measuring hundreds of off-screen matches during result delivery.
+        self.results.header().setResizeContentsPrecision(0)
         self.results.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self.results.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.results.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -192,21 +201,46 @@ class ProjectSearchDialog(QDialog):
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         close_row = QHBoxLayout()
+        self.previous_button = QPushButton("Previous", self)
+        self.previous_button.setToolTip("Previous match (Shift+F3)")
+        self.previous_button.clicked.connect(lambda: self._step_result(-1))
+        close_row.addWidget(self.previous_button)
+        self.position = QLabel("0 of 0", self)
+        self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position.setAccessibleName("Current search result")
+        close_row.addWidget(self.position)
+        self.next_button = QPushButton("Next", self)
+        self.next_button.setToolTip("Next match (F3 or Enter in the search box)")
+        self.next_button.clicked.connect(lambda: self._step_result(1))
+        close_row.addWidget(self.next_button)
         close_row.addStretch()
-        close = QPushButton("Close", self)
-        close.clicked.connect(self.close)
-        close_row.addWidget(close)
+        self.close_button = QPushButton("Close", self)
+        self.close_button.clicked.connect(self.close)
+        close_row.addWidget(self.close_button)
         root.addLayout(close_row)
+        for button in (self.search_button, self.previous_button, self.next_button, self.close_button):
+            button.setAutoDefault(False)
+            button.setDefault(False)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(180)
         self._timer.timeout.connect(self._start_search)
+        self._watchdog = QTimer(self)
+        self._watchdog.setSingleShot(True)
+        self._watchdog.setInterval(int((MAX_SECONDS + 2.0) * 1000))
+        self._watchdog.timeout.connect(self._search_waiting)
         self._finished.connect(self._finish_search, Qt.ConnectionType.QueuedConnection)
         self.query.textChanged.connect(self._queue_search)
         self.match_case.toggled.connect(self._queue_search)
         self.whole_word.toggled.connect(self._queue_search)
-        self.query.returnPressed.connect(self._search_now)
+        self.query.returnPressed.connect(self._query_return)
         self.results.itemActivated.connect(self._activate_result)
+        self.results.currentItemChanged.connect(self._update_navigation)
+        self._next_shortcut = QShortcut(QKeySequence("F3"), self)
+        self._next_shortcut.activated.connect(lambda: self._step_result(1))
+        self._previous_shortcut = QShortcut(QKeySequence("Shift+F3"), self)
+        self._previous_shortcut.activated.connect(lambda: self._step_result(-1))
+        self._update_navigation()
         self._screen_watcher = ScreenWatcher(self)
         self._apply_theme()
         from main.qt.signals import signals
@@ -218,6 +252,8 @@ class ProjectSearchDialog(QDialog):
         if self._cancel:
             self._cancel.set()
         self.results.clear()
+        self._completed_generation = -1
+        self._update_navigation()
         self._pending = False
         if self.query.text():
             self.status.setText("Searching…")
@@ -228,8 +264,16 @@ class ProjectSearchDialog(QDialog):
 
     @Slot()
     def _search_now(self):
+        self._queue_search()
         self._timer.stop()
         self._start_search()
+
+    @Slot()
+    def _query_return(self):
+        if self.results.topLevelItemCount() and self._completed_generation == self._generation:
+            self._step_result(1)
+        else:
+            self._search_now()
 
     @Slot()
     def _start_search(self):
@@ -237,14 +281,24 @@ class ProjectSearchDialog(QDialog):
             return
         if self._running:
             self._pending = True
+            if self._waiting_for_storage:
+                self.status.setText("Waiting for the previous search to stop. Project storage is not responding.")
+            elif not self._watchdog.isActive():
+                self._watchdog.start()
             return
         self._pending = False
         self._running = True
+        self._waiting_for_storage = False
         generation = self._generation
         query, match_case, whole_word = self.query.text(), self.match_case.isChecked(), self.whole_word.isChecked()
-        buffers = dict(self._buffers_provider())
+        try:
+            buffers = dict(self._buffers_provider())
+        except Exception as exc:
+            self._finish_search({"generation": generation, "error": str(exc), "matches": []})
+            return
         cancel = self._cancel = threading.Event()
         project = self.project
+        self._watchdog.start()
 
         def run():
             try:
@@ -266,7 +320,9 @@ class ProjectSearchDialog(QDialog):
     @Slot(dict)
     def _finish_search(self, result):
         self._running = False
+        self._watchdog.stop()
         if not self._closed and result["generation"] == self._generation:
+            self._completed_generation = self._generation
             self.results.setUpdatesEnabled(False)
             try:
                 self.results.clear()
@@ -282,10 +338,13 @@ class ProjectSearchDialog(QDialog):
             finally:
                 self.results.setUpdatesEnabled(True)
             if result.get("error"):
-                self.status.setText("Search failed: " + result["error"])
+                self.status.setText("Search failed: " + result["error"] + ". Press Search to retry.")
+            elif result.get("cancelled"):
+                self.status.setText("Search interrupted while reading project storage. Press Search to retry.")
             else:
                 count = len(result.get("matches", []))
-                message = f'{count} match{"es" if count != 1 else ""} in {result.get("files", 0)} files.'
+                files = result.get("files", 0)
+                message = f'{count} match{"es" if count != 1 else ""}. {files} file{"s" if files != 1 else ""} searched.'
                 if result.get("limited"):
                     message += " Search limit reached; narrow the search."
                 if result.get("skipped"):
@@ -293,21 +352,56 @@ class ProjectSearchDialog(QDialog):
                 self.status.setText(message)
             if self.results.topLevelItemCount():
                 self.results.setCurrentItem(self.results.topLevelItem(0))
+            self._update_navigation()
         if self._pending and not self._closed:
             self._start_search()
+
+    @Slot()
+    def _search_waiting(self):
+        if self._running and not self._closed:
+            self._waiting_for_storage = True
+            if self._cancel:
+                self._cancel.set()
+            self.status.setText("Project storage is not responding. Search will stop when the current read returns.")
+
+    @Slot()
+    def _update_navigation(self):
+        count = self.results.topLevelItemCount()
+        index = self.results.indexOfTopLevelItem(self.results.currentItem())
+        ready = count > 0 and self._completed_generation == self._generation and not self._running
+        self.previous_button.setEnabled(ready)
+        self.next_button.setEnabled(ready)
+        self.position.setText(f"{index + 1 if index >= 0 else 0} of {count}")
+
+    def _step_result(self, direction: int):
+        count = self.results.topLevelItemCount()
+        if not count or self._running or self._completed_generation != self._generation:
+            return
+        current = self.results.indexOfTopLevelItem(self.results.currentItem())
+        index = (current + direction) % count if current >= 0 else (0 if direction > 0 else count - 1)
+        item = self.results.topLevelItem(index)
+        self.results.setCurrentItem(item)
+        self.results.scrollToItem(item)
+        self._activate_result(item)
 
     @Slot(QTreeWidgetItem, int)
     def _activate_result(self, item, _column=0):
         match = item.data(0, Qt.ItemDataRole.UserRole)
         if match:
-            self.hide()
+            focused = self.focusWidget()
             self._navigate(match["path"], match["line"], match["column"], match["end_column"])
+            # Keep the modeless result list and its keyboard navigation usable.
+            if self.isVisible():
+                self.raise_()
+                self.activateWindow()
+                if focused:
+                    focused.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def open_search(self, selection: str = ""):
         self._closed = False
         if selection and "\n" not in selection and len(selection) <= 512:
             self.query.setText(selection)
-        elif self.query.text():
+        if self.query.text():
             self._queue_search()
         self.show()
         self.raise_()
@@ -317,8 +411,12 @@ class ProjectSearchDialog(QDialog):
 
     def closeEvent(self, event):
         self._closed = True
+        self._generation += 1
+        self._completed_generation = -1
+        self._update_navigation()
         self._pending = False
         self._timer.stop()
+        self._watchdog.stop()
         if self._cancel:
             self._cancel.set()
         super().closeEvent(event)

@@ -1045,7 +1045,8 @@ class MonacoEditorPanel(QWidget):
                      and buffers.get(path) == active.get("buffer_baseline"))
         if path and "content" in active and unchanged:
             buffers[active["path"]] = active["content"]
-        self._search_active_snapshot = {}
+        elif not unchanged:
+            self._search_active_snapshot = {}
         return buffers
 
     def force_layout(self) -> None:

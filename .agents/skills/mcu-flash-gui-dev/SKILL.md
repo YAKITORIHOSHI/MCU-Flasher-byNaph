@@ -16,6 +16,16 @@ For explicitly requested assistant delegation, use the local
   sketch sources/text notes, overlay dirty Monaco snapshots, use literal case/word
   options and UTF-16 locations. Keep one background worker, discard stale queries,
   and bound bytes/files/results. Preserve the active buffer on result navigation.
+  Catch snapshot-provider failures and release running state; same-query reopen
+  and explicit Search must request a fresh generation. Keep renderer snapshots
+  across queries until a newer bridge edit/save invalidates them. Report stalled
+  storage with a single owned watchdog, cancel cooperatively and retain the one
+  worker until its read returns. Previous/Next, F3/Shift+F3 and query Enter wrap
+  through matches with a position counter; keep the modeless dialog and its
+  keyboard focus available. Measure automatic table columns from visible rows
+  to keep large result sets responsive. Verify automatic/no-match searches,
+  failures/retries/reopen, four-result cycling, stale queries, real Monaco range
+  navigation and compact/wide palettes in `direct/verify_project_search.py`.
 - Keep C++ brace Enter rules in the lazy language configuration and respect each
   model's tab/space settings. Empty projects/new sketches use empty setup/loop;
   new .cpp/.c are empty, headers only `#pragma once`. Preserve explicit Blink.

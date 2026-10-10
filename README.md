@@ -1056,8 +1056,13 @@ MCU Flasher by Naph/
 
 **Ctrl+Shift+F** opens Find All for root sketch sources and text notes. Literal
 search supports Match case and Whole word, includes unsaved editor buffers, and
-opens a result at its file, line and column. Search runs in a bounded background
-worker and excludes build/cache folders. Enter between C++ braces follows the
+opens a result at its file, line and column. **Previous**/**Next**, **F3**/**Shift+F3**
+and Enter in the search box move through matches, wrapping at either end. The
+counter shows the selected match (for example, **2 of 4**), and results stay open
+while navigating. **Search** runs the query again; failed editor snapshots and
+unresponsive storage show a recovery message instead of remaining on Searching.
+Search runs in one bounded background worker and excludes build/cache folders.
+Enter between C++ braces follows the
 model's saved tab/space indentation. New sketches contain empty `setup()` and
 `loop()` functions; optional `.cpp` files are empty and headers contain only
 `#pragma once`. Modify starts with the sketch's filename and scrolls on short
