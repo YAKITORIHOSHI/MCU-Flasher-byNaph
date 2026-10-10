@@ -855,34 +855,43 @@ class TkResponsiveChecks(DownloaderChecks):
         self.pump()
         app.board_tab.detail_canvas.yview_moveto(1)
         self.pump()
-        # On short panes, controls cannot all be mapped at once. Scroll each
-        # control into view using actual canvas positions. Tk's Windows DPI
-        # scaling and font metrics can change the content/window coordinates.
-        for control in (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn):
+        # On short panes, controls cannot all be mapped at once. Use Tk canvas
+        # coordinates for the embedded controls: native Windows widgets such as
+        # ttk.Combobox can report root coordinates in a different DPI space.
+        controls = (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn)
+        for index, control in enumerate(controls):
             canvas = app.board_tab.detail_canvas
+            content = app.board_tab._detail_content
+            self.assertTrue(canvas.winfo_ismapped(), 'Board details canvas must be visible')
             bounds = canvas.bbox('all')
             self.assertIsNotNone(bounds, 'Board details need a scrollable content region')
             content_height = max(1, bounds[3] - bounds[1])
             viewport_height = max(1, canvas.winfo_height())
-            max_offset = max(0, content_height - viewport_height)
-            stride = max(1, viewport_height // 2)
-            positions = list(range(0, max_offset + 1, stride))
-            if not positions or positions[-1] != max_offset:
-                positions.append(max_offset)
-            visible = False
-            for offset in positions:
-                canvas.yview_moveto(offset / content_height)
-                self.pump()
-                top = control.winfo_rooty()
-                bottom = top + control.winfo_height()
-                pane_top = canvas.winfo_rooty()
-                pane_bottom = pane_top + canvas.winfo_height()
-                if (control.winfo_ismapped() and top >= pane_top
-                        and bottom <= pane_bottom):
-                    visible = True
-                    break
-            self.assertTrue(visible,
-                            f'{control.winfo_class()} is not fully reachable in the details pane')
+            relative_top = 0
+            ancestor = control
+            while ancestor is not content:
+                self.assertIsNotNone(ancestor.master, 'Board control must belong to the details content')
+                relative_top += ancestor.winfo_y()
+                ancestor = ancestor.master
+            window_top = canvas.coords(app.board_tab._content_window)[1]
+            control_top = window_top + relative_top
+            control_bottom = control_top + control.winfo_height()
+            max_offset = max(bounds[1], bounds[3] - viewport_height)
+            desired_top = min(max(bounds[1], control_top - max(0, (viewport_height - control.winfo_height()) // 2)),
+                              max_offset)
+            canvas.yview_moveto((desired_top - bounds[1]) / content_height)
+            self.pump()
+            visible_top = canvas.canvasy(0)
+            visible_bottom = canvas.canvasy(canvas.winfo_height())
+            self.assertGreater(control.winfo_width(), 0, f'{control.winfo_class()} must have a laid-out width')
+            self.assertGreater(control.winfo_height(), 0, f'{control.winfo_class()} must have a laid-out height')
+            self.assertGreaterEqual(control_top, visible_top - 1,
+                                    f'{control.winfo_class()} is above the details viewport')
+            self.assertLessEqual(control_bottom, visible_bottom + 1,
+                                 f'{control.winfo_class()} is below the details viewport')
+            if RENDER_DIR:
+                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
+                self.assertTrue(pixmap.save(str(RENDER_DIR / f'board-control-{index}.png')))
             self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
         app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
         app.sources_btn.invoke()
