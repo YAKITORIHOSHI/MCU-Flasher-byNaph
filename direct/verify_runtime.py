@@ -913,22 +913,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--render-dir", type=Path)
     parser.add_argument("--preview-cpus", type=int, choices=(4, 6), help="Simulate the low-end CPU policy for the real Qt preview")
+    parser.add_argument("--no-finalize", action="store_true")
     args = parser.parse_args()
     from PySide6.QtWidgets import QApplication
     app = QApplication(["MCU runtime verification"])
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RuntimeChecks)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
-        return 1
-    if args.preview_cpus:
-        from src.modules import runtime_resources
-        with patch.object(runtime_resources.os, "cpu_count", return_value=args.preview_cpus):
-            runtime_resources.configure_webengine_environment()
-            qt_smoke(app, args.render_dir)
-        print(f"Real Qt/Monaco constrained profile for {args.preview_cpus} logical CPUs: OK")
+        exit_code = 1
     else:
-        qt_smoke(app, args.render_dir)
-    return 0
+        if args.preview_cpus:
+            from src.modules import runtime_resources
+            with patch.object(runtime_resources.os, "cpu_count", return_value=args.preview_cpus):
+                runtime_resources.configure_webengine_environment()
+                qt_smoke(app, args.render_dir)
+            print(f"Real Qt/Monaco constrained profile for {args.preview_cpus} logical CPUs: OK")
+        else:
+            qt_smoke(app, args.render_dir)
+        exit_code = 0
+    if args.no_finalize:
+        # The real WebEngine smoke is complete and its window is closed. Some
+        # QtWebEngine/PySide builds crash during interpreter teardown only.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":
