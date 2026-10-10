@@ -186,6 +186,19 @@ class SerialViewChecks(unittest.TestCase):
                 view.deleteLater()
                 QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
+    def test_baud_dropdown_starts_and_stays_synced_to_the_confirmed_connection(self):
+        backend = SimpleNamespace(current_baud=57600)
+        panel = SerialPanel(backend)
+        def dispose():
+            panel.close()
+            panel.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.addCleanup(dispose)
+        self.assertEqual(panel.baud_combo.currentText(), "57600")
+        panel.update_status({"generation": 1, "connected": True, "port": "SIMULATED", "baud": 115200})
+        self.assertEqual(panel.baud_combo.currentText(), "115200")
+        self.assertEqual(panel.lbl_status.text(), "● Connected")
+
     def test_options_and_context_wrap_choice_save_then_sync(self):
         panel = self.panel()
         with patch.object(config, "save_gui_config", return_value=True) as save:

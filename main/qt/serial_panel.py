@@ -735,7 +735,10 @@ class SerialPanel(QWidget):
 
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(_BAUD_RATES)
-        self.baud_combo.setCurrentText("115200")
+        initial_baud = str(getattr(self._backend, "current_baud", 115200) or 115200)
+        if self.baud_combo.findText(initial_baud) < 0:
+            self.baud_combo.addItem(initial_baud)
+        self.baud_combo.setCurrentText(initial_baud)
         self.baud_combo.setFixedWidth(self._get_adaptive_baud_width())
         self.baud_combo.setToolTip("Serial monitor baud rate")
         self.baud_combo.currentTextChanged.connect(self._on_baud_changed)
@@ -1212,6 +1215,17 @@ class SerialPanel(QWidget):
         self._apply_connection_color()
         self._connection_text = self.lbl_status.text()
         self._reflow_header(getattr(self, "_current_responsive_width", self.width()))
+
+        # Status comes from the connection that actually opened.  Reflect it
+        # without re-emitting a baud-change request, so the displayed value
+        # cannot drift from the active serial session during a reconnect.
+        confirmed_baud = str(payload.get("baud", "") or "")
+        if confirmed_baud and self.baud_combo.currentText() != confirmed_baud:
+            if self.baud_combo.findText(confirmed_baud) < 0:
+                self.baud_combo.addItem(confirmed_baud)
+            self.baud_combo.blockSignals(True)
+            self.baud_combo.setCurrentText(confirmed_baud)
+            self.baud_combo.blockSignals(False)
 
         self.btn_reset.setEnabled(is_conn)
         self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor if is_conn else Qt.CursorShape.ArrowCursor)

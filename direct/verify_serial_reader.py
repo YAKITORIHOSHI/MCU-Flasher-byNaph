@@ -35,7 +35,10 @@ def reader_fixture():
                           decorator_list=[])
     module = ast.fix_missing_locations(ast.Module(body=[fixture], type_ignores=[]))
     namespace = {
-        "serial": SimpleNamespace(Serial=Mock(), SerialException=OSError),
+        "serial": SimpleNamespace(
+            Serial=Mock(), SerialException=OSError,
+            EIGHTBITS=8, PARITY_NONE="N", STOPBITS_ONE=1,
+        ),
         "threading": threading, "time": time,
     }
     exec(compile(module, str(source), "exec"), namespace)
@@ -55,6 +58,7 @@ class FakePort:
         self.idle_entered = threading.Event()
         self.read_sizes = []
         self.line_changes = []
+        self.input_resets = 0
 
     def __setattr__(self, name, value):
         if name in ("dtr", "rts") and "line_changes" in self.__dict__:
@@ -71,6 +75,9 @@ class FakePort:
     def close(self):
         self.is_open = False
         self.wake.set()
+
+    def reset_input_buffer(self):
+        self.input_resets += 1
 
     def read(self, size):
         self.read_sizes.append(size)
@@ -165,6 +172,43 @@ class ReaderChecks(unittest.TestCase):
         api, _events = backend_fixture(port)
         api._start_serial_monitor()
         self.assertEqual(port.write_timeout, 1.0)
+
+    def test_open_uses_explicit_8n1_without_flow_control_and_clears_stale_input(self):
+        port = FakePort(close_when_empty=False)
+        api, _events = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            self.assertEqual(port.baudrate, 115200)
+            self.assertEqual(port.bytesize, 8)
+            self.assertEqual(port.parity, "N")
+            self.assertEqual(port.stopbits, 1)
+            self.assertFalse(port.xonxoff)
+            self.assertFalse(port.rtscts)
+            self.assertFalse(port.dsrdtr)
+            self.assertEqual(port.input_resets, 1)
+        finally:
+            api._stop_serial_monitor()
+
+    def test_status_and_banner_keep_the_baud_used_to_open_this_connection(self):
+        api, events = backend_fixture(FakePort(close_when_empty=False))
+        port = SERIAL.Serial.return_value
+        original_open = port.open
+
+        def open_then_change_requested_baud():
+            original_open()
+            # A new request can arrive while this connection is opening.  Its
+            # status must still report this port's already-configured baud.
+            api.current_baud = 57600
+
+        port.open = open_then_change_requested_baud
+        try:
+            api._start_serial_monitor()
+            status = next(payload for name, payload in events if name == "serial:status" and payload["connected"])
+            banner = next(payload for name, payload in events if name == "serial:log" and "connected to" in payload["text"])
+            self.assertEqual(status["baud"], 115200)
+            self.assertIn("@ 115200 baud", banner["text"])
+        finally:
+            api._stop_serial_monitor()
 
     def tearDown(self):
         while ACTIVE_BACKENDS:

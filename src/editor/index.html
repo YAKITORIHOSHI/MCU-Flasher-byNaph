@@ -1347,43 +1347,59 @@
         });
       }
 
-      // ── Instant Unhide & Resize Observers ──────────────────────────────────
-      // When the editor container is unhidden, docked/undocked, or resized,
-      // trigger Monaco layout immediately so there is zero render throttling or latency.
-      window.forceEditorLayout = function () {
-        if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
-          window.editorInstance.layout();
-        }
-      };
-
       const editorContainerElem = document.getElementById('editor-container');
-      const monacoAnchorElem = document.getElementById('monaco-anchor');
-      if (window.ResizeObserver) {
-        const ro = new ResizeObserver(() => {
-          if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
-            window.editorInstance.layout();
-          }
-        });
-        if (editorContainerElem) ro.observe(editorContainerElem);
-        if (monacoAnchorElem) ro.observe(monacoAnchorElem);
+      // ── Stable Monaco layout scheduling ───────────────────────────────────
+      // A QWebEngine resize can raise several geometry notifications in one
+      // frame.  Calling Monaco.layout for each notification repaints its canvas
+      // repeatedly and may expose a transient black frame on Windows.  Keep one
+      // layout per rendered frame and do not observe Monaco's own anchor, whose
+      // canvas resize is itself a layout side effect.
+      let editorLayoutScheduled = false;
+      let editorLayoutForced = false;
+      let lastEditorLayoutWidth = -1;
+      let lastEditorLayoutHeight = -1;
+
+      function scheduleEditorLayout(force = false) {
+        editorLayoutForced = editorLayoutForced || !!force;
+        if (editorLayoutScheduled) return;
+        editorLayoutScheduled = true;
+        const flush = () => {
+          editorLayoutScheduled = false;
+          const mustLayout = editorLayoutForced;
+          editorLayoutForced = false;
+          const editor = window.editorInstance;
+          const width = editorContainerElem ? editorContainerElem.clientWidth : 0;
+          const height = editorContainerElem ? editorContainerElem.clientHeight : 0;
+          if (!editor || typeof editor.layout !== 'function' || width < 1 || height < 1) return;
+          if (!mustLayout && width === lastEditorLayoutWidth && height === lastEditorLayoutHeight) return;
+          lastEditorLayoutWidth = width;
+          lastEditorLayoutHeight = height;
+          editor.layout();
+        };
+        if (typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(flush);
+        } else {
+          window.setTimeout(flush, 0);
+        }
       }
 
-      window.addEventListener('resize', () => {
-        if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
-          window.editorInstance.layout();
-        }
-      }, { passive: true });
+      window.forceEditorLayout = function () { scheduleEditorLayout(true); };
+
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => scheduleEditorLayout());
+        if (editorContainerElem) ro.observe(editorContainerElem);
+      }
+
+      window.addEventListener('resize', () => scheduleEditorLayout(), { passive: true });
 
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && window.editorInstance && typeof window.editorInstance.layout === 'function') {
-          window.editorInstance.layout();
-        }
+        if (!document.hidden) scheduleEditorLayout(true);
       });
 
       const bar = document.getElementById('detached-action-bar');
       window.setDetachedActionBar = function (visible) {
         bar.classList.toggle('visible', !!visible);
-        if (window.editorInstance) window.editorInstance.layout();
+        scheduleEditorLayout(true);
       };
       window.setDetachedButtonStates = function (states) {
         if (!bar || !states) return;
@@ -2122,6 +2138,10 @@
       function showReviewBanner(snapshot, message) {
         const banner = document.getElementById('ai-diff-banner');
         if (!banner || !snapshot) return;
+        // A pending review must never rely on a hidden toggle: the decision
+        // controls are part of every AI edit, even after a user hid history.
+        aiBannerHidden = false;
+        try { sessionStorage.setItem('mcu_ai_banner_hidden', '0'); } catch (error) {}
         aiHistoryBannerToken = '';
         setBannerReviewMode();
         const diff = snapshot.diff || {};

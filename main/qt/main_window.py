@@ -1322,10 +1322,6 @@ class MCUMainWindow(QMainWindow):
                 self._editor_panel.show()
                 if hasattr(self._editor_panel, "force_layout"):
                     self._editor_panel.force_layout()
-                    QTimer.singleShot(20, self._editor_panel.force_layout)
-                    QTimer.singleShot(80, self._editor_panel.force_layout)
-                elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
-                    self._editor_panel._view.update()
 
             v_total = max(500, self.centralWidget().height())
             if editor_visible and monitors_visible:
@@ -1495,14 +1491,10 @@ class MCUMainWindow(QMainWindow):
             # Synchronize layout back to docked
             self._sync_ai_and_editor_layout()
 
-            # Ensure Chromium paints immediately and triggers instant layout
+            # The retained WebEngine page only needs one coalesced geometry pass.
             self._editor_panel.show()
             if hasattr(self._editor_panel, "force_layout"):
                 self._editor_panel.force_layout()
-                QTimer.singleShot(20, self._editor_panel.force_layout)
-                QTimer.singleShot(80, self._editor_panel.force_layout)
-            elif hasattr(self._editor_panel, "_view") and self._editor_panel._view:
-                self._editor_panel._view.update()
 
             if restore_editor_focus and self._editor_pane_visible:
                 self.activateWindow()

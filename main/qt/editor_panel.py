@@ -516,6 +516,12 @@ class MonacoEditorPanel(QWidget):
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._on_autosave_timeout)
+        # Geometry changes from splitters, detach/attach and native window
+        # state can arrive in a burst.  One queued Monaco layout avoids
+        # repeatedly repainting QWebEngine's canvas (the visible black flash).
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.timeout.connect(self._flush_layout)
 
         self._setup_ui()
 
@@ -1050,8 +1056,16 @@ class MonacoEditorPanel(QWidget):
         return buffers
 
     def force_layout(self) -> None:
-        """Force Monaco to instantly recalculate geometry and repaint."""
-        if not hasattr(self, "_view") or not self._view:
+        """Queue one Monaco geometry pass after a Qt resize/show burst."""
+        if (not self.isVisible() or not hasattr(self, "_view") or not self._view
+                or not self._view.isVisible()):
+            return
+        self._layout_timer.start(0)
+
+    def _flush_layout(self) -> None:
+        """Ask the page to coalesce its Monaco layout without repainting Qt."""
+        if (not self.isVisible() or not hasattr(self, "_view") or not self._view
+                or not self._view.isVisible()):
             return
         page = self._view.page()
         if not page:
@@ -1064,8 +1078,6 @@ class MonacoEditorPanel(QWidget):
             "}"
         )
         page.runJavaScript(js)
-        if hasattr(self._view, "update"):
-            self._view.update()
 
     def has_input_focus(self) -> bool:
         """Include Chromium's native focus proxy when preserving editor focus."""
@@ -1082,15 +1094,9 @@ class MonacoEditorPanel(QWidget):
         )
 
     def showEvent(self, event) -> None:
-        """Instantly wake up Monaco and recalculate layout upon unhide/show."""
+        """Schedule a stable Monaco layout when the existing panel is shown."""
         super().showEvent(event)
-        if hasattr(self, "_view") and self._view:
-            self._view.show()
         self.force_layout()
-        QTimer.singleShot(16, self.force_layout)
-        QTimer.singleShot(60, self.force_layout)
-        if self._backend and self._backend.active_file_path:
-            self.open_file(self._backend.active_file_path)
 
     @property
     def bridge(self) -> EditorBridgeAPI:

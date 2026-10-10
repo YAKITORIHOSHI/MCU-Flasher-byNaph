@@ -1050,6 +1050,12 @@ MCU Flasher by Naph/
     Keep the monitor at the running sketch's baud for its normal output. A message
     printed only in `setup()` can already have been sent before a passive monitor
     connects; use the explicit Reset control when you intend to restart it.
+  - Every monitor connection uses explicit **8N1** with software and hardware
+    flow control disabled. The baud picker starts from the saved monitor value
+    and follows the baud confirmed by the live connection, preventing the UI
+    from claiming a different rate while a reconnect is in flight. The input
+    buffer is cleared when a new connection becomes live so bytes received at a
+    previous rate cannot pollute the next session.
   - Hardware-free regressions: `direct/verify_serial_reader.py`,
     `direct/verify_serial_view.py`, `direct/verify_serial_wrap.py` and
     `direct/verify_serial_delivery.py`.
@@ -1091,6 +1097,15 @@ Integrated terminal edits display **Assistant Prompt (CLI)**; captured prompt te
 remains available in the group tooltip. Unidentified external changes are grouped
 by settled activity and explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
 registered as manual operations before disk changes and never become AI reviews.
+Whenever a new pending AI edit is detected, its review bar automatically opens
+with Accept and Reject available, even if an earlier AI history bar was hidden.
+Hiding the history bar remains a per-session preference until the next pending
+review needs a decision.
+
+The embedded editor preserves Monaco models and dirty buffers while docking,
+showing, resizing and changing themes. Resize notifications are coalesced to one
+Monaco layout per rendered frame, which avoids transient black editor flashes
+during Windows splitter and window resizing.
 
 Double-click an error or warning in **Syntax Check** to open its exact root source
 and select the reported range at the top of the editor, including wrapped and
@@ -1378,6 +1393,7 @@ resolved target, framework, port and operation state before confirmation.
 & src/_python/python.exe -B direct/verify_editor_c.py
 & src/_python/python.exe -B direct/verify_ai_line_diff.py
 & src/_python/python.exe -B direct/verify_editor_review_ui.py --render-dir temp/audit/editor-review
+node direct/verify_editor_layout_scheduling.js
 & src/_python/python.exe -B direct/verify_cursor.py
 & src/_python/python.exe -B direct/verify_preferences.py
 & src/_python/python.exe -B direct/verify_upload_workers.py

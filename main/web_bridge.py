@@ -3187,12 +3187,23 @@ class MCUWebBackendAPI:
                 })
                 return
 
+            # A baud change is intentionally asynchronous so typing in the UI
+            # never blocks.  Freeze this connection's complete identity before
+            # opening the port: a later request must not make an older open
+            # look like it is already using the new baud rate.
             port, baud = self.current_port, self.current_baud
 
             try:
                 self._serial_conn = serial.Serial()
-                self._serial_conn.port = self.current_port
-                self._serial_conn.baudrate = self.current_baud
+                self._serial_conn.port = port
+                self._serial_conn.baudrate = baud
+                # Be explicit about the ordinary Arduino/USB-UART wire format.
+                # PySerial defaults usually match these values, but drivers can
+                # retain a previous session's flow-control settings on Windows.
+                self._serial_conn.bytesize = serial.EIGHTBITS
+                self._serial_conn.parity = serial.PARITY_NONE
+                self._serial_conn.stopbits = serial.STOPBITS_ONE
+                self._serial_conn.xonxoff = False
                 self._serial_conn.timeout = 0.04
                 self._serial_conn.write_timeout = 1.0
                 self._serial_conn.dsrdtr = False
@@ -3202,24 +3213,35 @@ class MCUWebBackendAPI:
                 self._serial_conn.open()
                 self._serial_conn.dtr = False
                 self._serial_conn.rts = False
+                # Discard bytes captured while a previous baud session was
+                # closing.  Starting the reader from a clean boundary prevents
+                # stale garbled bytes from being presented as current output.
+                # Some platform-specific serial implementations omit this
+                # optional operation, which must not make a healthy port fail.
+                try:
+                    reset_input = getattr(self._serial_conn, "reset_input_buffer", None)
+                    if callable(reset_input):
+                        reset_input()
+                except Exception:
+                    pass
                 self.serial_running = True
                 self.emit("serial:status", {
                     "generation": generation,
                     "connected": True,
                     "state": "connected",
-                    "port": self.current_port,
-                    "baud": self.current_baud,
+                    "port": port,
+                    "baud": baud,
                 })
                 # Only log the "connected" banner when the (port, baud) pair actually changes.
                 # This deduplications the banner when multiple rapid reconnects land on the
                 # same pair (e.g. board-default baud + sketch-detected baud both == 115200).
-                connection_key = (self.current_port, self.current_baud)
+                connection_key = (port, baud)
                 if connection_key != getattr(self, "_last_serial_connection_key", None):
                     self._last_serial_connection_key = connection_key
                     self.emit("serial:log", {
                         "generation": generation,
                         "stream": False,
-                        "text": f"--- Serial Monitor connected to {self.current_port} @ {self.current_baud} baud ---",
+                        "text": f"--- Serial Monitor connected to {port} @ {baud} baud ---",
                         "tag": "info",
                         "newline": True,
                     })
@@ -3235,13 +3257,13 @@ class MCUWebBackendAPI:
                     "generation": generation,
                     "connected": False,
                     "state": "disconnected",
-                    "port": self.current_port,
-                    "baud": self.current_baud,
+                    "port": port,
+                    "baud": baud,
                 })
                 self.emit("serial:log", {
                     "generation": generation,
                     "stream": False,
-                    "text": f"--- Could not open {self.current_port}: {e} ---",
+                    "text": f"--- Could not open {port}: {e} ---",
                     "tag": "error",
                     "newline": True,
                 })

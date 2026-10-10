@@ -306,10 +306,13 @@ class EditorReviewChecks(unittest.TestCase):
         self.js("window.editorInstance.updateOptions({readOnly:false}); true")
         self.js("window.setAiBannerHidden(true); true")
         self.review('review-2')
-        self.assertEqual(self.snapshot()['banner'], 'none')
+        # A fresh pending edit must reveal its decision controls even when the
+        # user previously hid the history/review bar.
+        self.assertEqual(self.snapshot()['banner'], 'flex')
+        self.assertEqual(self.snapshot()['toggle']['expanded'], 'true')
+        self.assertEqual(self.js("sessionStorage.getItem('mcu_ai_banner_hidden')"), '0')
         self.js("window.setEditorTheme('light'); true")
-        self.assertEqual(self.snapshot()['banner'], 'none')
-        self.js("window.toggleAiBanner(); true")
+        self.assertEqual(self.snapshot()['banner'], 'flex')
         self.js("document.getElementById('ai-review-accept').click(); true")
         until(lambda: not self.snapshot()['pending'])
         self.assertEqual(len(self.snapshot()['calls']), 1)
@@ -331,10 +334,8 @@ class EditorReviewChecks(unittest.TestCase):
         self.load(reload=True)
         self.js(FIXTURE)
         self.review('after-reload')
-        self.assertEqual(self.snapshot()['banner'], 'none')
-        self.assertEqual(self.snapshot()['toggle']['expanded'], 'false')
-        self.js("window.toggleAiBanner(); true")
         self.assertEqual(self.snapshot()['banner'], 'flex')
+        self.assertEqual(self.snapshot()['toggle']['expanded'], 'true')
 
     def test_removed_anchor_and_existing_rulers_follow_each_theme(self):
         self.review()
