@@ -3396,6 +3396,7 @@ class MCUWebBackendAPI:
         finalized = False
         warned_invalid = False
         log_lock = threading.RLock()
+        reader_start = threading.Event()
 
         def warning_for_invalid():
             # Caller owns log_lock; claiming a notice is bounded memory work.
@@ -3460,6 +3461,10 @@ class MCUWebBackendAPI:
                 self._queue_serial_notification(generation, notice)
 
         def _reader():
+            # Thread.start() happens while state is protected so stop/upload
+            # cannot replace the connection mid-install. Do not read or queue
+            # diagnostics until that short setup lock has been released.
+            reader_start.wait()
             error = None
             while generation == self._serial_generation and conn and conn.is_open:
                 try:
@@ -3534,6 +3539,7 @@ class MCUWebBackendAPI:
                     "text": f"--- Could not start Serial Monitor: {exc} ---",
                     "tag": "error", "newline": True,
                 })
+        reader_start.set()
 
     def _queue_serial_notification(self, generation, notice):
         """Hand off optional UART diagnostics to one bounded storage worker."""
