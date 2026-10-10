@@ -701,6 +701,14 @@ class PerformanceChecks(unittest.TestCase):
 
     def test_syntax_worker_start_failure_releases_checking_state(self):
         from main.qt.syntax_panel import SyntaxPanel
+        from src import syntax_checker
+        # Qt and the parser pool are both process-wide fixtures. Retire any
+        # worker left by earlier parser checks before constructing more Qt
+        # objects, then let later tests create a fresh pool if they need one.
+        executor = syntax_checker._SYNTAX_EXECUTOR
+        if executor is not None:
+            executor.shutdown(wait=True)
+            syntax_checker._SYNTAX_EXECUTOR = None
         backend = SimpleNamespace(get_project_dir=lambda: str(ROOT / "temp"), is_busy=False)
         panel = SyntaxPanel(backend)
         panel._bg_timer.stop()
