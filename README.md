@@ -84,6 +84,8 @@ The project selector uses the same cached static glass header and cards in all
 three palettes. Existing, New, Recent, Open windows and Cloud have compact tabs,
 readable file/path surfaces and pinned actions; short pages scroll and forms
 reflow. Project destination and unsaved-change prompts share the palette.
+At compact sizes, Recent and Open windows actions use shorter visible labels
+while retaining full accessible names.
 The Existing tab lists the selected project's root files and highlights the
 `.ino` that owns `setup()` and `loop()`; split entry points are identified by
 their filenames. A subtle vertical rail links the theme-colored markers for the

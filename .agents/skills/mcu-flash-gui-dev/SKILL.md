@@ -391,7 +391,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `compat_panel.py`: Board compatibility matrix and GPIO pinout inspector.
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
-     - `project_dialog.py`: Project selector & new project scaffolding wizard. Keep the Existing path blank at startup; selecting a source file preserves that file as the editor's active file, while folder validation stays at the project root.
+     - `project_dialog.py`: Project selector & new project scaffolding wizard. Keep the Existing path blank at startup; selecting a source file preserves that file as the editor's active file, while folder validation stays at the project root. At compact widths shorten Recent/Open-window action labels but retain full accessible names.
      - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login and Firebase settings; cached shared glass surfaces and responsive forms.
      - `modify_dialog.py`: Project sketch file management dialog (add, rename, delete).
      - `download_dialog.py`: Explicit handoff to the separate host bootstrap process.

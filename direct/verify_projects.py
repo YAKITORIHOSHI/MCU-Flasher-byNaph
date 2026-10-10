@@ -883,10 +883,13 @@ class ProjectChecks(unittest.TestCase):
                     dialog._apply_dialog_theme(theme)
                     self.assertIsNotNone(dialog._header_card._colors)
                     scale = APP.primaryScreen().devicePixelRatio()
-                    max_width, max_height = int(1920 / scale) - 32, int(1080 / scale) - 70
+                    screen_area = APP.primaryScreen().availableGeometry()
+                    max_width = min(int(1920 / scale) - 32, screen_area.width() - 16)
+                    max_height = min(int(1080 / scale) - 70, screen_area.height() - 30)
                     for size_name, width, height in (("wide", min(1000, max_width), min(650, max_height)),
                                                     ("regular", min(720, max_width), min(560, max_height)),
-                                                    ("compact", 400, 360), ("short", 360, 300)):
+                                                    ("compact", min(400, max_width), min(360, max_height)),
+                                                    ("short", min(360, max_width), min(300, max_height))):
                         dialog.resize(width, height)
                         for page, buttons in enumerate(actions):
                             dialog._tabs.setCurrentIndex(page)
@@ -904,7 +907,8 @@ class ProjectChecks(unittest.TestCase):
                                                     f"{button.text()} clipped by {type(ancestor).__name__}")
                                     ancestor = ancestor.parentWidget()
                                 ink_width = button.fontMetrics().horizontalAdvance(button.text())
-                                self.assertGreaterEqual(button.width(), ink_width + 20)
+                                self.assertGreaterEqual(button.width(), ink_width + 20,
+                                                        f"{size_name} {pages[page]} {button.text()!r}")
                             fields = ((dialog._open_path_edit,) if page == 0 else
                                       (dialog._new_name_edit, dialog._new_parent_edit, dialog._template_combo)
                                       if page == 1 else ())

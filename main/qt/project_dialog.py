@@ -411,6 +411,12 @@ class ProjectDialog(QDialog):
                                        if self.width() < 560 else QFormLayout.RowWrapPolicy.DontWrapRows)
         self._btn_clear_recents.setText("Clear" if self.width() < 500 else "Clear history")
         self._btn_clear_recents.setAccessibleName("Clear recent project history")
+        if hasattr(self, "_btn_open_recent"):
+            self._btn_open_recent.setText("Open" if compact else "Open selected")
+            self._btn_open_recent.setAccessibleName("Open selected recent project")
+        if hasattr(self, "_focus_project_btn"):
+            self._focus_project_btn.setText("Show" if compact else "Show window")
+            self._focus_project_btn.setAccessibleName("Show selected sketch window")
 
     def _make_tab(self, title: str):
         """Keep actions visible while short-screen page content can scroll."""
