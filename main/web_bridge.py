@@ -38,6 +38,38 @@ from src.modules.package_jobs import guarded_package_operation, package_store_le
 SCRIPT_DIR = _project_root
 
 
+# Existing projects are intentionally stricter than new-project scaffolding.
+# Opening a broad folder such as Documents must never create a sketch, claim
+# ownership, or cause generated project metadata to appear there.
+_PROJECT_ENTRY_SOURCE_EXTENSIONS = frozenset({".ino", ".cpp", ".c"})
+_PROJECT_SOURCE_CONTENT_PROBE_BYTES = 8192
+
+
+def _system_documents_directory() -> Path:
+    """Return the OS Documents root used by the project picker."""
+    try:
+        from PySide6.QtCore import QStandardPaths
+        location = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DocumentsLocation
+        )
+        if location:
+            return Path(location).expanduser().resolve()
+    except Exception:
+        pass
+    try:
+        return (Path.home() / "Documents").resolve()
+    except (OSError, RuntimeError):
+        return Path.home() / "Documents"
+
+
+def _paths_refer_to_same_location(first: Path, second: Path) -> bool:
+    """Compare project paths without requiring a working network share."""
+    try:
+        return first.resolve() == second.resolve()
+    except (OSError, RuntimeError):
+        return os.path.normcase(os.path.abspath(str(first))) == os.path.normcase(os.path.abspath(str(second)))
+
+
 def _iter_process_output(process, stop_requested, stop_process, on_silence,
                          *, poll_interval: float = 0.2,
                          notice_after: float = 15.0,
@@ -2359,6 +2391,47 @@ class MCUWebBackendAPI:
         self.skip_compile = False
         self.emit("skip_compile:availability", False)
 
+    def validate_existing_project_folder(self, folder_path: str) -> dict[str, Any]:
+        """Confirm that an existing-project request names a usable sketch root.
+
+        This is deliberately a shallow, bounded probe: it reads the root once
+        and inspects at most a small prefix of each eligible firmware source.
+        It runs before any project ownership, history, cache, or metadata work.
+        """
+        try:
+            folder = Path(folder_path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            folder = Path(folder_path).expanduser().absolute()
+        if folder.is_file():
+            folder = folder.parent
+        if not folder.is_dir():
+            return {"success": False, "error": "Select an existing sketch folder."}
+        if is_application_codebase_dir(folder):
+            return {
+                "success": False,
+                "error": "The MCU Flasher application folder cannot be opened as an Arduino sketch project.",
+            }
+        if _paths_refer_to_same_location(folder, _system_documents_directory()):
+            return {
+                "success": False,
+                "error": "Select a sketch folder inside Documents, not the Documents folder itself.",
+            }
+
+        for source in get_project_root_source_files(folder, _PROJECT_ENTRY_SOURCE_EXTENSIONS):
+            try:
+                with source.open("rb") as handle:
+                    if handle.read(_PROJECT_SOURCE_CONTENT_PROBE_BYTES).strip():
+                        return {"success": True, "folder": str(folder), "source": str(source)}
+            except OSError:
+                continue
+        return {
+            "success": False,
+            "error": (
+                "Select a sketch folder containing a non-empty .ino, .cpp, or .c source file "
+                "in that folder. Use New project to create one."
+            ),
+        }
+
     def open_project(self, folder_path: str, active_file: Optional[str] = None) -> dict[str, Any]:
         """Open and switch to an existing sketch directory or code file."""
         if (self.is_busy or getattr(self, "active_operation", None) is not None
@@ -2382,12 +2455,10 @@ class MCUWebBackendAPI:
         else:
             return {"success": False, "error": f"Path does not exist: {folder_path}"}
 
-        # REJECT APPLICATION CODEBASE
-        if is_application_codebase_dir(p):
-            return {
-                "success": False,
-                "error": "The MCU Flasher application folder cannot be opened as an Arduino sketch project."
-            }
+        validation = self.validate_existing_project_folder(str(p))
+        if not validation.get("success"):
+            return validation
+        p = Path(validation["folder"])
 
         # Check if project is already active in another window
         owner = find_project_window(p)
@@ -2405,8 +2476,8 @@ class MCUWebBackendAPI:
                 "owner_pid": owner.get("pid"),
             }
 
-        # Claim before scaffolding, scans or metadata writes. A simultaneous
-        # opener must lose this claim without touching the project's files.
+        # Claim before any project mutation. A simultaneous opener must lose
+        # this claim without touching the project's files.
         if not set_active_sketch_dir(str(p), hwnd=getattr(self, "_hwnd", 0)):
             owner = find_project_window(p, exclude_self=True)
             if owner:
@@ -2414,36 +2485,6 @@ class MCUWebBackendAPI:
             return {"success": False, "already_open": bool(owner),
                     "error": "Project is already open in another window." if owner else
                              "Could not register the project. Check that your settings folder is writable."}
-
-        # Auto-scaffold default .ino if empty or missing source files
-        source_extensions = {".ino", ".cpp", ".c", ".h", ".hpp"}
-        has_source = False
-        try:
-            for item in p.iterdir():
-                if item.is_file() and item.suffix.lower() in source_extensions:
-                    has_source = True
-                    break
-        except Exception:
-            pass
-
-        if not has_source:
-            clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', p.name.strip()) or "sketch"
-            default_ino = p / f"{clean_name}.ino"
-            try:
-                if not default_ino.exists():
-                    template = (
-                        "void setup() {\n"
-                        "\n"
-                        "}\n\n"
-                        "void loop() {\n"
-                        "\n"
-                        "}\n"
-                    )
-                    default_ino.write_text(template, encoding="utf-8")
-                    if not active_file:
-                        active_file = str(default_ino)
-            except Exception:
-                pass
 
         self.sketch_dir_path = p
         add_recent_project(str(p))
@@ -2518,8 +2559,10 @@ class MCUWebBackendAPI:
             return {"success": False, "error": message}
         target = Path(folder_path).resolve()
         folder = target.parent if target.is_file() else target
-        if not folder.is_dir() or is_application_codebase_dir(folder):
-            return {"success": False, "error": "Select an existing sketch folder outside the application."}
+        validation = self.validate_existing_project_folder(str(folder))
+        if not validation.get("success"):
+            return validation
+        folder = Path(validation["folder"])
         owner = find_project_window(folder)
         if owner:
             focused = focus_project_window(owner.get("hwnd", 0), owner.get("pid", 0))

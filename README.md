@@ -910,6 +910,7 @@ MCU Flasher by Naph/
 - **Open projects** lists running sketch windows and their folder paths. When idle, use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
 - Right-click the project title or click its folder icon to reopen the picker when idle. **Cancel** leaves the current editor and monitor sessions intact.
 - **Existing project → Browse** always starts in your system's Documents folder, including redirected or localized Documents locations. Every click starts there; cancelling keeps the selected project path unchanged.
+- **Existing project validation**: Select the sketch folder itself, not the whole Documents folder. It must contain a non-empty top-level `.ino`, `.cpp`, or `.c` source file. Invalid folders are rejected before the app switches windows, saves buffers, creates files, updates history, or writes project metadata. Use **New project** for an empty folder.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
 

@@ -343,6 +343,70 @@ class ProjectChecks(unittest.TestCase):
         self.assertEqual(sketch.read_bytes(), before)
         self.assertEqual(api.sketch_dir_path, self.folder / "original")
 
+    def test_invalid_existing_project_never_claims_or_scaffolds(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_project_files = Mock()
+        documents = self.folder / "Documents"
+        documents.mkdir()
+        document_source = documents / "unrelated.ino"
+        document_source.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+        empty = self.folder / "empty-project"
+        empty.mkdir()
+        empty_source = empty / "empty.ino"
+        empty_source.write_text(" \n\t", encoding="utf-8")
+        before = (api.sketch_dir_path, api.active_file_path, api.modified_files.copy())
+
+        with patch.object(web_bridge, "_system_documents_directory", return_value=documents), \
+             patch.object(web_bridge, "find_project_window") as find_owner, \
+             patch.object(web_bridge, "set_active_sketch_dir") as claim, \
+             patch.object(web_bridge, "add_recent_project") as add_recent, \
+             patch.object(web_bridge, "hide_internal_project_metadata") as metadata, \
+             patch.object(web_bridge.subprocess, "Popen") as spawn:
+            documents_result = api.open_project(str(documents))
+            current_result = api.open_project(str(empty))
+            new_window_result = api.open_project_window(str(empty))
+
+        self.assertFalse(documents_result["success"])
+        self.assertIn("inside Documents", documents_result["error"])
+        self.assertFalse(current_result["success"])
+        self.assertIn("non-empty .ino", current_result["error"])
+        self.assertFalse(new_window_result["success"])
+        self.assertIn("non-empty .ino", new_window_result["error"])
+        self.assertEqual(document_source.read_text(encoding="utf-8"), "void setup() {}\nvoid loop() {}\n")
+        self.assertEqual(empty_source.read_text(encoding="utf-8"), " \n\t")
+        self.assertEqual(sorted(item.name for item in empty.iterdir()), ["empty.ino"])
+        self.assertEqual(before, (api.sketch_dir_path, api.active_file_path, api.modified_files))
+        find_owner.assert_not_called()
+        claim.assert_not_called()
+        add_recent.assert_not_called()
+        metadata.assert_not_called()
+        api.get_project_files.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_picker_rejects_invalid_project_before_window_choice_or_dirty_prompt(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_recent_projects = Mock(return_value=[])
+        invalid = self.folder / "not-a-project"
+        invalid.mkdir()
+        parent = QWidget()
+        dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), parent=parent, open_in_new_window=True)
+        try:
+            dialog._open_path_edit.setText(str(invalid))
+            with patch.object(dialog, "_choose_project_window") as choose_window, \
+                 patch.object(dialog, "_prepare_current_window_switch") as dirty_prompt:
+                dialog._open_existing()
+            choose_window.assert_not_called()
+            dirty_prompt.assert_not_called()
+            self.assertIn("non-empty .ino", dialog._existing_status.text())
+            self.assertIsNone(dialog.selected_project)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
     def test_new_project_creation_and_open_are_blocked_while_busy(self):
         api = self.backend()
         api.open_project_window = Mock(return_value={"success": True})

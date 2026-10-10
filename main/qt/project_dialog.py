@@ -34,6 +34,8 @@ from main.core.constants import is_application_codebase_dir
 
 # Supported sketch file extensions
 SUPPORTED_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
+PROJECT_ENTRY_SOURCE_EXTS = {".ino", ".cpp", ".c"}
+PROJECT_SOURCE_CONTENT_PROBE_BYTES = 8192
 
 
 class _ProjectTabBar(WorkspaceTabBar):
@@ -552,15 +554,26 @@ class ProjectDialog(QDialog):
             self._existing_preview_lbl.setText("This folder does not exist. Choose an existing sketch folder.")
             self._set_label_tone(self._existing_preview_lbl, "error")
             return
-        files = _get_project_files_fast(p)
-        if files:
-            summary = ", ".join(files[:8])
-            if len(files) > 8:
-                summary += f" (+{len(files) - 8} more)"
-            self._existing_preview_lbl.setText(f"Found ({len(files)} source files):\n{summary}")
+        sources = []
+        try:
+            for candidate in sorted(p.iterdir(), key=lambda item: item.name.lower()):
+                if candidate.is_file() and candidate.suffix.lower() in PROJECT_ENTRY_SOURCE_EXTS:
+                    with candidate.open("rb") as handle:
+                        if handle.read(PROJECT_SOURCE_CONTENT_PROBE_BYTES).strip():
+                            sources.append(candidate.name)
+        except OSError:
+            pass
+        if sources:
+            summary = ", ".join(sources[:8])
+            if len(sources) > 8:
+                summary += f" (+{len(sources) - 8} more)"
+            self._existing_preview_lbl.setText(f"Valid root source: {summary}")
             self._set_label_tone(self._existing_preview_lbl, "ok")
         else:
-            self._existing_preview_lbl.setText("No sketch files found. Opening this folder creates a starter .ino file.")
+            self._existing_preview_lbl.setText(
+                "Existing projects need a non-empty .ino, .cpp, or .c file in this folder. "
+                "Use New project to create one."
+            )
             self._set_label_tone(self._existing_preview_lbl, "warn")
 
     def _update_new_preview(self) -> None:
@@ -638,6 +651,11 @@ class ProjectDialog(QDialog):
         if not p.is_dir():
             self._set_label_tone(self._existing_status, "error")
             self._existing_status.setText("✖ The specified folder does not exist.")
+            return
+        validation = self._validate_existing_project_folder(p)
+        if not validation.get("success"):
+            self._set_label_tone(self._existing_status, "error")
+            self._existing_status.setText(f"✖ {validation.get('error', 'Could not open project.')}")
             return
 
         self._dispatch_project_action(
@@ -763,6 +781,10 @@ class ProjectDialog(QDialog):
             return
         if is_application_codebase_dir(p):
             self._recent_preview_lbl.setText("✖ The MCU Flasher application folder cannot be opened as a project.")
+            return
+        validation = self._validate_existing_project_folder(p)
+        if not validation.get("success"):
+            self._recent_preview_lbl.setText(f"✖ {validation.get('error', 'Could not open project.')}")
             return
 
         self._dispatch_project_action(
@@ -1010,6 +1032,15 @@ class ProjectDialog(QDialog):
             except (OSError, TypeError, ValueError):
                 pass
         return self._backend.open_project(path)
+
+    def _validate_existing_project_folder(self, folder: Path) -> dict:
+        """Use the backend's no-mutation project check before window prompts."""
+        if self._backend and hasattr(self._backend, "validate_existing_project_folder"):
+            try:
+                return self._backend.validate_existing_project_folder(str(folder))
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        return {"success": True}
 
     def _setup_open_projects_tab(self) -> None:
         tab, layout, actions = self._make_tab("Open projects")
