@@ -64,6 +64,9 @@ class CursorChecks(unittest.TestCase):
         detached = QWidget(self.owner, Qt.WindowType.Window)
         child = QWidget(detached)
         child.setCursor(Qt.CursorShape.BlankCursor)
+        # Ubuntu's guard scans newly-owned window trees on the next event-loop
+        # turn to avoid reentering QWidget construction from ChildAdded.
+        APP.processEvents()
         self.assertEqual(child.cursor().shape(), Qt.CursorShape.ArrowCursor)
         detached.close()
         unrelated.close()
