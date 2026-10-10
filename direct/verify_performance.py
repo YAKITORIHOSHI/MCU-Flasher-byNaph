@@ -700,6 +700,21 @@ class PerformanceChecks(unittest.TestCase):
             APP.processEvents()
 
     def test_syntax_worker_start_failure_releases_checking_state(self):
+        child_flag = "MCU_FLASHER_PERF_SYNTAX_START_FAILURE_CHILD"
+        if os.environ.get(child_flag) != "1":
+            # Keep this Qt-heavy startup fixture in its own application
+            # lifetime. The full performance suite constructs WebEngine and
+            # many widgets first; some Linux/PySide builds abort while
+            # collecting wrappers during a later widget constructor.
+            child_env = dict(os.environ)
+            child_env[child_flag] = "1"
+            result = subprocess.run(
+                [sys.executable, "-B", str(Path(__file__).resolve()), "--no-finalize",
+                 "PerformanceChecks.test_syntax_worker_start_failure_releases_checking_state"],
+                cwd=ROOT, env=child_env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Ran 1 test", result.stdout + result.stderr)
+            return
         from main.qt.syntax_panel import SyntaxPanel
         from src import syntax_checker
         # Qt and the parser pool are both process-wide fixtures. Retire any
