@@ -378,6 +378,11 @@ class FallbackChecks(unittest.TestCase):
         api._active_process = None
         api._resolve_board_info = Mock(return_value=info)
         api._effective_cache_root = Mock(return_value=self.fixture / "build-cache")
+        api._board_workspace_dir = Mock(side_effect=lambda board=None: (
+            self.fixture / "build-cache/boards/fixture-native-host" /
+            api._board_cache_key(board)))
+        api.modified_files = {}
+        api.update_skip_compile_availability = Mock()
         api._get_jobs = Mock(return_value=2)
         api.emit = Mock()
         api._stop_serial_monitor = Mock()
@@ -462,6 +467,91 @@ class FallbackChecks(unittest.TestCase):
         self.assertIn("--input-dir", self.operations[0][0])
         api._stop_serial_monitor.assert_called_once()
         api._start_serial_monitor.assert_called_once()
+
+    def test_cached_status_does_not_create_unbuilt_workspace(self):
+        api = self.api()
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        self.assertFalse((self.fixture / "build-cache").exists())
+        self.assertEqual(self.operations, [])
+        api._stop_serial_monitor.assert_not_called()
+
+    def test_each_selectable_board_retains_its_cli_build_when_switched_back(self):
+        api = self.api()
+        first = api.current_board
+        self.assertTrue(arduino_backend.run_arduino_operation(api))
+        first_build = Path(self.operations[-1][0][self.operations[-1][0].index("--build-path") + 1])
+        first_receipt = first_build.parent / "build-receipt.json"
+        first_receipt_bytes = first_receipt.read_bytes()
+        first_firmware_bytes = (first_build / "FallbackSketch.ino.hex").read_bytes()
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        api.update_skip_compile_availability.assert_called_once()
+
+        # Selectable aliases still require distinct folders even when their
+        # certified FQBN and native toolchain are identical.
+        api.current_board = "Other selectable board"
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        self.assertTrue(arduino_backend.run_arduino_operation(api))
+        second_build = Path(self.operations[-1][0][self.operations[-1][0].index("--build-path") + 1])
+        self.assertNotEqual(first_build, second_build)
+        self.assertTrue(first_build.is_relative_to(api._board_workspace_dir(first)))
+        self.assertTrue(second_build.is_relative_to(api._board_workspace_dir(api.current_board)))
+        self.assertEqual(first_receipt.read_bytes(), first_receipt_bytes)
+        self.assertEqual((first_build / "FallbackSketch.ino.hex").read_bytes(), first_firmware_bytes)
+
+        api.current_board = first
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        api._active_skip_compile = True
+        self.operations.clear()
+        self.assertTrue(arduino_backend.run_arduino_operation(api, upload=True))
+        self.assertEqual([upload for _, upload in self.operations], [True])
+        self.assertEqual(self.operations[0][0][self.operations[0][0].index("--input-dir") + 1], str(first_build))
+
+    def test_cached_status_rechecks_dirty_source_and_firmware_bytes(self):
+        api = self.api()
+        self.assertTrue(arduino_backend.run_arduino_operation(api))
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        source = api.sketch_dir_path / "sketch.ino"
+        source_bytes, previous = source.read_bytes(), source.stat()
+        api.modified_files = {str(source): True}
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        api.modified_files.clear()
+        source.write_bytes(source_bytes.replace(b"setup", b"other"))
+        os.utime(source, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        source.write_bytes(source_bytes)
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        build = Path(self.operations[-1][0][self.operations[-1][0].index("--build-path") + 1])
+        (build / "FallbackSketch.ino.hex").write_bytes(b"different fixture firmware")
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+
+    def test_cached_status_rechecks_selected_library_and_prepared_cli(self):
+        api = self.api()
+        library = self.core / "lib/StatusLibrary/src"
+        library.mkdir(parents=True)
+        header = library / "StatusLibrary.h"
+        header.write_bytes(b"const int value = 1;\n")
+        self.assertTrue(arduino_backend.run_arduino_operation(api))
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        previous = header.stat()
+        header.write_bytes(b"const int value = 2;\n")
+        os.utime(header, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        header.write_bytes(b"const int value = 1;\n")
+        self.assertFalse(arduino_backend.cached_build_status(api)[0])
+        self.cli.write_bytes(b"foreign CLI bytes")
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        self.assertEqual([upload for _, upload in self.operations], [False])
+
+    def test_cli_status_does_not_accept_legacy_shared_build_receipt(self):
+        api = self.api()
+        self.assertTrue(arduino_backend.run_arduino_operation(api))
+        build = Path(self.operations[-1][0][self.operations[-1][0].index("--build-path") + 1])
+        old_workspace = self.fixture / "build-cache/arduino-cli" / build.parent.name
+        old_workspace.parent.mkdir(parents=True)
+        build.parent.rename(old_workspace)
+        self.assertTrue(arduino_backend.cached_build_status(api)[0])
+        self.assertTrue((old_workspace / "build-receipt.json").is_file())
+        self.assertFalse(build.exists())
 
     def test_upload_failure_is_single_attempt_and_never_replayed(self):
         api = self.api()

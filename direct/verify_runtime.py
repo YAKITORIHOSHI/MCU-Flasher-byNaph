@@ -349,6 +349,8 @@ class RuntimeChecks(unittest.TestCase):
         events = []
         api.emit = lambda name, payload: events.append((name, payload))
         api._effective_cache_root = lambda path: path
+        api._board_workspace_dir = lambda: api.sketch_dir_path
+        api._needs_recompile = lambda: (False, "isolated programmer fixture")
         api._generate_platformio_ini = lambda path: None
         api._unmap_unc_after_build = lambda: None
         api._get_jobs = lambda: 1

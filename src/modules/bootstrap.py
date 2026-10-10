@@ -9453,6 +9453,7 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "core" / "package_activity.py",
         SCRIPT_DIR / "main" / "core" / "arduino_backend.py",
         SCRIPT_DIR / "main" / "core" / "arduino_inputs.py",
+        SCRIPT_DIR / "main" / "core" / "compiled_cache.py",
         SCRIPT_DIR / "main" / "qt" / "compat_panel.py",
         SCRIPT_DIR / "main" / "qt" / "package_progress.py",
         SCRIPT_DIR / "main" / "qt" / "package_coverage.py",

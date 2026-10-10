@@ -172,6 +172,25 @@ For explicitly requested assistant delegation, use the local
 - Reviewed AVR and exact ESP8266 Arduino checks share one bounded worker pool
   after installers complete. Source/package signatures must match; unknown/native
   builders remain serial. Failure cancels siblings and leaves readiness uncertified.
+- Ordinary compile/upload use `_board_workspace_dir()` for the exact board,
+  framework and `compiled_cache.host_namespace()` (native OS/architecture).
+  Keep generated INI, staged sources and `.pio/build/mcu_env` output in that
+  workspace; never accept flat `mcu_env` or display-name-only metadata. Per-board
+  successful receipts bind source bytes, normalized build configuration and
+  SHA-256 firmware images and configured library collections. Hash library
+  recipes/assets as well as sources, bound scans to 40,000 entries / 256 MiB,
+  and compare the pre-build signature before certification. Do not deserialize
+  SCons databases as dependency receipts. Check staged/root sources and
+  invalidate the selected receipt before rebuilding without removing other
+  boards' objects. Keep a separate pre-build input signature across failed
+  source builds; changed configuration/library bytes retire only the selected
+  objects so coarse timestamps cannot leave stale library code. Exclude only
+  upload port/speed and monitor speed from build
+  config validation. Arduino CLI uses its own certified subfolder and read-only
+  availability check. A → B → A, restart and framework return must restore Skip
+  Compile; dirty buffers, failed builds and altered images must reject reuse.
+  Verify with `direct/verify_board_build_cache.py`, board-family/upload fixtures
+  and isolated actual Compile-button AVR probes; never migrate a live cache.
 - Bootstrap recognizes only the exact standalone upstream UF2 already-added
   message as `UF2 bootloader image already included.`. Present it as a normal
   informational summary once per stage, preserving active package progress and

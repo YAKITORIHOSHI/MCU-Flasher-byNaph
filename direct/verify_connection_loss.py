@@ -310,7 +310,9 @@ class ConnectionLossChecks(unittest.TestCase):
         api._resolve_board_info = lambda: dict(INFO)
         api.sketch_dir_path = self.root
         api._effective_cache_root = lambda _: self.root
+        api._board_workspace_dir = lambda: self.root
         api._generate_platformio_ini = Mock()
+        api._needs_recompile = Mock(return_value=(False, "isolated connection fixture"))
         api._get_jobs = lambda: 1
         api._unmap_unc_after_build = Mock()
         command = [sys.executable, "-B", "-c", "import time; time.sleep(30)"]

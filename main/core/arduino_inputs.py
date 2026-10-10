@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 from src.modules.arduino_cli_support import sha256_file
@@ -65,8 +66,8 @@ def library_collections(command, info):
     return collections, flags
 
 
-def snapshot(collections, *, byte_hashes=True):
-    """Inventory searchable code names; read code bytes only in build workers."""
+def snapshot(collections, *, byte_hashes=True, all_files=False):
+    """Inventory code, or all custom recipe inputs, only in build workers."""
     files, discovery, total_bytes, count = {}, [], 0, 0
     for root in collections:
         root = Path(root).resolve()
@@ -75,7 +76,8 @@ def snapshot(collections, *, byte_hashes=True):
             continue
         for directory, dirs, names in os.walk(root):
             directory = Path(directory)
-            dirs[:] = sorted(name for name in dirs if name.casefold() not in _IGNORED)
+            ignored = {".git", ".pio", "__pycache__"} if all_files else _IGNORED
+            dirs[:] = sorted(name for name in dirs if name.casefold() not in ignored)
             if any((directory / name).resolve() != directory / name for name in dirs):
                 raise RuntimeError("Arduino library links require a directly prepared source collection")
             count += len(dirs) + len(names)
@@ -84,16 +86,27 @@ def snapshot(collections, *, byte_hashes=True):
             discovery.extend([str(directory.relative_to(root) / name), "directory"] for name in dirs)
             for name in sorted(names):
                 path = directory / name
-                if path.suffix.lower() not in _CODE_SUFFIXES and name not in _METADATA:
+                if not all_files and path.suffix.lower() not in _CODE_SUFFIXES and name not in _METADATA:
                     continue
                 resolved = path.resolve()
                 if not resolved.is_relative_to(root):
                     raise RuntimeError("An Arduino library input escapes its configured collection")
-                size = path.stat().st_size
+                info = path.stat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise RuntimeError("A library input is not a regular file")
+                size = info.st_size
                 total_bytes += size
                 if total_bytes > _MAX_BYTES:
                     raise RuntimeError("Arduino library source bytes exceed the bounded verification limit")
-                digest = sha256_file(path) if byte_hashes or name in _METADATA else None
+                digest = None
+                if byte_hashes or name in _METADATA:
+                    if all_files:
+                        from main.core.compiled_cache import file_digest
+                        digest = file_digest(path, byte_limit=_MAX_BYTES - total_bytes + size)
+                        if path.stat().st_size != size:
+                            raise RuntimeError("A library input changed during verification")
+                    else:
+                        digest = sha256_file(path)
                 discovery.append([str(path.relative_to(root)), digest if name in _METADATA else "source"])
                 if byte_hashes:
                     files[str(resolved)] = digest

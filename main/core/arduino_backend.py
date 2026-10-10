@@ -118,6 +118,36 @@ def _receipt_matches(path, source_hash, fqbn, build, inputs, *, inputs_only=Fals
         return False
 
 
+def _workspace(api, board, info, fqbn):
+    """Select this exact board's native-host workspace without touching files."""
+    key = hashlib.sha256(json.dumps({"fqbn": fqbn, "core": info.get("arduino_cli")}, sort_keys=True).encode()).hexdigest()[:16]
+    return api._board_workspace_dir(board) / "arduino-cli" / key
+
+
+def cached_build_status(api, board=None):
+    """Read-only worker check of the selected board's certified CLI build."""
+    target = board or api.current_board
+    if not target:
+        return True, "no board selected"
+    if not api.sketch_dir_path:
+        return True, "no sketch folder loaded"
+    if any(getattr(api, "modified_files", {}).values()):
+        return True, "unsaved modifications in editor"
+    try:
+        info = api._resolve_board_info(target)
+        command, _environment, fqbn = runtime_command(info)
+        source_hash = api._hash_sources(target)
+        workspace = _workspace(api, target, info, fqbn)
+        collections, _flags = arduino_inputs.library_collections(command, info)
+        inputs = arduino_inputs.snapshot(collections, byte_hashes=False)
+        if not _receipt_matches(workspace / "build-receipt.json", source_hash, fqbn,
+                                workspace / "build", inputs):
+            return True, "no unchanged, verified Arduino CLI build for this board"
+        return False, "unchanged sketch, Arduino library and firmware bytes"
+    except Exception as exc:
+        return True, f"Arduino CLI build verification unavailable: {exc}"
+
+
 def run_arduino_operation(api, *, upload=False):
     """Resolve current certificates, stage root sources and execute once."""
     from main import web_bridge
@@ -135,8 +165,7 @@ def run_arduino_operation(api, *, upload=False):
             _log(api, "PlatformIO does not support this exact board yet. Using the verified Arduino CLI fallback.", "warning")
             api.emit("notification", {"title": "Arduino CLI fallback", "message": f"PlatformIO does not support {board} yet. Using Arduino CLI.", "type": "warning"})
         source_hash = api._hash_sources(board)
-        key = hashlib.sha256(json.dumps({"fqbn": fqbn, "core": info.get("arduino_cli")}, sort_keys=True).encode()).hexdigest()[:16]
-        workspace = api._effective_cache_root(api.sketch_dir_path) / "arduino-cli" / key
+        workspace = _workspace(api, board, info, fqbn)
         staging, build = workspace / "sketch/FallbackSketch", workspace / "build"
         receipt = workspace / "build-receipt.json"
         collections, library_flags = arduino_inputs.library_collections(command, info)
@@ -188,6 +217,7 @@ def run_arduino_operation(api, *, upload=False):
                                                        "inputs": selected_inputs}, sort_keys=True))
             api._last_source_hash, api._last_compiled_board = source_hash, board
             _log(api, "Arduino CLI compilation completed.", "success")
+            api.update_skip_compile_availability()
         else:
             _log(api, "Verified unchanged sketch, library and firmware bytes; reusing the Arduino CLI build.", "info")
         if not upload:

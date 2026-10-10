@@ -71,8 +71,19 @@ Classify paths before changing attributes or deleting anything:
 ## Keep cache and Clean behavior safe
 
 - Keep each exact board under its canonical
-  `.mcu_flasher_build_cache/boards/<board-key>/` workspace. Do not restore
-  family-bucketed binaries into an exact-board build.
+  `.mcu_flasher_build_cache/boards/<host-architecture>/<board-key>/` workspace.
+  Keep generated INI, staged sources, `.pio/build/mcu_env` objects/output and
+  the successful build receipt together. Arduino CLI uses a certified CLI
+  subfolder in that same native board workspace. Do not restore shared or
+  family-bucketed binaries into an exact-board build; legacy caches stay untouched.
+- Board switching and framework changes never delete another target's build.
+  Check root source bytes and the selected receipt before enabling Skip Compile;
+  bind receipts to host, exact identity, build configuration, configured library
+  bytes (including custom recipes/assets) and firmware bytes. Snapshot inputs
+  before compiling and reject a changed post-build signature.
+  Preserve incremental objects while invalidating the selected receipt before a
+  rebuild. Verify A → B → A, restart, tampering and failure cases with disposable
+  `direct/verify_board_build_cache.py` and Arduino backend fixtures under temp/.
 - For remote/UNC network projects, workspaces are isolated on local fast storage
   (under `remote_workspaces/`) to prevent SMB signature file errors and network latency,
   and are cleanly registered for manual Clean operations.

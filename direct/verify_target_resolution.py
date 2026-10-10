@@ -524,7 +524,11 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     api._scan_includes_for_libs = lambda: []
     api._get_jobs = lambda: 4
     api._unmap_unc_after_build = lambda: None
-    api._save_compile_cache = Mock()
+    from main.core import compiled_cache
+    api._save_compile_cache = Mock(side_effect=lambda board, source_hash, build_metadata=None, build_inputs=None:
+        compiled_cache.write_receipt(api._board_workspace_dir(board), board_key=api._board_cache_key(board),
+                                     board_name=board, source_hash=source_hash, metadata=build_metadata,
+                                     build_inputs=build_inputs))
     api.update_skip_compile_availability = Mock()
     bus = MCUSignals()
     events = []
@@ -596,12 +600,14 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
             print("\n".join(messages[-15:]), flush=True)
             raise AssertionError(f"Application compile failed; see {log}")
         api._save_compile_cache.assert_called_once()
-        assert (workspace / ".pio/build/mcu_env" / artifact).is_file()
+        firmware = api._board_build_dir() / artifact
+        assert firmware.is_file()
+        assert api.check_can_skip_compile(), "Successful real compiler output must be reusable for this board"
         resolved = api._resolve_board_info()
         report_name = "application-build-result.json" if workspace_name == "project" else workspace_name + "-build-result.json"
         (sandbox / report_name).write_text(json.dumps({
             "success": True, "target": resolved["platform"] + ":" + resolved["board"], "framework": resolved["framework"],
-            "source": str(sketch / "probe.ino"), "firmware": str(workspace / ".pio/build/mcu_env" / artifact),
+            "source": str(sketch / "probe.ino"), "firmware": str(firmware),
             "log": str(log), "live_persistence": False, "upload": False,
         }, indent=2) + "\n", encoding="utf-8")
         print(f"Application Compile {display_name} -> convert .ino -> PlatformIO -> {artifact}: OK", flush=True)

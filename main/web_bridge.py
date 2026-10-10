@@ -1169,7 +1169,7 @@ class MCUWebBackendAPI:
         proj_hash = hashlib.sha1(str(target).lower().encode("utf-8")).hexdigest()[:12]
         proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', target.name) or "project"
         core_store = os.environ.get("PLATFORMIO_CORE_DIR")
-        base = Path(core_store) if core_store else SCRIPT_DIR
+        base = Path(core_store).resolve() if core_store else SCRIPT_DIR.resolve()
         return base / "remote_workspaces" / f"{proj_name}_{proj_hash}"
 
     def _effective_cache_root(self, project_dir: Optional[Path] = None) -> Path:
@@ -1318,285 +1318,129 @@ class MCUWebBackendAPI:
             self._unc_mapped_drive = None
 
     def _find_cached_firmware_binary(self, board_name: str | None = None) -> Optional[Path]:
-        """Find the precompiled firmware binary for the SPECIFIED board only.
-
-        Strictly board-scoped — never returns a binary built for a different board.
-        Using another board's binary would invoke the wrong upload tool (e.g. avrdude
-        instead of esptool) and could brick or corrupt the target MCU.
-        """
-        if not self.sketch_dir_path:
-            return None
-        target_board = board_name or self.current_board or getattr(self, "_last_compiled_board", "")
-        if not target_board:
+        """Find firmware only inside the selected native target's workspace."""
+        if not self.sketch_dir_path or not (board_name or self.current_board):
             return None
         try:
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
-            candidate_dirs: list[Path] = []
-
-            # 1. Board-isolated workspace
-            try:
-                candidate_dirs.append(self._board_build_dir(target_board))
-            except Exception:
-                pass
-
-            # 2. Primary flat build directory (<cache_root>/.pio/build/mcu_env)
-            # Only valid if the last build in this workspace was indeed for target_board
-            last_board = getattr(self, "_last_compiled_board", "")
-            if not last_board:
-                cache_file = cache_root / ".mcu_gui_cache.json"
-                if not cache_file.is_file():
-                    cache_file = cache_root / "compile_cache.json"
-                if cache_file.is_file():
-                    try:
-                        cdata = json.loads(cache_file.read_text(encoding="utf-8"))
-                        if isinstance(cdata, dict):
-                            last_board = cdata.get("last_board") or ""
-                    except Exception:
-                        pass
-
-            if not last_board or last_board == target_board:
-                candidate_dirs.append(cache_root / ".pio" / "build" / "mcu_env")
-                try:
-                    candidate_dirs.append(cache_root / ".pio" / "build" / self._pio_env_name(target_board))
-                except Exception:
-                    pass
-
-            for bdir in candidate_dirs:
-                if bdir and bdir.is_dir():
-                    for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf"):
-                        p = bdir / fname
-                        if p.is_file() and p.stat().st_size >= 1024:
-                            return p
-        except Exception:
+            if self._needs_recompile(board_name)[0]:
+                return None
+            build = self._board_build_dir(board_name)
+            for name in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf"):
+                candidate = build / name
+                if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size > 0:
+                    return candidate
+        except OSError:
             pass
         return None
 
     def _restore_project_compile_state(self) -> bool:
-        """Inspect the active project's build cache and restore remembered board and compiled state."""
+        """Restore a remembered target; its own receipt remains authoritative."""
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir():
             return False
         try:
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
-            cache_file = cache_root / ".mcu_gui_cache.json"
-            if not cache_file.is_file():
-                alt_file = cache_root / "compile_cache.json"
-                if alt_file.is_file():
-                    cache_file = alt_file
-
-            restored_board = ""
-            cached_hash = ""
-            if cache_file.is_file():
-                try:
+            remembered = get_project_remembered_board(str(self.sketch_dir_path))
+            target = self.current_board or remembered
+            if not target:
+                cache_file = self._effective_cache_root(self.sketch_dir_path) / ".mcu_gui_cache.json"
+                if cache_file.is_file() and cache_file.stat().st_size <= 1024 * 1024:
                     data = json.loads(cache_file.read_text(encoding="utf-8"))
                     if isinstance(data, dict):
-                        cached_board = data.get("last_board") or ""
-                        cached_hash = data.get("last_source_hash") or ""
-                        if "build_metadata" in data and isinstance(data["build_metadata"], dict):
-                            self._build_metadata_by_board = dict(data["build_metadata"])
-
-                        if cached_board:
-                            restored_board = cached_board
-                        elif "boards" in data and isinstance(data["boards"], dict):
-                            latest_ts = 0.0
-                            for b_key, b_info in data["boards"].items():
-                                if isinstance(b_info, dict):
-                                    ts = float(b_info.get("timestamp", 0.0))
-                                    if ts >= latest_ts and b_info.get("board"):
-                                        latest_ts = ts
-                                        restored_board = str(b_info.get("board"))
-                                        if b_info.get("source_hash"):
-                                            cached_hash = str(b_info.get("source_hash"))
-                except Exception:
-                    pass
-
-            if not restored_board:
-                remembered = get_project_remembered_board(str(self.sketch_dir_path))
-                if remembered and (remembered in SUPPORTED_BOARDS or remembered):
-                    restored_board = remembered
-
-            if restored_board:
-                self._last_compiled_board = restored_board
-                if cached_hash:
-                    self._last_source_hash = str(cached_hash)
-
-                bin_file = self._find_cached_firmware_binary(restored_board)
-                if bin_file is not None and cached_hash:
-                    self._load_compile_cache(restored_board)
-                    return True
-            else:
-                self._last_compiled_board = ""
-                self._last_source_hash = ""
-
-            return False
-        except Exception:
+                        target = str(data.get("last_board") or "")
+            return self._load_compile_cache(target) if target else False
+        except (OSError, ValueError, TypeError):
             return False
 
     def _save_compile_cache(self, board_name: str | None = None, source_hash: str | None = None,
-                            build_metadata: dict | None = None) -> bool:
-        """Persist compile cache metadata to disk in the project build cache root."""
-        if not self.sketch_dir_path:
-            return False
-        target_board = board_name or self.current_board
-        if not target_board:
-            return False
-        shash = source_hash or getattr(self, "_last_source_hash", "") or self._hash_sources(target_board)
-        if not shash:
+                            build_metadata: dict | None = None, build_inputs: dict | None = None) -> bool:
+        """Certify successful output in this native board's private workspace."""
+        from main.core import compiled_cache
+        target = board_name or self.current_board
+        if not self.sketch_dir_path or not target:
             return False
         try:
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
-            cache_file = cache_root / ".mcu_gui_cache.json"
-            data: dict[str, Any] = {}
-            if cache_file.is_file():
+            source_hash = source_hash or self._hash_sources(target)
+            board_key = self._board_cache_key(target)
+            compiled_cache.write_receipt(self._board_workspace_dir(target), board_key=board_key,
+                                         board_name=target, source_hash=source_hash, metadata=build_metadata,
+                                         build_inputs=build_inputs)
+            self._last_source_hash, self._last_compiled_board = source_hash, target
+            metadata = getattr(self, "_build_metadata_by_board", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata[board_key] = dict(build_metadata or {})
+            self._build_metadata_by_board = metadata
+            # The project index remembers targets, while receipts certify reuse.
+            cache_file = self._effective_cache_root(self.sketch_dir_path) / ".mcu_gui_cache.json"
+            data = {}
+            if cache_file.is_file() and cache_file.stat().st_size <= 1024 * 1024:
                 try:
-                    loaded = json.loads(cache_file.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        data = loaded
-                except Exception:
-                    data = {}
-
+                    data = json.loads(cache_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    pass
+            if not isinstance(data, dict):
+                data = {}
             boards = data.get("boards", {})
-            if not isinstance(boards, dict):
-                boards = {}
-
-            board_key = self._board_cache_key(target_board)
-
-            entry = {
-                "board": target_board,
-                "source_hash": shash,
-                "timestamp": time.time(),
-            }
-            boards[board_key] = entry
-            boards[target_board] = entry
-
-            if build_metadata:
-                if not hasattr(self, "_build_metadata_by_board") or not isinstance(self._build_metadata_by_board, dict):
-                    self._build_metadata_by_board = {}
-                self._build_metadata_by_board[board_key] = build_metadata
-                self._build_metadata_by_board[target_board] = build_metadata
-
-            existing_bmeta = data.get("build_metadata", {})
-            if isinstance(existing_bmeta, dict):
-                if not hasattr(self, "_build_metadata_by_board") or not isinstance(self._build_metadata_by_board, dict):
-                    self._build_metadata_by_board = {}
-                for k, v in existing_bmeta.items():
-                    if k not in self._build_metadata_by_board and isinstance(v, dict):
-                        self._build_metadata_by_board[k] = v
-
-            data["schema"] = 1
-            data["last_board"] = target_board
-            data["last_source_hash"] = shash
-            data["boards"] = boards
-            data["build_metadata"] = getattr(self, "_build_metadata_by_board", {})
-            data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-
+            boards = dict(boards) if isinstance(boards, dict) else {}
+            key = f"{compiled_cache.host_namespace()}/{board_key}"
+            boards[key] = {"board": target, "source_hash": source_hash, "timestamp": time.time()}
+            # Bound remembered metadata; never evict any board's actual build folder.
+            while len(boards) > 512:
+                del boards[next(iter(boards))]
+            data = {"schema": 2, "last_board": target, "last_source_hash": source_hash, "boards": boards}
             write_generated_text(cache_file, json.dumps(data, indent=2, sort_keys=True) + "\n")
-
-            # Also persist remembered board for this project directory
-            if self.sketch_dir_path:
-                set_project_remembered_board(str(self.sketch_dir_path), target_board)
-
+            set_project_remembered_board(str(self.sketch_dir_path), target)
             return True
-        except Exception:
+        except Exception as exc:
+            try:
+                compiled_cache.invalidate_receipt(self._board_workspace_dir(target))
+            except (OSError, ValueError):
+                pass
+            self.emit("console:log", {"text": f"Saved-build verification could not be recorded: {exc}",
+                                      "tag": "warning", "newline": True})
             return False
 
     def _load_compile_cache(self, board_name: str | None = None) -> bool:
-        """Load compile cache metadata from disk for the specified or current board."""
-        if not self.sketch_dir_path:
-            return False
-        target_board = board_name or self.current_board
-        if not target_board:
+        """Restore metadata for this exact native target, without flat-cache fallback."""
+        from main.core import compiled_cache
+        self._last_source_hash, self._last_compiled_board = "", ""
+        target = board_name or self.current_board
+        if not self.sketch_dir_path or not target:
             return False
         try:
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
-            cache_file = cache_root / ".mcu_gui_cache.json"
-            if not cache_file.is_file():
-                alt_file = cache_root / "compile_cache.json"
-                if alt_file.is_file():
-                    cache_file = alt_file
-                else:
-                    return False
-
-            data = json.loads(cache_file.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
+            board_key = self._board_cache_key(target)
+            receipt = compiled_cache.read_receipt(self._board_workspace_dir(target))
+            if not receipt or receipt.get("board_key") != board_key or receipt.get("host") != compiled_cache.host_namespace():
                 return False
-
-            if "build_metadata" in data and isinstance(data["build_metadata"], dict):
-                self._build_metadata_by_board = dict(data["build_metadata"])
-
-            board_key = self._board_cache_key(target_board)
-            boards = data.get("boards", {})
-            entry = None
-            if isinstance(boards, dict):
-                entry = boards.get(board_key) or boards.get(target_board)
-
-            if entry and isinstance(entry, dict) and entry.get("source_hash"):
-                self._last_source_hash = str(entry.get("source_hash", ""))
-                self._last_compiled_board = str(entry.get("board", target_board))
-                return True
-
-            if data.get("last_board") == target_board and data.get("last_source_hash"):
-                self._last_source_hash = str(data.get("last_source_hash", ""))
-                self._last_compiled_board = str(data.get("last_board", ""))
-                return True
-
-            return False
-        except Exception:
+            self._last_source_hash = str(receipt.get("source_hash") or "")
+            self._last_compiled_board = target
+            metadata = getattr(self, "_build_metadata_by_board", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata[board_key] = dict(receipt.get("metadata") or {})
+            self._build_metadata_by_board = metadata
+            return bool(self._last_source_hash)
+        except (OSError, ValueError, TypeError):
             return False
 
     def _needs_recompile(self, board_name: str | None = None) -> tuple[bool, str]:
-        """Check whether the active sketch needs recompilation for the target board.
-        Matches LATEST-WORKING-MCU-FLASHER contract:
-        Returns (recompile_needed: bool, reason: str).
-        """
-        target_board = board_name or self.current_board
-        if not target_board:
+        """Reuse only a certified build for the current source bytes and target."""
+        target = board_name or self.current_board
+        if not target:
             return True, "no board selected"
         if not self.sketch_dir_path:
             return True, "no sketch folder loaded"
-
         try:
-            # 1. Check if firmware binary exists for THIS board specifically
-            if not self._has_prior_build(target_board):
-                return True, "no firmware binary found for this board (build folder may have been cleaned)"
-
-            # 2. Retrieve per-board cached hash — reject cross-board hits explicitly
-            board_key = self._board_cache_key(target_board)
-            cache_file = self._effective_cache_root(self.sketch_dir_path) / ".mcu_gui_cache.json"
-            if not cache_file.is_file():
-                alt = self._effective_cache_root(self.sketch_dir_path) / "compile_cache.json"
-                if alt.is_file():
-                    cache_file = alt
-
-            cached_hash = ""
-            if cache_file.is_file():
-                try:
-                    data = json.loads(cache_file.read_text(encoding="utf-8"))
-                    boards = data.get("boards", {})
-                    entry = boards.get(board_key) or boards.get(target_board)
-                    if entry and isinstance(entry, dict):
-                        cached_hash = str(entry.get("source_hash", ""))
-                    elif not cached_hash:
-                        # Legacy flat format — only accept if board matches
-                        if data.get("last_board") == target_board:
-                            cached_hash = str(data.get("last_source_hash", ""))
-                except Exception:
-                    pass
-
-            if not cached_hash:
-                return True, "no previous compile cache for this board"
-
-            # 3. Check for any dirty/unsaved buffers in Monaco
-            if any(self.modified_files.values()):
+            if self._resolve_board_info(target).get("backend") == "arduino-cli":
+                from main.core.arduino_backend import cached_build_status
+                return cached_build_status(self, target)
+            if any(getattr(self, "modified_files", {}).values()):
                 return True, "unsaved modifications in editor"
-
-            # 4. Hash actual source files on disk
-            current_hash = self._hash_sources(target_board)
-            if current_hash != cached_hash:
-                return True, "source files have changed since this board was last compiled"
-
-            return False, "sources unchanged"
-        except Exception as e:
-            return True, f"cache check error: {e}"
+            from main.core import compiled_cache
+            valid, reason = compiled_cache.validate_receipt(self._board_workspace_dir(target),
+                board_key=self._board_cache_key(target), source_hash=self._hash_sources(target))
+            return not valid, reason
+        except Exception as exc:
+            return True, f"cache check error: {exc}"
 
     def check_can_skip_compile(self, board_name: str | None = None) -> bool:
         """Check whether a precompiled firmware binary exists and source code has not changed."""
@@ -1643,23 +1487,20 @@ class MCUWebBackendAPI:
                                       "tag": "warning", "newline": True})
 
     def check_can_skip_compile_for_upload(self, board_name: str | None = None) -> bool:
-        """Synchronously check whether upload can skip compilation and flash directly.
+        """Check this board's saved build on the upload worker before reuse.
 
-        Auto-skips recompile whenever:
-          • A prior firmware binary exists for this board, AND
-          • Source files have not changed since the last compile.
-
-        A checked Skip Compile option never bypasses source/target validation.
-        Missing or changed fingerprints require a fresh build.
+        The user's Skip Compile choice remains authoritative. A checked option
+        still requires unchanged source/target/configuration and firmware bytes.
         """
         target_board = board_name or self.current_board
         if not target_board or not self.sketch_dir_path:
             return False
 
         try:
-            # If no firmware binary at all → must compile
-            if not self._has_prior_build(target_board):
+            if self._needs_recompile(target_board)[0]:
                 return False
+            if self._resolve_board_info(target_board).get("backend") == "arduino-cli":
+                return True
 
             # For ESP platforms, also verify the fast-upload binaries exist
             binfo = self._resolve_board_info(target_board)
@@ -1672,12 +1513,7 @@ class MCUWebBackendAPI:
                 if fast_bins is None:
                     return False
 
-            # Sources unchanged → safe to skip
-            needs_recomp, _ = self._needs_recompile(target_board)
-            if not needs_recomp:
-                return True
-
-            return False
+            return True
         except Exception:
             return False
 
@@ -1686,6 +1522,8 @@ class MCUWebBackendAPI:
         Ensures the project remains 100% recompilable and rebuildable.
         """
         try:
+            from main.core.compiled_cache import invalidate_receipt
+            invalidate_receipt(cache_root)
             env_dir = cache_root / ".pio" / "build" / "mcu_env"
             if env_dir.is_dir():
                 for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf", "firmware.map"):
@@ -1711,10 +1549,12 @@ class MCUWebBackendAPI:
     def _clean_board_cache(self, board_name: str | None = None) -> bool:
         """Wipe the board build directory and SCons signature state to recover from cache corruption."""
         try:
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
+            cache_root = self._board_workspace_dir(board_name)
+            from main.core.compiled_cache import invalidate_receipt
+            invalidate_receipt(cache_root)
             build_dir = cache_root / ".pio" / "build"
-            if build_dir.exists():
-                robust_rmtree(build_dir)
+            if build_dir.exists() and not robust_rmtree(build_dir):
+                return False
             for sconsign in cache_root.glob(".sconsign*"):
                 try:
                     ensure_file_writable(sconsign)
@@ -1783,10 +1623,8 @@ class MCUWebBackendAPI:
         return int(base * multipliers.get(match.group(2) or "", 1))
 
     def _platformio_ini_path(self, project_dir: Path | None = None, board_name: str | None = None) -> Path:
-        """Return the private PlatformIO configuration for this project."""
-        pdir = Path(project_dir or self.sketch_dir_path) if (project_dir or self.sketch_dir_path) else Path(".")
-        cache_root = self._effective_cache_root(pdir)
-        return cache_root / "platformio.ini"
+        """Return the generated configuration for this native target's workspace."""
+        return self._board_workspace_dir(board_name, project_dir) / "platformio.ini"
 
     def _pio_env_name(self, board_name: str | None = None) -> str:
         """Stable PlatformIO [env:...] name / .pio/build subfolder for a given board."""
@@ -1796,63 +1634,26 @@ class MCUWebBackendAPI:
         digest = self._board_cache_key(name).rsplit("_", 1)[-1]
         return f"mcu_{digest}"
 
-    def _board_build_dir(self, board_name: str | None = None) -> Path:
-        """Return the isolated .pio build directory for the given board.
-
-        Each board compiles into its own workspace::
-
-            <cache_root>/boards/<board_key>/build/<env_name>/
-
-        This is the canonical location used for binary lookup, upload, and
-        cache validation.  Never use a shared or cross-board path.
-        """
-        if not self.sketch_dir_path:
+    def _board_workspace_dir(self, board_name: str | None = None, project_dir: Path | None = None) -> Path:
+        """Keep source staging, config, objects and images per native exact target."""
+        from main.core.compiled_cache import host_namespace
+        project = project_dir or self.sketch_dir_path
+        if not project:
             raise RuntimeError("No sketch loaded")
-        target = board_name or self.current_board or ""
-        cache_root = self._effective_cache_root(self.sketch_dir_path)
-        return (
-            cache_root / "boards" / self._board_cache_key(target)
-            / ".pio" / "build" / self._pio_env_name(target)
-        )
+        target = board_name or self.current_board
+        if not target:
+            raise RuntimeError("No board selected")
+        return self._effective_cache_root(project) / "boards" / host_namespace() / self._board_cache_key(target)
+
+    def _board_build_dir(self, board_name: str | None = None) -> Path:
+        """Canonical PlatformIO output for this board, framework and native host."""
+        return self._board_workspace_dir(board_name) / ".pio" / "build" / "mcu_env"
 
     def _has_prior_build(self, board_name: str | None = None) -> bool:
-        """Return True only if a compiled firmware binary exists for the target board.
-
-        Checks the actual flat build output path that _compile_worker writes to:
-            <cache_root>/.pio/build/mcu_env/firmware.*
-
-        Also falls back to the board-isolated workspace path for legacy cache
-        compatibility.  Cross-board binaries are never accepted — using the wrong
-        board's firmware would invoke the wrong upload tool and could brick the MCU.
-        """
+        """Require output in this exact target's folder; never search shared output."""
         try:
-            if not self.sketch_dir_path:
-                return False
-            target = board_name or self.current_board or ""
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
-
-            # Primary location: where _compile_worker actually writes via platformio.ini [env:mcu_env]
-            primary_build = cache_root / ".pio" / "build" / "mcu_env"
-            if primary_build.is_dir() and any(
-                (primary_build / fname).is_file()
-                for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf")
-            ):
-                return True
-
-            # Fallback: board-isolated workspace (used by direct esptool upload path)
-            if target:
-                try:
-                    isolated_dir = self._board_build_dir(target)
-                    if isolated_dir.is_dir() and any(
-                        (isolated_dir / fname).is_file()
-                        for fname in ("firmware.bin", "firmware.hex", "firmware.uf2", "firmware.elf")
-                    ):
-                        return True
-                except Exception:
-                    pass
-
-            return False
-        except Exception:
+            return self._find_cached_firmware_binary(board_name) is not None
+        except (OSError, RuntimeError):
             return False
 
     def _project_option(self, name: str) -> str | None:
@@ -1929,32 +1730,19 @@ class MCUWebBackendAPI:
         return result
 
     def _cached_build_metadata(self, fast_bins: dict) -> dict:
-        board_name = getattr(self, "current_board", "") or ""
-        board_key = self._board_cache_key(board_name)
-        metadata = getattr(self, "_build_metadata_by_board", {}) or {}
-        entry = dict(
-            metadata.get(board_key) or metadata.get(board_name) or {}
-        )
-        if not entry:
-            return {}
-        if entry.get("source_hash"):
-            try:
-                if entry["source_hash"] != self._hash_sources():
-                    return {}
-            except Exception:
-                return {}
+        """Show metadata only from the selected target's verified build receipt."""
+        from main.core import compiled_cache
+        target = self.current_board
         try:
-            fw_path = fast_bins.get("firmware")
-            if fw_path and Path(fw_path).is_file():
-                stat = Path(fw_path).stat()
-                if entry.get("firmware_size") is not None and int(entry["firmware_size"]) != stat.st_size:
-                    return {}
-                if (entry.get("firmware_mtime_ns") is not None
-                        and int(entry["firmware_mtime_ns"]) != stat.st_mtime_ns):
-                    return {}
-        except OSError:
+            workspace = self._board_workspace_dir(target)
+            valid, _ = compiled_cache.validate_receipt(workspace, board_key=self._board_cache_key(target),
+                                                      source_hash=self._hash_sources(target))
+            if not valid or Path(fast_bins.get("firmware", "")).parent != self._board_build_dir(target):
+                return {}
+            receipt = compiled_cache.read_receipt(workspace)
+            return dict(receipt.get("metadata") or {}) if receipt else {}
+        except (OSError, ValueError, TypeError):
             return {}
-        return entry
 
     def _partition_upload_capacity(self, fast_bins: dict,
                                    default_size: int | None,
@@ -4097,7 +3885,10 @@ class MCUWebBackendAPI:
             self.emit("window:closable", {"closable": True})
 
         start_time = time.time()
-        self._resolve_board_info(self.current_board)  # primes RAM cache
+        build_board = self.current_board
+        build_key = self._board_cache_key(build_board)
+        build_source_hash = self._hash_sources(build_board)
+        self._resolve_board_info(build_board)  # primes RAM cache
         compiler_name = "PlatformIO"
         core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
 
@@ -4126,7 +3917,7 @@ class MCUWebBackendAPI:
             _share = _unc_share_root(self.sketch_dir_path) or str(self.sketch_dir_path)
             self.emit("console:log", {"text": f"  🌐 Source  : Network share ({_share})", "tag": "info", "newline": True})
 
-        cache_root = self._effective_cache_root(self.sketch_dir_path)
+        cache_root = self._board_workspace_dir(build_board)
         if is_remote:
             self.emit("console:log", {"text": f"  🌐 Workspace: Local fast storage ({cache_root.name})", "tag": "info", "newline": True})
 
@@ -4169,6 +3960,12 @@ class MCUWebBackendAPI:
             if not board_toolchain_ready(core_dir, platform_name, board_id, framework):
                 from src.modules.offline_runtime import bootstrap_instruction
                 raise RuntimeError(bootstrap_instruction(f"Board pack unavailable: {platform_name}:{board_id} ({framework})"))
+
+            # A started rebuild cannot reuse its earlier success certificate.
+            # Keep incremental objects and every other board's workspace.
+            from main.core.compiled_cache import (file_digest, input_signature, invalidate_receipt,
+                                                  read_input_signature, write_input_signature)
+            invalidate_receipt(cache_root)
 
             # Pre-create build directories to avoid SCons dbm/dblite FileNotFoundError
             (cache_root / ".pio" / "build" / "mcu_env").mkdir(parents=True, exist_ok=True)
@@ -4261,6 +4058,19 @@ class MCUWebBackendAPI:
                         dst_path.unlink()
                     except OSError:
                         pass
+
+            if self._hash_sources(build_board) != build_source_hash:
+                raise RuntimeError("Sketch source bytes changed while preparing the build. Compile again.")
+            staged_hashes = {path.name: file_digest(path)
+                             for path in src_dir.iterdir() if path.is_file()}
+            build_inputs = input_signature(cache_root)
+            if read_input_signature(cache_root) != build_inputs:
+                # External library edits can retain coarse timestamps. Retire
+                # only this target's objects instead of trusting SCons times.
+                if not self._clean_board_cache(build_board):
+                    raise RuntimeError("The selected board's changed build inputs could not be cleared")
+                (cache_root / ".pio" / "build" / "mcu_env").mkdir(parents=True, exist_ok=True)
+                write_input_signature(cache_root, build_inputs)
 
             # Dynamically determine optimal compiler workers using real-time available RAM
             jobs = self._get_jobs()
@@ -4800,8 +4610,14 @@ class MCUWebBackendAPI:
                     _tool_dl_total[0] += time.time() - _tool_dl_start[0]
                     _tool_dl_start[0] = None
 
-                self._last_source_hash = self._hash_sources()
-                self._last_compiled_board = self.current_board
+                if (self.current_board != build_board or self._board_cache_key(build_board) != build_key
+                        or self._hash_sources(build_board) != build_source_hash
+                        or set(staged_hashes) != {path.name for path in src_dir.iterdir() if path.is_file()}
+                        or any(file_digest(src_dir / name) != digest
+                               for name, digest in staged_hashes.items())):
+                    raise RuntimeError("The sketch or target changed during compilation. Compile again before uploading.")
+                self._last_source_hash = build_source_hash
+                self._last_compiled_board = build_board
 
                 captured_meta: dict[str, Any] = {}
                 for raw in output_lines:
@@ -4814,14 +4630,10 @@ class MCUWebBackendAPI:
                     elif low.startswith("flash:") and "flash" not in captured_meta:
                         captured_meta["flash"] = line
                 if captured_meta:
-                    captured_meta["env_name"] = self._pio_env_name(self.current_board)
+                    captured_meta["env_name"] = "mcu_env"
                     captured_meta["source_hash"] = self._last_source_hash
                     try:
-                        board_build_dir = cache_root / ".pio" / "build" / "mcu_env"
-                        if not board_build_dir.is_dir():
-                            board_build_dir = cache_root / ".pio" / "build" / self._pio_env_name(self.current_board)
-                        if not board_build_dir.is_dir():
-                            board_build_dir = self._effective_cache_root(self.sketch_dir_path) / "boards" / self._board_cache_key(self.current_board) / ".pio" / "build" / self._pio_env_name(self.current_board)
+                        board_build_dir = self._board_build_dir(build_board)
                         firmware = board_build_dir / "firmware.bin"
                         if not firmware.exists():
                             firmware = next((board_build_dir / filename for filename in ("firmware.hex", "firmware.uf2", "firmware.elf")
@@ -4833,7 +4645,9 @@ class MCUWebBackendAPI:
                     except OSError:
                         pass
 
-                self._save_compile_cache(self.current_board, self._last_source_hash, build_metadata=captured_meta or None)
+                if not self._save_compile_cache(build_board, build_source_hash, build_metadata=captured_meta or None,
+                                                build_inputs=build_inputs):
+                    raise RuntimeError("The compiled build could not be verified and saved for this board.")
                 self.update_skip_compile_availability()
                 if not is_upload:
                     self.emit("console:progress", {"action": "Completed"})
@@ -4845,9 +4659,7 @@ class MCUWebBackendAPI:
 
                 # Artifact confirmation banner
                 try:
-                    target_env_dir = cache_root / ".pio" / "build" / "mcu_env"
-                    if not target_env_dir.is_dir():
-                        target_env_dir = cache_root / ".pio" / "build" / self._pio_env_name(self.current_board)
+                    target_env_dir = self._board_build_dir(build_board)
                     fw_file = target_env_dir / "firmware.bin"
                     if not fw_file.exists():
                         fw_file = next((target_env_dir / filename for filename in ("firmware.hex", "firmware.uf2", "firmware.elf")
@@ -5693,7 +5505,7 @@ class MCUWebBackendAPI:
             if cached_fw and cached_fw.is_file():
                 build_dir = cached_fw.parent
             else:
-                build_dir = self._effective_cache_root(project_dir) / ".pio" / "build" / env_name
+                return None
         else:
             build_dir = Path(project_dir) / ".pio" / "build" / env_name
 
@@ -5746,6 +5558,8 @@ class MCUWebBackendAPI:
         bootloader_bin = build_dir / "bootloader.bin"
         partitions_bin = build_dir / "partitions.bin"
         if not (bootloader_bin.exists() and partitions_bin.exists()):
+            if project_dir == getattr(self, "sketch_dir_path", None):
+                return None
             alt_root = Path(project_dir) / ".pio" / "build" / env_name
             if not bootloader_bin.exists() and (alt_root / "bootloader.bin").exists():
                 bootloader_bin = alt_root / "bootloader.bin"
@@ -6754,8 +6568,11 @@ class MCUWebBackendAPI:
             command = list(find_pio_executable() or [])
             if not command:
                 raise RuntimeError("PlatformIO is unavailable. Repair the application runtime.")
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
+            cache_root = self._board_workspace_dir()
             self._generate_platformio_ini(cache_root)
+            needs_build, reason = self._needs_recompile()
+            if needs_build:
+                raise RuntimeError(f"Saved build is unavailable for upload: {reason}. Compile again.")
             if monitor_port:
                 self._stop_serial_monitor()
                 monitor_paused = True
@@ -6930,7 +6747,7 @@ class MCUWebBackendAPI:
                 str(binfo.get("board", "")),
             ) if part
         ) or str(name or "unknown_board")
-        safe_prefix = re.sub(r"[^\w\-.]+", "_", readable).strip("_")
+        safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", readable).strip("_.")[:32] or "board"
         key = f"{safe_prefix}_{digest}"
         return key
 
@@ -7564,11 +7381,6 @@ class MCUWebBackendAPI:
         if is_unc_or_network_path(self.sketch_dir_path):
             self._map_unc_for_build(self.sketch_dir_path)
 
-        cache_root = self._effective_cache_root(self.sketch_dir_path)
-        current_hash = self._hash_sources()
-        bin_file = self._find_cached_firmware_binary(self.current_board)
-        cached_binary_exists = (bin_file is not None)
-
         if not getattr(self, "_last_source_hash", "") or self.current_board != getattr(self, "_last_compiled_board", ""):
             self._load_compile_cache(self.current_board)
 
@@ -7591,10 +7403,7 @@ class MCUWebBackendAPI:
         need_compile = True
         skip_comp = bool(getattr(self, "_active_skip_compile", getattr(self, "skip_compile", False)))
         skip_reason_msg: str | None = None  # message to show after console clear
-        bin_file = self._find_cached_firmware_binary(self.current_board)
-        has_prior_build = (bin_file is not None) or self._has_prior_build(self.current_board)
-
-        if skip_comp and has_prior_build:
+        if skip_comp:
             recompile_needed, reason = self._needs_recompile(self.current_board)
             if not recompile_needed:
                 # Reuse only when the user requested it and identity is valid.
@@ -7783,6 +7592,9 @@ class MCUWebBackendAPI:
         rc: int | None = None
         connection_guard = None
         try:
+            needs_build, reason = self._needs_recompile(board_name)
+            if needs_build:
+                raise RuntimeError(f"Saved build is unavailable for upload: {reason}. Compile again.")
             self._check_write_connection(port, binfo)
             # ── Fast direct ESP upload check ──────────────────────────────
             fast_bins = None
@@ -7908,7 +7720,7 @@ class MCUWebBackendAPI:
             if not pio_cmd:
                 self.emit("console:log", {"text": "✖ PlatformIO not available for upload.", "tag": "error", "newline": True})
                 return
-            cache_root = self._effective_cache_root(self.sketch_dir_path)
+            cache_root = self._board_workspace_dir()
             # Ensure platformio.ini and build directories exist before invoking PlatformIO!
             if not (cache_root / "platformio.ini").is_file():
                 self._generate_platformio_ini(cache_root)

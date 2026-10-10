@@ -166,6 +166,7 @@ class UploadWorkerChecks(unittest.TestCase):
         b._last_source_hash = "fixture-source-identity"
         b._serial_thread = None
         b._hash_sources = Mock(return_value="fixture-source-identity")
+        b._board_workspace_dir = Mock(return_value=self.root)
         firmware = self.root / "firmware.bin"
         firmware.write_bytes(b"isolated firmware fixture")
         b._find_cached_firmware_binary = Mock(return_value=firmware)
@@ -188,6 +189,7 @@ class UploadWorkerChecks(unittest.TestCase):
         cache = self.root / "fixture-cache"
         cache.mkdir(exist_ok=True)
         (cache / "platformio.ini").write_text("; isolated upload fixture\n", encoding="utf-8")
+        b._board_workspace_dir = Mock(return_value=cache)
         b._generate_platformio_ini = Mock(side_effect=AssertionError("No metadata generation"))
         bins = dict(self.bins, platform="espressif32", upload_speed=b.upload_speed,
                     bootloader_addr="0x0", board_name=b.current_board)

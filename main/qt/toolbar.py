@@ -1413,7 +1413,7 @@ class ControlsBar(QWidget):
 
         self.cb_skip_compile = QCheckBox("Skip Compile")
         self.cb_skip_compile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.cb_skip_compile.setToolTip("Reuse firmware only when sources and the selected target still match the last build")
+        self.cb_skip_compile.setToolTip("Reuse this board's saved build when its source files and target settings are unchanged")
         self._skip_compile_requested = bool(load_gui_config().get("skip_compile", True))
         self.cb_skip_compile.setEnabled(False)
         self.cb_skip_compile.stateChanged.connect(self._on_skip_compile_changed)

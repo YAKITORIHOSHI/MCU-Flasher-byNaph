@@ -334,6 +334,7 @@ class BoardFamilyChecks(unittest.TestCase):
                 self.api._unmap_unc_after_build = Mock()
                 self.api._get_jobs = lambda: 2
                 self.api._compile_worker = Mock(return_value=True)
+                self.api._needs_recompile = Mock(return_value=(False, "isolated protocol fixture"))
                 process = SimpleNamespace(stdout=["Simulated successful write"], wait=lambda: 0, poll=lambda: 0)
                 with patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                         patch.object(web_bridge, "find_pio_executable", return_value=["SIMULATED_PIO"]), \
@@ -371,6 +372,7 @@ class BoardFamilyChecks(unittest.TestCase):
             self.info = after
             return True
         self.api._compile_worker = compile_target
+        self.api._needs_recompile = Mock(return_value=(False, "isolated protocol fixture"))
         process = SimpleNamespace(stdout=[], wait=lambda: 0, poll=lambda: 0)
         with patch.object(web_bridge, "port_occupied_owner", return_value=None), \
                 patch.object(web_bridge, "find_pio_executable", return_value=["SIMULATED_PIO"]), \
@@ -427,6 +429,7 @@ class BoardFamilyChecks(unittest.TestCase):
         self.api._block_if_pending_ai_edits = Mock(return_value=False)
         self.api.check_can_skip_compile_for_upload = Mock(return_value=False)
         self.api._compile_worker = Mock(return_value=True)
+        self.api._needs_recompile = Mock(return_value=(False, "isolated protocol fixture"))
         self.api._get_jobs = lambda: 2
         self.api._unmap_unc_after_build = Mock()
         self.api.current_port = ""
@@ -478,9 +481,14 @@ class BoardFamilyChecks(unittest.TestCase):
     def test_uf2_cache_is_recognized(self):
         self.api._resolve_board_info = lambda name=None: info_for(TARGETS[5])
         self.api._last_compiled_board = self.api.current_board
-        build = self.root / ".pio/build/mcu_env"
+        workspace = self.api._board_workspace_dir()
+        build = self.api._board_build_dir()
         build.mkdir(parents=True)
         (build / "firmware.uf2").write_bytes(b"fixture" * 512)
+        self.api._generate_platformio_ini(workspace)
+        from main.core import compiled_cache
+        compiled_cache.write_receipt(workspace, board_key=self.api._board_cache_key(),
+                                     board_name=self.api.current_board, source_hash=self.api._hash_sources())
         self.assertEqual(self.api._find_cached_firmware_binary().name, "firmware.uf2")
         self.assertTrue(self.api._has_prior_build())
 

@@ -846,7 +846,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
                    "src/modules/arduino_cli_support.py", "src/modules/arduino_board_selection.py",
                    "src/modules/bootstrap_board_coverage.py",
                    "src/modules/bootstrap_arduino_sources.py",
-                   "main/core/arduino_backend.py", "main/core/arduino_inputs.py"])
+                   "main/core/arduino_backend.py", "main/core/arduino_inputs.py",
+                   "main/core/compiled_cache.py"])
     guards.extend(native_guards)
     payload = {"schema": SCHEMA, "plan": plan_hash(plan), "host": sys.platform,
                "default_plan": plan_hash(load_plan()), "prepared_plan": plan,

@@ -936,7 +936,13 @@ MCU Flasher by Naph/
   - Compiles the sketch using the PlatformIO SCons engine or Arduino CLI.
   - *Non-Blocking Execution*: The Serial Monitor remains active, streaming, and fully interactive during compilation!
   - Build and upload output is drained off the UI thread. Quiet dependency scans or bootloader handoffs report elapsed silence honestly, and a silent build can be stopped without waiting for another output line.
-  - Caches intermediate objects in `.mcu_flasher_build_cache/boards/<board-key>/` for near-instant incremental rebuilds.
+  - Keeps each board/framework's generated configuration, staged sources,
+    objects and firmware in
+    `.mcu_flasher_build_cache/boards/<host-architecture>/<board-key>/`.
+    Windows and Ubuntu use separate native folders; toolchains stay shared
+    within their own host store. Switching A → B → A or reopening the project
+    retains each successful build and enables **Skip Compile** when it matches.
+    Arduino CLI opt-in boards use their own subfolder within the same layout.
   - **Offline Toolchain Preparation**: Add a board platform or library to `direct/offline-packages.json`, then run bootstrap while online. The main app blocks registry/VCS package installation and uses the prepared local store.
   - **Resource-Aware Throttling**: Checks physical RAM and logical CPU cores via `psutil`. Background subprocesses are scheduled with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`), ensuring the UI, Monaco editor, and serial monitor stay fully responsive even during heavy compiles.
 - **Upload Firmware (`⚡ Upload`)**:
@@ -952,8 +958,14 @@ MCU Flasher by Naph/
     uploader telemetry after launch is a terminal, potentially partial-write
     state, not permission to retry or claim that firmware was untouched.
   - Skip Compile preserves your choice: an unchecked box compiles even when a
-    matching firmware cache exists. Reuse still requires unchanged source and
-    exact-target fingerprints.
+    matching firmware cache exists. Reuse requires unchanged source bytes,
+    exact target/framework, build configuration, configured library files and
+    verified firmware images. Library collections are checked conservatively,
+    so changing an unused library can also require compilation.
+    Unsaved edits, failed/interrupted builds, changed or missing images require
+    compilation. Legacy shared output is preserved but needs one new compile
+    per board before it can be reused in the new layout. Switching boards does
+    not clear earlier builds; explicit Clean removes the saved native builds.
 - **Framework compatibility**: Board selection preserves a valid saved framework, otherwise choosing Arduino when available or the sole supported native framework. Multiple native frameworks require an explicit saved choice in the `board_frameworks` configuration; no arbitrary framework is selected. Unavailable frameworks remain excluded. `.ino` files require Arduino; native C/C++ projects can use other declared frameworks. First-use preparation resolves their own packages rather than compiling an Arduino placeholder. Framework and board-definition changes use distinct firmware/cache identities. BIN, HEX, UF2 and ELF artifacts are recognized. Exact PlatformIO definitions, compatible source/libraries, packages and hardware drivers remain required; arbitrary unsupported boards are not inferred from their family name.
 - **Stop Operation (`🛑 Stop`)**: Cancels an active compilation, upload, or resets a hanging serial session.
 
