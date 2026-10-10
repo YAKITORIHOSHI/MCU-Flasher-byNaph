@@ -520,7 +520,7 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     api._board_frameworks = {}
     api.is_busy = False
     api.active_operation = api._current_op_phase = api._active_process = None
-    api._block_if_pending_ai_edits = lambda: False
+    api._block_if_pending_ai_edits = lambda *_args, **_kwargs: False
     api._effective_cache_root = lambda _path: workspace
     api._scan_includes_for_libs = lambda: []
     api._get_jobs = lambda: 4
