@@ -57,6 +57,43 @@ class BuilderOutputChecks(unittest.TestCase):
         self.assertTrue(any("display shortened" in text for text in records))
         self.assertFalse(any(text.startswith("Builder ready") for text in records))
 
+    def test_known_uf2_notice_changes_display_only_and_keeps_full_builder_log(self):
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        note = "UF2 bootloader image already included."
+        records = []
+        code = ("import sys,time; "
+                f"sys.stdout.write({warning[:23]!r}); sys.stdout.flush(); time.sleep(0.05); "
+                f"sys.stdout.write({(warning[23:] + chr(10))!r}); sys.stdout.flush()")
+        self.run_child(code, records.append)
+        self.assertEqual(records[0], note)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), warning + "\n")
+        self.assertTrue(records[-1].startswith("Builder ready:"))
+
+    def test_known_uf2_notice_never_turns_failed_builder_into_success(self):
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        records = []
+        code = f"import sys; print({warning!r}); print('Error: missing flash image'); sys.exit(7)"
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_child(code, records.append)
+        self.assertIn("exit code 7", str(caught.exception))
+        self.assertIn(warning, str(caught.exception))
+        self.assertIn("Error: missing flash image", str(caught.exception))
+        self.assertEqual(records, ["UF2 bootloader image already included.", "Error: missing flash image"])
+        self.assertEqual(self.output.read_text(encoding="utf-8"), warning + "\nError: missing flash image\n")
+
+    def test_uf2_related_diagnostics_remain_original_builder_output(self):
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        lines = (
+            "Warning! The UF2 bootloader image is missing!",
+            warning + " Error: missing bootloader file",
+            "src/main.cpp:5: warning: " + warning,
+            '    5 | const char *message = "' + warning + '";',
+        )
+        records = []
+        self.run_child("\n".join(f"print({line!r})" for line in lines), records.append)
+        self.assertEqual(records[:-1], [line.strip() for line in lines])
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "\n".join(lines) + "\n")
+
     def test_split_unicode_and_percentages_keep_live_record_boundaries(self):
         records = []
         code = ("import sys,time; b=sys.stdout.buffer; "

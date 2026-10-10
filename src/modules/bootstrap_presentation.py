@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import asdict, dataclass
 import re
 
+from src.modules.bootstrap_output import known_builder_notice
+
 
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _PERCENT = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*%")
@@ -174,7 +176,8 @@ class BootstrapPresentation:
 
     ``summaries`` returns only newly accepted events. ``events`` is the retained
     summary history. Feed original log text to technical details separately.
-    Success deduplication lasts one top-level stage; warnings/errors always pass.
+    Successes and known informational notices are deduplicated for one stage;
+    warnings/errors always pass.
     Snapshots contain only this display state and can transfer across Tk/Qt.
     """
 
@@ -204,7 +207,7 @@ class BootstrapPresentation:
         text = text.strip()[:2000]
         if not text:
             return
-        if tag == "ok":
+        if tag == "ok" or (tag == "normal" and known_builder_notice(text)):
             key = " ".join(text.casefold().split())
             if key in self._successes:
                 return
@@ -235,6 +238,11 @@ class BootstrapPresentation:
                 if not title or "MCU Flasher by Naph" in title:
                     continue
                 self._append(title, tag, accepted)
+                continue
+
+            notice = known_builder_notice(_label(raw, 8192))
+            if notice and tag != "fail" and not self._failure_remaining:
+                self._append(notice, "normal", accepted)
                 continue
 
             # Package-prefixed pip events still have their recognizable body.

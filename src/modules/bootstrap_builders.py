@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from src.modules.bootstrap_output import output_chunks
+from src.modules.bootstrap_output import known_builder_notice, output_chunks
 
 QUEUE_CHUNKS = 32
 READ_CHARS = 4096
@@ -51,8 +51,9 @@ class _DisplayRecords:
             if self.shortened:
                 suffix = " … [display shortened; full output in builder log]"
                 text = text[:DISPLAY_CHARS - len(suffix)] + suffix
-            self.log(text)
-            if not progress:
+            notice = known_builder_notice(text)
+            self.log(notice or text)
+            if not progress and not notice:
                 self.progress = bool(re.fullmatch(r"(?:Downloading|Unpacking)(?:\.{3})?", text, re.I))
         self.shortened = False
 

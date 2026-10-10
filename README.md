@@ -242,6 +242,13 @@ preparation children before releasing package storage, and cannot mark setup
 ready or open the workspace afterward. Delayed termination keeps Bootstrap
 alive until its writer processes have exited.
 
+During Bootstrap, the ESP32 builder's standalone message
+`Warning! An extra UF2 bootloader image is already added!` means the image is
+already included and the builder skips adding it again. Setup displays
+`UF2 bootloader image already included.` as an informational note, once per
+stage in the summary. The original message remains in the full builder log.
+Missing-image warnings, other diagnostics and failed builds retain their meaning.
+
 Maintenance utilities in [cleaner/](cleaner/README.md) and `DANGER-ZONE/` preview
 their targets by default. Windows and Ubuntu use separate resource plans;
 applying a plan requires an explicit flag and confirmation. Close running app,

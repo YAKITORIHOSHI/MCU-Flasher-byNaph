@@ -172,6 +172,14 @@ For explicitly requested assistant delegation, use the local
 - Reviewed AVR and exact ESP8266 Arduino checks share one bounded worker pool
   after installers complete. Source/package signatures must match; unknown/native
   builders remain serial. Failure cancels siblings and leaves readiness uncertified.
+- Bootstrap recognizes only the exact standalone upstream UF2 already-added
+  message as `UF2 bootloader image already included.`. Present it as a normal
+  informational summary once per stage, preserving active package progress and
+  bounded snapshot deduplication. Normalize builder display records for Windows
+  and native Ubuntu without editing installed tools or host resources. Preserve
+  original durable logs/failure tails, missing-image warnings, augmented or
+  source-prefixed diagnostics, explicit failure context and nonzero exit failures.
+  Verify with `direct/verify_offline.py` and `direct/verify_builder_output.py`.
 - Verify with `direct/verify_project_search.py`, `direct/verify_ai_changes.py`,
   `direct/verify_offline_mode.py`, `direct/verify_sessions.py` and the existing
   runtime/terminal/responsive/performance checks. Mock all live persistence,

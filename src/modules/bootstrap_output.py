@@ -3,6 +3,19 @@ import codecs
 import re
 
 
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_UF2_ALREADY_INCLUDED = "Warning! An extra UF2 bootloader image is already added!"
+_UF2_NOTICE = "UF2 bootloader image already included."
+
+
+def known_builder_notice(text):
+    """Recognize only the standalone upstream check that skips a second image."""
+    text = _ANSI.sub("", text).strip()
+    if text in (_UF2_ALREADY_INCLUDED, _UF2_NOTICE):
+        return _UF2_NOTICE
+    return None
+
+
 def output_chunks(stream):
     """Read available pipe bytes without waiting for a line or a full buffer."""
     binary = getattr(stream, "buffer", None)
@@ -99,6 +112,9 @@ class PackageOutput:
         self.emit("progress", label)
 
     def _record(self, text):
+        if notice := known_builder_notice(text):
+            self.emit("dim", notice)
+            return
         manager = re.match(r"(?:Tool|Platform|Library) Manager:\s*(.*)", text, re.I)
         body = manager[1] if manager else text
         if re.match(r"Warning\b|Warning!", body, re.I):

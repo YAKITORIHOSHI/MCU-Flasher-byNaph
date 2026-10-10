@@ -753,6 +753,98 @@ class OfflineChecks(unittest.TestCase):
                                  ("warn", "Warning: missing dependency")])
         self.assertLessEqual(gui.log_dim.call_count + len(shown), 64)
 
+    def test_bootstrap_uf2_notice_reaches_setup_without_warning_and_keeps_raw_log(self):
+        import io
+        callbacks, shown, raw = [], [], []
+        gui = SimpleNamespace(root=SimpleNamespace(after=lambda delay, callback: callbacks.append(callback)),
+                              log_dim=lambda text: shown.append(("dim", text)),
+                              log_warn=lambda text: shown.append(("warn", text)),
+                              log_fail=lambda text: shown.append(("fail", text)), set_status=Mock())
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        stream = self._isolated_setup_output()
+        stream.__globals__["_record_bootstrap_log"] = lambda level, text: raw.append((level, text))
+        stream(gui, self._completed_output_process(io.StringIO(warning + "\n")))
+        self.assertEqual(len(callbacks), 1)
+        callbacks.pop()()
+        self.assertEqual(shown, [("dim", "UF2 bootloader image already included.")])
+        self.assertTrue(any(level == "OFFLINE" and warning in text for level, text in raw))
+
+    def test_bootstrap_known_uf2_notice_preserves_active_progress_and_split_ansi(self):
+        from src.modules.bootstrap_output import PackageOutput
+        events = []
+        output = PackageOutput(lambda *event: events.append(event))
+        output.feed("Tool Manager: Installing fixture\nUnpacking 50%\n")
+        for chunk in ("\x1b[3", "3mWarning! An extra UF2 bootloader ",
+                      "image is already added!\x1b[0", "m\n"):
+            output.feed(chunk)
+        self.assertEqual(events[-1], ("dim", "UF2 bootloader image already included."))
+        self.assertEqual((output.phase, output.percent), ("Unpacking", 50))
+        self.assertFalse(any(kind in {"warn", "fail", "clear"} for kind, _ in events))
+        output.feed("Tool Manager: fixture has been installed!\n")
+        output.finish()
+        self.assertIn(("ok", "Unpacked fixture — 100%"), events)
+        self.assertFalse(any("interrupted" in text for _, text in events))
+
+    def test_bootstrap_known_uf2_notice_matches_only_complete_standalone_records(self):
+        from src.modules.bootstrap_output import PackageOutput, known_builder_notice
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        note = "UF2 bootloader image already included."
+        self.assertEqual(known_builder_notice(" \x1b[33m" + warning + "\x1b[0m "), note)
+        self.assertEqual(known_builder_notice(note), note)
+        for text, kind in (
+            ("Warning! The UF2 bootloader image is missing!", "warn"),
+            (warning + " Error: failed to read bootloader", "warn"),
+            ("Tool Manager: " + warning, "warn"),
+            ("src/main.cpp:5: warning: " + warning, "dim"),
+            ("    5 | const char *message = \"" + warning + "\";", "dim"),
+            (warning + "\nError: missing UF2 image", None),
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(known_builder_notice(text))
+                if kind is None:
+                    continue
+                events = []
+                output = PackageOutput(lambda *event: events.append(event))
+                output.feed(text + "\n")
+                output.finish()
+                self.assertIn((kind, text.strip()), events)
+                self.assertFalse(any(value == note for _, value in events))
+
+    def test_bootstrap_summary_uf2_notice_is_informational_once_per_section(self):
+        from src.modules.bootstrap_presentation import BootstrapPresentation
+        presentation = BootstrapPresentation()
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        note = "UF2 bootloader image already included."
+        presentation.summaries("Preparing board support", "section")
+        events = presentation.summaries("\x1b[33m" + warning + "\x1b[0m", "warn")
+        self.assertEqual([(event.text, event.tag) for event in events], [(note, "normal")])
+        self.assertEqual(presentation.summaries(note, "dim"), ())
+        self.assertEqual(presentation.summaries(warning, "warn"), ())
+        restored = BootstrapPresentation()
+        restored.restore_snapshot(presentation.snapshot())
+        self.assertEqual(restored.summaries(note, "dim"), ())
+        restored.summaries("Verifying next platform", "section")
+        events = restored.summaries(warning, "warn")
+        self.assertEqual([(event.text, event.tag) for event in events], [(note, "normal")])
+
+    def test_bootstrap_summary_retains_uf2_diagnostics_and_failure_context(self):
+        from src.modules.bootstrap_presentation import BootstrapPresentation
+        warning = "Warning! An extra UF2 bootloader image is already added!"
+        for text, tag in (
+            ("Warning! The UF2 bootloader image is missing!", "warn"),
+            (warning + " Error: failed to read bootloader", "fail"),
+            ("src/main.cpp:5: warning: " + warning, "warn"),
+            (warning, "fail"),
+        ):
+            with self.subTest(text=text, tag=tag):
+                events = BootstrapPresentation().summaries(text, tag)
+                self.assertTrue(any(event.text == text for event in events))
+                self.assertFalse(any(event.text == "UF2 bootloader image already included." for event in events))
+        presentation = BootstrapPresentation()
+        presentation.summaries("Error: actual builder failure", "fail")
+        events = presentation.summaries(warning, "dim")
+        self.assertEqual([(event.text, event.tag) for event in events], [(warning, "warn")])
+
     def test_bootstrap_protected_output_burst_is_lossless_and_bounded(self):
         import collections
         import io
