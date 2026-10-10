@@ -279,7 +279,7 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         # a scrollbar signal while Qt's finishEdit was still using them. The
         # next syntax completion exposed the resulting native heap corruption.
         result = subprocess.run([
-            sys.executable, "-B", str(ROOT / "direct/verify_performance.py"),
+            sys.executable, "-B", str(ROOT / "direct/verify_performance.py"), "--no-finalize",
             "PerformanceChecks.test_streaming_display_memory_and_no_newline",
             "PerformanceChecks.test_syntax_completion_is_on_gui_thread_and_can_repeat",
         ], cwd=ROOT, env=os.environ.copy(), text=True, stdout=subprocess.PIPE,
@@ -293,4 +293,10 @@ if __name__ == "__main__":
         raise SystemExit("Use the native Ubuntu private runtime for this verifier.")
     if "--native-probe" in sys.argv:
         raise SystemExit(native_probe())
+    if "--no-finalize" in sys.argv:
+        sys.argv.remove("--no-finalize")
+        checks = unittest.main(verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(verbosity=2)

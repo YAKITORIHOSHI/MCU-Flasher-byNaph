@@ -972,4 +972,14 @@ class PerformanceChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if "--no-finalize" in sys.argv:
+        # Isolated Linux/PySide stress runs can abort during extension-module
+        # finalization after reporting a successful suite. Test fixtures have
+        # already torn down their workers; flush the result and bypass only
+        # that broken interpreter teardown in this explicitly requested mode.
+        sys.argv.remove("--no-finalize")
+        checks = unittest.main(verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(verbosity=2)

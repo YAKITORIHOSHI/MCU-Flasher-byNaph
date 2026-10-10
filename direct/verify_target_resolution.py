@@ -700,14 +700,12 @@ if __name__ == "__main__":
         compile_installed_avr(args.avr_core)
     elif args.compile_button_only:
         verify_built_pipeline(args.compile_button_only)
-        APP.closeAllWindows()
-        APP.processEvents()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        APP.processEvents()
-        gc.collect()
+        # This one-shot first-run probe is a child process; Ubuntu's legacy
+        # PySide finalizer can abort after the successful compile report.
+        # The parent validates the report and firmware artifact before passing.
         sys.stdout.flush()
         sys.stderr.flush()
-        raise SystemExit(0)
+        os._exit(0)
     elif args.verify_built_pipeline:
         verify_built_pipeline(args.verify_built_pipeline)
     checks = unittest.main(argv=[sys.argv[0], *remaining], verbosity=2, exit=False)

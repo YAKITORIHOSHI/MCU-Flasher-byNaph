@@ -122,7 +122,7 @@ jobs:
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_ai_panel.py --native-renderer
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_ai_panel.py --workspace-renderer
           .venv-linux/bin/python -B direct/verify_ubuntu_ports.py
-          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_event_filters.py
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_event_filters.py --no-finalize
           .venv-linux/bin/python -B direct/verify_offline.py
           .venv-linux/bin/python -B direct/verify_target_resolution.py
           .venv-linux/bin/python -B direct/verify_board_families.py
@@ -151,7 +151,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_serial_delivery.py
           node direct/verify_editor_preferences.js
           xvfb-run -a env QT_QPA_PLATFORM=xcb QT_DEBUG_PLUGINS=1 .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility
-          .venv-linux/bin/python -B direct/verify_performance.py
+          .venv-linux/bin/python -B direct/verify_performance.py --no-finalize
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_controls.py --render-dir temp/audit/compatibility
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_browser_loading.py
           for scale in 1 1.25 1.5 2; do
@@ -233,7 +233,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_terminal.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & env/Scripts/python.exe -B direct/verify_performance.py
+          & env/Scripts/python.exe -B direct/verify_performance.py --no-finalize
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:QT_QPA_PLATFORM = 'windows'
           & env/Scripts/python.exe -B direct/verify_controls.py --render-dir temp/audit/compatibility
