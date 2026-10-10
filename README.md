@@ -893,6 +893,7 @@ MCU Flasher by Naph/
 - Normal startup and serial monitoring operate with current user permissions; Windows prompts for UAC elevation only when a missing driver or system component strictly requires it.
 
 ### 2. Opening, Selecting & Scaffolding Projects
+- Startup waits for an explicit project choice (or a supplied project path). It never creates or automatically selects `Documents/example`. The picker starts in your system's Documents folder; previous projects remain available under **Recent projects**.
 - Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Project selection, project creation, and focusing another project are unavailable while any action is running, including compile, upload, clean, or reset. The controls become available again when the action finishes. When idle, switching the current window prompts to save, discard or cancel when editor changes are unsaved. New windows start with hardware unselected. The startup picker opens the first project directly.
 - **Open projects** lists running sketch windows and their folder paths. When idle, use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
 - Right-click the project title or click its folder icon to reopen the picker when idle. **Cancel** leaves the current editor and monitor sessions intact.

@@ -94,6 +94,65 @@ class ProjectChecks(unittest.TestCase):
         api.emit = Mock()
         return api
 
+    def test_startup_leaves_projects_unbound_and_never_creates_an_example(self):
+        example = self.folder / "Documents" / "example"
+        for saved_dir in ("", str(self.folder / "sketch"), str(example)):
+            with self.subTest(saved_dir=saved_dir), \
+                 patch.object(web_bridge, "load_gui_config", return_value={"last_sketch_dir": saved_dir}), \
+                 patch.object(web_bridge, "get_reset_on_baud_change", return_value=False), \
+                 patch.object(web_bridge, "get_project_remembered_board") as remembered:
+                api = web_bridge.MCUWebBackendAPI()
+                try:
+                    self.assertIsNone(api.sketch_dir_path)
+                    self.assertEqual(api.get_project_dir(), "")
+                    self.assertEqual(api.get_project_files(), [])
+                    self.assertEqual(api.get_initial_state()["project"], {
+                        "path": "", "name": "", "files": [], "active_file": ""})
+                    self.assertEqual(api.get_default_project_parent(), str(self.folder / "Documents"))
+                    self.assertIsNone(api.ai_review_manager.project_dir)
+                    self.assertIsNone(api.ai_watcher.project_dir)
+                    self.assertFalse(api.ai_watcher._timer.isActive())
+                    remembered.assert_not_called()
+                    self.assertFalse(example.parent.exists())
+                finally:
+                    api.ai_watcher.shutdown()
+                    api.ai_review_manager.shutdown()
+                    api._serial_send_queue.stop()
+
+        # Previously generated examples remain user-owned and selectable;
+        # a remembered path must not silently bind or alter them at startup.
+        example.mkdir(parents=True)
+        source = example / "example.ino"
+        source.write_text("// user changes\n", encoding="utf-8")
+        with patch.object(web_bridge, "load_gui_config", return_value={"last_sketch_dir": str(example)}), \
+             patch.object(web_bridge, "get_reset_on_baud_change", return_value=False):
+            api = web_bridge.MCUWebBackendAPI()
+            try:
+                self.assertIsNone(api.sketch_dir_path)
+                self.assertEqual(source.read_text(encoding="utf-8"), "// user changes\n")
+                self.assertEqual(list(example.iterdir()), [source])
+            finally:
+                api.ai_watcher.shutdown()
+                api.ai_review_manager.shutdown()
+                api._serial_send_queue.stop()
+
+    def test_startup_picker_uses_system_documents_even_when_an_example_exists(self):
+        (self.folder / "Documents" / "example").mkdir(parents=True)
+        for location, expected in ((str(self.folder / "Redirected Documents"),
+                                    str(self.folder / "Redirected Documents")),
+                                   ("", str(self.folder / "Documents"))):
+            with self.subTest(location=location), \
+                 patch.object(QStandardPaths, "writableLocation", return_value=location):
+                dialog = ProjectDialog()
+                try:
+                    self.assertEqual(dialog._start_dir, expected)
+                    self.assertEqual(dialog._open_path_edit.text(), expected)
+                    self.assertIsNone(dialog.selected_project)
+                finally:
+                    dialog.close()
+                    dialog.deleteLater()
+                    APP.processEvents()
+
     def test_stale_settings_snapshot_preserves_other_window_and_nested_preferences(self):
         first = config._load_raw_config()
         stale = copy.deepcopy(first)

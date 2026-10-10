@@ -384,33 +384,10 @@ class MCUWebBackendAPI:
         # Qt signal bus reference (bound on main thread)
         self._qt_signals: Optional[Any] = _qt_signals_bus
 
-        # Project state (strictly user sketch folder, NEVER application codebase)
+        # Bind a sketch only after explicit project selection or --project.
+        # Remembered folders remain available through the Recent projects page.
         config = load_gui_config()
-        last_dir = config.get("last_sketch_dir", "")
-        SCRIPT_DIR.resolve()
-
-        default_doc = Path(os.path.expanduser("~")) / "Documents" / "example"
-        if not default_doc.is_dir():
-            try:
-                default_doc.mkdir(parents=True, exist_ok=True)
-                default_ino = default_doc / "example.ino"
-                if not default_ino.exists():
-                    default_ino.write_text(
-                        "void setup() {\n"
-                        "\n"
-                        "}\n\n"
-                        "void loop() {\n"
-                        "\n"
-                        "}\n",
-                        encoding="utf-8",
-                    )
-            except Exception:
-                pass
-
-        if last_dir and Path(last_dir).is_dir() and not is_application_codebase_dir(last_dir):
-            self.sketch_dir_path = Path(last_dir).resolve()
-        else:
-            self.sketch_dir_path = default_doc
+        self.sketch_dir_path: Optional[Path] = None
 
         self.active_file_path: Optional[str] = None
         self.modified_files: dict[str, bool] = {}
@@ -983,8 +960,8 @@ class MCUWebBackendAPI:
 
         return {
             "project": {
-                "path": str(self.sketch_dir_path),
-                "name": self.sketch_dir_path.name,
+                "path": str(self.sketch_dir_path) if self.sketch_dir_path else "",
+                "name": self.sketch_dir_path.name if self.sketch_dir_path else "",
                 "files": files,
                 "active_file": active_f,
             },
@@ -1089,7 +1066,7 @@ class MCUWebBackendAPI:
 
     def get_project_dir(self) -> str:
         """Return the current project root path."""
-        return str(self.sketch_dir_path)
+        return str(self.sketch_dir_path) if self.sketch_dir_path else ""
 
     def save_tab_order(self, paths: list[str]):
         """Persist tab order."""
@@ -2681,14 +2658,14 @@ class MCUWebBackendAPI:
     def get_default_project_parent(self) -> str:
         """Return the default parent directory for new projects."""
         try:
-            if self.sketch_dir_path.is_dir() and not is_application_codebase_dir(self.sketch_dir_path) and not is_application_codebase_dir(self.sketch_dir_path.parent):
+            if self.sketch_dir_path and self.sketch_dir_path.is_dir() and not is_application_codebase_dir(self.sketch_dir_path) and not is_application_codebase_dir(self.sketch_dir_path.parent):
                 return str(self.sketch_dir_path.parent)
-            docs = Path(os.path.expanduser("~")) / "Documents" / "Arduino"
+            docs = Path.home() / "Documents" / "Arduino"
             if docs.is_dir():
                 return str(docs)
-            return str(Path(os.path.expanduser("~")) / "Documents")
+            return str(Path.home() / "Documents")
         except Exception:
-            return str(Path(os.path.expanduser("~")))
+            return str(Path.home())
 
     def create_project(
         self,

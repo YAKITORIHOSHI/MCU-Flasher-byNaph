@@ -36,9 +36,6 @@ PROJECT_BUILD_CACHE_MARKER = ".mcu_flasher_cache_marker"
 AI_PROJECT_STORAGE_DIR = ".mcu_ai_edits"
 EDITOR_WINDOW_TITLE = "MCU Flasher — Embedded Code Editor (Closing this window will attach back to the MAIN window)"
 
-DEFAULT_SKETCH_DIR = Path.home() / "Documents" / "example"
-
-
 def is_application_codebase_dir(path: Path | str | None) -> bool:
     """Check if the given path is the MCU Flasher application root or its internal code directories."""
     if not path:
@@ -276,7 +273,6 @@ __all__ = [
     "AVR_MONITOR_BAUD",
     "board_reset_capabilities",
     "DEFAULT_BAUD",
-    "DEFAULT_SKETCH_DIR",
     "is_application_codebase_dir",
     "DEFAULT_UPLOAD_SPEED",
     "EDITOR_WINDOW_TITLE",

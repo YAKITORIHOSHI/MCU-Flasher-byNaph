@@ -124,9 +124,10 @@ class ProjectDialog(QDialog):
             self._foreground_timers.append(timer)
 
         # Determine start directory (NEVER the application codebase)
-        default_user_dir = str(Path.home() / "Documents" / "example")
-        if not Path(default_user_dir).is_dir():
-            default_user_dir = str(Path.home() / "Documents")
+        default_user_dir = (
+            QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+            or str(Path.home() / "Documents")
+        )
 
         candidate_start = ""
         if initial_dir and Path(initial_dir).is_dir() and not is_application_codebase_dir(initial_dir):
