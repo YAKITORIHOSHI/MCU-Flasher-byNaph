@@ -1,12 +1,13 @@
 """Static glass, readable inks and responsive forms for the developer portal."""
 from __future__ import annotations
 
+from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtGui import QColor, QPalette, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QBoxLayout, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionComboBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -50,17 +51,17 @@ def portal_stylesheet(mode: str) -> str:
         QWidget {{ font-family: 'Montserrat', 'Segoe UI', sans-serif; font-size: 12px; color: {c['TEXT']}; }}
         QLabel, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
         QLabel {{ padding: 0; }}
-        QLabel[role="heading"] {{ font-size: 24px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
-        QLabel[role="title"] {{ font-size: 16px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
-        QLabel[role="label"] {{ font-weight: 600; }}
-        QLabel[role="muted"], QLabel[role="metadata"] {{ color: {c['TEXT_DIM']}; }}
-        QLabel[role="metadata"] {{ font-size: 11px; }}
+        QLabel[role="heading"], QTextEdit[wrappedLabel="true"][role="heading"] {{ font-size: 24px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
+        QLabel[role="title"], QTextEdit[wrappedLabel="true"][role="title"] {{ font-size: 16px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
+        QLabel[role="label"], QTextEdit[wrappedLabel="true"][role="label"] {{ font-weight: 600; }}
+        QLabel[role="muted"], QLabel[role="metadata"], QTextEdit[wrappedLabel="true"][role="muted"], QTextEdit[wrappedLabel="true"][role="metadata"] {{ color: {c['TEXT_DIM']}; }}
+        QLabel[role="metadata"], QTextEdit[wrappedLabel="true"][role="metadata"] {{ font-size: 11px; }}
         QLabel[role="value"] {{ font-size: 23px; font-weight: 700; }}
-        QLabel[tone="active"] {{ color: {c['CYAN']}; }}
-        QLabel[tone="ok"] {{ color: {c['GREEN']}; }}
-        QLabel[tone="warn"] {{ color: {c['YELLOW']}; }}
-        QLabel[tone="fail"] {{ color: {c['RED']}; }}
-        QLabel[tone="high"] {{ color: {c['ORANGE']}; }}
+        QLabel[tone="active"], QTextEdit[wrappedLabel="true"][tone="active"] {{ color: {c['CYAN']}; }}
+        QLabel[tone="ok"], QTextEdit[wrappedLabel="true"][tone="ok"] {{ color: {c['GREEN']}; }}
+        QLabel[tone="warn"], QTextEdit[wrappedLabel="true"][tone="warn"] {{ color: {c['YELLOW']}; }}
+        QLabel[tone="fail"], QTextEdit[wrappedLabel="true"][tone="fail"] {{ color: {c['RED']}; }}
+        QLabel[tone="high"], QTextEdit[wrappedLabel="true"][tone="high"] {{ color: {c['ORANGE']}; }}
         QLabel[role="feedback"] {{ background: {c['BG_DARKEST']}; border-radius: 8px; padding: 10px; }}
         QLineEdit, QTextEdit, QComboBox {{
             background: {c['BG_DARKEST']}; color: {c['TEXT']};
@@ -68,6 +69,10 @@ def portal_stylesheet(mode: str) -> str:
             selection-background-color: {c['BG_HOVER']}; selection-color: {c['TEXT_BRIGHT']};
         }}
         QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border: 1px solid {accent}; }}
+        QTextEdit[wrappedLabel="true"], QTextEdit[wrappedLabel="true"]:focus {{
+            background: transparent; border: none; border-radius: 0; padding: 0;
+        }}
+        QTextEdit[wrappedLabel="true"][role="feedback"] {{ background: {c['BG_DARKEST']}; border-radius: 8px; padding: 10px; }}
         QComboBox {{ padding-right: 28px; }}
         QComboBox::drop-down {{ border: none; width: 24px; }}
         QComboBox::down-arrow {{ image: url("{arrow}"); width: 10px; height: 10px; }}
@@ -102,10 +107,90 @@ def portal_stylesheet(mode: str) -> str:
     """
 
 
-def label(text: str, parent: QWidget, role: str = "", *, wrap: bool = False) -> QLabel:
-    result = QLabel(text, parent)
-    result.setTextFormat(Qt.TextFormat.PlainText)
-    result.setWordWrap(wrap)
+class WrappedLabel(QTextEdit):
+    """Selectable literal reading text whose minimum width never follows a token.
+
+    QLabel's word wrap makes an uninterrupted word the minimum layout width.
+    A plain-text document can fall back to character wrapping without inserting
+    characters into copied text. A separate measuring document keeps selection
+    and the displayed document untouched while layouts request other widths.
+    """
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.setProperty("wrappedLabel", True)
+        self.setReadOnly(True)
+        self.setAcceptRichText(False)
+        self.setFrameShape(QTextEdit.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.viewport().setAutoFillBackground(False)
+        self.document().setDocumentMargin(0)
+        self._measure = QTextDocument(self)
+        self._measure.setDocumentMargin(0)
+        self._heights = {}
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.setPlainText(text)
+        self.textChanged.connect(self._invalidate_measurement)
+        self._invalidate_measurement()
+
+    def text(self):
+        return self.toPlainText()
+
+    def setText(self, text):
+        self.setPlainText(text)
+
+    def setTextInteractionFlags(self, flags):
+        super().setTextInteractionFlags(flags)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus if flags & Qt.TextInteractionFlag.TextSelectableByKeyboard
+                            else Qt.FocusPolicy.NoFocus)
+
+    def setReadingHeightLimit(self, height):
+        """Keep large literal content reachable without a giant card surface."""
+        self.setMaximumHeight(height)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.updateGeometry()
+
+    def _invalidate_measurement(self):
+        self._heights.clear()
+        self._measure.setDefaultFont(self.font())
+        self._measure.setDefaultTextOption(self.document().defaultTextOption())
+        self._measure.setPlainText(self.toPlainText())
+        self.updateGeometry()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if hasattr(self, "_measure") and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._invalidate_measurement()
+
+    def heightForWidth(self, width):
+        horizontal = max(0, self.width() - self.viewport().width())
+        vertical = max(0, self.height() - self.viewport().height())
+        key = max(1, width - horizontal), vertical
+        if key not in self._heights:
+            self._measure.setTextWidth(key[0])
+            # Keep a bounded cache: a resize must not retain every visited width.
+            if len(self._heights) >= 8:
+                self._heights.clear()
+            self._heights[key] = ceil(self._measure.size().height()) + vertical
+        return min(self.maximumHeight(), self._heights[key])
+
+    def minimumSizeHint(self):
+        return QSize(1, self.fontMetrics().height())
+
+    def sizeHint(self):
+        width = min(520, max(1, self.width()))
+        return QSize(width, self.heightForWidth(width))
+
+
+def label(text: str, parent: QWidget, role: str = "", *, wrap: bool = False) -> QLabel | WrappedLabel:
+    result = WrappedLabel(text, parent) if wrap else QLabel(text, parent)
+    if not wrap:
+        result.setTextFormat(Qt.TextFormat.PlainText)
     result.setProperty("role", role)
     result.setMinimumWidth(0)
     return result
@@ -147,11 +232,15 @@ class PortalComboBox(QComboBox):
         chrome = max(64, self.rect().width() - edit_rect.width())
         width = max((self.fontMetrics().horizontalAdvance(self.itemText(index))
                      for index in range(self.count())), default=0) + chrome + 8
-        size.setWidth(max(size.width(), width))
+        # Unknown server-supplied classifications must not enlarge a form.
+        # Native combo text can elide; the full current value stays in its tooltip.
+        size.setWidth(min(self.maximumWidth(), max(120, min(width, 220))))
         return size
 
     def sizeHint(self):
-        return super().sizeHint().expandedTo(self.minimumSizeHint())
+        size = super().sizeHint().expandedTo(self.minimumSizeHint())
+        size.setWidth(min(size.width(), self.maximumWidth(), 220))
+        return size
 
 
 def combo(items, parent, current="") -> QComboBox:
@@ -161,11 +250,16 @@ def combo(items, parent, current="") -> QComboBox:
         result.addItem(current)
     if current:
         result.setCurrentText(current)
+    for index in range(result.count()):
+        result.setItemData(index, result.itemText(index), Qt.ItemDataRole.ToolTipRole)
+    result.view().setTextElideMode(Qt.TextElideMode.ElideRight)
     result.setMinimumWidth(0)
     result.setMinimumContentsLength(3)
     result.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     result.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     result.setCursor(Qt.CursorShape.PointingHandCursor)
+    result.setToolTip(result.currentText())
+    result.currentTextChanged.connect(result.setToolTip)
     return result
 
 
@@ -198,7 +292,9 @@ class ResponsiveGrid(QWidget):
         self._reflow()
 
     def _reflow(self):
-        columns = min(self._max_columns, max(1, (self.width() + 12) // (self._cell_width + 12)))
+        cell_width = max(self._cell_width, max((widget.minimumSizeHint().width()
+                                               for widget in self._widgets), default=0))
+        columns = min(self._max_columns, max(1, (self.width() + 12) // (cell_width + 12)))
         if columns == self._columns:
             return
         while self.grid.count():
@@ -209,6 +305,46 @@ class ResponsiveGrid(QWidget):
             self.grid.addWidget(widget, index // columns, index % columns)
         self._columns = columns
         self.updateGeometry()
+
+    def minimumSizeHint(self):
+        size = super().minimumSizeHint()
+        # A currently wide grid must still be allowed to shrink into one column;
+        # otherwise its old columns can keep a scroll body wider than its viewport.
+        size.setWidth(max((widget.minimumSizeHint().width() for widget in self._widgets), default=0))
+        return size
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reflow()
+
+
+class ResponsiveRow(QWidget):
+    """Stack a compact row without replacing its controls or focus scope."""
+
+    def __init__(self, widgets, parent=None, *, compact_width=440):
+        super().__init__(parent)
+        self._widgets = widgets
+        self._compact_width = compact_width
+        self.row = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(10)
+        for widget, stretch in widgets:
+            self.row.addWidget(widget, stretch)
+        self._reflow()
+
+    def _reflow(self):
+        compact = self.width() < self._compact_width
+        direction = QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
+        if self.row.direction() != direction:
+            self.row.setDirection(direction)
+            self.updateGeometry()
+        for index, (_, stretch) in enumerate(self._widgets):
+            self.row.setStretch(index, 0 if compact else stretch)
+
+    def minimumSizeHint(self):
+        size = super().minimumSizeHint()
+        size.setWidth(max((widget.minimumSizeHint().width() for widget, _ in self._widgets), default=0))
+        return size
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

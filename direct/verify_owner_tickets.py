@@ -16,13 +16,14 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "offscreen")
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QPoint, Qt, QThread
+from PySide6.QtGui import QPalette, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
 from main.core.theme import Theme
 from main.qt import owner_ticket_dialog as portal
 from main.qt.toolbar import PrimaryToolbar
-from main.qt.owner_ticket_style import portal_colors
+from main.qt.owner_ticket_style import WrappedLabel, portal_colors
 from main.core.log_colors import contrast_ratio
 from main.qt.theme import build_stylesheet, register_fonts
 
@@ -115,6 +116,186 @@ class PortalChecks(unittest.TestCase):
         self.dialog._do_authenticate()
         settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
+
+    def assert_scroll_width(self, scroll):
+        viewport = scroll.viewport()
+        self.assertLessEqual(scroll.widget().width(), viewport.width())
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+
+    def assert_wrapped_text(self, widget, *, fully_visible=True):
+        self.assertEqual(widget.wordWrapMode(), QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.assertEqual(widget.horizontalScrollBar().maximum(), 0)
+        available = widget.viewport().width() - 2 * widget.document().documentMargin()
+        block = widget.document().firstBlock()
+        lines = 0
+        while block.isValid():
+            layout = block.layout()
+            for index in range(layout.lineCount()):
+                self.assertLessEqual(layout.lineAt(index).naturalTextWidth(), available + 1, widget.toPlainText()[:80])
+                lines += 1
+            block = block.next()
+        self.assertGreater(lines, 0)
+        if fully_visible:
+            self.assertLessEqual(widget.document().size().height(), widget.viewport().height() + 1)
+            self.assertEqual(widget.verticalScrollBar().maximum(), 0)
+
+    def test_unbroken_ticket_content_cannot_expand_dashboard_or_clip_card_actions(self):
+        literal = '  Serial.println("' + "A" * 4096 + '");\nhttps://fixture.invalid/' + "path" * 512 + '\n<b>literal markup</b>\n  '
+        ticket = dict(TICKETS[0], title="Title" * 512, description=literal,
+                      category="CustomCategory" * 128, severity="UnexpectedSeverity" * 32,
+                      status="UnknownStatus" * 128, created_at="Time" * 128, updated_at="Updated" * 128)
+        self.tickets[:] = [ticket]
+        self.sign_in()
+        for widget in self.dialog.findChildren(WrappedLabel):
+            if not (widget.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByKeyboard):
+                self.assertEqual(widget.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        card = self.dialog.cards_layout.itemAt(0).widget()
+        self.assertEqual(card.description_label.text(), literal)
+        self.assertEqual(card.title_label.text(), ticket["title"])
+        for size in ((880, 740), (520, 620), (380, 520), (360, 420), (880, 740)):
+            self.dialog.resize(*size)
+            pump()
+            self.assertEqual(self.dialog.width(), size[0], size)
+            self.assert_scroll_width(self.dialog.scroll)
+            viewport = self.dialog.scroll.viewport()
+            for widget in (card, self.dialog.search_row, self.dialog.account_row, self.dialog.stats_grid):
+                left = widget.mapTo(viewport, QPoint(0, 0)).x()
+                right = widget.mapTo(viewport, QPoint(widget.width(), 0)).x()
+                self.assertGreaterEqual(left, 0, (size, widget.objectName()))
+                self.assertLessEqual(right, viewport.width(), (size, widget.objectName()))
+            for widget in (card.title_label, card.description_label, card.metadata, card.severity_label):
+                self.assert_wrapped_text(widget, fully_visible=False)
+                self.assertLessEqual(widget.minimumSizeHint().width(), 2)
+                self.assertLessEqual(widget.height(), widget.maximumHeight())
+                self.assertGreater(widget.verticalScrollBar().maximum(), 0)
+            self.assertLessEqual(card.height(), 720)
+            for action in (card.edit_button, card.delete_button, card.status_cb):
+                self.assertTrue(card.rect().contains(action.mapTo(card, action.rect().topLeft())), size)
+                self.assertTrue(card.rect().contains(action.mapTo(card, action.rect().bottomRight())), size)
+            self.assertLessEqual(card.status_cb.minimumSizeHint().width(), card.status_cb.maximumWidth())
+            self.assertEqual(card.status_cb.currentText(), ticket["status"])
+            self.assertEqual(card.status_cb.toolTip(), ticket["status"])
+        cursor = card.description_label.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        card.description_label.setTextCursor(cursor)
+        selected = cursor.selection().toPlainText()
+        self.assertEqual(selected, literal)
+        card.description_label.setFocus()
+        QTest.keyClick(card.description_label, Qt.Key.Key_End, Qt.KeyboardModifier.ControlModifier)
+        pump()
+        self.assertEqual(card.description_label.textCursor().position(), card.description_label.document().characterCount() - 1)
+        self.assertEqual(card.description_label.verticalScrollBar().value(), card.description_label.verticalScrollBar().maximum())
+        cursor = card.description_label.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        card.description_label.setTextCursor(cursor)
+        displayed_document = card.description_label.document()
+        measurement_document = card.description_label._measure
+        for mode in ("light", "solarized_dark", "default"):
+            self.dialog.apply_theme(mode)
+            self.dialog.resize(380, 520)
+            pump()
+            self.assertEqual(card.description_label.textCursor().selection().toPlainText(), literal)
+            self.assert_scroll_width(self.dialog.scroll)
+            self.assert_wrapped_text(card.description_label, fully_visible=False)
+            self.assertIs(card.description_label.document(), displayed_document)
+            self.assertIs(card.description_label._measure, measurement_document)
+            self.assertLessEqual(len(card.description_label._heights), 8)
+        # Render a realistic long token while keeping title/actions visible.
+        self.dialog.resize(880, 740)
+        self.dialog._tickets = [dict(TICKETS[0], title="A long serial message and URL", description=literal)]
+        self.dialog._render_tickets_list()
+        pump()
+        capture(self.dialog, "tickets-long-code-wide")
+        self.dialog.resize(380, 520)
+        pump()
+        self.dialog.scroll.verticalScrollBar().setValue(self.dialog.cards_container.y())
+        pump()
+        capture(self.dialog, "tickets-long-code-compact")
+
+    def test_long_edit_and_create_content_wraps_without_replacing_draft_widgets(self):
+        self.sign_in()
+        literal = '<b>literal</b>\nSerial.println("' + "x" * 8192 + '");\nhttps://fixture.invalid/' + "segment" * 256
+        ticket = dict(TICKETS[0], title="LongTitle" * 512, category="LongCategory" * 256, description=literal)
+        edit = portal.EditTicketDialog(ticket, self.service, self.dialog)
+        self.addCleanup(edit.close)
+        self.addCleanup(edit.deleteLater)
+        show(edit, (380, 420))
+        for size in ((680, 640), (380, 420), (360, 320)):
+            edit.resize(*size)
+            pump()
+            self.assertEqual(edit.width(), size[0])
+            self.assert_scroll_width(edit.scroll)
+            self.assert_wrapped_text(edit.txt_desc, fully_visible=False)
+            self.assertEqual(edit.txt_title.text(), ticket["title"])
+            self.assertEqual(edit.cb_category.currentText(), ticket["category"])
+            self.assertEqual(edit.cb_category.toolTip(), ticket["category"])
+            self.assertEqual(edit.txt_desc.toPlainText(), literal)
+            self.assertLessEqual(edit.cb_category.minimumSizeHint().width(), 220)
+        capture(edit, "edit-long-fields-compact")
+        edit.scroll.ensureWidgetVisible(edit.txt_desc, 0, 0)
+        pump()
+        capture(edit, "edit-long-code-compact")
+        edit.close()
+        show(self.dialog)
+        self.dialog.btn_new.click()
+        self.dialog.new_title.setText(ticket["title"])
+        self.dialog.new_desc.setPlainText(literal)
+        self.dialog.new_desc.setFocus()
+        cursor = self.dialog.new_desc.textCursor()
+        cursor.setPosition(10)
+        cursor.setPosition(30, QTextCursor.MoveMode.KeepAnchor)
+        self.dialog.new_desc.setTextCursor(cursor)
+        original = self.dialog.new_desc
+        for size in ((880, 740), (380, 520), (360, 420), (880, 740)):
+            self.dialog.resize(*size)
+            pump()
+            self.assert_scroll_width(self.dialog.scroll)
+            self.assert_wrapped_text(self.dialog.new_desc, fully_visible=False)
+            self.assertIs(self.dialog.new_desc, original)
+            self.assertEqual(self.dialog.new_desc.toPlainText(), literal)
+            self.assertEqual(self.dialog.new_title.text(), ticket["title"])
+            self.assertEqual(self.dialog.new_desc.textCursor().anchor(), 10)
+            self.assertEqual(self.dialog.new_desc.textCursor().position(), 30)
+            self.assertTrue(self.dialog.new_desc.hasFocus())
+        self.service.update_ticket.assert_not_called()
+        self.service.create_ticket.assert_not_called()
+
+    def test_wrapped_reading_widgets_keep_semantic_inks_and_keyboard_focus(self):
+        self.sign_in()
+        card = self.dialog.cards_layout.itemAt(0).widget()
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            self.dialog.apply_theme(mode)
+            pump()
+            colors = portal_colors(mode)
+            for widget, token in ((card.title_label, "TEXT_BRIGHT"),
+                                  (card.severity_label, "RED"),
+                                  (card.description_label, "TEXT"),
+                                  (card.metadata, "TEXT_DIM"),
+                                  (self.dialog.lbl_auth_error, "RED")):
+                self.assertEqual(widget.palette().color(QPalette.ColorRole.Text).name(), colors[token], (mode, token))
+            self.assertEqual(self.dialog.access_label.focusPolicy(), Qt.FocusPolicy.NoFocus)
+            self.assertEqual(card.description_label.focusPolicy(), Qt.FocusPolicy.StrongFocus)
+        # Reflow must not recreate the reading documents or their copied text.
+        document = card.description_label.document()
+        measurement = card.description_label._measure
+        for width in (360, 460, 580, 880, 520, 380, 440, 640, 780, 880):
+            self.dialog.resize(width, 620)
+            pump()
+            self.assertIs(card.description_label.document(), document)
+            self.assertIs(card.description_label._measure, measurement)
+            self.assertEqual(card.description_label.text(), TICKETS[0]["description"])
+            self.assert_wrapped_text(card.description_label)
+            self.assertLessEqual(len(card.description_label._heights), 8)
+
+    def test_cached_non_string_metadata_still_renders_as_plain_text(self):
+        # Cached ticket dictionaries are not guaranteed to normalize every field.
+        for category in (None, 42):
+            card = portal.TicketCard(dict(TICKETS[0], category=category), self.dialog.backdrop)
+            self.assertEqual(card.metadata.text(), f"{category}\n{TICKETS[0]['created_at']}")
+            self.assertIn(str(category), card.metadata.toolTip())
+            card.deleteLater()
 
     def test_login_keyboard_mask_and_lock(self):
         capture(self.dialog, "login-default")

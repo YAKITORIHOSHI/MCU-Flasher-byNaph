@@ -27,6 +27,7 @@ from main.qt.theme import build_stylesheet, register_fonts
 
 APP = QApplication.instance() or QApplication([])
 register_fonts()
+RENDER_DIR = ROOT / "temp/audit/cloud-sketch-ui"
 
 
 class FakeService:
@@ -135,7 +136,7 @@ class FakeService:
 
 class CloudUIChecks(unittest.TestCase):
     def setUp(self):
-        output = ROOT / "temp/audit/cloud-sketch-ui"
+        output = RENDER_DIR
         output.mkdir(parents=True, exist_ok=True)
         self.output = output
         self.fixture = tempfile.TemporaryDirectory(prefix="cloud-ui-", dir=ROOT / "temp/audit")
@@ -187,6 +188,37 @@ class CloudUIChecks(unittest.TestCase):
             panel._initialize()
         self.wait(lambda: not panel._busy)
         return panel
+
+    def settle_layout(self):
+        deadline = time.monotonic() + .1
+        while time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.003)
+
+    def assert_visible_in_ancestors(self, widget):
+        self.assertTrue(widget.isVisible(), widget.objectName())
+        ancestor = widget.parentWidget()
+        while ancestor is not None:
+            bounds = QRect(widget.mapTo(ancestor, QPoint()), widget.size())
+            self.assertTrue(ancestor.rect().contains(bounds),
+                            (widget.objectName() or getattr(widget, "text", lambda: "")(),
+                             bounds, ancestor.objectName(), ancestor.size()))
+            ancestor = ancestor.parentWidget()
+
+    def assert_compact_sketch_header(self, panel):
+        card, header, listing = panel._sketches_card, panel._sketch_header, panel._sketches
+        layout = card.layout()
+        self.assertEqual(header.y(), layout.contentsMargins().top())
+        self.assertLessEqual(header.height(), panel._refresh_btn.sizeHint().height() + 2)
+        self.assertEqual(listing.x(), header.x())
+        self.assertEqual(listing.width(), header.width())
+        self.assertEqual(listing.y(), header.geometry().bottom() + layout.spacing() + 1)
+        self.assertEqual(listing.maximumHeight(), 16777215)
+        if not panel._linked_section.isVisible() and not panel._empty.isVisible():
+            self.assertEqual(listing.geometry().bottom(), card.height() - layout.contentsMargins().bottom() - 1)
+        if listing.count() and listing.verticalScrollBar().value() == 0:
+            self.assertEqual(listing.visualItemRect(listing.item(0)).top(), 0)
+        self.assertEqual(listing.horizontalScrollBar().maximum(), 0)
 
     def test_secure_storage_network_and_source_work_stays_off_gui(self):
         panel = self.panel()
@@ -527,6 +559,159 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
         self.assertIsNone(dialog.selected_project)
 
+    def test_actual_selector_cloud_heading_list_and_actions_stay_aligned(self):
+        from src.modules.ui_metrics import WorkArea
+        with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1600, 1000)):
+            dialog = ProjectDialog(self.backend)
+            self.widgets.append(dialog)
+            dialog.show()
+            cloud_index = dialog._tabs.count() - 1
+            dialog._tabs.setCurrentIndex(cloud_index)
+            panel = dialog._cloud_panel
+            self.wait(lambda: not panel._busy)
+            for mode in ("default", "light", "solarized_dark"):
+                APP.setStyleSheet(build_stylesheet(mode))
+                dialog._apply_dialog_theme(mode)
+                panel.apply_theme(mode)
+                for width, height in ((720, 560), (900, 650), (400, 360)):
+                    if APP.platformName() == "windows":
+                        # Couple native DPI with this monitor's real work area;
+                        # offscreen fixtures retain the exact 720x560 selector.
+                        area = dialog.screen().availableGeometry()
+                        width, height = min(width, area.width() - 24), min(height, area.height() - 48)
+                    dialog.resize(width, height)
+                    self.settle_layout()
+                    self.assertEqual((dialog.width(), dialog.height()), (width, height))
+                    self.assert_compact_sketch_header(panel)
+                    self.assert_visible_in_ancestors(panel._refresh_btn)
+                    for button in (panel._upload_btn, panel._open_btn):
+                        self.assert_visible_in_ancestors(button)
+                    if width > 400:
+                        self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+                        self.assertGreater(panel._sketches.height(), panel._sketch_header.height() * 3)
+                        account_bounds = QRect(panel._account_card.mapTo(panel, QPoint()), panel._account_card.size())
+                        for widget in (panel._sync_actions, panel._status):
+                            bounds = QRect(widget.mapTo(panel, QPoint()), widget.size())
+                            self.assertEqual(bounds.left(), account_bounds.left())
+                            self.assertEqual(bounds.right(), account_bounds.right())
+                    self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-selector-cloud-{width}-{height}.png")))
+                dialog.resize(720, 560)
+                dialog._tabs.setCurrentIndex(0)
+                dialog._tabs.setCurrentIndex(cloud_index)
+                self.settle_layout()
+                self.assert_compact_sketch_header(panel)
+                self.assertEqual(panel._selected_sketch()["id"], "fixture")
+
+    def test_compact_cloud_dialog_long_values_keep_reading_space(self):
+        from src.modules.ui_metrics import WorkArea
+        with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1600, 1000)):
+            self.service.pull_project("fixture", destination=self.local)
+            dialog = CloudSketchDialog(self.backend)
+            self.widgets.append(dialog)
+            dialog.show()
+            panel = dialog.panel
+            self.wait(lambda: not panel._busy)
+            name = "LongCloudSketchName" * 15
+            email = "long.cloud.account." * 10 + "@example.invalid"
+            status = "\n".join(["Cloud refresh failed. Check the connection and try refreshing again."] * 5)
+            state = dict(panel._state)
+            state["account"] = dict(state["account"], email=email)
+            state["sketches"] = [dict(self.service.rows[0], name=name)]
+            state["link"] = dict(state["link"], name=name)
+            panel._apply_state(state)
+            panel._status.setText(status)
+            for mode in ("default", "light", "solarized_dark"):
+                APP.setStyleSheet(build_stylesheet(mode))
+                panel.apply_theme(mode)
+                for width, height in ((590, 580), (400, 360), (360, 300)):
+                    dialog.resize(width, height)
+                    self.settle_layout()
+                    self.assert_compact_sketch_header(panel)
+                    self.assertEqual(panel._scroll.horizontalScrollBar().maximum(), 0)
+                    for widget in (panel._account_summary, panel._status):
+                        self.assert_visible_in_ancestors(widget)
+                        self.assertFalse(widget.wordWrap())
+                        shortened = widget.fontMetrics().elidedText(widget.text(), Qt.TextElideMode.ElideRight,
+                                                                   widget.contentsRect().width())
+                        self.assertNotEqual(shortened, widget.text())
+                    self.assertEqual(panel._status.height(), panel._status.fontMetrics().height())
+                    for button in (panel._upload_btn, panel._open_btn, panel._push_btn,
+                                   panel._pull_btn, panel._history_btn, panel._refresh_btn):
+                        self.assert_visible_in_ancestors(button)
+                    self.assertIn(name, panel._sketches.item(0).toolTip())
+                    self.assertEqual(panel._account_summary.toolTip(), email)
+                    self.assertEqual(panel._status.toolTip(), status)
+                    self.assertIn(name, panel._linked.toolTip())
+                    if height >= 360:
+                        self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+                        self.assertGreaterEqual(panel._sketches.height(), 48)
+                    self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-cloud-long-values-{width}-{height}.png")))
+
+    def test_many_sketches_scroll_inside_card_and_empty_header_stays_at_top(self):
+        from src.modules.ui_metrics import WorkArea
+        self.service.rows = [dict(self.service.rows[0], id=f"fixture-{index}", name=f"Sensor sketch {index + 1}")
+                             for index in range(20)]
+        with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1600, 1000)):
+            APP.setStyleSheet(build_stylesheet("default"))
+            dialog = ProjectDialog(self.backend)
+            self.widgets.append(dialog)
+            dialog.show()
+            dialog._tabs.setCurrentIndex(dialog._tabs.count() - 1)
+            panel = dialog._cloud_panel
+            panel.apply_theme("default")
+            self.wait(lambda: not panel._busy)
+            self.settle_layout()
+            self.assert_compact_sketch_header(panel)
+            self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+            self.assertGreater(panel._sketches.verticalScrollBar().maximum(), 0)
+            header_geometry, footer_geometry = panel._sketch_header.geometry(), panel._sync_actions.geometry()
+            panel._sketches.setCurrentRow(19)
+            panel._sketches.scrollToBottom()
+            self.settle_layout()
+            self.assertEqual(panel._sketch_header.geometry(), header_geometry)
+            self.assertEqual(panel._sync_actions.geometry(), footer_geometry)
+            self.assertEqual(panel._scroll.verticalScrollBar().value(), 0)
+            self.assert_visible_in_ancestors(panel._refresh_btn)
+            self.assert_visible_in_ancestors(panel._open_btn)
+            self.assertTrue(dialog.grab().save(str(self.output / "selector-cloud-many-sketches.png")))
+            self.service.rows = []
+            panel._refresh()
+            self.wait(lambda: not panel._busy)
+            self.settle_layout()
+            self.assert_compact_sketch_header(panel)
+            self.assertTrue(panel._empty.isVisible())
+            self.assertFalse(panel._open_btn.isEnabled())
+            self.assert_visible_in_ancestors(panel._refresh_btn)
+            self.assert_visible_in_ancestors(panel._upload_btn)
+            self.assertTrue(dialog.grab().save(str(self.output / "selector-cloud-empty.png")))
+
+    def test_signed_out_selector_keeps_centered_account_view(self):
+        from src.modules.ui_metrics import WorkArea
+        self.service.authenticated = False
+        with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1600, 1000)):
+            dialog = ProjectDialog(self.backend)
+            self.widgets.append(dialog)
+            dialog.show()
+            dialog._tabs.setCurrentIndex(dialog._tabs.count() - 1)
+            panel = dialog._cloud_panel
+            self.wait(lambda: not panel._busy)
+            for register in (False, True):
+                if register:
+                    panel._show_create_account()
+                else:
+                    panel._show_sign_in()
+                dialog.resize(720, 560)
+                self.settle_layout()
+                self.assertFalse(panel._management.isVisible())
+                self.assertFalse(panel._sync_actions.isVisible())
+                viewport = panel._scroll.viewport()
+                content = panel._scroll.widget()
+                account_top = panel._account_card.mapTo(content, QPoint()).y()
+                connection_bottom = panel._connection_section.mapTo(content, QPoint()).y() + panel._connection_section.height()
+                self.assertLessEqual(abs((account_top + connection_bottom) / 2 - viewport.height() / 2), 2)
+                self.assertTrue(panel._account_summary.wordWrap())
+                self.assertTrue(dialog.grab().save(str(self.output / f"selector-cloud-{'register' if register else 'sign-in'}.png")))
+
     def test_startup_cloud_login_and_connection_sections_render_all_palettes(self):
         self.service.authenticated = False
         panel = self.panel()
@@ -595,4 +780,11 @@ class CloudUIChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--render-dir", type=Path, default=RENDER_DIR)
+    args, remaining = parser.parse_known_args()
+    RENDER_DIR = args.render_dir.resolve()
+    if not RENDER_DIR.is_relative_to(ROOT / "temp"):
+        parser.error("Cloud UI captures must remain under this checkout's temp directory")
+    unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

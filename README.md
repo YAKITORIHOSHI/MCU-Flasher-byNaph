@@ -113,6 +113,10 @@ creation/editing and Firebase settings share readable form surfaces and keyboard
 focus. Narrow forms stack their fields; short windows scroll while edit and cloud
 actions stay visible. Theme changes retain drafts, search and filters. Failed
 Firebase settings writes keep the form open with an explanation.
+Ticket titles, notes and metadata wrap inside the card, including long URLs and
+unbroken log lines. The dashboard keeps its search, filters and ticket actions
+inside the window. Long notes use a bounded reading area with vertical scrolling,
+and their full text remains available for selection and copying.
 Developer Access checks its Firebase connection independently of package Offline
 Mode. The sign-in card shows connection status without requiring a settings
 change or a restart. Cloud status distinguishes
@@ -953,8 +957,10 @@ Open **Project → Cloud** or the toolbar's **Cloud** action to sign in, create 
 account, manage cloud sketches, or delete your account after confirming your
 current password. Sign-in and account creation open as separate sections within
 the Cloud tab. After sign-in, a compact account header and sketch list replace
-the login form. **Upload local** opens a folder/name dialog; select a sketch and
-choose **Open sketch**. The current linked sketch also offers **Push changes**,
+the login form. The list heading and Refresh action stay together at the top,
+and the sketch list uses the available space below them. **Upload local** opens
+a folder/name dialog; select a sketch and choose **Open sketch**. The current
+linked sketch also offers **Push changes**,
 **Pull latest**, and **Versions**. Sign-out, saved-login removal, and account
 deletion live in the **Account** menu. **Save credentials** fills your email/password on the next sign-in;
 **Remember me** restores a session using its refresh token. **Forget saved

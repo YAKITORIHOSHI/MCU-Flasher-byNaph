@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import ExitStack
@@ -23,6 +24,7 @@ from PySide6.QtCore import QPoint, QRect, QTimer, QStandardPaths, QSize, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
+from main.core.cloud_sketch_service import CloudSketchService as _REAL_CLOUD_SERVICE
 from main.qt.main_window import MCUMainWindow
 from main.qt.project_dialog import ProjectDialog, QFileDialog
 from main.qt.toolbar import PrimaryToolbar
@@ -33,6 +35,77 @@ from src.modules.ui_metrics import WorkArea
 APP = QApplication.instance() or QApplication([])
 RENDER_DIR = None
 REAL_INSTANCE_IS_ALIVE = config._instance_is_alive
+
+class InertLayoutCloudService:
+    """Unconfigured cloud state with no credentials, persistence or requests."""
+
+    configured = False
+    is_authenticated = False
+    account_info = {}
+    secure_storage_status = (False, "Credential saving is unavailable in this fixture.")
+
+    def check_connection(self):
+        return False
+
+    def saved_login(self):
+        return {}
+
+
+def isolate_layout_cloud(checks, stack):
+    """Keep the actual panel/worker while denying live cloud IO until teardown."""
+    from main.qt.cloud_sketch_panel import CloudSketchPanel
+
+    services = []
+    previous_threads = set(threading.enumerate())
+
+    def cloud_workers():
+        return [thread for thread in threading.enumerate()
+                if thread.name == "MCU_CloudSketch" and thread not in previous_threads]
+
+    def create_service(*args, **kwargs):
+        service = InertLayoutCloudService()
+        services.append(service)
+        return service
+
+    guards = []
+    for target in ("urllib.request.urlopen", "urllib.request.OpenerDirector.open",
+                   "main.core.credential_store.CredentialStore.get",
+                   "main.core.credential_store.CredentialStore.set",
+                   "main.core.credential_store.CredentialStore.delete",
+                   "main.core.credential_store.CredentialStore._windows_api",
+                   "main.core.credential_store.CredentialStore._secret_tool"):
+        guard = stack.enter_context(patch(target, side_effect=AssertionError(
+            "Layout verification attempted live networking or credential access.")))
+        guards.append(guard)
+    guards.append(stack.enter_context(patch.object(
+        _REAL_CLOUD_SERVICE, "__init__", side_effect=AssertionError(
+            "Layout verification attempted to construct the live cloud service."))))
+    # The panel imports a class alias; the backend property imports it lazily.
+    for target in ("main.qt.cloud_sketch_panel.CloudSketchService",
+                   "main.core.cloud_sketch_service.CloudSketchService"):
+        stack.enter_context(patch(target, side_effect=create_service))
+
+    def finish_cloud():
+        panels = [widget for widget in APP.allWidgets()
+                  if isinstance(widget, CloudSketchPanel)
+                  and any(widget._service is service for service in services)]
+        deadline = time.monotonic() + 3
+        while (cloud_workers() or any(panel._busy for panel in panels)) and time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.005)
+        checks.assertFalse(cloud_workers(), "Fixture cloud thread outlived its isolation guards.")
+        for panel in panels:
+            checks.assertFalse(panel._busy, "Fixture cloud worker did not finish before teardown.")
+            panel.dispose()
+        # Cloud worker exceptions become UI status; check recorded guard calls
+        # so an asynchronously caught exception still fails the check.
+        for guard in guards:
+            guard.assert_not_called()
+
+    # Widget cleanup registered later runs first; patches remain in the stack
+    # until panel completions and the isolation assertions have finished.
+    checks.addCleanup(finish_cloud)
+
 
 CHILD = '''
 import sys, time, json
@@ -73,6 +146,7 @@ class ProjectChecks(unittest.TestCase):
         self.folder = Path(self.fixture.name)
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        isolate_layout_cloud(self, self.stack)
         self.stack.enter_context(patch.object(Path, "home", return_value=self.folder))
         self.stack.enter_context(patch.object(config, "LOCAL_GUI_CONFIG", self.folder / "portable.json"))
         self.stack.enter_context(patch.object(config, "_CONFIG_MEM_SIGNATURE", None))

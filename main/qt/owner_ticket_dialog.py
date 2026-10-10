@@ -10,7 +10,7 @@ from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
 from PySide6.QtCore import Qt, Signal, QTimer, QObject, Slot, QEvent
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QTextOption
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QLineEdit, QTextEdit, QMessageBox,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from main.core.owner_tickets import OwnerTicketService
 from main.qt.owner_ticket_style import (
-    PortalDialog, ResponsiveGrid, button, combo, field, heading, label,
+    PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
     refresh_portal_children, retone, scroll_body,
 )
 from main.qt.setup_components import GlassCard
@@ -139,6 +139,8 @@ class TicketFields(QWidget):
         retone(self.status, STATUS_TONES.get(self.status.currentText(), "muted"))
         self.description = QTextEdit(self)
         self.description.setAcceptRichText(False)
+        self.description.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.description.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.description.setPlainText(ticket.get("description", ""))
         self.description.setPlaceholderText("What happened?\nSteps to reproduce and useful logs.")
         self.description.setMinimumHeight(110)
@@ -162,6 +164,8 @@ class TicketCard(GlassCard):
         top = QHBoxLayout()
         top.setSpacing(8)
         self.title_label = label(ticket.get("title", "Untitled defect"), self, "title", wrap=True)
+        self.title_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.title_label.setReadingHeightLimit(128)
         top.addWidget(self.title_label, 1)
         self.edit_button = button("", self, self._on_edit, role="icon", vector="modify")
         self.edit_button.setFixedSize(34, 34)
@@ -177,26 +181,31 @@ class TicketCard(GlassCard):
         controls = QHBoxLayout()
         controls.setSpacing(12)
         severity = ticket.get("severity", "Medium")
-        self.severity_label = label(severity, self, "label")
+        self.severity_label = label(severity, self, "label", wrap=True)
+        self.severity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.severity_label.setReadingHeightLimit(80)
         retone(self.severity_label, SEVERITY_TONES.get(severity, "muted"))
-        controls.addWidget(self.severity_label)
+        controls.addWidget(self.severity_label, 1)
         self.status_cb = combo(STATUSES, self, ticket.get("status", "Open"))
         self.status_cb.setAccessibleName("Ticket status")
         self.status_cb.setMaximumWidth(155)
         self._update_status_style(self.status_cb.currentText())
         self.status_cb.currentTextChanged.connect(self._on_status_change)
         controls.addWidget(self.status_cb)
-        controls.addStretch(1)
         layout.addLayout(controls)
-        description = (ticket.get("description") or "").strip()
+        description = ticket.get("description") or ""
         if description:
             self.description_label = label(description, self, wrap=True)
-            self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            self.description_label.setReadingHeightLimit(300)
             layout.addWidget(self.description_label)
         created, updated = ticket.get("created_at", ""), ticket.get("updated_at", "")
         stamp = f"Updated {updated}" if updated and updated != created else created
-        self.metadata = label(f"{ticket.get('category', 'General')}\n{stamp}".rstrip(), self, "metadata", wrap=True)
-        self.metadata.setToolTip(f"Created: {created}\nLast modified: {updated or created}")
+        category = str(ticket.get("category", "General"))
+        self.metadata = label(category + (f"\n{stamp}" if stamp else ""), self, "metadata", wrap=True)
+        self.metadata.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.metadata.setReadingHeightLimit(128)
+        self.metadata.setToolTip(f"{category}\nCreated: {created}\nLast modified: {updated or created}")
         layout.addWidget(self.metadata)
 
     def _update_status_style(self, status):
@@ -683,27 +692,27 @@ class OwnerTicketDialog(_TaskPortal):
         self.stats_grid = ResponsiveGrid([self.stat_total, self.stat_critical, self.stat_open, self.stat_resolved], ribbon, columns=4, cell_width=130)
         stats_layout.addWidget(self.stats_grid)
         layout.addWidget(ribbon)
-        controls = QHBoxLayout()
-        controls.setSpacing(10)
         self.search_input = QLineEdit(body)
         self.search_input.setPlaceholderText("Search tickets")
         self.search_input.setAccessibleName("Search tickets")
         self.search_input.textChanged.connect(self._on_search_changed)
-        controls.addWidget(self.search_input, 1)
         self.filter_cb = combo(["All Status"] + STATUSES, body)
         self.filter_cb.setAccessibleName("Filter tickets by status")
         self.filter_cb.setMaximumWidth(170)
         self.filter_cb.currentTextChanged.connect(self._on_filter_changed)
-        controls.addWidget(self.filter_cb)
-        layout.addLayout(controls)
-        actions = QHBoxLayout()
+        self.search_row = ResponsiveRow([(self.search_input, 1), (self.filter_cb, 0)], body, compact_width=440)
+        layout.addWidget(self.search_row)
         self.access_label = label("Private defect reports", body, "metadata", wrap=True)
-        actions.addWidget(self.access_label, 1)
+        account_actions = QWidget(body)
+        actions = QHBoxLayout(account_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(10)
         self.btn_cloud = button("Connection settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
         self.btn_lock = button("Lock", body, self._do_lock, role="quiet")
         actions.addWidget(self.btn_cloud)
         actions.addWidget(self.btn_lock)
-        layout.addLayout(actions)
+        self.account_row = ResponsiveRow([(self.access_label, 1), (account_actions, 0)], body, compact_width=520)
+        layout.addWidget(self.account_row)
         self.form_card = GlassCard(body, radius=16, accent=True)
         form = QVBoxLayout(self.form_card)
         form.setContentsMargins(20, 20, 20, 20)

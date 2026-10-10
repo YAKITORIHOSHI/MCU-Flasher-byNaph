@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QEvent, QTimer
+from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QScrollArea, QFrame, QLabel, QLineEdit, QCheckBox, QListWidget,
@@ -24,6 +25,34 @@ from main.core.credential_store import save_cloud_configuration
 
 
 _CLOUD_UI_GATE = threading.Lock()
+
+
+class _ElidedLabel(QLabel):
+    """Keep account/status text readable without letting long values widen a card."""
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
+
+    def paintEvent(self, event):
+        if self.wordWrap():
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setFont(self.font())
+        lines = self.text().splitlines() or [""]
+        rect = self.contentsRect()
+        line_height = self.fontMetrics().height()
+        visible_lines = max(1, rect.height() // line_height)
+        if len(lines) > visible_lines:
+            lines = lines[:visible_lines - 1] + [" ".join(lines[visible_lines - 1:])]
+        top = rect.top() + max(0, (rect.height() - line_height * len(lines)) // 2)
+        for line in lines:
+            elided = self.fontMetrics().elidedText(line, Qt.TextElideMode.ElideRight, rect.width())
+            painter.drawText(rect.x(), top, rect.width(), line_height,
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+            top += line_height
 
 
 class _CloudConnectionDialog(QDialog):
@@ -197,9 +226,10 @@ class CloudSketchPanel(QWidget):
         self.apply_theme()
         self._update_controls()
 
-    def _label(self, text, parent=None):
-        label = QLabel(text, parent or self)
-        label.setWordWrap(True)
+    def _label(self, text, parent=None, *, elide=False):
+        label = _ElidedLabel(parent or self) if elide else QLabel(parent or self)
+        label.setText(text)
+        label.setWordWrap(not elide)
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setMinimumWidth(0)
         label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -252,7 +282,8 @@ class CloudSketchPanel(QWidget):
         self._connection.setAccessibleName("Firebase connection status")
         heading.addWidget(self._connection, 1)
         account.addLayout(heading)
-        self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card)
+        self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card, elide=True)
+        self._account_summary.setWordWrap(True)
         account_summary_row = QHBoxLayout()
         account_summary_row.setContentsMargins(0, 0, 0, 0)
         account_summary_row.addWidget(self._account_summary, 1)
@@ -382,21 +413,29 @@ class CloudSketchPanel(QWidget):
         self._content_layout.addWidget(self._management, 0, Qt.AlignmentFlag.AlignHCenter)
         self._management.hide()
 
-        sketches_card = GlassCard(self._management, radius=9)
+        self._sketches_card = sketches_card = GlassCard(self._management, radius=9)
         self._cards.append(sketches_card)
         sketches = QVBoxLayout(sketches_card)
         sketches.setContentsMargins(10, 8, 10, 8)
         sketches.setSpacing(6)
         management.addWidget(sketches_card, 1)
-        sketch_heading = QHBoxLayout()
-        sketch_heading.addWidget(self._label("Your sketches", sketches_card), 1)
-        self._refresh_btn = self._button("Refresh", self._refresh, sketches_card)
+        self._sketch_header = QWidget(sketches_card)
+        self._sketch_header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        sketch_heading = QHBoxLayout(self._sketch_header)
+        sketch_heading.setContentsMargins(0, 0, 0, 0)
+        self._sketch_title = self._label("Your sketches", self._sketch_header)
+        sketch_heading.addWidget(self._sketch_title, 1)
+        self._refresh_btn = self._button("Refresh", self._refresh, self._sketch_header)
         sketch_heading.addWidget(self._refresh_btn)
-        sketches.addLayout(sketch_heading)
+        sketches.addWidget(self._sketch_header)
         self._sketches = QListWidget(sketches_card)
         self._sketches.setAccessibleName("Cloud sketch list")
         self._sketches.setMinimumHeight(105)
-        self._sketches.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # The explicit reading minimum owns the short-window budget; QListWidget's
+        # default 192px hint must not force the outer account view to scroll.
+        self._sketches.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._sketches.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sketches.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._sketches.currentItemChanged.connect(self._selection_changed)
         self._sketches.itemDoubleClicked.connect(lambda *_: self._open_cloud())
         sketches.addWidget(self._sketches, 1)
@@ -406,7 +445,7 @@ class CloudSketchPanel(QWidget):
         linked_layout = QVBoxLayout(self._linked_section)
         linked_layout.setContentsMargins(0, 0, 0, 0)
         linked_layout.setSpacing(6)
-        self._linked = self._label("", self._linked_section)
+        self._linked = self._label("", self._linked_section, elide=True)
         linked_layout.addWidget(self._linked)
         self._linked_actions = QWidget(self._linked_section)
         linked_actions = QHBoxLayout(self._linked_actions)
@@ -497,10 +536,25 @@ class CloudSketchPanel(QWidget):
         primary_actions.addWidget(self._upload_btn, 1)
         primary_actions.addWidget(self._open_btn, 1)
         footer.addLayout(primary_actions)
-        outer.addWidget(self._sync_actions)
-        self._status = self._label("Sign in to manage cloud sketches.")
+        self._sync_actions.setMaximumWidth(700)
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(0)
+        footer_row.addStretch()
+        footer_row.addWidget(self._sync_actions, 1)
+        footer_row.addStretch()
+        outer.addLayout(footer_row)
+        self._status = self._label("Sign in to manage cloud sketches.", elide=True)
+        self._status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._status.setAccessibleName("Cloud operation status")
-        outer.addWidget(self._status)
+        self._status.setMaximumWidth(700)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(0)
+        status_row.addStretch()
+        status_row.addWidget(self._status, 1)
+        status_row.addStretch()
+        outer.addLayout(status_row)
         for field in self.findChildren(QLineEdit):
             field.setMinimumWidth(0)
             field.installEventFilter(self)
@@ -822,6 +876,7 @@ class CloudSketchPanel(QWidget):
                 "Firebase is reachable." if connection else
                 "Firebase could not be reached. Check your internet connection.")
         email = self._state.get("account", {}).get("email", "")
+        self._account_summary.setWordWrap(not authenticated)
         self._account_summary.setText(email if authenticated else
                                       "Sign in to access your private cloud sketches.")
         secure, detail = self._state.get("secure", (False, "Credential storage is unavailable."))
@@ -858,7 +913,7 @@ class CloudSketchPanel(QWidget):
                 item = QListWidgetItem(f"{row.get('name', 'Cloud sketch')}\nVersion {row.get('revision', '')} · {row.get('file_count', 0)} files")
                 item.setData(Qt.ItemDataRole.UserRole, row)
                 item.setIcon(icon("cloud", self._palette["CYAN"]))
-                item.setToolTip(f"Updated {self._display_time(row.get('updated_at'))}")
+                item.setToolTip(f"{row.get('name', 'Cloud sketch')}\nUpdated {self._display_time(row.get('updated_at'))}")
                 self._sketches.addItem(item)
                 if row.get("id") == selected:
                     target = item
@@ -1201,7 +1256,6 @@ class CloudSketchPanel(QWidget):
             self._restore_btn.setText("Restore" if compact else "Restore version")
             short = event.size().height() < 420
             self._sketches.setMinimumHeight(48 if short else 105)
-            self._sketches.setMaximumHeight(70 if short else 16777215)
         if hasattr(self, "_scroll"):
             QTimer.singleShot(0, self._fit_centered_content)
 
@@ -1214,6 +1268,8 @@ class CloudSketchPanel(QWidget):
             self._account_card.setFixedWidth(width)
             self._connection_section.setFixedWidth(width)
             self._management.setFixedWidth(width)
+            self._sync_actions.setMaximumWidth(width)
+            self._status.setMaximumWidth(width)
 
     def apply_theme(self, mode=None):
         from main.qt.theme import get_palette
@@ -1246,6 +1302,7 @@ class CloudSketchPanel(QWidget):
         """)
         for field in self.findChildren(QLineEdit):
             field.setMinimumHeight(max(32, field.fontMetrics().height() + 18))
+        self._status.setFixedHeight(self._status.fontMetrics().height())
         for button in self._job_buttons:
             if button._icon_name:
                 button.setIcon(icon(button._icon_name, primary if button.property("cloudPrimary") else pal["TEXT_BRIGHT"]))

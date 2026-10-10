@@ -140,6 +140,14 @@ For explicitly requested assistant delegation, use the local
   another account's or legacy local cache. Save cache updates atomically. Verify service
   behavior with `direct/verify_owner_ticket_service.py` using mocked vault,
   configuration, probes and HTTP, together with the offline-mode verifier.
+  Keep dashboard cards constrained to the viewport; ticket titles, descriptions
+  and metadata must wrap even for long unbroken words, URLs and code/log lines.
+  Preserve literal text and selection rather than inserting break characters.
+  Keep search, filters and ticket actions visible at compact/scaled widths,
+  using bounded vertically scrollable reading areas for long notes so a log
+  cannot create an enormous cached glass surface. Retain the complete text for
+  selection/copying. Verify long-text ticket fixtures in all three palettes
+  without creating real tickets.
 - Cloud sketches use `main/core/cloud_sketch_service.py` and the selector's
   `CloudSketchPanel`. All provider/keyring/Auth/RTDB/source operations run through
   a bounded serialized worker. Cloud connectivity is independent of package
@@ -168,6 +176,9 @@ For explicitly requested assistant delegation, use the local
   outside that folder. Preserve legacy working edits when adopting this location.
   Keep the signed-in screen compact: account menu, sketch list, and relevant
   actions; open upload entry explicitly rather than showing raw paths by default.
+  Pin the sketch heading and Refresh action above the list; assign spare height
+  to the list rather than stretching its header. Check the real project selector
+  Cloud tab as well as the standalone dialog with long names and compact sizes.
   Push/Pull are explicit, with ETag/revision conflict handling,
   account/provider link validation, root UTF-8 source boundaries and bounded
   history. Pull confirms replacement, retains external recovery copies, validates

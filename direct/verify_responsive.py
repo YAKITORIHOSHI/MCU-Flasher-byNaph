@@ -50,6 +50,8 @@ def capture(widget, name):
 class QtResponsiveChecks(ControlChecks):
     def setUp(self):
         super().setUp()
+        from verify_projects import isolate_layout_cloud
+        isolate_layout_cloud(self, self.stack)
         register_fonts()
         APP.setStyleSheet(build_stylesheet('default'))
 
