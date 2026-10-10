@@ -272,30 +272,50 @@ class LogFollow(QObject):
         following = (self.enabled and not self.scrollbar_held and not bar.isSliderDown()
                      and ((self.hold_to_pause and follow_output)
                           or (not self.user_scrolled_up and (wrapped or self._at_bottom()))))
-        if self._plain and not wrapped:
-            anchor = QTextCursor(view.firstVisibleBlock())
-        else:
-            anchor = view.cursorForPosition(QPoint(0, 1))
-        anchor.setKeepPositionOnInsert(True)
-        selection = QTextCursor(view.textCursor())
-        endpoints = []
+        # Appending output already adjusts the widget's active text cursor and
+        # selection. Keep only rebuild coordinates as plain values; retaining
+        # two extra QTextCursor objects for every output batch makes Qt's native
+        # document cursor list grow rapidly under a busy serial stream.
         points = []
-        for position in (selection.anchor(), selection.position()):
-            point = QTextCursor(view.document())
-            point.setPosition(position)
-            point.setKeepPositionOnInsert(True)
-            endpoints.append(point)
-            if rebuild:
+        if rebuild:
+            selection = view.textCursor()
+            for position in (selection.anchor(), selection.position()):
+                point = QTextCursor(view.document())
+                point.setPosition(position)
                 points.append((point.blockNumber(), point.positionInBlock(), point.block().text()))
+        if following:
+            # Following output restores directly to the bottom and needs no
+            # persistent anchor cursor. This is the hot path for build/serial
+            # output and avoids one native document cursor per flush as well.
+            anchor = None
+            anchor_point = None
+            block_number = 0
+            anchor_y = 0
+            row_offset = 0
+        else:
+            if self._plain and not wrapped:
+                anchor = QTextCursor(view.firstVisibleBlock())
+            else:
+                anchor = view.cursorForPosition(QPoint(0, 1))
+            anchor.setKeepPositionOnInsert(True)
+            anchor_point = ((anchor.blockNumber(), anchor.positionInBlock(), anchor.block().text())
+                            if rebuild else None)
+            block_number = anchor.blockNumber()
+            anchor_y = view.cursorRect(anchor).top()
+            row_offset = bar.value() - self._visual_row(anchor) if wrapped else 0
+            if rebuild:
+                # The document is about to be rebuilt. Recreate the anchor
+                # from its coordinates afterward instead of retaining a cursor
+                # through the destructive replacement.
+                anchor = None
         return {
             "following": following, "anchor": anchor,
             "content_revision": self._content_revision,
-            "block": anchor.blockNumber(), "y": view.cursorRect(anchor).top(),
-            "horizontal": view.horizontalScrollBar().value(), "selection": endpoints,
+            "block": block_number, "y": anchor_y,
+            "horizontal": view.horizontalScrollBar().value(),
             "rebuild": rebuild, "empty": view.document().isEmpty(),
             "selection_points": points,
-            "anchor_point": (anchor.blockNumber(), anchor.positionInBlock(), anchor.block().text()) if rebuild else None,
-            "row_offset": bar.value() - self._visual_row(anchor) if wrapped else 0,
+            "anchor_point": anchor_point, "row_offset": row_offset,
         }
 
     @staticmethod
@@ -324,12 +344,8 @@ class LogFollow(QObject):
             selection = QTextCursor(view.document())
             selection.setPosition(self._rebuilt_position(state["selection_points"][0]))
             selection.setPosition(self._rebuilt_position(state["selection_points"][1]), QTextCursor.MoveMode.KeepAnchor)
-        else:
-            selection = QTextCursor(view.document())
-            selection.setPosition(state["selection"][0].position())
-            selection.setPosition(state["selection"][1].position(), QTextCursor.MoveMode.KeepAnchor)
-        if view.textCursor() != selection:
-            view.setTextCursor(selection)
+            if view.textCursor() != selection:
+                view.setTextCursor(selection)
         if state["anchor_point"] is not None:
             anchor = QTextCursor(view.document())
             anchor.setPosition(self._rebuilt_position(state["anchor_point"]))
