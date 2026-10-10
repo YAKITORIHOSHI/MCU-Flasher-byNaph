@@ -7,6 +7,7 @@ import io
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -192,9 +193,16 @@ class SystemSetupChecks(unittest.TestCase):
         self.run.assert_not_called()
 
 
-@unittest.skipUnless(sys.platform.startswith("linux"), "Ubuntu shell coordinator")
 class MissingPythonChecks(unittest.TestCase):
     def setUp(self):
+        self.bash = shutil.which("bash")
+        if not self.bash and os.name == "nt":
+            git = shutil.which("git")
+            candidate = Path(git).parent.parent / "bin/bash.exe" if git else None
+            if candidate is not None and candidate.is_file():
+                self.bash = str(candidate)
+        if not self.bash:
+            self.skipTest("Native Bash or installed Git Bash is unavailable")
         audit = ROOT / "temp/audit/ubuntu-system-setup"
         audit.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=audit)
@@ -209,52 +217,103 @@ class MissingPythonChecks(unittest.TestCase):
         self.script = folder / "run.sh"
         source = (ROOT / "direct/ubuntu/run.sh").read_text()
         # Only the copied fixture receives replacement executable paths.
-        source = source.replace("/usr/bin/python3", shlex.quote(str(self.python))).replace("/usr/bin/sudo", shlex.quote(str(self.sudo))).replace("/usr/bin/apt-get", shlex.quote(str(self.apt)))
+        source = source.replace("/usr/bin/python3", shlex.quote(self.shell_path(self.python))).replace("/usr/bin/sudo", shlex.quote(self.shell_path(self.sudo))).replace("/usr/bin/apt-get", shlex.quote(self.shell_path(self.apt)))
+        if os.name == "nt":
+            # Git Bash checks shell orchestration with fake native executables;
+            # it does not prove Ubuntu host admission or native Python support.
+            source = source.replace('[[ "$(uname -s)" != "Linux" ]]', "false")
         # Root CI uses an isolated fake desktop uid for this shell-only fixture.
         source = source.replace("(( EUID == 0 ))", "false")
-        self.script.write_text(source)
+        self.script.write_text(source, encoding="utf-8", newline="\n")
         self.env = os.environ.copy()
-        self.env["MCU_PYTHON_FIXTURE_RECEIPT"] = str(self.receipt)
+        self.env.pop("BASH_ENV", None)
+        self.env.pop("ENV", None)
+        self.env["MCU_PYTHON_FIXTURE_RECEIPT"] = self.shell_path(self.receipt)
+
+    @staticmethod
+    def shell_path(path):
+        path = Path(path)
+        if os.name == "nt":
+            return "/" + path.drive.rstrip(":").lower() + path.as_posix()[2:]
+        return str(path)
 
     def test_missing_python_check_never_starts_installer(self):
-        result = subprocess.run(["/bin/bash", str(self.script), "--check"], env=self.env,
+        result = subprocess.run([self.bash, self.shell_path(self.script), "--check"], env=self.env,
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 1)
         self.assertIn("system Python is missing", result.stderr)
         self.assertFalse(self.receipt.exists())
 
     def test_missing_python_installs_then_continues_with_literal_arguments(self):
-        self.sudo.write_text('#!/bin/bash\nexec "$@"\n')
+        self.sudo.write_text('#!/bin/bash\nexec "$@"\n', newline="\n")
         self.sudo.chmod(0o755)
         self.apt.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$MCU_PYTHON_FIXTURE_RECEIPT"\n'
                             'if [[ "$*" == *" install "* ]]; then\n'
-                            'cp -- "$MCU_PYTHON_FIXTURE_TEMPLATE" "$MCU_PYTHON_FIXTURE_TARGET"\nfi\n')
+                            'cp -- "$MCU_PYTHON_FIXTURE_TEMPLATE" "$MCU_PYTHON_FIXTURE_TARGET"\nfi\n', newline="\n")
         self.apt.chmod(0o755)
         template = self.root / "python-template"
-        template.write_text('#!/bin/bash\nprintf "python argument: %s\\n" "$@" >> "$MCU_PYTHON_FIXTURE_RECEIPT"\n')
+        template.write_text('#!/bin/bash\n'
+                            'if [[ -n ${PYTHONEXEPATH-}${PIO_PYTHON_EXE-}${PLATFORMIO_PYTHON_EXE-}${PLATFORMIO_PENV_DIR-} ]]; then\n'
+                            '  printf "Foreign interpreter hint reached the coordinator\\n" >&2; exit 71\n'
+                            'fi\n'
+                            'printf "python argument: %s\\n" "$@" >> "$MCU_PYTHON_FIXTURE_RECEIPT"\n', newline="\n")
         template.chmod(0o755)
-        self.env.update(MCU_PYTHON_FIXTURE_TEMPLATE=str(template), MCU_PYTHON_FIXTURE_TARGET=str(self.python))
+        self.env.update(MCU_PYTHON_FIXTURE_TEMPLATE=self.shell_path(template), MCU_PYTHON_FIXTURE_TARGET=self.shell_path(self.python))
+        self.env.update({name: "C:/copied/python.exe" for name in
+                         ("PYTHONEXEPATH", "PIO_PYTHON_EXE", "PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR")})
         project = "Sketch Ω $(touch NEVER) with spaces"
-        result = subprocess.run(["/bin/bash", str(self.script), "--bootstrap-window", "--project", project],
-                                env=self.env, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([self.bash, self.shell_path(self.script), "--bootstrap-window", "--project", project],
+                                env=self.env, capture_output=True, text=True, encoding="utf-8", timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        receipt = self.receipt.read_text()
+        receipt = self.receipt.read_text(encoding="utf-8")
         self.assertIn("update", receipt)
         self.assertIn("install --yes --no-remove --no-install-recommends python3 python3-venv", receipt)
         self.assertIn("python argument: " + project, receipt)
         self.assertFalse((self.root / "NEVER").exists())
 
     def test_cancelled_python_setup_never_continues_to_coordinator(self):
-        self.sudo.write_text('#!/bin/bash\nprintf "cancelled\\n" >> "$MCU_PYTHON_FIXTURE_RECEIPT"\nexit 1\n')
+        self.sudo.write_text('#!/bin/bash\nprintf "cancelled\\n" >> "$MCU_PYTHON_FIXTURE_RECEIPT"\nexit 1\n', newline="\n")
         self.sudo.chmod(0o755)
-        self.apt.write_text('#!/bin/bash\nexit 0\n')
+        self.apt.write_text('#!/bin/bash\nexit 0\n', newline="\n")
         self.apt.chmod(0o755)
-        result = subprocess.run(["/bin/bash", str(self.script), "--bootstrap-window"], input="\n",
+        result = subprocess.run([self.bash, self.shell_path(self.script), "--bootstrap-window"], input="\n",
                                 env=self.env, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 1)
         self.assertIn("authentication was cancelled", result.stderr)
         self.assertEqual(self.receipt.read_text(), "cancelled\n")
         self.assertFalse(self.python.exists())
+
+    def test_missing_python_desktop_recovery_uses_each_terminal_command_option(self):
+        tools = self.root / "fake-terminals"
+        tools.mkdir()
+        env = dict(self.env, PATH=self.shell_path(tools) + ":/usr/bin:/bin")
+        arguments = ["--desktop", "--project", 'Sketch Ω $(touch NEVER) "quoted"']
+        for name, separator in (("gnome-terminal", "--"), ("kitty", "--"), ("alacritty", "-e")):
+            with self.subTest(terminal=name):
+                terminal = tools / name
+                terminal.write_text('#!/bin/bash\nprintf \'%s\\0\' "$@" > "$MCU_PYTHON_FIXTURE_RECEIPT"\n',
+                                    encoding="utf-8", newline="\n")
+                terminal.chmod(0o755)
+                # Restrict the copied fixture's lookup to this one fake terminal;
+                # the caller must never open an installed desktop terminal.
+                source = self.script.read_text(encoding="utf-8")
+                fixture_lookup = ('command() {\n'
+                                  '  if [[ "$1" == -v && "$2" == "$MCU_PYTHON_FIXTURE_TERMINAL" ]]; then\n'
+                                  '    printf "%s\\n" "$2"; return 0\n'
+                                  '  fi\n'
+                                  '  return 1\n'
+                                  '}\n')
+                coordinator = self.script.parent / ("recovery-" + name + ".sh")
+                coordinator.write_text(source.replace("set -euo pipefail\n", "set -euo pipefail\n" + fixture_lookup, 1),
+                                       encoding="utf-8", newline="\n")
+                env["MCU_PYTHON_FIXTURE_TERMINAL"] = name
+                result = subprocess.run([self.bash, self.shell_path(coordinator), *arguments], env=env,
+                                        capture_output=True, text=True, encoding="utf-8", timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                recorded = self.receipt.read_text(encoding="utf-8").split("\0")[:-1]
+                self.assertEqual(recorded, [separator, "/bin/bash", self.shell_path(self.script),
+                                            "--bootstrap-window", *arguments])
+                self.assertFalse((self.root / "NEVER").exists())
 
 
 if __name__ == "__main__":

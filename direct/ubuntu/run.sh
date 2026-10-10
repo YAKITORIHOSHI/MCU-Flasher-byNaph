@@ -7,6 +7,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 # Bootstrap's coordinator uses Ubuntu Python; the workspace always uses its venv.
 unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
+unset PYTHONEXEPATH PIO_PYTHON_EXE PLATFORMIO_PYTHON_EXE PLATFORMIO_PENV_DIR
 unset MCU_FLASHER_OFFLINE_RUNTIME MCU_FLASHER_WORKSPACE_RUNTIME MCU_FLASHER_APP_ROOT PIP_NO_INDEX
 export PYTHONNOUSERSITE=1
 if [[ ! -x /usr/bin/python3 ]]; then
@@ -28,7 +29,7 @@ if [[ ! -x /usr/bin/python3 ]]; then
         for terminal in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm kitty alacritty; do
             if command -v "$terminal" >/dev/null; then
                 separator=-e
-                [[ "$terminal" != gnome-terminal && "$terminal" != alacritty ]] || separator=--
+                [[ "$terminal" != gnome-terminal && "$terminal" != kitty ]] || separator=--
                 [[ "$terminal" != xfce4-terminal ]] || separator=--execute
                 exec "$terminal" "$separator" /bin/bash "$app_root/direct/ubuntu/run.sh" --bootstrap-window "$@"
             fi

@@ -28,9 +28,13 @@ from PySide6.QtCore import QCoreApplication, QEvent, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from main.core import config
+from main.qt.garbage_collection import install_gui_garbage_collector
 from src.modules.runtime_resources import performance_profile
 
 APP = QApplication.instance() or QApplication([])
+# Match the workspace lifetime before constructing any Qt-backed fixtures.
+# Background parser allocation must not trigger cyclic Qt wrapper cleanup.
+COLLECTOR = install_gui_garbage_collector(APP)
 
 
 def wait_until(predicate, timeout=3.0):

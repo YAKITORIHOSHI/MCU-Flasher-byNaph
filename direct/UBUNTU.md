@@ -221,6 +221,10 @@ Linux builds and uploads use native PlatformIO packages under
 `${XDG_DATA_HOME:-$HOME/.local/share}/mcu-flasher/platformio/<architecture>`.
 Build preparation replaces inherited Windows package/cache/interpreter hints
 with native Linux locations; it never trusts a copied Windows readiness marker.
+Launch, Bootstrap and build preparation clear PlatformIO interpreter overrides
+(`PYTHONEXEPATH`, `PIO_PYTHON_EXE`, `PLATFORMIO_PYTHON_EXE` and
+`PLATFORMIO_PENV_DIR`). XDG data/cache roots must be absolute native Linux paths;
+copied Windows or relative values use the account's default folders instead.
 The main app and its build/upload/reset subprocesses prohibit downloads. Missing
 packages report the bootstrap command. Edit `direct/offline-packages.json` to
 add a custom platform or a registry library specification, then run setup while
@@ -281,6 +285,10 @@ OpenCode TUI with one protected native PTY. **Hide** and reveal keep the same
 session running; an independent close of its container is ignored. Closing the
 owning workspace ends it. The separate **Terminal** tab remains empty until
 **New Bash** creates a general shell session.
+If a project-terminal renderer stops or its assets fail to load, only that
+session's PTY closes. Its tab remains available, and **New Bash** starts a new
+session explicitly; commands are never replayed. The assistant header fits
+compact panes using the current font's logical dimensions.
 
 Ubuntu creates PTY pairs with `openpty` and starts the private supervisor through
 native `Popen` session setup. Python does not run a fork callback inside the

@@ -29,10 +29,12 @@ from main.qt.main_window import MCUMainWindow
 from main.qt.project_dialog import ProjectDialog, QFileDialog
 from main.qt.toolbar import PrimaryToolbar
 from main.qt.theme import build_stylesheet, register_fonts
+from main.qt.garbage_collection import install_gui_garbage_collector
 from main import web_bridge
 from src.modules.ui_metrics import WorkArea
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 RENDER_DIR = None
 REAL_INSTANCE_IS_ALIVE = config._instance_is_alive
 

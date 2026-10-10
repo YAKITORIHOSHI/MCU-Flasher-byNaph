@@ -17,7 +17,8 @@ def clean_native_bootstrap_environment() -> dict[str, str]:
     """Keep proxy/certificate/PATH choices while forcing private pip destinations."""
     from src.modules.offline_bootstrap import clean_bootstrap_environment
     env = clean_bootstrap_environment()
-    for name in ("PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_USER"):
+    for name in ("PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_USER",
+                 "PYTHONEXEPATH", "PIO_PYTHON_EXE", "PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR"):
         env.pop(name, None)
     # A user pip.conf can otherwise redirect venv installs with target/prefix.
     # Environment proxy, index and certificate settings remain available.

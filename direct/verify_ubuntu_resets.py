@@ -24,7 +24,6 @@ parser.add_argument("--tool-python", type=Path, default=Path(sys.executable),
 OPTIONS, UNITTEST_ARGS = parser.parse_known_args()
 
 
-@unittest.skipUnless(sys.platform.startswith("linux"), "Native Ubuntu reset tools")
 class ResetChecks(unittest.TestCase):
     def test_versioned_command_names_preserve_v4_and_use_current_v5_syntax(self):
         for version, erase, image in (("4.11.0", "erase_flash", "image_info"),
@@ -80,7 +79,8 @@ class ResetChecks(unittest.TestCase):
             esp._port.close.assert_called_once_with()
 
     def test_private_module_is_used_without_path_or_copied_windows_fallback(self):
-        with patch("src.modules.private_python_guard.is_running_private_python", return_value=True), \
+        with patch.object(web_bridge.sys, "platform", "linux"), \
+                patch("src.modules.private_python_guard.is_running_private_python", return_value=True), \
                 patch.object(ubuntu_esptool.importlib.util, "find_spec", return_value=object()), \
                 patch.object(web_bridge.shutil, "which", side_effect=AssertionError("Foreign PATH tool searched")):
             command = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)._get_esptool_cmd()
@@ -141,13 +141,13 @@ class ResetChecks(unittest.TestCase):
 
     def tool(self, *arguments, cwd=None):
         version = subprocess.run(
-            [str(OPTIONS.tool_python), "-B", "-c",
+            [str(OPTIONS.tool_python), "-B", "-W", "error", "-c",
              "from importlib.metadata import version; print(version('esptool'))"],
             capture_output=True, text=True, timeout=20, check=False)
         self.assertEqual(version.returncode, 0, version.stderr)
         with patch.object(ubuntu_esptool.metadata, "version", return_value=version.stdout.strip()):
             arguments = [ubuntu_esptool.subcommand(argument) for argument in arguments]
-        return subprocess.run([str(OPTIONS.tool_python), "-B", "-m", "esptool", *arguments],
+        return subprocess.run([str(OPTIONS.tool_python), "-B", "-W", "error", "-m", "esptool", *arguments],
                               capture_output=True, text=True, timeout=20, cwd=cwd or ROOT, check=False)
 
     def test_real_tool_accepts_recovery_flags_without_connecting_to_a_port(self):
@@ -168,7 +168,7 @@ class ResetChecks(unittest.TestCase):
                       "import sys; image=ESP32FirmwareImage(); image.entrypoint=0x40000000; "
                       "segment=ImageSegment(0x3ffb0000,b'isolated fixture firmware bytes!!'); "
                       "segment.name='fixture'; image.segments=[segment]; image.save(sys.argv[1])")
-            built = subprocess.run([str(OPTIONS.tool_python), "-B", "-c", source, str(firmware)],
+            built = subprocess.run([str(OPTIONS.tool_python), "-B", "-W", "error", "-c", source, str(firmware)],
                                    capture_output=True, text=True, timeout=20, check=False)
             self.assertEqual(built.returncode, 0, built.stderr)
             before = firmware.read_bytes()

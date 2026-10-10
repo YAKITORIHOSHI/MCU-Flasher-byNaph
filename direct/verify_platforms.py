@@ -73,7 +73,8 @@ class PlatformChecks(unittest.TestCase):
         foreign = {name: "C:/copied-windows/toolchains" for name in (
             "PLATFORMIO_CORE_DIR", "PLATFORMIO_PACKAGES_DIR", "PLATFORMIO_PLATFORMS_DIR",
             "PLATFORMIO_CACHE_DIR", "PLATFORMIO_BUILD_CACHE_DIR", "PLATFORMIO_GLOBALLIB_DIR",
-            "PLATFORMIO_PENV_DIR", "PLATFORMIO_PYTHON_EXE", "PYTHONHOME")}
+            "PLATFORMIO_PENV_DIR", "PLATFORMIO_PYTHON_EXE", "PYTHONHOME",
+            "PYTHONEXEPATH", "PIO_PYTHON_EXE")}
         with patch.object(ubuntu, "native_platformio_dir", return_value=core), patch.dict(os.environ, foreign):
             actual, repaired = ubuntu._refresh_platformio_core_environment(self.root)
             self.assertEqual(actual, core)
@@ -83,8 +84,13 @@ class PlatformChecks(unittest.TestCase):
                 path = Path(os.environ[name])
                 self.assertTrue(path.is_relative_to(core))
                 self.assertTrue(path.is_dir())
-            for name in ("PLATFORMIO_PENV_DIR", "PLATFORMIO_PYTHON_EXE", "PYTHONHOME"):
+            for name in ("PLATFORMIO_PENV_DIR", "PLATFORMIO_PYTHON_EXE", "PYTHONHOME",
+                         "PYTHONEXEPATH", "PIO_PYTHON_EXE"):
                 self.assertNotIn(name, os.environ)
+            # This is the override PlatformIO actually uses for its SCons
+            # interpreter; merely clearing PLATFORMIO_PYTHON_EXE is insufficient.
+            from platformio.proc import get_pythonexe_path
+            self.assertEqual(get_pythonexe_path(), os.path.normpath(sys.executable))
         self.assertFalse((self.root / "src/.platformio-mcu-gui").exists())
 
     def test_ubuntu_core_selection_does_not_write_on_import_or_discovery(self):
@@ -96,6 +102,7 @@ class PlatformChecks(unittest.TestCase):
     def test_host_package_and_retained_resource_directories_are_separate(self):
         from src.modules import package_jobs, platform_runtime, offline_mode
         with patch.object(package_jobs, "ROOT", self.root), \
+                patch.object(platform_runtime, "_native_xdg_base", return_value=self.root / "ubuntu-data"), \
                 patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root / "ubuntu-data"),
                                         "PLATFORMIO_CORE_DIR": str(self.root / "foreign-store")}), \
                 patch.object(platform_runtime.platform, "machine", return_value="x86_64"):
@@ -108,6 +115,30 @@ class PlatformChecks(unittest.TestCase):
             self.assertNotEqual(windows_store, ubuntu_store)
             self.assertNotEqual(offline_mode.extras_directory(self.root, "win32"),
                                 offline_mode.extras_directory(self.root, "linux"))
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_native_xdg_paths_reject_foreign_or_relative_values_without_writes(self):
+        from src.modules import platform_runtime
+        home = self.root / "fixture-home"
+        for value in ("", "relative/cache", "C:/copied-windows/cache",
+                      "C:\\copied-windows\\cache", "\\\\server\\share\\cache",
+                      "//server/share/cache"):
+            with self.subTest(value=value), \
+                    patch.object(platform_runtime.sys, "platform", "linux"), \
+                    patch.object(platform_runtime.Path, "home", return_value=home), \
+                    patch.object(platform_runtime.platform, "machine", return_value="x86_64"), \
+                    patch.dict(os.environ, {"XDG_DATA_HOME": value, "XDG_CACHE_HOME": value}):
+                self.assertEqual(platform_runtime.native_platformio_dir(),
+                                 home / ".local/share/mcu-flasher/platformio/x86_64")
+                self.assertEqual(platform_runtime.app_cache_dir(), home / ".cache/mcu-flasher")
+        for value in ("/native/data", "/native/cache with spaces", "/mnt/removable/native"):
+            with self.subTest(value=value), \
+                    patch.object(platform_runtime.sys, "platform", "linux"), \
+                    patch.object(platform_runtime.platform, "machine", return_value="x86_64"), \
+                    patch.dict(os.environ, {"XDG_DATA_HOME": value, "XDG_CACHE_HOME": value}):
+                self.assertEqual(platform_runtime.native_platformio_dir(),
+                                 Path(value) / "mcu-flasher/platformio/x86_64")
+                self.assertEqual(platform_runtime.app_cache_dir(), Path(value) / "mcu-flasher")
         self.assertEqual(list(self.root.iterdir()), [])
 
     @unittest.skipUnless(sys.platform == "win32", "Windows resource environment")

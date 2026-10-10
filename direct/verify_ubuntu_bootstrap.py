@@ -50,6 +50,29 @@ class UbuntuReleasePackageChecks(unittest.TestCase):
         self.assertEqual(missing.exception.packages, ("libglib2.0-0t64", "libasound2t64"))
 
 
+class BootstrapEnvironmentChecks(unittest.TestCase):
+    def test_private_pip_and_platformio_interpreters_ignore_foreign_destinations(self):
+        from platformio.proc import get_pythonexe_path
+
+        values = {"PIP_TARGET": "/external-target", "PIP_PREFIX": "/external-prefix", "PIP_ROOT": "/external-root",
+                  "PIP_USER": "1", "PIP_CONFIG_FILE": "/user/pip.conf", "PATH": "/account/bin:/usr/bin",
+                  "PYTHONEXEPATH": "C:/copied/python.exe", "PIO_PYTHON_EXE": "C:/copied/python.exe",
+                  "PLATFORMIO_PYTHON_EXE": "C:/copied/python.exe", "PLATFORMIO_PENV_DIR": "C:/copied/penv",
+                  "HTTPS_PROXY": "https://proxy.invalid", "PIP_INDEX_URL": "https://packages.invalid/simple",
+                  "PIP_CERT": "/account/certificate.pem", "REQUESTS_CA_BUNDLE": "/account/requests.pem"}
+        with patch.dict(os.environ, values):
+            env = setup.clean_native_bootstrap_environment()
+        for name in ("PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_USER", "PYTHONEXEPATH",
+                     "PIO_PYTHON_EXE", "PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR"):
+            self.assertNotIn(name, env)
+        self.assertEqual(env["PIP_CONFIG_FILE"], os.devnull)
+        for name in ("PATH", "HTTPS_PROXY", "PIP_INDEX_URL", "PIP_CERT", "REQUESTS_CA_BUNDLE"):
+            self.assertEqual(env[name], values[name])
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(get_pythonexe_path(), os.path.normpath(sys.executable))
+        self.assertEqual(env["PYTHONNOUSERSITE"], "1")
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "Native Linux venv and SONAME fixtures")
 class UbuntuBootstrapChecks(unittest.TestCase):
     def setUp(self):
@@ -89,20 +112,6 @@ class UbuntuBootstrapChecks(unittest.TestCase):
             self.assertEqual(setup.main([]), 1)
         self.assertIn("Ubuntu prerequisites", output.getvalue())
         self.assertIn("sudo apt install libxcb-cursor0", output.getvalue())
-
-    def test_private_pip_destination_isolated_without_removing_network_preferences(self):
-        values = {"PIP_TARGET": "/external-target", "PIP_PREFIX": "/external-prefix", "PIP_ROOT": "/external-root",
-                  "PIP_USER": "1", "PIP_CONFIG_FILE": "/user/pip.conf", "PATH": "/account/bin:/usr/bin",
-                  "HTTPS_PROXY": "https://proxy.invalid", "PIP_INDEX_URL": "https://packages.invalid/simple",
-                  "PIP_CERT": "/account/certificate.pem", "REQUESTS_CA_BUNDLE": "/account/requests.pem"}
-        with patch.dict(os.environ, values):
-            env = setup.clean_native_bootstrap_environment()
-        for name in ("PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_USER"):
-            self.assertNotIn(name, env)
-        self.assertEqual(env["PIP_CONFIG_FILE"], os.devnull)
-        for name in ("PATH", "HTTPS_PROXY", "PIP_INDEX_URL", "PIP_CERT", "REQUESTS_CA_BUNDLE"):
-            self.assertEqual(env[name], values[name])
-        self.assertEqual(env["PYTHONNOUSERSITE"], "1")
 
     def test_missing_native_libraries_show_exact_recovery_packages(self):
         self.host_mocks()

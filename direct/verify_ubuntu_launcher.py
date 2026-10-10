@@ -57,6 +57,27 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
                     self.assertIn("isolated home", (destination / "src/__init__.py").read_text())
 
 
+class LaunchEnvironmentChecks(unittest.TestCase):
+    def test_foreign_interpreter_hints_cannot_override_platformio_children(self):
+        from platformio.proc import get_pythonexe_path
+
+        values = {"PYTHONHOME": "C:/Python", "PYTHONPATH": "foreign", "QT_PLUGIN_PATH": "Qt5",
+                  "PYTHONEXEPATH": "C:/copied/python.exe", "PIO_PYTHON_EXE": "C:/copied/python.exe",
+                  "PLATFORMIO_PYTHON_EXE": "C:/copied/python.exe", "PLATFORMIO_PENV_DIR": "C:/copied/penv",
+                  "MCU_FLASHER_WORKSPACE_RUNTIME": "1", "PIP_NO_INDEX": "1", "PATH": "custom-cli-path"}
+        with patch.dict(os.environ, values):
+            # Exercise PlatformIO's actual interpreter selector, which otherwise
+            # trusts PYTHONEXEPATH even when invoked by the native private Python.
+            self.assertEqual(get_pythonexe_path(), values["PYTHONEXEPATH"])
+            env = launch.clean_environment()
+        self.assertEqual(env["PATH"], "custom-cli-path")
+        for key in values.keys() - {"PATH"}:
+            self.assertNotIn(key, env)
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(get_pythonexe_path(), os.path.normpath(sys.executable))
+        self.assertEqual(env["PYTHONNOUSERSITE"], "1")
+
+
 def desktop_command(text: str, *, action: bool = False) -> list[str]:
     """Decode string/Exec quoting and literal percent escapes, leaving %k alone."""
     values = [line.removeprefix("Exec=") for line in text.splitlines() if line.startswith("Exec=")]
@@ -413,17 +434,6 @@ class LauncherChecks(unittest.TestCase):
             time.sleep(.02)
         self.assertTrue(receipt.is_file(), "The native desktop API launched its child without a receipt")
         self.assertEqual(receipt.read_text(), "launched")
-
-    def test_foreign_runtime_variables_are_removed_but_cli_path_is_retained(self):
-        values = {"PYTHONHOME": "C:/Python", "PYTHONPATH": "foreign", "QT_PLUGIN_PATH": "Qt5",
-                  "MCU_FLASHER_WORKSPACE_RUNTIME": "1", "PIP_NO_INDEX": "1", "PATH": "custom-cli-path"}
-        with patch.dict(os.environ, values):
-            env = launch.clean_environment()
-        self.assertEqual(env["PATH"], "custom-cli-path")
-        for key in values.keys() - {"PATH"}:
-            self.assertNotIn(key, env)
-        self.assertEqual(env["PYTHONNOUSERSITE"], "1")
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -274,6 +275,31 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
                 redirect_stderr(diagnostic):
             self.assertEqual(supervisor.supervise(["fixture-command"]), 125)
         self.assertIn("Bootstrap --repair", diagnostic.getvalue())
+
+    def test_signal_shutdown_has_no_already_reaped_subprocess_warning(self):
+        command = "import time; print('SIGNAL_FIXTURE_READY',flush=True); time.sleep(30)"
+        session = PtySession(str(self.root), [sys.executable, "-I", "-u", "-c", command])
+        self.addCleanup(session.close)
+        output, ended = [], []
+        session.output.connect(output.append)
+        session.ended.connect(ended.append)
+        native_spawn = NativePtyProcess.spawn
+
+        def strict_spawn(arguments, **options):
+            # -I ignores inherited PYTHONWARNINGS. Pass the warning policy to
+            # the actual supervisor interpreter so destructor warnings are visible.
+            return native_spawn([arguments[0], "-W", "error", *arguments[1:]], **options)
+
+        with patch.object(NativePtyProcess, "spawn", side_effect=strict_spawn):
+            self.assertTrue(session.start())
+        supervisor = session.process
+        self.wait_for(lambda: "SIGNAL_FIXTURE_READY" in "".join(output))
+        supervisor._handle.send_signal(signal.SIGTERM)
+        self.wait_for(lambda: bool(ended))
+        self.wait_for(lambda: supervisor.exitstatus is not None)
+        self.assertEqual(supervisor.exitstatus, 128 + signal.SIGTERM)
+        self.assertNotIn("ResourceWarning", "".join(output))
+        self.assertNotIn("Exception ignored", "".join(output))
 
     def test_ctrl_c_reaches_a_native_command_without_terminating_custody_early(self):
         command = "import time; print('COMMAND_READY',flush=True); time.sleep(30)"

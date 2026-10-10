@@ -29,6 +29,7 @@ from shiboken6 import isValid
 from main.qt.cursor_visibility import WorkspacePointerGuard
 from main.qt.garbage_collection import install_gui_garbage_collector
 from main.qt.log_follow import LogFollow
+NATIVE_LINUX = sys.platform.startswith("linux")
 
 
 def mouse_event(kind):
@@ -115,6 +116,14 @@ class UbuntuEventFilterChecks(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
         cls.collector = install_gui_garbage_collector(cls.app)
+
+    def setUp(self):
+        if not NATIVE_LINUX:
+            # Exercise the Linux registration/dispatch contracts with real
+            # owned Qt widgets; native WebEngine probes still require Linux.
+            platform = patch("sys.platform", "linux")
+            platform.start()
+            self.addCleanup(platform.stop)
 
     def widget(self, cls=QWidget, parent=None):
         widget = cls(parent)
@@ -264,6 +273,7 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.process()
 
+    @unittest.skipUnless(NATIVE_LINUX, "Native Ubuntu WebEngine event loop")
     def test_native_renderer_event_loop_survives_local_filter_churn(self):
         audit = ROOT / "temp" / "audit" / "ubuntu-event-filters"
         audit.mkdir(parents=True, exist_ok=True)
@@ -274,6 +284,7 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("survived 30", result.stdout)
 
+    @unittest.skipUnless(NATIVE_LINUX, "Native Ubuntu log cursor/renderer lifetime")
     def test_long_output_clear_and_deferred_document_destruction_do_not_corrupt_heap(self):
         # This exact sequence used to release retained QTextCursor objects from
         # a scrollbar signal while Qt's finishEdit was still using them. The
@@ -289,9 +300,9 @@ class UbuntuEventFilterChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if not sys.platform.startswith("linux"):
-        raise SystemExit("Use the native Ubuntu private runtime for this verifier.")
     if "--native-probe" in sys.argv:
+        if not NATIVE_LINUX:
+            raise SystemExit("Use the native Ubuntu private runtime for --native-probe.")
         raise SystemExit(native_probe())
     if "--no-finalize" in sys.argv:
         sys.argv.remove("--no-finalize")

@@ -347,6 +347,20 @@ For explicitly requested assistant delegation, use the local
   environment policies in their respective host implementations. Verify both
   directions and disjoint resource selectors in `direct/verify_platforms.py`,
   and reject foreign-host certificates in `direct/verify_offline.py`.
+- Ubuntu entry, Bootstrap and build preparation clear `PYTHONEXEPATH`,
+  `PIO_PYTHON_EXE`, `PLATFORMIO_PYTHON_EXE` and `PLATFORMIO_PENV_DIR` before
+  native PlatformIO children start. Verify the actual PlatformIO Python
+  selector, not only environment membership. Accept only absolute native XDG
+  roots; copied Windows and relative values fall back to the account defaults.
+  Missing-system-Python recovery uses the documented terminal argument
+  separators, including Alacritty `-e` and kitty/gnome-terminal `--`.
+- Install the workspace's GUI garbage collector in Qt verification fixtures
+  before creating widgets or workers, including project, cloud, developer and
+  performance checks. Keep automatic cyclic collection out of Qt callbacks and
+  background allocations. A dead or failed project-terminal renderer closes
+  only its own PTY; retain the tab and never replay input or start a replacement
+  automatically. Reconcile the supervisor's original Popen handle after
+  descendant reaping so normal signal shutdown does not report a live child.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow

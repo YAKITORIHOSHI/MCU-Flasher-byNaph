@@ -17,7 +17,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPu
 
 from main.qt.log_colors import themed_terminal_colors
 from main.platforms.ubuntu_pty import PromptObserver, close_pty_tree
-from main.platforms.ubuntu_pty_process import NativePtyProcess
 from src.modules.runtime_resources import performance_profile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +50,9 @@ class PtySession(QObject):
         if self.process or self._closed:
             return False
         try:
+            # Native descriptor modules are needed only for an explicit PTY
+            # start; keep mocked Qt lifecycle checks importable on either host.
+            from main.platforms.ubuntu_pty_process import NativePtyProcess
             env = os.environ.copy()
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
@@ -210,6 +212,7 @@ class PosixTerminalPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         header = QHBoxLayout()
         self._label = QLabel("Project terminal", self)
+        self._label.setWordWrap(True)
         header.addWidget(self._label, 1)
         self._session_actions = []
         for label, handler in (("New Bash", self.add_session), ("Clear", self._clear), ("End session", self._end_current)):
@@ -257,11 +260,33 @@ class PosixTerminalPanel(QWidget):
         view.page().setWebChannel(channel)
         session.output.connect(lambda data: view.page().runJavaScript(f"window.writeOutput?.({json.dumps(data)})"))
         session.ended.connect(lambda data: view.page().runJavaScript(f"window.sessionEnded?.({json.dumps(data)})"))
-        view.loadFinished.connect(lambda ok: self._configure(view) if ok else self._label.setText("Terminal assets failed to load."))
+        view.loadFinished.connect(lambda ok: self._loaded(view, ok))
+        if hasattr(view, "renderProcessTerminated"):
+            view.renderProcessTerminated.connect(lambda *_: self._renderer_terminated(view))
         self._sessions[view] = (session, channel)
+        self._label.setText("Project terminal")
         self._tabs.setCurrentIndex(self._tabs.addTab(view, label))
         self._update_session_state()
         view.setUrl(QUrl.fromLocalFile(str(ROOT / "src" / "editor" / "terminal.html")))
+
+    def _loaded(self, view, ok):
+        entry = self._sessions.get(view)
+        if entry is None:
+            return
+        if ok:
+            self._configure(view)
+        else:
+            entry[0].close()
+            self._label.setText("Terminal assets failed to load.")
+
+    def _renderer_terminated(self, view):
+        entry = self._sessions.get(view)
+        if entry is None:
+            return
+        # Once xterm is gone there is no reliable interactive state to recover.
+        # Stop only this PTY, retain its tab, and never replay commands.
+        entry[0].close()
+        self._label.setText("Terminal view stopped. Start a new session.")
 
     def _configure(self, view):
         theme = themed_terminal_colors(self._theme)

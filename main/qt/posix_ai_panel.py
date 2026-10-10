@@ -10,7 +10,7 @@ import time
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, QSize, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout
+from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout, QSizePolicy
 
 from main.core.theme import get_palette
 from main.qt.log_colors import themed_terminal_colors
@@ -222,6 +222,7 @@ class PosixAIPanel(QWidget):
         row.setContentsMargins(10, 4, 10, 4)
         row.setSpacing(6)
         self._title = QLabel("OpenCode AI Assistant", self._header)
+        self._title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         row.addWidget(self._title, 1)
         self._status_badge = QLabel("Ready", self._header)
         row.addWidget(self._status_badge)
@@ -378,7 +379,7 @@ class PosixAIPanel(QWidget):
 
     def _set_state(self, state, text):
         self._state = state
-        self._status_badge.setText({"idle": "Ready", "loading": "Loading…", "active": "Active", "error": "Unavailable"}[state])
+        self._refresh_header(self.width())
         self._load_title.setText("OpenCode AI Assistant" if state != "error" else "OpenCode unavailable")
         self._load_sub.setText(text)
         self._retry_button.setVisible(state == "error")
@@ -422,8 +423,25 @@ class PosixAIPanel(QWidget):
             self._fit_timer.start()
 
     def set_responsive_width(self, width):
-        self._title.setText("OpenCode AI Assistant" if width >= 340 else "OpenCode AI")
+        self._refresh_header(width)
         self._resize_embedded_ai()
+
+    def _refresh_header(self, width):
+        title = "OpenCode AI Assistant"
+        status = {"idle": "Ready", "loading": "Loading…", "active": "Active", "error": "Unavailable"}[self._state]
+        row = self._header.layout()
+        margins = row.contentsMargins()
+        reserved = margins.left() + margins.right() + 2 * row.spacing() + self._hide_button.width()
+        status_width = self._status_badge.fontMetrics().horizontalAdvance(status)
+        if width < max(340, reserved + status_width + self._title.fontMetrics().horizontalAdvance(title) + 2):
+            title = "OpenCode AI"
+        if width < reserved + status_width + self._title.fontMetrics().horizontalAdvance(title) + 2:
+            status_text = {"loading": "Wait…", "error": "Retry"}.get(self._state, status)
+        else:
+            status_text = status
+        self._title.setText(title)
+        self._status_badge.setText(status_text)
+        self._status_badge.setToolTip(status)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

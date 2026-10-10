@@ -115,6 +115,7 @@ def supervise(command: list[str], *, acquire_terminal: bool = False) -> int:
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 
     status = 125
+    child = None
     try:
         # This standalone supervisor has no threads. Reset only child signal
         # dispositions; do not introduce pipes, sessions or foreground groups.
@@ -135,6 +136,12 @@ def supervise(command: list[str], *, acquire_terminal: bool = False) -> int:
             print("Terminal tools did not finish within the shutdown deadline.",
                   file=sys.stderr, flush=True)
             status = 125
+        if child is not None:
+            # Descendant cleanup can reap the command through psutil/waitpid
+            # after HUP/TERM interrupted its wait loop. Reconcile the original
+            # Popen handle so disposal does not report an already-reaped child
+            # as still running, while retaining the requested signal status.
+            child.poll()
     return status
 
 

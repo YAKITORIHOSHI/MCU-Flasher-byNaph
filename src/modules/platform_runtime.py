@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import platform
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 def host_info() -> dict[str, str | bool]:
@@ -28,16 +28,24 @@ def host_info() -> dict[str, str | bool]:
     }
 
 
+def _native_xdg_base(name: str, fallback: Path) -> Path:
+    """Ignore relative and copied Windows values when selecting native stores."""
+    value = os.environ.get(name) or ""
+    if value and PurePosixPath(value).is_absolute() and not PureWindowsPath(value).drive:
+        return Path(value)
+    return fallback
+
+
 def app_cache_dir() -> Path:
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         return (Path(base) if base else Path.home() / "AppData" / "Local") / ".mcuflasher-app"
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "mcu-flasher"
+    return _native_xdg_base("XDG_CACHE_HOME", Path.home() / ".cache") / "mcu-flasher"
 
 
 def native_platformio_dir() -> Path:
     """Separate native Linux toolchains from portable Windows executables."""
-    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    base = _native_xdg_base("XDG_DATA_HOME", Path.home() / ".local" / "share")
     return base / "mcu-flasher" / "platformio" / platform.machine()
 
 

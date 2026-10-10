@@ -20,6 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QTabWidget
 from main.qt import posix_ai_panel as ai
+from main.qt import posix_terminal_panel as terminal
 from main.qt.garbage_collection import install_gui_garbage_collector
 
 APP = QApplication.instance() or QApplication([])
@@ -52,6 +53,50 @@ class FakePty(QObject):
         self.start = Mock(return_value=True)
         self.close, self.write, self.resize, self.consumed = Mock(), Mock(), Mock(), Mock()
         self.instances.append(self)
+
+
+class ProjectTerminalRendererChecks(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for name, value in (("PtySession", FakePty), ("QWebEngineView", FakeView),
+                            ("QWebChannel", lambda *_: SimpleNamespace(registerObject=Mock()))):
+            self.stack.enter_context(patch.object(terminal, name, value))
+        self.stack.enter_context(patch("main.core.config.get_monitor_font_size", return_value=12))
+        self.panel = terminal.PosixTerminalPanel(SimpleNamespace(sketch_dir_path=ROOT / "temp"))
+        PANELS.append(self.panel)
+        self.addCleanup(self.panel.close)
+
+    def add_session(self):
+        self.panel.add_session(argv=["/fixture/bash"])
+        view = self.panel._tabs.currentWidget()
+        return view, self.panel._sessions[view][0]
+
+    def test_renderer_failure_closes_only_its_session_without_replay_or_restart(self):
+        first_view, first = self.add_session()
+        second_view, second = self.add_session()
+        first_view.renderProcessTerminated.emit(1, 9)
+        first.close.assert_called_once()
+        second.close.assert_not_called()
+        first.start.assert_not_called()
+        second.start.assert_not_called()
+        first.write.assert_not_called()
+        second.write.assert_not_called()
+        self.assertEqual(self.panel._tabs.count(), 2)
+        self.assertIn("Start a new session", self.panel._label.text())
+        self.assertIs(self.panel._tabs.currentWidget(), second_view)
+
+    def test_load_failure_closes_pty_and_late_callbacks_ignore_removed_tab(self):
+        view, session = self.add_session()
+        view.loadFinished.emit(False)
+        session.close.assert_called_once()
+        self.assertIn("failed to load", self.panel._label.text())
+        self.panel._close_tab(0)
+        count = session.close.call_count
+        self.panel._renderer_terminated(view)
+        self.panel._loaded(view, True)
+        self.assertEqual(session.close.call_count, count)
+        self.assertFalse(self.panel._sessions)
 
 
 class DedicatedAssistantChecks(unittest.TestCase):
@@ -330,6 +375,9 @@ class DedicatedAssistantChecks(unittest.TestCase):
                     self.assertLessEqual(panel.width(), width)
                     for widget in (panel._title, panel._status_badge, panel._hide_button):
                         self.assertTrue(panel._header.rect().contains(widget.geometry()), widget.geometry())
+                    for label in (panel._title, panel._status_badge):
+                        self.assertLessEqual(label.fontMetrics().horizontalAdvance(label.text()),
+                                             label.contentsRect().width(), label.text())
 
 
 def native_renderer_check(render_dir=None, workspace=False):

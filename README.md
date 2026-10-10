@@ -704,6 +704,14 @@ the Windows store. Ubuntu clears copied Windows resource hints and uses
 its native runtime and toolchains. Readiness certificates are bound to
 the host and architecture.
 
+Ubuntu launch, Bootstrap and build preparation also discard inherited
+PlatformIO Python overrides, including `PYTHONEXEPATH`, so copying the app
+from Windows cannot redirect native build tools to `python.exe`. XDG cache
+and data roots must be absolute Linux paths; invalid copied values fall back
+to the Ubuntu account's usual folders. A project terminal whose renderer
+stops closes its own Bash session and offers a new session without replaying
+commands.
+
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only
 installations enter Bootstrap automatically on their next launch. `--repair`

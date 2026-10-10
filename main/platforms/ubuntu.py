@@ -36,7 +36,8 @@ def _configure_platformio_environment(script_dir: Path = SCRIPT_DIR) -> str:
             directory.mkdir(parents=True, exist_ok=True)
             os.environ[name] = str(directory)
         # Exported Windows launch hints cannot select a foreign interpreter.
-        for name in ("PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR", "PYTHONHOME"):
+        for name in ("PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR", "PYTHONHOME",
+                     "PYTHONEXEPATH", "PIO_PYTHON_EXE"):
             os.environ.pop(name, None)
         os.environ["TEMP"] = os.environ["TMP"] = os.environ["TMPDIR"]
         for name in ("PYTHONUNBUFFERED", "PLATFORMIO_UNBUFFERED", "PLATFORMIO_DISABLE_UPGRADE_CHECK",

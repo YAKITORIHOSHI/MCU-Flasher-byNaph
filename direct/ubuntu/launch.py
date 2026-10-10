@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 def clean_environment() -> dict[str, str]:
     env = os.environ.copy()
     for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE",
+                "PYTHONEXEPATH", "PIO_PYTHON_EXE", "PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR",
                 "MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME",
                 "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX", "QT_PLUGIN_PATH",
                 "QT_QPA_PLATFORM_PLUGIN_PATH", "QML2_IMPORT_PATH"):

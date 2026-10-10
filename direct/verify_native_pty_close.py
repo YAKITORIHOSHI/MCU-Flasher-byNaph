@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import errno
 import importlib.util
+import io
 import signal
 import subprocess
 import sys
 import unittest
 import warnings
+from contextlib import redirect_stderr
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,20 @@ def load_native_pty():
 
 
 native_pty = load_native_pty()
+
+
+def load_supervisor():
+    source = ROOT / "main/platforms/ubuntu_pty_supervisor.py"
+    spec = importlib.util.spec_from_file_location("native_pty_supervisor_fixture", source)
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {"fcntl": ModuleType("fcntl"),
+                                 "termios": ModuleType("termios")}):
+        exec(compile(source.read_text(encoding="utf-8-sig"), str(source), "exec"),
+             module.__dict__)
+    return module
+
+
+supervisor = load_supervisor()
 
 
 class NativePtyCloseChecks(unittest.TestCase):
@@ -115,6 +131,64 @@ class NativePtyCloseChecks(unittest.TestCase):
         handle.kill.assert_called_once_with()
         self.assertFalse(process.terminated)
 
+
+class NativePtySupervisorChecks(unittest.TestCase):
+    def signals(self):
+        names = ("SIGINT", "SIGQUIT", "SIGTERM", "SIGHUP", "SIGTSTP",
+                 "SIGTTIN", "SIGTTOU", "SIGCHLD", "SIG_IGN", "SIG_DFL")
+        handlers = {}
+        values = {name: index for index, name in enumerate(names, 1)}
+        return SimpleNamespace(**values, signal=lambda number, handler: handlers.update({number: handler})), handlers
+
+    def test_signal_cleanup_reconciles_the_owned_command_handle(self):
+        for name in ("SIGHUP", "SIGTERM"):
+            for cleaned, expected in ((True, None), (False, 125)):
+                with self.subTest(signal=name, cleaned=cleaned):
+                    signals, handlers = self.signals()
+                    child = Mock(spec=subprocess.Popen)
+                    order = []
+
+                    def interrupted_wait(*, timeout):
+                        handlers[getattr(signals, name)](getattr(signals, name), None)
+                        raise subprocess.TimeoutExpired("fixture-command", timeout)
+
+                    child.wait.side_effect = interrupted_wait
+                    child.poll.side_effect = lambda: order.append("handle reconciled")
+
+                    def cleanup(*_):
+                        order.append("descendants reaped")
+                        return cleaned
+
+                    with patch.object(supervisor, "signal", signals), \
+                            patch.object(supervisor, "_enable_subreaper"), \
+                            patch("psutil.Process", return_value=Mock()), \
+                            patch.object(supervisor.subprocess, "Popen", return_value=child), \
+                            patch.object(supervisor, "_close_descendants", side_effect=cleanup), \
+                            redirect_stderr(io.StringIO()):
+                        result = supervisor.supervise(["fixture-command"])
+                    self.assertEqual(result, expected if expected is not None else 128 + getattr(signals, name))
+                    self.assertEqual(order, ["descendants reaped", "handle reconciled"])
+                    child.poll.assert_called_once_with()
+
+    def test_completed_command_keeps_its_exit_status_after_cleanup(self):
+        signals, _ = self.signals()
+        child = Mock(spec=subprocess.Popen)
+        child.wait.return_value = 17
+        with patch.object(supervisor, "signal", signals), \
+                patch.object(supervisor, "_enable_subreaper"), \
+                patch("psutil.Process", return_value=Mock()), \
+                patch.object(supervisor.subprocess, "Popen", return_value=child), \
+                patch.object(supervisor, "_close_descendants", return_value=True):
+            self.assertEqual(supervisor.supervise(["fixture-command"]), 17)
+        child.poll.assert_called_once_with()
+
+    def test_failed_containment_never_spawns_a_command(self):
+        with patch.object(supervisor, "_enable_subreaper", side_effect=OSError("fixture custody failure")), \
+                patch.object(supervisor.subprocess, "Popen") as spawn, \
+                redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertEqual(supervisor.supervise(["fixture-command"]), 125)
+        spawn.assert_not_called()
+        self.assertIn("Bootstrap --repair", diagnostic.getvalue())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native OpenCode helpers against isolated files; never launch an assistant."""
+"""OpenCode discovery contracts; POSIX filesystem checks require a native host."""
 from __future__ import annotations
 
 import os
@@ -32,12 +32,28 @@ class UbuntuOpenCodeChecks(unittest.TestCase):
         path = patch.object(helper.shutil, "which", return_value=None)
         self.which = path.start()
         self.addCleanup(path.stop)
+        self.permissions = {}
+        if os.name == "nt":
+            # Windows chmod does not implement executable bits. Model only
+            # this POSIX contract; do not claim a native permission check.
+            original_access = os.access
+
+            def access(candidate, mode):
+                permission = self.permissions.get(os.path.abspath(candidate))
+                if mode == os.X_OK and permission is not None:
+                    return permission
+                return original_access(candidate, mode)
+
+            access_patch = patch.object(helper.os, "access", side_effect=access)
+            access_patch.start()
+            self.addCleanup(access_patch.stop)
 
     def executable(self, relative, *, data=b"#!/bin/sh\nexit 0\n", executable=True):
         path = self.home / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         path.chmod(0o755 if executable else 0o644)
+        self.permissions[str(path.absolute())] = executable
         return path
 
     def test_path_installation_takes_precedence(self):
@@ -80,6 +96,7 @@ class UbuntuOpenCodeChecks(unittest.TestCase):
         native = self.executable(".local/bin/opencode")
         self.assertEqual(helper.find_opencode_cli(), str(native))
 
+    @unittest.skipUnless(os.name == "posix", "Native POSIX symlink permissions")
     def test_symlink_invocation_preserved_and_windows_target_rejected(self):
         native = self.executable("package/bin/opencode-native")
         link = self.home / ".opencode/bin/opencode"
@@ -91,12 +108,19 @@ class UbuntuOpenCodeChecks(unittest.TestCase):
         link.symlink_to(foreign)
         self.assertIsNone(helper.find_opencode_cli())
 
+    @unittest.skipUnless(os.name == "posix", "Native POSIX symlink permissions")
     def test_broken_symlink_and_failed_lookup_are_safe(self):
         link = self.home / ".opencode/bin/opencode"
         link.parent.mkdir(parents=True)
         link.symlink_to(link.parent / "absent")
         self.which.side_effect = OSError("lookup unavailable")
         self.assertIsNone(helper.find_opencode_cli())
+
+    def test_failed_path_lookup_retains_user_directory_fallback(self):
+        self.which.side_effect = OSError("lookup unavailable")
+        self.assertIsNone(helper.find_opencode_cli())
+        binary = self.executable(".local/bin/opencode")
+        self.assertEqual(helper.find_opencode_cli(), str(binary))
 
     def test_arguments_preserve_spaces_unicode_and_shell_metacharacters(self):
         executable = str(self.home / "bin $(echo secret)/opencode")

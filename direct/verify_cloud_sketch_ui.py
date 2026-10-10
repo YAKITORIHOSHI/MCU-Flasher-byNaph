@@ -24,8 +24,10 @@ from main.qt.cloud_sketch_panel import (
 )
 from main.qt.project_dialog import ProjectDialog
 from main.qt.theme import build_stylesheet, register_fonts
+from main.qt.garbage_collection import install_gui_garbage_collector
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 register_fonts()
 RENDER_DIR = ROOT / "temp/audit/cloud-sketch-ui"
 

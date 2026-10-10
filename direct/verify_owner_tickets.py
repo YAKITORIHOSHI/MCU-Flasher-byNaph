@@ -26,8 +26,10 @@ from main.qt.toolbar import PrimaryToolbar
 from main.qt.owner_ticket_style import WrappedLabel, portal_colors
 from main.core.log_colors import contrast_ratio
 from main.qt.theme import build_stylesheet, register_fonts
+from main.qt.garbage_collection import install_gui_garbage_collector
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 register_fonts()
 RENDER_DIR = None
 TICKETS = [
