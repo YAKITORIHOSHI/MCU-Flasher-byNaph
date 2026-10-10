@@ -4,7 +4,7 @@ from __future__ import annotations
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPalette, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QBoxLayout, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -130,13 +130,20 @@ class WrappedLabel(QTextEdit):
         self.document().setDocumentMargin(0)
         self._measure = QTextDocument(self)
         self._measure.setDocumentMargin(0)
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self._measure.setDefaultTextOption(option)
         self._heights = {}
+        self._measurement_refresh = QTimer(self)
+        self._measurement_refresh.setSingleShot(True)
+        self._measurement_refresh.timeout.connect(self._refresh_measurement)
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
         self.setPlainText(text)
         self.textChanged.connect(self._invalidate_measurement)
-        self._invalidate_measurement()
+        self._refresh_measurement()
+        self.installEventFilter(self)
 
     def text(self):
         return self.toPlainText()
@@ -157,15 +164,21 @@ class WrappedLabel(QTextEdit):
 
     def _invalidate_measurement(self):
         self._heights.clear()
+        if not self._measurement_refresh.isActive():
+            self._measurement_refresh.start(0)
+
+    def _refresh_measurement(self):
+        # Qt can request geometry while delivering its native font/style event.
+        # Mutate the separate document only after that event has returned.
+        self._heights.clear()
         self._measure.setDefaultFont(self.font())
-        self._measure.setDefaultTextOption(self.document().defaultTextOption())
         self._measure.setPlainText(self.toPlainText())
         self.updateGeometry()
 
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if hasattr(self, "_measure") and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+    def eventFilter(self, watched, event):
+        if watched is self and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
             self._invalidate_measurement()
+        return False
 
     def heightForWidth(self, width):
         horizontal = max(0, self.width() - self.viewport().width())

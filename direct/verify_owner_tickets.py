@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "offscreen")
-from PySide6.QtCore import QPoint, Qt, QThread
+from PySide6.QtCore import QEvent, QPoint, Qt, QThread
 from PySide6.QtGui import QPalette, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
@@ -299,6 +299,42 @@ class PortalChecks(unittest.TestCase):
             self.assertEqual(card.metadata.text(), f"{category}\n{TICKETS[0]['created_at']}")
             self.assertIn(str(category), card.metadata.toolTip())
             card.deleteLater()
+
+    def test_native_style_events_defer_measurement_and_preserve_literal_selection(self):
+        self.sign_in()
+        reading = self.dialog.cards_layout.itemAt(0).widget().description_label
+        displayed = reading.document()
+        measurement = reading._measure
+        measured_font = measurement.defaultFont()
+        measured_text = measurement.toPlainText()
+        refreshes = []
+        reading._measurement_refresh.timeout.connect(lambda: refreshes.append(True))
+        literal = 'Serial.println("' + "A" * 4096 + '"); <literal>'
+        reading.setText(literal)
+        cursor = reading.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        reading.setTextCursor(cursor)
+        reading.setStyleSheet("font-size: 15px; font-style: italic;")
+        for _ in range(30):
+            APP.sendEvent(reading, QEvent(QEvent.Type.FontChange))
+            APP.sendEvent(reading, QEvent(QEvent.Type.StyleChange))
+        # Nested Qt geometry requests must see the last complete measurement;
+        # document mutations wait until native font/style dispatch has returned.
+        self.assertTrue(reading._measurement_refresh.isActive())
+        self.assertEqual(refreshes, [])
+        self.assertEqual(measurement.defaultFont(), measured_font)
+        self.assertEqual(measurement.toPlainText(), measured_text)
+        pump()
+        self.assertEqual(refreshes, [True])
+        self.assertFalse(reading._measurement_refresh.isActive())
+        self.assertIs(reading.document(), displayed)
+        self.assertIs(reading._measure, measurement)
+        self.assertEqual(measurement.defaultFont(), reading.font())
+        self.assertEqual(measurement.toPlainText(), literal)
+        self.assertEqual(reading.textCursor().selectedText(), literal)
+        self.assert_wrapped_text(reading, fully_visible=False)
+        reading.copy()
+        self.assertEqual(APP.clipboard().text(), literal)
 
     def test_login_keyboard_mask_and_lock(self):
         capture(self.dialog, "login-default")

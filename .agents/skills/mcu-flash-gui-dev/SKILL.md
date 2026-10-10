@@ -371,6 +371,11 @@ For explicitly requested assistant delegation, use the local
   selected-item/detail state. Bound responsive board fixtures to a 1024x768
   work area so a larger verification monitor cannot hide high-font-scale
   details-pane collapse; keep Qt and Tk sizing independent.
+- Developer reading text coalesces font/style/content measurement through a
+  parented single-shot timer. Never mutate its separate QTextDocument from a
+  QTextEdit font/style virtual callback; invalidate cached heights and refresh
+  after native event dispatch. Preserve the displayed document, literal copy,
+  selection and bounded reading-height/scroll behavior through that refresh.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow
