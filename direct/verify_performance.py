@@ -677,18 +677,27 @@ class PerformanceChecks(unittest.TestCase):
                 threads.append(QThread.currentThread())
                 original(diags)
             panel.set_diagnostics = record
-            panel._run_manual_check()
-            wait_until(lambda: not panel._is_checking)
-            self.assertTrue(threads)
-            self.assertTrue(all(thread == APP.thread() for thread in threads))
-            with patch.object(syntax_checker, "analyze_files_parallel", side_effect=OSError("fixture read failed")):
+            # Keep this GUI-delivery check independent of the process-wide
+            # parser pool. Other tests exercise that pool; leaving its native
+            # worker alive across a Qt-heavy performance suite can trigger a
+            # PySide refcount abort during the next test on Linux.
+            with patch.object(syntax_checker, "analyze_files_parallel",
+                              side_effect=[[], OSError("fixture read failed"), []]):
+                panel._run_manual_check()
+                wait_until(lambda: not panel._is_checking)
+                self.assertTrue(threads)
+                self.assertTrue(all(thread == APP.thread() for thread in threads))
                 panel._run_manual_check()
                 wait_until(lambda: not panel._is_checking)
                 self.assertIn("failed", panel._lbl_status.text())
-            panel._run_manual_check()
-            wait_until(lambda: not panel._is_checking)
-            self.assertNotIn("failed", panel._lbl_status.text())
+                panel._run_manual_check()
+                wait_until(lambda: not panel._is_checking)
+                self.assertNotIn("failed", panel._lbl_status.text())
+                self.assertEqual(len(threads), 2)
+            panel.close()
             panel.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            APP.processEvents()
 
     def test_syntax_worker_start_failure_releases_checking_state(self):
         from main.qt.syntax_panel import SyntaxPanel
