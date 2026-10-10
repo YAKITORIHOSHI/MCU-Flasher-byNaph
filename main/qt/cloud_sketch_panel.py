@@ -9,20 +9,97 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QEvent
+from PySide6.QtCore import Qt, Signal, QEvent, QTimer
 from PySide6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QScrollArea, QFrame, QLabel, QLineEdit, QCheckBox, QListWidget,
     QListWidgetItem, QFileDialog, QMessageBox, QInputDialog, QComboBox, QSizePolicy,
+    QPushButton,
 )
 
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
 from main.core.cloud_sketch_service import CloudSketchService, read_project_link
-from main.core.credential_store import load_cloud_configuration, save_cloud_configuration
+from main.core.credential_store import save_cloud_configuration
 
 
 _CLOUD_UI_GATE = threading.Lock()
+
+
+class _CloudConnectionDialog(QDialog):
+    """Write-only provider settings entry; saved values are never read back to UI."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Cloud connection settings")
+        self.setModal(True)
+        self._glass = GlassCard(self, radius=10)
+        self._glass.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._glass.lower()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.addWidget(self._glass)
+        layout = QVBoxLayout(self._glass)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+        heading = QLabel("Secure cloud connection", self._glass)
+        heading.setObjectName("cloud-heading")
+        layout.addWidget(heading)
+        note = QLabel("Enter new values to replace this device's encrypted settings. "
+                      "Saved values are never displayed.", self._glass)
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setVerticalSpacing(8)
+        form.setHorizontalSpacing(10)
+        self.api_key = QLineEdit(self._glass)
+        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key.setMaxLength(256)
+        self.api_key.setPlaceholderText("Enter Firebase API key")
+        self.api_key.setAccessibleName("New Firebase API key; hidden while typing")
+        self.database_url = QLineEdit(self._glass)
+        self.database_url.setEchoMode(QLineEdit.EchoMode.Password)
+        self.database_url.setMaxLength(512)
+        self.database_url.setPlaceholderText("Enter HTTPS database address")
+        self.database_url.setAccessibleName("New Firebase database address; hidden while typing")
+        self.project_id = QLineEdit(self._glass)
+        self.project_id.setEchoMode(QLineEdit.EchoMode.Password)
+        self.project_id.setMaxLength(128)
+        self.project_id.setPlaceholderText("Enter Firebase project ID")
+        self.project_id.setAccessibleName("New Firebase project ID; hidden while typing")
+        form.addRow("API key", self.api_key)
+        form.addRow("Database", self.database_url)
+        form.addRow("Project ID", self.project_id)
+        layout.addLayout(form)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.cancel_button = QPushButton("Cancel", self._glass)
+        self.save_button = QPushButton("Save encrypted settings", self._glass)
+        self.save_button.setProperty("cloudPrimary", True)
+        self.cancel_button.clicked.connect(self.reject)
+        self.save_button.clicked.connect(self.accept)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.save_button)
+        layout.addLayout(actions)
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+        from main.qt.responsive import fit_dialog
+        fit_dialog(self, (560, 360), (360, 300))
+
+    def values(self):
+        return {
+            "firebase_api_key": self.api_key.text().strip(),
+            "firebase_database_url": self.database_url.text().strip(),
+            "firebase_project_id": self.project_id.text().strip(),
+        }
+
+    def clear_values(self):
+        for field in (self.api_key, self.database_url, self.project_id):
+            field.clear()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._glass.setGeometry(self.rect())
 
 
 class CloudSketchPanel(QWidget):
@@ -98,13 +175,16 @@ class CloudSketchPanel(QWidget):
 
         self._content_layout.addStretch(1)
         self._account_card, account = self._card(content)
+        self._account_card.setMaximumWidth(700)
+        self._content_layout.setAlignment(self._account_card, Qt.AlignmentFlag.AlignHCenter)
         account.setContentsMargins(10, 8, 10, 8)
         account.setSpacing(6)
         heading = QHBoxLayout()
         self._account_title = self._label("Cloud sketches", self._account_card)
         self._account_title.setObjectName("cloud-heading")
         heading.addWidget(self._account_title, 1)
-        self._connection = self._label("Select Cloud to connect", self._account_card)
+        self._connection = self._label("Checking Firebase connection…", self._account_card)
+        self._connection.setAccessibleName("Firebase connection status")
         heading.addWidget(self._connection, 1)
         account.addLayout(heading)
         self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card)
@@ -214,7 +294,7 @@ class CloudSketchPanel(QWidget):
         account_actions.addWidget(self._delete_account_btn)
         account_actions.addStretch()
         account.addWidget(self._signed_in_actions)
-        self._security = self._label("Saved passwords and sessions use your OS credential vault. Cloud traffic uses HTTPS.", self._account_card)
+        self._security = self._label("Saved logins use your device's credential vault. Connection values are never displayed; cloud traffic uses HTTPS.", self._account_card)
         self._security.setObjectName("cloud-secondary")
         account.addWidget(self._security)
         self._forget_btn = self._button("Forget saved login", self._forget_login, self._account_card)
@@ -283,35 +363,36 @@ class CloudSketchPanel(QWidget):
         upload.addWidget(self._name)
         upload.addWidget(self._label("Root source files and text notes are uploaded. Build caches and credentials stay on this computer.", upload_card))
 
-        self._configure_toggle = QCheckBox("Cloud connection settings", content)
-        self._content_layout.addWidget(self._configure_toggle)
-        self._configuration_card = GlassCard(content, radius=9)
+        self._connection_section = QWidget(content)
+        self._connection_section.setMaximumWidth(700)
+        self._connection_section_layout = QVBoxLayout(self._connection_section)
+        self._connection_section_layout.setContentsMargins(0, 0, 0, 0)
+        self._connection_section_layout.setSpacing(6)
+        self._configure_toggle = QCheckBox("Cloud connection settings", self._connection_section)
+        self._connection_section_layout.addWidget(self._configure_toggle)
+        self._configuration_card = GlassCard(self._connection_section, radius=9)
         self._cards.append(self._configuration_card)
         configuration = QVBoxLayout(self._configuration_card)
         configuration.setContentsMargins(10, 8, 10, 8)
         configuration.setSpacing(6)
-        self._content_layout.addWidget(self._configuration_card)
-        config_form = QFormLayout()
-        config_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self._forms.append(config_form)
-        self._api_key = QLineEdit(self._configuration_card)
-        self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key.setAccessibleName("Firebase web API key")
-        self._database_url = QLineEdit(self._configuration_card)
-        self._database_url.setPlaceholderText("https://your-project-default-rtdb.firebaseio.com")
-        self._database_url.setAccessibleName("Firebase realtime database URL")
-        self._project_id = QLineEdit(self._configuration_card)
-        self._project_id.setAccessibleName("Firebase project ID")
-        config_form.addRow("API key", self._api_key)
-        config_form.addRow("Database URL", self._database_url)
-        config_form.addRow("Project ID", self._project_id)
-        configuration.addLayout(config_form)
-        configuration.addWidget(self._label("Saved encrypted in your operating system's credential vault, outside the application folder.", self._configuration_card))
-        self._save_config_btn = self._button("Save connection", self._save_configuration, self._configuration_card)
-        configuration.addWidget(self._save_config_btn)
+        self._connectivity_status = self._label("Checking Firebase connection…", self._configuration_card)
+        self._connectivity_status.setObjectName("cloud-secondary")
+        self._connectivity_status.setAccessibleName("Firebase internet connection result")
+        configuration.addWidget(self._connectivity_status)
+        configuration.addWidget(self._label(
+            "Connection details are encrypted in this device's credential vault. "
+            "Saved values are never displayed.", self._configuration_card))
+        config_actions = QHBoxLayout()
+        self._edit_config_btn = self._button("Change connection", self._edit_configuration, self._configuration_card)
+        self._check_connection_btn = self._button("Check connection", self._check_connection, self._configuration_card)
+        config_actions.addWidget(self._edit_config_btn)
+        config_actions.addWidget(self._check_connection_btn)
+        configuration.addLayout(config_actions)
+        self._connection_section_layout.addWidget(self._configuration_card)
+        self._content_layout.addWidget(self._connection_section, 0, Qt.AlignmentFlag.AlignHCenter)
         self._configuration_card.hide()
         self._configure_toggle.toggled.connect(self._configuration_visibility_changed)
-        self._content_layout.addStretch()
+        self._content_layout.addStretch(1)
 
         self._sync_actions = QWidget(self)
         self._sync_actions.hide()
@@ -379,24 +460,25 @@ class CloudSketchPanel(QWidget):
         def initialize():
             if self._service.configured and not self._service.is_authenticated:
                 self._service.restore_session()
-        if self._request("initialize", "Checking cloud account…", initialize, include_saved=True, include_config=True):
+        if self._request("initialize", "Checking Firebase connection…", initialize,
+                         include_saved=True, include_connectivity=True):
             self._initialized = True
 
-    def _snapshot(self, root, *, load_sketches=True, include_saved=False, include_config=False):
+    def _snapshot(self, root, *, load_sketches=True, include_saved=False, include_connectivity=False):
         service = self._service
         state = {"configured": service.configured, "authenticated": service.is_authenticated,
                  "account": service.account_info, "secure": service.secure_storage_status,
                  "root": root, "link": read_project_link(root) if root else None}
+        if include_connectivity:
+            state["connectivity"] = bool(service.check_connection())
         if load_sketches or not state["authenticated"]:
             state["sketches"] = service.list_sketches() if state["authenticated"] else []
         if include_saved:
             state["saved_login"] = service.saved_login()
-        if include_config:
-            state["configuration"] = load_cloud_configuration(getattr(service, "_store", None))
         return state
 
     def _request(self, kind, message, operation, *, project_io=False, include_saved=False,
-                 include_config=False, redactions=()):
+                 include_connectivity=False, redactions=()):
         if self._closed or self._busy or self._waiting_for_save:
             return False
         if kind in {"refresh", "upload", "open", "push", "pull", "restore", "history"} \
@@ -436,12 +518,13 @@ class CloudSketchPanel(QWidget):
                     result["sources_changed"] = True
                     result["value"] = root
             try:
-                result["state"] = self._snapshot(root, include_saved=include_saved, include_config=include_config)
+                result["state"] = self._snapshot(root, include_saved=include_saved,
+                                                  include_connectivity=include_connectivity)
             except Exception as exc:
                 result["refresh_error"] = safe_message(exc)
                 try:
                     result["state"] = self._snapshot(root, load_sketches=False,
-                        include_saved=include_saved, include_config=include_config)
+                        include_saved=include_saved, include_connectivity=include_connectivity)
                 except Exception:
                     pass
             try:
@@ -504,7 +587,10 @@ class CloudSketchPanel(QWidget):
             self._scroll.ensureWidgetVisible(self._history_box, 8, 12)
             self._status.setText("Choose a revision, then Restore to revert the current cloud sketch.")
         elif kind == "configuration":
-            self._status.setText("Cloud connection saved in your encrypted credential vault.")
+            self._status.setText("Cloud connection saved in this device's encrypted credential vault.")
+        elif kind == "connectivity":
+            self._status.setText("Firebase is reachable." if value else
+                                 "Firebase could not be reached. Check your internet connection.")
         elif kind == "upload":
             self._status.setText("Local sketch uploaded. Open it from the cloud list in its own workspace.")
         elif kind == "push":
@@ -522,6 +608,9 @@ class CloudSketchPanel(QWidget):
             self._history_box.hide()
             self._status.setText("Account and cloud sketches deleted." if kind == "delete" else
                                  "Signed out and saved login removed." if kind == "forget" else "Signed out.")
+        elif kind == "initialize":
+            self._status.setText("Sign in to access your cloud sketches." if result.get("state", {}).get("connectivity")
+                                 else "Firebase could not be reached. Check your internet connection.")
         else:
             self._status.setText("Cloud sketches are ready." if self._state.get("authenticated") else
                                  "Sign in to open or upload cloud sketches." if self._state.get("configured") else
@@ -638,9 +727,18 @@ class CloudSketchPanel(QWidget):
         self._management.setVisible(authenticated)
         self._sync_actions.setVisible(authenticated)
         self._signed_in_actions.setVisible(authenticated)
+        self._connection_section.setVisible(not authenticated)
         self._configure_toggle.setVisible(not authenticated)
         self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
-        self._connection.setText("Signed in" if authenticated else "Sign in required" if self._state.get("configured") else "Connection not configured")
+        connection = self._state.get("connectivity")
+        self._connection.setText("Signed in" if authenticated else
+                                 "Firebase reachable" if connection is True else
+                                 "No internet connection" if connection is False else
+                                 "Checking Firebase connection…")
+        if connection is not None:
+            self._connectivity_status.setText(
+                "Firebase is reachable." if connection else
+                "Firebase could not be reached. Check your internet connection.")
         email = self._state.get("account", {}).get("email", "")
         self._account_summary.setText(f"Signed in as {email}" if authenticated else
                                       "Sign in to access your private cloud sketches.")
@@ -665,11 +763,7 @@ class CloudSketchPanel(QWidget):
         storage_warning = self._state.get("account", {}).get("storage_warning", "")
         if storage_warning and not self._state.get("secure", (False, ""))[0]:
             self._security.setText("Login encryption: " + storage_warning)
-        if "configuration" in state:
-            cfg = state["configuration"]
-            self._api_key.setText(cfg.get("firebase_api_key", ""))
-            self._database_url.setText(cfg.get("firebase_database_url", ""))
-            self._project_id.setText(cfg.get("firebase_project_id", ""))
+        if "configured" in state:
             self._configure_toggle.setChecked(not self._state.get("configured"))
         if "sketches" in state:
             selected = self._selected_sketch().get("id")
@@ -703,7 +797,7 @@ class CloudSketchPanel(QWidget):
         authenticated = self._state.get("authenticated", False)
         for button in self._job_buttons:
             button.setEnabled(idle)
-        for field in (self._email, self._password, self._api_key, self._database_url, self._project_id, self._name):
+        for field in (self._email, self._password, self._name):
             field.setEnabled(idle)
         for field in (self._register_email, self._register_password, self._register_confirm):
             field.setEnabled(idle)
@@ -721,7 +815,9 @@ class CloudSketchPanel(QWidget):
         secure = self._state.get("secure", (False, ""))[0]
         self._save_login.setEnabled(idle and secure)
         self._remember.setEnabled(idle and secure)
-        self._save_config_btn.setEnabled(idle and secure and not authenticated)
+        self._edit_config_btn.setText("Change connection" if self._state.get("configured") else "Set up connection")
+        self._edit_config_btn.setEnabled(idle and secure and not authenticated)
+        self._check_connection_btn.setEnabled(idle and not authenticated)
         self._forget_btn.setEnabled(idle and secure)
         self._forget_btn.setText("Sign out and forget" if authenticated else "Forget saved login")
         self._forget_btn.setVisible(secure and self._saved_login_exists)
@@ -793,19 +889,48 @@ class CloudSketchPanel(QWidget):
         if accepted and password and not self._closed:
             self._request("delete", "Deleting cloud account…", lambda: self._service.delete_account(password), redactions=(password,))
 
-    def _save_configuration(self):
+    def _edit_configuration(self):
         if self._state.get("authenticated"):
             self._status.setText("Sign out before changing the cloud connection.")
             return
-        cfg = {"firebase_api_key": self._api_key.text().strip(), "firebase_database_url": self._database_url.text().strip(),
-               "firebase_project_id": self._project_id.text().strip()}
+        if not self._state.get("secure", (False, ""))[0]:
+            self._status.setText("Secure credential storage is unavailable. Cloud connection details cannot be saved.")
+            return
+        dialog = _CloudConnectionDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            dialog.clear_values()
+            dialog.deleteLater()
+            return
+        cfg = dialog.values()
+        dialog.clear_values()
+        dialog.deleteLater()
+        self._save_configuration(cfg)
+
+    def _save_configuration(self, cfg):
+        if self._state.get("authenticated"):
+            self._status.setText("Sign out before changing the cloud connection.")
+            return
+        cfg = {key: str(value).strip() for key, value in cfg.items()}
         def save():
             from urllib.parse import urlsplit
-            parsed = urlsplit(cfg["firebase_database_url"])
-            if not all(cfg.values()) or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise ValueError("Enter an API key, project ID and HTTPS realtime database URL.")
+            try:
+                parsed = urlsplit(cfg["firebase_database_url"])
+                port = parsed.port
+            except ValueError:
+                raise ValueError("Enter valid Firebase connection settings.") from None
+            host = (parsed.hostname or "").lower().rstrip(".")
+            is_firebase_host = host.endswith((".firebasedatabase.app", ".firebaseio.com"))
+            if (not all(cfg.values()) or parsed.scheme != "https" or not host or not is_firebase_host
+                    or parsed.username or parsed.password or port not in (None, 443)
+                    or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
+                raise ValueError("Enter a Firebase API key, project ID and HTTPS database address.")
             save_cloud_configuration(cfg, getattr(self._service, "_store", None))
-        self._request("configuration", "Saving cloud connection…", save, include_config=True, redactions=(cfg["firebase_api_key"],))
+        self._request("configuration", "Saving encrypted cloud connection…", save,
+                      include_connectivity=True, redactions=tuple(cfg.values()))
+
+    def _check_connection(self):
+        self._request("connectivity", "Checking Firebase connection…",
+                      self._service.check_connection, include_connectivity=True)
 
     def _configuration_visibility_changed(self, visible):
         self._configuration_card.setVisible(bool(visible) and not self._state.get("authenticated", False))
@@ -947,7 +1072,6 @@ class CloudSketchPanel(QWidget):
         self._closed = True
         self._generation += 1
         self._password.clear()
-        self._api_key.clear()
 
     def closeEvent(self, event):
         if self._busy or self._waiting_for_save:
@@ -966,6 +1090,17 @@ class CloudSketchPanel(QWidget):
         if hasattr(self, "_open_btn"):
             self._open_btn.setText("Open" if compact else "Open sketch")
             self._upload_btn.setText("Upload" if compact else "Upload local")
+        if hasattr(self, "_scroll"):
+            QTimer.singleShot(0, self._fit_centered_content)
+
+    def _fit_centered_content(self):
+        if self._closed or not hasattr(self, "_scroll"):
+            return
+        available = max(0, self._scroll.viewport().width() - 16)
+        width = min(700, available)
+        if width:
+            self._account_card.setFixedWidth(width)
+            self._connection_section.setFixedWidth(width)
 
     def apply_theme(self, mode=None):
         from main.qt.theme import get_palette

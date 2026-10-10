@@ -141,10 +141,16 @@ For explicitly requested assistant delegation, use the local
   configuration, probes and HTTP, together with the offline-mode verifier.
 - Cloud sketches use `main/core/cloud_sketch_service.py` and the selector's
   `CloudSketchPanel`. All provider/keyring/Auth/RTDB/source operations run through
-  a bounded serialized worker. No generic internet probe gates Firebase requests.
-  Credentials/configuration use per-user Windows Credential Manager or Ubuntu
-  Secret Service (`secret-tool`); never add a fixed key, repo vault, plaintext
-  fallback, password/token argv or Admin SDK credential. Save login and Remember
+  a bounded serialized worker. Cloud connectivity is independent of package
+  Offline Mode: the Cloud tab probes its Firebase endpoint with an unauthenticated
+  HEAD request that reads no database body, or Firebase Auth when unconfigured.
+  That status informs the user but never gates sign-in. Offline Mode keeps blocking
+  other network activity; only the current, validated Firebase HTTPS host may pass
+  its audit guard during a cloud request. Provider settings are write-only in the
+  UI: mask new values, save them only in per-user Windows Credential Manager or
+  Ubuntu Secret Service (`secret-tool`), and never read them back into visible
+  fields, environment variables or the checkout. Never add a fixed key, repo vault,
+  plaintext fallback, password/token argv or Admin SDK credential. Save login and Remember
   me are separate options. Keep sign-in and account creation as separate views
   inside the selector's Cloud tab, and hide/gate sketch management until Firebase
   confirms authentication. Store no account credentials in the checkout. An

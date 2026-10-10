@@ -322,12 +322,15 @@ class FirebaseSettingsDialog(_TaskPortal):
         form = QVBoxLayout(card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
-        form.addWidget(label("Set the Firebase service for developer tickets. Settings stay in your user profile outside the app folder.", card, "muted", wrap=True))
-        self.db_input = QLineEdit(cfg.get("firebase_database_url", ""), card)
-        self.db_input.setPlaceholderText("https://your-project.firebasedatabase.app/")
+        form.addWidget(label("Connection details are encrypted in your device's credential vault. They are never read back into this window. Enter both values to set or replace the connection.", card, "muted", wrap=True))
+        self.db_input = QLineEdit(card)
+        self.db_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.db_input.setAccessibleName("New Firebase database address; hidden while typing")
+        self.db_input.setPlaceholderText("Enter HTTPS database address")
         form.addWidget(field("Realtime Database URL", self.db_input, card))
-        self.key_input = QLineEdit(cfg.get("firebase_api_key", ""), card)
+        self.key_input = QLineEdit(card)
         self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_input.setAccessibleName("New Firebase Web API key; hidden while typing")
         self.key_input.setPlaceholderText("Firebase Web API key")
         form.addWidget(field("Web API key", self.key_input, card))
         self.test_button = button("Test connection", card, self._run_test, vector="reload")
@@ -376,9 +379,9 @@ class FirebaseSettingsDialog(_TaskPortal):
 
     def _run_test(self):
         url, key = self.db_input.text().strip(), self.key_input.text().strip()
-        if not url:
-            self._show_feedback("Enter a database URL first.", "warn")
-            self.db_input.setFocus()
+        if not url or not key:
+            self._show_feedback("Enter both the database URL and API key to test the Firebase endpoint.", "warn")
+            (self.db_input if not url else self.key_input).setFocus()
             return
         if message := cloud_network_error():
             self._show_feedback(message, "warn")
@@ -437,7 +440,12 @@ class FirebaseSettingsDialog(_TaskPortal):
 
     def _save(self):
         url = self.db_input.text().strip()
-        updates = {"firebase_database_url": url, "firebase_api_key": self.key_input.text().strip(),
+        key = self.key_input.text().strip()
+        if not url or not key:
+            self._show_feedback("Enter both the database URL and API key to save the Firebase settings.", "warn")
+            (self.db_input if not url else self.key_input).setFocus()
+            return
+        updates = {"firebase_database_url": url, "firebase_api_key": key,
                    "use_firebase": bool(url)}
         self._run_task("save", lambda: self.service.save_config(updates), self._saved)
 

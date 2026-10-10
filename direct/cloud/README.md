@@ -1,11 +1,12 @@
 # Firebase cloud sketches
 
 The application uses Firebase Authentication email/password accounts and the
-existing Firebase Realtime Database. Client configuration is loaded from the
-current OS user's secure credential store or explicit `FIREBASE_API_KEY`,
-`FIREBASE_DATABASE_URL`, and `FIREBASE_PROJECT_ID` environment variables. It never
-loads a password, token, service-account key or developer unlock key from the
-application checkout. Firebase's web API key identifies a project; database
+existing Firebase Realtime Database. Client configuration is loaded only from
+the current OS user's secure credential store. The selector never reads saved
+connection values back into the UI; entry fields are masked, and settings stay
+in the system vault rather than the application checkout or environment.
+Passwords, tokens, service-account keys and developer unlock keys are never
+loaded from the checkout. Firebase's web API key identifies a project; database
 security comes from authenticated user isolation and deployed rules.
 
 ## Provider setup and migration
@@ -24,10 +25,9 @@ security comes from authenticated user isolation and deployed rules.
    Authentication alone does not enable sketch storage. `Permission denied`
    means the cloud endpoint was reached but this operation was denied by its
    rules; it does not mean the computer lacks internet access.
-4. Migrate the old repository vault to per-user secure configuration through
-   `save_cloud_configuration`, verify it can be read back, then remove the vault
-   from distributable source and release archives. The old compiled encryption
-   seed cannot protect secrets from anyone with a copied application. Rotate
+4. Save provider settings through `save_cloud_configuration` into the user's OS
+   credential vault. Verify vault readback in isolated tests; never add settings
+   to the source tree or use an embedded encryption seed. Rotate
    any private credentials formerly shipped in it. Never distribute an Admin
    SDK/service-account private key or make database rules public as a workaround.
 5. The client only operates on the authenticated account. Legacy ticket records
@@ -120,8 +120,14 @@ Pulling an older revision restores that source locally while retaining the
 latest cloud revision as the next push's comparison base. The next explicit
 push creates a new revision; it never rewrites an old revision. Save pending
 editor changes and confirm replacement before using Pull/Revert. All network
-and source-storage work runs off the GUI thread. Offline Mode prevents cloud
-requests before credentials are sent and requires an app restart after disabling.
+and source-storage work runs off the GUI thread. Opening the Cloud tab checks
+reachability with a credential-free HTTPS `HEAD` request to the configured
+Firebase database endpoint, or Firebase Authentication when no database is
+configured. It reads no database contents. This cloud-only check and Firebase
+authentication/sync work independently of the package Offline Mode preference;
+Offline Mode still blocks other application network activity. While its audit
+guard is active, only scoped HTTPS requests to Firebase Auth and Realtime Database
+hosts pass through.
 
 ## Verification
 

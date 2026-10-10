@@ -209,8 +209,15 @@ class PortalChecks(unittest.TestCase):
         self.assertIsNone(self.dialog.auth_card.graphicsEffect())
 
     def test_cloud_failure_stays_open_and_connection_feedback(self):
-        cloud = portal.FirebaseSettingsDialog(self.service, self.dialog)
+        cloud = portal.FirebaseSettingsDialog(self.service, self.dialog, config={
+            "firebase_database_url": "https://stored-secret.firebasedatabase.app/",
+            "firebase_api_key": "stored-secret-key",
+        })
         show(cloud, (500, 360))
+        self.assertEqual(cloud.db_input.echoMode(), QLineEdit.EchoMode.Password)
+        self.assertEqual(cloud.key_input.echoMode(), QLineEdit.EchoMode.Password)
+        self.assertEqual(cloud.db_input.text(), "")
+        self.assertEqual(cloud.key_input.text(), "")
         cloud._run_test()
         self.service.test_firebase_connection.assert_not_called()
         self.assertIn("URL", cloud.feedback.text())

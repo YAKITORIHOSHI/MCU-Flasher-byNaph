@@ -7,6 +7,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from main.core import cloud_sketch_service as cloud
 from main.core.credential_store import CredentialStore, SecureStorageError
+from src.modules import offline_runtime as offline
 
 CONFIG = {"firebase_api_key": "fixture-key", "firebase_database_url": "https://fixture.firebasedatabase.app",
           "firebase_project_id": "fixture-project"}
@@ -67,6 +69,8 @@ class MemoryHTTP:
             return {"user_id": self.uid, "id_token": "fixture-refreshed-id-token",
                     "refresh_token": "fixture-new-refresh", "expires_in": "3600"}, {}
         assert url.hostname == "fixture.firebasedatabase.app"
+        if request.get_method() == "HEAD":
+            return None, {}
         assert urllib.parse.parse_qs(url.query)["auth"][0].startswith("fixture-")
         names = url.path.removesuffix(".json").strip("/").split("/")
         assert names[:2] == ["users", self.uid]
@@ -104,9 +108,6 @@ class CloudChecks(unittest.TestCase):
         self.local.mkdir()
         (self.local / "Sketch.ino").write_bytes(b"void setup() {}\nvoid loop() {}\n")
         (self.local / "Header.h").write_bytes(b"#pragma once\n")
-        guard = patch.object(cloud, "network_access_disabled", return_value=False)
-        self.offline = guard.start()
-        self.addCleanup(guard.stop)
         real_network = patch.object(cloud.urllib.request, "build_opener", side_effect=AssertionError("Real HTTP forbidden"))
         real_network.start()
         self.addCleanup(real_network.stop)
@@ -150,12 +151,46 @@ class CloudChecks(unittest.TestCase):
         child.sign_out(forget_saved=True)
         self.assertFalse(self.store.values)
 
-    def test_offline_never_sends_credentials(self):
-        self.offline.return_value = True
-        with self.assertRaisesRegex(cloud.CloudError, "Offline Mode"):
+    def test_cloud_auth_and_probe_work_independently_of_offline_mode(self):
+        original = self.service._transport
+        def offline_aware_transport(request, **kwargs):
+            host = urllib.parse.urlsplit(request.full_url).hostname
+            offline._audit("socket.getaddrinfo", (host, 443, 0, 0, 0))
+            offline._audit("socket.connect", (None, ("8.8.8.8", 443)))
+            return original(request, **kwargs)
+        self.service._transport = offline_aware_transport
+        with patch.object(offline, "_network_blocked", True):
+            self.assertTrue(self.service.check_connection())
             self.login()
-        self.assertFalse(self.http.calls)
-        self.assertFalse(self.service.is_authenticated)
+            self.assertTrue(self.service.is_authenticated)
+            self.assertGreaterEqual(len(self.http.calls), 2)
+            with self.assertRaisesRegex(offline.OfflineDependencyError, "Offline Mode"):
+                offline._audit("socket.getaddrinfo", ("example.invalid", 443, 0, 0, 0))
+
+    def test_connection_probe_uses_firebase_head_without_credentials_or_database_content(self):
+        self.assertTrue(self.service.check_connection())
+        request = self.http.calls[0]
+        self.assertEqual(request.get_method(), "HEAD")
+        self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, "fixture.firebasedatabase.app")
+        self.assertIsNone(request.data)
+        self.assertEqual(urllib.parse.urlsplit(request.full_url).query, "shallow=true")
+
+    def test_provider_configuration_is_read_only_from_secure_vault(self):
+        names = {"FIREBASE_API_KEY": "environment-key",
+                 "FIREBASE_DATABASE_URL": "https://environment.firebasedatabase.app",
+                 "FIREBASE_PROJECT_ID": "environment-project"}
+        with patch.dict(os.environ, names, clear=False):
+            self.assertFalse(any(cloud.load_cloud_configuration(self.store).values()))
+            self.store.set("provider_configuration", CONFIG)
+            self.assertEqual(cloud.load_cloud_configuration(self.store), CONFIG)
+
+    def test_unconfigured_connection_probe_checks_firebase_auth_host(self):
+        self.service._config_provider = lambda: {}
+        self.assertTrue(self.service.check_connection())
+        request = self.http.calls[-1]
+        self.assertEqual(request.get_method(), "HEAD")
+        self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, "identitytoolkit.googleapis.com")
+        self.assertIsNone(request.data)
 
     def test_saved_credentials_fail_closed(self):
         self.store.status = False, "Fixture keyring is locked"

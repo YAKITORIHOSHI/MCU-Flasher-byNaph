@@ -26,7 +26,7 @@ from typing import Any, Callable
 from main.core.credential_store import (
     CredentialStore, SecureStorageError, load_cloud_configuration, user_cloud_directory,
 )
-from src.modules.offline_runtime import OfflineDependencyError, network_access_disabled
+from src.modules.offline_runtime import OfflineDependencyError, firebase_network_access
 
 
 MAX_FILES = 128
@@ -40,10 +40,6 @@ SOURCE_SUFFIXES = frozenset({".ino", ".cpp", ".c", ".h", ".hpp", ".txt"})
 LINK_NAME = ".mcu_cloud_link.json"
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _REVISION_KEY = re.compile(r"^r[1-9][0-9]{0,9}$")
-_OFFLINE = ("Cloud access is blocked by Offline Mode in this session. Turn Offline Mode "
-            "off in Settings and restart MCU Flasher.")
-
-
 class CloudError(RuntimeError):
     """Safe user-facing error; raw HTTP exceptions and credential URLs stay private."""
 
@@ -290,9 +286,42 @@ class CloudSketchService:
             except (SecureStorageError, CloudError):
                 return {}
 
+    def check_connection(self) -> bool:
+        """Probe the configured Firebase endpoint without sending credentials or reading data."""
+        try:
+            endpoint = self._config()["firebase_database_url"] + "/.json?shallow=true"
+            host = urllib.parse.urlsplit(endpoint).hostname
+        except Exception:
+            endpoint = "https://identitytoolkit.googleapis.com/"
+            host = urllib.parse.urlsplit(endpoint).hostname
+        request = urllib.request.Request(endpoint, headers={"Accept": "application/json"}, method="HEAD")
+        try:
+            with firebase_network_access(host):
+                if self._transport:
+                    self._transport(request, timeout=5.0, max_bytes=0)
+                else:
+                    opener = urllib.request.build_opener(_NoRedirect())
+                    with opener.open(request, timeout=5.0):
+                        pass
+            return True
+        except urllib.error.HTTPError as error:
+            # Auth-required, method-not-allowed and similar responses prove the
+            # Firebase endpoint is reachable; the response body is never read.
+            error.close()
+            return True
+        except Exception:
+            return False
+
     def _request(self, method: str, url: str, payload=None, *, headers=None, form=False) -> tuple[Any, dict]:
-        if network_access_disabled():
-            raise CloudError(_OFFLINE)
+        try:
+            parsed_url = urllib.parse.urlsplit(url)
+            host = parsed_url.hostname or ""
+            port = parsed_url.port
+        except ValueError:
+            raise CloudError("The Firebase connection address is invalid.") from None
+        if (parsed_url.scheme != "https" or not host or parsed_url.username or parsed_url.password
+                or port not in (None, 443)):
+            raise CloudError("Cloud requests require a valid Firebase HTTPS endpoint.")
         request_headers = {"Accept": "application/json", **(headers or {})}
         data = None
         if payload is not None:
@@ -303,29 +332,30 @@ class CloudSketchService:
             request_headers["Content-Type"] = ("application/x-www-form-urlencoded" if form else "application/json")
         request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
         try:
-            if self._transport:
-                return self._transport(request, timeout=12.0, max_bytes=MAX_RESPONSE_BYTES)
-            opener = urllib.request.build_opener(_NoRedirect())
-            with opener.open(request, timeout=12.0) as response:
-                chunks = []
-                size = 0
-                started = time.monotonic()
-                while True:
-                    if time.monotonic() - started > 30:
-                        raise CloudError("The cloud response took too long. Try again later.")
-                    chunk = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - size))
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > MAX_RESPONSE_BYTES:
-                        raise CloudError("The cloud response exceeds the size limit.")
-                    chunks.append(chunk)
-                raw = b"".join(chunks)
-                return json.loads(raw.decode("utf-8")), dict(response.headers.items())
+            with firebase_network_access(host):
+                if self._transport:
+                    return self._transport(request, timeout=12.0, max_bytes=MAX_RESPONSE_BYTES)
+                opener = urllib.request.build_opener(_NoRedirect())
+                with opener.open(request, timeout=12.0) as response:
+                    chunks = []
+                    size = 0
+                    started = time.monotonic()
+                    while True:
+                        if time.monotonic() - started > 30:
+                            raise CloudError("The cloud response took too long. Try again later.")
+                        chunk = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - size))
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > MAX_RESPONSE_BYTES:
+                            raise CloudError("The cloud response exceeds the size limit.")
+                        chunks.append(chunk)
+                    raw = b"".join(chunks)
+                    return json.loads(raw.decode("utf-8")), dict(response.headers.items())
         except CloudError:
             raise
         except OfflineDependencyError:
-            raise CloudError(_OFFLINE) from None
+            raise CloudError("Could not reach Firebase. Check your internet connection and try again.") from None
         except urllib.error.HTTPError as error:
             status = error.code
             try:

@@ -174,16 +174,12 @@ _CONFIG_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project_i
 
 
 def load_cloud_configuration(store: CredentialStore | None = None) -> dict[str, Any]:
-    """Read only per-user secure configuration and explicit process environment."""
+    """Read provider settings only from the current user's OS credential vault."""
     cfg: dict[str, Any] = {}
     try:
         cfg.update((store or CredentialStore()).get("provider_configuration") or {})
     except SecureStorageError:
-        # Temporary sign-in still works with explicit environment configuration.
         pass
-    for key in _CONFIG_KEYS:
-        if value := os.environ.get(key.upper()):
-            cfg[key] = value
     return {key: cfg.get(key, "") for key in _CONFIG_KEYS}
 
 

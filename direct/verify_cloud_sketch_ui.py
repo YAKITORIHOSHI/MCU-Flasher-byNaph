@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer
 from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit
-from main.qt.cloud_sketch_panel import CloudSketchPanel, CloudSketchDialog
+from main.qt.cloud_sketch_panel import CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog
 from main.qt.project_dialog import ProjectDialog
 from main.qt.theme import build_stylesheet, register_fonts
 
@@ -39,6 +39,7 @@ class FakeService:
         self.list_error = False
         self.hold = None
         self._store = object()
+        self.connectivity = True
 
     def record(self, method, *args, **kwargs):
         self.threads.append(threading.get_ident())
@@ -77,6 +78,10 @@ class FakeService:
     def restore_session(self):
         self.record("restore_session")
         return self.authenticated
+
+    def check_connection(self):
+        self.record("connectivity")
+        return self.connectivity
 
     def sign_in(self, email, password, **kwargs):
         self.record("sign_in", email, password, **kwargs)
@@ -145,7 +150,6 @@ class CloudUIChecks(unittest.TestCase):
             get_recent_projects=Mock(return_value=[]), get_default_project_parent=Mock(return_value=str(self.root)))
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(patch("main.qt.cloud_sketch_panel.load_cloud_configuration", return_value={}))
         self.stack.enter_context(patch("main.qt.cloud_sketch_panel.save_cloud_configuration", return_value=True))
         self.stack.enter_context(patch("main.core.config.get_open_projects", return_value=[]))
         self.stack.enter_context(patch("main.core.config.find_project_window", return_value=None))
@@ -186,9 +190,15 @@ class CloudUIChecks(unittest.TestCase):
         panel = self.panel()
         self.assertTrue(self.service.threads)
         self.assertNotIn(threading.get_ident(), self.service.threads)
+        self.assertIn("connectivity", [row[0] for row in self.service.calls])
         self.assertEqual(panel._sketches.count(), 1)
         self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
-        self.assertEqual(panel._api_key.echoMode(), QLineEdit.EchoMode.Password)
+        dialog = _CloudConnectionDialog(panel)
+        self.widgets.append(dialog)
+        for field in (dialog.api_key, dialog.database_url, dialog.project_id):
+            self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
+            self.assertEqual(field.text(), "")
+        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
         self.assertFalse(panel._pull_btn.isEnabled())
 
     def test_failed_sign_in_clears_previous_private_sketch_list(self):
@@ -323,18 +333,22 @@ class CloudUIChecks(unittest.TestCase):
     def test_configuration_saves_only_to_injected_secure_store_off_gui(self):
         self.service.authenticated = False
         panel = self.panel()
-        panel._api_key.setText("fixture-api-key")
-        panel._database_url.setText("https://fixture-default-rtdb.firebaseio.com")
-        panel._project_id.setText("fixture")
+        cfg = {"firebase_api_key": "fixture-api-key",
+               "firebase_database_url": "https://fixture-default-rtdb.firebaseio.com",
+               "firebase_project_id": "fixture"}
         captured = []
         with patch("main.qt.cloud_sketch_panel.save_cloud_configuration", side_effect=lambda *args:
                    captured.append((args, threading.get_ident()))):
-            panel._save_configuration()
+            panel._save_configuration(cfg)
             self.wait(lambda: not panel._busy)
         self.assertEqual(captured[0][0][0]["firebase_project_id"], "fixture")
         self.assertIs(captured[0][0][1], self.service._store)
         self.assertNotEqual(captured[0][1], threading.get_ident())
         self.assertIn("encrypted credential vault", panel._status.text())
+        visible_text = " ".join(field.text() for field in panel.findChildren(QLineEdit))
+        self.assertNotIn("fixture-api-key", visible_text)
+        self.assertNotIn("fixture-default-rtdb", visible_text)
+        self.assertNotIn("fixture-project", visible_text)
 
     def test_account_delete_requires_confirmation_and_literal_password(self):
         panel = self.panel()
@@ -469,11 +483,15 @@ class CloudUIChecks(unittest.TestCase):
             self.assertTrue(panel._save_login.isVisible())
             self.assertTrue(panel._remember.isVisible())
             self.assertTrue(panel.grab().save(str(self.output / f"{mode}-login.png")))
+        viewport_center = panel._scroll.viewport().mapTo(panel, panel._scroll.viewport().rect().center())
+        card_center = panel._account_card.mapTo(panel, panel._account_card.rect().center())
+        self.assertLessEqual(abs(card_center.x() - viewport_center.x()), 2)
         panel._configure_toggle.setChecked(True)
         APP.processEvents()
         panel._scroll.ensureWidgetVisible(panel._configuration_card)
         APP.processEvents()
-        self.assertTrue(panel.grab().save(str(self.output / "connection-fields.png")))
+        self.assertTrue(panel.grab().save(str(self.output / "connection-settings.png")))
+        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
         panel._configure_toggle.setChecked(False)
         panel._show_create_account()
         APP.processEvents()
@@ -485,6 +503,11 @@ class CloudUIChecks(unittest.TestCase):
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
             panel.apply_theme(mode)
+            connection_dialog = _CloudConnectionDialog(panel)
+            self.widgets.append(connection_dialog)
+            for field in (connection_dialog.api_key, connection_dialog.database_url,
+                          connection_dialog.project_id):
+                self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
             for width, height in ((720, 650), (400, 360), (330, 270)):
                 panel.resize(width, height)
                 APP.processEvents()
@@ -493,12 +516,13 @@ class CloudUIChecks(unittest.TestCase):
                     self.assertTrue(panel.rect().contains(geometry), (mode, width, height, button.text(), geometry))
                     self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
                 self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
-                self.assertEqual(panel._api_key.echoMode(), QLineEdit.EchoMode.Password)
+                self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
                 self.assertTrue(panel.grab().save(str(self.output / f"{mode}-{width}-{height}.png")))
+            connection_dialog.deleteLater()
         panel._configure_toggle.setChecked(True)
         panel._scroll.verticalScrollBar().setValue(panel._scroll.verticalScrollBar().maximum())
         APP.processEvents()
-        self.assertTrue(panel.grab().save(str(self.output / "connection-settings.png")))
+        self.assertTrue(panel.grab().save(str(self.output / "connection-settings-compact.png")))
 
 
 if __name__ == "__main__":

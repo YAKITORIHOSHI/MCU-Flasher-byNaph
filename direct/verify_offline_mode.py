@@ -186,6 +186,23 @@ class ModeChecks(unittest.TestCase):
                         with self.assertRaisesRegex(runtime.OfflineDependencyError, "bootstrap"):
                             runtime._audit("subprocess.Popen", (command[0], command, None, {}))
 
+    def test_offline_mode_allows_only_scoped_firebase_https_requests(self):
+        with patch.object(runtime, "_network_blocked", True):
+            with runtime.firebase_network_access("identitytoolkit.googleapis.com"):
+                runtime._audit("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0))
+                runtime._audit("socket.connect", (None, ("8.8.8.8", 443)))
+                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
+                    runtime._audit("socket.getaddrinfo", ("example.invalid", 443, 0, 0, 0))
+                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
+                    runtime._audit("socket.connect", (None, ("8.8.8.8", 80)))
+                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
+                    runtime._audit("socket.sendto", (None, ("8.8.8.8", 443)))
+            with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
+                runtime._audit("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0))
+            with self.assertRaises(runtime.OfflineDependencyError):
+                with runtime.firebase_network_access("example.invalid"):
+                    pass
+
     def test_effective_network_policy_uses_active_guard_over_inherited_environment(self):
         for blocked in (False, True):
             for inherited in (None, "", "0", "1", "true"):
