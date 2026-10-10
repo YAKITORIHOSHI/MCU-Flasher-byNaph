@@ -715,9 +715,14 @@ class BoardListItemDelegate(QStyledItemDelegate):
     sleek pill badge for hardware architecture, and a clean subtitle with chip/ID.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None, theme_pal: Optional[dict] = None):
+    def __init__(self, parent: Optional[QWidget] = None, theme_pal: Optional[dict] = None,
+                 list_model: Optional[QAbstractListModel] = None):
         super().__init__(parent)
         self.pal = theme_pal or {}
+        # Keep the model metadata local for sizeHint. QModelIndex.data() crosses
+        # the Python/Qt boundary for every row and is needlessly expensive when
+        # the board catalog streams thousands of rows into QListView.
+        self._list_model = list_model
         self._f_title = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
         self._f_title_bold = QFont("Segoe UI", 10, QFont.Weight.Bold)
         self._f_badge = QFont("Consolas", 8, QFont.Weight.Bold)
@@ -764,7 +769,9 @@ class BoardListItemDelegate(QStyledItemDelegate):
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         view = self.parent()
         width = max(1, view.viewport().width() - 4) if isinstance(view, QListView) else 300
-        is_header = index.data(Qt.ItemDataRole.UserRole + 1) == "header"
+        row = index.row()
+        rows = self._list_model.rows if self._list_model is not None else ()
+        is_header = 0 <= row < len(rows) and "header" in rows[row]
         if is_header:
             return QSize(width, 26)
         return QSize(width, 48)
@@ -1126,7 +1133,7 @@ class BoardSearchDialog(QDialog):
         self.listbox.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.listbox.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.listbox.setHorizontalScrollMode(QListView.ScrollMode.ScrollPerPixel)
-        self._delegate = BoardListItemDelegate(self.listbox)
+        self._delegate = BoardListItemDelegate(self.listbox, list_model=self._list_model)
         self.listbox.setItemDelegate(self._delegate)
 
         self.search_ent = _SearchLineEdit(self.listbox)

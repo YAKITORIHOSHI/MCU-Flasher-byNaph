@@ -588,4 +588,13 @@ class SerialViewChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if "--no-finalize" in sys.argv:
+        # Clipboard ownership is verified on the native Windows/X11 platform,
+        # then the saved clipboard is restored by unittest cleanup. Bypass only
+        # PySide's interpreter teardown after those checks and cleanups finish.
+        sys.argv.remove("--no-finalize")
+        checks = unittest.main(verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(verbosity=2)
