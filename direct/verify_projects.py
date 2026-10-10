@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QPoint, QRect, QTimer, QStandardPaths
+from PySide6.QtCore import QPoint, QRect, QTimer, QStandardPaths, QSize, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox, QWidget
 from main.core import config
 from main.core.config_store import ConfigSnapshot
@@ -94,6 +94,20 @@ class ProjectChecks(unittest.TestCase):
         api.emit = Mock()
         return api
 
+    def wait_for_existing_preview(self, dialog, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while dialog._existing_preview_applied_revision != dialog._existing_preview_revision:
+            APP.processEvents()
+            if time.monotonic() >= deadline:
+                self.fail("Existing-project file preview did not finish")
+            time.sleep(.005)
+
+    def assert_existing_preview_starts_below_path(self, dialog):
+        path_bottom = dialog._open_path_edit.mapToGlobal(
+            QPoint(0, dialog._open_path_edit.height())).y()
+        preview_top = dialog._preview_box.mapToGlobal(QPoint(0, 0)).y()
+        self.assertLessEqual(preview_top - path_bottom, 24)
+
     def test_startup_leaves_projects_unbound_and_never_creates_an_example(self):
         example = self.folder / "Documents" / "example"
         for saved_dir in ("", str(self.folder / "sketch"), str(example)):
@@ -149,6 +163,129 @@ class ProjectChecks(unittest.TestCase):
                     dialog.close()
                     dialog.deleteLater()
                     APP.processEvents()
+
+    def test_existing_project_preview_lists_root_files_and_highlights_setup_loop_main(self):
+        project = self.folder / "WebConnect-GarbyController"
+        project.mkdir()
+        main_ino = project / "WebConnect-GarbyController.ino"
+        main_ino.write_text(
+            "void setup() { Serial.begin(115200); }\n"
+            "void loop() { delay(10); }\n", encoding="utf-8")
+        (project / "Function.cpp").write_text("void moveRobot() {}\n", encoding="utf-8")
+        (project / "Header.h").write_text("void moveRobot();\n", encoding="utf-8")
+        (project / "NOTE.txt").write_text("Project notes\n", encoding="utf-8")
+        (project / "Helpers.ino").write_text("void printStatus() {}\n", encoding="utf-8")
+
+        dialog = ProjectDialog()
+        try:
+            if RENDER_DIR:
+                dialog.show()
+                APP.processEvents()
+                self.assertTrue(dialog._existing_files_list.isHidden())
+                self.assertLess(dialog._preview_box.height(), 160)
+                self.assert_existing_preview_starts_below_path(dialog)
+                self.assertTrue(dialog.grab().save(
+                    str(RENDER_DIR / "existing-project-empty-preview.png")))
+
+            # A selected .ino previews its containing folder while keeping that
+            # same file as the clearly identified setup()/loop() owner.
+            dialog._open_path_edit.setText(str(main_ino))
+            self.wait_for_existing_preview(dialog)
+            names = [dialog._existing_files_list.item(i).text()
+                     for i in range(dialog._existing_files_list.count())]
+            self.assertEqual(dialog._existing_files_list.count(), 5)
+            self.assertTrue(names[0].startswith("WebConnect-GarbyController.ino"))
+            self.assertIn("MAIN · setup() + loop()", names[0])
+            main_item = dialog._existing_files_list.item(0)
+            self.assertTrue(main_item.data(Qt.ItemDataRole.UserRole + 1))
+            self.assertEqual(main_item.data(Qt.ItemDataRole.UserRole), str(main_ino))
+            self.assertFalse(main_item.icon().isNull())
+            main_marker = main_item.icon().pixmap(QSize(16, 26)).toImage()
+            self.assertGreater(main_marker.pixelColor(8, 22).alpha(), 0)
+            self.assertTrue(any(name.startswith("Function.cpp") for name in names))
+            self.assertTrue(any(name.startswith("Header.h") for name in names))
+            self.assertTrue(any(name.startswith("NOTE.txt") for name in names))
+            self.assertTrue(any(name.startswith("Helpers.ino") for name in names))
+            self.assertTrue(dialog._existing_preview_lbl.isHidden())
+            for theme in ("default", "light", "solarized_dark"):
+                dialog._apply_dialog_theme(theme)
+                self.assertEqual(
+                    main_item.foreground().color().name(),
+                    dialog._dialog_palette["GREEN"].lower(),
+                )
+                self.assertFalse(main_item.icon().isNull())
+            dialog._apply_dialog_theme("default")
+            if RENDER_DIR:
+                APP.processEvents()
+                self.assertGreater(dialog._existing_files_list.height(), 176)
+                row_heights = [dialog._existing_files_list.visualItemRect(
+                    dialog._existing_files_list.item(i)).height()
+                    for i in range(dialog._existing_files_list.count())]
+                self.assertTrue(row_heights)
+                self.assertLess(max(row_heights), 30)
+                self.assertTrue(
+                    dialog._existing_files_list.visualItemRect(main_item).isValid())
+                self.assertTrue(dialog.grab().save(
+                    str(RENDER_DIR / "existing-project-main-preview.png")))
+
+            single_project = self.folder / "single-file-project"
+            single_project.mkdir()
+            only_ino = single_project / "Only.ino"
+            only_ino.write_text(
+                "void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+            dialog._open_path_edit.setText(str(only_ino))
+            self.wait_for_existing_preview(dialog)
+            self.assertEqual(dialog._existing_files_list.count(), 1)
+            single_marker = dialog._existing_files_list.item(0).icon().pixmap(
+                QSize(16, 26)).toImage()
+            self.assertEqual(single_marker.pixelColor(8, 0).alpha(), 0)
+            self.assertEqual(single_marker.pixelColor(8, 25).alpha(), 0)
+            if RENDER_DIR:
+                APP.processEvents()
+                self.assertLess(dialog._existing_files_list.height(), 60)
+                self.assertLess(dialog._preview_box.height(), 160)
+                self.assert_existing_preview_starts_below_path(dialog)
+                self.assertTrue(dialog.grab().save(
+                    str(RENDER_DIR / "existing-project-single-preview.png")))
+
+            split_project = self.folder / "split-entrypoints"
+            split_project.mkdir()
+            (split_project / "setup.ino").write_text(
+                "void setup() {}\n", encoding="utf-8")
+            (split_project / "loop.ino").write_text(
+                "void loop() {}\n", encoding="utf-8")
+            dialog._open_path_edit.setText(str(split_project))
+            self.wait_for_existing_preview(dialog)
+            split_rows = [dialog._existing_files_list.item(i)
+                          for i in range(dialog._existing_files_list.count())]
+            self.assertFalse(any(item.data(Qt.ItemDataRole.UserRole + 1)
+                                 for item in split_rows))
+            self.assertTrue(any("setup()" in item.text() for item in split_rows))
+            self.assertTrue(any("loop()" in item.text() for item in split_rows))
+            self.assertTrue(all(not item.icon().isNull() for item in split_rows))
+            self.assertTrue(dialog._existing_preview_lbl.isHidden())
+
+            no_source_project = self.folder / "no-root-source"
+            no_source_project.mkdir()
+            (no_source_project / "NOTE.txt").write_text(
+                "notes only\n", encoding="utf-8")
+            dialog._open_path_edit.setText(str(no_source_project))
+            self.wait_for_existing_preview(dialog)
+            self.assertFalse(dialog._existing_preview_lbl.isHidden())
+            self.assertIn("non-empty .ino, .cpp, or .c", dialog._existing_preview_lbl.text())
+            if RENDER_DIR:
+                APP.processEvents()
+                self.assertLess(dialog._existing_files_list.height(), 60)
+
+            dialog._open_path_edit.clear()
+            APP.processEvents()
+            self.assertTrue(dialog._existing_files_list.isHidden())
+            if RENDER_DIR:
+                self.assertLess(dialog._preview_box.height(), 160)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            APP.processEvents()
 
     def test_stale_settings_snapshot_preserves_other_window_and_nested_preferences(self):
         first = config._load_raw_config()

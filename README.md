@@ -84,6 +84,15 @@ The project selector uses the same cached static glass header and cards in all
 three palettes. Existing, New, Recent and Open projects have compact tabs,
 readable file/path surfaces and pinned actions; short pages scroll and forms
 reflow. Project destination and unsaved-change prompts share the palette.
+The Existing tab lists the selected project's root files and highlights the
+`.ino` that owns `setup()` and `loop()`; split entry points are identified by
+their filenames. A subtle vertical rail links the theme-colored markers for the
+MAIN sketch, entry-point contributors and supporting files. The file list fills
+the available preview space with compact rows; supplemental text is reserved
+for errors and scan warnings. Empty and single-file previews stay compact at
+the top, directly beneath the path field, with spare height below. The
+connector rail appears only when multiple files are listed. File discovery and
+entry-point reading run off the UI thread.
 Foreground retries stop when the selector closes and respect active modal
 prompts, preserving keyboard focus.
 

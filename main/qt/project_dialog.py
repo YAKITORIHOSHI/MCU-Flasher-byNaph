@@ -5,7 +5,8 @@ main.qt.project_dialog — Project selector / creator dialog for MCU Flasher.
 
 Replaces the Tkinter ProjectSelectorDialog.
 Shows recent projects, allows browsing for existing folders with live file
-content preview, and can scaffold a new sketch folder with templates.
+content preview, and can scaffold a new sketch folder with templates. The
+existing-project preview lists root files and identifies the MAIN .ino file.
 """
 from __future__ import annotations
 
@@ -17,13 +18,14 @@ from typing import Callable, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
-from PySide6.QtCore import Qt, QTimer, QStandardPaths
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import Qt, QTimer, QStandardPaths, QObject, QRunnable, QThreadPool, Signal, QSize
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTabBar,
     QWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
     QLineEdit, QFileDialog, QComboBox, QCheckBox, QGroupBox, QFormLayout,
     QFrame, QApplication, QMessageBox, QScrollArea, QSizePolicy, QLayout,
+    QAbstractItemView, QStyledItemDelegate,
 )
 from main.qt.icons import ActionButton as QPushButton, icon
 from main.qt.setup_components import GlassCard
@@ -36,6 +38,124 @@ from main.core.constants import is_application_codebase_dir
 SUPPORTED_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
 PROJECT_ENTRY_SOURCE_EXTS = {".ino", ".cpp", ".c"}
 PROJECT_SOURCE_CONTENT_PROBE_BYTES = 8192
+PROJECT_PREVIEW_MAX_FILES = 256
+PROJECT_PREVIEW_MAX_INO_ANALYSIS = 32
+PROJECT_PREVIEW_INO_SCAN_BYTES = 2 * 1024 * 1024
+
+_SETUP_DEFINITION_RE = re.compile(
+    r'\bvoid\s+setup\s*\(\s*(?:void)?\s*\)\s*\{', re.MULTILINE
+)
+_LOOP_DEFINITION_RE = re.compile(
+    r'\bvoid\s+loop\s*\(\s*(?:void)?\s*\)\s*\{', re.MULTILINE
+)
+
+
+class _ProjectPreviewSignals(QObject):
+    finished = Signal(int, object)
+
+
+def _scan_existing_project_preview(raw_path: str) -> dict:
+    """Read a selected project's shallow root contents away from the GUI thread."""
+    result = {
+        "folder": "", "error": "", "files": [], "files_omitted": 0,
+        "valid_sources": [], "entrypoints": {}, "main_file": "",
+        "analysis_limited": False,
+    }
+    try:
+        path = Path(raw_path)
+        if path.is_dir():
+            folder = path
+        elif path.is_file():
+            folder = path.parent
+        else:
+            result["error"] = "This folder does not exist. Choose an existing sketch folder."
+            return result
+        if is_application_codebase_dir(folder):
+            result["error"] = "The MCU Flasher application folder cannot be opened as a sketch project."
+            return result
+
+        entries = sorted(
+            (item for item in folder.iterdir()
+             if item.is_file() and item.suffix.lower() in SUPPORTED_EXTS),
+            key=lambda item: item.name.casefold(),
+        )
+        result["folder"] = str(folder)
+        result["files_omitted"] = max(0, len(entries) - PROJECT_PREVIEW_MAX_FILES)
+        entries = entries[:PROJECT_PREVIEW_MAX_FILES]
+        result["files"] = [item.name for item in entries]
+
+        owners: dict[str, dict[str, int]] = {}
+        setup_owners: set[str] = set()
+        loop_owners: set[str] = set()
+        ino_count = 0
+        for item in entries:
+            ext = item.suffix.lower()
+            if ext not in PROJECT_ENTRY_SOURCE_EXTS:
+                continue
+            try:
+                read_limit = (PROJECT_PREVIEW_INO_SCAN_BYTES if ext == ".ino"
+                              else PROJECT_SOURCE_CONTENT_PROBE_BYTES)
+                with item.open("rb") as handle:
+                    content = handle.read(read_limit)
+                if content[:PROJECT_SOURCE_CONTENT_PROBE_BYTES].strip():
+                    result["valid_sources"].append(item.name)
+                if ext != ".ino":
+                    continue
+
+                ino_count += 1
+                if ino_count > PROJECT_PREVIEW_MAX_INO_ANALYSIS:
+                    result["analysis_limited"] = True
+                    continue
+                if item.stat().st_size > read_limit:
+                    result["analysis_limited"] = True
+                text = content.decode("utf-8", errors="replace")
+                setup_count = len(_SETUP_DEFINITION_RE.findall(text))
+                loop_count = len(_LOOP_DEFINITION_RE.findall(text))
+                if setup_count or loop_count:
+                    owners[item.name] = {"setup": setup_count, "loop": loop_count}
+                    if setup_count:
+                        setup_owners.add(item.name)
+                    if loop_count:
+                        loop_owners.add(item.name)
+            except OSError:
+                continue
+
+        result["entrypoints"] = owners
+        if (len(setup_owners) == 1 and len(loop_owners) == 1
+                and setup_owners == loop_owners):
+            result["main_file"] = next(iter(setup_owners))
+        else:
+            ino_files = [item.name for item in entries if item.suffix.lower() == ".ino"]
+            if len(ino_files) == 1:
+                result["main_file"] = ino_files[0]
+    except OSError as exc:
+        result["error"] = f"Could not read this project's files: {exc}"
+    except Exception as exc:
+        result["error"] = f"Could not preview this project: {exc}"
+    return result
+
+
+class _ProjectPreviewWorker(QRunnable):
+    def __init__(self, revision: int, path: str):
+        super().__init__()
+        self.revision = revision
+        self.path = path
+        self.signals = _ProjectPreviewSignals()
+        self.setAutoDelete(False)
+
+    def run(self):
+        self.signals.finished.emit(
+            self.revision, _scan_existing_project_preview(self.path)
+        )
+
+
+class _ProjectFileRowDelegate(QStyledItemDelegate):
+    """Keep file rows compact so adjacent marker segments meet cleanly."""
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        hint.setHeight(max(28, option.fontMetrics.height() + 4))
+        return hint
 
 
 class _ProjectTabBar(WorkspaceTabBar):
@@ -97,7 +217,7 @@ class ProjectDialog(QDialog):
     Open / Create Project dialog for MCU Flasher by Naph.
 
     Tabs:
-      1. Existing Project — browse for folder with live file preview
+      1. Existing Project — browse for folder with root-file and entry-point preview
       2. New Project      — scaffold a new sketch with template
       3. Recent Projects  — list of recently opened projects
       4. Open Projects    — focus an existing sketch workspace
@@ -117,6 +237,17 @@ class ProjectDialog(QDialog):
         # no active workspace to switch, so they keep the direct current path.
         self._allow_window_choice = bool(open_in_new_window)
         self.selected_project: Optional[Path] = None
+        self._existing_preview_revision = 0
+        self._existing_preview_applied_revision = 0
+        self._existing_preview_running = False
+        self._existing_preview_pending: tuple[int, str] | None = None
+        self._existing_preview_worker: _ProjectPreviewWorker | None = None
+        self._existing_preview_pool = QThreadPool(self)
+        self._existing_preview_pool.setMaxThreadCount(1)
+        self._existing_preview_timer = QTimer(self)
+        self._existing_preview_timer.setSingleShot(True)
+        self._existing_preview_timer.setInterval(140)
+        self._existing_preview_timer.timeout.connect(self._start_existing_preview_scan)
         self._foreground_timers = []
         for interval in (50, 200):
             timer = QTimer(self)
@@ -328,6 +459,99 @@ class ProjectDialog(QDialog):
         key = {"muted": "TEXT_DIM", "error": "RED", "ok": "GREEN", "warn": "YELLOW"}.get(tone, "TEXT")
         label.setStyleSheet(f"color: {colors.get(key, '#e3edf6')};")
 
+    def _set_existing_preview_expanded(self, expanded: bool) -> None:
+        vertical_policy = (
+            QSizePolicy.Policy.Expanding if expanded else QSizePolicy.Policy.Maximum
+        )
+        self._preview_box.setSizePolicy(QSizePolicy.Policy.Preferred, vertical_policy)
+        self._existing_content_layout.setStretchFactor(
+            self._preview_box, 1 if expanded else 0)
+        self._existing_content_layout.setStretch(
+            self._existing_preview_bottom_stretch_index, 0 if expanded else 1)
+
+    def _project_file_marker_icon(
+        self, kind: str, connect_above: bool, connect_below: bool,
+    ) -> QIcon:
+        """Draw a themed tree connector and marker without changing file labels."""
+        palette = getattr(self, "_dialog_palette", {})
+        kind = kind if kind in {"main", "entry"} else "file"
+        connect_above = bool(connect_above)
+        connect_below = bool(connect_below)
+        key = (self._theme_mode, kind, connect_above, connect_below)
+        cache = getattr(self, "_project_file_marker_icons", None)
+        if cache is None:
+            cache = self._project_file_marker_icons = {}
+        if key in cache:
+            return cache[key]
+
+        tone = "GREEN" if kind == "main" else "CYAN" if kind == "entry" else "TEXT_DIM"
+        color = QColor(palette.get(tone, "#aebdca"))
+        rail = QColor(palette.get("CYAN", "#73d9d0"))
+        rail.setAlpha(150)
+        pixmap = QPixmap(16, 26)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(rail, 1.2, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
+        if connect_above:
+            top_edge = 6 if kind == "main" else 8 if kind == "entry" else 9
+            painter.drawLine(8, 0, 8, top_edge)
+        if connect_below:
+            bottom_edge = 20 if kind == "main" else 18 if kind == "entry" else 17
+            painter.drawLine(8, bottom_edge, 8, 25)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        if kind == "main":
+            halo = QColor(color)
+            halo.setAlpha(38)
+            ring = QColor(color)
+            ring.setAlpha(185)
+            painter.setBrush(halo)
+            painter.drawEllipse(1, 6, 14, 14)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(ring, 1.2))
+            painter.drawEllipse(1, 6, 14, 14)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(5, 10, 6, 6)
+        elif kind == "entry":
+            painter.setPen(QPen(color, 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(3, 8, 10, 10)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(6, 11, 4, 4)
+        else:
+            painter.setBrush(color)
+            painter.drawEllipse(5, 10, 6, 6)
+        painter.end()
+        cache[key] = QIcon(pixmap)
+        return cache[key]
+
+    def _style_existing_file_items(self) -> None:
+        """Style file rows and mark MAIN/entry-point ownership at a glance."""
+        palette = getattr(self, "_dialog_palette", {})
+        if not palette or not hasattr(self, "_existing_files_list"):
+            return
+        item_count = self._existing_files_list.count()
+        for index in range(item_count):
+            item = self._existing_files_list.item(index)
+            is_main = bool(item.data(Qt.ItemDataRole.UserRole + 1))
+            entry_roles = item.data(Qt.ItemDataRole.UserRole + 2) or ()
+            marker = "main" if is_main else "entry" if entry_roles else "file"
+            item.setIcon(self._project_file_marker_icon(
+                marker, index > 0, index < item_count - 1))
+            if is_main:
+                item.setBackground(QColor(palette["GREEN_DIM"]))
+                item.setForeground(QColor(palette["GREEN"]))
+            else:
+                item.setBackground(QColor(0, 0, 0, 0))
+                item.setForeground(QColor(palette["CYAN"] if entry_roles else palette["TEXT"]))
+            font = item.font()
+            font.setBold(is_main)
+            item.setFont(font)
+
     def _apply_dialog_theme(self, theme_mode: str | None = None) -> None:
         if not theme_mode:
             from main.core.config import get_theme_mode
@@ -380,6 +604,7 @@ class ProjectDialog(QDialog):
             QListWidget::item:hover {{ background: {pal['BG_MID']}; }}
             QListWidget::item:selected {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; border-color: {pal['BORDER_LIT']}; }}
             QListWidget:focus {{ border-color: {pal['CYAN']}; }}
+            QListWidget#existing-project-files::item {{ padding: 0px 7px; border-width: 0px; }}
             QCheckBox {{ color: {pal['TEXT']}; font-size: 12px; background: transparent; }}
             QPushButton {{ min-height: 18px; padding: 7px 12px; border: 1px solid {pal['BORDER']};
                 border-radius: 7px; color: {pal['TEXT_BRIGHT']}; font-size: 12px; font-weight: 600;
@@ -402,6 +627,7 @@ class ProjectDialog(QDialog):
             if getattr(widget, "_icon_name", ""):
                 ink = primary_ink if widget.property("projectAction") == "primary" else pal["TEXT_BRIGHT"]
                 widget.setIcon(icon(widget._icon_name, ink))
+        self._style_existing_file_items()
         self._tabs.tabBar().update()
         for field in (self._open_path_edit, self._new_name_edit, self._new_parent_edit, self._template_combo):
             # Native styles may otherwise compress a line edit to its frame
@@ -410,8 +636,10 @@ class ProjectDialog(QDialog):
 
     def _setup_existing_tab(self) -> None:
         tab, layout, actions = self._make_tab("Existing")
+        self._existing_content_layout = layout
         hint = QLabel("Choose the main .ino file or enter its project folder.", tab)
         hint.setWordWrap(True)
+        hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout.addWidget(hint)
         path_row = QHBoxLayout()
         self._open_path_edit = QLineEdit(tab)
@@ -424,6 +652,8 @@ class ProjectDialog(QDialog):
         path_row.addWidget(self._btn_browse)
         layout.addLayout(path_row)
         self._preview_box = GlassCard(tab, radius=9)
+        self._preview_box.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._glass_cards.append(self._preview_box)
         preview = QVBoxLayout(self._preview_box)
         preview.setContentsMargins(10, 9, 10, 10)
@@ -432,12 +662,33 @@ class ProjectDialog(QDialog):
         self._p_title.setObjectName("project-section-title")
         preview.addWidget(self._p_title)
         self._existing_preview_lbl = self._reading_label("Choose a folder to preview its files.", self._preview_box)
+        self._existing_preview_lbl.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         preview.addWidget(self._existing_preview_lbl)
+        self._existing_files_list = QListWidget(self._preview_box)
+        self._existing_files_list.setObjectName("existing-project-files")
+        self._existing_files_list.setAccessibleName("Files in selected sketch project")
+        self._existing_files_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._existing_files_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._existing_files_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._existing_files_list.setSpacing(0)
+        self._existing_files_list.setIconSize(QSize(16, 26))
+        self._existing_files_list.setItemDelegate(
+            _ProjectFileRowDelegate(self._existing_files_list))
+        self._existing_files_list.setUniformItemSizes(True)
+        self._existing_files_list.setMinimumHeight(0)
+        self._existing_files_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._existing_files_list.hide()
+        preview.addWidget(self._existing_files_list, 1)
         layout.addWidget(self._preview_box)
         self._existing_status = QLabel("", tab)
         self._existing_status.setWordWrap(True)
+        self._existing_status.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout.addWidget(self._existing_status)
-        layout.addStretch()
+        self._existing_preview_bottom_stretch_index = layout.count()
+        layout.addStretch(1)
         actions.addStretch()
         self._btn_cancel_existing = self._action("Cancel", "secondary", self.reject, tab)
         self._btn_open_existing = self._action("Open project", "primary", self._open_existing, tab)
@@ -523,42 +774,130 @@ class ProjectDialog(QDialog):
 
     def _update_existing_preview(self, text: str) -> None:
         raw = text.strip()
+        self._existing_preview_revision += 1
+        revision = self._existing_preview_revision
+        self._existing_preview_timer.stop()
+        self._existing_preview_pending = None
+        self._existing_files_list.clear()
+        self._existing_files_list.hide()
+        self._existing_files_list.setMinimumHeight(0)
+        self._existing_files_list.setMaximumHeight(16777215)
+        self._set_existing_preview_expanded(False)
         if not raw:
             self._existing_preview_lbl.setText("No folder selected")
             self._set_label_tone(self._existing_preview_lbl, "muted")
+            self._existing_preview_lbl.show()
             return
-        p = Path(raw)
-        if p.is_file():
-            p = p.parent
-        if is_application_codebase_dir(p):
-            self._existing_preview_lbl.setText("The MCU Flasher application folder cannot be opened as a sketch project.")
+        self._existing_preview_lbl.setText("Reading the project's root files…")
+        self._set_label_tone(self._existing_preview_lbl, "muted")
+        self._existing_preview_lbl.show()
+        self._existing_preview_pending = (revision, raw)
+        if not self._existing_preview_running:
+            self._existing_preview_timer.start()
+
+    def _start_existing_preview_scan(self) -> None:
+        if self._existing_preview_running or not self._existing_preview_pending:
+            return
+        revision, path = self._existing_preview_pending
+        self._existing_preview_pending = None
+        worker = _ProjectPreviewWorker(revision, path)
+        worker.signals.finished.connect(self._on_existing_preview_scanned)
+        self._existing_preview_worker = worker
+        self._existing_preview_running = True
+        self._existing_preview_pool.start(worker)
+
+    def _on_existing_preview_scanned(self, revision: int, result: dict) -> None:
+        self._existing_preview_running = False
+        self._existing_preview_worker = None
+        if revision == self._existing_preview_revision:
+            self._existing_preview_applied_revision = revision
+            self._show_existing_preview(result)
+        if self._existing_preview_pending:
+            self._existing_preview_timer.start(0)
+
+    def _show_existing_preview(self, result: dict) -> None:
+        self._existing_files_list.clear()
+        self._existing_files_list.hide()
+        self._existing_files_list.setMinimumHeight(0)
+        self._existing_files_list.setMaximumHeight(16777215)
+        self._set_existing_preview_expanded(False)
+        self._existing_preview_lbl.hide()
+        if result.get("error"):
+            self._existing_preview_lbl.setText(result["error"])
             self._set_label_tone(self._existing_preview_lbl, "error")
+            self._existing_preview_lbl.show()
             return
-        if not p.exists() or not p.is_dir():
-            self._existing_preview_lbl.setText("This folder does not exist. Choose an existing sketch folder.")
-            self._set_label_tone(self._existing_preview_lbl, "error")
-            return
-        sources = []
-        try:
-            for candidate in sorted(p.iterdir(), key=lambda item: item.name.lower()):
-                if candidate.is_file() and candidate.suffix.lower() in PROJECT_ENTRY_SOURCE_EXTS:
-                    with candidate.open("rb") as handle:
-                        if handle.read(PROJECT_SOURCE_CONTENT_PROBE_BYTES).strip():
-                            sources.append(candidate.name)
-        except OSError:
-            pass
-        if sources:
-            summary = ", ".join(sources[:8])
-            if len(sources) > 8:
-                summary += f" (+{len(sources) - 8} more)"
-            self._existing_preview_lbl.setText(f"Valid root source: {summary}")
-            self._set_label_tone(self._existing_preview_lbl, "ok")
-        else:
+
+        files = list(result.get("files", ()))
+        main_file = result.get("main_file", "")
+        if main_file in files:
+            files.remove(main_file)
+            files.insert(0, main_file)
+        entrypoints = result.get("entrypoints", {})
+        for name in files:
+            roles = tuple(role for role in ("setup", "loop")
+                          if entrypoints.get(name, {}).get(role, 0))
+            is_main = name == main_file
+            if is_main and set(roles) == {"setup", "loop"}:
+                badge = "MAIN · setup() + loop()"
+            elif is_main and roles:
+                missing = "loop()" if "loop" not in roles else "setup()"
+                badge = f"MAIN · {', '.join(f'{role}()' for role in roles)} · {missing} missing"
+            elif is_main:
+                badge = "MAIN SKETCH · entry points not detected"
+            else:
+                badge = " · ".join(f"{role}()" for role in roles)
+            text = f"{name}  —  {badge}" if badge else name
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, str(Path(result["folder"]) / name))
+            item.setData(Qt.ItemDataRole.UserRole + 1, is_main)
+            item.setData(Qt.ItemDataRole.UserRole + 2, roles)
+            functions = ", ".join(f"{role}()" for role in roles)
+            item.setToolTip(
+                str(Path(result["folder"]) / name)
+                + (f"\nDefines: {functions}" if functions else "")
+            )
+            self._existing_files_list.addItem(item)
+
+        if files:
+            row_height = self._existing_files_list.iconSize().height()
+            if len(files) == 1:
+                self._existing_files_list.setFixedHeight(row_height + 16)
+            else:
+                visible_rows = min(len(files), 4)
+                self._existing_files_list.setMinimumHeight(
+                    visible_rows * row_height + 16)
+                self._set_existing_preview_expanded(True)
+            self._existing_files_list.setVisible(True)
+            self._existing_files_list.scrollToTop()
+            self._style_existing_file_items()
+
+        sources = list(result.get("valid_sources", ()))
+        if not sources:
             self._existing_preview_lbl.setText(
                 "Existing projects need a non-empty .ino, .cpp, or .c file in this folder. "
                 "Use New project to create one."
             )
             self._set_label_tone(self._existing_preview_lbl, "warn")
+            self._existing_preview_lbl.show()
+            return
+
+        notices = []
+        ino_files = [name for name in files if Path(name).suffix.lower() == ".ino"]
+        if ino_files and not entrypoints:
+            notices.append(
+                "No setup()/loop() definition was detected in the root .ino files."
+            )
+        if result.get("analysis_limited"):
+            notices.append(
+                "Entry-point detection was limited for oversized or numerous .ino files."
+            )
+        if result.get("files_omitted"):
+            notices.append(f"{result['files_omitted']} additional files are not shown.")
+        if notices:
+            self._existing_preview_lbl.setText("\n".join(notices))
+            self._set_label_tone(self._existing_preview_lbl, "warn")
+            self._existing_preview_lbl.show()
 
     def _update_new_preview(self) -> None:
         name = re.sub(r'[^a-zA-Z0-9_-]', '_', self._new_name_edit.text().strip()) or "MySketch"
