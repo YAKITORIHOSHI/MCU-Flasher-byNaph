@@ -111,14 +111,15 @@ For explicitly requested assistant delegation, use the local
   enter Bootstrap automatically; Windows --repair must prepare the full plan,
   reusing valid packages with --coverage-only. Additional exact targets use
   explicit board preparation. Both modes retain the bootstrap-only installer
-  boundary; Offline additionally enables network denial. Settings confirms disk/restart or removal of owned
+  boundary. Offline Mode controls board/library preparation only and never
+  blocks application networking. Settings confirms disk/restart or removal of owned
   extras, rechecks busy/other-window state, saves acknowledged buffers, then a
   private helper waits for exit before native Bootstrap --repair. Report failure
   and roll back mode without dropping buffers. Cleanup authenticates per-host
   extras and rejects links/unknown content; preserve shared toolchains and sketches.
-- Firebase checks `offline_runtime.network_access_disabled()` before probes and
-  requests. A Windows adapter status cannot override the active process guard.
-  Blocked sign-in needs an Offline Mode/restart explanation, not package repair.
+- Developer Access checks Firebase connectivity independently of Settings Offline
+  Mode. Never infer its connection state from package-mode flags or inherited
+  environment markers. Display a simple endpoint status and Retry action.
   Distinguish configured, Firebase signed-in and local access; endpoint tests
   prove reachability only. Test the configured Firebase HTTPS endpoint directly;
   a generic internet probe must not veto authentication or ticket synchronization.
@@ -128,8 +129,8 @@ For explicitly requested assistant delegation, use the local
   serialized background tasks and queued slots; filters use the retained ticket
   snapshot. Preserve literal passwords, validate returned token and UID, redact
   request URLs/tokens from errors and clear an earlier session on a failed attempt.
-  Deny HTTP redirects before authenticated requests can forward tokens; recheck
-  the effective Offline Mode guard immediately before opening each request.
+  Deny HTTP redirects before authenticated requests can forward tokens; validate
+  Firebase HTTPS destinations immediately before opening each request.
   Bound authentication replies to 64 KiB, ticket replies to 4 MiB and errors to
   8 KiB; close HTTP error responses after extracting safe provider codes.
   Local access uses a user-configured salted PBKDF2 key (at least 12 characters),
@@ -144,9 +145,9 @@ For explicitly requested assistant delegation, use the local
   a bounded serialized worker. Cloud connectivity is independent of package
   Offline Mode: the Cloud tab probes its Firebase endpoint with an unauthenticated
   HEAD request that reads no database body, or Firebase Auth when unconfigured.
-  That status informs the user but never gates sign-in. Offline Mode keeps blocking
-  other network activity; only the current, validated Firebase HTTPS host may pass
-  its audit guard during a cloud request. Provider settings are write-only in the
+  That status informs the user but never gates sign-in. Offline Mode applies only
+  to board/library preparation; application networking remains available. Validate
+  every Firebase HTTPS destination. Provider settings are write-only in the
   UI: mask new values, save them only in per-user Windows Credential Manager or
   Ubuntu Secret Service (`secret-tool`), and never read them back into visible
   fields, environment variables or the checkout. Never add a fixed key, repo vault,
@@ -162,7 +163,12 @@ For explicitly requested assistant delegation, use the local
 - Upload preserves the original local project. Cloud copies always use explicit
   independent windows, a vector cloud indicator and [Cloud] title. Focus an open
   working copy without pulling; opening a closed existing copy preserves its
-  saved sources. Push/Pull are explicit, with ETag/revision conflict handling,
+  saved sources. Use readable sketch folders under the configured generated source
+  root's `Cloud/`, beside `Boards/` and `Libs/`; credentials and account state stay
+  outside that folder. Preserve legacy working edits when adopting this location.
+  Keep the signed-in screen compact: account menu, sketch list, and relevant
+  actions; open upload entry explicitly rather than showing raw paths by default.
+  Push/Pull are explicit, with ETag/revision conflict handling,
   account/provider link validation, root UTF-8 source boundaries and bounded
   history. Pull confirms replacement, retains external recovery copies, validates
   snapshots and concurrent source changes, and never touches build caches/journals.
@@ -302,9 +308,9 @@ For explicitly requested assistant delegation, use the local
   Verify official IDs and stale certificates with isolated selection/fallback
   fixtures; use narrowly scoped policy overrides only for fabricated test targets.
 
-- Apply the saved Offline Mode at the Linux root entry point before the first
-  runtime activation; its audit hook is immutable within the process. Keep the
-  existing Windows activation call unchanged. Verify both root entry paths and
+- Apply the saved package Offline Mode at both Windows and Linux root entry points
+  before the first runtime activation. Never default a Windows launch into Offline
+  Mode when its setting is off. Verify both root entry paths and
   inherited markers with `direct/verify_offline_mode.py`, plus the actual first
   launch's saved/active mode evidence.
 - Native Ubuntu package planning omits only the reviewed optional
@@ -406,7 +412,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `theme.py`: QSS generator for Glass Smoked Dark, Glass Frosted Light and Solarized Dark.
 
    **Theme and log readability**
-   - Developer tickets share the workspace's GlassCard/GlassWorkspace and original vectors. Five left-clicks on the toolbar brand open the portal, including when offline; local tickets remain available while cloud synchronization follows the network policy. Count both Qt press and double-click events in a label subclass. Use portal inks checked against actual reflected surfaces in all three palettes; retain keyboard focus, masked access keys, drafts and filters through theme changes. Stack classifications on narrow windows, scroll short forms and pin edit/cloud actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
+   - Developer tickets share the workspace's GlassCard/GlassWorkspace and original vectors. Five left-clicks on the toolbar brand open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count both Qt press and double-click events in a label subclass. Use portal inks checked against actual reflected surfaces in all three palettes; retain keyboard focus, masked access keys, drafts and filters through theme changes. Center the compact login card, scroll short forms and pin actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
    - Build and serial output, ANSI foregrounds, connection state and transient status-bar messages use semantic colors with readable contrast against the active theme. Recolor retained output after theme changes instead of leaving stale inline colors.
    - Check rendered compatibility logs, syntax severity/status brushes and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
    - The workspace owns one theme signal connection and one propagation pass. Hosted panels opt out of direct theme subscriptions; standalone panels retain them. Status timers are window-owned, restart for the latest message and never clear a newer operation status. Failed notification clears preserve history; filters use bounded retained records and apply to live events. Refresh external history off the GUI thread on panel reveal, discard stale project results and preserve unpersisted live events. Report failed history writes without recursively persisting the warning. Notification replacement must be atomic; verify failure preservation with the isolated notification persistence/writes verifiers.
@@ -450,8 +456,8 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - Windows setup ignores inherited PlatformIO cores outside this installation, matching workspace ownership; never create or modify a foreign inherited store. Ubuntu Bootstrap verifies an installed native Arduino CLI or prepares a pinned executable in `.ubuntu-tools/`; runtime discovery reads that certified location before PATH. Missing-tool guidance directs Ubuntu users to Bootstrap repair while preserving Windows guidance.
    - `src/modules/package_jobs.py` owns cross-process package-store coordination. Build/upload/reset workers hold shared use leases; background preparation reserves an exclusive waiting writer before mutating packages, blocking later readers while active users finish. Windows host repair guards initial store/configuration work and its complete seed/SCons/board-folder/offline preparation stage through `_bootstrap_tool_store_lease`; Ubuntu guards the native offline preparation child. Release host repair leases on failure/return and before workspace launch. Python environment repair remains a separate setup concern. Queue and disk failures must terminate truthfully, cancellation releases reservations, and dead-worker leases are reclaimable. Keep waiting/acquisition and job I/O off the GUI thread, preserve short Windows core aliases, and never replay a hardware operation after lease failure.
    - Publish atomic bounded live job snapshots with job identity, monotonic sequence and retained stage transitions. Coalesce percentages without losing diagnostics or final outcomes; independent workspace readers reject stale events and report interrupted processes once. Retain the newest 48 completed/interrupted jobs and their associated request/report files; active jobs are never pruned. `main/core/package_activity.py` forwards progress through queued Qt signals. The `PackageProgressCard` stays parented inside the main window's bottom-right corner, preserves typing focus and theme changes, and hides independently of the job. Notifications retain stage/final history, while completed ready subsets trigger local catalog refresh. **View all board results** opens `PackageCoverageDialog` only on an explicit details action; load reports and filter immutable rows off Qt, reject stale/closed completions and validate report identity/containment/limits. Preserve full reason text and report every included board. Verification must route events/leases through `MCU_PACKAGE_EVENTS_ROOT` or explicit fixture roots under `temp/`, never live logs or caches.
-   - `offline_runtime.py` and `offline_platformio.py` keep package installation in Bootstrap in both modes, including nested Python builders. Offline additionally denies external network traffic while allowing loopback terminals and installed/local symlink packages. Bootstrap installs a conditional `.pth` guard; the root comes from the launch environment so moves stay supported. Main entry points check mode-specific readiness before opening the workspace. Setup and user-terminal handoffs remove inherited runtime/no-index variables. Runtime board refresh reads local manifests/catalog snapshots; the Bootstrap toolbar action opens a separate setup process and rechecks busy state. Keep Monaco/xterm/assistant assets local and remove pip/CDN fallbacks.
-   - The real project build verifies source compatibility with the declared framework. A single declared native framework can be selected automatically; multiple native frameworks stay explicit. Require Arduino for .ino sources. Cache identity reflects current framework/definition on every call, across windows; recognize BIN/HEX/UF2/ELF outputs. Use `direct/verify_offline.py` for isolated package planning, startup certificates, setup handoffs, remote-network denial/local sockets and actual PlatformIO missing-package rejection. Mock all bootstrap installers/builders; never run live setup during verification.
+   - `offline_runtime.py` and `offline_platformio.py` keep package installation in Bootstrap in both modes, including nested Python builders. Offline Mode is limited to board/library preparation: it never blocks DNS, sockets, Cloud, Developer Access or user connections. Installed/local symlink packages remain usable. Bootstrap installs a conditional `.pth` installation guard; the root comes from the launch environment so moves stay supported. Main entry points check mode-specific readiness before opening the workspace. Setup and user-terminal handoffs remove inherited runtime/no-index variables. Runtime board refresh reads local manifests/catalog snapshots; the Bootstrap toolbar action opens a separate setup process and rechecks busy state. Keep Monaco/xterm/assistant assets local and remove pip/CDN fallbacks.
+   - The real project build verifies source compatibility with the declared framework. A single declared native framework can be selected automatically; multiple native frameworks stay explicit. Require Arduino for .ino sources. Cache identity reflects current framework/definition on every call, across windows; recognize BIN/HEX/UF2/ELF outputs. Use `direct/verify_offline.py` for isolated package planning, startup certificates, setup handoffs, app-network/loopback availability and actual PlatformIO missing-package rejection. Mock all bootstrap installers/builders; never run live setup during verification.
    - Use `direct/verify_board_families.py` for isolated multi-family framework/transport checks and native Upload-button clicks. Optional `direct/verify_target_resolution.py --compile-installed-avr` builds Uno, Nano ATmega328 and Mega 2560 through the actual Compile button with copied installed host-native packages. Ubuntu accepts an explicit read-only `--avr-core` store and refuses copied Windows stores. No verifier runs installs, uploads, or live persistence. The Ubuntu CI integration provisions native AVR packages separately in `temp/` before running this probe.
    - `direct/verify_platforms.py` checks host/import order, native environment replacement, guarded runtime discovery, mocked venv setup/argument forwarding, POSIX upload sessions and Bash/Windows Script Host syntax. Syntax checks never execute installers or launchers; Windows Script Host skips on Linux. Report native Ubuntu CI results separately from Windows simulations.
 
@@ -690,7 +696,7 @@ MCU Flasher by Naph/
 
 ### 3. Toolchain & Serial Monitor Execution Pipeline
 - **PlatformIO targets**: Validate the exact board and declared framework through `target_profile.py`; never silently substitute a family default. `.ino` projects require Arduino. Runtime refresh reads only installed/cache definitions. Firmware cache fingerprints include host, board/framework/platform, manifests and sources.
-- **Bootstrap-Only Board Toolchain Preparation**: Both modes prepare and certify the configured board/library plan before launch; additional targets use explicit board preparation. Online permits workspace networking and Offline denies it. Compile, Upload and Reset never call installers.
+- **Bootstrap-Only Board Toolchain Preparation**: Both modes prepare and certify the configured board/library plan before launch; additional targets use explicit board preparation. Offline Mode changes board/library preparation only; application networking stays available. Compile, Upload and Reset never call installers.
 - **Process Scheduling Priority**: Background compiler subprocesses are launched with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`) on Windows, ensuring the Qt event loop, Monaco editor, and serial monitor remain responsive under full CPU load.
 - **Operation Phase Scoping**:
   - `_active_operation == "compile"`: Serial Monitor, Reset DTR/RTS pulse, Baud Rate selection, and Send bar remain **fully functional and active**.

@@ -11,10 +11,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QEvent, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QScrollArea, QFrame, QLabel, QLineEdit, QCheckBox, QListWidget,
     QListWidgetItem, QFileDialog, QMessageBox, QInputDialog, QComboBox, QSizePolicy,
-    QPushButton,
+    QPushButton, QMenu,
 )
 
 from main.qt.icons import ActionButton, icon
@@ -34,6 +34,8 @@ class _CloudConnectionDialog(QDialog):
         self.setWindowTitle("Cloud connection settings")
         self.setModal(True)
         self._glass = GlassCard(self, radius=10)
+        if parent is not None and hasattr(parent, "_palette"):
+            self._glass.set_palette(parent._palette)
         self._glass.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._glass.lower()
         outer = QVBoxLayout(self)
@@ -102,6 +104,68 @@ class _CloudConnectionDialog(QDialog):
         self._glass.setGeometry(self.rect())
 
 
+class _CloudUploadDialog(QDialog):
+    """Choose a local project only when the user asks to upload one."""
+
+    def __init__(self, root="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Upload local sketch")
+        self.setModal(True)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        self._glass = GlassCard(self, radius=10)
+        if parent is not None and hasattr(parent, "_palette"):
+            self._glass.set_palette(parent._palette)
+        outer.addWidget(self._glass)
+        layout = QVBoxLayout(self._glass)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        heading = QLabel("Upload a local sketch", self._glass)
+        heading.setObjectName("cloud-heading")
+        layout.addWidget(heading)
+        layout.addWidget(QLabel("Choose a sketch folder and its cloud name.", self._glass))
+        row = QHBoxLayout()
+        self.folder = QLineEdit(root, self._glass)
+        self.folder.setReadOnly(True)
+        self.folder.setMinimumWidth(0)
+        self.folder.setPlaceholderText("Choose a sketch folder")
+        self.folder.setAccessibleName("Local sketch folder to upload")
+        row.addWidget(self.folder, 1)
+        self.browse_button = QPushButton("Browse", self._glass)
+        self.browse_button.clicked.connect(self._browse)
+        row.addWidget(self.browse_button)
+        layout.addLayout(row)
+        self.name = QLineEdit(Path(root).name if root else "", self._glass)
+        self.name.setMinimumWidth(0)
+        self.name.setPlaceholderText("Sketch name")
+        self.name.setAccessibleName("Cloud sketch name")
+        layout.addWidget(self.name)
+        note = QLabel("Sketch source files and notes are included.", self._glass)
+        note.setObjectName("cloud-secondary")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        actions = QHBoxLayout()
+        self.cancel_button = QPushButton("Cancel", self._glass)
+        self.cancel_button.clicked.connect(self.reject)
+        self.upload_button = QPushButton("Upload", self._glass)
+        self.upload_button.setProperty("cloudPrimary", True)
+        self.upload_button.clicked.connect(self.accept)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.upload_button)
+        layout.addLayout(actions)
+        self.folder.textChanged.connect(lambda: self.upload_button.setEnabled(bool(self.folder.text())))
+        self.upload_button.setEnabled(bool(root))
+        self.setStyleSheet(parent.styleSheet() if parent else "")
+        from main.qt.responsive import fit_dialog
+        fit_dialog(self, (560, 320), (360, 280))
+
+    def _browse(self):
+        path = QFileDialog.getExistingDirectory(self, "Choose a local sketch folder", self.folder.text())
+        if path:
+            self.folder.setText(path)
+            self.name.setText(Path(path).name)
+
+
 class CloudSketchPanel(QWidget):
     project_pulled = Signal(str)
     cloud_opened = Signal(str)
@@ -168,7 +232,7 @@ class CloudSketchPanel(QWidget):
         content.setObjectName("cloud-content")
         content.setMinimumWidth(0)
         self._content_layout = QVBoxLayout(content)
-        self._content_layout.setContentsMargins(0, 0, 4, 0)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(7)
         self._scroll.setWidget(content)
         outer.addWidget(self._scroll, 1)
@@ -184,11 +248,15 @@ class CloudSketchPanel(QWidget):
         self._account_title.setObjectName("cloud-heading")
         heading.addWidget(self._account_title, 1)
         self._connection = self._label("Checking Firebase connection…", self._account_card)
+        self._connection.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._connection.setAccessibleName("Firebase connection status")
         heading.addWidget(self._connection, 1)
         account.addLayout(heading)
         self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card)
-        account.addWidget(self._account_summary)
+        account_summary_row = QHBoxLayout()
+        account_summary_row.setContentsMargins(0, 0, 0, 0)
+        account_summary_row.addWidget(self._account_summary, 1)
+        account.addLayout(account_summary_row)
         self._auth_pages = QWidget(self._account_card)
         auth_pages_layout = QVBoxLayout(self._auth_pages)
         auth_pages_layout.setContentsMargins(0, 0, 0, 0)
@@ -257,12 +325,13 @@ class CloudSketchPanel(QWidget):
         auth_pages_layout.addWidget(self._register_fields)
         self._register_fields.hide()
         account.addWidget(self._auth_pages)
-        auth_options = QHBoxLayout()
+        self._auth_options = QWidget(self._account_card)
+        auth_options = QHBoxLayout(self._auth_options)
         auth_options.setContentsMargins(0, 0, 0, 0)
         auth_options.addWidget(self._save_login)
         auth_options.addWidget(self._remember)
         auth_options.addStretch(1)
-        account.addLayout(auth_options)
+        account.addWidget(self._auth_options)
         self._auth_action_pages = QWidget(self._account_card)
         auth_actions_layout = QVBoxLayout(self._auth_action_pages)
         auth_actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -288,12 +357,15 @@ class CloudSketchPanel(QWidget):
         self._signed_in_actions.hide()
         account_actions = QHBoxLayout(self._signed_in_actions)
         account_actions.setContentsMargins(0, 0, 0, 0)
-        self._sign_out_btn = self._button("Sign out", self._sign_out, self._signed_in_actions)
-        self._delete_account_btn = self._button("Delete account", self._delete_account, self._signed_in_actions)
-        account_actions.addWidget(self._sign_out_btn)
-        account_actions.addWidget(self._delete_account_btn)
-        account_actions.addStretch()
-        account.addWidget(self._signed_in_actions)
+        self._account_button = self._button("Account", lambda: None, self._signed_in_actions)
+        self._account_menu = QMenu(self._account_button)
+        self._sign_out_action = self._account_menu.addAction("Sign out", self._sign_out)
+        self._forget_action = self._account_menu.addAction("Sign out and forget saved login", self._forget_login)
+        self._account_menu.addSeparator()
+        self._delete_account_action = self._account_menu.addAction("Delete account…", self._delete_account)
+        self._account_button.setMenu(self._account_menu)
+        account_actions.addWidget(self._account_button)
+        account_summary_row.addWidget(self._signed_in_actions)
         self._security = self._label("Saved logins use your device's credential vault. Connection values are never displayed; cloud traffic uses HTTPS.", self._account_card)
         self._security.setObjectName("cloud-secondary")
         account.addWidget(self._security)
@@ -303,10 +375,11 @@ class CloudSketchPanel(QWidget):
         self._auth_screen = 0
 
         self._management = QWidget(content)
+        self._management.setMaximumWidth(700)
         management = QVBoxLayout(self._management)
         management.setContentsMargins(0, 0, 0, 0)
         management.setSpacing(7)
-        self._content_layout.addWidget(self._management)
+        self._content_layout.addWidget(self._management, 0, Qt.AlignmentFlag.AlignHCenter)
         self._management.hide()
 
         sketches_card = GlassCard(self._management, radius=9)
@@ -314,19 +387,41 @@ class CloudSketchPanel(QWidget):
         sketches = QVBoxLayout(sketches_card)
         sketches.setContentsMargins(10, 8, 10, 8)
         sketches.setSpacing(6)
-        management.addWidget(sketches_card)
-        sketches.addWidget(self._label("Your sketches", sketches_card))
+        management.addWidget(sketches_card, 1)
+        sketch_heading = QHBoxLayout()
+        sketch_heading.addWidget(self._label("Your sketches", sketches_card), 1)
+        self._refresh_btn = self._button("Refresh", self._refresh, sketches_card)
+        sketch_heading.addWidget(self._refresh_btn)
+        sketches.addLayout(sketch_heading)
         self._sketches = QListWidget(sketches_card)
         self._sketches.setAccessibleName("Cloud sketch list")
         self._sketches.setMinimumHeight(105)
-        self._sketches.setMaximumHeight(240)
+        self._sketches.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._sketches.currentItemChanged.connect(self._selection_changed)
         self._sketches.itemDoubleClicked.connect(lambda *_: self._open_cloud())
-        sketches.addWidget(self._sketches)
+        sketches.addWidget(self._sketches, 1)
         self._empty = self._label("Sign in to see your sketches. Upload a local sketch to start.", sketches_card)
         sketches.addWidget(self._empty)
-        self._linked = self._label("Open a cloud sketch in a separate workspace to push, pull or restore a revision.", sketches_card)
-        sketches.addWidget(self._linked)
+        self._linked_section = QWidget(sketches_card)
+        linked_layout = QVBoxLayout(self._linked_section)
+        linked_layout.setContentsMargins(0, 0, 0, 0)
+        linked_layout.setSpacing(6)
+        self._linked = self._label("", self._linked_section)
+        linked_layout.addWidget(self._linked)
+        self._linked_actions = QWidget(self._linked_section)
+        linked_actions = QHBoxLayout(self._linked_actions)
+        linked_actions.setContentsMargins(0, 0, 0, 0)
+        linked_actions.setSpacing(6)
+        self._push_btn = self._button("Push changes", self._push_current, self._linked_actions)
+        self._pull_btn = self._button("Pull latest", self._pull_current, self._linked_actions)
+        self._history_btn = self._button("Versions", self._load_history, self._linked_actions)
+        self._push_btn.setToolTip("Save editor changes and update this sketch's cloud copy")
+        self._pull_btn.setToolTip("Restore the latest cloud copy into this sketch")
+        self._history_btn.setToolTip("Choose an earlier version of this sketch to restore")
+        for button in (self._push_btn, self._pull_btn, self._history_btn):
+            linked_actions.addWidget(button, 1)
+        linked_layout.addWidget(self._linked_actions)
+        sketches.addWidget(self._linked_section)
         self._history_box = QWidget(sketches_card)
         history_row = QHBoxLayout(self._history_box)
         history_row.setContentsMargins(0, 0, 0, 0)
@@ -334,34 +429,21 @@ class CloudSketchPanel(QWidget):
         self._revisions.setMinimumWidth(0)
         self._revisions.setAccessibleName("Cloud revision to restore")
         history_row.addWidget(self._revisions, 1)
-        self._restore_btn = self._button("Restore", self._restore_revision, self._history_box)
+        self._restore_btn = self._button("Restore version", self._restore_revision, self._history_box)
         history_row.addWidget(self._restore_btn)
         sketches.addWidget(self._history_box)
         self._history_box.hide()
 
-        upload_card = GlassCard(self._management, radius=9)
-        self._cards.append(upload_card)
-        upload = QVBoxLayout(upload_card)
-        upload.setContentsMargins(10, 8, 10, 8)
-        upload.setSpacing(6)
-        management.addWidget(upload_card)
-        upload.addWidget(self._label("Upload a local project", upload_card))
-        row = QHBoxLayout()
-        self._local_path = QLineEdit(upload_card)
+        # Upload selections stay out of the main view until Upload local is chosen.
+        self._local_path = QLineEdit(self._management)
         self._local_path.setReadOnly(True)
         self._local_path.setMinimumWidth(0)
         self._local_path.setPlaceholderText("Choose a sketch folder")
         self._local_path.setAccessibleName("Local sketch folder to upload")
         self._local_path.setText(self._active_root())
-        row.addWidget(self._local_path, 1)
-        self._browse_btn = self._button("Browse", self._browse_local, upload_card)
-        row.addWidget(self._browse_btn)
-        upload.addLayout(row)
-        self._name = QLineEdit(upload_card)
-        self._name.setPlaceholderText("Cloud sketch name (optional)")
-        self._name.setAccessibleName("Cloud sketch name")
-        upload.addWidget(self._name)
-        upload.addWidget(self._label("Root source files and text notes are uploaded. Build caches and credentials stay on this computer.", upload_card))
+        self._local_path.hide()
+        self._name = QLineEdit(self._management)
+        self._name.hide()
 
         self._connection_section = QWidget(content)
         self._connection_section.setMaximumWidth(700)
@@ -396,27 +478,25 @@ class CloudSketchPanel(QWidget):
 
         self._sync_actions = QWidget(self)
         self._sync_actions.hide()
-        footer = QGridLayout(self._sync_actions)
+        footer = QVBoxLayout(self._sync_actions)
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(6)
-        self._refresh_btn = self._button("Refresh", self._refresh)
-        self._upload_btn = self._button("Upload local", self._upload_local)
+        linked_layout.removeWidget(self._linked_actions)
+        self._linked_actions.setParent(self._sync_actions)
+        footer.addWidget(self._linked_actions)
+        primary_actions = QHBoxLayout()
+        primary_actions.setContentsMargins(0, 0, 0, 0)
+        primary_actions.setSpacing(6)
+        self._upload_btn = self._button("Upload local", self._show_upload)
         self._open_btn = self._button("Open sketch", self._open_cloud)
         self._open_btn.setProperty("cloudPrimary", True)
         self._open_btn.setToolTip("Open the selected cloud sketch in a separate workspace")
         self._open_btn.setAccessibleName("Open cloud sketch in another window")
-        self._upload_btn.setToolTip("Save and upload the selected local sketch's root sources and notes")
+        self._upload_btn.setToolTip("Choose a local sketch to upload to your account")
         self._upload_btn.setAccessibleName("Upload local sketch to cloud")
-        self._push_btn = self._button("Push", self._push_current)
-        self._pull_btn = self._button("Pull", self._pull_current)
-        self._history_btn = self._button("History", self._load_history)
-        self._push_btn.setToolTip("Save and push the current linked sketch; conflicts never overwrite a newer cloud version")
-        self._pull_btn.setToolTip("Restore the latest cloud version into the current linked sketch; keep a source recovery copy")
-        for row_index, buttons in enumerate(((self._refresh_btn, self._upload_btn, self._open_btn),
-                                             (self._push_btn, self._pull_btn, self._history_btn))):
-            for column, button in enumerate(buttons):
-                footer.addWidget(button, row_index, column)
-                footer.setColumnStretch(column, 1)
+        primary_actions.addWidget(self._upload_btn, 1)
+        primary_actions.addWidget(self._open_btn, 1)
+        footer.addLayout(primary_actions)
         outer.addWidget(self._sync_actions)
         self._status = self._label("Sign in to manage cloud sketches.")
         self._status.setAccessibleName("Cloud operation status")
@@ -582,10 +662,10 @@ class CloudSketchPanel(QWidget):
             self._revisions.clear()
             for row in (value or [])[:20]:
                 when = self._display_time(row.get("created_at"))
-                self._revisions.addItem(f"Revision {row['revision']}   {when}", row["revision"])
+                self._revisions.addItem(f"Version {row['revision']}   {when}", row["revision"])
             self._history_box.setVisible(bool(self._revisions.count()))
             self._scroll.ensureWidgetVisible(self._history_box, 8, 12)
-            self._status.setText("Choose a revision, then Restore to revert the current cloud sketch.")
+            self._status.setText("Choose a version to restore.")
         elif kind == "configuration":
             self._status.setText("Cloud connection saved in this device's encrypted credential vault.")
         elif kind == "connectivity":
@@ -609,7 +689,8 @@ class CloudSketchPanel(QWidget):
             self._status.setText("Account and cloud sketches deleted." if kind == "delete" else
                                  "Signed out and saved login removed." if kind == "forget" else "Signed out.")
         elif kind == "initialize":
-            self._status.setText("Sign in to access your cloud sketches." if result.get("state", {}).get("connectivity")
+            self._status.setText(("Select a sketch to open." if self._state.get("authenticated") else
+                                  "Sign in to access your cloud sketches.") if result.get("state", {}).get("connectivity")
                                  else "Firebase could not be reached. Check your internet connection.")
         else:
             self._status.setText("Cloud sketches are ready." if self._state.get("authenticated") else
@@ -724,6 +805,8 @@ class CloudSketchPanel(QWidget):
         authenticated = self._state.get("authenticated", False)
         self._auth_pages.setVisible(not authenticated)
         self._auth_action_pages.setVisible(not authenticated)
+        self._auth_options.setVisible(not authenticated)
+        self._security.setVisible(not authenticated)
         self._management.setVisible(authenticated)
         self._sync_actions.setVisible(authenticated)
         self._signed_in_actions.setVisible(authenticated)
@@ -731,16 +814,15 @@ class CloudSketchPanel(QWidget):
         self._configure_toggle.setVisible(not authenticated)
         self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
         connection = self._state.get("connectivity")
-        self._connection.setText("Signed in" if authenticated else
-                                 "Firebase reachable" if connection is True else
-                                 "No internet connection" if connection is False else
-                                 "Checking Firebase connection…")
+        self._connection.setText("Online" if connection is True else
+                                 "Connection unavailable" if connection is False else
+                                 "Checking connection…")
         if connection is not None:
             self._connectivity_status.setText(
                 "Firebase is reachable." if connection else
                 "Firebase could not be reached. Check your internet connection.")
         email = self._state.get("account", {}).get("email", "")
-        self._account_summary.setText(f"Signed in as {email}" if authenticated else
+        self._account_summary.setText(email if authenticated else
                                       "Sign in to access your private cloud sketches.")
         secure, detail = self._state.get("secure", (False, "Credential storage is unavailable."))
         self._save_login.setEnabled(secure)
@@ -757,9 +839,12 @@ class CloudSketchPanel(QWidget):
             self._register_email.setText(saved.get("email", ""))
             self._save_login.setChecked(bool(saved) and secure)
             self._remember.setChecked(bool(self._state.get("account", {}).get("remember_me")) and secure)
-            self._forget_btn.setVisible(bool(saved) and secure)
+            self._forget_btn.setVisible(bool(saved) and secure and not authenticated)
         if authenticated:
             self._set_auth_screen(0)
+        self._content_layout.setStretch(0, 0 if authenticated else 1)
+        self._content_layout.setStretch(self._content_layout.indexOf(self._management), 1 if authenticated else 0)
+        self._content_layout.setStretch(self._content_layout.count() - 1, 0 if authenticated else 1)
         storage_warning = self._state.get("account", {}).get("storage_warning", "")
         if storage_warning and not self._state.get("secure", (False, ""))[0]:
             self._security.setText("Login encryption: " + storage_warning)
@@ -770,20 +855,26 @@ class CloudSketchPanel(QWidget):
             self._sketches.clear()
             target = None
             for row in state["sketches"][:100]:
-                item = QListWidgetItem(f"{row.get('name', 'Cloud sketch')}\nRevision {row.get('revision', '')}   {row.get('file_count', 0)} files")
+                item = QListWidgetItem(f"{row.get('name', 'Cloud sketch')}\nVersion {row.get('revision', '')} · {row.get('file_count', 0)} files")
                 item.setData(Qt.ItemDataRole.UserRole, row)
                 item.setIcon(icon("cloud", self._palette["CYAN"]))
-                item.setToolTip(f"Updated {self._display_time(row.get('updated_at'))}\nCloud sketch: {row.get('id', '')}")
+                item.setToolTip(f"Updated {self._display_time(row.get('updated_at'))}")
                 self._sketches.addItem(item)
                 if row.get("id") == selected:
                     target = item
             self._sketches.setCurrentItem(target or self._sketches.item(0))
             self._empty.setVisible(not self._sketches.count())
-            self._empty.setText("No cloud sketches yet. Choose a local project and Upload local." if authenticated else "Sign in to see your sketches.")
+            self._empty.setText("No cloud sketches yet. Upload a local sketch to begin." if authenticated else "Sign in to see your sketches.")
         link = self._state.get("link")
-        self._linked.setText(f"Current project: {Path(self._state.get('root', '')).name}   Cloud revision {link['revision']}" if link else
-                             "Push, Pull and History apply to the current cloud-linked project.")
+        if link:
+            metadata = next((row for row in self._state.get("sketches", [])
+                             if row.get("id") == link.get("sketch_id")), {})
+            name = link.get("name") or metadata.get("name") or "Current cloud sketch"
+            self._linked.setText(f"Open sketch: {name}\nVersion {link['revision']} on this computer")
+        else:
+            self._linked.setText("")
         self._update_controls()
+        self._fit_centered_content()
 
     def _selected_sketch(self):
         item = self._sketches.currentItem()
@@ -809,6 +900,10 @@ class CloudSketchPanel(QWidget):
         self._upload_btn.setEnabled(idle and authenticated and not self._backend_busy())
         link = self._state.get("link")
         linked_account = bool(link and link.get("uid") == self._state.get("account", {}).get("uid"))
+        self._linked_section.setVisible(authenticated and linked_account)
+        self._linked_actions.setVisible(authenticated and linked_account)
+        if not linked_account:
+            self._history_box.hide()
         for button in (self._push_btn, self._pull_btn, self._history_btn):
             button.setEnabled(idle and authenticated and linked_account and not self._backend_busy())
         self._restore_btn.setEnabled(self._pull_btn.isEnabled() and self._revisions.count() > 0)
@@ -819,10 +914,15 @@ class CloudSketchPanel(QWidget):
         self._edit_config_btn.setEnabled(idle and secure and not authenticated)
         self._check_connection_btn.setEnabled(idle and not authenticated)
         self._forget_btn.setEnabled(idle and secure)
-        self._forget_btn.setText("Sign out and forget" if authenticated else "Forget saved login")
-        self._forget_btn.setVisible(secure and self._saved_login_exists)
+        self._forget_btn.setText("Forget saved login")
+        self._forget_btn.setVisible(secure and self._saved_login_exists and not authenticated)
         self._forget_btn.setEnabled(idle and secure and self._saved_login_exists)
         self._configure_toggle.setEnabled(idle and not authenticated)
+        self._account_button.setEnabled(idle)
+        self._sign_out_action.setEnabled(idle and authenticated)
+        self._forget_action.setVisible(secure and self._saved_login_exists)
+        self._forget_action.setEnabled(idle and authenticated and secure)
+        self._delete_account_action.setEnabled(idle and authenticated)
         self._refresh_btn.setText("Retry reload" if self._reload_pending else "Refresh")
         if self._reload_pending:
             self._refresh_btn.setEnabled(not self._reload_running)
@@ -944,12 +1044,18 @@ class CloudSketchPanel(QWidget):
         elif not self._initialized:
             self._initialize()
         else:
-            self._request("refresh", "Refreshing cloud sketches…", lambda: None)
+            self._request("refresh", "Refreshing cloud sketches…", lambda: None, include_connectivity=True)
 
-    def _browse_local(self):
-        path = QFileDialog.getExistingDirectory(self, "Choose a local sketch project", self._local_path.text() or self._active_root())
-        if path:
-            self._local_path.setText(path)
+    def _show_upload(self):
+        if not self._state.get("authenticated") or self._busy or self._waiting_for_save or self._backend_busy():
+            return
+        root = "" if self._state.get("link") else self._active_root()
+        dialog = _CloudUploadDialog(root, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._local_path.setText(dialog.folder.text())
+            self._name.setText(dialog.name.text())
+            self._upload_local()
+        dialog.deleteLater()
 
     def _with_saved_project(self, root, callback):
         if not self._can_change_project() or self._busy or self._waiting_for_save:
@@ -1007,7 +1113,7 @@ class CloudSketchPanel(QWidget):
         sketch_id = row["id"]
         def download():
             from main.core.config import find_project_window
-            working = self._service.working_directory(sketch_id)
+            working = self._service.working_directory(sketch_id, sketch_name=row.get("name"))
             if find_project_window(str(working)) or read_project_link(working):
                 return working
             return self._service.pull_project(sketch_id)
@@ -1090,6 +1196,12 @@ class CloudSketchPanel(QWidget):
         if hasattr(self, "_open_btn"):
             self._open_btn.setText("Open" if compact else "Open sketch")
             self._upload_btn.setText("Upload" if compact else "Upload local")
+            self._push_btn.setText("Push" if compact else "Push changes")
+            self._pull_btn.setText("Pull" if compact else "Pull latest")
+            self._restore_btn.setText("Restore" if compact else "Restore version")
+            short = event.size().height() < 420
+            self._sketches.setMinimumHeight(48 if short else 105)
+            self._sketches.setMaximumHeight(70 if short else 16777215)
         if hasattr(self, "_scroll"):
             QTimer.singleShot(0, self._fit_centered_content)
 
@@ -1101,6 +1213,7 @@ class CloudSketchPanel(QWidget):
         if width:
             self._account_card.setFixedWidth(width)
             self._connection_section.setFixedWidth(width)
+            self._management.setFixedWidth(width)
 
     def apply_theme(self, mode=None):
         from main.qt.theme import get_palette
@@ -1155,7 +1268,7 @@ class CloudSketchDialog(QDialog):
         if on_pulled and self.panel._pull_handler() is None:
             self.panel.project_pulled.connect(on_pulled)
         from main.qt.responsive import fit_dialog, ScreenWatcher
-        fit_dialog(self, (720, 650), (360, 300))
+        fit_dialog(self, (590, 580), (360, 300))
         self._screen_watcher = ScreenWatcher(self)
 
     def resizeEvent(self, event):

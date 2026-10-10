@@ -113,9 +113,9 @@ creation/editing and Firebase settings share readable form surfaces and keyboard
 focus. Narrow forms stack their fields; short windows scroll while edit and cloud
 actions stay visible. Theme changes retain drafts, search and filters. Failed
 Firebase settings writes keep the form open with an explanation.
-Firebase follows the current app session's Offline Mode network policy. Blocked
-sign-in explains how to turn the mode off and restart, instead of suggesting
-package repair or reporting invalid credentials. Cloud status distinguishes
+Developer Access checks its Firebase connection independently of package Offline
+Mode. The sign-in card shows connection status without requiring a settings
+change or a restart. Cloud status distinguishes
 configuration from a Firebase sign-in; endpoint tests verify reachability and
 leave credential and ticket-access checks to sign-in. Passwords are sent exactly
 as entered, and failed attempts clear the earlier cloud session.
@@ -458,7 +458,8 @@ these prepared providers before its older bundled dependencies take precedence.
 Setup validates their versions and imports; offline builds use them without
 installing packages. Missing or incompatible providers require bootstrap repair.
 
-Offline mode denies workspace network access; online mode permits networking.
+Offline Mode controls board and library preparation only. It does not disable
+Cloud sketches, Developer Access, or other application internet connections.
 Both modes keep dependency installation inside Bootstrap. Missing
 packages report the bootstrap repair command, and **Refresh boards** reads local
 definitions. Editor, terminal and assistant frontend assets are bundled locally.
@@ -706,8 +707,9 @@ prepares those board packs too, so the repair command can resolve a missing
 ESP32 Dev Module definition. The saved Online/Offline Mode is preserved.
 Ubuntu preparation excludes the unused Windows-only ESP32 menuconfig package
 that otherwise stops first-run setup with a `tool-mconf` registry error.
-The Ubuntu entry point applies the saved Online/Offline Mode before installing
-its process guard, retaining network access for an Online launch.
+Both host entry points apply the saved board/library preparation mode before
+installing the package guard. Cloud and Developer Access remain independent
+of that setting.
 
 Rebuild the Linux executable and local shortcut with `bash direct/ubuntu/build_launcher.sh`. The folder's `MCU Flasher.desktop` resolves the application beside itself, so it can travel with the folder. It launches the Bash entry even if a Windows copy loses the native executable's permission bit. Add an Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`; regenerate that menu entry after moving the application folder. Replace older shortcuts that contain another computer's `/home/...` path with the same command. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
 
@@ -743,7 +745,7 @@ Setup starts at 70% of the active monitor's width and height. Qt logical sizing,
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
 4. **Pre-Built Toolchain Seeding**: Seeds the pre-built PlatformIO core (~1.7GB fast download with resume & SHA-256 verification) and Arduino CLI binaries.
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
-6. **Package Preparation**: Both modes verify the runtime and local editor/terminal assets and prepare the configured framework, uploader/debugger and library plan. Readiness is recorded only after every required check succeeds; Offline Mode additionally disables workspace networking.
+6. **Package Preparation**: Both modes verify the runtime and local editor/terminal assets and prepare the configured framework, uploader/debugger and library plan. Readiness is recorded only after every required check succeeds. Offline Mode applies to board/library preparation; Cloud and Developer Access check their own connections.
 7. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition. Direct GUI entry points require bootstrap readiness and never run installers.
 
 > [!IMPORTANT]
@@ -950,8 +952,11 @@ MCU Flasher by Naph/
 Open **Project → Cloud** or the toolbar's **Cloud** action to sign in, create an
 account, manage cloud sketches, or delete your account after confirming your
 current password. Sign-in and account creation open as separate sections within
-the Cloud tab; cloud sketch lists, uploads, Push, Pull and history appear only
-after a successful sign-in. **Save credentials** fills your email/password on the next sign-in;
+the Cloud tab. After sign-in, a compact account header and sketch list replace
+the login form. **Upload local** opens a folder/name dialog; select a sketch and
+choose **Open sketch**. The current linked sketch also offers **Push changes**,
+**Pull latest**, and **Versions**. Sign-out, saved-login removal, and account
+deletion live in the **Account** menu. **Save credentials** fills your email/password on the next sign-in;
 **Remember me** restores a session using its refresh token. **Forget saved
 login** removes saved credentials. Both options use Windows Credential Manager
 or Ubuntu's Secret Service with an unlocked desktop keyring. They never store
@@ -965,8 +970,10 @@ their own provider configuration through **Cloud configuration**.
 always open in another window, with a cloud icon and **[Cloud]** in the title.
 An already open cloud sketch is brought forward without replacing its editor
 buffers. Existing working copies open as saved; use **Pull latest** explicitly
-to obtain newer remote files. Cloud projects and recovery snapshots live under
-your OS user's data directory, outside the installation.
+to obtain newer remote files. Cloud working sketches live under the generated
+source folder: `_MCUFlasherByNaph_src/Cloud/<sketch name>/`, alongside `Boards`
+and `Libs`. Pull recovery copies and account state stay in your OS user's private
+data directory. Existing working copies retain their saved edits when opened.
 
 **Push** saves acknowledged editor changes and creates a new cloud revision.
 If another window/device already pushed, it reports a conflict instead of
@@ -975,7 +982,8 @@ requires confirmation before replacing local sources and retains a recovery
 copy. Restoring an older revision affects the working copy; the next Push
 creates a new revision. Build caches and AI recovery journals remain intact.
 Without Remember me, an independent cloud window may require another sign-in.
-Offline Mode blocks cloud requests until disabled and the app restarted.
+Cloud sketches and Developer Access each check Firebase connectivity directly;
+the Offline Mode setting does not block them.
 
 Existing developer tickets remain at `users/<uid>/tickets`; sketches are stored
 separately at `users/<uid>/cloud_sketches`. See [cloud setup and database rules](direct/cloud/README.md)

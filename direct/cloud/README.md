@@ -67,7 +67,14 @@ its own encryption protocol, and machine owners retain access to their own OS
 credential vault. Firebase web API keys identify the project and are not private
 authentication secrets.
 
-User cloud projects and pull recovery copies are outside the installation:
+Cloud working sketches are stored with the generated board/library sources,
+under `_MCUFlasherByNaph_src/Cloud/<sketch name>/`. The configured source folder
+is shared with `Boards` and `Libs`; its default location is the current user's
+Documents folder. Names are readable, safe on Windows and Ubuntu, and separate
+working copies cannot overwrite a different account's or sketch's folder.
+Existing working-copy edits are preserved when adopting the new location.
+
+Private account state and pull recovery copies remain outside the installation:
 
 - Windows: `%LOCALAPPDATA%/MCUFlasher/cloud/`
 - Ubuntu: `$XDG_DATA_HOME/mcu-flasher/cloud/`, normally
@@ -125,9 +132,10 @@ reachability with a credential-free HTTPS `HEAD` request to the configured
 Firebase database endpoint, or Firebase Authentication when no database is
 configured. It reads no database contents. This cloud-only check and Firebase
 authentication/sync work independently of the package Offline Mode preference;
-Offline Mode still blocks other application network activity. While its audit
-guard is active, only scoped HTTPS requests to Firebase Auth and Realtime Database
-hosts pass through.
+Offline Mode applies only to board/library preparation and never disables
+application networking. Cloud and Developer Access each check Firebase directly.
+All authenticated requests validate Firebase HTTPS destinations and reject
+redirects so credentials cannot be forwarded to another host.
 
 ## Verification
 

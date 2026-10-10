@@ -36,7 +36,7 @@ def transition_pending(config=None):
 
 
 def startup_ready(core, plan=None, *, config=None, ignore_pending=False):
-    """Require Windows board packs even when workspace networking is enabled."""
+    """Require the prepared board/library inputs for this host and saved mode."""
     data = _configuration() if config is None else config
     if not ignore_pending and transition_pending(data):
         return False

@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
-from PySide6.QtCore import Qt, Signal, QTimer, QObject, Slot
+from PySide6.QtCore import Qt, Signal, QTimer, QObject, Slot, QEvent
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QMenu,
 )
 
-from main.core.owner_tickets import OwnerTicketService, cloud_network_error
+from main.core.owner_tickets import OwnerTicketService
 from main.qt.owner_ticket_style import (
     PortalDialog, ResponsiveGrid, button, combo, field, heading, label,
     refresh_portal_children, retone, scroll_body,
@@ -315,14 +315,14 @@ class FirebaseSettingsDialog(_TaskPortal):
         super().__init__(parent, preferred=(640, 530))
         self.service = service
         cfg = dict(config if config is not None else getattr(parent, "_config", {}))
-        self.setWindowTitle("Firebase settings — MCU Flasher")
-        self.content.addWidget(heading(self.backdrop, "Cloud settings", "Firebase synchronization for developer tickets."))
+        self.setWindowTitle("Connection settings — MCU Flasher")
+        self.content.addWidget(heading(self.backdrop, "Connection settings"))
         self.scroll, body, layout = scroll_body(self.backdrop)
         card = GlassCard(body, radius=16)
         form = QVBoxLayout(card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
-        form.addWidget(label("Connection details are encrypted in your device's credential vault. They are never read back into this window. Enter both values to set or replace the connection.", card, "muted", wrap=True))
+        form.addWidget(label("Enter new connection details. Saved values stay encrypted and hidden on this device.", card, "muted", wrap=True))
         self.db_input = QLineEdit(card)
         self.db_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.db_input.setAccessibleName("New Firebase database address; hidden while typing")
@@ -382,9 +382,6 @@ class FirebaseSettingsDialog(_TaskPortal):
         if not url or not key:
             self._show_feedback("Enter both the database URL and API key to test the Firebase endpoint.", "warn")
             (self.db_input if not url else self.key_input).setFocus()
-            return
-        if message := cloud_network_error():
-            self._show_feedback(message, "warn")
             return
         self.feedback.hide()
         self._run_task("test", lambda: self.service.test_firebase_connection(key, url), self._tested)
@@ -458,7 +455,7 @@ class FirebaseSettingsDialog(_TaskPortal):
 
 class OwnerTicketDialog(_TaskPortal):
     def __init__(self, backend=None, parent=None):
-        super().__init__(parent, preferred=(590, 640))
+        super().__init__(parent, preferred=(590, 580))
         self._backend = backend
         self.service = None
         self._config = {}
@@ -477,7 +474,7 @@ class OwnerTicketDialog(_TaskPortal):
             self.setWindowIcon(QIcon(str(_mcu_icon_path)))
         header = QHBoxLayout()
         header.addWidget(label("Developer tickets", self.backdrop, "label"), 1)
-        self.cloud_badge = label("Loading settings…", self.backdrop, "metadata")
+        self.cloud_badge = label("Checking connection…", self.backdrop, "metadata")
         header.addWidget(self.cloud_badge)
         self.content.addLayout(header)
         self.stack = QStackedWidget(self.backdrop)
@@ -490,7 +487,7 @@ class OwnerTicketDialog(_TaskPortal):
     def _initialize_service(self):
         def initialize():
             service = OwnerTicketService()
-            return service, service.get_config()
+            return service, service.get_config(), service.check_connection()
         self._run_task("initialize", initialize, self._initialized)
 
     def _initialized(self, result, error):
@@ -501,7 +498,8 @@ class OwnerTicketDialog(_TaskPortal):
             self.btn_diagnose.setText("Retry settings")
             self._update_cloud_badge()
             return
-        self.service, self._config = result
+        self.service, self._config, connection = result
+        self._endpoint_state, self._endpoint_message = connection
         if not self.txt_auth_email.isModified():
             self.txt_auth_email.setText(self._config.get("owner_email", ""))
         self._set_busy(False)
@@ -521,34 +519,35 @@ class OwnerTicketDialog(_TaskPortal):
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         self.auth_scroll, body, layout = scroll_body(page)
+        self.auth_scroll.viewport().installEventFilter(self)
         self.auth_card = GlassCard(body, radius=20, accent=True)
         self.auth_card.setMaximumWidth(520)
         self.auth_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form = QVBoxLayout(self.auth_card)
-        form.setContentsMargins(24, 24, 24, 24)
-        form.setSpacing(16)
-        form.addWidget(heading(self.auth_card, "Developer access", "Manage private issue reports and investigation notes."))
-        self.connection_note = label("Loading your cloud settings…", self.auth_card, "muted", wrap=True)
+        form.setContentsMargins(20, 20, 20, 20)
+        form.setSpacing(12)
+        form.addWidget(heading(self.auth_card, "Developer access", "Sign in to manage your issue reports."))
+        self.connection_note = label("Checking connection…", self.auth_card, "muted", wrap=True)
         self.connection_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addWidget(self.connection_note)
         self.txt_auth_email = QLineEdit(self.auth_card)
-        self.txt_auth_email.setPlaceholderText("Developer ID or email")
+        self.txt_auth_email.setPlaceholderText("Email address")
         self.txt_auth_email.returnPressed.connect(self._on_auth_email_return)
-        form.addWidget(field("Developer ID / email", self.txt_auth_email, self.auth_card))
+        form.addWidget(field("Email", self.txt_auth_email, self.auth_card))
         password = QWidget(self.auth_card)
         password_row = QHBoxLayout(password)
         password_row.setContentsMargins(0, 0, 0, 0)
         password_row.setSpacing(8)
         self.txt_auth_pwd = QLineEdit(password)
         self.txt_auth_pwd.setEchoMode(QLineEdit.EchoMode.Password)
-        self.txt_auth_pwd.setPlaceholderText("Enter your access key")
+        self.txt_auth_pwd.setPlaceholderText("Password or local access key")
         self.txt_auth_pwd.returnPressed.connect(self._do_authenticate)
         password_row.addWidget(self.txt_auth_pwd, 1)
         self.btn_toggle_eye = button("Show", password, self._toggle_password_mask, role="quiet")
         self._update_eye_icon(True)
         password_row.addWidget(self.btn_toggle_eye)
-        form.addWidget(field("Access key", password, self.auth_card))
-        self.txt_auth_pwd.setAccessibleName("Access key")
+        form.addWidget(field("Password", password, self.auth_card))
+        self.txt_auth_pwd.setAccessibleName("Password or local access key")
         self.lbl_auth_error = label("", self.auth_card, "feedback", wrap=True)
         retone(self.lbl_auth_error, "fail")
         self.lbl_auth_error.hide()
@@ -557,11 +556,12 @@ class OwnerTicketDialog(_TaskPortal):
         form.addWidget(self.btn_unlock)
         actions = ResponsiveGrid([
             button("Check connection", self.auth_card, self._diagnose_cloud, role="quiet", vector="reload"),
-            button("Cloud settings", self.auth_card, self._open_firebase_settings_modal, role="quiet", vector="settings"),
+            button("Connection settings", self.auth_card, self._open_firebase_settings_modal, role="quiet", vector="settings"),
         ], self.auth_card, columns=2, cell_width=190)
         self.btn_diagnose, self.btn_auth_cloud = actions._widgets
         form.addWidget(actions)
-        form.addWidget(label("Cloud sign-in and local access have separate connection states.", self.auth_card, "metadata", wrap=True))
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.addStretch(1)
         card_row = QHBoxLayout()
         card_row.setContentsMargins(0, 0, 0, 0)
         card_row.addStretch(1)
@@ -571,6 +571,20 @@ class OwnerTicketDialog(_TaskPortal):
         layout.addStretch(1)
         outer.addWidget(self.auth_scroll)
         self.stack.addWidget(page)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "auth_scroll"):
+            QTimer.singleShot(0, self, self._fit_auth_card)
+
+    def _fit_auth_card(self):
+        self.auth_card.setFixedWidth(min(520, max(1, self.auth_scroll.viewport().width() - 4)))
+
+    def eventFilter(self, watched, event):
+        if (hasattr(self, "auth_scroll") and watched is self.auth_scroll.viewport()
+                and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)):
+            QTimer.singleShot(0, self, self._fit_auth_card)
+        return super().eventFilter(watched, event)
 
     def _update_eye_icon(self, is_masked):
         # A textual control stays visible and readable in every palette.
@@ -685,7 +699,7 @@ class OwnerTicketDialog(_TaskPortal):
         actions = QHBoxLayout()
         self.access_label = label("Private defect reports", body, "metadata", wrap=True)
         actions.addWidget(self.access_label, 1)
-        self.btn_cloud = button("Cloud settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
+        self.btn_cloud = button("Connection settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
         self.btn_lock = button("Lock", body, self._do_lock, role="quiet")
         actions.addWidget(self.btn_cloud)
         actions.addWidget(self.btn_lock)
@@ -877,43 +891,37 @@ class OwnerTicketDialog(_TaskPortal):
         self.txt_auth_pwd.setFocus()
 
     def _update_cloud_badge(self):
-        if message := cloud_network_error():
-            text, tone = "Offline Mode", "warn"
-        elif self.service is None:
-            text, tone, message = "Settings unavailable", "warn", "Your developer settings could not be loaded. Use Retry settings to try again."
-        elif not self._config.get("use_firebase"):
-            text, tone, message = "Local tickets", "muted", "Cloud synchronization is off. Your issue reports stay in your user profile."
-        elif not (self._config.get("firebase_database_url") and self._config.get("firebase_api_key")):
-            text, tone, message = "Cloud needs setup", "warn", "Cloud sign-in needs a database URL and Web API key. Open Cloud settings to configure them."
+        if self.service is None:
+            text, tone, message = "Unavailable", "warn", "Settings could not be loaded. Use Retry settings."
         elif self._endpoint_state is False:
-            text, tone, message = "Cloud unreachable", "warn", self._endpoint_message
+            text, tone, message = "No connection", "warn", self._endpoint_message
         elif self._cloud_authenticated:
-            text, tone, message = "Cloud signed in", "ok", "Signed in to Firebase. Ticket access depends on the database security rules."
+            text, tone, message = "Signed in", "ok", "You are signed in."
+        elif not self._config.get("use_firebase"):
+            text, tone, message = "Online" if self._endpoint_state else "Local tickets", "muted", "Use your local access key to sign in on this device."
+        elif not (self._config.get("firebase_database_url") and self._config.get("firebase_api_key")):
+            text, tone, message = "Online" if self._endpoint_state else "Not set up", "active", "Open Connection settings to set up cloud sign-in."
         elif self._endpoint_state is True:
-            text, tone, message = "Cloud reachable", "active", "The database endpoint responded. Sign in to verify your account and ticket access."
+            text, tone, message = "Online", "ok", "Connected. Sign in to continue."
         else:
-            text, tone, message = "Cloud configured", "active", "Cloud settings are present. Use Check connection to test the database, or sign in to verify access."
+            text, tone, message = "Checking…", "muted", "Checking connection…"
         self.cloud_badge.setText(text)
         self.cloud_badge.setToolTip(message)
         self.connection_note.setText(message)
+        self.connection_note.setVisible(self._endpoint_state is not True or not self._config.get("use_firebase")
+                                        or not self._config.get("firebase_api_key"))
         retone(self.cloud_badge, tone)
 
     def _diagnose_cloud(self):
         if self.service is None:
             self._initialize_service()
             return
-        if message := cloud_network_error():
-            self._update_cloud_badge()
-            return
-        if not self._config.get("firebase_database_url"):
-            self._update_cloud_badge()
-            return
-        key, url = self._config.get("firebase_api_key", ""), self._config["firebase_database_url"]
-        self._run_task("diagnose", lambda: self.service.test_firebase_connection(key, url), self._diagnosed)
+        self._run_task("diagnose", self.service.check_connection, self._diagnosed)
 
     def _diagnosed(self, result, error):
         self._endpoint_state, self._endpoint_message = result if not error else (False, error)
         self._update_cloud_badge()
+        self._fit_auth_card()
 
     def _open_firebase_settings_modal(self):
         if self._task_name or self.service is None:
@@ -929,6 +937,8 @@ class OwnerTicketDialog(_TaskPortal):
             self._endpoint_state = None
             self._endpoint_message = ""
         self._update_cloud_badge()
+        if not error:
+            self._diagnose_cloud()
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):

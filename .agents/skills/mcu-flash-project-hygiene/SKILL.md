@@ -24,6 +24,14 @@ Serial Monitor setting. Verify payloads with a mocked metadata queue in
 
 ## Preserve ownership boundaries
 
+The configured source container (normally `Documents/_MCUFlasherByNaph_src`)
+contains `Boards`, `Libs` and `Cloud`. Treat `Cloud/<sketch name>` sources as
+user-owned working projects. Keep credentials in the OS vault and private
+account/recovery records outside this shared source folder. When adopting an
+older cloud location, copy only validated root sources and the nonsecret cloud
+link; preserve original assets, protected build caches and AI journals. Reject
+concurrent source changes and never replace a different account's working copy.
+
 Classify paths before changing attributes or deleting anything:
 
 - Treat root sketch sources and user material as user-owned. This includes

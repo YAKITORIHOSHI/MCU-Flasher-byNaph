@@ -10748,7 +10748,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
             offline_plan, offline_plan_path = requested_plan()
             offline_board_sources = requested_board_sources()
             offline_packages_ready = ready(offline_core, offline_plan if offline_plan_path else None)
-            # Online controls workspace networking, not whether its default
+            # Package mode controls offline preparation records, not whether its default
             # boards can build. SCons alone cannot resolve ESP32 Dev Module.
             # Both first-run and --repair must prepare the configured packs.
             if offline_board_sources or _explicit_setup_requested() or not offline_packages_ready:

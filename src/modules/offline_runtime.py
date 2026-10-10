@@ -1,17 +1,13 @@
-"""Workspace network policy and bootstrap-only package installation."""
+"""Board/library preparation policy and bootstrap-only package installation."""
 from __future__ import annotations
 
-import ipaddress
 import os
 import sys
-import threading
 from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 _enabled = False
-_network_blocked = False
-_firebase_network = threading.local()
 _FIREBASE_AUTH_HOSTS = frozenset({
     "identitytoolkit.googleapis.com",
     "securetoken.googleapis.com",
@@ -23,16 +19,8 @@ class OfflineDependencyError(RuntimeError):
 
 
 def network_access_disabled():
-    """Report the current process policy, including an inherited child guard.
-
-    Saved preferences may already describe the next launch. An installed audit
-    hook keeps its original mode until the workspace is restarted.
-    """
-    return _network_blocked if _enabled else os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") == "1"
-
-
-def offline_network_instruction():
-    return "Network access is disabled in Offline Mode. Turn it off in Settings and restart MCU Flasher."
+    """Compatibility query: package Offline Mode never disables app networking."""
+    return False
 
 
 def bootstrap_instruction(detail="Missing offline dependency"):
@@ -44,20 +32,6 @@ def offline_pio_command(python=None):
     return [str(python or sys.executable), "-B", str(ROOT / "src/modules/offline_platformio.py")]
 
 
-def _local_address(address):
-    if isinstance(address, (str, bytes)):
-        return True  # Unix-domain sockets / Windows named pipes
-    if not isinstance(address, tuple) or not address:
-        return False
-    host = str(address[0]).strip("[]").lower()
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _firebase_host(host):
     host = str(host or "").strip("[]").lower().rstrip(".")
     return (host in _FIREBASE_AUTH_HOSTS or host.endswith(".firebasedatabase.app")
@@ -66,55 +40,14 @@ def _firebase_host(host):
 
 @contextmanager
 def firebase_network_access(hostname):
-    """Allow one validated Firebase HTTPS host through an Offline Mode audit hook."""
+    """Validate a Firebase request destination, independently of package mode."""
     host = str(hostname or "").strip("[]").lower().rstrip(".")
     if not _firebase_host(host):
         raise OfflineDependencyError("Cloud requests are limited to Firebase HTTPS endpoints.")
-    previous = getattr(_firebase_network, "host", None)
-    _firebase_network.host = host
-    try:
-        yield
-    finally:
-        if previous is None:
-            try:
-                del _firebase_network.host
-            except AttributeError:
-                pass
-        else:
-            _firebase_network.host = previous
-
-
-def _firebase_connect_allowed(address, expected_host):
-    if not expected_host or not isinstance(address, tuple) or len(address) < 2:
-        return False
-    try:
-        if int(address[1]) != 443:
-            return False
-    except (TypeError, ValueError):
-        return False
-    target = str(address[0]).strip("[]").lower().rstrip(".")
-    try:
-        parsed = ipaddress.ip_address(target)
-    except ValueError:
-        return target == expected_host
-    return parsed.is_global
+    yield
 
 
 def _audit(event, args):
-    if _network_blocked and event == "socket.getaddrinfo":
-        host = str(args[0]).strip("[]").lower().rstrip(".")
-        allowed_host = getattr(_firebase_network, "host", None)
-        if host not in ("localhost", "127.0.0.1", "::1", "none") and host != allowed_host:
-            raise OfflineDependencyError(offline_network_instruction())
-    if _network_blocked and event in ("socket.connect", "socket.sendto"):
-        address = args[-1]
-        if _local_address(address):
-            pass
-        elif (event == "socket.connect"
-              and _firebase_connect_allowed(address, getattr(_firebase_network, "host", None))):
-            pass
-        else:
-            raise OfflineDependencyError(offline_network_instruction())
     if event == "subprocess.Popen":
         command = args[1]
         from src.modules.windows_tool_paths import zephyr_cmake_environment
@@ -133,15 +66,14 @@ def _audit(event, args):
 
 
 def activate(offline=True):
-    """Keep installation bootstrap-only; networking follows the saved mode.
+    """Keep installation bootstrap-only without blocking application networking.
 
-    Audit hooks cannot be removed. A mode change therefore requires a new
-    process, rather than trying to turn an active offline hook off in place.
+    The saved mode controls prepared board/library inputs and pip's package
+    lookup policy. Cloud, developer access and user connections are independent.
     """
-    global _enabled, _network_blocked
+    global _enabled
     if _enabled:
         return
-    _network_blocked = bool(offline)
     os.environ["MCU_FLASHER_WORKSPACE_RUNTIME"] = "1"
     os.environ["MCU_FLASHER_APP_ROOT"] = str(ROOT)
     if offline:

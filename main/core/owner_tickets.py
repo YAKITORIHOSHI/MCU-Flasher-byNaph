@@ -29,7 +29,7 @@ from main.core.file_utils import (
     hide_hidden_attribute,
     ensure_file_writable,
 )
-from src.modules.offline_runtime import OfflineDependencyError, network_access_disabled
+from src.modules.offline_runtime import firebase_network_access
 from main.core.credential_store import (
     CredentialStore, load_cloud_configuration, save_cloud_configuration,
 )
@@ -43,26 +43,18 @@ _OWNER_METADATA_KEYS = {"owner_email", "firebase_user_uid"}
 _AUTH_RESPONSE_BYTES = 64 * 1024
 _TICKET_RESPONSE_BYTES = 4 * 1024 * 1024
 
-_CLOUD_OFFLINE_MESSAGE = (
-    "Firebase is blocked by Offline Mode in this app session. Turn Offline Mode off "
-    "in Settings, then restart MCU Flasher. If it is already off, restart the app."
-)
-
-
-def cloud_network_error() -> str:
-    """Explain effective runtime denial before probing or sending credentials."""
-    return _CLOUD_OFFLINE_MESSAGE if network_access_disabled() else ""
-
-
 class _NoFirebaseRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
         return None
 
 
 def _open_firebase_request(request, *, timeout):
-    if network_access_disabled():
-        raise OfflineDependencyError(_CLOUD_OFFLINE_MESSAGE)
-    return urllib.request.build_opener(_NoFirebaseRedirect()).open(request, timeout=timeout)
+    endpoint = urlsplit(request.full_url)
+    if (endpoint.scheme != "https" or endpoint.username or endpoint.password
+            or endpoint.port not in (None, 443)):
+        raise ValueError("Use a secure Firebase connection.")
+    with firebase_network_access(endpoint.hostname):
+        return urllib.request.build_opener(_NoFirebaseRedirect()).open(request, timeout=timeout)
 
 
 def _read_firebase_json(response, limit):
@@ -74,11 +66,9 @@ def _read_firebase_json(response, limit):
 
 def _cloud_request_error(error: Exception) -> str:
     """Never display request URLs, credentials or tokens from exception strings."""
-    if isinstance(error, OfflineDependencyError) or network_access_disabled():
-        return _CLOUD_OFFLINE_MESSAGE
     if isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
-        return "The Firebase request timed out. Check your connection and try again."
-    return "Could not reach Firebase. Check the cloud settings, connection and firewall, then try again."
+        return "The cloud connection timed out. Try again."
+    return "Could not reach the cloud. Check your connection and try again."
 
 
 def _firebase_database_url(value: str) -> str:
@@ -98,50 +88,23 @@ def _firebase_database_url(value: str) -> str:
 def _firebase_auth_error(error: urllib.error.HTTPError) -> str:
     try:
         code = _read_firebase_json(error, 8192).get("error", {}).get("message", "").split(" : ", 1)[0]
-        if code in {"INVALID_LOGIN_CREDENTIALS", "EMAIL_NOT_FOUND", "INVALID_PASSWORD", "USER_DISABLED",
-                    "TOO_MANY_ATTEMPTS_TRY_LATER", "OPERATION_NOT_ALLOWED", "API_KEY_INVALID", "INVALID_EMAIL"}:
-            return f"Firebase error: {code}"
+        messages = {
+            "INVALID_LOGIN_CREDENTIALS": "The email or password is incorrect.",
+            "EMAIL_NOT_FOUND": "The email or password is incorrect.",
+            "INVALID_PASSWORD": "The email or password is incorrect.",
+            "USER_DISABLED": "This account has been disabled.",
+            "TOO_MANY_ATTEMPTS_TRY_LATER": "Too many sign-in attempts. Try again later.",
+            "OPERATION_NOT_ALLOWED": "Sign-in is not enabled for this connection.",
+            "API_KEY_INVALID": "The cloud connection needs to be updated.",
+            "INVALID_EMAIL": "Enter a valid email address.",
+        }
+        if code in messages:
+            return messages[code]
     except (ValueError, AttributeError, TypeError):
         pass
     finally:
         error.close()
-    return f"Firebase returned HTTP {error.code}. Check cloud settings and account access."
-
-
-def is_internet_available(timeout: float = 0.5) -> bool:
-    """Quickly check whether an active internet connection is available.
-
-    Must never throw exceptions and must never block for long.
-    Returns False immediately if offline or on any connection failure.
-    """
-    if network_access_disabled():
-        return False
-    try:
-        from src.modules.dedicated_AI import check_internet_connection
-        return check_internet_connection(timeout=timeout)
-    except Exception:
-        pass
-    try:
-        import sys
-        if sys.platform == "win32":
-            import ctypes
-            import ctypes.wintypes
-            flags = ctypes.wintypes.DWORD()
-            if ctypes.windll.wininet.InternetGetConnectedState(ctypes.byref(flags), 0):
-                return True
-    except Exception:
-        pass
-    try:
-        import socket
-        for host in ("1.1.1.1", "8.8.8.8"):
-            try:
-                with socket.create_connection((host, 443), timeout=timeout):
-                    return True
-            except (socket.timeout, OSError, Exception):
-                continue
-    except Exception:
-        pass
-    return False
+    return "Sign-in failed. Check your account and cloud connection."
 
 
 def get_owner_portal_storage_dir() -> Path:
@@ -388,8 +351,6 @@ class OwnerTicketService:
 
             # 2. Firebase Cloud Authentication via REST API
             if cfg.get("use_firebase") and cfg.get("firebase_api_key"):
-                if message := cloud_network_error():
-                    return False, message
                 api_key = cfg["firebase_api_key"]
                 url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
                 payload = json.dumps({
@@ -417,8 +378,6 @@ class OwnerTicketService:
                         self._user_email = data.get("email", email_clean)
                         self._is_authenticated = True
                         return True, "Firebase Cloud authentication successful."
-                except OfflineDependencyError:
-                    return False, _CLOUD_OFFLINE_MESSAGE
                 except urllib.error.HTTPError as e:
                     return False, _firebase_auth_error(e)
                 except Exception as e:
@@ -431,8 +390,6 @@ class OwnerTicketService:
     def send_password_reset_email(self, email: Optional[str] = None) -> tuple[bool, str]:
         """Send a password reset email via Firebase Identity Toolkit."""
         try:
-            if message := cloud_network_error():
-                return False, message
             cfg = self.get_config()
             api_key = cfg.get("firebase_api_key", "")
             target_email = (email or cfg.get("owner_email", "")).strip()
@@ -504,7 +461,7 @@ class OwnerTicketService:
     def _get_firebase_tickets_url(self, ticket_id: Optional[str] = None, root_collection: Optional[str] = None) -> Optional[str]:
         """Construct the REST URL adhering to Firebase security rules: /owner/{$uid}/tickets"""
         try:
-            if cloud_network_error() or not self.is_cloud_authenticated:
+            if not self.is_cloud_authenticated:
                 return None
             cfg = self.get_config()
             db_url = _firebase_database_url(cfg.get("firebase_database_url", ""))
@@ -526,42 +483,42 @@ class OwnerTicketService:
         try:
             cfg = self.get_config()
 
-            # Try Firebase Realtime Database REST API only if configured, authenticated, AND online
+            # Try the configured service directly; package Offline Mode is unrelated.
             if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                if not cloud_network_error():
-                    candidates: List[str] = []
-                    configured_root = cfg.get("firebase_root_collection", _DEFAULT_ROOT_COLLECTION)
-                    for r in [self._active_root_collection, configured_root, "owner", "users"]:
-                        if r and r not in candidates:
-                            candidates.append(r)
+                candidates: List[str] = []
+                configured_root = cfg.get("firebase_root_collection", _DEFAULT_ROOT_COLLECTION)
+                for r in [self._active_root_collection, configured_root, "owner", "users"]:
+                    if r and r not in candidates:
+                        candidates.append(r)
 
-                    for root in candidates:
-                        try:
-                            url = self._get_firebase_tickets_url(root_collection=root)
-                            if not url:
-                                continue
-                            req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
-                            with _open_firebase_request(req, timeout=4.0) as resp:
-                                raw = _read_firebase_json(resp, _TICKET_RESPONSE_BYTES)
-                                if isinstance(raw, dict):
-                                    tickets = []
-                                    for k, v in raw.items():
-                                        if isinstance(v, dict):
-                                            v["id"] = v.get("id") or k
-                                            tickets.append(v)
-                                    self._active_root_collection = root
-                                    # Sync to local cache
-                                    self._save_local_tickets(tickets)
-                                    return self._sort_tickets(tickets)
-                                elif raw is None:
-                                    self._active_root_collection = root
-                                    return self._sort_tickets(self._read_local_tickets())
-                        except urllib.error.HTTPError as e:
-                            if e.code in (401, 403, 404):
-                                continue
-                            break
-                        except Exception:
-                            break
+                for root in candidates:
+                    try:
+                        url = self._get_firebase_tickets_url(root_collection=root)
+                        if not url:
+                            continue
+                        req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
+                        with _open_firebase_request(req, timeout=4.0) as resp:
+                            raw = _read_firebase_json(resp, _TICKET_RESPONSE_BYTES)
+                            if isinstance(raw, dict):
+                                tickets = []
+                                for k, v in raw.items():
+                                    if isinstance(v, dict):
+                                        v["id"] = v.get("id") or k
+                                        tickets.append(v)
+                                self._active_root_collection = root
+                                # Sync to local cache
+                                self._save_local_tickets(tickets)
+                                return self._sort_tickets(tickets)
+                            elif raw is None:
+                                self._active_root_collection = root
+                                return self._sort_tickets(self._read_local_tickets())
+                    except urllib.error.HTTPError as e:
+                        e.close()
+                        if e.code in (401, 403, 404):
+                            continue
+                        break
+                    except Exception:
+                        break
 
             return self._sort_tickets(self._read_local_tickets())
         except Exception:
@@ -608,8 +565,7 @@ class OwnerTicketService:
             try:
                 cfg = self.get_config()
                 if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                    if not cloud_network_error():
-                        self._push_to_firebase(ticket)
+                    self._push_to_firebase(ticket)
             except Exception:
                 pass
 
@@ -638,8 +594,7 @@ class OwnerTicketService:
                 try:
                     cfg = self.get_config()
                     if target_ticket and self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        if not cloud_network_error():
-                            self._patch_to_firebase(ticket_id, target_ticket)
+                        self._patch_to_firebase(ticket_id, target_ticket)
                 except Exception:
                     pass
                 return True
@@ -660,8 +615,7 @@ class OwnerTicketService:
                 try:
                     cfg = self.get_config()
                     if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        if not cloud_network_error():
-                            self._delete_from_firebase(ticket_id)
+                        self._delete_from_firebase(ticket_id)
                 except Exception:
                     pass
                 return True
@@ -825,27 +779,42 @@ class OwnerTicketService:
             pass
 
     def test_firebase_connection(self, api_key: str, db_url: str) -> tuple[bool, str]:
-        """Verify Firebase Realtime Database endpoint accessibility."""
+        """Check the endpoint without sending credentials or reading database data."""
         try:
-            if message := cloud_network_error():
-                return False, message
             try:
                 clean_url = _firebase_database_url(db_url)
             except ValueError:
-                return False, "URL should be a valid Firebase Realtime Database URL."
+                return False, "The cloud connection needs a valid database address."
 
             url = f"{clean_url}/.json?shallow=true"
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-Test/1.0"})
+                req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "MCUFlasher-Test/1.0"})
                 with _open_firebase_request(req, timeout=4.0) as resp:
-                    if resp.status in (200, 401, 403):
-                        return True, "Firebase database endpoint reached. Sign in to verify credentials and ticket access."
-                    return False, f"Unexpected response status: {resp.status}"
+                    return True, "Connected. Sign in to continue."
             except urllib.error.HTTPError as e:
-                if e.code in (401, 403):
-                    return True, "Firebase database endpoint reached; security rules require sign-in. Credentials and ticket access are not verified."
-                return False, f"The Firebase database returned HTTP {e.code}. Check the database URL and service availability."
+                e.close()
+                # Some Firebase endpoints reject HEAD with 405. Their HTTP
+                # response still proves connectivity; sign-in verifies access.
+                return True, "Connected. Sign in to continue."
             except Exception as e:
                 return False, _cloud_request_error(e)
         except Exception as e:
             return False, _cloud_request_error(e)
+
+    def check_connection(self) -> tuple[bool, str]:
+        """Probe this feature's Firebase service independently of package settings."""
+        try:
+            cfg = self.get_config()
+            if cfg.get("firebase_database_url"):
+                return self.test_firebase_connection("", cfg["firebase_database_url"])
+            request = urllib.request.Request("https://identitytoolkit.googleapis.com/", method="HEAD")
+            try:
+                with _open_firebase_request(request, timeout=4.0):
+                    pass
+            except urllib.error.HTTPError as error:
+                # The Auth API requires a specific route. Any HTTP response proves
+                # reachability, without claiming authentication or ticket access.
+                error.close()
+            return True, "Connected. Set up the cloud connection to sign in."
+        except Exception as error:
+            return False, _cloud_request_error(error)

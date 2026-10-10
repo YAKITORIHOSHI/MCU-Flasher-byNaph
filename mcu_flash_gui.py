@@ -34,11 +34,8 @@ from src.modules.private_python_guard import enforce_private_python
 enforce_private_python()
 
 from src.modules.offline_runtime import activate
-if sys.platform.startswith("linux"):
-    from src.modules.offline_mode import offline_enabled
-    activate(offline_enabled())
-else:
-    activate()
+from src.modules.offline_mode import offline_enabled
+activate(offline_enabled())
 
 # Hide background subprocess consoles on Windows
 if sys.platform == "win32":

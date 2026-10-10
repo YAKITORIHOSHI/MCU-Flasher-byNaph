@@ -149,7 +149,7 @@ class ModeChecks(unittest.TestCase):
                 patch("main.core.config._instance_is_alive", return_value=True):
             self.assertIn("other", mode.transition_blocker())
 
-    def test_online_network_is_allowed_but_installers_still_require_bootstrap(self):
+    def test_both_package_modes_allow_app_network_but_installers_require_bootstrap(self):
         external_events = (
             ("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0)),
             ("socket.connect", (None, ("192.0.2.1", 443))),
@@ -169,52 +169,37 @@ class ModeChecks(unittest.TestCase):
             ["npm", "install", "fixture"],
             ["winget", "install", "fixture"],
         )
-        for blocked in (False, True):
-            with patch.object(runtime, "_network_blocked", blocked):
+        for offline in (False, True):
+            with patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1" if offline else "0"}):
                 for event, arguments in external_events:
-                    with self.subTest(blocked=blocked, event=event):
-                        if blocked:
-                            with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
-                                runtime._audit(event, arguments)
-                        else:
-                            runtime._audit(event, arguments)
+                    with self.subTest(offline=offline, event=event):
+                        runtime._audit(event, arguments)
                 for event, arguments in local_events:
-                    with self.subTest(blocked=blocked, local=arguments, event=event):
+                    with self.subTest(offline=offline, local=arguments, event=event):
                         runtime._audit(event, arguments)
                 for command in installers:
-                    with self.subTest(blocked=blocked, installer=command):
+                    with self.subTest(offline=offline, installer=command):
                         with self.assertRaisesRegex(runtime.OfflineDependencyError, "bootstrap"):
                             runtime._audit("subprocess.Popen", (command[0], command, None, {}))
 
-    def test_offline_mode_allows_only_scoped_firebase_https_requests(self):
-        with patch.object(runtime, "_network_blocked", True):
-            with runtime.firebase_network_access("identitytoolkit.googleapis.com"):
-                runtime._audit("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0))
-                runtime._audit("socket.connect", (None, ("8.8.8.8", 443)))
-                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
-                    runtime._audit("socket.getaddrinfo", ("example.invalid", 443, 0, 0, 0))
-                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
-                    runtime._audit("socket.connect", (None, ("8.8.8.8", 80)))
-                with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
-                    runtime._audit("socket.sendto", (None, ("8.8.8.8", 443)))
-            with self.assertRaisesRegex(runtime.OfflineDependencyError, "Offline Mode"):
-                runtime._audit("socket.getaddrinfo", ("identitytoolkit.googleapis.com", 443, 0, 0, 0))
-            with self.assertRaises(runtime.OfflineDependencyError):
-                with runtime.firebase_network_access("example.invalid"):
-                    pass
+    def test_firebase_destination_validation_is_independent_of_package_mode(self):
+        for host in ("identitytoolkit.googleapis.com", "securetoken.googleapis.com",
+                     "fixture.firebasedatabase.app", "fixture.firebaseio.com"):
+            with runtime.firebase_network_access(host):
+                runtime._audit("socket.getaddrinfo", (host, 443, 0, 0, 0))
+        with self.assertRaises(runtime.OfflineDependencyError):
+            with runtime.firebase_network_access("example.invalid"):
+                pass
 
-    def test_effective_network_policy_uses_active_guard_over_inherited_environment(self):
-        for blocked in (False, True):
+    def test_package_mode_and_stale_child_markers_never_disable_app_network(self):
+        for enabled in (False, True):
             for inherited in (None, "", "0", "1", "true"):
-                with self.subTest(blocked=blocked, inherited=inherited), \
-                        patch.object(runtime, "_enabled", True), \
-                        patch.object(runtime, "_network_blocked", blocked), \
+                with self.subTest(enabled=enabled, inherited=inherited), \
+                        patch.object(runtime, "_enabled", enabled), \
                         patch.dict(os.environ, {}, clear=True):
                     if inherited is not None:
                         os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = inherited
-                    self.assertEqual(runtime.network_access_disabled(), blocked)
-                    runtime.activate(not blocked)
-                    self.assertEqual(runtime.network_access_disabled(), blocked)
+                    self.assertFalse(runtime.network_access_disabled())
 
     def _root_entrypoint_policy(self, host, saved_offline):
         source = (ROOT / "mcu_flash_gui.py").read_text(encoding="utf-8")
@@ -234,7 +219,6 @@ class ModeChecks(unittest.TestCase):
             guard = stack.enter_context(patch.object(runtime, "guard_platformio"))
             audit = stack.enter_context(patch.object(sys, "addaudithook"))
             stack.enter_context(patch.object(runtime, "_enabled", False))
-            stack.enter_context(patch.object(runtime, "_network_blocked", False))
             activation = stack.enter_context(patch.object(runtime, "activate", wraps=runtime.activate))
             stack.enter_context(patch.object(mode, "_configuration", return_value={
                 "shared": {"offline_enabled": saved_offline}}))
@@ -265,27 +249,20 @@ class ModeChecks(unittest.TestCase):
             with self.subTest(saved_offline=saved_offline):
                 initial, observed = self._root_entrypoint_policy("linux", saved_offline)
                 self.assertEqual(initial, (saved_offline,))
-                self.assertEqual(observed["before_main"], saved_offline)
-                self.assertEqual(observed["after_main"], saved_offline)
+                self.assertFalse(observed["before_main"])
+                self.assertFalse(observed["after_main"])
                 self.assertEqual(observed["offline_environment"], "1" if saved_offline else None)
                 self.assertEqual(observed["pip_no_index"], "1" if saved_offline else None)
 
-    def test_windows_root_entrypoint_retains_original_activation_call(self):
-        initial, observed = self._root_entrypoint_policy("win32", False)
-        self.assertEqual(initial, ())
-        self.assertTrue(observed["before_main"])
-        self.assertTrue(observed["after_main"])
-
-    def test_effective_network_policy_before_activation_uses_explicit_environment_marker(self):
-        for inactive_value in (False, True):
-            for inherited in (None, "", "0", "1", "true"):
-                with self.subTest(inactive_value=inactive_value, inherited=inherited), \
-                        patch.object(runtime, "_enabled", False), \
-                        patch.object(runtime, "_network_blocked", inactive_value), \
-                        patch.dict(os.environ, {}, clear=True):
-                    if inherited is not None:
-                        os.environ["MCU_FLASHER_OFFLINE_RUNTIME"] = inherited
-                    self.assertEqual(runtime.network_access_disabled(), inherited == "1")
+    def test_windows_root_entrypoint_uses_saved_package_mode_not_default_offline(self):
+        for saved_offline in (False, True):
+            with self.subTest(saved_offline=saved_offline):
+                initial, observed = self._root_entrypoint_policy("win32", saved_offline)
+                self.assertEqual(initial, (saved_offline,))
+                self.assertFalse(observed["before_main"])
+                self.assertFalse(observed["after_main"])
+                self.assertEqual(observed["offline_environment"], "1" if saved_offline else None)
+                self.assertEqual(observed["pip_no_index"], "1" if saved_offline else None)
 
     def test_online_activation_also_guards_nested_python_package_managers(self):
         from platformio.package.manager._install import PackageManagerInstallMixin
@@ -293,14 +270,14 @@ class ModeChecks(unittest.TestCase):
         original = Mock()
         specification = SimpleNamespace(uri=None, humanize=lambda: "vendor/missing")
         manager = SimpleNamespace(ensure_spec=lambda value: value, get_package=lambda value: None)
-        with patch.object(runtime, "_enabled", False), patch.object(runtime, "_network_blocked", False), \
+        with patch.object(runtime, "_enabled", False), \
                 patch.object(runtime.sys, "addaudithook"), \
                 patch("src.modules.windows_tool_paths.install_espidf_component_relpaths"), \
                 patch("src.modules.mbed_compat.install_mbed_compat"), \
                 patch.dict(os.environ, setup.clean_bootstrap_environment(), clear=True), \
                 patch.object(PackageManagerInstallMixin, "_install", original):
             runtime.activate(False)
-            self.assertFalse(runtime._network_blocked)
+            self.assertFalse(runtime.network_access_disabled())
             self.assertEqual(os.environ["MCU_FLASHER_WORKSPACE_RUNTIME"], "1")
             self.assertNotIn("MCU_FLASHER_OFFLINE_RUNTIME", os.environ)
             with self.assertRaisesRegex(PackageException, "bootstrap"):

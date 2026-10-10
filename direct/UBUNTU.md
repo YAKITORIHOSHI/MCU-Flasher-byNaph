@@ -177,9 +177,11 @@ automatically enters Bootstrap again. Existing certified packages are reused.
 This preparation leaves the selected Online/Offline Mode unchanged; explicit
 `--plan`/`--board-source` can customize the configured preparation. Rerun setup to
 repair missing dependencies.
-The Ubuntu workspace reads that saved mode before activating its process guard,
-so Online Mode retains network access while package installation remains
-Bootstrap-only.
+The Ubuntu workspace reads that saved package mode before activating its
+installation guard. Offline Mode applies only to board/library preparation;
+Cloud sketches and Developer Access each check their own internet connection.
+Application networking remains available in both modes, while package
+installation remains Bootstrap-only.
 Ubuntu omits the reviewed, unused Windows-only ESP32 `tool-mconf` package from
 preparation. Required tools, custom package sources and Windows plans remain
 unchanged; Bootstrap still stops on genuine package preparation failures.

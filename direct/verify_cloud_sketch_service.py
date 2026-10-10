@@ -114,7 +114,8 @@ class CloudChecks(unittest.TestCase):
 
     def make_service(self):
         return cloud.CloudSketchService(config_provider=lambda: dict(CONFIG), credential_store=self.store,
-                                        transport=self.http, data_dir=self.folder / "user-cloud")
+                                        transport=self.http, data_dir=self.folder / "user-cloud",
+                                        source_root_provider=lambda: self.folder / "_MCUFlasherByNaph_src")
 
     def login(self, **options):
         return self.service.sign_in(" user@example.com ", " literal password ", **options)
@@ -159,13 +160,15 @@ class CloudChecks(unittest.TestCase):
             offline._audit("socket.connect", (None, ("8.8.8.8", 443)))
             return original(request, **kwargs)
         self.service._transport = offline_aware_transport
-        with patch.object(offline, "_network_blocked", True):
-            self.assertTrue(self.service.check_connection())
-            self.login()
-            self.assertTrue(self.service.is_authenticated)
-            self.assertGreaterEqual(len(self.http.calls), 2)
-            with self.assertRaisesRegex(offline.OfflineDependencyError, "Offline Mode"):
+        for enabled in (False, True):
+            with self.subTest(offline_mode=enabled), patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1" if enabled else ""}):
+                self.assertTrue(self.service.check_connection())
+                self.login()
+                self.assertTrue(self.service.is_authenticated)
+                self.assertFalse(offline.network_access_disabled())
                 offline._audit("socket.getaddrinfo", ("example.invalid", 443, 0, 0, 0))
+                offline._audit("socket.connect", (None, ("8.8.8.8", 443)))
+        self.assertGreaterEqual(len(self.http.calls), 4)
 
     def test_connection_probe_uses_firebase_head_without_credentials_or_database_content(self):
         self.assertTrue(self.service.check_connection())
@@ -294,7 +297,157 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual(cloud.read_project_link(folder)["source_revision"], 1)
         self.assertEqual(self.service.push_project(folder, meta["id"], 2)["revision"], 3)
         self.assertNotEqual(folder, self.local)
-        self.assertIn(str(self.folder / "user-cloud"), str(self.service.working_directory(meta["id"])))
+        self.assertEqual(self.service.working_directory(meta["id"]),
+                         self.folder / "_MCUFlasherByNaph_src" / "Cloud" / meta["name"])
+
+    def test_readable_cloud_folder_reopens_saved_edits_without_a_pull(self):
+        self.login()
+        meta = self.service.upload_project(self.local, "My Arduino Sketch")
+        working = self.service.pull_project(meta["id"])
+        self.assertEqual(working, self.folder / "_MCUFlasherByNaph_src" / "Cloud" / "My Arduino Sketch")
+        (working / "Sketch.ino").write_bytes(b"// saved unsynced edits\n")
+        self.http.calls.clear()
+        self.assertEqual(self.service.working_directory(meta["id"], "Renamed on cloud"), working)
+        self.assertFalse(self.http.calls)
+        self.assertEqual((working / "Sketch.ino").read_bytes(), b"// saved unsynced edits\n")
+        self.assertFalse((self.folder / "user-cloud" / "projects").exists())
+
+    def test_generated_source_location_uses_the_configured_download_root(self):
+        from main.core import board_catalog
+        configured = self.folder / "Configured source location"
+        configured.mkdir()
+        for name in ("Boards", "Libs"):
+            (configured / name).mkdir()
+            (configured / name / "keep.txt").write_bytes(b"owned existing content")
+        self.login()
+        meta = self.service.upload_project(self.local, "Sketch one")
+        self.service._source_root_provider = None
+        with patch.object(board_catalog, "_get_download_dir", return_value=str(configured)) as download_root:
+            working = self.service.pull_project(meta["id"])
+        download_root.assert_called_once_with()
+        self.assertEqual(working, configured / "Cloud" / "Sketch one")
+        self.assertEqual({entry.name for entry in configured.iterdir()}, {"Boards", "Libs", "Cloud"})
+        for name in ("Boards", "Libs"):
+            self.assertEqual((configured / name / "keep.txt").read_bytes(), b"owned existing content")
+
+    def test_safe_names_case_collisions_and_different_accounts_never_share_sources(self):
+        self.login()
+        first = self.service.upload_project(self.local, "../CON:<bad>\\Sketch")
+        one = self.service.pull_project(first["id"])
+        self.assertEqual(one.parent, self.folder / "_MCUFlasherByNaph_src" / "Cloud")
+        self.assertNotIn(first["id"], one.name)
+        self.assertNotIn("..", one.name)
+        two_meta = self.service.upload_project(self.local, first["name"].upper())
+        two = self.service.pull_project(two_meta["id"])
+        self.assertNotEqual(one.name.casefold(), two.name.casefold())
+        self.http.uid = "other-account"
+        self.login()
+        third = self.service.upload_project(self.local, first["name"])
+        three = self.service.pull_project(third["id"])
+        self.assertNotEqual(one, three)
+        self.assertNotEqual(two, three)
+        self.assertEqual(cloud.read_project_link(one)["uid"], "fixture-user")
+        self.assertEqual(cloud.read_project_link(three)["uid"], "other-account")
+        (three / "Sketch.ino").write_bytes(b"// another account\n")
+        self.assertEqual((one / "Sketch.ino").read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+
+    def test_existing_legacy_saved_sources_are_copied_and_journals_left_untouched(self):
+        self.login()
+        meta = self.service.upload_project(self.local, "Legacy sketch")
+        legacy = (self.folder / "user-cloud" / "projects" / self.service._scope()[:16]
+                  / self.service._account_folder() / meta["id"])
+        self.service.pull_project(meta["id"], legacy)
+        (legacy / "Sketch.ino").write_bytes(b"// saved legacy edit\n")
+        (legacy / "Header.h").unlink()
+        (legacy / "New.cpp").write_bytes(b"// newly added source\n")
+        journal = legacy / ".mcu_flasher_build_cache" / ".mcu_ai_edits"
+        journal.mkdir(parents=True)
+        (journal / "edit1.txt").write_bytes(b"protected journal")
+        (legacy / "asset.png").write_bytes(b"user asset")
+        self.http.calls.clear()
+        working = self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual(working, self.folder / "_MCUFlasherByNaph_src" / "Cloud" / "Legacy sketch")
+        self.assertEqual((working / "Sketch.ino").read_bytes(), b"// saved legacy edit\n")
+        self.assertEqual((working / "New.cpp").read_bytes(), b"// newly added source\n")
+        self.assertFalse((working / "Header.h").exists())
+        self.assertFalse((working / ".mcu_flasher_build_cache").exists())
+        self.assertEqual((journal / "edit1.txt").read_bytes(), b"protected journal")
+        self.assertEqual((legacy / "asset.png").read_bytes(), b"user asset")
+        self.assertEqual((legacy / "Sketch.ino").read_bytes(), b"// saved legacy edit\n")
+        self.assertFalse(self.http.calls)
+
+    def test_relocated_generated_root_preserves_existing_saved_sources(self):
+        meta = self.upload()
+        first = self.local
+        (first / "Sketch.ino").write_bytes(b"// unpushed relocation edit\n")
+        self.service._source_root_provider = lambda: self.folder / "Relocated sources"
+        moved = self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual(moved, self.folder / "Relocated sources" / "Cloud" / meta["name"])
+        self.assertEqual((moved / "Sketch.ino").read_bytes(), b"// unpushed relocation edit\n")
+        self.assertEqual((first / "Sketch.ino").read_bytes(), b"// unpushed relocation edit\n")
+        reopened = self.make_service()
+        reopened._source_root_provider = lambda: self.folder / "Relocated sources"
+        reopened.sign_in("user@example.com", "literal password")
+        self.assertEqual(reopened.working_directory(meta["id"], meta["name"]), moved)
+
+    def test_source_added_during_legacy_copy_is_retained_and_retry_uses_clean_destination(self):
+        self.login()
+        meta = self.service.upload_project(self.local, "Legacy retry")
+        legacy = (self.folder / "user-cloud" / "projects" / self.service._scope()[:16]
+                  / self.service._account_folder() / meta["id"])
+        self.service.pull_project(meta["id"], legacy)
+        sync = cloud.os.fsync
+        changed = False
+        def add_source_on_copy(descriptor):
+            nonlocal changed
+            sync(descriptor)
+            if not changed:
+                changed = True
+                (legacy / "Added.cpp").write_bytes(b"// saved while copying\n")
+        with patch.object(cloud.os, "fsync", side_effect=add_source_on_copy):
+            with self.assertRaisesRegex(cloud.CloudError, "original folder and saved edits were preserved"):
+                self.service.working_directory(meta["id"], meta["name"])
+        cloud_root = self.folder / "_MCUFlasherByNaph_src" / "Cloud"
+        self.assertFalse(any(cloud_root.iterdir()))
+        self.assertEqual((legacy / "Added.cpp").read_bytes(), b"// saved while copying\n")
+        working = self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual(working.name, "Legacy retry")
+        self.assertEqual((working / "Added.cpp").read_bytes(), b"// saved while copying\n")
+
+    def test_external_edit_to_new_copy_is_never_removed_during_failed_copy_cleanup(self):
+        self.login()
+        meta = self.service.upload_project(self.local, "Copy race")
+        legacy = (self.folder / "user-cloud" / "projects" / self.service._scope()[:16]
+                  / self.service._account_folder() / meta["id"])
+        self.service.pull_project(meta["id"], legacy)
+        destination = self.folder / "_MCUFlasherByNaph_src" / "Cloud" / "Copy race"
+        sync = cloud.os.fsync
+        def change_destination(descriptor):
+            sync(descriptor)
+            path = destination / "Sketch.ino"
+            if path.exists():
+                path.write_bytes(b"// external destination edit\n")
+        with patch.object(cloud.os, "fsync", side_effect=change_destination):
+            with self.assertRaisesRegex(cloud.CloudError, "original folder and saved edits were preserved"):
+                self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual((destination / "Sketch.ino").read_bytes(), b"// external destination edit\n")
+        self.assertEqual((legacy / "Sketch.ino").read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+        self.assertFalse((destination / cloud.LINK_NAME).exists())
+        retry = self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual(retry.name, "Copy race (2)")
+        self.assertEqual((destination / "Sketch.ino").read_bytes(), b"// external destination edit\n")
+
+    def test_unknown_folder_and_empty_reservation_never_overwrite_user_material(self):
+        self.login()
+        meta = self.service.upload_project(self.local, "Occupied sketch")
+        occupied = self.folder / "_MCUFlasherByNaph_src" / "Cloud" / meta["name"]
+        occupied.mkdir(parents=True)
+        (occupied / "Sketch.ino").write_bytes(b"unrelated user project")
+        working = self.service.working_directory(meta["id"], meta["name"])
+        self.assertEqual(working.name, "Occupied sketch (2)")
+        self.assertEqual(self.service.working_directory(meta["id"], meta["name"]), working)
+        self.service.pull_project(meta["id"])
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"unrelated user project")
 
     def test_stale_base_or_racing_etag_never_overwrites(self):
         meta = self.upload()
@@ -507,6 +660,7 @@ class CloudChecks(unittest.TestCase):
         self.login()
         meta = self.service.upload_project(deep)
         self.service._data_dir = deep / "cloud-working"
+        self.service._source_root_provider = lambda: deep / "_MCUFlasherByNaph_src"
         working = self.service.pull_project(meta["id"])
         self.assertEqual(cloud._io_path(working / filename).read_bytes(), b"void setup() {}\nvoid loop() {}\n")
         cloud._io_path(working / filename).write_bytes(b"// changed\n")

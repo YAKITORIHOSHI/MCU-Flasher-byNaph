@@ -89,8 +89,7 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertNotIn("firebase_api_key", self.service._read_config())
 
     def test_default_owner_password_never_unlocks_local_data(self):
-        with patch("main.core.owner_tickets.cloud_network_error", return_value="offline"):
-            ok, _ = self.service.authenticate("", "owner")
+        ok, _ = self.service.authenticate("", "owner")
         self.assertFalse(ok)
         self.assertFalse(self.service.is_authenticated)
         self.assertFalse(self.service.get_config()["local_access_configured"])

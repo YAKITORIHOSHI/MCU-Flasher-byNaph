@@ -19,7 +19,9 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer
 from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit
-from main.qt.cloud_sketch_panel import CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog
+from main.qt.cloud_sketch_panel import (
+    CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
+)
 from main.qt.project_dialog import ProjectDialog
 from main.qt.theme import build_stylesheet, register_fonts
 
@@ -103,7 +105,7 @@ class FakeService:
         self.authenticated = False
         self.rows = []
 
-    def working_directory(self, sketch_id):
+    def working_directory(self, sketch_id, sketch_name=None):
         return self.root / "cloud-copy"
 
     def pull_project(self, sketch_id, destination=None, revision=None, **kwargs):
@@ -225,7 +227,12 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(call[2], {"save_login": True, "remember_me": True})
         self.assertEqual(panel._password.text(), "")
         self.assertTrue(panel._management.isVisible())
-        self.assertTrue(panel._push_btn.isVisible())
+        self.assertFalse(panel._push_btn.isVisible())
+        self.assertFalse(panel._save_login.isVisible())
+        self.assertFalse(panel._remember.isVisible())
+        self.assertFalse(panel._security.isVisible())
+        self.assertFalse(panel._local_path.isVisible())
+        self.assertFalse(panel._name.isVisible())
         panel._forget_login()
         self.wait(lambda: not panel._busy)
         self.assertTrue(next(row for row in self.service.calls if row[0] == "sign_out")[2]["forget_saved"])
@@ -271,6 +278,58 @@ class CloudUIChecks(unittest.TestCase):
         self.wait(lambda: not panel._busy)
         self.assertEqual(sum(row[0] == "pull" for row in self.service.calls), 1)
         self.assertEqual(path.read_text(), "// unsaved closed local changes\n")
+
+    def test_signed_in_cloud_dialog_is_simple_and_names_current_sketch(self):
+        APP.setStyleSheet(build_stylesheet("default"))
+        self.service.pull_project("fixture", destination=self.local)
+        self.service.saved = {"email": "fixture@example.invalid", "password": "fixture pass"}
+        dialog = CloudSketchDialog(self.backend)
+        dialog.panel.apply_theme("default")
+        self.widgets.append(dialog)
+        dialog.show()
+        self.wait(lambda: not dialog.panel._busy)
+        panel = dialog.panel
+        self.assertIn("Sensor sketch", panel._linked.text())
+        self.assertNotIn("local", panel._linked.text())
+        self.assertEqual(panel._connection.text(), "Online")
+        self.assertNotIn("Sign in", panel._status.text())
+        self.assertTrue(panel._push_btn.isVisible())
+        compact = panel.width() < 480
+        self.assertEqual(panel._push_btn.text(), "Push" if compact else "Push changes")
+        self.assertEqual(panel._pull_btn.text(), "Pull" if compact else "Pull latest")
+        for button in (panel._upload_btn, panel._open_btn, panel._push_btn,
+                       panel._pull_btn, panel._history_btn):
+            geometry = QRect(button.mapTo(panel, QPoint()), button.size())
+            self.assertTrue(panel.rect().contains(geometry), (button.text(), geometry, panel.size()))
+            self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
+        for widget in (panel._save_login, panel._remember, panel._security,
+                       panel._forget_btn, panel._local_path, panel._name):
+            self.assertFalse(widget.isVisible(), widget.objectName())
+        self.assertTrue(panel._forget_action.isVisible())
+        from main.qt.responsive import work_area
+        from src.modules.ui_metrics import preferred_size
+        fitted_size = preferred_size(work_area(dialog), 590, 580)
+        self.assertEqual((dialog.width(), dialog.height()), fitted_size)
+        self.assertTrue(dialog.screen().availableGeometry().contains(dialog.frameGeometry()))
+        if fitted_size == (590, 580):
+            self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+        self.assertTrue(dialog.grab().save(str(self.output / "simple-cloud-window.png")))
+
+    def test_upload_folder_name_are_only_shown_when_requested(self):
+        panel = self.panel()
+        dialog = _CloudUploadDialog(str(self.local), panel)
+        self.widgets.append(dialog)
+        self.assertEqual(dialog.folder.text(), str(self.local))
+        self.assertEqual(dialog.name.text(), "local")
+        dialog.name.setText("My sensor")
+        with patch("main.qt.cloud_sketch_panel._CloudUploadDialog", return_value=dialog), \
+                patch.object(dialog, "exec", return_value=QDialog.DialogCode.Accepted):
+            panel._show_upload()
+        self.wait(lambda: not panel._busy)
+        call = next(row for row in self.service.calls if row[0] == "upload")
+        self.assertEqual(call[1], (str(self.local), "My sensor"))
+        self.assertFalse(panel._local_path.isVisible())
+        self.assertFalse(panel._name.isVisible())
 
     def test_source_busy_save_ack_and_editor_freeze_are_scoped(self):
         parent = QWidget()
@@ -499,6 +558,7 @@ class CloudUIChecks(unittest.TestCase):
         self.assertTrue(panel.grab().save(str(self.output / "create-account.png")))
 
     def test_palettes_compact_actions_and_sensitive_field_capture_masking(self):
+        self.service.pull_project("fixture", destination=self.local)
         panel = self.panel()
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
@@ -511,10 +571,19 @@ class CloudUIChecks(unittest.TestCase):
             for width, height in ((720, 650), (400, 360), (330, 270)):
                 panel.resize(width, height)
                 APP.processEvents()
-                for button in (panel._refresh_btn, panel._upload_btn, panel._open_btn, panel._push_btn, panel._pull_btn, panel._history_btn):
+                if (width, height) == (400, 360):
+                    self.wait(lambda: panel._scroll.verticalScrollBar().maximum() == 0)
+                for button in (panel._upload_btn, panel._open_btn,
+                               panel._push_btn, panel._pull_btn, panel._history_btn):
                     geometry = QRect(button.mapTo(panel, QPoint()), button.size())
                     self.assertTrue(panel.rect().contains(geometry), (mode, width, height, button.text(), geometry))
                     self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
+                for button in (panel._refresh_btn,):
+                    self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
+                if (width, height) == (400, 360):
+                    self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+                self.assertFalse(panel._save_login.isVisible())
+                self.assertFalse(panel._security.isVisible())
                 self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
                 self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
                 self.assertTrue(panel.grab().save(str(self.output / f"{mode}-{width}-{height}.png")))

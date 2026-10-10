@@ -99,13 +99,11 @@ class PortalChecks(unittest.TestCase):
         self.service.delete_ticket.side_effect = delete_ticket
         self.service.save_config.return_value = True
         self.service.test_firebase_connection.return_value = (True, "Connection verified in the fixture.")
+        self.service.check_connection.return_value = (True, "Connected. Sign in to continue.")
         self.service.configure_local_access.return_value = (True, "Your local access key is saved.")
         patcher = patch.object(portal, "OwnerTicketService", return_value=self.service)
         patcher.start()
         self.addCleanup(patcher.stop)
-        network = patch("main.core.owner_tickets.is_internet_available", return_value=False)
-        network.start()
-        self.addCleanup(network.stop)
         self.dialog = portal.OwnerTicketDialog()
         show(self.dialog)
         settle(self.dialog)
@@ -241,22 +239,18 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(cloud.result(), QDialog.DialogCode.Accepted)
         cloud.deleteLater()
 
-    def test_offline_status_and_sign_in_error_are_distinct_from_credentials(self):
-        message = "Firebase is blocked by Offline Mode. Restart the app after turning it off."
-        with patch.object(portal, "cloud_network_error", return_value=message), \
-                patch("main.core.owner_tickets.is_internet_available") as probe:
-            self.dialog._update_cloud_badge()
-            self.assertEqual(self.dialog.cloud_badge.text(), "Offline Mode")
-            self.assertIn("Restart", self.dialog.cloud_badge.toolTip())
-            probe.assert_not_called()
+    def test_connection_status_is_independent_from_package_offline_mode(self):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.invalid", firebase_api_key="fixture-key")
-        with patch("main.core.owner_tickets.is_internet_available", return_value=True) as probe:
+        with patch("src.modules.offline_runtime.network_access_disabled", return_value=True) as mode:
             self.dialog._update_cloud_badge()
-            self.assertEqual(self.dialog.cloud_badge.text(), "Cloud configured")
+            self.assertEqual(self.dialog.cloud_badge.text(), "Online")
+            self.assertNotIn("Offline", self.dialog.connection_note.text())
+            self.assertTrue(self.dialog.connection_note.isHidden())
             self.dialog._cloud_authenticated = True
             self.dialog._update_cloud_badge()
-            self.assertEqual(self.dialog.cloud_badge.text(), "Cloud signed in")
-            probe.assert_not_called()
+            self.assertEqual(self.dialog.cloud_badge.text(), "Signed in")
+            mode.assert_not_called()
+        message = "The cloud connection timed out. Try again."
         self.service.authenticate.return_value = (False, message)
         self.dialog.txt_auth_pwd.setText(" fixture-only ")
         self.dialog._do_authenticate()
@@ -275,8 +269,7 @@ class PortalChecks(unittest.TestCase):
         self.addCleanup(toolbar.deleteLater)
         owner_dialog = Mock()
         owner_dialog.isVisible.return_value = False
-        with patch.object(portal, "OwnerTicketDialog", return_value=owner_dialog) as create_dialog, \
-                patch("main.core.owner_tickets.is_internet_available", return_value=False) as network_probe:
+        with patch.object(portal, "OwnerTicketDialog", return_value=owner_dialog) as create_dialog:
             for _ in range(5):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
             QTest.qWait(850)
@@ -284,7 +277,6 @@ class PortalChecks(unittest.TestCase):
             owner_dialog.show.assert_called_once()
             owner_dialog.raise_.assert_called_once()
             owner_dialog.activateWindow.assert_called_once()
-            network_probe.assert_not_called()
 
         with patch.object(toolbar, "_open_owner_ticket_dialog") as open_portal:
             for _ in range(6):
@@ -296,12 +288,12 @@ class PortalChecks(unittest.TestCase):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")
         started, release = Event(), Event()
         self.addCleanup(release.set)
-        def diagnose(key, url):
+        def diagnose():
             self.assertIsNot(QThread.currentThread(), APP.thread())
             started.set()
             self.assertTrue(release.wait(2))
             return True, "Database endpoint reached; account access has not been verified."
-        self.service.test_firebase_connection.side_effect = diagnose
+        self.service.check_connection.side_effect = diagnose
         self.dialog._diagnose_cloud()
         self.assertTrue(started.wait(.5))
         QTest.qWait(60)
@@ -310,14 +302,14 @@ class PortalChecks(unittest.TestCase):
         self.dialog.txt_auth_email.setText("still-responsive@example.com")
         release.set()
         settle(self.dialog)
-        self.assertEqual(self.dialog.cloud_badge.text(), "Cloud reachable")
+        self.assertEqual(self.dialog.cloud_badge.text(), "Online")
         self.assertIn("Sign in", self.dialog.connection_note.text())
         self.service.authenticate.assert_not_called()
-        self.service.test_firebase_connection.side_effect = None
-        self.service.test_firebase_connection.return_value = (False, "The database endpoint timed out.")
+        self.service.check_connection.side_effect = None
+        self.service.check_connection.return_value = (False, "The database endpoint timed out.")
         self.dialog._diagnose_cloud()
         settle(self.dialog)
-        self.assertEqual(self.dialog.cloud_badge.text(), "Cloud unreachable")
+        self.assertEqual(self.dialog.cloud_badge.text(), "No connection")
         self.assertIn("timed out", self.dialog.connection_note.text())
 
     def test_storage_initialization_and_authentication_never_run_on_qt(self):
@@ -332,7 +324,7 @@ class PortalChecks(unittest.TestCase):
         self.dialog._initialize_service()
         settle(self.dialog)
         self.sign_in()
-        self.assertEqual(self.dialog.cloud_badge.text(), "Local tickets")
+        self.assertEqual(self.dialog.cloud_badge.text(), "Online")
 
     def test_local_key_setup_keeps_passwords_out_of_config_updates(self):
         settings = portal.FirebaseSettingsDialog(self.service, self.dialog, config={"local_access_configured": False})
@@ -363,7 +355,7 @@ class PortalChecks(unittest.TestCase):
             started.set()
             release.wait(2)
             return True, "Fixture endpoint reached"
-        self.service.test_firebase_connection.side_effect = diagnose
+        self.service.check_connection.side_effect = diagnose
         self.dialog._diagnose_cloud()
         self.assertTrue(started.wait(.5))
         self.dialog.close()
@@ -371,6 +363,20 @@ class PortalChecks(unittest.TestCase):
         release.set()
         settle(self.dialog)
         self.assertFalse(self.dialog.isVisible())
+
+    def test_connection_checked_automatically_and_login_centered_after_resize(self):
+        self.service.check_connection.assert_called_once_with()
+        for size in ((590, 580), (880, 740), (380, 600)):
+            self.dialog.resize(*size)
+            pump()
+            viewport = self.dialog.auth_scroll.viewport()
+            center = self.dialog.auth_card.mapTo(viewport, self.dialog.auth_card.rect().center())
+            self.assertLessEqual(abs(center.x() - viewport.rect().center().x()), 3, size)
+            if self.dialog.auth_card.height() <= viewport.height() - 4:
+                self.assertLessEqual(abs(center.y() - viewport.rect().center().y()), 3, size)
+            self.assertLessEqual(self.dialog.auth_card.width(), viewport.width())
+            self.assertEqual(self.dialog.auth_scroll.horizontalScrollBar().maximum(), 0)
+        capture(self.dialog, "login-centered-compact")
 
     def test_render_all_themes_and_compact_forms(self):
         self.sign_in()

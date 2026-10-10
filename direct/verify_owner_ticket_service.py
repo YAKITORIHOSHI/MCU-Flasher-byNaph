@@ -74,8 +74,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         )
         self.patch(owner, "load_cloud_configuration", side_effect=AssertionError("Live vault reads are forbidden"))
         self.patch(owner, "CredentialStore", side_effect=AssertionError("Live vault access is forbidden"))
-        self.disabled = self.patch(owner, "network_access_disabled", return_value=False)
-        self.patch(offline_runtime, "network_access_disabled", new=self.disabled)
+        self.disabled = self.patch(offline_runtime, "network_access_disabled", return_value=False)
         self.http = self.patch(
             owner, "_open_firebase_request",
             side_effect=AssertionError("HTTP responses must be explicitly supplied by the fixture"),
@@ -124,9 +123,9 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertIsNone(self.service._refresh_token)
         self.assertIsNone(self.service.user_uid)
 
-    def test_offline_cloud_operations_do_not_probe_or_request_http(self):
+    def test_package_offline_mode_never_blocks_cloud_operations(self):
         self.disabled.return_value = True
-        self.assertFalse(owner.is_internet_available())
+        self.cloud_response()
         operations = (
             lambda: self.service.authenticate("developer@example.com", "firebase-fixture-password"),
             lambda: self.service.send_password_reset_email("developer@example.com"),
@@ -137,17 +136,44 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         for operation in operations:
             with self.subTest(operation=operation):
                 ok, message = operation()
-                self.assertFalse(ok)
-                self.assertIn("offline mode", message.lower())
-                self.assertIn("restart", message.lower())
-                self.assertNotIn("invalid credentials", message.lower())
+                self.assertTrue(ok, message)
+                self.assertNotIn("offline mode", message.lower())
         self.internet_probe.assert_not_called()
-        self.http.assert_not_called()
+        self.assertEqual(self.http.call_count, 3)
+        self.disabled.assert_not_called()
         self.socket_connect.assert_not_called()
         self.socket_dns.assert_not_called()
 
-    def test_online_preflight_has_no_offline_error(self):
-        self.assertEqual(owner.cloud_network_error(), "")
+    def test_connection_checker_uses_provider_endpoint_only(self):
+        self.http.side_effect = None
+        self.http.return_value = Response({})
+        self.assertTrue(self.service.check_connection()[0])
+        request = self.http.call_args.args[0]
+        self.assertEqual(request.get_method(), "HEAD")
+        self.assertEqual(request.full_url, "https://fixture.firebasedatabase.app/.json?shallow=true")
+        self.assertIsNone(request.data)
+        self.assertNotIn("key=", request.full_url)
+        self.assertNotIn("auth=", request.full_url)
+        self.disabled.assert_not_called()
+        self.internet_probe.assert_not_called()
+
+    def test_connection_probe_reads_no_database_data(self):
+        response = Response({})
+        response.read = Mock(side_effect=AssertionError("A connection check must not read database data"))
+        self.http.side_effect = None
+        self.http.return_value = response
+        self.assertTrue(self.service.check_connection()[0])
+        response.read.assert_not_called()
+
+    def test_unconfigured_connection_checker_probes_firebase_auth_without_credentials(self):
+        self.config["firebase_database_url"] = ""
+        self.http.side_effect = self.http_error("https://identitytoolkit.googleapis.com/", 404, {}, "route missing")
+        self.assertTrue(self.service.check_connection()[0])
+        self.assertEqual(self.http.call_args.args[0].full_url, "https://identitytoolkit.googleapis.com/")
+        self.assertEqual(self.http.call_args.args[0].get_method(), "HEAD")
+        self.assertFalse(self.service.is_cloud_authenticated)
+
+    def test_no_preflight_network_requests(self):
         self.http.assert_not_called()
         self.internet_probe.assert_not_called()
 
@@ -208,7 +234,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         )
         ok, message = self.service.authenticate("developer@example.com", "firebase-fixture-password")
         self.assertFalse(ok)
-        self.assertIn("INVALID_LOGIN_CREDENTIALS", message)
+        self.assertIn("email or password is incorrect", message)
         self.assertNotIn("offline mode", message.lower())
         self.assert_session_cleared()
 
@@ -250,10 +276,11 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.service._uid = "previous-fixture-uid"
         self.service._user_email = "previous@example.com"
         self.disabled.return_value = True
+        self.http.side_effect = TimeoutError("fixture connection failure")
         ok, _ = self.service.authenticate("developer@example.com", "firebase-fixture-password")
         self.assertFalse(ok)
         self.assert_session_cleared()
-        self.http.assert_not_called()
+        self.http.assert_called_once()
 
     def test_local_key_unlocks_without_claiming_cloud_authentication(self):
         self.disabled.return_value = True
@@ -272,18 +299,23 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assert_session_cleared()
         self.http.assert_not_called()
 
-    def test_http_helper_rechecks_offline_guard_and_never_follows_redirects(self):
+    def test_http_helper_ignores_package_mode_and_never_follows_redirects(self):
         request = owner.urllib.request.Request("https://fixture.firebasedatabase.app/.json?auth=fixture-token")
         with patch.object(owner.urllib.request, "build_opener") as create_opener:
             self.disabled.return_value = True
-            with self.assertRaises(offline_runtime.OfflineDependencyError):
-                REAL_OPEN_FIREBASE_REQUEST(request, timeout=4.0)
-            create_opener.assert_not_called()
-            self.disabled.return_value = False
             REAL_OPEN_FIREBASE_REQUEST(request, timeout=4.0)
             handler = create_opener.call_args.args[0]
             self.assertIsNone(handler.redirect_request(request, None, 302, "redirect", {}, "https://other.invalid"))
             create_opener.return_value.open.assert_called_once_with(request, timeout=4.0)
+            self.disabled.assert_not_called()
+
+    def test_http_helper_rejects_insecure_and_foreign_hosts(self):
+        with patch.object(owner.urllib.request, "build_opener") as create_opener:
+            for url in ("http://fixture.firebasedatabase.app/", "https://other.invalid/",
+                        "https://fixture.firebasedatabase.app:444/", "https://user:password@fixture.firebasedatabase.app/"):
+                with self.subTest(url=url), self.assertRaises((ValueError, offline_runtime.OfflineDependencyError)):
+                    REAL_OPEN_FIREBASE_REQUEST(owner.urllib.request.Request(url), timeout=4.0)
+            create_opener.assert_not_called()
 
     def test_oversized_auth_and_ticket_responses_are_bounded(self):
         class LargeResponse(Response):
@@ -312,7 +344,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertTrue(error.fp.closed)
 
     def test_protected_endpoint_response_only_proves_reachability(self):
-        for code in (401, 403):
+        for code in (401, 403, 404, 405, 503):
             with self.subTest(code=code):
                 self.http.side_effect = self.http_error(
                     "https://fixture.firebasedatabase.app/.json?shallow=true", code,
@@ -322,9 +354,10 @@ class OwnerTicketServiceChecks(unittest.TestCase):
                     "fixture-web-api-key", "https://fixture.firebasedatabase.app/"
                 )
                 self.assertTrue(ok, message)
-                self.assertIn("reach", message.lower())
-                self.assertIn("not verified", message.lower())
+                self.assertIn("connected", message.lower())
+                self.assertIn("sign in", message.lower())
                 self.assertFalse(self.service.is_cloud_authenticated)
+                self.assertTrue(self.http.side_effect.fp.closed)
 
     def test_cloud_crud_uses_authenticated_endpoint_without_generic_probe(self):
         self.cloud_response()
@@ -356,17 +389,18 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.http.assert_not_called()
         self.internet_probe.assert_not_called()
 
-    def test_authenticated_sync_honors_runtime_offline_guard(self):
+    def test_authenticated_sync_is_independent_of_package_offline_mode(self):
         self.cloud_response()
         self.assertTrue(self.service.authenticate("developer@example.com", "firebase-fixture-password")[0])
         self.http.reset_mock()
         self.disabled.return_value = True
         self.service._save_local_tickets.side_effect = None
-        self.assertIsNone(self.service._get_firebase_tickets_url())
+        self.assertIsNotNone(self.service._get_firebase_tickets_url())
         self.service.get_tickets()
         self.service.create_ticket("Offline fixture ticket")
         self.service._push_to_firebase({"id": "fixture-ticket"})
-        self.http.assert_not_called()
+        self.assertEqual(self.http.call_count, 3)
+        self.disabled.assert_not_called()
 
     def test_errors_never_reveal_request_urls_or_tokens(self):
         marker = "fixture-secret-that-must-not-display"
@@ -400,6 +434,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
             self.assertNotEqual(first, self.service._ticket_cache_path())
             self.assertEqual(self.service._read_local_tickets(), [])
             self.disabled.return_value = True
+            self.http.side_effect = TimeoutError("fixture connection unavailable")
             self.assertEqual(self.service.get_tickets(), [])
             self.service._uid = "account-a"
             self.assertEqual(self.service._read_local_tickets(), [{"id": "account-a-private"}])
@@ -408,7 +443,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
             self.assertEqual(self.service._read_local_tickets(), [])
             self.service.logout()
             self.assertEqual(self.service._read_local_tickets(), [{"id": "local-only"}])
-        self.http.assert_not_called()
+        self.http.assert_called_once()
 
 
 if __name__ == "__main__":

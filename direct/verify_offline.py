@@ -54,15 +54,18 @@ class OfflineChecks(unittest.TestCase):
         self.assertIn("bootstrap", result.stdout + result.stderr)
         self.assertFalse(any(self.core.rglob("package.json")))
 
-    def test_network_denial_keeps_loopback_terminal_working(self):
+    def test_package_guard_keeps_app_network_and_loopback_terminal_working(self):
         code = ("import sys,socket; sys.path.insert(0," + repr(str(ROOT)) + "); "
-                "from src.modules.offline_runtime import activate,OfflineDependencyError; activate(); "
+                "from src.modules.offline_runtime import activate,network_access_disabled; activate(); "
                 "s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(1); "
                 "c=socket.socket(); c.connect(s.getsockname()); a,_=s.accept(); c.sendall(b'local'); "
                 "assert a.recv(5)==b'local'; "
-                "remote=socket.socket();\ntry: remote.connect(('192.0.2.1',443))\n"
-                "except OfflineDependencyError: print('Network blocked before connect; loopback OK')\n"
-                "else: raise AssertionError('Remote network allowed')")
+                "assert not network_access_disabled(); "
+                "sys.audit('socket.getaddrinfo','example.invalid',443,0,0,0); "
+                "sys.audit('socket.connect',None,('192.0.2.1',443)); "
+                "sys.audit('socket.sendto',None,('192.0.2.1',443)); "
+                "a.close(); c.close(); s.close(); "
+                "print('App network permitted; loopback OK')")
         result = self.child([sys.executable, "-B", "-c", code])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("loopback OK", result.stdout)

@@ -511,14 +511,15 @@ class SettingsDialog(QDialog):
         offline_box = QGroupBox("Offline Mode")
         self._offline_box = offline_box
         ov = QVBoxLayout(offline_box)
-        self.cb_offline = QCheckBox("Enable offline mode", offline_box)
-        self.cb_offline.setToolTip("Prepare the configured board and library package plan. Restart required.")
+        self.cb_offline = QCheckBox("Prepare boards and libraries for offline use", offline_box)
+        self.cb_offline.setToolTip("Controls board and library preparation only. Cloud and Developer Access keep their own internet connection checks.")
         self.cb_offline.setChecked(self.offline_mode_previous)
         ov.addWidget(self.cb_offline)
         offline_note = QLabel(
             "Disabled by default. Enabling restarts the app into Bootstrap to prepare the configured "
             "board and library plan, which can use many gigabytes of disk space. "
-            "Changing mode requires other project windows to be closed.", offline_box)
+            "Cloud sketches and Developer Access can still connect to the internet. "
+            "Changing preparation mode requires other project windows to be closed.", offline_box)
         offline_note.setProperty("role", "dim")
         offline_note.setWordWrap(True)
         ov.addWidget(offline_note)

@@ -67,17 +67,19 @@ GUI_SMOKE = '''
                 return
             _first_run_finished[0] = True
             from src.modules.offline_mode import offline_enabled as _first_run_saved_mode
-            from src.modules.offline_runtime import network_access_disabled as _first_run_active_mode
+            from src.modules.offline_runtime import network_access_disabled as _first_run_network_policy
             _first_run_saved_offline = bool(_first_run_saved_mode())
-            _first_run_network_disabled = bool(_first_run_active_mode())
-            if _first_run_saved_offline != _first_run_network_disabled:
+            _first_run_active_package_mode = os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") == "1"
+            _first_run_network_disabled = bool(_first_run_network_policy())
+            if _first_run_saved_offline != _first_run_active_package_mode or _first_run_network_disabled:
                 success = False
-                detail = "Saved Online/Offline Mode does not match the active network policy"
+                detail = "Saved board/library mode is incorrect or application networking is blocked"
             report = {"success": bool(success), "detail": detail,
                       "workspace_visible": window.isVisible(),
                       "services_started": bool(api._services_started),
                       "serial_running": bool(api.serial_running),
                       "saved_offline_enabled": _first_run_saved_offline,
+                      "active_package_offline_enabled": _first_run_active_package_mode,
                       "network_access_disabled": _first_run_network_disabled,
                       "source_loaded": bool(_first_run_editor[0].get("source_loaded")),
                       "active_file": str(api.active_file_path or ""),

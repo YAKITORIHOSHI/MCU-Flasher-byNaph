@@ -38,6 +38,7 @@ MAX_REVISIONS = 20
 MAX_SKETCHES = 100
 SOURCE_SUFFIXES = frozenset({".ino", ".cpp", ".c", ".h", ".hpp", ".txt"})
 LINK_NAME = ".mcu_cloud_link.json"
+MAX_WORKING_FOLDERS = 1024
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _REVISION_KEY = re.compile(r"^r[1-9][0-9]{0,9}$")
 class CloudError(RuntimeError):
@@ -76,6 +77,20 @@ def _source_name(value: Any) -> str:
                                                 *(f"LPT{i}" for i in range(1, 10))}:
         raise CloudError("A sketch filename is reserved on Windows.")
     return value
+
+
+def _working_folder_name(value: Any) -> str:
+    """Keep human-readable sketch names valid on Windows and native Ubuntu."""
+    text = str(value or "Sketch")
+    text = "".join("_" if ord(char) < 32 or char in '/\\:\x00<>\"|?*' else char for char in text)
+    text = re.sub(r"\s+", " ", text).strip(" .") or "Sketch"
+    # Leave room for a collision suffix and for native source filenames.
+    while len(text.encode("utf-8")) > 120:
+        text = text[:-1]
+    if text.split(".", 1)[0].upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                                         *(f"LPT{i}" for i in range(1, 10))}:
+        text = "Sketch-" + text
+    return text
 
 
 def _io_path(value: Path | str) -> Path:
@@ -211,11 +226,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class CloudSketchService:
     def __init__(self, *, config_provider: Callable[[], dict] | None = None,
                  credential_store: CredentialStore | None = None, transport=None,
-                 data_dir: Path | str | None = None):
+                 data_dir: Path | str | None = None,
+                 source_root_provider: Callable[[], Path | str] | None = None):
         self._store = credential_store or CredentialStore()
         self._config_provider = config_provider or (lambda: load_cloud_configuration(self._store))
         self._transport = transport
         self._data_dir = Path(data_dir) if data_dir is not None else user_cloud_directory()
+        self._source_root_provider = source_root_provider
         self._lock = threading.RLock()
         self._id_token = ""
         self._refresh_token = ""
@@ -689,10 +706,179 @@ class CloudSketchService:
                 raise CloudError("The cloud sketch version history is invalid.")
         return value, etag
 
-    def working_directory(self, sketch_id: str) -> Path:
-        if not self._uid:
-            raise CloudError("Sign in to your cloud account first.")
-        return self._data_dir / "projects" / self._scope()[:16] / self._account_folder() / _safe_id(sketch_id)
+    def _cloud_source_root(self) -> Path:
+        if self._source_root_provider is None:
+            # Read the same configured source/download location used by Boards
+            # and Libs; a copied settings path is normalized by this helper.
+            from main.core.board_catalog import _get_download_dir
+            source_root = _get_download_dir()
+        else:
+            source_root = self._source_root_provider()
+        root = Path(os.path.abspath(os.path.expanduser(os.path.expandvars(os.fspath(source_root))))) / "Cloud"
+        if _io_path(root).is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents):
+            raise CloudError("The cloud sketch location cannot use symbolic links.")
+        return root
+
+    def _owns_working_link(self, value: dict | None, sketch_id: str, *, scope: str | None = None) -> bool:
+        return bool(value and value["uid"] == self._uid and value["sketch_id"] == sketch_id
+                    and value.get("provider") == (scope if scope is not None else self._scope()))
+
+    def _copy_existing_working_sources(self, original: Path, destination: Path, sketch_id: str) -> None:
+        """Copy saved edits to the new location; retain the old project/journals."""
+        source = _io_path(original)
+        if source.is_symlink() or any(_io_path(parent).is_symlink() for parent in original.parents):
+            raise CloudError("An existing cloud folder cannot use symbolic links.")
+        old_link = read_project_link(original)
+        if not self._owns_working_link(old_link, sketch_id):
+            raise CloudError("The existing cloud copy no longer belongs to this account.")
+        source_identity = source.stat()
+        target = _io_path(destination)
+        target_identity = target.stat()
+        link_bytes = (source / LINK_NAME).read_bytes()
+        # Build caches, AI journals and unknown assets remain in the original
+        # copy. Do not traverse, move, rename, delete or recreate those trees.
+        def source_snapshot():
+            files: dict[str, bytes] = {}
+            seen = set()
+            total = 0
+            for path in source.iterdir():
+                if path.name.startswith(".") or path.suffix.lower() not in SOURCE_SUFFIXES:
+                    continue
+                name = _source_name(path.name)
+                if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
+                    raise CloudError("An existing cloud source cannot be safely copied to the new location.")
+                with path.open("rb") as stream:
+                    content = stream.read(MAX_FILE_BYTES + 1)
+                total += len(content)
+                if len(files) >= MAX_FILES or len(content) > MAX_FILE_BYTES or total > MAX_SOURCE_BYTES:
+                    raise CloudError("The existing cloud copy exceeds the source size limit.")
+                if name.casefold() in seen:
+                    raise CloudError("The existing cloud copy contains conflicting filenames.")
+                seen.add(name.casefold())
+                files[name] = content
+            return files
+
+        files = source_snapshot()
+        created: dict[str, tuple[bytes, tuple[int, int]]] = {}
+        try:
+            for name, content in files.items():
+                with (target / name).open("xb") as stream:
+                    identity = os.fstat(stream.fileno())
+                    created[name] = content, (identity.st_dev, identity.st_ino)
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            current_source = source.stat()
+            current_target = target.stat()
+            if (source.is_symlink() or target.is_symlink()
+                    or any(_io_path(parent).is_symlink() for parent in (*original.parents, *destination.parents))
+                    or (source_identity.st_dev, source_identity.st_ino) != (current_source.st_dev, current_source.st_ino)
+                    or (target_identity.st_dev, target_identity.st_ino) != (current_target.st_dev, current_target.st_ino)
+                    or (source / LINK_NAME).is_symlink() or (source / LINK_NAME).read_bytes() != link_bytes
+                    or source_snapshot() != files):
+                raise CloudError("The existing cloud sources changed while copying. The original folder was preserved.")
+            for name, (content, identity) in created.items():
+                path = target / name
+                current = path.stat()
+                if path.is_symlink() or (current.st_dev, current.st_ino) != identity or path.read_bytes() != content:
+                    raise CloudError("The new cloud folder changed while copying. Existing files were preserved.")
+            with (target / LINK_NAME).open("xb") as stream:
+                identity = os.fstat(stream.fileno())
+                created[LINK_NAME] = link_bytes, (identity.st_dev, identity.st_ino)
+                stream.write(link_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except (OSError, CloudError):
+            # Only remove byte-identical files created by this attempt. Never
+            # delete another process's replacement or any changed user content.
+            for name, (content, identity) in created.items():
+                try:
+                    path = target / name
+                    current = path.stat()
+                    if (not path.is_symlink() and (current.st_dev, current.st_ino) == identity
+                            and current.st_size == len(content) and path.read_bytes() == content):
+                        path.unlink()
+                except OSError:
+                    pass
+            raise
+
+    def working_directory(self, sketch_id: str, sketch_name: str | None = None) -> Path:
+        """Resolve an account-owned, readable Cloud folder without pulling edits."""
+        with self._lock:
+            if not self._uid:
+                raise CloudError("Sign in to your cloud account first.")
+            sketch_id = _safe_id(sketch_id)
+            scope = self._scope()
+            root = self._cloud_source_root()
+            io_root = _io_path(root)
+            io_root.mkdir(parents=True, exist_ok=True)
+            location_file = self._data_dir / "locations" / scope[:16] / self._account_folder() / (sketch_id + ".json")
+            previous: Path | None = None
+            preferred_name: str | None = None
+            try:
+                stored = _io_path(location_file)
+                if not stored.is_symlink() and stored.stat().st_size <= 16 * 1024:
+                    value = json.loads(stored.read_text(encoding="utf-8"))
+                    if (isinstance(value, dict) and value.get("schema") == 1
+                            and isinstance(value.get("path"), str) and isinstance(value.get("folder"), str)
+                            and value["folder"] == Path(value["folder"]).name
+                            and len(value["folder"].encode("utf-8")) <= 150):
+                        mapped = Path(value["path"])
+                        safe_mapped = (mapped.is_absolute() and not _io_path(mapped).is_symlink()
+                                       and not any(_io_path(parent).is_symlink() for parent in mapped.parents))
+                        if safe_mapped and self._owns_working_link(read_project_link(mapped), sketch_id, scope=scope):
+                            previous = mapped
+                            preferred_name = _working_folder_name(value["folder"])
+                            if mapped.parent == root:
+                                return mapped
+                        elif safe_mapped and mapped.parent == root and mapped.name == value["folder"]:
+                            # A reserved empty folder can be reused after a failed
+                            # first download; unknown material is never overwritten.
+                            if _io_path(mapped).is_dir() and not any(_io_path(mapped).iterdir()):
+                                return mapped
+            except (OSError, ValueError, TypeError):
+                pass
+            folders: dict[str, Path] = {}
+            for count, item in enumerate(io_root.iterdir()):
+                if count >= MAX_WORKING_FOLDERS:
+                    raise CloudError("The Cloud folder contains too many entries to inspect safely.")
+                candidate = root / item.name
+                folders[item.name.casefold()] = candidate
+                if item.is_dir() and not item.is_symlink() and self._owns_working_link(read_project_link(candidate), sketch_id, scope=scope):
+                    _io_path(location_file.parent).mkdir(parents=True, exist_ok=True)
+                    _atomic_json(location_file, {"schema": 1, "folder": candidate.name, "path": str(candidate)})
+                    return candidate
+            if previous is None:
+                legacy = self._data_dir / "projects" / scope[:16] / self._account_folder() / sketch_id
+                if self._owns_working_link(read_project_link(legacy), sketch_id, scope=scope):
+                    previous = legacy
+            if sketch_name is None:
+                old = read_project_link(previous) if previous is not None else None
+                sketch_name = old.get("name") if old else self._meta(sketch_id).get("name")
+            name = preferred_name or _working_folder_name(sketch_name)
+            for number in range(1, MAX_WORKING_FOLDERS + 2):
+                folder = name if number == 1 else f"{name} ({number})"
+                if folder.casefold() in folders:
+                    continue
+                destination = root / folder
+                try:
+                    _io_path(destination).mkdir(exist_ok=False)
+                except FileExistsError:
+                    continue
+                if previous is not None:
+                    try:
+                        self._copy_existing_working_sources(previous, destination, sketch_id)
+                    except (OSError, CloudError):
+                        try:
+                            _io_path(destination).rmdir()
+                        except OSError:
+                            pass
+                        raise CloudError("The existing cloud copy could not be transferred safely. "
+                                         "Its original folder and saved edits were preserved; try opening it again.") from None
+                _io_path(location_file.parent).mkdir(parents=True, exist_ok=True)
+                _atomic_json(location_file, {"schema": 1, "folder": folder, "path": str(destination)})
+                return destination
+            raise CloudError("A safe cloud sketch folder could not be created.")
 
     def _account_folder(self) -> str:
         # Short, deterministic names avoid exceeding traditional Windows path
@@ -778,7 +964,7 @@ class CloudSketchService:
             if type(wanted) is not int or "r" + str(wanted) not in record["versions"]:
                 raise CloudError("The requested cloud revision is no longer available.")
             sources = _validate_snapshot(record["versions"]["r" + str(wanted)].get("files"))
-            root = Path(destination) if destination is not None else self.working_directory(sketch_id)
+            root = Path(destination) if destination is not None else self.working_directory(sketch_id, record["meta"]["name"])
             io_root = _io_path(root)
             if io_root.is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents):
                 raise CloudError("A cloud working folder cannot use symbolic links.")
