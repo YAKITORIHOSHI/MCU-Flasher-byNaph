@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QCoreApplication, QEvent, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from main.core import config
@@ -255,8 +255,16 @@ class PerformanceChecks(unittest.TestCase):
                     widget.clear()
                     widget.set_timestamp_enabled(True)
                     self.assertEqual(widget.toPlainText(), "")
+                    flush_timer = getattr(widget, "_flush_timer", None)
+                    if flush_timer is not None:
+                        flush_timer.stop()
+                    widget.close()
                     widget.deleteLater()
-        APP.processEvents()
+                    # Retire each large QTextDocument before building the next
+                    # profile/widget fixture; otherwise Qt keeps six stress
+                    # documents alive until the final processEvents call.
+                    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                    APP.processEvents()
 
     def test_serial_ansi_clear_does_not_resurrect_history(self):
         from main.qt.serial_panel import SerialOutputView
