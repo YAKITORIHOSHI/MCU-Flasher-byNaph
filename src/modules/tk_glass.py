@@ -135,6 +135,7 @@ class ResponsivePanes:
         self.pane, self.left, self.right = pane, left, right
         self._pending = None
         self._vertical = None
+        self._minimum_sizes = None
         pane.bind("<Configure>", self._schedule, add="+")
         pane.bind("<Destroy>", self._cancel, add="+")
 
@@ -152,13 +153,30 @@ class ResponsivePanes:
         pane = self.pane
         scale = ui_scale(pane)
         vertical = pane.winfo_width() < round(660 * scale)
-        if vertical == self._vertical:
-            return
+        changed = vertical != self._vertical
         self._vertical = vertical
-        pane.configure(orient=tk.VERTICAL if vertical else tk.HORIZONTAL)
-        pane.paneconfigure(self.left, minsize=round((70 if vertical else 180) * scale))
-        pane.paneconfigure(self.right, minsize=round((100 if vertical else 300) * scale))
-        pane.sash_place(0, round(pane.winfo_width() * .35), round(pane.winfo_height() * .35))
+        if changed:
+            pane.configure(orient=tk.VERTICAL if vertical else tk.HORIZONTAL)
+        extent = pane.winfo_height() if vertical else pane.winfo_width()
+        available = max(2, extent - pane.winfo_pixels(pane.cget("sashwidth"))
+                        - 2 * pane.winfo_pixels(pane.cget("borderwidth")))
+        left = round((70 if vertical else 180) * scale)
+        right = round((100 if vertical else 300) * scale)
+        if left + right > available:
+            # Fixed scaled minima can consume every pixel before the details
+            # pane is mapped on a short monitor. Both scrollable panes share
+            # the actual space; preserve their widgets, fonts and selection.
+            left = max(1, min(available - 1, round(available * left / (left + right))))
+            right = available - left
+        minima = (left, right)
+        if minima != self._minimum_sizes:
+            pane.paneconfigure(self.left, minsize=left)
+            pane.paneconfigure(self.right, minsize=right)
+            self._minimum_sizes = minima
+        position = round(available * .35) if changed else pane.sash_coord(0)[1 if vertical else 0]
+        fitted = max(left, min(position, available - right))
+        if changed or fitted != position:
+            pane.sash_place(0, 0 if vertical else fitted, fitted if vertical else 0)
 
 
 class ScrollBody(tk.Frame):

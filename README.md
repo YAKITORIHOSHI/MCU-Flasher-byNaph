@@ -712,6 +712,10 @@ to the Ubuntu account's usual folders. A project terminal whose renderer
 stops closes its own Bash session and offers a new session without replaying
 commands.
 
+On short screens, the board/library downloader now fits both list and details
+panes to the available height at the selected font scale. Resizing preserves
+the selected item, its details and a valid manually adjusted divider.
+
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only
 installations enter Bootstrap automatically on their next launch. `--repair`

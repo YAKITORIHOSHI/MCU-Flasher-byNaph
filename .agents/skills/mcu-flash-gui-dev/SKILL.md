@@ -361,6 +361,16 @@ For explicitly requested assistant delegation, use the local
   only its own PTY; retain the tab and never replay input or start a replacement
   automatically. Reconcile the supervisor's original Popen handle after
   descendant reaping so normal signal shutdown does not report a live child.
+- Linux CI cloud/developer fixtures use `--no-finalize` only after their owned
+  widgets and service workers retire, matching the existing WebEngine/runtime
+  probes. Keep failed assertions and surviving-worker checks as failures. This
+  avoids the observed Python 3.11/PySide mandatory interpreter-GC abort; it is
+  a fixture teardown limitation, not evidence that the binding defect is fixed.
+- Recalculate Tk list/details pane minima from the available native pixels even
+  when orientation stays unchanged. Preserve valid user sash positions and
+  selected-item/detail state. Bound responsive board fixtures to a 1024x768
+  work area so a larger verification monitor cannot hide high-font-scale
+  details-pane collapse; keep Qt and Tk sizing independent.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow

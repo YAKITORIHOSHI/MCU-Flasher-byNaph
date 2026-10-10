@@ -5,6 +5,7 @@ import argparse
 import copy
 import os
 import sys
+import threading
 import time
 import unittest
 import warnings
@@ -637,10 +638,28 @@ class PortalChecks(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--render-dir", type=Path)
+    parser.add_argument("--no-finalize", action="store_true")
     args, rest = parser.parse_known_args()
     if args.render_dir:
         RENDER_DIR = args.render_dir.resolve()
         if not RENDER_DIR.is_relative_to(ROOT / "temp"):
             parser.error("Captures must stay in the project's temp folder.")
         RENDER_DIR.mkdir(parents=True, exist_ok=True)
-    unittest.main(argv=[sys.argv[0]] + rest)
+    checks = unittest.main(argv=[sys.argv[0]] + rest, exit=False)
+    exit_code = 0 if checks.result.wasSuccessful() else 1
+    for worker in threading.enumerate():
+        if worker.name in ("developer-service", "MCU_CloudSketch"):
+            worker.join(3)
+            if worker.is_alive():
+                print("Developer UI fixture worker survived owned cleanup.", file=sys.stderr)
+                exit_code = 1
+    if args.no_finalize:
+        # Match the isolated runtime probes after their owned-window cleanup;
+        # Linux Qt wrapper finalization is separate from the UI assertions.
+        from PySide6.QtCore import QCoreApplication, QEvent
+        COLLECTOR.stop()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+    raise SystemExit(exit_code)

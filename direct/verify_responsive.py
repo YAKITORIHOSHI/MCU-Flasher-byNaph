@@ -789,6 +789,48 @@ class TkResponsiveChecks(DownloaderChecks):
         with patch.object(tk, 'Tk', side_effect=scaled_root):
             super().setUp()
 
+    def test_short_panes_preserve_selection_and_valid_user_sash(self):
+        import tkinter as tk
+        from src.modules.tk_glass import GlassCard, ResponsivePanes, ScrollBody, ui_scale
+        from src.modules.arduino_lib_req import Theme
+        dialog = tk.Toplevel(self.root)
+        self.addCleanup(dialog.destroy)
+        scale = ui_scale(dialog)
+        width = min(round(480 * scale), 1024 - 48, self.root.winfo_screenwidth() - 48)
+        tall = min(round(300 * scale), self.root.winfo_screenheight() - 80)
+        short = min(round(120 * scale), tall - 20)
+        pane = tk.PanedWindow(dialog, orient=tk.HORIZONTAL, sashwidth=2, bd=0)
+        pane.pack(fill='both', expand=True)
+        left = GlassCard(pane, Theme, padding=7, expand=True)
+        right = GlassCard(pane, Theme, padding=9, expand=True)
+        pane.add(left)
+        pane.add(right)
+        items = tk.Listbox(left.body, font=('Consolas', 10), exportselection=False)
+        items.pack(fill='both', expand=True)
+        items.insert('end', 'Selected board', 'Other board')
+        items.selection_set(0)
+        details = ScrollBody(right.body, Theme.BG_DARKEST)
+        details.pack(fill='both', expand=True)
+        value = tk.StringVar(value='Selected board details')
+        entry = tk.Entry(details.body, textvariable=value, font=('Consolas', 10))
+        entry.pack(fill='x')
+        reflow = ResponsivePanes(pane, left, right)
+        dialog.geometry(f'{width}x{tall}+20+20')
+        self.pump()
+        self.assertTrue(reflow._vertical)
+        pane.sash_place(0, 0, round(tall * .45))
+        user_position = pane.sash_coord(0)[1]
+        dialog.geometry(f'{width}x{tall - round(12 * scale)}+20+20')
+        self.pump()
+        self.assertLessEqual(abs(pane.sash_coord(0)[1] - user_position), 1)
+        for height in (short, tall, short):
+            dialog.geometry(f'{width}x{height}+20+20')
+            self.pump()
+            self.assertTrue(details.canvas.winfo_ismapped(), 'Resizing must retain a visible details viewport')
+            self.assertGreater(details.canvas.winfo_height(), 20)
+            self.assertEqual(items.curselection(), (0,))
+            self.assertEqual(value.get(), 'Selected board details')
+
     def test_header_and_panes_at_native_font_scales(self):
         app = self.app
         from src.modules.tk_glass import ui_scale
@@ -843,8 +885,11 @@ class TkResponsiveChecks(DownloaderChecks):
         app = self.app
         from src.modules.tk_glass import ui_scale
         scale = ui_scale(self.root)
-        width = min(round(480 * scale), self.root.winfo_screenwidth() - 48)
-        height = min(round(510 * scale), self.root.winfo_screenheight() - 80)
+        # Bound this case to a 1024x768 runner even on a larger local monitor.
+        # Native Tk fonts stay scaled while header/footer chrome consumes the
+        # same short work area that exposed the unmapped details pane in CI.
+        width = min(round(480 * scale), 1024 - 48, self.root.winfo_screenwidth() - 48)
+        height = min(round(510 * scale), 768 - 80, self.root.winfo_screenheight() - 80)
         board = dict(name='ESP8266 device core', package='esp8266', architecture='esp8266', maintainer='Community',
                      category='Device support', boards=['NodeMCU 1.0 (ESP-12E Module)', 'NodeMCU 0.9 (ESP-12 Module)'],
                      versions=[dict(version='3.1.2', url='https://fixture.invalid/esp8266.zip', size=12000)])

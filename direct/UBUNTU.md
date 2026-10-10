@@ -24,8 +24,9 @@ Python 3.10 or newer,
 four CPU cores, and enough space for native board toolchains are
 required. Ubuntu 22.04, 24.04 and 26.04 are the compatibility workflow targets.
 The first-launch job uses each release's system Python, including Python 3.14
-on 26.04. Native 26.04 compatibility still requires a completed CI run; the
-existing local native verification covers 24.04.
+on 26.04. Check the completed compatibility run for the revision being used;
+first-launch, runtime and compile results are separate jobs. CI uses X11/Xvfb
+and does not replace on-device Wayland, keyring or USB checks.
 
 Open `MCU_Flasher`, or run `./MCU_Flasher`. Bootstrap detects missing desktop
 dependencies, opens a setup terminal and asks for Ubuntu administrator

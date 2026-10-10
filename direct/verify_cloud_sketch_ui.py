@@ -785,8 +785,26 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--render-dir", type=Path, default=RENDER_DIR)
+    parser.add_argument("--no-finalize", action="store_true")
     args, remaining = parser.parse_known_args()
     RENDER_DIR = args.render_dir.resolve()
     if not RENDER_DIR.is_relative_to(ROOT / "temp"):
         parser.error("Cloud UI captures must remain under this checkout's temp directory")
-    unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)
+    checks = unittest.main(argv=[sys.argv[0], *remaining], verbosity=2, exit=False)
+    exit_code = 0 if checks.result.wasSuccessful() else 1
+    for worker in threading.enumerate():
+        if worker.name == "MCU_CloudSketch":
+            worker.join(3)
+            if worker.is_alive():
+                print("Cloud UI fixture worker survived owned cleanup.", file=sys.stderr)
+                exit_code = 1
+    if args.no_finalize:
+        # Owned widgets and workers have already been retired by fixture
+        # cleanups. Some Linux PySide/Python builds fail only while destroying
+        # wrappers during interpreter finalization; keep that outside the probe.
+        COLLECTOR.stop()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+    raise SystemExit(exit_code)

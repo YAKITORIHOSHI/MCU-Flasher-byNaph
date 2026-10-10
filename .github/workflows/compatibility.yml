@@ -130,9 +130,9 @@ jobs:
           .venv-linux/bin/python -B direct/verify_projects.py
           .venv-linux/bin/python -B direct/verify_cloud_configuration.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
-          .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py
+          .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py --no-finalize
           .venv-linux/bin/python -B direct/verify_owner_ticket_service.py
-          .venv-linux/bin/python -B direct/verify_owner_tickets.py --render-dir temp/audit/compatibility/developer
+          .venv-linux/bin/python -B direct/verify_owner_tickets.py --render-dir temp/audit/compatibility/developer --no-finalize
           .venv-linux/bin/python -B direct/verify_application_guard.py
           .venv-linux/bin/python -B direct/verify_actions.py
           .venv-linux/bin/python -B direct/verify_cursor.py
