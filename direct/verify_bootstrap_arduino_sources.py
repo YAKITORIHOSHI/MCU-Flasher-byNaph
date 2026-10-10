@@ -71,6 +71,16 @@ class SourceChecks(unittest.TestCase):
         self.archives = {self.archive}
         stack = ExitStack()
         self.addCleanup(stack.close)
+        # Restrict this test override to the fabricated source-receipt namespace.
+        production_allowed = selection.board_allowed
+        production_ids = selection.allowed_board_ids
+        fixture_key = selection.association_key(self.receipt)
+        fixture_ids = frozenset(("absent", "ambig", "native"))
+        stack.enter_context(patch.object(selection, "allowed_board_ids", side_effect=lambda metadata:
+            fixture_ids if selection.association_key(metadata) == fixture_key else production_ids(metadata)))
+        stack.enter_context(patch.object(selection, "board_allowed", side_effect=lambda metadata, identifier:
+            identifier in fixture_ids if selection.association_key(metadata) == fixture_key
+            else production_allowed(metadata, identifier)))
         stack.enter_context(patch.object(selection, "load_preferences",
                                          side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         stack.enter_context(patch.object(arduino_cli_support, "load_preferences",

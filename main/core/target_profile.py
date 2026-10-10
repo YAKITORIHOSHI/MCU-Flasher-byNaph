@@ -10,6 +10,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
     if info and info.get("backend") == "arduino-cli":
+        from src.modules.arduino_board_selection import row_allowed
+        if not row_allowed(info):
+            return ("Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. "
+                    "Select an exact PlatformIO definition for this board.")
         from src.modules.arduino_cli_support import source_target_proof, unsupported_proof, valid_fqbn
         if not (source_target_proof(info) or unsupported_proof(info)) or not valid_fqbn(info.get("arduino_fqbn")) or not isinstance(info.get("arduino_cli"), Mapping):
             detail = info.get("fallback_notice")

@@ -167,7 +167,7 @@ def prepare_sources(core, sources, *, emit, jobs=None):
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Arduino source preparation belongs to the separate bootstrap worker")
     from main.core import board_catalog
-    from src.modules.arduino_board_selection import board_selected, load_preferences
+    from src.modules.arduino_board_selection import board_selected, disabled_reason, load_preferences
     from src.modules.arduino_cli_support import (load_prepared_targets, prepared_target_index,
         prepared_target_for_record, source_declaration_proof, prepare_source_boards, publish_prepared_targets,
         planned_source_target_index, source_namespace_target_for_record)
@@ -256,7 +256,7 @@ def prepare_sources(core, sources, *, emit, jobs=None):
                             affected.add(identity)
                             affected_directories.add(Path(source_file).parent)
                         row.update(status="unavailable", backend="", reason=(receipt_reason if not metadata else
-                            "Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support."))
+                            disabled_reason(metadata, row["arduino_id"])))
                         continue
                     row.update(prepared)
                     row.update(status="ready", reason="Exact prepared Arduino source target certificates reused.")
@@ -272,7 +272,7 @@ def prepare_sources(core, sources, *, emit, jobs=None):
                     row["reason"] = receipt_reason
                     continue
                 if not board_selected(metadata, row["arduino_id"], cli_preferences):
-                    row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+                    row.update(status="unavailable", backend="", reason=disabled_reason(metadata, row["arduino_id"]))
                     for key in ("arduino_backend_role", "arduino_source_proof", "arduino_fqbn"):
                         row.pop(key, None)
                     continue

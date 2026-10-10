@@ -49,6 +49,17 @@ esp32c3.build.board=ESP32C3_DEV
         self.metadata = {"package": "esp32", "architecture": "esp32", "version": "3.3.11",
                          "index_url": "https://example.invalid/verified-source-index.json"}
         self.cli_preferences = {selection.association_key(self.metadata): ["esp32s3", "esp32c3"]}
+        # Generic source/certificate fixtures retain their synthetic index;
+        # this does not authorize CLI for a real Espressif board namespace.
+        production_allowed = selection.board_allowed
+        production_ids = selection.allowed_board_ids
+        fixture_key = selection.association_key(self.metadata)
+        fixture_ids = frozenset(("esp32s3", "esp32c3"))
+        self.stack.enter_context(patch.object(selection, "allowed_board_ids", side_effect=lambda metadata:
+            fixture_ids if selection.association_key(metadata) == fixture_key else production_ids(metadata)))
+        self.stack.enter_context(patch.object(selection, "board_allowed", side_effect=lambda metadata, identifier:
+            identifier in fixture_ids if selection.association_key(metadata) == fixture_key
+            else production_allowed(metadata, identifier)))
         self.stack.enter_context(patch.object(selection, "load_preferences",
                                              side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         self.stack.enter_context(patch.object(support, "load_preferences",

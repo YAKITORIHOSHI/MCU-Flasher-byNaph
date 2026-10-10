@@ -232,7 +232,21 @@ class CoverageChecks(unittest.TestCase):
         failure = self.primary_intention()
         self.catalog.remove(self.s3_second)
         self.catalog.remove(self.s3_first)
-        row = self.row(self.report(source_preparation={"boards": [failure]}), "esp32s3")
+        metadata = {"package": "esp32", "architecture": "esp32",
+                    "index_url": "https://fixture.invalid/exact-source.json"}
+        fixture_key = selection.association_key(metadata)
+        production_allowed = selection.board_allowed
+        production_ids = selection.allowed_board_ids
+        self.assertFalse(selection.board_selected(metadata, "esp32s3"))
+        # Exercise failed-plan reporting only for this exact fabricated source
+        # namespace, leaving the production denial above and sibling cases intact.
+        with patch.object(selection, "board_allowed", side_effect=lambda value, identifier:
+                identifier == "esp32s3" if selection.association_key(value) == fixture_key
+                else production_allowed(value, identifier)), \
+                patch.object(selection, "allowed_board_ids", side_effect=lambda value:
+                frozenset(("esp32s3",)) if selection.association_key(value) == fixture_key
+                else production_ids(value)):
+            row = self.row(self.report(source_preparation={"boards": [failure]}), "esp32s3")
         self.assertEqual(row["status"], "unavailable")
         self.assertEqual(row["backend"], "arduino-cli")
         self.assertEqual(row["reason"], failure["reason"])

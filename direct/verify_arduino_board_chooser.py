@@ -52,8 +52,24 @@ class BoardChooserChecks(unittest.TestCase):
         self.app._post_ui = self.app._tasks.post
         self.metadata = {'name': 'Vendor sensor boards', 'package': 'fixture', 'architecture': 'avr',
                          'index_url': 'https://example.invalid/package.json', 'version': '1.2.3'}
+        # These UI fixtures keep duplicate-name coverage independent of the
+        # separately verified official vendor/architecture allowlist.
+        self.allowed = {'alpha', 'beta'}
+        def eligible(metadata):
+            return (frozenset(self.allowed) if metadata.get('package') == 'fixture'
+                    and metadata.get('architecture') == 'avr' else frozenset())
+        self.package_policy = patch.object(policy, 'allowed_board_ids', side_effect=eligible, create=True)
+        self.board_policy = patch.object(policy, 'board_allowed',
+                                         side_effect=lambda metadata, identifier: identifier in eligible(metadata), create=True)
+        self.package_policy.start()
+        self.board_policy.start()
+        self.addCleanup(self.package_policy.stop)
+        self.addCleanup(self.board_policy.stop)
+        # Grouped downloader items keep index provenance on each version.
+        item = {key: value for key, value in self.metadata.items() if key not in ('index_url', 'version')}
+        item['versions'] = [{key: self.metadata[key] for key in ('index_url', 'package', 'architecture', 'version')}]
         self.tab = SimpleNamespace(listbox=SimpleNamespace(curselection=lambda: (0,)),
-                                   filtered_names=['boards'], all_items={'boards': self.metadata},
+                                   filtered_names=['boards'], all_items={'boards': item},
                                    version_var=tk.StringVar(self.root, value='1.2.3'))
         self.settings = {'other': 'preserve', policy.FIELD: {policy.association_key(self.metadata): ['beta']}}
         self.load = Mock(side_effect=lambda: copy.deepcopy(self.settings))
@@ -132,6 +148,32 @@ class BoardChooserChecks(unittest.TestCase):
         self.pump()
         self.save.assert_not_called()
 
+    def test_save_uses_selected_version_index_namespace(self):
+        item = self.tab.all_items['boards']
+        self.assertNotIn('index_url', item)
+        self.assertEqual(item['versions'][0]['index_url'], self.metadata['index_url'])
+        dialog = self.open()
+        dialog._cli_save.invoke()
+        self.pump(lambda: not dialog.winfo_exists())
+        self.save.assert_called_once()
+        stored = self.save.call_args.args[0][policy.FIELD]
+        self.assertEqual(stored[policy.association_key(self.metadata)], ['beta'])
+        self.assertNotIn(policy.association_key(item), stored)
+
+    def test_save_rejects_changed_index_or_missing_selected_version(self):
+        dialog = self.open()
+        item = self.tab.all_items['boards']
+        item['versions'][0]['index_url'] = 'https://other.invalid/package.json'
+        dialog._cli_save.invoke()
+        self.save.assert_not_called()
+        self.assertIn('reopen this chooser', dialog._cli_status.cget('text'))
+        item['versions'].clear()
+        dialog._cli_save.invoke()
+        self.save.assert_not_called()
+        self.assertIn('reopen this chooser', dialog._cli_status.cget('text'))
+        dialog.destroy()
+        self.pump()
+
     def test_scan_and_persistence_run_off_tk_thread(self):
         gui = threading.get_ident()
         threads = []
@@ -209,6 +251,70 @@ class BoardChooserChecks(unittest.TestCase):
         self.assertFalse(any(isinstance(child, tk.Toplevel) for child in self.root.winfo_children()))
         self.load.assert_not_called()
         self.save.assert_not_called()
+
+    def test_disallowed_package_never_opens_dialog_or_reads_settings(self):
+        metadata = dict(self.metadata, package='other', name='Arduino UNO Q')
+        result = chooser.open_board_chooser(self.app, self.tab, metadata, self.folder,
+                       theme=browser.Theme, button=browser.make_flat_button,
+                       load_settings=self.load, save_settings=self.save)
+        self.assertIsNone(result)
+        self.assertFalse(any(isinstance(child, tk.Toplevel) for child in self.root.winfo_children()))
+        self.load.assert_not_called()
+        self.save.assert_not_called()
+        self.assertIn('only for Arduino UNO Q', self.app._set_status.call_args.args[0])
+
+    def test_stale_other_board_choices_and_matching_names_cannot_enable_cli(self):
+        with (self.folder / 'boards.txt').open('a', encoding='utf-8') as stream:
+            stream.write('excluded.name=Sensor board\n')
+        self.settings[policy.FIELD][policy.association_key(self.metadata)] += ['excluded', 'absent']
+        dialog = self.open()
+        self.assertEqual(dialog._cli_chosen, {'beta'})
+        self.assertEqual(len(dialog._cli_tree.get_children()), 2)
+        self.assertFalse(any('[excluded]' in dialog._cli_tree.item(row, 'values')[1]
+                             for row in dialog._cli_tree.get_children()))
+        dialog._cli_save.invoke()
+        self.pump(lambda: not dialog.winfo_exists())
+        stored = self.save.call_args.args[0][policy.FIELD][policy.association_key(self.metadata)]
+        self.assertEqual(stored, ['beta'])
+
+    def test_toggle_and_save_recheck_eligibility_after_dialog_loads(self):
+        dialog = self.open()
+        first = dialog._cli_tree.get_children()[0]
+        self.allowed = {'beta'}
+        dialog._cli_toggle(first)
+        self.assertEqual(dialog._cli_chosen, {'beta'})
+        self.allowed.clear()
+        dialog._cli_save.invoke()
+        self.pump(lambda: not dialog.winfo_exists())
+        stored = self.save.call_args.args[0][policy.FIELD]
+        self.assertNotIn(policy.association_key(self.metadata), stored)
+
+    def test_downloader_callback_rejects_other_package_before_chooser(self):
+        self.tab.all_items['boards'] = dict(self.metadata, package='other', versions=[{'version': '1.2.3'}])
+        self.app._download_dir = str(self.folder)
+        with patch.object(chooser, 'open_board_chooser') as open_dialog:
+            self.app._edit_arduino_cli_boards(self.tab)
+        open_dialog.assert_not_called()
+        self.load.assert_not_called()
+        self.save.assert_not_called()
+
+    def test_downloader_button_tracks_allowed_package_busy_and_missing_version(self):
+        self.tab.arduino_cli_btn = Mock()
+        self.tab.lbl_available = Mock()
+        self.tab.download_btn = Mock()
+        self.app._active_download_tab = None
+        eligible = dict(self.metadata, versions=[{'version': '1.2.3'}])
+        other = dict(eligible, package='other', name='Arduino UNO Q')
+        for metadata, busy, version, state in ((eligible, False, '1.2.3', 'normal'),
+                                              (other, False, '1.2.3', 'disabled'),
+                                              (eligible, True, '1.2.3', 'disabled'),
+                                              (eligible, False, 'absent', 'disabled')):
+            self.app._busy = busy
+            self.app._render_version_status(self.tab, 'boards', metadata, version, None)
+            self.assertEqual(self.tab.arduino_cli_btn.configure.call_args.kwargs['state'], state)
+        self.tab.listbox.curselection = lambda: ()
+        self.app._update_version_status(self.tab)
+        self.assertEqual(self.tab.arduino_cli_btn.configure.call_args.kwargs['state'], 'disabled')
 
 
 if __name__ == '__main__':

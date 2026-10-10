@@ -3407,7 +3407,8 @@ class ArduinoBrowser:
         tab.arduino_cli_btn = make_flat_button(prepare_row, "Choose Arduino CLI boards…",
             lambda: self._edit_arduino_cli_boards(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
         tab.arduino_cli_btn.pack(anchor="w", pady=(5, 0))
-        hint = tk.Label(dc, text="PlatformIO is used first. Arduino CLI is prepared only for boards you choose when no exact PlatformIO target is available.",
+        tab.arduino_cli_btn.configure(state="disabled")
+        hint = tk.Label(dc, text="Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. All other boards use PlatformIO.",
                         font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         hint.pack(fill="x", pady=(2, 4))
         tab._wrapping_labels.append(hint)
@@ -3472,6 +3473,10 @@ class ArduinoBrowser:
         if version is None:
             return
         metadata = {**item, **version}
+        from src.modules.arduino_board_selection import allowed_board_ids
+        if not allowed_board_ids(metadata):
+            self._set_status('Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. Use PlatformIO for other boards.')
+            return
         archive = _archive_filename(metadata.get('url', ''), metadata.get('archiveFileName', ''))
         folder = os.path.join(self._download_dir, 'Boards', _get_folder_name(archive))
         from src.modules.arduino_board_chooser import open_board_chooser
@@ -3714,6 +3719,8 @@ class ArduinoBrowser:
         }
 
     def _update_version_status(self, tab: BrowseTab):
+        if hasattr(tab, "arduino_cli_btn"):
+            tab.arduino_cli_btn.configure(state="disabled")
         sel = tab.listbox.curselection()
         if not sel:
             return
@@ -3734,6 +3741,11 @@ class ArduinoBrowser:
 
         if not target_version:
             return
+
+        if hasattr(tab, "arduino_cli_btn"):
+            from src.modules.arduino_board_selection import allowed_board_ids
+            tab.arduino_cli_btn.configure(state="normal" if not self._busy and
+                allowed_board_ids({**item, **target_version}) else "disabled")
 
         size_val = target_version.get("size", 0)
         try:
@@ -3768,6 +3780,11 @@ class ArduinoBrowser:
         tab._version_worker.submit((tab, name, item, folder, tuple(getattr(self, "_installed_items", []))), completed)
 
     def _render_version_status(self, tab, name, item, ver, installed_info):
+        if hasattr(tab, "arduino_cli_btn"):
+            from src.modules.arduino_board_selection import allowed_board_ids
+            version = next((entry for entry in item.get("versions", []) if entry.get("version") == ver), {})
+            tab.arduino_cli_btn.configure(state="normal" if not self._busy and version and
+                allowed_board_ids({**item, **version}) else "disabled")
         if hasattr(tab, "prepare_btn"):
             available = bool(installed_info and ver in installed_info["installed_versions"])
             tab.prepare_btn.configure(state="normal" if available and not self._busy else "disabled")

@@ -18,8 +18,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from src.modules.arduino_board_selection import (board_selected, load_preferences,
-    selection_for_row, selection_identity)
+from src.modules.arduino_board_selection import (board_selected, disabled_reason, load_preferences,
+    row_allowed, selection_for_row, selection_identity)
 
 TARGETS_FILE = ".mcu-index-targets.json"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
@@ -143,7 +143,7 @@ def prepare_source_boards(core, directory, metadata, rows, *, emit, jobs=None):
                 or row.get("status") == "ready" and row.get("backend") == "platformio"):
             continue
         if not board_selected(metadata, row.get("arduino_id"), preferences):
-            row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+            row.update(status="unavailable", backend="", reason=disabled_reason(metadata, row.get("arduino_id")))
             for key in ("arduino_cli", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection"):
                 row.pop(key, None)
             continue
@@ -394,7 +394,7 @@ def prepare_unsupported_boards(core, directory, metadata, rows, *, emit, jobs=No
                 or row.get("status") == "ready" and row.get("backend") == "platformio"):
             continue
         if not board_selected(metadata, row.get("arduino_id"), preferences):
-            row.update(status="unavailable", backend="", reason="Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support.")
+            row.update(status="unavailable", backend="", reason=disabled_reason(metadata, row.get("arduino_id")))
             for key in ("arduino_cli", "arduino_backend_role", "arduino_source_proof", "arduino_cli_selection"):
                 row.pop(key, None)
             continue
@@ -887,6 +887,8 @@ def runtime_command(info, *, core=None):
     core = _core_directory(core)
     preferences = load_preferences(force_read=True)
     if not selection_for_row(info, preferences):
+        if not row_allowed(info):
+            raise RuntimeError(disabled_reason({}, ""))
         raise RuntimeError("Arduino CLI is disabled for this board. Use Choose Arduino CLI boards in Libraries & boards, then prepare board support again")
     from main.core.board_catalog import _load_platformio_board_catalog
     catalog = _load_platformio_board_catalog(core, force_read=True)

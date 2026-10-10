@@ -59,6 +59,19 @@ class CustomIndexChecks(unittest.TestCase):
         self.records = board_catalog._parse_downloaded_arduino_board_files(self.archive, force_read=True)
         self.cli_preferences = {selection.association_key(metadata): ["future"] for metadata in
             (CUSTOM, dict(CUSTOM, package="arduino", architecture="avr"))}
+        # Only the fabricated association namespaces may bypass real board policy.
+        production_allowed = selection.board_allowed
+        production_ids = selection.allowed_board_ids
+        fixture_keys = frozenset(self.cli_preferences)
+        fixture_ids = frozenset(("future",))
+        for name, callback in (
+                ("allowed_board_ids", lambda metadata: fixture_ids
+                 if selection.association_key(metadata) in fixture_keys else production_ids(metadata)),
+                ("board_allowed", lambda metadata, identifier: identifier in fixture_ids
+                 if selection.association_key(metadata) in fixture_keys else production_allowed(metadata, identifier))):
+            policy = patch.object(selection, name, side_effect=callback)
+            policy.start()
+            self.addCleanup(policy.stop)
         for module in (selection, arduino_cli_support):
             preference_reader = patch.object(module, "load_preferences",
                                              side_effect=lambda **_kwargs: dict(self.cli_preferences))

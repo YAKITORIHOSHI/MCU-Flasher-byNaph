@@ -53,6 +53,18 @@ class FallbackChecks(unittest.TestCase):
         self.metadata = {"package": "vendor", "architecture": "newarch", "version": "2.0.0",
                          "index_url": "https://example.invalid/vendor_index.json"}
         self.cli_preferences = {selection.association_key(self.metadata): ["future", "future2", "second"]}
+        # These exact synthetic namespaces exercise generic certificate and
+        # upload boundaries independently of the production board allowlist.
+        self.production_allowed = selection.board_allowed
+        self.production_ids = selection.allowed_board_ids
+        fixture_keys = {selection.association_key(metadata) for metadata in (
+            self.metadata, dict(self.metadata, index_url="https://another.invalid/vendor_index.json"))}
+        fixture_ids = frozenset(("future", "future2", "second"))
+        self.stack.enter_context(patch.object(selection, "allowed_board_ids", side_effect=lambda metadata:
+            fixture_ids if selection.association_key(metadata) in fixture_keys else self.production_ids(metadata)))
+        self.stack.enter_context(patch.object(selection, "board_allowed", side_effect=lambda metadata, identifier:
+            identifier in fixture_ids if selection.association_key(metadata) in fixture_keys
+            else self.production_allowed(metadata, identifier)))
         self.stack.enter_context(patch.object(selection, "load_preferences",
                                              side_effect=lambda **_kwargs: dict(self.cli_preferences)))
         self.stack.enter_context(patch.object(support, "load_preferences",
@@ -99,6 +111,23 @@ class FallbackChecks(unittest.TestCase):
         self.assertNotEqual(rows[0]["status"], "ready")
         self.runner.assert_not_called()
         self.assertFalse((self.core / "arduino-cli/arduino-cli.yaml").exists())
+
+    def test_production_policy_rejects_legacy_selected_future_board(self):
+        api = self.api()
+        self.assertTrue(selection.board_selected(self.metadata, "future", self.cli_preferences))
+        self.runner.reset_mock()
+        with patch.object(selection, "board_allowed", side_effect=self.production_allowed), \
+                patch.object(selection, "allowed_board_ids", side_effect=self.production_ids):
+            self.assertFalse(selection.board_selected(self.metadata, "future", self.cli_preferences))
+            rows = support.prepare_unsupported_boards(
+                self.core, self.download, self.metadata, [self.row], emit=self.emit)
+            self.assertNotEqual(rows[0]["status"], "ready")
+            self.runner.assert_not_called()
+            with self.assertRaises(RuntimeError):
+                support.runtime_command(api._resolve_board_info())
+            self.assertFalse(arduino_backend.run_arduino_operation(api, upload=True))
+        self.assertEqual(self.operations, [])
+        api._stop_serial_monitor.assert_not_called()
 
     def test_one_selected_board_does_not_prepare_its_siblings(self):
         self.cli_preferences[selection.association_key(self.metadata)] = ["future"]

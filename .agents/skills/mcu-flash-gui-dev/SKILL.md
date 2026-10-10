@@ -207,6 +207,17 @@ For explicitly requested assistant delegation, use the local
 
 ## Platform Scope
 
+- Arduino CLI is restricted to `arduino:zephyr:unoq` (Arduino UNO Q) and
+  `rp2040:rp2040:rpipico2` (Raspberry Pi Pico 2 / RP2350), with explicit local
+  opt-in. Enforce the central `arduino_board_selection` allowlist in downloader
+  controls, preparation, certificates, catalog routing and runtime; stale choices
+  cannot revive other boards. Match exact core/board IDs, never display names or
+  broad MCU families. Ventuno Q, Pico, Pico 2 W and other RP2350 boards stay on
+  PlatformIO. Include policy identity in preference/catalog fingerprints and
+  explain excluded targets without directing users to an impossible CLI choice.
+  Verify official IDs and stale certificates with isolated selection/fallback
+  fixtures; use narrowly scoped policy overrides only for fabricated test targets.
+
 - Apply the saved Offline Mode at the Linux root entry point before the first
   runtime activation; its audit hook is immutable within the process. Keep the
   existing Windows activation call unchanged. Verify both root entry paths and

@@ -65,7 +65,8 @@ def read_board_choices(folder, cancel=None):
 
 def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settings, save_settings):
     """Create one explicit dialog; every disk read/write stays in a worker."""
-    from src.modules.arduino_board_selection import FIELD, association_key, invalidate_preferences, selected_boards
+    from src.modules.arduino_board_selection import (FIELD, allowed_board_ids, association_key,
+                                                     board_allowed, invalidate_preferences, selected_boards)
     from src.modules.tk_glass import DialogFit, GlassCard, ui_scale
 
     existing = getattr(app, '_arduino_board_dialog', None)
@@ -76,6 +77,9 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
     key = association_key(metadata)
     if not key:
         app._set_status('This package has no valid vendor and architecture identity. Choose another package.')
+        return None
+    if not allowed_board_ids(metadata):
+        app._set_status('Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. Use PlatformIO for other boards.')
         return None
     version = str(metadata.get('version') or '')
     cancelled = threading.Event()
@@ -100,7 +104,7 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
                      justify='left', anchor='w')
     title.pack(fill='x')
     hint = tk.Label(header.body,
-                    text='PlatformIO first. Only checked boards may use Arduino CLI when an exact PlatformIO target is unavailable.',
+                    text='Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. Check an exact board to enable it; other boards use PlatformIO.',
                     font=('Montserrat', 9), fg=theme.TEXT, bg=theme.BG_MID, justify='left', anchor='w')
     hint.pack(fill='x', pady=(gap, 0))
     header.body.bind('<Configure>', lambda event: [widget.configure(wraplength=max(1, event.width))
@@ -180,6 +184,10 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         if saving or not loaded or row not in visible:
             return
         identifier = visible[row]
+        if not board_allowed(metadata, identifier):
+            chosen.discard(identifier)
+            render()
+            return
         if identifier in chosen:
             chosen.remove(identifier)
         else:
@@ -207,7 +215,11 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         if not selection or selection[0] >= len(tab.filtered_names):
             return False
         item = tab.all_items.get(tab.filtered_names[selection[0]], {})
-        return association_key(item) == key and tab.version_var.get() == version
+        if tab.version_var.get() != version:
+            return False
+        selected_version = next((entry for entry in item.get('versions', [])
+                                 if entry.get('version') == version), None)
+        return selected_version is not None and association_key({**item, **selected_version}) == key
 
     def save():
         nonlocal saving
@@ -220,14 +232,14 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         save_button.configure(state='disabled')
         clear_button.configure(state='disabled')
         status.configure(text='Saving Arduino CLI choices…')
-        values = sorted(chosen)
+        values = sorted(identifier for identifier in chosen if board_allowed(metadata, identifier))
 
         def finish(stored, success):
             nonlocal saving
             saving = False
             if success:
                 invalidate_preferences()
-                app._set_status('Arduino CLI choices saved. Prepare board support to verify chosen boards. PlatformIO remains first.')
+                app._set_status('Arduino CLI choices saved for eligible UNO Q / Pico 2 boards. Prepare board support to verify them; other boards use PlatformIO.')
                 if dialog.winfo_exists():
                     close()
             elif dialog.winfo_exists():
@@ -267,6 +279,8 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         nonlocal loaded
         if cancelled.is_set() or not dialog.winfo_exists():
             return
+        selected = {identifier for identifier in selected if board_allowed(metadata, identifier)}
+        choices = [(identifier, name) for identifier, name in choices if board_allowed(metadata, identifier)]
         chosen.update(selected)
         rows.extend(choices)
         present_ids = {identifier for identifier, _name in choices}
@@ -277,12 +291,16 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         clear_button.configure(state='normal')
         if error:
             status.configure(text=error + ' Existing choices can still be cleared.')
+        elif not choices:
+            status.configure(text='This version has no eligible UNO Q / Pico 2 board IDs. Existing choices can still be cleared.')
 
     def scan():
         from src.modules.arduino_board_selection import load_preferences
         selected = selected_boards(metadata, load_preferences(force_read=True))
         try:
-            choices, error = read_board_choices(folder, cancelled), ''
+            choices = [(identifier, name) for identifier, name in read_board_choices(folder, cancelled)
+                       if board_allowed(metadata, identifier)]
+            error = ''
         except (OSError, ValueError) as exc:
             choices, error = [], str(exc)
         app._post_ui(present, choices, selected, error)

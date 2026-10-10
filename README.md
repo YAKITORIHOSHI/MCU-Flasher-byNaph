@@ -289,9 +289,12 @@ models. The supplied successful ESP32-S3 reference resolved to
 `espressif32:esp32-s3-devkitm-1` and compiled/uploaded through PlatformIO. A
 prepared Arduino CLI source target cannot override an ambiguous PIO match.
 PlatformIO is the default for every board. Arduino CLI is available only for
-exact boards explicitly enabled through **Choose Arduino CLI boards…** in the
+**Arduino UNO Q** (`arduino:zephyr:unoq`) and **Raspberry Pi Pico 2 / RP2350**
+(`rp2040:rp2040:rpipico2`), explicitly enabled through **Choose Arduino CLI boards…** in the
 **Libraries & boards** downloader, and only when PlatformIO has no compatible
-target. Older prepared CLI targets stay inactive until selected. A current
+target. All other boards use PlatformIO, even if older settings or certificates
+enabled Arduino CLI. The exceptions match exact board IDs; Ventuno Q, the
+original Pico, Pico 2 W and unrelated RP2350 models are excluded. A current
 compatible PlatformIO match takes precedence over CLI associations; a failed
 PlatformIO build never switches compilers.
 Windows Bootstrap prepares Arduino CLI. Ubuntu Bootstrap verifies a native
