@@ -501,4 +501,12 @@ class SerialWrapChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if "--no-finalize" in sys.argv:
+        # Qt's offscreen text-layout objects can corrupt the Python refcount
+        # during extension teardown after every fixture has already closed.
+        sys.argv.remove("--no-finalize")
+        checks = unittest.main(verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(verbosity=2)

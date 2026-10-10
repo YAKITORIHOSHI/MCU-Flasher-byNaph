@@ -147,7 +147,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_serial_reader.py
           # Clipboard ownership needs a native platform through process exit.
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_serial_view.py --no-finalize
-          .venv-linux/bin/python -B direct/verify_serial_wrap.py
+          .venv-linux/bin/python -B direct/verify_serial_wrap.py --no-finalize
           .venv-linux/bin/python -B direct/verify_serial_delivery.py
           node direct/verify_editor_preferences.js
           xvfb-run -a env QT_QPA_PLATFORM=xcb QT_DEBUG_PLUGINS=1 .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility --no-finalize
@@ -223,10 +223,12 @@ jobs:
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader', 'verify_serial_wrap', 'verify_serial_delivery') {
+          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader', 'verify_serial_delivery') {
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+          & env/Scripts/python.exe -B direct/verify_serial_wrap.py --no-finalize
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_serial_view.py --no-finalize
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node direct/verify_editor_preferences.js
