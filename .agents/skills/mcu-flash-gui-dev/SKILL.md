@@ -145,7 +145,12 @@ For explicitly requested assistant delegation, use the local
   Credentials/configuration use per-user Windows Credential Manager or Ubuntu
   Secret Service (`secret-tool`); never add a fixed key, repo vault, plaintext
   fallback, password/token argv or Admin SDK credential. Save login and Remember
-  me are separate options. Local developer access requires a salted PBKDF2 key;
+  me are separate options. Keep sign-in and account creation as separate views
+  inside the selector's Cloud tab, and hide/gate sketch management until Firebase
+  confirms authentication. Store no account credentials in the checkout. An
+  empty, permission-restricted marker outside the installation only records that
+  this provider has used the OS vault, so a later missing keyring fails closed;
+  clear it once no saved login or session remains. Local developer access requires a salted PBKDF2 key;
   changing an existing key requires authentication. Partition remote ticket caches
   by provider and verified UID; local access cannot inherit cloud identity/cache.
 - Upload preserves the original local project. Cloud copies always use explicit
