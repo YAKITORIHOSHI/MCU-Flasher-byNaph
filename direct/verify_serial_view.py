@@ -197,7 +197,9 @@ class SerialViewChecks(unittest.TestCase):
         self.assertEqual(panel.baud_combo.currentText(), "57600")
         panel.update_status({"generation": 1, "connected": True, "port": "SIMULATED", "baud": 115200})
         self.assertEqual(panel.baud_combo.currentText(), "115200")
-        self.assertEqual(panel.lbl_status.text(), "● Connected")
+        self.assertIn(panel.lbl_status.text(), ("● Connected", "●"))
+        self.assertEqual(panel.lbl_status.toolTip(), "● Connected")
+        self.assertEqual(panel.lbl_status.accessibleName(), "● Connected")
 
     def test_options_and_context_wrap_choice_save_then_sync(self):
         panel = self.panel()
