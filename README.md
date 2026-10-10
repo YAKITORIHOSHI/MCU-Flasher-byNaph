@@ -91,9 +91,13 @@ Startup opens the main workspace. The compact **Actions** menu belongs to its
 toolbar; it does not create a separate desktop window. **Detach Editor** opens
 the full code editor only on request. Closing it attaches the same editor and
 its unsaved buffers back to the main workspace.
+Use **View → Toolbars** to show or hide **Primary Actions** and **Controls**.
+If both bars are hidden, **View → Show All Toolbars** restores them.
 Settings reset and system-theme fallback resolve the current glass theme names.
-The private developer ticket portal follows all three workspace themes with
-cached beveled glass cards, Montserrat text and circuit icons. Login, ticket
+Five left-clicks on the toolbar's MCU Flasher title open the private developer
+ticket portal. It remains available offline and uses local ticket storage when
+cloud synchronization cannot be reached. The portal follows all three workspace
+themes with cached beveled glass cards, Montserrat text and circuit icons. Login, ticket
 creation/editing and Firebase settings share readable form surfaces and keyboard
 focus. Narrow forms stack their fields; short windows scroll while edit and cloud
 actions stay visible. Theme changes retain drafts, search and filters. Failed
@@ -578,8 +582,12 @@ Windows installations save a per-user health snapshot after successful setup.
 Subsequent launches check local runtime paths and source fingerprints before
 opening the GUI. First launch, a changed installation, missing dependencies,
 explicit `--repair`/`--setup`, or a recorded crash runs verification again.
-An immediate failed GUI launch falls back to repair. The project picker no
-longer starts a hidden editor; services begin after the workspace is shown.
+An immediate failed GUI launch falls back to repair. The existing-project path
+starts blank. Browse can select a source file or project folder; selecting an
+`.ino` file keeps that file active in the editor. Arduino builds report which
+root `.ino` defines each of `setup()` and `loop()`, and flag missing or duplicate
+definitions. The project picker no longer starts a hidden editor; services begin
+after the workspace is shown.
 Port enumeration and catalog/USB discovery run in background workers.
 
 Four/six-core and low-memory profiles use one syntax parser, eight-second

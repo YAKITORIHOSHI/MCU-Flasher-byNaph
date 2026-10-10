@@ -136,17 +136,14 @@ class ProjectChecks(unittest.TestCase):
                 api.ai_review_manager.shutdown()
                 api._serial_send_queue.stop()
 
-    def test_startup_picker_uses_system_documents_even_when_an_example_exists(self):
+    def test_existing_project_path_starts_empty_even_with_an_initial_directory(self):
         (self.folder / "Documents" / "example").mkdir(parents=True)
-        for location, expected in ((str(self.folder / "Redirected Documents"),
-                                    str(self.folder / "Redirected Documents")),
-                                   ("", str(self.folder / "Documents"))):
-            with self.subTest(location=location), \
-                 patch.object(QStandardPaths, "writableLocation", return_value=location):
-                dialog = ProjectDialog()
+        for initial_dir in ("", str(self.folder / "sketch"), str(self.folder / "Documents")):
+            with self.subTest(initial_dir=initial_dir):
+                dialog = ProjectDialog(initial_dir=initial_dir)
                 try:
-                    self.assertEqual(dialog._start_dir, expected)
-                    self.assertEqual(dialog._open_path_edit.text(), expected)
+                    self.assertEqual(dialog._open_path_edit.text(), "")
+                    self.assertEqual(dialog._existing_preview_lbl.text(), "Choose a folder to preview its files.")
                     self.assertIsNone(dialog.selected_project)
                 finally:
                     dialog.close()
@@ -465,6 +462,7 @@ class ProjectChecks(unittest.TestCase):
                 APP.processEvents()
                 if RENDER_DIR:
                     self.assertTrue(dialog.grab().save(str(RENDER_DIR / ("project-picker-" + theme + ".png"))))
+            dialog._open_path_edit.setText(str(self.folder / "sketch"))
             with patch.object(dialog, "_choose_project_window", return_value=True):
                 dialog._open_existing()
             api.open_project_window.assert_called_once()
@@ -519,6 +517,7 @@ class ProjectChecks(unittest.TestCase):
         dialog = ProjectDialog(api, initial_dir=str(self.folder / "sketch"), parent=parent, open_in_new_window=True)
         guarded_targets = []
         try:
+            dialog._open_path_edit.setText(str(self.folder / "sketch"))
             dialog._prepare_current_window_switch = lambda target, done, on_wait=None: (guarded_targets.append(target), done(True, "", False))
             with patch.object(dialog, "_choose_project_window", return_value=False):
                 dialog._open_existing()
@@ -548,9 +547,9 @@ class ProjectChecks(unittest.TestCase):
             with patch.object(QStandardPaths, "writableLocation", return_value=str(documents)) as location, \
                  patch.object(QFileDialog, "getOpenFileName", side_effect=[(str(sketch), ""), ("", ""), ("", "")]) as picker:
                 dialog._btn_browse.click()
-                self.assertEqual(dialog._open_path_edit.text(), str(chosen_folder))
+                self.assertEqual(dialog._open_path_edit.text(), str(sketch))
                 dialog._btn_browse.click()
-                self.assertEqual(dialog._open_path_edit.text(), str(chosen_folder))
+                self.assertEqual(dialog._open_path_edit.text(), str(sketch))
                 dialog._open_path_edit.setText(str(self.folder / "typed-folder"))
                 dialog._btn_browse.click()
                 self.assertEqual(dialog._open_path_edit.text(), str(self.folder / "typed-folder"))
@@ -569,6 +568,95 @@ class ProjectChecks(unittest.TestCase):
             dialog.deleteLater()
             APP.processEvents()
 
+    def test_opening_a_selected_ino_keeps_that_file_as_the_initial_editor_file(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project = Mock(return_value={"success": True})
+        api.open_project_window = Mock(return_value={"success": True})
+        project = self.folder / "multi-ino-project"
+        project.mkdir()
+        (project / "a-helper.ino").write_text("void helper() {}\n", encoding="utf-8")
+        main_ino = project / "z-main.ino"
+        main_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+        parent = QWidget()
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        try:
+            dialog._open_path_edit.setText(str(main_ino))
+            dialog._prepare_current_window_switch = lambda target, done, on_wait=None: done(True, "", False)
+            with patch.object(dialog, "_choose_project_window", return_value=False):
+                dialog._open_existing()
+            api.open_project.assert_called_once_with(str(project), active_file=str(main_ino))
+            self.assertEqual(dialog.selected_project, project)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_selected_ino_is_preserved_for_new_window_and_same_project_navigation(self):
+        project = self.folder / "selected-ino-project"
+        project.mkdir()
+        main_ino = project / "sketch-main.ino"
+        main_ino.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project = Mock(return_value={"success": True})
+        api.open_project_window = Mock(return_value={"success": True})
+        new_window = ProjectDialog(api, open_in_new_window=True)
+        try:
+            new_window._open_path_edit.setText(str(main_ino))
+            with patch.object(new_window, "_choose_project_window", return_value=True):
+                new_window._open_existing()
+            api.open_project_window.assert_called_once_with(str(main_ino))
+            api.open_project.assert_not_called()
+        finally:
+            new_window.close()
+            new_window.deleteLater()
+            APP.processEvents()
+
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.sketch_dir_path = project
+        api.get_recent_projects = Mock(return_value=[])
+        api.open_project = Mock(return_value={"success": True})
+        api.set_active_file = Mock()
+        parent = QWidget()
+        parent._editor_panel = SimpleNamespace(open_file=Mock())
+        same_project = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        try:
+            same_project._open_path_edit.setText(str(main_ino))
+            with patch.object(same_project, "_choose_project_window", return_value=False):
+                same_project._open_existing()
+            api.set_active_file.assert_called_once_with(str(main_ino))
+            parent._editor_panel.open_file.assert_called_once_with(str(main_ino))
+            api.open_project.assert_not_called()
+        finally:
+            same_project.close()
+            same_project.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
+    def test_entrypoint_probe_reports_each_ino_owner_and_duplicate_definitions(self):
+        project = self.folder / "entrypoint-project"
+        project.mkdir()
+        (project / "setup.ino").write_text("void setup() { }\n", encoding="utf-8")
+        (project / "loop.ino").write_text("void loop() { }\n", encoding="utf-8")
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.sketch_dir_path = project
+
+        valid, details = api._validate_entry_points()
+        self.assertTrue(valid)
+        self.assertEqual(details, "setup() in setup.ino; loop() in loop.ino")
+
+        (project / "setup.ino").write_text(
+            "void setup() { }\nvoid setup() { }\n", encoding="utf-8")
+        valid, details = api._validate_entry_points()
+        self.assertFalse(valid)
+        self.assertEqual(details, "setup() in setup.ino (2 definitions); loop() in loop.ino")
+
     def test_startup_sketch_browse_uses_documents_and_empty_os_location_has_fallback(self):
         dialog = ProjectDialog(initial_dir=str(self.folder / "sketch"))
         try:
@@ -579,7 +667,7 @@ class ProjectChecks(unittest.TestCase):
                      patch.object(QFileDialog, "getOpenFileName", return_value=("", "")) as picker:
                     dialog._btn_browse.click()
                     self.assertEqual(picker.call_args.args[2], expected)
-                    self.assertEqual(dialog._open_path_edit.text(), str(self.folder / "sketch"))
+                    self.assertEqual(dialog._open_path_edit.text(), "")
                     self.assertIsNone(dialog.selected_project)
         finally:
             dialog.close()

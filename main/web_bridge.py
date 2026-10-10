@@ -4016,11 +4016,11 @@ class MCUWebBackendAPI:
 
             self._generate_platformio_ini(cache_root)
 
-            entry_ok, entry_owners = self._validate_entry_points() if "arduino" in framework.lower().split(",") else (True, "")
-            if entry_ok and entry_owners:
+            entry_ok, entry_details = self._validate_entry_points() if "arduino" in framework.lower().split(",") else (True, "")
+            if entry_details:
                 self.emit("console:log", {
-                    "text": f"  ✔ Entry points OK — setup()/loop() found in: {entry_owners}",
-                    "tag": "success",
+                    "text": f"  {'✔' if entry_ok else '⚠'} Arduino entry points — {entry_details}",
+                    "tag": "success" if entry_ok else "warning",
                     "newline": True
                 })
 
@@ -6315,7 +6315,7 @@ class MCUWebBackendAPI:
                     connection_guard.close()
 
     def _validate_entry_points(self) -> tuple[bool, str]:
-        """Validate that setup() and loop() are defined in the sketch files."""
+        """Locate setup()/loop() definitions across root .ino files."""
         if not self.sketch_dir_path:
             return False, ""
 
@@ -6323,26 +6323,33 @@ class MCUWebBackendAPI:
         if not ino_files:
             return True, ""
 
-        SETUP_RE = re.compile(r'\bvoid\s+setup\s*\(\s*(?:void)?\s*\)', re.MULTILINE)
-        LOOP_RE = re.compile(r'\bvoid\s+loop\s*\(\s*(?:void)?\s*\)', re.MULTILINE)
+        SETUP_RE = re.compile(r'\bvoid\s+setup\s*\(\s*(?:void)?\s*\)\s*\{', re.MULTILINE)
+        LOOP_RE = re.compile(r'\bvoid\s+loop\s*\(\s*(?:void)?\s*\)\s*\{', re.MULTILINE)
 
-        setup_owners = []
-        loop_owners = []
+        setup_owners: list[str] = []
+        loop_owners: list[str] = []
         for f in ino_files:
             try:
                 content = f.read_text(encoding="utf-8", errors="replace")
-                if SETUP_RE.search(content):
-                    setup_owners.append(f.name)
-                if LOOP_RE.search(content):
-                    loop_owners.append(f.name)
+                setup_owners.extend([f.name] * len(SETUP_RE.findall(content)))
+                loop_owners.extend([f.name] * len(LOOP_RE.findall(content)))
             except Exception:
                 pass
 
-        if not setup_owners or not loop_owners:
-            return False, ""
+        def describe(function: str, owners: list[str]) -> str:
+            if not owners:
+                return f"{function}() missing"
+            counts: dict[str, int] = {}
+            for owner in owners:
+                counts[owner] = counts.get(owner, 0) + 1
+            locations = ", ".join(
+                f"{owner} ({count} definitions)" if count > 1 else owner
+                for owner, count in counts.items()
+            )
+            return f"{function}() in {locations}"
 
-        owners = sorted(list(set(setup_owners) | set(loop_owners)))
-        return True, ", ".join(owners)
+        details = f"{describe('setup', setup_owners)}; {describe('loop', loop_owners)}"
+        return len(setup_owners) == 1 and len(loop_owners) == 1, details
 
     def _generate_platformio_ini(self, cache_root: Path):
         """Generate platformio.ini dynamically for the active board in cache."""

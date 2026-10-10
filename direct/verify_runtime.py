@@ -605,6 +605,22 @@ def qt_smoke(app, render_dir=None):
         window._primary_toolbar.update_sketch_label(str(backend.sketch_dir_path))
         window.resize(1920, 900)
         window.show()
+        toolbar_actions = window._toolbar_visibility_actions
+        assert window._view_menu.title().replace("&", "") == "View"
+        assert len(toolbar_actions) == 2
+        assert all(action.isChecked() for action in toolbar_actions)
+        for action in toolbar_actions:
+            action.trigger()
+            assert not action.isChecked()
+        assert not window._primary_toolbar.isVisible()
+        assert not window._controls_toolbar.isVisible()
+        if render_dir:
+            app.processEvents()
+            assert window.grab().save(str(render_dir / "toolbar-hidden.png"))
+        window._restore_toolbars_action.trigger()
+        assert window._primary_toolbar.isVisible()
+        assert window._controls_toolbar.isVisible()
+        assert all(action.isChecked() for action in toolbar_actions)
         assert not window._primary_toolbar.btn_upload.isEnabled()
         assert not window._primary_toolbar.btn_compile.isEnabled()
         backend.current_board = "Demo target"

@@ -422,6 +422,12 @@ class MCUMainWindow(QMainWindow):
         controls_toolbar.setFloatable(False)
         controls_toolbar.addWidget(self._controls_bar)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, controls_toolbar)
+        self._controls_toolbar = controls_toolbar
+
+        # Toolbar visibility can also be changed from Qt's native toolbar
+        # context menu. Keep a persistent recovery route when every toolbar is
+        # hidden, because that native menu otherwise has no visible anchor.
+        self._setup_view_menu()
 
         # ── Central widget ────────────────────────────────────────────────────
         central = GlassWorkspace()
@@ -660,6 +666,33 @@ class MCUMainWindow(QMainWindow):
         self._layout_timer.start()
         if preserve_focus and focused.isVisible() and focused.isEnabled():
             focused.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _setup_view_menu(self) -> None:
+        """Keep toolbar visibility controls available when the bars are hidden."""
+        menu_bar = self.menuBar()
+        menu_bar.setNativeMenuBar(False)
+        menu_bar.setObjectName("workspace-menu-bar")
+
+        self._view_menu = menu_bar.addMenu("&View")
+        self._toolbar_menu = self._view_menu.addMenu("&Toolbars")
+        toolbars = (self._primary_toolbar, self._controls_toolbar)
+        self._toolbar_visibility_actions = tuple(
+            toolbar.toggleViewAction() for toolbar in toolbars
+        )
+        for action in self._toolbar_visibility_actions:
+            self._toolbar_menu.addAction(action)
+
+        self._view_menu.addSeparator()
+        self._restore_toolbars_action = self._view_menu.addAction("Show All Toolbars")
+        self._restore_toolbars_action.setStatusTip(
+            "Show the Primary Actions and Controls toolbars"
+        )
+        self._restore_toolbars_action.triggered.connect(self._restore_toolbars)
+
+    def _restore_toolbars(self) -> None:
+        """Show both top toolbars from the persistent View menu."""
+        self._primary_toolbar.setVisible(True)
+        self._controls_toolbar.setVisible(True)
 
     def _build_status_bar(self) -> None:
         sb = QStatusBar()

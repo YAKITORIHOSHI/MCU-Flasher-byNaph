@@ -9,6 +9,7 @@ import time
 import unittest
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
 from main.core.theme import Theme
 from main.qt import owner_ticket_dialog as portal
+from main.qt.toolbar import PrimaryToolbar
 from main.qt.owner_ticket_style import portal_colors
 from main.core.log_colors import contrast_ratio
 from main.qt.theme import build_stylesheet, register_fonts
@@ -224,6 +226,32 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(self.dialog.stack.currentIndex(), 0)
         self.assertEqual(self.dialog.lbl_auth_error.text(), message)
         self.assertFalse(self.dialog.lbl_auth_error.isHidden())
+
+    def test_five_logo_clicks_open_ticket_portal_offline_and_six_do_not(self):
+        backend = SimpleNamespace(
+            is_busy=True, active_operation=None, _current_op_phase=None,
+            current_board="", current_port="",
+        )
+        toolbar = PrimaryToolbar(backend)
+        self.addCleanup(toolbar.deleteLater)
+        owner_dialog = Mock()
+        owner_dialog.isVisible.return_value = False
+        with patch.object(portal, "OwnerTicketDialog", return_value=owner_dialog) as create_dialog, \
+                patch("main.core.owner_tickets.is_internet_available", return_value=False) as network_probe:
+            for _ in range(5):
+                QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
+            QTest.qWait(850)
+            create_dialog.assert_called_once_with(backend=backend, parent=toolbar)
+            owner_dialog.show.assert_called_once()
+            owner_dialog.raise_.assert_called_once()
+            owner_dialog.activateWindow.assert_called_once()
+            network_probe.assert_not_called()
+
+        with patch.object(toolbar, "_open_owner_ticket_dialog") as open_portal:
+            for _ in range(6):
+                QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
+            QTest.qWait(850)
+            open_portal.assert_not_called()
 
     def test_render_all_themes_and_compact_forms(self):
         self.sign_in()

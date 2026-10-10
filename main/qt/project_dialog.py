@@ -125,20 +125,6 @@ class ProjectDialog(QDialog):
             timer.timeout.connect(self._restore_foreground_focus)
             self._foreground_timers.append(timer)
 
-        # Determine start directory (NEVER the application codebase)
-        default_user_dir = (
-            QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-            or str(Path.home() / "Documents")
-        )
-
-        candidate_start = ""
-        if initial_dir and Path(initial_dir).is_dir() and not is_application_codebase_dir(initial_dir):
-            candidate_start = initial_dir
-        elif self._backend and self._backend.sketch_dir_path and self._backend.sketch_dir_path.is_dir() and not is_application_codebase_dir(self._backend.sketch_dir_path):
-            candidate_start = str(self._backend.sketch_dir_path)
-
-        self._start_dir = candidate_start or default_user_dir
-
         self.setWindowTitle("MCU Flasher by Naph — Select Project")
 
         from main.qt.responsive import fit_dialog, ScreenWatcher
@@ -149,10 +135,8 @@ class ProjectDialog(QDialog):
         self._screen_watcher = ScreenWatcher(self)
         self._load_recents()
 
-        # Update initial folder preview
-        if self._start_dir:
-            self._open_path_edit.setText(self._start_dir)
-            self._update_existing_preview(self._start_dir)
+        # The existing-project path intentionally starts empty. The Browse
+        # action opens Documents without preselecting a project for the user.
 
     def _is_busy(self) -> bool:
         if self._backend and (self._backend.is_busy
@@ -426,13 +410,13 @@ class ProjectDialog(QDialog):
 
     def _setup_existing_tab(self) -> None:
         tab, layout, actions = self._make_tab("Existing")
-        hint = QLabel("Choose a sketch file or enter its project folder.", tab)
+        hint = QLabel("Choose the main .ino file or enter its project folder.", tab)
         hint.setWordWrap(True)
         layout.addWidget(hint)
         path_row = QHBoxLayout()
         self._open_path_edit = QLineEdit(tab)
-        self._open_path_edit.setPlaceholderText("Sketch project folder")
-        self._open_path_edit.setAccessibleName("Existing project folder")
+        self._open_path_edit.setPlaceholderText("Sketch file or project folder")
+        self._open_path_edit.setAccessibleName("Existing project file or folder")
         self._open_path_edit.setMinimumWidth(0)
         self._open_path_edit.textChanged.connect(self._update_existing_preview)
         path_row.addWidget(self._open_path_edit, 1)
@@ -597,8 +581,8 @@ class ProjectDialog(QDialog):
             QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
             or str(Path.home() / "Documents")
         )
-        # Use getOpenFileName so .ino/.cpp/.h/.txt files are visible
-        # (stable reference: dialogs.py:577 uses filedialog.askopenfilename)
+        # Selecting a source file keeps that exact file as the editor's initial
+        # tab; backend validation still applies to its containing project root.
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Select Existing Sketch / Project File (.ino, .cpp, .h, .txt)",
@@ -616,7 +600,7 @@ class ProjectDialog(QDialog):
                 self._set_label_tone(self._existing_status, "error")
                 self._existing_status.setText("✖ Cannot select MCU Flasher application folder.")
                 return
-            self._open_path_edit.setText(str(folder))
+            self._open_path_edit.setText(str(p))
 
     def _browse_parent(self) -> None:
         start = self._new_parent_edit.text().strip() or str(Path.home())
@@ -640,10 +624,16 @@ class ProjectDialog(QDialog):
             self._set_label_tone(self._existing_status, "error")
             self._existing_status.setText("✖ Please select a folder path.")
             return
-        p = Path(path)
+        requested_path = Path(path).expanduser()
+        try:
+            requested_path = requested_path.resolve()
+        except (OSError, RuntimeError):
+            requested_path = requested_path.absolute()
+        selected_file = str(requested_path) if requested_path.is_file() else None
+        p = requested_path
         if p.is_file():
             p = p.parent
-            path = str(p)
+        path = str(p)
         if is_application_codebase_dir(p):
             self._set_label_tone(self._existing_status, "error")
             self._existing_status.setText("✖ The MCU Flasher application folder cannot be opened as a project.")
@@ -661,7 +651,9 @@ class ProjectDialog(QDialog):
         self._dispatch_project_action(
             path,
             p.name,
-            lambda in_new_window: self._open_project(path, in_new_window),
+            lambda in_new_window: self._open_project(
+                path, in_new_window, active_file=selected_file,
+            ),
             lambda: self._accept_selected_project(p),
             self._existing_status,
         )
@@ -1013,11 +1005,16 @@ class ProjectDialog(QDialog):
         else:
             perform()
 
-    def _open_project(self, path: str, open_in_new_window: bool = False) -> dict:
+    def _open_project(
+        self,
+        path: str,
+        open_in_new_window: bool = False,
+        active_file: str | None = None,
+    ) -> dict:
         if not self._backend:
             return {"success": True}
         if open_in_new_window:
-            result = self._backend.open_project_window(path)
+            result = self._backend.open_project_window(active_file or path)
             if result.get("success") and result.get("already_open"):
                 from main.core.config import focus_project_window
                 # Closing a modal picker can reactivate its parent; focus the
@@ -1025,12 +1022,21 @@ class ProjectDialog(QDialog):
                 hwnd, pid = result.get("owner_hwnd", 0), result.get("owner_pid", 0)
                 QTimer.singleShot(250, lambda: focus_project_window(hwnd, pid))
             return result
-        if self._backend:
-            try:
-                if Path(self._backend.sketch_dir_path).resolve() == Path(path).resolve():
-                    return {"success": True, "already_current": True}
-            except (OSError, TypeError, ValueError):
-                pass
+        try:
+            same_project = Path(self._backend.sketch_dir_path).resolve() == Path(path).resolve()
+        except (OSError, TypeError, ValueError):
+            same_project = False
+        if same_project:
+            if active_file:
+                set_active_file = getattr(self._backend, "set_active_file", None)
+                if callable(set_active_file):
+                    set_active_file(active_file)
+                editor = getattr(self.parentWidget(), "_editor_panel", None)
+                if editor and hasattr(editor, "open_file"):
+                    editor.open_file(active_file)
+            return {"success": True, "already_current": True}
+        if active_file:
+            return self._backend.open_project(path, active_file=active_file)
         return self._backend.open_project(path)
 
     def _validate_existing_project_folder(self, folder: Path) -> dict:

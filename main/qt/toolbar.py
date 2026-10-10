@@ -48,6 +48,26 @@ VALID_BAUD_RATES      = [b for b in [9600, 19200, 38400, 57600, 74880, 115200, 2
 UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if s <= MAX_BAUD_RATE]
 
 
+class _DeveloperLogoLabel(QLabel):
+    """Logo label that reliably counts both ordinary and double-click presses."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 def _make_action_btn(text: str, tooltip: str, object_name: str,
                      color: str = "", hover_color: str = "") -> QPushButton:
     """Create an action button for the primary toolbar."""
@@ -236,13 +256,12 @@ class PrimaryToolbar(QToolBar):
 
     def _setup_widgets(self) -> None:
         # ── 1. Left: Logo / Title (Stealth trigger: exactly 5 clicks opens owner portal) ──
-        self.logo = QLabel("MCU Flasher by Naph")
+        self.logo = _DeveloperLogoLabel("MCU Flasher by Naph")
         self.logo.setStyleSheet(
             "color: #56cfbf; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
         )
         self.logo.setCursor(Qt.CursorShape.ArrowCursor)
-        self.logo.mousePressEvent = self._on_logo_mouse_press
-        self.logo.mouseDoubleClickEvent = self._on_logo_mouse_press
+        self.logo.clicked.connect(self._on_logo_click)
         self.addWidget(self.logo)
 
         # ── 2. Left Expanding Spacer ────────────────────────────────────────
@@ -546,23 +565,10 @@ class PrimaryToolbar(QToolBar):
         elif self._backend:
             self._backend.open_in_explorer()
 
-    def _on_logo_mouse_press(self, event) -> None:
-        """Secret easter-egg click detector for owner defect portal.
-
-        Must be completely stealthy — standard arrow cursor, no hover style,
-        and opens ONLY when clicked exactly 5 times. If clicked 6 times or
-        fewer than 5 times within the debounce window, it resets and does not open.
-        """
-        try:
-            if event.button() == Qt.MouseButton.LeftButton:
-                self._logo_click_count += 1
-                # 450ms debounce window after each click to detect exact sequence of clicks
-                self._logo_click_timer.start(450)
-                event.accept()
-            else:
-                QLabel.mousePressEvent(self.logo, event)
-        except Exception:
-            pass
+    def _on_logo_click(self) -> None:
+        """Count a five-click gesture without relying on instance monkey-patching."""
+        self._logo_click_count += 1
+        self._logo_click_timer.start(800)
 
     def _on_logo_click_timeout(self) -> None:
         """Evaluates click count once user ceases clicking."""
@@ -575,17 +581,8 @@ class PrimaryToolbar(QToolBar):
             self._logo_click_count = 0
 
     def _open_owner_ticket_dialog(self) -> None:
-        """Launch or foreground the private owner defect portal if internet is online.
-
-        Strict stealth requirement: If internet is not available, do not proceed
-        or display anything so the secret portal remains 100% invisible.
-        """
+        """Launch or foreground the private ticket portal, including offline."""
         try:
-            from main.core.owner_tickets import is_internet_available
-            # Check internet connectivity first. If offline, silently abort without displaying anything!
-            if not is_internet_available(timeout=0.6):
-                return
-
             from main.qt.owner_ticket_dialog import OwnerTicketDialog
             parent_window = self.window() if self.window() else self
             if self._owner_dialog is None or not self._owner_dialog.isVisible():
