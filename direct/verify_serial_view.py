@@ -17,7 +17,10 @@ sys.path.insert(0, str(ROOT))
 # These cases exercise clipboard ownership through process shutdown. Windows'
 # offscreen plugin can crash while releasing transferred QMimeData; use the
 # native clipboard, with its original MIME data restored once after the suite.
-os.environ.setdefault("QT_QPA_PLATFORM", "windows" if os.name == "nt" else "offscreen")
+if os.name == "nt":
+    os.environ["QT_QPA_PLATFORM"] = "windows"
+else:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QTimer, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextCursor, QTextOption
 from PySide6.QtTest import QTest

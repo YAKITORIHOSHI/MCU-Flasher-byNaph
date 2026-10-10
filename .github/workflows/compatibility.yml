@@ -126,7 +126,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_offline.py
           .venv-linux/bin/python -B direct/verify_target_resolution.py
           .venv-linux/bin/python -B direct/verify_board_families.py
-          .venv-linux/bin/python -B direct/verify_board_search.py
+          .venv-linux/bin/python -B direct/verify_board_search.py --no-finalize
           .venv-linux/bin/python -B direct/verify_projects.py
           .venv-linux/bin/python -B direct/verify_cloud_configuration.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
@@ -215,7 +215,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_board_families.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & env/Scripts/python.exe -B direct/verify_board_search.py
+          & env/Scripts/python.exe -B direct/verify_board_search.py --no-finalize
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_projects.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

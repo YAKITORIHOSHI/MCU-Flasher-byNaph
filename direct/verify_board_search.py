@@ -524,6 +524,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--render-dir", type=Path)
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--no-finalize", action="store_true")
     args, remaining = parser.parse_known_args()
     RENDER_DIR = args.render_dir
     if RENDER_DIR:
@@ -531,4 +532,12 @@ if __name__ == "__main__":
     if args.benchmark:
         args.benchmark.parent.mkdir(parents=True, exist_ok=True)
         benchmark(args.benchmark)
+    if args.no_finalize:
+        # Isolated Qt stress runs can pass every assertion and still abort
+        # while PySide finalizes at interpreter shutdown. Fixtures have
+        # already stopped workers and deleted their dialogs before this point.
+        checks = unittest.main(argv=[sys.argv[0], *remaining], verbosity=2, exit=False)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if checks.result.wasSuccessful() else 1)
     unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

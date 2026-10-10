@@ -18,7 +18,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("QT_QPA_PLATFORM", "windows" if os.name == "nt" else "offscreen")
+if os.name == "nt":
+    # This verifier reads the Win32 clipboard format directly; the offscreen
+    # Qt plugin used by the CI job cannot publish CF_UNICODETEXT.
+    os.environ["QT_QPA_PLATFORM"] = "windows"
+else:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QThread
