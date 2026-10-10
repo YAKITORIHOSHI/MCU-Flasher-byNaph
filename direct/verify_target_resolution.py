@@ -689,6 +689,8 @@ if __name__ == "__main__":
     parser.add_argument("--compile-installed-avr", action="store_true")
     parser.add_argument("--avr-core", type=Path, help="Explicit native fixture store for the AVR probe (read-only)")
     parser.add_argument("--verify-built-pipeline", type=Path)
+    parser.add_argument("--compile-button-only", type=Path,
+                        help="Run only the real Compile-button integration in an explicitly prepared temp/ fixture")
     args, remaining = parser.parse_known_args()
     if args.compile_installed_esp32:
         compile_installed_esp32()
@@ -696,6 +698,16 @@ if __name__ == "__main__":
         compile_native_esp32(args.compile_native_esp32)
     elif args.compile_installed_avr:
         compile_installed_avr(args.avr_core)
+    elif args.compile_button_only:
+        verify_built_pipeline(args.compile_button_only)
+        APP.closeAllWindows()
+        APP.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        APP.processEvents()
+        gc.collect()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise SystemExit(0)
     elif args.verify_built_pipeline:
         verify_built_pipeline(args.verify_built_pipeline)
     checks = unittest.main(argv=[sys.argv[0], *remaining], verbosity=2, exit=False)

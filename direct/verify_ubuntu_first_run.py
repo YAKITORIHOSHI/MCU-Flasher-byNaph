@@ -325,7 +325,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
             raise RuntimeError("Bootstrap prepared a non-native ESP32 compiler")
     compile_log = fixture / "compile-verifier.log"
     compiled = _run([str(python), "-B", str(app / "direct/verify_target_resolution.py"),
-                     "--verify-built-pipeline", str(compile_fixture)],
+                     "--compile-button-only", str(compile_fixture)],
                     cwd=app, env=env, log=compile_log, timeout=360)
     if compiled:
         raise RuntimeError(f"The real Compile-button integration failed; see {compile_log}")
