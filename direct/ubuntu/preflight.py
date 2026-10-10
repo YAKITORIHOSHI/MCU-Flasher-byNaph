@@ -39,7 +39,8 @@ SYSTEM_LIBRARIES = (
 )
 SYSTEM_TOOLS = (("bash", "bash"), ("git", "git"), ("make", "build-essential"),
                 ("gcc", "build-essential"), ("g++", "build-essential"),
-                ("xdg-open", "xdg-utils"), ("ldd", "libc-bin"), ("rg", "ripgrep"))
+                ("xdg-open", "xdg-utils"), ("ldd", "libc-bin"), ("rg", "ripgrep"),
+                ("secret-tool", "libsecret-tools"))
 CLIPBOARD_PACKAGES = ("xclip", "wl-clipboard")
 
 
@@ -74,7 +75,7 @@ class MissingSystemDependencies(RuntimeError):
 
 def system_install_command(packages=None) -> str:
     """Return a manual recovery command; checks never execute it."""
-    packages = packages or ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", *CLIPBOARD_PACKAGES,
+    packages = packages or ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", *CLIPBOARD_PACKAGES,
                             *(package for _, package in SYSTEM_LIBRARIES)]
     return "sudo apt install " + " ".join(normalize_packages(packages))
 

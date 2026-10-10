@@ -81,7 +81,7 @@ restored. Minimum sizing follows the current monitor in Qt logical pixels.
 Tabs map to exact root filenames rather than loading order, and Ubuntu paths
 retain case. Startup project loading is coalesced to avoid duplicate models.
 The project selector uses the same cached static glass header and cards in all
-three palettes. Existing, New, Recent and Open projects have compact tabs,
+three palettes. Existing, New, Recent, Open windows and Cloud have compact tabs,
 readable file/path surfaces and pinned actions; short pages scroll and forms
 reflow. Project destination and unsaved-change prompts share the palette.
 The Existing tab lists the selected project's root files and highlights the
@@ -117,6 +117,16 @@ package repair or reporting invalid credentials. Cloud status distinguishes
 configuration from a Firebase sign-in; endpoint tests verify reachability and
 leave credential and ticket-access checks to sign-in. Passwords are sent exactly
 as entered, and failed attempts clear the earlier cloud session.
+Developer requests run in bounded background workers and check the Firebase
+endpoint directly. A failed generic internet probe cannot veto cloud access.
+Local access requires an explicitly configured key; there is no built-in unlock
+password. The local key uses salted PBKDF2, and cloud ticket caches are isolated
+by authenticated account. Provider settings live in the OS credential vault;
+the old code-encrypted repository vault is no longer used or distributed.
+AI Changes lists each edited filename above its timestamp, with the decision
+alongside it, retaining full paths in tooltips even at compact widths.
+Update logs show the readable interpreter path; Windows tools can still use
+their equivalent short path for long-path compatibility.
 The downloader shows cached catalogs before network refreshes and keeps compact
 grouped metadata in an automatically rebuilt cache. Fresh local indexes need no
 connectivity probe. Installed-package and detail scans run in bounded workers;
@@ -697,7 +707,9 @@ that otherwise stops first-run setup with a `tool-mconf` registry error.
 The Ubuntu entry point applies the saved Online/Offline Mode before installing
 its process guard, retaining network access for an Online launch.
 
-Rebuild the Linux executable and local shortcut with `bash direct/ubuntu/build_launcher.sh`. Add an Applications menu entry with `./MCU_Flasher --install-shortcut`; regenerate it after moving the application folder. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. The executable is a folder-based launcher, so it requires `main/`, `src/` and `direct/` beside it.
+Rebuild the Linux executable and local shortcut with `bash direct/ubuntu/build_launcher.sh`. The folder's `MCU Flasher.desktop` resolves the application beside itself, so it can travel with the folder. It launches the Bash entry even if a Windows copy loses the native executable's permission bit. Add an Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`; regenerate that menu entry after moving the application folder. Replace older shortcuts that contain another computer's `/home/...` path with the same command. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
+
+A folder named `_` can be residue from an older archive verification run: a Windows path prefix was incorrectly added to Linux staging paths. Archive helpers now keep Linux paths native. That fixture folder is not an application dependency; see [Ubuntu launch troubleshooting](direct/UBUNTU.md#copied-folders-and-launch-problems).
 
 Windows files live in `direct/windows/`. Host toolchain implementations are separate in `main/platforms/windows.py` and `main/platforms/ubuntu.py`; they share the editor, project windows and CPU/RAM budgets. Ubuntu uses its native virtual environment and architecture-specific PlatformIO store. The older launch paths remain compatibility forwarders.
 
@@ -756,7 +768,7 @@ Below is the complete architectural layout of the MCU Flasher ecosystem:
 MCU Flasher by Naph/
 ├── MCU_Flasher.exe                   # Native Windows launcher (compiled from src/launcher.cs)
 ├── MCU_Flasher                       # Native Ubuntu amd64 launcher (src/launcher_ubuntu.c)
-├── MCU Flasher.desktop               # Generated local Ubuntu shortcut (regenerate after moves)
+├── MCU Flasher.desktop               # Movable local Ubuntu shortcut (keep beside the app)
 ├── mcu_flash_gui.py                 # Root application entry point forwarder
 ├── README.md                         # Comprehensive documentation, user guide & architecture
 ├── LICENSE                           # MIT license terms
@@ -924,12 +936,48 @@ MCU Flasher by Naph/
 ### 2. Opening, Selecting & Scaffolding Projects
 - Startup waits for an explicit project choice (or a supplied project path). It never creates or automatically selects `Documents/example`. The picker starts in your system's Documents folder; previous projects remain available under **Recent projects**.
 - Click **Project** or press **Ctrl+O** to choose whether a selected or newly created sketch opens in the current window or a new one. Project selection, project creation, and focusing another project are unavailable while any action is running, including compile, upload, clean, or reset. The controls become available again when the action finishes. When idle, switching the current window prompts to save, discard or cancel when editor changes are unsaved. New windows start with hardware unselected. The startup picker opens the first project directly.
-- **Open projects** lists running sketch windows and their folder paths. When idle, use **Show window** to return to a project. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
+- **Open windows** lists running sketch windows and their folder paths. When idle, use **Open folder** (or double-click) to open the actual sketch directory; **Show window** returns to its workspace. Reopening a sketch brings its existing window forward; one sketch and one serial port can belong to only one window at a time. Use separate ports to monitor or upload to different boards concurrently.
 - Right-click the project title or click its folder icon to reopen the picker when idle. **Cancel** leaves the current editor and monitor sessions intact.
 - **Existing project → Browse** always starts in your system's Documents folder, including redirected or localized Documents locations. Every click starts there; cancelling keeps the selected project path unchanged.
 - **Existing project validation**: Select the sketch folder itself, not the whole Documents folder. It must contain a non-empty top-level `.ino`, `.cpp`, or `.c` source file. Invalid folders are rejected before the app switches windows, saves buffers, creates files, updates history, or writes project metadata. Use **New project** for an empty folder.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
+
+#### Cloud sketches
+
+Open **Project → Cloud** or the toolbar's **Cloud** action to sign in, create an
+account, manage cloud sketches, or delete your account after confirming your
+current password. **Save login** fills your email/password on the next sign-in;
+**Remember me** restores a session using its refresh token. **Forget saved
+login** removes saved credentials. Both options use Windows Credential Manager
+or Ubuntu's Secret Service with an unlocked desktop keyring. They never store
+passwords or tokens in the application, sketch, process arguments or database.
+Ubuntu Bootstrap installs `libsecret-tools`; a locked or unavailable keyring
+reports a saving error, with no plaintext fallback. New computers require
+their own provider configuration through **Cloud configuration**.
+
+**Upload local sketch** creates a private cloud copy of root `.ino`, `.cpp`,
+`.c`, `.h`, `.hpp` and `.txt` files, preserving the local project. Cloud sketches
+always open in another window, with a cloud icon and **[Cloud]** in the title.
+An already open cloud sketch is brought forward without replacing its editor
+buffers. Existing working copies open as saved; use **Pull latest** explicitly
+to obtain newer remote files. Cloud projects and recovery snapshots live under
+your OS user's data directory, outside the installation.
+
+**Push** saves acknowledged editor changes and creates a new cloud revision.
+If another window/device already pushed, it reports a conflict instead of
+overwriting that newer version. **Pull latest** or **History → Restore revision**
+requires confirmation before replacing local sources and retains a recovery
+copy. Restoring an older revision affects the working copy; the next Push
+creates a new revision. Build caches and AI recovery journals remain intact.
+Without Remember me, an independent cloud window may require another sign-in.
+Offline Mode blocks cloud requests until disabled and the app restarted.
+
+Existing developer tickets remain at `users/<uid>/tickets`; sketches are stored
+separately at `users/<uid>/cloud_sketches`. See [cloud setup and database rules](direct/cloud/README.md)
+for account isolation, schema validation, revision/size limits, credential
+migration and account-deletion recovery. The desktop client never distributes
+Firebase administrative credentials or changes server rules automatically.
 
 ### 3. Selecting Boards & COM Ports
 - **Manual Hardware Selection**: MCU Flasher opens with no board and no port pre-selected (`""`). You retain full control over target hardware, preventing unintentional flashing or port locking.

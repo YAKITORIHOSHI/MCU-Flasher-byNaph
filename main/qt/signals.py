@@ -191,6 +191,7 @@ class MCUSignals(QObject):
     # ── Project ──────────────────────────────────────────────────────────────
     # Payload: {"path": str, "name": str, "files": list, "active_file": str}
     project_updated = Signal(dict)
+    cloud_project_updated = Signal(dict)
 
     # ── Syntax Diagnostics ───────────────────────────────────────────────────
     # Payload: list[diagnostic dicts]

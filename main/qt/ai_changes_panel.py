@@ -4,6 +4,7 @@ from __future__ import annotations
 import difflib
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QPainter
@@ -131,13 +132,15 @@ class AIChangesPanel(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._splitter = splitter
         self._tree = QTreeWidget(splitter)
-        self._tree.setHeaderLabels(["Prompt / file", "Edited", "Decision"])
+        self._tree.setHeaderLabels(["Prompt / file", "Decision"])
+        self._tree.headerItem().setToolTip(0, "Edited filename and local edit time; hover for the full path")
         self._tree.header().setStretchLastSection(False)
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.setMinimumWidth(0)
-        self._tree.setUniformRowHeights(True)
+        # Keep file identity visible even when the history shares a narrow pane
+        # with previews. A separate timestamp column can consume the whole pane.
+        self._tree.setUniformRowHeights(False)
         self._tree.currentItemChanged.connect(self._select)
         self._tree.itemDoubleClicked.connect(lambda *_: self._review_selected())
         previews = QWidget(splitter)
@@ -191,7 +194,7 @@ class AIChangesPanel(QWidget):
         for record in reversed(list(self._records.values())):
             group_id = record.get("groupId", "")
             if group_id not in groups:
-                group = QTreeWidgetItem([self._prompt_title(record), "", ""])
+                group = QTreeWidgetItem([self._prompt_title(record), ""])
                 group.setToolTip(0, record.get("prompt", ""))
                 self._tree.addTopLevelItem(group)
                 group.setFirstColumnSpanned(True)
@@ -201,10 +204,12 @@ class AIChangesPanel(QWidget):
                 edited = datetime.fromisoformat(record["timestamp"]).astimezone().strftime("%b %d, %Y %H:%M:%S")
             except (ValueError, KeyError):
                 edited = str(record.get("timestamp", ""))
-            from pathlib import Path
-            card = QTreeWidgetItem([Path(record["path"]).name, edited, record.get("status", "pending").capitalize()])
+            decision = record.get("status", "pending").capitalize()
+            card = QTreeWidgetItem([f"{Path(record['path']).name}\n{edited}", decision])
             card.setData(0, Qt.ItemDataRole.UserRole, record["id"])
-            card.setToolTip(0, record["path"])
+            tooltip = f"{record['path']}\nEdited: {edited}\nDecision: {decision}"
+            card.setToolTip(0, tooltip)
+            card.setToolTip(1, tooltip)
             groups[group_id].addChild(card)
             if record["id"] == selected or target is None:
                 target = card
@@ -314,6 +319,13 @@ class AIChangesPanel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         compact = event.size().width() < 650
+        metrics = self._tree.fontMetrics()
+        self._tree.setMinimumWidth(0 if compact else (
+            metrics.horizontalAdvance("Sep 30, 2000 23:59:59") + metrics.horizontalAdvance("Accepted")
+            + self._tree.indentation() * 2 + 32))
+        self._tree.setMinimumHeight(min(
+            self._tree.header().height() + metrics.height() * 7 + self._tree.frameWidth() * 2,
+            max(72, event.size().height() // 3)) if compact else 0)
         for button, full, short in ((self._review, "Review file", "Review"),
                                     (self._delete, "Delete card", "Delete"),
                                     (self._clear, "Delete all", "Clear")):

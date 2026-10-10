@@ -95,6 +95,9 @@ src/dbs/dbs_notif.json
 .owner_portal/
 .owner_tickets.json
 .owner_config.json
+dbs_cloud_sync.dat
+.mcu_cloud_link.json
+/firebase-debug.log
 
 
 # === Project-specific caches ===
@@ -143,7 +146,7 @@ ___*.py
 node_modules/
 .venv-linux/
 .ubuntu-tools/
-# Shortcuts contain a local checkout path; regenerate after moving the folder.
+# Folder shortcuts are generated locally; only Applications entries need new paths after moves.
 /MCU Flasher.desktop
 
 # === Tests ===

@@ -514,6 +514,7 @@ class PreviewBackend:
         self.current_baud = 115200
         self.upload_speed = "460800"
         self.is_busy = self.serial_running = self.serial_paused = False
+        self._cloud_project_operation = False
         self.active_operation = self._current_op_phase = self._active_reset_kind = None
         self._active_process = self.ai_review_manager = self.ai_watcher = None
         self._operation_worker = None
@@ -568,6 +569,8 @@ class PreviewBackend:
 
 
 def qt_smoke(app, render_dir=None):
+    if render_dir:
+        render_dir.mkdir(parents=True, exist_ok=True)
     from main.qt.garbage_collection import install_gui_garbage_collector
     collector = install_gui_garbage_collector(app)
     from PySide6.QtCore import QTimer, Qt, QRect
@@ -683,6 +686,25 @@ def qt_smoke(app, render_dir=None):
             collector._last_full -= 61
             collector.collect_pending()
             print("Qt tabs, keyboard navigation, compact/wide ownership, detach/reattach, action gating and dirty renderer recovery: OK")
+            # A confirmed cloud Pull must replace every model, including a
+            # dirty inactive header, without reviving renderer recovery text.
+            backend.read_file = lambda path: {"success": True, "content":
+                "// pulled header\n" if str(path).endswith(".h") else "// pulled sketch\n"}
+            window._editor_panel.reload_cloud_snapshot(callback=read_cloud_snapshot,
+                failure_callback=lambda: finish(AssertionError("Cloud source reload acknowledgement failed")))
+
+        @checked
+        def read_cloud_snapshot():
+            page.runJavaScript("JSON.stringify(window.monaco.editor.getModels().map(m => m.getValue()))", check_cloud_snapshot)
+
+        @checked
+        def check_cloud_snapshot(value):
+            contents = json.loads(value)
+            assert "// pulled header\n" in contents and "// pulled sketch\n" in contents, contents
+            assert unsaved not in contents, "Confirmed Pull revived a discarded editor buffer"
+            assert not any(backend.modified_files.values()), "Pulled buffers remained dirty"
+            assert not window._editor_panel.bridge._buffer_snapshots
+            print("Confirmed cloud Pull replaces all Monaco source buffers and clears dirty recovery: OK")
             finish()
 
         @checked
@@ -880,7 +902,7 @@ def qt_smoke(app, render_dir=None):
             QTimer.singleShot(250, capture_compact)
 
         QTimer.singleShot(2500, capture)
-        QTimer.singleShot(14000, lambda: finish(AssertionError("Qt verification timed out")))
+        QTimer.singleShot(20000, lambda: finish(AssertionError("Qt verification timed out")))
         app.exec()
         if capture_errors:
             raise capture_errors[0]

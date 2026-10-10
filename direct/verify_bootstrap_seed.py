@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -21,6 +22,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.modules import bootstrap_seed as seed
+from src.modules import bootstrap_platformio as entry
 from platformio.package.meta import PackageSpec
 
 
@@ -256,6 +258,38 @@ class SeedChecks(unittest.TestCase):
         self.assertEqual((self.core / "packages/missing/.piopm").read_text(), files[".piopm"])
         self.assertTrue(archive.is_file())
         self.assertTrue(Path(result["staging"]).is_dir())
+
+    def test_native_seed_extraction_writes_only_inside_retained_stage(self):
+        files = package_files("native")
+        files["include/fixture μ.h"] = "native archive bytes\n"
+        archive = self.archive({"native": files})
+        retained = self.root / "retained native μ"
+        before = set(self.root.iterdir())
+        adapted = []
+        original = entry.extended_windows_path
+
+        def native_path(path):
+            result = original(path)
+            adapted.append(Path(result))
+            self.assertFalse(result.startswith("\\\\?\\"))
+            return result
+
+        with patch.object(entry, "sys", SimpleNamespace(platform="linux")), \
+                patch.object(seed, "sys_platform_is_windows", return_value=False), \
+                patch.object(seed, "extended_windows_path", side_effect=native_path):
+            result = seed.import_missing(archive, self.core,
+                                         {"packages": [PackageSpec("vendor/native@1.0.0")]},
+                                         staging_parent=retained, log=lambda *_: None)
+        stage = Path(result["staging"])
+        self.assertEqual(stage.parent.resolve(), retained.resolve())
+        self.assertTrue(adapted)
+        self.assertTrue(all(path.resolve().is_relative_to(stage.resolve()) for path in adapted))
+        self.assertEqual(set(self.root.iterdir()) - before, {retained})
+        self.assertEqual(result["imported"], [str(self.core / "packages/native")])
+        for name, payload in files.items():
+            self.assertEqual((self.core / "packages/native" / name).read_text(encoding="utf-8"), payload)
+        self.assertEqual(list((stage / "packages").iterdir()), [])
+        self.assertTrue(archive.is_file())
 
     def test_older_package_is_preserved_when_missing_version_uses_suffix(self):
         older = self.core / "packages/compiler"

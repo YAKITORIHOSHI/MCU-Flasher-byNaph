@@ -43,7 +43,7 @@ sudo apt install python3-venv python3-tk build-essential git libegl1 libgl1 libn
   libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 \
   libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 \
   libdbus-1-3 libfontconfig1 libfreetype6 libusb-1.0-0 libudev1 xdg-utils \
-  ripgrep xclip wl-clipboard
+  ripgrep xclip wl-clipboard libsecret-tools
 ```
 
 Qt also needs ALSA and GLib: install `libasound2` and `libglib2.0-0` on Ubuntu
@@ -78,10 +78,62 @@ bash direct/ubuntu/run.sh --repair
 existing Windows launcher. Keep it beside `direct/`, `main/` and `src/`; it is
 not a single-file bundle of Python and board toolchains. Executable permissions
 are supplied; if a copy loses them, use `chmod +x MCU_Flasher`. A filesystem
-mounted with `noexec` can still use `bash direct/ubuntu/run.sh`. The generated
-`MCU Flasher.desktop` shortcut stores this checkout's location. Ubuntu may require
-right-clicking it and choosing **Allow Launching**. After moving the folder, run
-`./MCU_Flasher --install-shortcut` to regenerate its paths.
+mounted with `noexec` can use `bash direct/ubuntu/run.sh` to enter setup, but the
+private runtime and native tools still need executable storage. The generated
+folder shortcut resolves the application beside the shortcut at click time and
+invokes Bash, so its launch path survives a folder move and a lost ELF executable
+bit. Keep that shortcut beside `direct/`, `main/` and `src/`. Ubuntu may require
+right-clicking it and choosing **Allow Launching**. The optional Applications menu
+entry uses absolute paths; after moving the folder, run
+`bash direct/ubuntu/run.sh --install-shortcut` to regenerate that menu entry.
+
+## Copied folders and launch problems
+
+An older `MCU Flasher.desktop` may still point to another machine's `/home/...`
+folder. Clicking it fails before Bootstrap can run. From the current application
+folder, use:
+
+```bash
+bash direct/ubuntu/run.sh --check
+bash direct/ubuntu/run.sh --install-shortcut
+bash direct/ubuntu/run.sh
+```
+
+The first command only diagnoses dependencies and runtime readiness. The second
+replaces the local shortcut and registers the current folder in Applications.
+New local shortcuts resolve their own location, including local `file:` URIs,
+and pass paths and Repair arguments literally. A fixed Bash dispatcher locates
+the source entry without requiring Python first, preserving Bootstrap's
+missing-Python recovery. The workspace still uses `.venv-linux`.
+
+A strange folder such as `_`, containing
+`home/.../temp/audit/bootstrap-seed-fixtures`, is residue from older verification
+code. A shared helper added Windows's `\\?\` prefix to a Linux absolute path;
+Linux treated that prefix as a relative directory name. Copying or extraction
+can turn the backslashes into private-use Unicode glyphs. The helper now adds
+the prefix only on Windows, and verification checks extraction containment.
+The residue is not required to launch the app. Inspect its contents before
+removing anything; preserve unrecognized user files and protected caches.
+
+Use the Linux `MCU_Flasher` or Bash entry. The `.exe`, bundled Windows Python and
+copied Windows board tools cannot serve as Ubuntu's runtime. A writable native
+Linux filesystem with execution enabled is recommended for the application and
+its runtime; a `noexec` mount can also prevent `.venv-linux/bin/python` and
+compiler tools from starting.
+
+If the workspace opens but its editor stays blank and the launch log reports
+`GBM is not supported` or `Compositor returned null texture`, check the graphics
+driver separately. For one diagnostic launch, use Qt WebEngine's documented
+[software rendering fallback](https://doc.qt.io/qt-6.10/qtwebengine-features.html#hardware-acceleration):
+
+```bash
+env QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu bash direct/ubuntu/run.sh
+```
+
+This applies only to that launch. A GPU warning alone does not establish a
+startup failure; confirm the editor's behavior on the Ubuntu desktop.
+
+## Bootstrap preparation
 
 First launch checks Ubuntu's Tk, native libraries and build tools before any
 dependency install. Missing OS packages such as `libxcb-cursor0` and
@@ -231,6 +283,8 @@ of tools that create separate process sessions. When the command exits, those
 tools are stopped and reaped before the PTY ends or a fresh assistant starts.
 Keyboard interrupts and Bash job control still reach the command normally;
 cleanup runs outside Qt and does not replay input.
+The native PTY close API preserves descriptor-close exceptions after the owned
+supervisor is reaped; it no longer suppresses them by returning from `finally`.
 
 `/exit` starts a fresh assistant PTY without replaying input. Unexpected exits
 allow at most two automatic restarts within one minute, then leave a visible

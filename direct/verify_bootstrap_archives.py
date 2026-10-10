@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import json
+import ntpath
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+import posixpath
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -23,6 +26,45 @@ from platformio.package.manager import _install as installer
 from platformio.package.manager.tool import ToolPackageManager
 from platformio.package.meta import PackageSpec
 from platformio.package.unpack import FileUnpacker
+
+
+class NativeArchivePathChecks(unittest.TestCase):
+    def test_native_posix_paths_keep_spaces_unicode_and_absolute_root(self):
+        native_os = SimpleNamespace(path=posixpath, fsdecode=os.fsdecode)
+        value = "/home/fixture/MCU Flasher μ/temp/retained/payload.txt"
+        with patch.object(entry, "sys", SimpleNamespace(platform="linux")), \
+                patch.object(entry, "os", native_os):
+            for path in (value, value.encode("utf-8"), PurePosixPath(value)):
+                with self.subTest(path=path):
+                    result = entry.extended_windows_path(path)
+                    self.assertEqual(result, value)
+                    self.assertTrue(posixpath.isabs(result))
+                    self.assertFalse(result.startswith("\\\\?\\"))
+
+    def test_native_relative_paths_resolve_in_current_directory(self):
+        relative = Path("temp") / "archive μ" / "payload.txt"
+        expected = os.path.abspath(relative)
+        with patch.object(entry, "sys", SimpleNamespace(platform="linux")):
+            for path in (relative, os.fspath(relative), os.fsencode(relative)):
+                self.assertEqual(entry.extended_windows_path(path), expected)
+
+    def test_windows_drive_unc_and_existing_namespace_remain_idempotent(self):
+        native_os = SimpleNamespace(path=ntpath, fsdecode=os.fsdecode)
+        cases = (
+            (r"C:\MCU Flasher μ\payload.txt", r"\\?\C:\MCU Flasher μ\payload.txt"),
+            (r"\\server\share\MCU Flasher μ\payload.txt",
+             r"\\?\UNC\server\share\MCU Flasher μ\payload.txt"),
+            (r"\\?\C:\MCU Flasher μ\payload.txt", r"\\?\C:\MCU Flasher μ\payload.txt"),
+            (r"\\?\UNC\server\share\payload.txt", r"\\?\UNC\server\share\payload.txt"),
+        )
+        with patch.object(entry, "sys", SimpleNamespace(platform="win32")), \
+                patch.object(entry, "os", native_os):
+            for value, expected in cases:
+                for path in (value, os.fsencode(value), PureWindowsPath(value)):
+                    with self.subTest(path=path):
+                        result = entry.extended_windows_path(path)
+                        self.assertEqual(result, expected)
+                        self.assertEqual(entry.extended_windows_path(result), result)
 
 
 class BootstrapArchiveChecks(unittest.TestCase):

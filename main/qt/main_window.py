@@ -778,6 +778,7 @@ class MCUMainWindow(QMainWindow):
         sig_bus.notification.connect(self._on_notification)
         sig_bus.package_progress.connect(self._package_card.update_job)
         sig_bus.project_updated.connect(self._on_project_updated)
+        sig_bus.cloud_project_updated.connect(self._on_cloud_project_updated)
         sig_bus.window_closable.connect(self._set_window_closable)
         sig_bus.board_catalog_updated.connect(self._on_catalog_updated)
 
@@ -1133,7 +1134,7 @@ class MCUMainWindow(QMainWindow):
     def _on_project_updated(self, payload: dict) -> None:
         name = payload.get("name", "")
         if name:
-            self.setWindowTitle(f"MCU Flasher by Naph — {name}")
+            self._set_project_window_title(name)
         path = payload.get("path", "")
         if path and hasattr(self, "_primary_toolbar"):
             self._primary_toolbar.update_sketch_label(path)
@@ -1145,6 +1146,31 @@ class MCUMainWindow(QMainWindow):
             self._ai_panel.reset_for_project(path)
         if hasattr(self, "_terminal_panel") and getattr(self._terminal_panel, "_is_active", False):
             self._terminal_panel.reset_for_project(path)
+
+    def _set_project_window_title(self, name: str) -> None:
+        link = getattr(self._backend, "_cloud_project_link", None)
+        link = link if isinstance(link, dict) else None
+        display_name = str(link.get("name") or name) if link else name
+        self.setWindowTitle(f"MCU Flasher by Naph — {display_name}" + (" [Cloud]" if link else ""))
+
+    @Slot(dict)
+    def _on_cloud_project_updated(self, payload: dict) -> None:
+        path = str(getattr(self._backend, "sketch_dir_path", "") or "")
+        if payload.get("path") == path:
+            self._set_project_window_title(Path(path).name)
+
+    def _on_cloud_project_pulled(self, path: str, *, callback=None, failure_callback=None) -> None:
+        if not self._backend or str(self._backend.sketch_dir_path) != str(path):
+            if failure_callback:
+                failure_callback()
+            return
+        self._backend.invalidate_cloud_source_buffers()
+        self._backend.refresh_cloud_project_link()
+        def applied():
+            self._backend.update_skip_compile_availability()
+            if callback:
+                callback()
+        self._editor_panel.reload_cloud_snapshot(callback=applied, failure_callback=failure_callback)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Keyboard shortcut handlers
@@ -1555,7 +1581,7 @@ class MCUMainWindow(QMainWindow):
             self._primary_toolbar.update_sketch_label(path)
             name = Path(path).name
             if name:
-                self.setWindowTitle(f"MCU Flasher by Naph — {name}")
+                self._set_project_window_title(name)
 
             self._backend.update_skip_compile_availability()
             if hasattr(self._backend, "start_services"):
@@ -1703,6 +1729,10 @@ class MCUMainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._backend and getattr(self._backend, "_cloud_project_operation", False):
+            self._set_status_text("Wait for cloud synchronization and editor refresh to finish.")
+            event.ignore()
+            return
         # ── Read current backend operation state ─────────────────────────
         phase = getattr(self._backend, "_current_op_phase", None) if self._backend else None
         op    = getattr(self._backend, "active_operation",   None) if self._backend else None

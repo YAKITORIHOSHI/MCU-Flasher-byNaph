@@ -124,6 +124,7 @@ def button(text: str, parent: QWidget, callback=None, *, role: str = "", vector:
     result.setProperty("vector", vector)
     result.setAutoDefault(False)
     result.setDefault(False)
+    result.setMinimumHeight(36)
     result.setCursor(Qt.CursorShape.PointingHandCursor)
     if vector:
         result.setIcon(icon(vector))
@@ -207,6 +208,7 @@ class ResponsiveGrid(QWidget):
         for index, widget in enumerate(self._widgets):
             self.grid.addWidget(widget, index // columns, index % columns)
         self._columns = columns
+        self.updateGeometry()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

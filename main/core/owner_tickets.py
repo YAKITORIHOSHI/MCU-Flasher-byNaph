@@ -20,31 +20,28 @@ import hmac
 import secrets
 import urllib.request
 import urllib.error
+from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, List, Dict
 
-from main.core.constants import SCRIPT_DIR
 from main.core.file_utils import (
     hide_hidden_attribute,
     ensure_file_writable,
 )
 from src.modules.offline_runtime import OfflineDependencyError, network_access_disabled
+from main.core.credential_store import (
+    CredentialStore, load_cloud_configuration, save_cloud_configuration,
+)
 
 _TICKETS_FILE_NAME = ".owner_tickets.json"
 _CONFIG_FILE_NAME  = ".owner_config.json"
-_VAULT_FILE_NAME   = "dbs_cloud_sync.dat"
-_DEFAULT_OWNER_KEY = "owner"  # Default developer master unlock key for skeleton mode
-
-# Cryptographic derivation constants for tracked repo vault (src/dbs/dbs_cloud_sync.dat)
-_SECRET_SEED = b"MCU_FLASHER_BY_NAPH_SECURE_VAULT_KEY_2026_X79"
-_SALT        = b"mcu_c46e3_rtdb_salt_v1"
-
-# Default Firebase Realtime Database configuration (Base endpoints)
-_DEFAULT_RTDB_URL        = "https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/"
-_DEFAULT_PROJECT_ID      = "mcu-flasher-c46e3"
-_DEFAULT_API_KEY         = ""
 _DEFAULT_ROOT_COLLECTION = "owner"
+_LOCAL_KEY_ITERATIONS = 600_000
+_PROVIDER_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project_id"}
+_OWNER_METADATA_KEYS = {"owner_email", "firebase_user_uid"}
+_AUTH_RESPONSE_BYTES = 64 * 1024
+_TICKET_RESPONSE_BYTES = 4 * 1024 * 1024
 
 _CLOUD_OFFLINE_MESSAGE = (
     "Firebase is blocked by Offline Mode in this app session. Turn Offline Mode off "
@@ -57,80 +54,58 @@ def cloud_network_error() -> str:
     return _CLOUD_OFFLINE_MESSAGE if network_access_disabled() else ""
 
 
-def _derive_vault_keys() -> tuple[bytes, bytes]:
-    """Derive 256-bit encryption key and 256-bit MAC key using PBKDF2."""
-    master = hashlib.pbkdf2_hmac("sha256", _SECRET_SEED, _SALT, 100000, dklen=64)
-    return master[:32], master[32:]
+class _NoFirebaseRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
 
 
-def encrypt_vault_payload(data: Dict[str, Any]) -> bytes:
-    """Encrypt confidential dictionary payload into authentic binary vault with HMAC-SHA256 authentication."""
-    enc_key, mac_key = _derive_vault_keys()
-    plaintext = json.dumps(data).encode("utf-8")
-    nonce = secrets.token_bytes(16)
-
-    keystream = bytearray()
-    counter = 0
-    while len(keystream) < len(plaintext):
-        counter_bytes = counter.to_bytes(4, "big")
-        keystream.extend(hmac.new(enc_key, nonce + counter_bytes, hashlib.sha256).digest())
-        counter += 1
-
-    ciphertext = bytes(p ^ k for p, k in zip(plaintext, keystream[:len(plaintext)]))
-    tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-    return b"MCUV" + nonce + tag + ciphertext
+def _open_firebase_request(request, *, timeout):
+    if network_access_disabled():
+        raise OfflineDependencyError(_CLOUD_OFFLINE_MESSAGE)
+    return urllib.request.build_opener(_NoFirebaseRedirect()).open(request, timeout=timeout)
 
 
-def decrypt_vault_payload(raw: bytes) -> Dict[str, Any]:
-    """Decrypt binary vault payload and verify cryptographic integrity."""
-    if not raw.startswith(b"MCUV") or len(raw) < 4 + 16 + 32:
-        raise ValueError("Invalid vault header")
-    nonce = raw[4:20]
-    expected_tag = raw[20:52]
-    ciphertext = raw[52:]
-
-    enc_key, mac_key = _derive_vault_keys()
-    actual_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected_tag, actual_tag):
-        raise ValueError("Integrity verification failed")
-
-    keystream = bytearray()
-    counter = 0
-    while len(keystream) < len(ciphertext):
-        counter_bytes = counter.to_bytes(4, "big")
-        keystream.extend(hmac.new(enc_key, nonce + counter_bytes, hashlib.sha256).digest())
-        counter += 1
-
-    plaintext = bytes(c ^ k for c, k in zip(ciphertext, keystream[:len(ciphertext)]))
-    return json.loads(plaintext.decode("utf-8"))
+def _read_firebase_json(response, limit):
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("Firebase response exceeds the supported size limit.")
+    return json.loads(raw.decode("utf-8"))
 
 
-def get_vault_file_path() -> Path:
-    """Resolve path to tracked encrypted cloud vault in src/dbs/ or project root."""
+def _cloud_request_error(error: Exception) -> str:
+    """Never display request URLs, credentials or tokens from exception strings."""
+    if isinstance(error, OfflineDependencyError) or network_access_disabled():
+        return _CLOUD_OFFLINE_MESSAGE
+    if isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+        return "The Firebase request timed out. Check your connection and try again."
+    return "Could not reach Firebase. Check the cloud settings, connection and firewall, then try again."
+
+
+def _firebase_database_url(value: str) -> str:
+    clean_url = (value or "").strip().rstrip("/")
+    if "://" not in clean_url:
+        clean_url = "https://" + clean_url
+    endpoint = urlsplit(clean_url)
+    host = endpoint.hostname or ""
+    if (endpoint.scheme != "https" or endpoint.username or endpoint.password
+            or endpoint.query or endpoint.fragment or endpoint.path not in ("", "/")
+            or endpoint.port not in (None, 443)
+            or not host.endswith((".firebaseio.com", ".firebasedatabase.app"))):
+        raise ValueError("Use an HTTPS Firebase Realtime Database URL.")
+    return clean_url
+
+
+def _firebase_auth_error(error: urllib.error.HTTPError) -> str:
     try:
-        candidates = [
-            Path(__file__).resolve().parent.parent.parent / "src" / "dbs" / _VAULT_FILE_NAME,
-            SCRIPT_DIR / "src" / "dbs" / _VAULT_FILE_NAME,
-            SCRIPT_DIR / _VAULT_FILE_NAME,
-        ]
-        for p in candidates:
-            if p.exists() and p.is_file():
-                return p
-        return candidates[0]
-    except Exception:
-        return Path("src/dbs") / _VAULT_FILE_NAME
-
-
-def load_encrypted_vault() -> Dict[str, Any]:
-    """Load and decrypt confidential Firebase configuration from tracked repository vault."""
-    try:
-        vp = get_vault_file_path()
-        if vp.exists() and vp.is_file():
-            raw = vp.read_bytes()
-            return decrypt_vault_payload(raw)
-    except Exception:
+        code = _read_firebase_json(error, 8192).get("error", {}).get("message", "").split(" : ", 1)[0]
+        if code in {"INVALID_LOGIN_CREDENTIALS", "EMAIL_NOT_FOUND", "INVALID_PASSWORD", "USER_DISABLED",
+                    "TOO_MANY_ATTEMPTS_TRY_LATER", "OPERATION_NOT_ALLOWED", "API_KEY_INVALID", "INVALID_EMAIL"}:
+            return f"Firebase error: {code}"
+    except (ValueError, AttributeError, TypeError):
         pass
-    return {}
+    finally:
+        error.close()
+    return f"Firebase returned HTTP {error.code}. Check cloud settings and account access."
 
 
 def is_internet_available(timeout: float = 0.5) -> bool:
@@ -176,7 +151,7 @@ def get_owner_portal_storage_dir() -> Path:
     Uses %LOCALAPPDATA%/MCUFlasher/.owner_portal or ~/.mcu_flasher/.owner_portal.
     """
     try:
-        local_app_data = os.environ.get("LOCALAPPDATA")
+        local_app_data = os.environ.get("LOCALAPPDATA") if sys.platform == "win32" else None
         if local_app_data:
             base = Path(local_app_data) / "MCUFlasher" / ".owner_portal"
         else:
@@ -199,7 +174,8 @@ class OwnerTicketService:
     All operations are safe for offline operation without crashing.
     """
 
-    def __init__(self, storage_dir: Optional[Path | str] = None, project_root: Optional[Path | str] = None):
+    def __init__(self, storage_dir: Optional[Path | str] = None, project_root: Optional[Path | str] = None, *, credential_store=None):
+        self._credential_store = credential_store or CredentialStore()
         try:
             if storage_dir:
                 self._storage_dir = Path(storage_dir)
@@ -241,7 +217,7 @@ class OwnerTicketService:
                     "firebase_project_id": "",
                     "firebase_root_collection": _DEFAULT_ROOT_COLLECTION,
                     "use_firebase": True,
-                    "owner_password_hash": hashlib.sha256(_DEFAULT_OWNER_KEY.encode()).hexdigest(),
+                    "local_access": {},
                     "owner_email": "",
                     "firebase_user_uid": "",
                 }
@@ -255,75 +231,127 @@ class OwnerTicketService:
     # Configuration
     # ─────────────────────────────────────────────────────────────────────────
 
-    def get_config(self) -> Dict[str, Any]:
+    def _read_config(self) -> Dict[str, Any]:
         try:
-            # 1. Load from tracked git encrypted cloud vault (src/dbs/dbs_cloud_sync.dat)
-            vault = load_encrypted_vault()
+            cfg = json.loads(self._config_file.read_text(encoding="utf-8"))
+            return cfg if isinstance(cfg, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
-            # 2. Local config overrides (if any)
-            cfg = {}
-            if self._config_file.exists():
-                try:
-                    cfg = json.loads(self._config_file.read_text(encoding="utf-8"))
-                except Exception:
-                    cfg = {}
+    def _write_config(self, cfg: Dict[str, Any]) -> bool:
+        temporary = self._config_file.with_name(self._config_file.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            if sys.platform != "win32":
+                temporary.chmod(0o600)
+            ensure_file_writable(self._config_file)
+            temporary.replace(self._config_file)
+            hide_hidden_attribute(self._config_file)
+            return True
+        except OSError:
+            return False
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
-            # Priority: explicit local override > os.environ > encrypted vault > defaults
-            api_key  = cfg.get("firebase_api_key") or os.environ.get("FIREBASE_API_KEY") or vault.get("firebase_api_key") or _DEFAULT_API_KEY
-            db_url   = cfg.get("firebase_database_url") or os.environ.get("FIREBASE_DATABASE_URL") or vault.get("firebase_database_url") or _DEFAULT_RTDB_URL
-            proj_id  = cfg.get("firebase_project_id") or os.environ.get("FIREBASE_PROJECT_ID") or vault.get("firebase_project_id") or _DEFAULT_PROJECT_ID
-            uid      = cfg.get("firebase_user_uid") or os.environ.get("FIREBASE_USER_UID") or vault.get("firebase_user_uid") or ""
-            email    = cfg.get("owner_email") or os.environ.get("OWNER_EMAIL") or vault.get("owner_email") or ""
-            root_col = cfg.get("firebase_root_collection") or os.environ.get("FIREBASE_ROOT_COLLECTION") or vault.get("firebase_root_collection") or _DEFAULT_ROOT_COLLECTION
+    @staticmethod
+    def _local_access_valid(record) -> bool:
+        if not isinstance(record, dict):
+            return False
+        try:
+            return (record.get("algorithm") == "pbkdf2-sha256"
+                    and 100_000 <= int(record["iterations"]) <= 1_000_000
+                    and len(bytes.fromhex(record["salt"])) == 16
+                    and len(bytes.fromhex(record["hash"])) == 32)
+        except (KeyError, TypeError, ValueError):
+            return False
 
-            cfg["firebase_api_key"] = api_key
-            cfg["firebase_database_url"] = db_url
-            cfg["firebase_project_id"] = proj_id
-            cfg["firebase_user_uid"] = uid
-            cfg["owner_email"] = email
-            cfg["firebase_root_collection"] = root_col
-            if "use_firebase" not in cfg:
-                cfg["use_firebase"] = True
-            return cfg
+    def get_config(self) -> Dict[str, Any]:
+        """Read OS-protected provider settings; never consult the application tree."""
+        cfg = self._read_config()
+        # Upgrade older per-user plaintext settings only after verified secure
+        # persistence. Failures leave the original settings intact for recovery.
+        provider = {key: cfg[key] for key in _PROVIDER_KEYS if cfg.get(key)}
+        metadata = {key: cfg[key] for key in _OWNER_METADATA_KEYS if cfg.get(key)}
+        if provider or metadata:
+            try:
+                if provider:
+                    save_cloud_configuration(provider, self._credential_store)
+                if metadata:
+                    saved = self._credential_store.get("owner_metadata") or {}
+                    saved.update(metadata)
+                    self._credential_store.set("owner_metadata", saved)
+                    if self._credential_store.get("owner_metadata") != saved:
+                        raise ValueError("Secure save verification failed")
+                cleaned = {key: value for key, value in cfg.items()
+                           if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS | {"owner_password_hash"}}
+                if self._write_config(cleaned):
+                    cfg = cleaned
+            except Exception:
+                pass
+        elif "owner_password_hash" in cfg:
+            cleaned = {key: value for key, value in cfg.items() if key != "owner_password_hash"}
+            if self._write_config(cleaned):
+                cfg = cleaned
+        try:
+            private_metadata = self._credential_store.get("owner_metadata") or {}
         except Exception:
-            pass
-        return {
-            "firebase_api_key": os.environ.get("FIREBASE_API_KEY", _DEFAULT_API_KEY),
-            "firebase_database_url": os.environ.get("FIREBASE_DATABASE_URL", _DEFAULT_RTDB_URL),
-            "firebase_project_id": os.environ.get("FIREBASE_PROJECT_ID", _DEFAULT_PROJECT_ID),
-            "firebase_user_uid": os.environ.get("FIREBASE_USER_UID", ""),
-            "firebase_root_collection": os.environ.get("FIREBASE_ROOT_COLLECTION", _DEFAULT_ROOT_COLLECTION),
-            "use_firebase": True,
-            "owner_email": os.environ.get("OWNER_EMAIL", ""),
-        }
+            private_metadata = {}
+        secure = load_cloud_configuration(self._credential_store)
+        # An unavailable keyring must not revive a legacy plaintext API key.
+        cfg.update(secure)
+        cfg.update({key: os.environ.get(key.upper()) or private_metadata.get(key, "")
+                    for key in _OWNER_METADATA_KEYS})
+        cfg["firebase_root_collection"] = cfg.get("firebase_root_collection") or _DEFAULT_ROOT_COLLECTION
+        cfg.setdefault("use_firebase", True)
+        cfg["local_access_configured"] = self._local_access_valid(cfg.get("local_access"))
+        return cfg
 
     def update_vault(self, updates: Dict[str, Any]) -> bool:
-        """Update and re-encrypt the tracked git vault."""
-        try:
-            vault = load_encrypted_vault()
-            vault.update(updates)
-            vp = get_vault_file_path()
-            ensure_file_writable(vp)
-            vp.write_bytes(encrypt_vault_payload(vault))
-            return True
-        except Exception:
-            return False
+        """Compatibility entry point: save to the current user's OS vault."""
+        return self.save_config(updates)
 
     def save_config(self, new_cfg: Dict[str, Any]) -> bool:
         try:
-            cfg = {}
-            if self._config_file.exists():
-                try:
-                    cfg = json.loads(self._config_file.read_text(encoding="utf-8"))
-                except Exception:
-                    cfg = {}
-            cfg.update(new_cfg)
-            ensure_file_writable(self._config_file)
-            self._config_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-            hide_hidden_attribute(self._config_file)
-            return True
+            cfg = self._read_config()
+            provider = {key: cfg[key] for key in _PROVIDER_KEYS if cfg.get(key)}
+            provider.update({key: value for key, value in new_cfg.items() if key in _PROVIDER_KEYS})
+            if provider:
+                save_cloud_configuration(provider, self._credential_store)
+            metadata = {key: cfg[key] for key in _OWNER_METADATA_KEYS if cfg.get(key)}
+            metadata.update({key: value for key, value in new_cfg.items() if key in _OWNER_METADATA_KEYS})
+            if metadata:
+                saved = self._credential_store.get("owner_metadata") or {}
+                saved.update(metadata)
+                self._credential_store.set("owner_metadata", saved)
+                if self._credential_store.get("owner_metadata") != saved:
+                    return False
+            cfg.update({key: value for key, value in new_cfg.items()
+                        if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS
+                        and key not in {"owner_password_hash", "local_access_configured"}})
+            cfg = {key: value for key, value in cfg.items()
+                   if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS | {"owner_password_hash", "local_access_configured"}}
+            return self._write_config(cfg)
         except Exception:
             return False
+
+    def configure_local_access(self, password: str) -> tuple[bool, str]:
+        """Configure a separate local key; changing an existing key requires login."""
+        cfg = self.get_config()
+        if cfg.get("local_access_configured") and not self.is_authenticated:
+            return False, "Sign in before changing the local access key."
+        if not isinstance(password, str) or len(password) < 12 or not password.strip():
+            return False, "Choose a local access key with at least 12 characters."
+        salt = secrets.token_bytes(16)
+        record = {"algorithm": "pbkdf2-sha256", "iterations": _LOCAL_KEY_ITERATIONS,
+                  "salt": salt.hex(), "hash": hashlib.pbkdf2_hmac(
+                      "sha256", password.encode("utf-8"), salt, _LOCAL_KEY_ITERATIONS).hex()}
+        if not self.save_config({"local_access": record}):
+            return False, "The local access key could not be saved."
+        return True, "Local access key saved. It grants access to this computer's local tickets only."
 
     def is_firebase_configured(self) -> bool:
         try:
@@ -333,11 +361,11 @@ class OwnerTicketService:
             return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Authentication (Master Key & Firebase Auth REST API)
+    # Authentication (Local Access & Firebase Auth REST API)
     # ─────────────────────────────────────────────────────────────────────────
 
     def authenticate(self, email_or_user: str, password: str) -> tuple[bool, str]:
-        """Authenticate with master developer key or Firebase Auth REST API."""
+        """Authenticate with the configured local key or Firebase Auth REST API."""
         try:
             self.logout()
             email_clean = (email_or_user or "").strip()
@@ -348,23 +376,20 @@ class OwnerTicketService:
 
             cfg = self.get_config()
 
-            # 1. Master developer unlock key check ("owner" or stored local hash)
-            entered_hash = hashlib.sha256(pwd_clean.encode()).hexdigest()
-            stored_hash = cfg.get("owner_password_hash") or hashlib.sha256(_DEFAULT_OWNER_KEY.encode()).hexdigest()
-
-            if pwd_clean == _DEFAULT_OWNER_KEY or entered_hash == stored_hash:
-                self._is_authenticated = True
-                self._user_email = email_clean or cfg.get("owner_email", "developer@mcuflasher.local")
-                self._uid = cfg.get("firebase_user_uid", "")
-                return True, "Authenticated (Developer Master Key)."
+            record = cfg.get("local_access")
+            if self._local_access_valid(record):
+                entered = hashlib.pbkdf2_hmac("sha256", pwd_clean.encode("utf-8"),
+                    bytes.fromhex(record["salt"]), int(record["iterations"]))
+                if hmac.compare_digest(entered, bytes.fromhex(record["hash"])):
+                    self._is_authenticated = True
+                    self._user_email = email_clean or "Local developer"
+                    # A local key never supplies a cloud UID or token.
+                    return True, "Signed in to local developer tickets."
 
             # 2. Firebase Cloud Authentication via REST API
             if cfg.get("use_firebase") and cfg.get("firebase_api_key"):
                 if message := cloud_network_error():
                     return False, message
-                if not is_internet_available(timeout=0.6):
-                    return False, "No internet connection available."
-
                 api_key = cfg["firebase_api_key"]
                 url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
                 payload = json.dumps({
@@ -380,8 +405,8 @@ class OwnerTicketService:
                         headers={"Content-Type": "application/json"},
                         method="POST",
                     )
-                    with urllib.request.urlopen(req, timeout=5.0) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
+                    with _open_firebase_request(req, timeout=5.0) as resp:
+                        data = _read_firebase_json(resp, _AUTH_RESPONSE_BYTES)
                         token = data.get("idToken") if isinstance(data, dict) else None
                         uid = (data.get("localId") or data.get("uid")) if isinstance(data, dict) else None
                         if not isinstance(token, str) or not token or not isinstance(uid, str) or not uid:
@@ -395,18 +420,13 @@ class OwnerTicketService:
                 except OfflineDependencyError:
                     return False, _CLOUD_OFFLINE_MESSAGE
                 except urllib.error.HTTPError as e:
-                    try:
-                        err_json = json.loads(e.read().decode("utf-8"))
-                        err_msg = err_json.get("error", {}).get("message", "Authentication failed.")
-                        return False, f"Firebase error: {err_msg}"
-                    except Exception:
-                        return False, f"Firebase HTTP error: {e.code}"
+                    return False, _firebase_auth_error(e)
                 except Exception as e:
-                    return False, f"Connection error: {e}"
+                    return False, _cloud_request_error(e)
 
             return False, "Invalid credentials. Access denied."
         except Exception as e:
-            return False, f"Authentication error: {e}"
+            return False, _cloud_request_error(e)
 
     def send_password_reset_email(self, email: Optional[str] = None) -> tuple[bool, str]:
         """Send a password reset email via Firebase Identity Toolkit."""
@@ -414,7 +434,7 @@ class OwnerTicketService:
             if message := cloud_network_error():
                 return False, message
             cfg = self.get_config()
-            api_key = cfg.get("firebase_api_key", _DEFAULT_API_KEY)
+            api_key = cfg.get("firebase_api_key", "")
             target_email = (email or cfg.get("owner_email", "")).strip()
             if not api_key:
                 return False, "Firebase API Key is missing."
@@ -433,17 +453,13 @@ class OwnerTicketService:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            with _open_firebase_request(req, timeout=5.0) as resp:
+                _read_firebase_json(resp, _AUTH_RESPONSE_BYTES)
                 return True, f"Password reset email sent to {target_email}."
         except urllib.error.HTTPError as e:
-            try:
-                err_json = json.loads(e.read().decode("utf-8"))
-                return False, err_json.get("error", {}).get("message", f"HTTP {e.code}")
-            except Exception:
-                return False, f"HTTP error {e.code}"
+            return False, _firebase_auth_error(e)
         except Exception as e:
-            return False, f"Failed to send reset email: {e}"
+            return False, _cloud_request_error(e)
 
 
     def logout(self) -> None:
@@ -488,20 +504,19 @@ class OwnerTicketService:
     def _get_firebase_tickets_url(self, ticket_id: Optional[str] = None, root_collection: Optional[str] = None) -> Optional[str]:
         """Construct the REST URL adhering to Firebase security rules: /owner/{$uid}/tickets"""
         try:
-            cfg = self.get_config()
-            db_url = (cfg.get("firebase_database_url") or "").rstrip("/")
-            if not db_url:
+            if cloud_network_error() or not self.is_cloud_authenticated:
                 return None
-            auth_param = f"?auth={self._id_token}" if self._id_token else ""
-            uid = self._uid or cfg.get("firebase_user_uid")
+            cfg = self.get_config()
+            db_url = _firebase_database_url(cfg.get("firebase_database_url", ""))
+            auth_param = "?" + urlencode({"auth": self._id_token})
+            uid = self._uid
             root = (root_collection or cfg.get("firebase_root_collection") or _DEFAULT_ROOT_COLLECTION).strip().strip("/")
-            if uid:
-                base_path = f"{db_url}/{root}/{uid}/tickets"
-            else:
-                base_path = f"{db_url}/{root}/tickets"
+            if any(character in root + uid + (ticket_id or "") for character in ".#$[]/\\"):
+                return None
+            base_path = f"{db_url}/{quote(root, safe='')}/{quote(uid, safe='')}/tickets"
 
             if ticket_id:
-                return f"{base_path}/{ticket_id}.json{auth_param}"
+                return f"{base_path}/{quote(ticket_id, safe='')}.json{auth_param}"
             return f"{base_path}.json{auth_param}"
         except Exception:
             return None
@@ -512,8 +527,8 @@ class OwnerTicketService:
             cfg = self.get_config()
 
             # Try Firebase Realtime Database REST API only if configured, authenticated, AND online
-            if self._is_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                if is_internet_available(timeout=0.5):
+            if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
+                if not cloud_network_error():
                     candidates: List[str] = []
                     configured_root = cfg.get("firebase_root_collection", _DEFAULT_ROOT_COLLECTION)
                     for r in [self._active_root_collection, configured_root, "owner", "users"]:
@@ -526,8 +541,8 @@ class OwnerTicketService:
                             if not url:
                                 continue
                             req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
-                            with urllib.request.urlopen(req, timeout=4.0) as resp:
-                                raw = json.loads(resp.read().decode("utf-8"))
+                            with _open_firebase_request(req, timeout=4.0) as resp:
+                                raw = _read_firebase_json(resp, _TICKET_RESPONSE_BYTES)
                                 if isinstance(raw, dict):
                                     tickets = []
                                     for k, v in raw.items():
@@ -584,15 +599,16 @@ class OwnerTicketService:
             try:
                 tickets = self._read_local_tickets()
                 tickets.insert(0, ticket)
-                self._save_local_tickets(tickets)
+                if self._save_local_tickets(tickets) is False:
+                    return {}
             except Exception:
                 pass
 
             # 2. Sync to Firebase if configured and online
             try:
                 cfg = self.get_config()
-                if cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                    if is_internet_available(timeout=0.5):
+                if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
+                    if not cloud_network_error():
                         self._push_to_firebase(ticket)
             except Exception:
                 pass
@@ -617,11 +633,12 @@ class OwnerTicketService:
                     break
 
             if found:
-                self._save_local_tickets(tickets)
+                if self._save_local_tickets(tickets) is False:
+                    return False
                 try:
                     cfg = self.get_config()
-                    if target_ticket and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        if is_internet_available(timeout=0.5):
+                    if target_ticket and self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
+                        if not cloud_network_error():
                             self._patch_to_firebase(ticket_id, target_ticket)
                 except Exception:
                     pass
@@ -638,11 +655,12 @@ class OwnerTicketService:
             tickets = [t for t in tickets if t.get("id") != ticket_id]
 
             if len(tickets) != initial_len:
-                self._save_local_tickets(tickets)
+                if self._save_local_tickets(tickets) is False:
+                    return False
                 try:
                     cfg = self.get_config()
-                    if cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        if is_internet_available(timeout=0.5):
+                    if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
+                        if not cloud_network_error():
                             self._delete_from_firebase(ticket_id)
                 except Exception:
                     pass
@@ -655,23 +673,46 @@ class OwnerTicketService:
     # Local & Remote Synchronization Helpers
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _ticket_cache_path(self) -> Path:
+        """Keep cloud fallback data isolated by verified identity and provider."""
+        if self.is_cloud_authenticated:
+            cfg = self.get_config()
+            database = _firebase_database_url(cfg.get("firebase_database_url", "")).lower()
+            identity = "\n".join((database, cfg.get("firebase_project_id", ""), self._uid))
+            partition = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            return self._storage_dir / (".owner_cloud_tickets_" + partition + ".json")
+        return self._tickets_file
+
     def _read_local_tickets(self) -> List[Dict[str, Any]]:
         try:
-            if self._tickets_file.exists():
-                data = json.loads(self._tickets_file.read_text(encoding="utf-8"))
+            cache_file = self._ticket_cache_path()
+            if cache_file.exists():
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
                 if isinstance(data, list):
                     return data
         except Exception:
             pass
         return []
 
-    def _save_local_tickets(self, tickets: List[Dict[str, Any]]) -> None:
+    def _save_local_tickets(self, tickets: List[Dict[str, Any]]) -> bool:
         try:
-            ensure_file_writable(self._tickets_file)
-            self._tickets_file.write_text(json.dumps(tickets, indent=2, ensure_ascii=False), encoding="utf-8")
-            hide_hidden_attribute(self._tickets_file)
+            cache_file = self._ticket_cache_path()
+            temporary = cache_file.with_name(cache_file.name + "." + uuid.uuid4().hex + ".tmp")
+            temporary.write_text(json.dumps(tickets, indent=2, ensure_ascii=False), encoding="utf-8")
+            if sys.platform != "win32":
+                temporary.chmod(0o600)
+            ensure_file_writable(cache_file)
+            temporary.replace(cache_file)
+            hide_hidden_attribute(cache_file)
+            return True
         except Exception:
-            pass
+            return False
+        finally:
+            if "temporary" in locals():
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _sort_tickets(self, tickets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sort tickets with Open & Critical tickets at the top."""
@@ -709,7 +750,7 @@ class OwnerTicketService:
                     method="PUT",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=4.0) as resp:
+                    with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
                             return
@@ -742,7 +783,7 @@ class OwnerTicketService:
                     method="PATCH",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=4.0) as resp:
+                    with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
                             return
@@ -770,7 +811,7 @@ class OwnerTicketService:
                     continue
                 req = urllib.request.Request(url, method="DELETE")
                 try:
-                    with urllib.request.urlopen(req, timeout=4.0) as resp:
+                    with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
                             return
@@ -788,27 +829,23 @@ class OwnerTicketService:
         try:
             if message := cloud_network_error():
                 return False, message
-            if not is_internet_available(timeout=0.6):
-                return False, "No internet connection detected."
-
-            clean_url = db_url.strip().rstrip("/")
-            if not clean_url.startswith("http"):
-                clean_url = "https://" + clean_url
-            if not clean_url.endswith(".firebaseio.com") and "firebasedatabase.app" not in clean_url:
+            try:
+                clean_url = _firebase_database_url(db_url)
+            except ValueError:
                 return False, "URL should be a valid Firebase Realtime Database URL."
 
             url = f"{clean_url}/.json?shallow=true"
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-Test/1.0"})
-                with urllib.request.urlopen(req, timeout=4.0) as resp:
+                with _open_firebase_request(req, timeout=4.0) as resp:
                     if resp.status in (200, 401, 403):
                         return True, "Firebase database endpoint reached. Sign in to verify credentials and ticket access."
                     return False, f"Unexpected response status: {resp.status}"
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
                     return True, "Firebase database endpoint reached; security rules require sign-in. Credentials and ticket access are not verified."
-                return False, f"HTTP error {e.code}: {e.reason}"
+                return False, f"The Firebase database returned HTTP {e.code}. Check the database URL and service availability."
             except Exception as e:
-                return False, f"Connection failed: {e}"
+                return False, _cloud_request_error(e)
         except Exception as e:
-            return False, f"Test failed: {e}"
+            return False, _cloud_request_error(e)

@@ -2058,7 +2058,14 @@ def run_update_checks(auto_update: bool = False):
         return "skipped"
 
     status("Update checks enabled. Querying PyPI, GitHub, and winget...", DIM)
-    dim(f"Update target: {_get_target_python()}")
+    update_target = _get_target_python()
+    try:
+        # Pip still uses its short Windows spelling to avoid MAX_PATH; show
+        # the actual environment location to the user, including junctions.
+        update_target_display = update_target.resolve()
+    except (OSError, RuntimeError):
+        update_target_display = update_target
+    dim(f"Update target: {update_target_display}")
 
     # Fast offline check: if we can't even reach pypi.org:443 in 2 seconds,
     # every probe below will just sit in its socket timeout (8-20s each).

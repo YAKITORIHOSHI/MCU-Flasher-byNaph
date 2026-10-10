@@ -60,8 +60,13 @@ def builder_processes():
 
 
 def extended_windows_path(path):
-    """Keep archive I/O usable after ZIP/TAR security checks resolve junctions."""
+    """Use the native absolute path, adding the extended namespace on Windows."""
     path = os.path.abspath(os.fsdecode(path))
+    # Shared seed extraction also runs in native Ubuntu fixtures. There a
+    # Windows namespace prefix is a relative filename containing backslashes,
+    # so it would redirect archive members outside their retained staging tree.
+    if sys.platform != "win32":
+        return path
     if path.startswith("\\\\?\\"):
         return path
     if path.startswith("\\\\"):

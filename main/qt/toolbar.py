@@ -385,6 +385,10 @@ class PrimaryToolbar(QToolBar):
         self.btn_project.clicked.connect(self._on_new_project)
         rc_layout.addWidget(self.btn_project)
 
+        self.btn_cloud = _make_action_btn("Cloud", "Cloud sketches and account", "btn-cloud")
+        self.btn_cloud.clicked.connect(self._on_cloud_sketches)
+        rc_layout.addWidget(self.btn_cloud)
+
         # Download Boards/Libs button
         self.btn_download = _make_action_btn("⬇ Boards & Libraries",
                                              "Download and manage Arduino boards and libraries",
@@ -610,10 +614,23 @@ class PrimaryToolbar(QToolBar):
         from main.qt.download_dialog import launch_download_manager
         launch_download_manager(parent=self.window())
 
+    def _on_cloud_sketches(self) -> None:
+        if self._is_busy():
+            return
+        from main.qt.cloud_sketch_panel import show_cloud_dialog
+        window = self.window()
+        show_cloud_dialog(self._backend, parent=window,
+                          on_pulled=getattr(window, "_on_cloud_project_pulled", None))
+
     def update_sketch_label(self, path: str) -> None:
         self._current_sketch_path = path
         p = Path(path)
         text = p.name if p.name else path
+        link = getattr(self._backend, "_cloud_project_link", None)
+        link = link if isinstance(link, dict) else None
+        self.lbl_sketch_icon.setPixmap(icon("cloud" if link else "project").pixmap(16, 16))
+        if link:
+            text = str(link.get("name") or text)
         if len(text) > 40:
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
@@ -636,6 +653,7 @@ class PrimaryToolbar(QToolBar):
         phase: str = str(payload.get("phase", "")).lower()
         op: str = str(payload.get("op", "")).lower()
         can_stop: bool = bool(payload.get("can_stop", True))
+        self.btn_cloud.setEnabled(not is_busy)
 
         if is_busy:
             self.btn_compile.setEnabled(False)
@@ -760,12 +778,18 @@ class PrimaryToolbar(QToolBar):
             lambda p: self.update_sketch_label(p.get("path", ""))
         )
         sig_bus.project_updated.connect(self._on_target_selection_changed)
+        sig_bus.cloud_project_updated.connect(self._on_cloud_project_updated)
         if connect_theme and hasattr(sig_bus, "theme_changed"):
             sig_bus.theme_changed.connect(self.apply_theme)
 
     @Slot(dict)
     def _on_target_selection_changed(self, _payload: dict) -> None:
         self._update_action_button_states()
+
+    @Slot(dict)
+    def _on_cloud_project_updated(self, payload: dict) -> None:
+        if payload.get("path") == self._current_sketch_path:
+            self.update_sketch_label(self._current_sketch_path)
 
     def apply_theme(self, theme_name: str) -> None:
         for button in self.findChildren(QPushButton):
@@ -776,7 +800,7 @@ class PrimaryToolbar(QToolBar):
                 f"color: {Theme.CYAN}; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
             )
         if hasattr(self, "lbl_sketch_icon"):
-            self.lbl_sketch_icon.setPixmap(icon("project").pixmap(16, 16))
+            self.lbl_sketch_icon.setPixmap(icon("cloud" if isinstance(getattr(self._backend, "_cloud_project_link", None), dict) else "project").pixmap(16, 16))
             self.lbl_sketch_icon.setStyleSheet(
                 f"color: {Theme.CYAN}; font-size: 13px; font-family: 'Segoe UI Emoji', sans-serif; background: transparent;"
             )
@@ -865,7 +889,7 @@ class PrimaryToolbar(QToolBar):
         # Keep Project and Download directly reachable on very narrow screens.
         tiny = width < 560
         for button, label in ((self.btn_compile, "Compile"), (self.btn_upload, "Upload"),
-                              (self.btn_project, "Project")):
+                              (self.btn_project, "Project"), (self.btn_cloud, "Cloud")):
             desired = "" if tiny else label
             if button.text() != desired:
                 button.setText(desired)

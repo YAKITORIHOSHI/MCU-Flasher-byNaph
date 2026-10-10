@@ -1282,6 +1282,27 @@
         return projectLoadInFlight;
       };
 
+      // The account dialog confirms discarding local changes before Pull.
+      // Reuse the native clean-state reload for each tab after loading the
+      // downloaded file set, including files added/deleted by that revision.
+      window.reloadCloudSnapshot = async function () {
+        const active = document.querySelector('#tab-bar .tab.active');
+        const activePath = active && active._filePath;
+        await window.safeLoadProject();
+        let success = true;
+        const paths = Array.from(document.querySelectorAll('#tab-bar .tab'))
+          .map(tab => tab._filePath).filter(Boolean);
+        for (const path of paths) {
+          if (!window.activateProjectFile || !window.activateProjectFile(path)) {
+            success = false;
+            continue;
+          }
+          if (await window.reloadActiveFile() !== true) success = false;
+        }
+        if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
+        return success;
+      };
+
       function dedupeProjectTabs() {
         const seen = new Map();
         document.querySelectorAll('#tab-bar .tab').forEach((tab) => {

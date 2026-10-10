@@ -86,14 +86,12 @@ class NativePtyProcess:
             # original handle; Popen checks status before sending a signal.
             try:
                 self._record_status(self._handle.wait(timeout=1.75))
-                return
             except subprocess.TimeoutExpired:
-                pass
-            self._handle.send_signal(signal.SIGTERM)
-            try:
-                self._record_status(self._handle.wait(timeout=.4))
-            except subprocess.TimeoutExpired:
-                if not force:
-                    raise OSError("The native terminal did not close")
-                self._handle.kill()
-                self._record_status(self._handle.wait(timeout=.4))
+                self._handle.send_signal(signal.SIGTERM)
+                try:
+                    self._record_status(self._handle.wait(timeout=.4))
+                except subprocess.TimeoutExpired:
+                    if not force:
+                        raise OSError("The native terminal did not close")
+                    self._handle.kill()
+                    self._record_status(self._handle.wait(timeout=.4))

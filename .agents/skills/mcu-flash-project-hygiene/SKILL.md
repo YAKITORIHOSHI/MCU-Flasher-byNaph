@@ -153,6 +153,15 @@ path references, and fallback logic in the same operation.
 
 ## Git repository hygiene
 
+- Shared archive path helpers add the `\\?\` namespace only on Windows. On
+  Linux they must retain native absolute paths; otherwise extraction creates a
+  relative backslash directory outside its staging tree. Verify actual seed
+  extraction containment with `direct/verify_bootstrap_seed.py` and native/Windows
+  path spellings with `direct/verify_bootstrap_archives.py`. A copied
+  `_/home/.../temp/audit/bootstrap-seed-fixtures` tree may be old fixture residue;
+  prove its contents/ownership before relocating it, preserve it under `temp/`,
+  and exclude audit artifacts from release archives.
+
 - **`.gitignore` is authoritative.** Files committed before their ignore rule
   existed remain tracked until explicitly untracked with `git rm --cached`.
   Periodically audit with `git ls-files -ic --exclude-standard`.

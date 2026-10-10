@@ -8,6 +8,7 @@ import sys
 import time
 import unittest
 import warnings
+from threading import Event
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -15,7 +16,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "offscreen")
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
 from main.core.theme import Theme
@@ -50,6 +51,14 @@ def pump():
         time.sleep(.02)
 
 
+def settle(widget, timeout=4000):
+    deadline = time.monotonic() + timeout / 1000
+    while widget._task_name and time.monotonic() < deadline:
+        QTest.qWait(10)
+    assert not widget._task_name, "A fixture service task did not complete"
+    pump()
+
+
 def show(widget, size=None):
     widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
     if size:
@@ -78,24 +87,35 @@ class PortalChecks(unittest.TestCase):
         self.service.is_cloud_authenticated = False
         self.service.get_tickets.side_effect = lambda: copy.deepcopy(self.tickets)
         self.service.create_ticket.return_value = {"id": "created-fixture"}
-        self.service.update_ticket.return_value = True
+        def update_ticket(ticket_id, updates):
+            for ticket in self.tickets:
+                if ticket["id"] == ticket_id:
+                    ticket.update(updates)
+            return True
+        self.service.update_ticket.side_effect = update_ticket
+        def delete_ticket(ticket_id):
+            self.tickets[:] = [ticket for ticket in self.tickets if ticket["id"] != ticket_id]
+            return True
+        self.service.delete_ticket.side_effect = delete_ticket
         self.service.save_config.return_value = True
         self.service.test_firebase_connection.return_value = (True, "Connection verified in the fixture.")
+        self.service.configure_local_access.return_value = (True, "Your local access key is saved.")
         patcher = patch.object(portal, "OwnerTicketService", return_value=self.service)
         patcher.start()
         self.addCleanup(patcher.stop)
-        network = patch.object(portal, "is_internet_available", return_value=False)
+        network = patch("main.core.owner_tickets.is_internet_available", return_value=False)
         network.start()
         self.addCleanup(network.stop)
         self.dialog = portal.OwnerTicketDialog()
         show(self.dialog)
+        settle(self.dialog)
         self.addCleanup(self.dialog.close)
         self.addCleanup(self.dialog.deleteLater)
 
     def sign_in(self):
         self.dialog.txt_auth_pwd.setText("fixture-only")
         self.dialog._do_authenticate()
-        pump()
+        settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
 
     def test_login_keyboard_mask_and_lock(self):
@@ -107,18 +127,20 @@ class PortalChecks(unittest.TestCase):
         self.dialog.btn_toggle_eye.click()
         self.assertEqual(self.dialog.txt_auth_pwd.echoMode(), QLineEdit.EchoMode.Normal)
         QTest.keyClick(self.dialog.txt_auth_pwd, Qt.Key.Key_Return)
-        pump()
+        settle(self.dialog)
         self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only")
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
         self.assertEqual(self.dialog.txt_auth_pwd.text(), "")
         self.assertEqual(self.dialog.txt_auth_pwd.echoMode(), QLineEdit.EchoMode.Password)
         self.dialog._do_lock()
+        settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 0)
         self.service.logout.assert_called_once()
         self.service.authenticate.reset_mock()
         self.dialog.txt_auth_email.setFocus()
         self.dialog.txt_auth_pwd.setText("fixture-only")
         QTest.keyClick(self.dialog.txt_auth_email, Qt.Key.Key_Return)
+        settle(self.dialog)
         self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only")
 
     def test_search_filter_create_edit_and_delete_routes(self):
@@ -130,10 +152,13 @@ class PortalChecks(unittest.TestCase):
         card = self.dialog.cards_layout.itemAt(0).widget()
         self.assertEqual(card.ticket["id"], "fixture-2")
         card.status_cb.setCurrentText("Resolved")
+        settle(self.dialog)
         self.service.update_ticket.assert_called_with("fixture-2", {"status": "Resolved"})
         self.assertEqual(card.ticket["status"], "Resolved")
+        card = self.dialog.cards_layout.itemAt(0).widget()
         with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
             card.delete_button.click()
+        settle(self.dialog)
         self.service.delete_ticket.assert_called_once_with("fixture-2")
         self.dialog.search_input.clear()
         self.dialog.filter_cb.setCurrentText("Resolved")
@@ -143,6 +168,7 @@ class PortalChecks(unittest.TestCase):
         self.dialog.new_desc.setPlainText("Reproduction steps\\nFixture notes")
         self.dialog.new_category.setCurrentText("Serial Monitor")
         self.dialog.btn_save_new.click()
+        settle(self.dialog)
         self.service.create_ticket.assert_called_once_with(
             title="Preserve draft", category="Serial Monitor", severity="Medium",
             description="Reproduction steps\\nFixture notes", status="Open")
@@ -154,6 +180,7 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(edit.txt_title.text(), "<plain title>")
         edit.txt_desc.setPlainText("Updated notes")
         QTest.keyClick(edit.txt_desc, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
+        settle(edit)
         self.service.update_ticket.assert_called_with("fixture-1", {
             "title": "<plain title>", "category": "Custom category", "severity": "Critical",
             "status": "Open", "description": "Updated notes"})
@@ -190,38 +217,43 @@ class PortalChecks(unittest.TestCase):
         cloud.db_input.setText("https://fixture.invalid/")
         cloud.key_input.setText("fixture-key")
         cloud._run_test()
+        settle(cloud)
         self.service.test_firebase_connection.assert_called_once_with("fixture-key", "https://fixture.invalid/")
         self.assertTrue(cloud.test_button.isEnabled())
         self.assertTrue(cloud.save_button.isEnabled())
         self.service.save_config.return_value = False
         cloud._save()
+        settle(cloud)
         self.assertTrue(cloud.isVisible())
         self.assertEqual(cloud.db_input.text(), "https://fixture.invalid/")
         self.assertEqual(cloud.feedback.property("tone"), "fail")
         capture(cloud, "cloud-save-error-default")
         self.service.save_config.return_value = True
         cloud._save()
+        settle(cloud)
         self.assertEqual(cloud.result(), QDialog.DialogCode.Accepted)
         cloud.deleteLater()
 
     def test_offline_status_and_sign_in_error_are_distinct_from_credentials(self):
         message = "Firebase is blocked by Offline Mode. Restart the app after turning it off."
         with patch.object(portal, "cloud_network_error", return_value=message), \
-                patch.object(portal, "is_internet_available") as probe:
+                patch("main.core.owner_tickets.is_internet_available") as probe:
             self.dialog._update_cloud_badge()
             self.assertEqual(self.dialog.cloud_badge.text(), "Offline Mode")
             self.assertIn("Restart", self.dialog.cloud_badge.toolTip())
             probe.assert_not_called()
-        self.service.get_config.return_value.update(use_firebase=True, firebase_database_url="https://fixture.invalid")
-        with patch.object(portal, "is_internet_available", return_value=True):
+        self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.invalid", firebase_api_key="fixture-key")
+        with patch("main.core.owner_tickets.is_internet_available", return_value=True) as probe:
             self.dialog._update_cloud_badge()
             self.assertEqual(self.dialog.cloud_badge.text(), "Cloud configured")
-            self.service.is_cloud_authenticated = True
+            self.dialog._cloud_authenticated = True
             self.dialog._update_cloud_badge()
             self.assertEqual(self.dialog.cloud_badge.text(), "Cloud signed in")
+            probe.assert_not_called()
         self.service.authenticate.return_value = (False, message)
         self.dialog.txt_auth_pwd.setText(" fixture-only ")
         self.dialog._do_authenticate()
+        settle(self.dialog)
         self.service.authenticate.assert_called_once_with("developer@example.com", " fixture-only ")
         self.assertEqual(self.dialog.stack.currentIndex(), 0)
         self.assertEqual(self.dialog.lbl_auth_error.text(), message)
@@ -252,6 +284,86 @@ class PortalChecks(unittest.TestCase):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
             QTest.qWait(850)
             open_portal.assert_not_called()
+
+    def test_cloud_diagnosis_is_async_and_never_claims_sign_in(self):
+        self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")
+        started, release = Event(), Event()
+        self.addCleanup(release.set)
+        def diagnose(key, url):
+            self.assertIsNot(QThread.currentThread(), APP.thread())
+            started.set()
+            self.assertTrue(release.wait(2))
+            return True, "Database endpoint reached; account access has not been verified."
+        self.service.test_firebase_connection.side_effect = diagnose
+        self.dialog._diagnose_cloud()
+        self.assertTrue(started.wait(.5))
+        QTest.qWait(60)
+        self.assertEqual(self.dialog._task_name, "diagnose")
+        self.assertFalse(self.dialog.btn_diagnose.isEnabled())
+        self.dialog.txt_auth_email.setText("still-responsive@example.com")
+        release.set()
+        settle(self.dialog)
+        self.assertEqual(self.dialog.cloud_badge.text(), "Cloud reachable")
+        self.assertIn("Sign in", self.dialog.connection_note.text())
+        self.service.authenticate.assert_not_called()
+        self.service.test_firebase_connection.side_effect = None
+        self.service.test_firebase_connection.return_value = (False, "The database endpoint timed out.")
+        self.dialog._diagnose_cloud()
+        settle(self.dialog)
+        self.assertEqual(self.dialog.cloud_badge.text(), "Cloud unreachable")
+        self.assertIn("timed out", self.dialog.connection_note.text())
+
+    def test_storage_initialization_and_authentication_never_run_on_qt(self):
+        def read_config():
+            self.assertIsNot(QThread.currentThread(), APP.thread())
+            return {"owner_email": "developer@example.com", "use_firebase": False}
+        def authenticate(email, password):
+            self.assertIsNot(QThread.currentThread(), APP.thread())
+            return True, "Local access unlocked"
+        self.service.get_config.side_effect = read_config
+        self.service.authenticate.side_effect = authenticate
+        self.dialog._initialize_service()
+        settle(self.dialog)
+        self.sign_in()
+        self.assertEqual(self.dialog.cloud_badge.text(), "Local tickets")
+
+    def test_local_key_setup_keeps_passwords_out_of_config_updates(self):
+        settings = portal.FirebaseSettingsDialog(self.service, self.dialog, config={"local_access_configured": False})
+        show(settings, (420, 420))
+        settings.local_key.setText("long-fixture-key")
+        settings.local_confirm.setText("different-key")
+        settings._configure_local_access()
+        self.service.configure_local_access.assert_not_called()
+        self.assertIn("match", settings.feedback.text())
+        settings.local_confirm.setText("long-fixture-key")
+        settings._configure_local_access()
+        settle(settings)
+        self.service.configure_local_access.assert_called_once_with("long-fixture-key")
+        self.service.save_config.assert_not_called()
+        self.assertEqual(settings.local_key.text(), "")
+        self.assertEqual(settings.local_confirm.text(), "")
+        self.assertFalse(settings.local_save.isEnabled())
+        settings._configure_local_access()
+        self.assertEqual(self.service.configure_local_access.call_count, 1)
+        settings.close()
+        settings.deleteLater()
+
+    def test_closing_portal_during_endpoint_check_does_not_destroy_running_worker(self):
+        self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")
+        started, release = Event(), Event()
+        self.addCleanup(release.set)
+        def diagnose(*_):
+            started.set()
+            release.wait(2)
+            return True, "Fixture endpoint reached"
+        self.service.test_firebase_connection.side_effect = diagnose
+        self.dialog._diagnose_cloud()
+        self.assertTrue(started.wait(.5))
+        self.dialog.close()
+        self.assertTrue(portal._SERVICE_TASKS)
+        release.set()
+        settle(self.dialog)
+        self.assertFalse(self.dialog.isVisible())
 
     def test_render_all_themes_and_compact_forms(self):
         self.sign_in()

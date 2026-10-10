@@ -25,7 +25,7 @@ jobs:
       - name: Ubuntu first-launch prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep xclip wl-clipboard
+          sudo apt-get install -y ripgrep xclip wl-clipboard libsecret-tools
           sudo apt-get install -y xvfb python3-venv python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
           sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
           if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep xclip wl-clipboard
+          sudo apt-get install -y ripgrep xclip wl-clipboard libsecret-tools
           sudo apt-get install -y xvfb python3-tk build-essential git xdg-utils libusb-1.0-0 libudev1 libegl1 libgl1 libnss3 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1
           sudo apt-get install -y libnspr4 libgbm1 libxcb1 libxcb-dri3-0 libx11-6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libdbus-1-3 libfontconfig1 libfreetype6
           if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
@@ -131,6 +131,11 @@ jobs:
           .venv-linux/bin/python -B direct/verify_board_families.py
           .venv-linux/bin/python -B direct/verify_board_search.py
           .venv-linux/bin/python -B direct/verify_projects.py
+          .venv-linux/bin/python -B direct/verify_cloud_configuration.py
+          .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
+          .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py
+          .venv-linux/bin/python -B direct/verify_owner_ticket_service.py
+          .venv-linux/bin/python -B direct/verify_owner_tickets.py --render-dir temp/audit/compatibility/developer
           .venv-linux/bin/python -B direct/verify_application_guard.py
           .venv-linux/bin/python -B direct/verify_actions.py
           .venv-linux/bin/python -B direct/verify_cursor.py
@@ -217,6 +222,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_projects.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($check in 'verify_cloud_configuration', 'verify_cloud_sketch_service', 'verify_cloud_sketch_ui', 'verify_owner_ticket_service', 'verify_owner_tickets') {
+            & env/Scripts/python.exe -B "direct/$check.py"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader', 'verify_serial_view', 'verify_serial_wrap', 'verify_serial_delivery') {
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

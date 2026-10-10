@@ -1,0 +1,60 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "owner": {
+      "$uid": {
+        "tickets": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": "auth != null && auth.uid == $uid"
+        }
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid",
+        "cloud_sketches": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": "auth != null && auth.uid == $uid",
+          ".indexOn": ["meta/updated_at"],
+          "$sketch": {
+            ".validate": "newData.hasChildren(['schema', 'meta', 'versions']) && $sketch.matches(/^[A-Za-z0-9_-]{1,128}$/)",
+            "schema": {".validate": "newData.val() == 1"},
+            "meta": {
+              ".validate": "newData.hasChildren(['id', 'name', 'owner_uid', 'revision', 'created_at', 'updated_at', 'file_count'])",
+              "id": {".validate": "newData.val() == $sketch"},
+              "name": {".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"},
+              "owner_uid": {".validate": "newData.val() == $uid"},
+              "revision": {".validate": "newData.isNumber() && newData.val() % 1 == 0 && newData.val() >= 1 && newData.val() <= 1000000000 && ((!data.exists() && newData.val() == 1) || (data.exists() && newData.val() == data.val() + 1))"},
+              "created_at": {".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())"},
+              "updated_at": {".validate": "newData.isNumber() && newData.val() >= newData.parent().child('created_at').val() && newData.val() <= now + 300000"},
+              "file_count": {".validate": "newData.isNumber() && newData.val() % 1 == 0 && newData.val() >= 1 && newData.val() <= 128"},
+              "$other": {".validate": false}
+            },
+            "versions": {
+              ".validate": "newData.hasChild('r' + newData.parent().child('meta/revision').val())",
+              "$revision": {
+                ".validate": "newData.hasChildren(['revision', 'created_at', 'files']) && (data.exists() || $revision == 'r' + newData.parent().parent().child('meta/revision').val())",
+                "revision": {".validate": "newData.isNumber() && newData.val() % 1 == 0 && 'r' + newData.val() == $revision && newData.val() >= newData.parent().parent().parent().child('meta/revision').val() - 19 && newData.val() <= newData.parent().parent().parent().child('meta/revision').val() && (!data.exists() || newData.val() == data.val())"},
+                "created_at": {".validate": "newData.isNumber() && newData.val() <= now + 300000 && (!data.exists() || newData.val() == data.val())"},
+                "files": {
+                  ".validate": "newData.hasChildren()",
+                  "$file": {
+                    ".validate": "newData.hasChildren(['name', 'content', 'sha256']) && (!data.parent().parent().exists() || data.exists()) && $file.matches(/^[A-Za-z0-9_-]{1,320}$/)",
+                    "name": {".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 240 && !newData.val().beginsWith('.') && !newData.val().contains('/') && !newData.val().contains('\\\\') && !newData.val().contains(':') && newData.val().matches(/^.+\\.(ino|cpp|c|h|hpp|txt)$/i) && (!data.exists() || newData.val() == data.val())"},
+                    "content": {".validate": "newData.isString() && newData.val().length <= 1048576 && (!data.exists() || newData.val() == data.val())"},
+                    "sha256": {".validate": "newData.isString() && newData.val().matches(/^[a-f0-9]{64}$/) && (!data.exists() || newData.val() == data.val())"},
+                    "$other": {".validate": false}
+                  }
+                },
+                "$other": {".validate": false}
+              }
+            },
+            "$other": {".validate": false}
+          }
+        }
+      }
+    }
+  }
+}

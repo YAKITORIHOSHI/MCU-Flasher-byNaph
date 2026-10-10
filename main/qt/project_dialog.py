@@ -18,8 +18,8 @@ from typing import Callable, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
-from PySide6.QtCore import Qt, QTimer, QStandardPaths, QObject, QRunnable, QThreadPool, Signal, QSize
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, QStandardPaths, QObject, QRunnable, QThreadPool, Signal, QSize, QUrl
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTabBar,
     QWidget, QListWidget, QListWidgetItem, QPushButton, QLabel,
@@ -220,7 +220,8 @@ class ProjectDialog(QDialog):
       1. Existing Project — browse for folder with root-file and entry-point preview
       2. New Project      — scaffold a new sketch with template
       3. Recent Projects  — list of recently opened projects
-      4. Open Projects    — focus an existing sketch workspace
+      4. Open Windows     — show a workspace or its actual sketch folder
+      5. Cloud            — account and private cloud sketches
     """
 
     def __init__(
@@ -237,6 +238,7 @@ class ProjectDialog(QDialog):
         # no active workspace to switch, so they keep the direct current path.
         self._allow_window_choice = bool(open_in_new_window)
         self.selected_project: Optional[Path] = None
+        self.cloud_window_opened = False
         self._existing_preview_revision = 0
         self._existing_preview_applied_revision = 0
         self._existing_preview_running = False
@@ -386,6 +388,7 @@ class ProjectDialog(QDialog):
         self._setup_new_tab()
         self._setup_recents_tab()
         self._setup_open_projects_tab()
+        self._setup_cloud_tab()
         self._apply_dialog_theme()
         try:
             from main.qt.signals import signals
@@ -628,6 +631,7 @@ class ProjectDialog(QDialog):
                 ink = primary_ink if widget.property("projectAction") == "primary" else pal["TEXT_BRIGHT"]
                 widget.setIcon(icon(widget._icon_name, ink))
         self._style_existing_file_items()
+        self._cloud_panel.apply_theme(theme_mode)
         self._tabs.tabBar().update()
         for field in (self._open_path_edit, self._new_name_edit, self._new_parent_edit, self._template_combo):
             # Native styles may otherwise compress a line edit to its frame
@@ -1388,13 +1392,20 @@ class ProjectDialog(QDialog):
         return {"success": True}
 
     def _setup_open_projects_tab(self) -> None:
-        tab, layout, actions = self._make_tab("Open projects")
-        hint = QLabel("Bring an open sketch workspace to the front.", tab)
+        tab, layout, actions = self._make_tab("Open windows")
+        hint = QLabel("Open the selected sketch folder, or show its workspace.", tab)
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        hint.setMinimumWidth(0)
+        hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(hint, 1)
+        self._open_folder_btn = self._action("Open folder", "secondary", self._open_project_folder, tab)
+        self._open_folder_btn.setToolTip("Open the selected sketch's actual project folder in your file manager")
+        folder_row.addWidget(self._open_folder_btn)
+        layout.addLayout(folder_row)
         self._open_projects_list = QListWidget(tab)
         self._open_projects_list.setMinimumHeight(90)
-        self._open_projects_list.itemDoubleClicked.connect(self._focus_open_project)
+        self._open_projects_list.itemDoubleClicked.connect(self._open_project_folder)
         layout.addWidget(self._open_projects_list, 1)
         self._open_projects_status = QLabel(tab)
         self._open_projects_status.setWordWrap(True)
@@ -1422,9 +1433,44 @@ class ProjectDialog(QDialog):
             self._open_projects_list.addItem(item)
         has_projects = self._open_projects_list.count() > 0
         self._focus_project_btn.setEnabled(has_projects)
+        self._open_folder_btn.setEnabled(has_projects)
         if has_projects:
             self._open_projects_list.setCurrentRow(0)
         self._open_projects_status.setText("" if has_projects else "No sketch windows are open yet.")
+
+    def _open_project_folder(self, item=None) -> None:
+        if not isinstance(item, QListWidgetItem):
+            item = self._open_projects_list.currentItem()
+        if item is None:
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        folder = str(project.get("folder", ""))
+        if folder and not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
+            self._open_projects_status.setText("The project folder could not open. Check that your file manager is available.")
+
+    def _setup_cloud_tab(self) -> None:
+        from main.qt.cloud_sketch_panel import CloudSketchPanel
+        self._cloud_panel = CloudSketchPanel(self._backend, self._tabs)
+        self._tabs.addTab(self._cloud_panel, "Cloud")
+        self._cloud_panel.cloud_opened.connect(self._cloud_opened)
+
+    def _cloud_opened(self, path: str) -> None:
+        self.cloud_window_opened = True
+        if not self._allow_window_choice:
+            # Startup has no workspace to replace. Its newly opened cloud
+            # child owns the sketch; do not open it again in the parent.
+            self.reject()
+        else:
+            self._load_open_projects()
+
+    def done(self, code) -> None:
+        panel = getattr(self, "_cloud_panel", None)
+        if panel and (panel._busy or panel._waiting_for_save):
+            panel._status.setText("Wait for the cloud operation to finish before closing the project selector.")
+            return
+        if panel:
+            panel.dispose()
+        super().done(code)
 
     def _focus_open_project(self, item=None) -> None:
         if self._is_busy():

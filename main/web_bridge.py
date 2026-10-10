@@ -409,6 +409,65 @@ class MCUWebBackendAPI:
     unchanged — the routing is transparent to the callers.
     """
 
+    @property
+    def is_busy(self) -> bool:
+        return bool(getattr(self, "_hardware_busy", False)
+                    or getattr(self, "_cloud_project_operation", False))
+
+    @is_busy.setter
+    def is_busy(self, value: bool) -> None:
+        self._hardware_busy = bool(value)
+
+    @property
+    def cloud_sketch_service(self):
+        # Construction performs no network or keyring operations. The cloud
+        # panel calls every storage/service operation from its worker.
+        with self._lock:
+            if getattr(self, "_cloud_sketch_service", None) is None:
+                from main.core.cloud_sketch_service import CloudSketchService
+                self._cloud_sketch_service = CloudSketchService()
+            return self._cloud_sketch_service
+
+    def refresh_cloud_project_link(self) -> None:
+        """Read a small cloud link off the UI thread and discard old projects."""
+        path = self.sketch_dir_path
+        with self._lock:
+            self._cloud_link_pending = path
+            if getattr(self, "_cloud_link_worker_running", False):
+                return
+            self._cloud_link_worker_running = True
+
+        def read_links():
+            while True:
+                with self._lock:
+                    target = self._cloud_link_pending
+                    self._cloud_link_pending = None
+                try:
+                    from main.core.cloud_sketch_service import read_project_link
+                    link = read_project_link(target) if target else None
+                except (OSError, ValueError, ImportError):
+                    link = None
+                with self._lock:
+                    current = self.sketch_dir_path == target
+                    if current:
+                        self._cloud_project_link = link
+                    again = self._cloud_link_pending is not None
+                    if not again:
+                        self._cloud_link_worker_running = False
+                if current:
+                    self.emit("project:cloud", {"path": str(target or ""), "link": link})
+                if not again:
+                    return
+
+        try:
+            threading.Thread(target=read_links, name="MCU_CloudLink", daemon=True).start()
+        except Exception:
+            with self._lock:
+                self._cloud_link_worker_running = False
+                self._cloud_link_pending = None
+            self.emit("notification", {"title": "Cloud status", "type": "warning",
+                      "message": "Cloud project status could not be loaded. Reopen the project to retry."})
+
     def __init__(self, window: Optional[Any] = None):
         self._window = window
         self._lock = threading.Lock()
@@ -423,6 +482,9 @@ class MCUWebBackendAPI:
 
         self.active_file_path: Optional[str] = None
         self.modified_files: dict[str, bool] = {}
+        self._cloud_project_link = None
+        self._cloud_sketch_service = None
+        self._cloud_project_operation = False
 
         # Hardware & Toolchain state — board and port always start empty on launch (stable reference)
         self.current_board = ""
@@ -786,6 +848,7 @@ class MCUWebBackendAPI:
                     "board:selected":   bus.board_selected,
                     "boards:updated":   bus.board_catalog_updated,
                     "project:updated":  bus.project_updated,
+                    "project:cloud": bus.cloud_project_updated,
                     "syntax:errors":    bus.syntax_errors,
                     "notification":     bus.notification,
                     "package:progress": getattr(bus, "package_progress", None),
@@ -1055,6 +1118,8 @@ class MCUWebBackendAPI:
 
     def save_file(self, file_path: str, content: str) -> dict[str, Any]:
         """Save text content safely to a sketch file."""
+        if getattr(self, "_cloud_project_operation", False):
+            return {"success": False, "error": "Wait for cloud synchronization to finish before saving."}
         try:
             p = Path(file_path).resolve()
             encoded = content.encode("utf-8")
@@ -1079,7 +1144,14 @@ class MCUWebBackendAPI:
 
     def save_all_files(self) -> dict[str, Any]:
         """Signal Monaco editor to commit all open buffers."""
+        if getattr(self, "_cloud_project_operation", False):
+            return {"success": False, "error": "Wait for cloud synchronization to finish before saving."}
         return {"success": True}
+
+    def invalidate_cloud_source_buffers(self) -> None:
+        """Forget in-memory source copies after a confirmed cloud Pull."""
+        _sketch_ram_cache.invalidate()
+        self.modified_files.clear()
 
     def mark_modified(self, file_path: str, is_modified: bool = True):
         """Track dirty state of files."""
@@ -2487,6 +2559,8 @@ class MCUWebBackendAPI:
                              "Could not register the project. Check that your settings folder is writable."}
 
         self.sketch_dir_path = p
+        self._cloud_project_link = None
+        self.refresh_cloud_project_link()
         add_recent_project(str(p))
 
         # Enforce file hiding and cleanup immediately upon opening sketch

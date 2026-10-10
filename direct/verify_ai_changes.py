@@ -309,6 +309,57 @@ class AIChangesChecks(unittest.TestCase):
         panel.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
+    def test_filenames_and_timestamps_remain_visible_in_shared_history_pane(self):
+        prompt = {"id": "three-files", "prompt": "Update controller and header", "source": "cli"}
+        paths = [self.queue(name, prompt=prompt) for name in ("Header.h", "Controller.ino", "loop.cpp")]
+        review = self.manager.get_ai_edit_reviews()[0]
+        self.assertTrue(self.manager.accept_ai_edit(str(paths[0]), review["revision"])["success"])
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        output = ROOT / "temp/audit/ai-changes"
+        output.mkdir(parents=True, exist_ok=True)
+        requested = []
+        from main.qt.signals import signals
+        signals.ai_review_requested.connect(requested.append)
+        try:
+            for mode in ("default", "light", "solarized_dark"):
+                from main.qt.theme import build_stylesheet
+                APP.setStyleSheet(build_stylesheet(mode))
+                panel.apply_theme(mode)
+                for width in (1440, 920, 500):
+                    panel.resize(width, 380)
+                    panel.show()
+                    APP.processEvents()
+                    self.assertEqual(panel._tree.columnCount(), 2)
+                    group = panel._tree.topLevelItem(0)
+                    self.assertEqual(group.text(0), "Assistant Prompt (CLI)")
+                    self.assertEqual(group.childCount(), 3)
+                    for index in range(group.childCount()):
+                        card = group.child(index)
+                        record = panel._records[card.data(0, Qt.ItemDataRole.UserRole)]
+                        name, timestamp = card.text(0).splitlines()
+                        self.assertEqual(name, Path(record["path"]).name)
+                        self.assertIn(":", timestamp)
+                        self.assertIn(record["path"], card.toolTip(0))
+                        self.assertIn(timestamp, card.toolTip(0))
+                        self.assertEqual(card.text(1), record["status"].capitalize())
+                        self.assertGreaterEqual(panel._tree.columnWidth(0) - panel._tree.indentation() * 2,
+                                                panel._tree.fontMetrics().horizontalAdvance(timestamp))
+                        self.assertGreaterEqual(panel._tree.visualItemRect(card).height(),
+                                                panel._tree.fontMetrics().height() * 2)
+                    first_column_space = panel._tree.columnWidth(0) - panel._tree.indentation() * 2
+                    self.assertGreater(first_column_space, panel._tree.fontMetrics().horizontalAdvance("Header.h"))
+                    self.assertTrue(panel.grab().save(str(output / f"{mode}-files-{width}.png")))
+            card = group.child(0)
+            panel._tree.setCurrentItem(card)
+            panel._review_selected()
+            self.assertEqual(requested, [panel._records[card.data(0, Qt.ItemDataRole.UserRole)]["path"]])
+        finally:
+            signals.ai_review_requested.disconnect(requested.append)
+            panel.close()
+            panel.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

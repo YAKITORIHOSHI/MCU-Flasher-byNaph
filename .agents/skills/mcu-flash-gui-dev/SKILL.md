@@ -53,7 +53,10 @@ For explicitly requested assistant delegation, use the local
   counters, history bounds (200 cards / 4 MiB), truncated-preview notices and
   atomic replicas. Delete history never removes pending reviews or recovery copies.
 - AI Changes Before/AI edit previews use `CodePreview` with independently numbered
-  source blocks, not painted numbers inside copied text. Align gutters to real
+  source blocks. List child rows show the filename above the local timestamp
+  and keep Decision alongside, reserving readable list width/height and full-path
+  tooltips. Prompt groups and review navigation retain their original IDs.
+  Do not paint numbers inside copied text. Align preview gutters to real
   QTextBlock geometry under scrolling/wrapping and update widths for fonts/digits.
   Preserve unchanged preview text/scroll/selection through themes. PTY contexts
   carry `source: "cli"`; journal cards retain `promptSource` and original prompt
@@ -117,10 +120,50 @@ For explicitly requested assistant delegation, use the local
   requests. A Windows adapter status cannot override the active process guard.
   Blocked sign-in needs an Offline Mode/restart explanation, not package repair.
   Distinguish configured, Firebase signed-in and local access; endpoint tests
-  prove reachability only. Preserve literal passwords, validate returned token
-  and UID, and clear an earlier session on a failed attempt. Verify service
+  prove reachability only. Test the configured Firebase HTTPS endpoint directly;
+  a generic internet probe must not veto authentication or ticket synchronization.
+  The compact Developer Access form opens cloud settings before login and shows
+  a readable connection reason. Run initialization, credential/config reads,
+  account authentication, endpoint diagnostics and ticket CRUD off Qt through
+  serialized background tasks and queued slots; filters use the retained ticket
+  snapshot. Preserve literal passwords, validate returned token and UID, redact
+  request URLs/tokens from errors and clear an earlier session on a failed attempt.
+  Deny HTTP redirects before authenticated requests can forward tokens; recheck
+  the effective Offline Mode guard immediately before opening each request.
+  Bound authentication replies to 64 KiB, ticket replies to 4 MiB and errors to
+  8 KiB; close HTTP error responses after extracting safe provider codes.
+  Local access uses a user-configured salted PBKDF2 key (at least 12 characters),
+  never a universal default key or cloud identity. Changing an existing local key
+  requires an authenticated session. Keep cloud fallback caches partitioned by
+  verified UID and provider identity outside the checkout; never fall back to
+  another account's or legacy local cache. Save cache updates atomically. Verify service
   behavior with `direct/verify_owner_ticket_service.py` using mocked vault,
   configuration, probes and HTTP, together with the offline-mode verifier.
+- Cloud sketches use `main/core/cloud_sketch_service.py` and the selector's
+  `CloudSketchPanel`. All provider/keyring/Auth/RTDB/source operations run through
+  a bounded serialized worker. No generic internet probe gates Firebase requests.
+  Credentials/configuration use per-user Windows Credential Manager or Ubuntu
+  Secret Service (`secret-tool`); never add a fixed key, repo vault, plaintext
+  fallback, password/token argv or Admin SDK credential. Save login and Remember
+  me are separate options. Local developer access requires a salted PBKDF2 key;
+  changing an existing key requires authentication. Partition remote ticket caches
+  by provider and verified UID; local access cannot inherit cloud identity/cache.
+- Upload preserves the original local project. Cloud copies always use explicit
+  independent windows, a vector cloud indicator and [Cloud] title. Focus an open
+  working copy without pulling; opening a closed existing copy preserves its
+  saved sources. Push/Pull are explicit, with ETag/revision conflict handling,
+  account/provider link validation, root UTF-8 source boundaries and bounded
+  history. Pull confirms replacement, retains external recovery copies, validates
+  snapshots and concurrent source changes, and never touches build caches/journals.
+  Guard user source mutations through the AI watcher rather than recording a Pull
+  as an AI edit. Cloud source operations count as backend busy and block file saves
+  and hardware operations; refresh every Monaco model only after confirmed Pull.
+  Verify `direct/verify_cloud_sketch_service.py`, `verify_cloud_configuration.py`,
+  `verify_cloud_sketch_ui.py` and the real Monaco cloud-pull runtime fixture.
+  Rules and provider deployment are administrative actions separate from app login;
+  preserve existing user tickets. See `direct/cloud/README.md` and validated rules.
+  Capture Developer Access/settings/dashboard in all palettes and compact sizes
+  with `direct/verify_owner_tickets.py --render-dir temp/audit/developer-portal`.
 - An additional healthy same-installation window skips source-fingerprint
   rechecks while retaining runtime/mode/crash validation and immediate-child
   failure checks. Keep session/crash records and spawn logs per process; mark clean
@@ -281,14 +324,14 @@ For explicitly requested assistant delegation, use the local
   preserves settings, sketches, protected project caches and recovery. Follow
   `mcu-flash-project-hygiene` for ownership, link and native shared-store checks;
   verify only disposable fixtures with the two maintenance verifiers.
-- Ubuntu's native `MCU_Flasher` ELF wrapper comes from `src/launcher_ubuntu.c`; rebuild it with `direct/ubuntu/build_launcher.sh`. Resolve the executable's folder rather than cwd and forward literal arguments without shell interpolation. `direct/ubuntu/launch.py` checks native dependencies/private readiness, opens a first-run Bootstrap terminal only when needed, and launches the workspace with `.venv-linux`. `--check` stays read-only and opens no dialogs; `--install-shortcut` generates per-checkout desktop paths. Regenerate shortcuts after moves. Keep Windows launchers, installers and dependency ranges unchanged.
+- Ubuntu's native `MCU_Flasher` ELF wrapper comes from `src/launcher_ubuntu.c`; rebuild it with `direct/ubuntu/build_launcher.sh`. Resolve the executable's folder rather than cwd and forward literal arguments without shell interpolation. `direct/ubuntu/launch.py` checks native dependencies/private readiness, opens a first-run Bootstrap terminal only when needed, and launches the workspace with `.venv-linux`. `--check` stays read-only and opens no dialogs. The local folder shortcut resolves the standalone Desktop Entry `%k` filename/local URI through fixed Bash code, decodes URI escapes once and invokes `/bin/bash` with literal path/Repair arguments; never interpolate a path into source or use eval. Keep this dispatcher independent of Python so `run.sh` can perform its missing-Python recovery. Keep the shortcut beside the app, without a stale `Path=`. Only the optional Applications entry stores absolute paths and needs regeneration after moves with `bash direct/ubuntu/run.sh --install-shortcut`. Verify emitted shortcut decoding, relocation and argument forwarding in `direct/verify_ubuntu_launcher.py` using isolated shell fixtures; native GLib checks are separate. Keep Windows launchers, installers and dependency ranges unchanged.
 - Windows and Ubuntu Bootstrap prepare the configured common Arduino platform/tool/library packs even in Online Mode; SCons-only runtime preparation cannot resolve or compile ESP32 Dev Module and other retained declarations. Use the existing `offline_bootstrap.py` full configured-plan path and reuse certified packs with `--coverage-only`; preserve the saved Online/Offline Mode. Windows `startup_ready` and Ubuntu launcher readiness require host board-pack certification, upgrading old SCons-only installations automatically. Verify Windows Online/repair/source/failure paths with `direct/verify_windows_board_setup.py`, mocking all installers. Use `direct/verify_target_resolution.py --compile-native-esp32 temp/.../core` for an explicitly provisioned native fixture and the actual Compile button; isolate package leases/events and all persistence under temp, never upload during verification.
 - `direct/ubuntu/preflight.py` checks Tk/native libraries/tools before setup mutations and validates Qt6/PySide6/WebEngine plus Qt5/QScintilla in separate processes. Missing system packages enter Ubuntu Bootstrap automatically. `system_setup.py` refreshes apt indexes and installs only detected, allowlisted prerequisites (including Ubuntu's ALSA package rename) through visible OS-owned sudo/pkexec authentication. Elevate only absolute apt-get commands; keep setup Python and the GUI under the desktop user. Recheck prerequisites before private setup; stop on cancellation, apt errors or failed rechecks without automatic retries. `run.sh` can install missing system Python through the same visible terminal flow; `--check` never authenticates or installs. Reject unsupported non-amd64 desktop wheels. Repair only owned venv interpreter links; preserve packages and refuse external symlink paths/unrecognized content. Verify with isolated `direct/verify_ubuntu_bootstrap.py`, `direct/verify_ubuntu_system_setup.py` and `direct/verify_ubuntu_launcher.py`; mock apt/elevation and do not run live setup during checks.
 - Ubuntu folder/source pickers use parented Qt dialogs. POSIX PTY input drains a bounded nonblocking byte queue, retaining partial writes, UTF-8, capability replies and paste. Report an input rejected by the 4 MiB bound; never replay queued input after close. Verify Linux pickers and a real local PTY with `direct/verify_ubuntu_runtime.py`, without hardware or authenticated assistant commands.
 - Ubuntu's AI pane is `main/qt/posix_ai_panel.py`, a dedicated OpenCode TUI with one protected native PTY. Keep `posix_terminal_panel.py` as the separate project terminal that starts empty until New Bash. Hide/reveal retain the same assistant session and independent container closes are ignored; owning workspace shutdown tears it down. An explicit `/exit` starts a fresh PTY without replaying input. Bound unexpected exit recovery to two restarts per minute, then show Retry OpenCode. Discover native OpenCode off the GUI thread through `main/platforms/ubuntu_opencode.py`, using account PATH and standard user directories without shell startup or downloads. Preserve the Windows assistant path. Verify discovery/lifecycle with `direct/verify_ubuntu_opencode.py` and `direct/verify_ubuntu_ai_panel.py`; run its `--native-renderer` probe under xcb/Xvfb with real Qt/PTY and a fake CLI, never authentication, AI requests, hardware or live caches.
 - Ubuntu Bootstrap verifies or prepares native Arduino CLI and baseline OpenCode releases through `direct/ubuntu/arduino_cli.py` and `opencode_setup.py`. Pin official archive hashes, safely extract only the native executable, serialize installation, certify and atomically promote owned `.ubuntu-tools/` files; preserve external installs, account/auth state and prior working tools on failures. Bootstrap includes esptool in the private runtime plus ripgrep and both clipboard backends. Keep pip destination/configuration isolation Ubuntu-only, retaining download proxy/certificate settings. Verify isolated release fixtures and system prerequisites without live provisioning.
 - Ubuntu reset command spelling is selected from the prepared esptool distribution's major version: use v5 `erase-flash`/`image-info`, retain v4 names, and preserve Windows command strings. Native chip probing uses the nondeprecated `connect_first_available` alias target when available, with the same exact port and retry arguments; v4 retains its legacy connector. Verify with `direct/verify_ubuntu_resets.py` under deprecation warnings as errors, local image bytes and command help only; never open hardware to audit deprecations.
-- Native Ubuntu PTYs use `ubuntu_pty_process.py` to allocate `openpty` descriptors and launch private Python's standalone `ubuntu_pty_supervisor.py` through native `Popen` session setup. Never use Python `fork`, `forkpty` or a `preexec_fn` inside the threaded Qt process. The fresh supervisor acquires its controlling terminal and foreground process group, then establishes Linux child-subreaper custody before spawning; keep cwd/env/stdio and terminal signal/job-control behavior, restore inherited ignored signals in the child, and bound identity-checked descendant cleanup/reaping before EOF. This must cover detached tools whose CLI already exited. Fail visibly without spawning an unowned command if custody cannot be established. Verify threaded launch, controlling tty, resizing, failed-launch descriptor cleanup, actual detached children, exit status, Ctrl-C and Bash job control through the isolated PTY lifecycle fixtures with warnings treated as errors; never signal a dead leader's reused PID.
+- Native Ubuntu PTYs use `ubuntu_pty_process.py` to allocate `openpty` descriptors and launch private Python's standalone `ubuntu_pty_supervisor.py` through native `Popen` session setup. Never use Python `fork`, `forkpty` or a `preexec_fn` inside the threaded Qt process. The fresh supervisor acquires its controlling terminal and foreground process group, then establishes Linux child-subreaper custody before spawning; keep cwd/env/stdio and terminal signal/job-control behavior, restore inherited ignored signals in the child, and bound identity-checked descendant cleanup/reaping before EOF. This must cover detached tools whose CLI already exited. Fail visibly without spawning an unowned command if custody cannot be established. Do not return from `finally` during close: reap the owned child while preserving descriptor-close errors. Verify mocked close/escalation/error propagation with `direct/verify_native_pty_close.py` on either host. Verify threaded launch, controlling tty, resizing, failed-launch descriptor cleanup, actual detached children, exit status, Ctrl-C and Bash job control through the isolated PTY lifecycle fixtures with warnings treated as errors; never signal a dead leader's reused PID.
 - Native assistant preparation must finish project guidance and the exact requested durable hardware-state revision off Qt, never accept an older revision for the same folder. `ubuntu_pty.py` bounds passive prompt observation and keeps process discovery/persistence off GUI while forwarding original input unchanged. Close owned tool descendants through checked process identities outside Qt, including tools with separate sessions. Native CLI focus disables only Linux workspace shortcuts; restore them on editor focus. Renderer termination retains the protected assistant card and requires explicit fresh-session Retry without replay. Verify `direct/verify_ubuntu_pty_lifecycle.py` and `verify_ubuntu_ai_panel.py --workspace-renderer` with mocked metadata, real local fixture PTYs and offline Monaco; preserve Windows controllers and shortcut behavior.
 - Ubuntu Download Manager reserves same-account, per-checkout IPC before constructing Tk or caches, wakes the existing instance and drains bounded commands without blocking Tk. Final-workspace close excludes live sibling processes from the same checkout before requesting quit, and closes only owned sample viewers. Keep Windows HWND/trigger logic unchanged. Verify `direct/verify_ubuntu_download_manager.py` with isolated socket/child/Tk fixtures and `direct/verify_library_samples.py`; never open a live installer for verification.
 - Ubuntu port enumeration uses `main/platforms/ubuntu_ports.py` metadata to omit blank/N/A entries without real device details. Preserve meaningful descriptions or use supplied product/interface/manufacturer/hardware IDs; bare tty names and link paths are insufficient. Filter in the backend scan so startup, refresh and hotplug caches agree; never open/probe a serial port to populate the picker. Keep Windows enumeration/registry and upload/reset presence checks unchanged. Verify with isolated `direct/verify_ubuntu_ports.py`, mocking enumeration, persistence and hardware.

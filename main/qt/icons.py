@@ -23,6 +23,7 @@ PATHS = {
     "save": '<path d="M4 3h12l5 5v11l-2 2H5l-2-2V4l1-1ZM7 3v6h9V3M7 21v-7h10v7M12 5h1"/>',
     "reload": '<path d="M20 9a8 8 0 1 0-1 8M20 3v6h-6M4 15H1"/>',
     "project": '<path d="M3 7V5h7l3 3h7l1 2v9l-2 2H5l-2-2V7ZM3 11h10m4 0h4"/>',
+    "cloud": '<path d="M7 18H5a4 4 0 0 1-1-8 6 6 0 0 1 11-3 5 5 0 0 1 4 10h-2M12 21V12m-3 3 3-3 3 3"/>',
     "search": '<path d="m15 15 6 6m-2-2 2-2M5 4h7l4 4v5l-4 4H7l-4-4V8l2-4Z"/>',
     "settings": '<path d="M3 5h4m4 0h10M3 12h10m4 0h4M3 19h3m4 0h11M7 3h4v4H7ZM13 10h4v4h-4ZM6 17h4v4H6Z"/>',
     "setup": '<path d="M3 5h4m4 0h10M3 12h10m4 0h4M3 19h3m4 0h11M7 3h4v4H7ZM13 10h4v4h-4ZM6 17h4v4H6Z"/>',

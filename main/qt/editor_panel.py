@@ -72,6 +72,7 @@ class EditorBridgeAPI(QObject):
     request_save   = Signal()
     request_save_all = Signal()
     save_finished = Signal(str, bool)
+    cloud_reload_finished = Signal(str, bool)
     _syntax_finished = Signal(dict)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
@@ -98,6 +99,10 @@ class EditorBridgeAPI(QObject):
     @Slot(str, bool)
     def finish_save_request(self, token: str, success: bool) -> None:
         self.save_finished.emit(token, success)
+
+    @Slot(str, bool)
+    def finish_cloud_reload(self, token: str, success: bool) -> None:
+        self.cloud_reload_finished.emit(token, success)
 
     @Slot(result="QVariant")
     def get_project_files(self) -> list:
@@ -700,6 +705,42 @@ class MonacoEditorPanel(QWidget):
             "}"
         )
         self._view.page().runJavaScript(js)
+
+    def reload_cloud_snapshot(self, *, callback=None, failure_callback=None) -> None:
+        """Apply only an explicitly confirmed pull to all open source buffers."""
+        if getattr(self, "_cloud_reload_pending", None):
+            if failure_callback:
+                failure_callback()
+            return
+        import uuid
+        token = uuid.uuid4().hex
+        self._cloud_reload_pending = token
+        self._bridge._buffer_snapshots.clear()
+        self._bridge._recovery_buffers.clear()
+
+        def finished(received, success):
+            if received != token or self._cloud_reload_pending != token:
+                return
+            self._cloud_reload_pending = None
+            self._bridge.cloud_reload_finished.disconnect(finished)
+            if success:
+                if self._backend:
+                    self._backend.modified_files.clear()
+                if callback:
+                    callback()
+            elif failure_callback:
+                failure_callback()
+
+        self._bridge.cloud_reload_finished.connect(finished)
+        QTimer.singleShot(30000, self, lambda: finished(token, False))
+        self._view.page().runJavaScript(
+            "(async () => { let ok = false; try {"
+            " if (typeof window.reloadCloudSnapshot === 'function') {"
+            "  ok = (await window.reloadCloudSnapshot()) === true; }"
+            " } catch (error) { console.error(error); }"
+            f" if (window.editorBridge) window.editorBridge.finish_cloud_reload({json.dumps(token)}, ok);"
+            "})()"
+        )
 
     def set_theme(self, theme_name: str) -> None:
         """Change the Monaco editor colour theme."""

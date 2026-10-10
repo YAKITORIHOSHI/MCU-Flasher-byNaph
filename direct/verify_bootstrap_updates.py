@@ -211,6 +211,26 @@ class UpdateChecks(unittest.TestCase):
         reachable.assert_not_called()
         checks.assert_not_called()
 
+    def test_update_target_display_expands_alias_without_changing_installer_target(self):
+        namespace, _reachable, checks, _summary = self.update_stage_fixture(None, online=False)
+        target = Mock()
+        target.resolve.return_value = self.root / "readable project name/env/Scripts/python.exe"
+        namespace["_get_target_python"] = Mock(return_value=target)
+        self.assertEqual(namespace["run_update_checks"](), "offline")
+        namespace["dim"].assert_any_call(f"Update target: {target.resolve.return_value}")
+        namespace["_get_target_python"].assert_called_once_with()
+        target.resolve.assert_called_once_with()
+        checks.assert_not_called()
+        namespace["_pip_upgrade"].assert_not_called()
+
+    def test_update_target_display_resolution_failure_does_not_block_checks(self):
+        namespace, _reachable, _checks, _summary = self.update_stage_fixture(None, online=False)
+        target = Mock()
+        target.resolve.side_effect = OSError("Drive temporarily unavailable")
+        namespace["_get_target_python"] = Mock(return_value=target)
+        self.assertEqual(namespace["run_update_checks"](), "offline")
+        namespace["dim"].assert_any_call(f"Update target: {target}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
