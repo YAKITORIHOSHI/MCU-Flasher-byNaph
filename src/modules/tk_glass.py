@@ -278,6 +278,38 @@ class GlassCard(tk.Canvas):
             self.after_cancel(self._redraw_id)
             self._redraw_id = None
 
+    def _reading_height(self):
+        """Reserve one native text line before spending short-pane space on rims."""
+        required = 1
+        for child in self.body.winfo_children():
+            if not child.winfo_manager():
+                continue
+            line_height = 1
+            pending = [child]
+            while pending:
+                widget = pending.pop()
+                pending.extend(item for item in widget.winfo_children() if item.winfo_manager())
+                try:
+                    content_font = widget.cget("font")
+                except tk.TclError:
+                    continue
+                if content_font:
+                    height = int(widget.tk.call("font", "metrics", content_font, "-linespace"))
+                    for name in ("pady", "borderwidth", "highlightthickness"):
+                        try:
+                            height += 2 * widget.winfo_pixels(widget.cget(name))
+                        except tk.TclError:
+                            pass
+                    line_height = max(line_height, height)
+            if child.winfo_manager() == "pack":
+                padding = child.pack_info().get("pady", 0)
+                if isinstance(padding, (tuple, list)):
+                    line_height += sum(child.winfo_pixels(value) for value in padding)
+                else:
+                    line_height += 2 * child.winfo_pixels(padding)
+            required = max(required, line_height)
+        return required
+
     def _draw(self):
         self._redraw_id = None
         p = self.palette
@@ -287,7 +319,9 @@ class GlassCard(tk.Canvas):
             self.configure(height=height)
         self.itemconfigure(self._body_window, width=max(1, width - 2 * self.padding))
         if self.expand:
-            self.itemconfigure(self._body_window, height=max(1, height - 2 * self.padding))
+            vertical_padding = min(self.padding, max(0, (height - self._reading_height()) // 2))
+            self.coords(self._body_window, self.padding, vertical_padding)
+            self.itemconfigure(self._body_window, height=max(1, height - 2 * vertical_padding))
         self.delete("glass")
         radius = min(12, height // 2)
         points = [1 + radius, 1, width - radius - 1, 1, width - 1, 1,

@@ -307,6 +307,7 @@ class PortalChecks(unittest.TestCase):
         measurement = reading._measure
         measured_font = measurement.defaultFont()
         measured_text = measurement.toPlainText()
+        measured_width = measurement.textWidth()
         refreshes = []
         reading._measurement_refresh.timeout.connect(lambda: refreshes.append(True))
         literal = 'Serial.println("' + "A" * 4096 + '"); <literal>'
@@ -324,6 +325,8 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(refreshes, [])
         self.assertEqual(measurement.defaultFont(), measured_font)
         self.assertEqual(measurement.toPlainText(), measured_text)
+        reading.heightForWidth(reading.width() + 47)
+        self.assertEqual(measurement.textWidth(), measured_width)
         pump()
         self.assertEqual(refreshes, [True])
         self.assertFalse(reading._measurement_refresh.isActive())

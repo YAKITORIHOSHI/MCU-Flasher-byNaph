@@ -714,7 +714,9 @@ commands.
 
 On short screens, the board/library downloader now fits both list and details
 panes to the available height at the selected font scale. Resizing preserves
-the selected item, its details and a valid manually adjusted divider.
+the selected item, its details and a valid manually adjusted divider. Short
+glass cards reduce their decorative padding to keep a complete native text
+line visible; longer details remain reachable by scrolling.
 
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only

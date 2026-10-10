@@ -9,6 +9,29 @@ permissions:
   contents: read
 
 jobs:
+  qt-binding-diagnostics:
+    strategy:
+      fail-fast: false
+      matrix:
+        qt: ['PySide6>=6.11,<6.12', 'PySide6>=6.12,<6.13']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Isolated Qt binding lifetime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0
+          python -m venv .venv-qt-probe
+          .venv-qt-probe/bin/python -m pip install '${{ matrix.qt }}'
+          .venv-qt-probe/bin/python -B direct/verify_qt_binding_lifetime.py
   ubuntu-first-run:
     strategy:
       fail-fast: false

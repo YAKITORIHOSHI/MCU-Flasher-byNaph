@@ -392,6 +392,7 @@ Hardware-free regressions, using the application's private Python:
 .venv-linux/bin/python -B direct/verify_ubuntu_download_manager.py
 .venv-linux/bin/python -B direct/verify_ubuntu_resets.py
 .venv-linux/bin/python -B direct/verify_ubuntu_pty_lifecycle.py
+.venv-linux/bin/python -B direct/verify_qt_binding_lifetime.py
 xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B \
   direct/verify_ubuntu_ai_panel.py --workspace-renderer
 ```

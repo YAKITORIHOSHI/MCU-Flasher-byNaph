@@ -373,9 +373,15 @@ For explicitly requested assistant delegation, use the local
   details-pane collapse; keep Qt and Tk sizing independent.
 - Developer reading text coalesces font/style/content measurement through a
   parented single-shot timer. Never mutate its separate QTextDocument from a
-  QTextEdit font/style virtual callback; invalidate cached heights and refresh
-  after native event dispatch. Preserve the displayed document, literal copy,
+  QTextEdit font/style virtual callback; schedule a refresh after native event
+  dispatch and reuse the last completed heights in pending geometry queries.
+  Preserve the displayed document, literal copy,
   selection and bounded reading-height/scroll behavior through that refresh.
+- Short expanding Tk glass cards reserve a complete padded native text line
+  before their vertical rims. Verify installed metadata at bounded 1024x768
+  work areas through 200% scale, including every line's scroll reachability.
+  Use direct/verify_qt_binding_lifetime.py to isolate native Qt binding lifetime
+  failures from app services; run older mutable-None Python in a fresh process.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow

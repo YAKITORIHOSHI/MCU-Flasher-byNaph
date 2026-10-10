@@ -163,7 +163,6 @@ class WrappedLabel(QTextEdit):
         self.updateGeometry()
 
     def _invalidate_measurement(self):
-        self._heights.clear()
         if not self._measurement_refresh.isActive():
             self._measurement_refresh.start(0)
 
@@ -184,6 +183,12 @@ class WrappedLabel(QTextEdit):
         horizontal = max(0, self.width() - self.viewport().width())
         vertical = max(0, self.height() - self.viewport().height())
         key = max(1, width - horizontal), vertical
+        if self._measurement_refresh.isActive():
+            # A native style event may request a width we have not seen before.
+            # Reuse the last complete height until the queued refresh relayouts.
+            previous = self._heights.get(key, max(self._heights.values(),
+                                                 default=self.fontMetrics().height() + vertical))
+            return min(self.maximumHeight(), previous)
         if key not in self._heights:
             self._measure.setTextWidth(key[0])
             # Keep a bounded cache: a resize must not retain every visited width.

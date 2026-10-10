@@ -833,13 +833,17 @@ class TkResponsiveChecks(DownloaderChecks):
 
     def test_header_and_panes_at_native_font_scales(self):
         app = self.app
+        from tkinter import font
         from src.modules.tk_glass import ui_scale
         scale = ui_scale(self.root)
         maximum = self.root.winfo_screenwidth() - 48
         wide = min(round(1040 * scale), maximum)
         narrow = min(round(480 * scale), maximum)
-        for width in (wide, narrow, wide):
-            height = min(round(660 * scale), self.root.winfo_screenheight() - 80)
+        height = min(round(660 * scale), self.root.winfo_screenheight() - 80)
+        bounded_width = min(narrow, 1024 - 48)
+        bounded_height = min(height, 768 - 80)
+        for width, height in ((wide, height), (narrow, height), (wide, height),
+                              (bounded_width, bounded_height)):
             self.root.geometry(f'{width}x{height}+20+20')
             self.root.deiconify()
             self.pump()
@@ -868,9 +872,36 @@ class TkResponsiveChecks(DownloaderChecks):
             detail.lbl_path.configure(text=str(ROOT / 'temp/audit/fixture-download/device-toolkit'))
             self.pump()
             canvas = detail._details_view.canvas
+            self.assertTrue(canvas.winfo_ismapped(), 'Installed metadata needs a visible reading viewport')
+            self.assertGreaterEqual(canvas.winfo_height(), detail.lbl_name.winfo_reqheight(),
+                                    'A complete padded title line must fit at the native font scale')
+            bounds = canvas.bbox('all')
+            self.assertIsNotNone(bounds, 'Installed metadata needs a scrollable content region')
+            content_height = max(1, bounds[3] - bounds[1])
+            content = detail._details_view.body
+            for label in (detail.lbl_name, detail.lbl_type, detail.lbl_path_header,
+                          detail.lbl_path, detail.lbl_examples_header):
+                relative_top = 0
+                ancestor = label
+                while ancestor is not content:
+                    relative_top += ancestor.winfo_y()
+                    ancestor = ancestor.master
+                    self.assertIsNotNone(ancestor, 'Metadata must remain in its owned scroll body')
+                line_height = font.Font(root=self.root, font=label.cget('font')).metrics('linespace')
+                inset = sum(label.winfo_pixels(label.cget(name))
+                            for name in ('pady', 'borderwidth', 'highlightthickness'))
+                text_height = label.winfo_height() - 2 * inset
+                for offset in range(0, text_height, line_height):
+                    line_top = relative_top + inset + offset
+                    line_bottom = min(line_top + line_height, relative_top + label.winfo_height() - inset)
+                    target = min(max(bounds[1], line_top), bounds[3] - canvas.winfo_height())
+                    canvas.yview_moveto((target - bounds[1]) / content_height)
+                    self.root.update_idletasks()
+                    self.assertGreaterEqual(line_top, canvas.canvasy(0) - 1, label.cget('text'))
+                    self.assertLessEqual(line_bottom, canvas.canvasy(canvas.winfo_height()) + 1,
+                                         'Every native metadata line must be reachable without clipping')
             canvas.yview_moveto(1)
             self.pump()
-            self.assertGreater(canvas.winfo_height(), 40)
             self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
             if RENDER_DIR:
                 pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
