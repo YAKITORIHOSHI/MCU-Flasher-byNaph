@@ -535,11 +535,14 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     api._save_compile_cache = save_compile_cache
     api.update_skip_compile_availability = lambda: None
     bus = MCUSignals()
-    events = []
+    events, phase_events = [], []
     def emit(event, data):
         events.append((event, data))
         if event == "operation:phase":
-            bus.operation_phase.emit(data)
+            # This probe checks the real Compile button and build worker. Keep
+            # the synthetic event transport out of the worker thread, then
+            # replay state changes on the GUI thread after the build completes.
+            phase_events.append(data)
     api.emit = emit
     isolated_catalog = catalog_module.BoardCatalog({display_name: selection or stale_selection()})
     original_popen = subprocess.Popen
@@ -594,6 +597,8 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         if api.is_busy:
             api.stop_operation()
             raise AssertionError("Application compile exceeded probe timeout")
+        for payload in phase_events:
+            toolbar.on_operation_phase(payload)
         QTest.qWait(20)
         messages = [str(data.get("text", "")) for event, data in events if event == "console:log"]
         log = sandbox / ("application-compile.log" if workspace_name == "project" else workspace_name + "-compile.log")

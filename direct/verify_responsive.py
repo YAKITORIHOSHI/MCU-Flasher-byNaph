@@ -855,13 +855,27 @@ class TkResponsiveChecks(DownloaderChecks):
         self.pump()
         app.board_tab.detail_canvas.yview_moveto(1)
         self.pump()
-        # On short panes, controls at the top and bottom cannot all be mapped
-        # at once. Verify each one is reachable at its scroll position.
+        # On short panes, controls cannot all be mapped at once. Scroll each
+        # control into view using its position in the embedded content frame;
+        # the content height varies with Tk/Windows scaling and font metrics.
         for control in (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn):
-            app.board_tab.detail_canvas.yview_moveto(1 if control is app.board_tab.prepare_btn else 0)
+            canvas = app.board_tab.detail_canvas
+            content = app.board_tab._detail_content
+            offset = 0
+            current = control
+            while current is not content:
+                offset += current.winfo_y()
+                current = current.master
+            bounds = canvas.bbox('all')
+            self.assertIsNotNone(bounds, 'Board details need a scrollable content region')
+            content_height = max(1, bounds[3] - bounds[1])
+            viewport_height = max(1, canvas.winfo_height())
+            max_offset = max(0, content_height - viewport_height)
+            target_offset = min(max_offset, max(0, offset - 4))
+            canvas.yview_moveto(target_offset / content_height)
             self.pump()
             self.assertTrue(control.winfo_ismapped(),
-                            f'{control.winfo_class()} is not mapped at scroll position {app.board_tab.detail_canvas.yview()}')
+                            f'{control.winfo_class()} is not mapped at scroll position {canvas.yview()}')
             self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
         app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
         app.sources_btn.invoke()
