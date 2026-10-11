@@ -35,6 +35,14 @@ then prepares the private runtime and opens the app automatically. You do not
 need to type apt commands. Internet access and an administrator account are
 needed when packages are missing.
 
+For a dependency reset, preview `python3 cleaner/ubuntu/maintenance.py runtime`
+and add `--apply` to carry out the reviewed plan. It removes the validated
+`.venv-linux`, owned native tools and Linux offline extras, preserving sketches,
+settings and protected build/recovery caches. The shared XDG PlatformIO store
+requires the separate `--include-native-store` opt-in and matching ownership
+receipt. Next launch uses Bootstrap to download or restore missing dependencies;
+do not include generated environments or audit fixtures in source releases.
+
 For manual provisioning, the equivalent desktop dependencies are:
 
 ```bash
@@ -541,9 +549,17 @@ heights, because offscreen windows have smaller decorations and can fit forms
 at heights that require scrolling on Wayland. Fixed monitor cases and complete
 field visibility, text and font assertions remain in place.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4.
-Ubuntu 22.04/Python 3.10 remains unresolved: run 38115716448's authenticated
-logs and GDB artifact show an invalid free in `_tkinter` during Listbox.delete,
-without Qt loaded. A pass on newer Python does not establish a Jammy fix.
+The Ubuntu 22.04/Python 3.10 failure in run 38115716448 was reproduced with
+matching native Python, Tk and libc hashes. A hardware watchpoint identified
+Tk's retired font error callback writing into an expired stack slot after
+libXft 2.3.4 submitted unsupported color glyphs. Before creating the downloader's
+Tk root, `tk_font_runtime.py` now supplements the process's existing Fontconfig
+configuration to exclude color fallback only on libXft before 2.3.5. Unicode
+text, requested fonts, user configuration files and environment are preserved.
+Modern Xft keeps color fonts. The unchanged 29-check browser suite passed four
+times on the matched Jammy graph, including a debug allocator run; disabling
+only the compatibility helper reproduced the original crash. Native Ubuntu 26
+also passed all 29 browser checks and the full runtime/recovery fixture.
 The failure-only CI diagnostic records native runtime versions and binary
 hashes alongside full GDB stacks, registers and shared-library mappings. It
 retains the original failure and bounds both diagnostic subprocesses.
@@ -556,7 +572,11 @@ No existing account record or real sketch was accessed by those fixtures.
 This host still needs normal Bootstrap preparation: `.venv-linux` is absent and
 the read-only launcher check reports missing `libsecret-tools`. Verification
 used a disposable runtime and checksum-verified temporary Ubuntu vault tools;
-it did not install system packages or provision live board stores.
+it did not install system packages or provision live board stores. At the
+user's request, generated Linux/Windows Python runtimes and bulky isolated
+audit dependencies were subsequently removed. Compact validation evidence and
+the original settings, installers, sources and protected caches were retained;
+the checkout is approximately 1.5 GB, with nearly 1 GB in Git history.
 
 Local Ubuntu 24.04 amd64 verification passes with the native xcb backend on an
 isolated Xvfb display: 35 runtime checks plus the real Monaco workspace, seven

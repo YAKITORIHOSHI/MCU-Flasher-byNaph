@@ -166,6 +166,10 @@ in a separate process from the PySide6 checks.
 If a browser worker cannot start, it reports the failure on the Tk thread and
 restores Download/Update controls and progress. Pending work is not replayed;
 the next explicit click retries normally.
+On Linux with libXft older than 2.3.5, the standalone downloader uses monochrome
+font fallback for Unicode symbols. This avoids unsupported color-glyph requests
+that can crash older Tk. Text, saved fonts and user Fontconfig files are preserved;
+the adjustment stays in the downloader process. Newer libXft keeps color fonts.
 The editor engine is offline Monaco with automatic resource settings; Settings
 does not offer the unused legacy lightweight-engine selector.
 
@@ -303,6 +307,11 @@ unlinked only after ownership checks; Ubuntu's shared native package store
 requires a separate opt-in. Windows driver removal, shared dependency reset
 and system repair remain explicit actions. See the maintenance guide for the
 native commands and confirmation phrases.
+Removing generated Python environments also removes their PlatformIO Python
+packages; the native launcher restores dependencies through Bootstrap on the
+next launch. Keep the Windows Python installer under `installers/.handsoff/`
+so its launcher can restore a removed `src/_python` runtime. Source releases
+should exclude generated environments, package stores and audit fixtures.
 
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
 can consume many gigabytes and substantial time. Close other project windows

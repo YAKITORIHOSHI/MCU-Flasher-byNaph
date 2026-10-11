@@ -129,10 +129,16 @@ Classify paths before changing attributes or deleting anything:
   store needs `--include-native-store` and a current Linux/architecture receipt.
   Retain other architectures, all Windows resources and system packages.
   Native descriptor-relative deletion must not follow venv interpreter links.
+  Python 3.14's `bin/𝜋thon` link is recognized only when it resolves to that
+  environment's own `bin/python`; a different destination remains a refusal.
 - Cleanup refuses running app/package operations and never kills them to unlock
   files. The separate legacy Windows Stop entry point requires explicit
   acknowledgement, captured creation identity and exact owned entry/executable
   boundaries. A root appearing in another program's arguments proves nothing.
+  A permission-denied Linux executable probe may skip only the recognized
+  systemd user manager, its PAM helper or the SSH agent when command, process
+  name and exact kernel service unit all agree. Unknown inaccessible processes
+  still refuse cleanup; never bypass the process check wholesale.
 - Driver and Windows system reset/repair entry points remain native and explicit;
   preview does not elevate or run repair. Driver selection requires a supported
   original INF and exact OEM package identity. FullReset is a separate opt-in

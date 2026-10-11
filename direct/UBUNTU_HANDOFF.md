@@ -29,17 +29,21 @@ again when changing recovery or Pull.
 Run node direct/verify_editor_recovery.js and the real direct/verify_runtime.py
 fixture. Never relax dirty-text assertions or clear snapshots to obtain a pass.
 
-The remaining 31e6e24 failure is 22.04/Python 3.10's browser fixture. Authenticated
-logs and the GDB artifact for run 38115716448/job 114400091025 reproduce an
-invalid free in _tkinter during Listbox.delete, reached by
-test_download_button_launch_failure_restores_controls_and_explicit_retry.
-The extension-module list contains no Qt; the separated
-direct/tk_downloader_fixture.py did not resolve this crash. Preserve the full
-browser assertions and investigate on the affected Python/Tk combination;
-do not attribute it to a mixed Qt process or claim a fix from newer Python alone.
+The 31e6e24 Ubuntu 22.04/Python 3.10 browser failure was reproduced with
+matching Python, Tk and libc hashes. A native hardware watchpoint identified
+Tk's retired font error callback writing through expired stack client data
+after old libXft submitted unsupported color glyphs. The downloader and its
+shared Tk-only fixture now initialize tk_font_runtime.py before creating a Tk
+root. Only Xft before 2.3.5 receives an in-memory Fontconfig supplement excluding
+color fallback; Unicode text, requested fonts, user files/environment and modern
+Xft behavior remain intact. The unchanged full 29-check Jammy browser suite
+passed four times, including a debug allocator run. Disabling only the helper
+reproduced the original crash. Preserve all assertions and check the current
+commit's CI; newer Python alone would not establish a Jammy fix.
 The failure-only CI diagnostic preserves the failing result and records exact
 native runtime versions/hashes, full GDB stacks, registers and loaded mappings.
-Compare these with an isolated Jammy fixture before changing production Tk code.
+Compact causal logs and binary hashes are retained under
+temp/audit/tk-native-font-crash-evidence-2026-10-11.
 Earlier successes do not prove the current revision.
 
 Launch through MCU_Flasher or bash direct/ubuntu/run.sh. Diagnose with --check
@@ -72,12 +76,19 @@ native standard-icon assignments, palette contrast, real navigation clicks and
 settled idle layouts. Ubuntu QWebEngine checks of the Windows HTML do not
 establish native WebView2 behavior; keep the Windows terminal checks in CI.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4,
-which does not resolve the older Jammy failure above.
+including the compatibility initialization, and the required runtime fixture
+passed all 46 checks plus real renderer recovery.
 A uniquely namespaced production-adapter GNOME Secret Service round
 trip passed without reading existing account records. This machine's normal
 private runtime is still unprepared and its launcher check reports missing
 libsecret-tools. Temporary verification tools were checksum-verified and
 extracted under temp/; no system installer or live metadata generation ran.
+The user then requested dependency cleanup. The Linux environment/native CLI,
+copied Windows env/private Python and bulky owned audit dependencies were
+removed, retaining compact logs/captures, installers, settings, sources, Git and
+all protected caches/journals. The checkout is approximately 1.5 GB. Preserve
+this lean state; let the native launcher run Bootstrap when the user next opens
+the application, rather than reprovisioning live dependencies for verification.
 
 Run relevant hardware-free direct/ verifiers with .venv-linux/bin/python,
 using isolated fixtures and temp/ captures. Preserve protected cache/journal

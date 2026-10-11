@@ -123,6 +123,30 @@ class UbuntuMaintenanceTests(unittest.TestCase):
         self.assertFalse(opencode.exists())
         self.assertFalse(extras.exists())
 
+    def test_python314_alias_is_unlinked_without_touching_system_interpreter(self):
+        venv = self.venv()
+        self.write(".venv-linux/pyvenv.cfg", "home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.14.4\n")
+        interpreter = self.base / "python3.14"
+        interpreter.write_text("external interpreter", encoding="utf-8")
+        (venv / "bin/python").symlink_to(interpreter)
+        (venv / "bin/python3").symlink_to("python")
+        (venv / "bin/𝜋thon").symlink_to("python3")
+        self.apply(self.plan("fresh"))
+        self.assertFalse(venv.exists())
+        self.assertEqual(interpreter.read_text(), "external interpreter")
+
+    def test_python314_alias_to_different_interpreter_is_retained(self):
+        venv = self.venv()
+        first, other = self.base / "python3.14", self.base / "python3.13"
+        first.write_text("configured interpreter", encoding="utf-8")
+        other.write_text("unrelated interpreter", encoding="utf-8")
+        (venv / "bin/python").symlink_to(first)
+        (venv / "bin/𝜋thon").symlink_to(other)
+        with self.assertRaisesRegex(maintenance.MaintenanceError, "Unexpected link"):
+            self.plan("fresh")
+        self.assertEqual(other.read_text(), "unrelated interpreter")
+        self.assertTrue(venv.exists())
+
     def test_native_store_requires_explicit_flag_and_current_architecture(self):
         base, current = self.core()
         other = base / "mcu-flasher/platformio/aarch64"
@@ -249,6 +273,51 @@ class UbuntuMaintenanceTests(unittest.TestCase):
         with patch.object(maintenance.os, "readlink", return_value="/usr/bin/python3"):
             self.apply(self.plan())
         self.assertFalse(bytecode.exists())
+
+    def test_protected_systemd_user_manager_does_not_block_cleanup(self):
+        bytecode = self.write("main/fixture.pyc")
+        proc = self.proc / "9999999"
+        proc.mkdir()
+        (proc / "cmdline").write_bytes(b"/usr/lib/systemd/systemd\0--user\0")
+        (proc / "comm").write_bytes(b"systemd\n")
+        uid = self.proc.stat().st_uid
+        group = f"0::/user.slice/user-{uid}.slice/user@{uid}.service/init.scope\n"
+        (proc / "cgroup").write_text(group)
+        with patch.object(maintenance.os, "readlink", side_effect=PermissionError("non-dumpable manager")):
+            self.apply(self.plan())
+        self.assertFalse(bytecode.exists())
+        self.assertTrue(proc.exists())
+
+    def test_inaccessible_process_with_systemd_name_outside_init_scope_refuses(self):
+        bytecode = self.write("main/fixture.pyc")
+        proc = self.proc / "9999999"
+        proc.mkdir()
+        (proc / "cmdline").write_bytes(b"/usr/lib/systemd/systemd\0--user\0")
+        (proc / "comm").write_bytes(b"systemd\n")
+        (proc / "cgroup").write_bytes(b"0::/user.slice/app.slice/unrelated.scope\n")
+        with patch.object(maintenance.os, "readlink", side_effect=PermissionError("unknown process")):
+            with self.assertRaisesRegex(maintenance.MaintenanceError, "could not be checked"):
+                self.apply(self.plan())
+        self.assertTrue(bytecode.exists())
+
+    def test_protected_pam_and_ssh_services_require_exact_kernel_units(self):
+        uid = self.proc.stat().st_uid
+        cases = [(b"(sd-pam)\0", b"(sd-pam)\n", "/init.scope"),
+                 (b"/usr/bin/ssh-agent\0-D\0", b"ssh-agent\n", "/app.slice/ssh-agent.service")]
+        for argv, name, unit in cases:
+            with self.subTest(service=name):
+                proc = self.proc / "9999999"
+                proc.mkdir(exist_ok=True)
+                (proc / "cmdline").write_bytes(argv)
+                (proc / "comm").write_bytes(name)
+                group = f"0::/user.slice/user-{uid}.slice/user@{uid}.service{unit}\n"
+                (proc / "cgroup").write_text(group)
+                with patch.object(maintenance.os, "readlink", side_effect=PermissionError("OS service")):
+                    self.assertEqual(maintenance.running_processes(self.root, [], proc_root=self.proc), [])
+                (proc / "cgroup").write_bytes(b"0::/unrelated.scope\n")
+                with patch.object(maintenance.os, "readlink", side_effect=PermissionError("unknown process")):
+                    with self.assertRaisesRegex(maintenance.MaintenanceError, "could not be checked"):
+                        maintenance.running_processes(self.root, [], proc_root=self.proc)
 
     def fake_shared_process(self, environment):
         proc = self.proc / "9999999"

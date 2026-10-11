@@ -2547,6 +2547,8 @@ class ArduinoBrowser:
     """Main application window with Libraries, Boards, and Installed tabs."""
 
     def __init__(self, *, linux_channel=None):
+        from src.modules.tk_font_runtime import prepare_tk_font_runtime
+        prepare_tk_font_runtime()
         # DPI awareness on Windows
         if sys.platform == "win32":
             try:

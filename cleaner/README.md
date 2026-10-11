@@ -23,6 +23,11 @@ offline extras. Its XDG PlatformIO store is shared by this account's checkouts
 for the current architecture. It stays intact unless runtime reset explicitly
 selects `--include-native-store`, which also requires a matching native receipt.
 Ubuntu maintenance runs with system Python, outside the environment it removes.
+Python 3.14's Unicode interpreter alias is unlinked only when it belongs to the
+same validated environment; its external interpreter is preserved. Protected
+systemd session services are recognized by command, name and kernel unit when
+their executable cannot be inspected. Unknown inaccessible processes still
+block cleanup.
 
 Both hosts preserve user sketches, settings, generic logs, recovery copies,
 `.mcu_flasher_build_cache`, `.mcu_ai_edits`, `.pio`, `.vscode`, `.clangd`,
@@ -31,6 +36,11 @@ and runtime directories before traversal. Unknown content, linked deletion
 roots and escaping paths are retained; a refusal or incomplete cleanup returns
 a failing exit status. Interior runtime links are never followed into targets.
 After dependency removal, relaunch the matching native launcher while online.
+Keep `installers/.handsoff/` when removing Windows's private Python: its launcher
+can restore `src/_python` from that installer before Bootstrap rebuilds `env`.
+Generated runtimes, downloaded package stores and audit fixtures can occupy
+several gigabytes; exclude them from source distributions. Keep user settings,
+sketches, recovery journals and unknown material out of any cleanup allowlist.
 
 From the project root, review a Windows plan with:
 

@@ -180,8 +180,13 @@ def _allowed_venv_link(path, target):
     relative = path.relative_to(target.path)
     if relative == Path("lib64"):
         return path.resolve() == (target.path / "lib").resolve()
-    if relative.parent == Path("bin") and re.fullmatch(r"python(?:3(?:\.\d+)?)?", relative.name):
+    interpreter = re.fullmatch(r"python(?:3(?:\.\d+)?)?", relative.name)
+    if relative.parent == Path("bin") and (interpreter or relative.name == "𝜋thon"):
         resolved = path.resolve()
+        # Python 3.14's UTF-8 venv creates this alias to its own interpreter.
+        # Admit only that same destination, never arbitrary Unicode links.
+        if relative.name == "𝜋thon" and resolved != (target.path / "bin/python").resolve():
+            return False
         return resolved.is_file() and re.fullmatch(r"python(?:3(?:\.\d+)?)?", resolved.name) is not None
     return False
 
@@ -312,6 +317,29 @@ def build_plan(root=ROOT, mode="bytecode", include_native_store=False, *, enviro
     return result
 
 
+def _is_unrelated_system_service(directory, argv):
+    """Recognize protected OS session services by argv, name and kernel unit."""
+    with (directory / "comm").open("rb") as stream:
+        name = stream.read(64)
+    with (directory / "cgroup").open("rb") as stream:
+        groups = stream.read(8193)
+    if len(groups) > 8192:
+        return False
+    uid = os.geteuid() if hasattr(os, "geteuid") else directory.stat().st_uid
+    session = f"/user.slice/user-{uid}.slice/user@{uid}.service"
+    if (name.strip() == b"systemd" and argv in
+            (["/usr/lib/systemd/systemd", "--user"], ["/lib/systemd/systemd", "--user"])):
+        expected = (session + "/init.scope").encode()
+    elif name.strip() == b"(sd-pam)" and argv == ["(sd-pam)"]:
+        expected = (session + "/init.scope").encode()
+    elif name.strip() == b"ssh-agent" and argv[:2] == ["/usr/bin/ssh-agent", "-D"]:
+        expected = (session + "/app.slice/ssh-agent.service").encode()
+    else:
+        return False
+    paths = [line.split(b":", 2)[-1] for line in groups.splitlines()]
+    return bool(paths) and all(path == expected for path in paths)
+
+
 def running_processes(root, plan, *, proc_root=Path("/proc")):
     """Passively inventory same-account processes; do not stop any process."""
     proc_root = Path(proc_root)
@@ -341,6 +369,13 @@ def running_processes(root, plan, *, proc_root=Path("/proc")):
                 executable = os.readlink(directory / "exe")
             except FileNotFoundError:
                 continue
+            except PermissionError:
+                # Known non-dumpable OS services have distinct kernel units;
+                # they cannot be checkout runtimes or package workers. Unknown
+                # inaccessible processes still refuse the cleanup below.
+                if _is_unrelated_system_service(directory, argv):
+                    continue
+                raise
             candidates = argv + [executable]
             owned_resource = any(value == str(base) or value.startswith(str(base) + os.sep)
                                  for value in candidates for base in roots)

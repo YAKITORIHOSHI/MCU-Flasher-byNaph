@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock
 
 from src.modules import arduino_lib_req as downloader
+from src.modules.tk_font_runtime import prepare_tk_font_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,6 +19,7 @@ class TkDownloaderFixture(unittest.TestCase):
         # Retire previous disposable Tcl wrapper cycles on their UI thread
         # before the next fixture starts catalog or disk workers.
         gc.collect()
+        prepare_tk_font_runtime()
         self.module = downloader
         try:
             self.root = tk.Tk()
