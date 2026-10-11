@@ -350,16 +350,21 @@ editor window, and closing it restores the same editor and dirty buffers.
 
 Ubuntu pointer recovery and log mouse-release listeners use constructed widget
 filters. They avoid application-wide Python filters that can recurse while
-Shiboken wraps private Qt/WebEngine objects. Native Build/Serial Clear also keeps
+Shiboken wraps private Qt/WebEngine objects. Pointer filtering uses this owned
+widget scope on Windows too. Native Build/Serial Clear also keeps
 retained text cursors alive until Qt finishes clearing its document, avoiding a
-cursor use-after-free during synchronous scrollbar callbacks. Both fixes are
-Linux-only; Windows retains its existing paths.
+cursor use-after-free during synchronous scrollbar callbacks. The retained
+text-cursor workaround is Linux-only.
 
 Serial reader failures retry at bounded delays, retain port selection, and
 stop after repeated failures. Stale readers cannot disconnect newer sessions.
 Permission failures need user correction. Editor renderer failures preserve
 dirty source buffers in process memory and reload a bounded number of times;
 a visible reload control remains available after that budget is exhausted.
+Each renderer has a distinct recovery token. The replacement loads its initial
+project once and acknowledges recovery only after checking the restored model
+text; delayed work from an older page cannot clear its buffers. Explicit project
+reload and cloud Pull still load the newly selected sources.
 This does not recover from complete process termination. Flashing, erasing,
 resets, and shell commands are never automatically replayed by these recovery
 paths. Errors remain visible; broad try/catch blocks do not prove recovery.

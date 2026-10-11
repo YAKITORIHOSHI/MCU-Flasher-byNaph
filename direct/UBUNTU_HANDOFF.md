@@ -15,12 +15,22 @@ the current range. Readiness and the direct GUI entry reject the affected
 combination before native widgets load. Do not remove this guard without
 passing direct/verify_qt_binding_lifetime.py on older Python.
 
-Review the latest Desktop compatibility GitHub Actions results and artifacts.
-Clean first-launch checks have passed on 22.04, 24.04 and 26.04. A broader
-22.04/Python 3.10 downloader fixture has crashed in Tk Listbox.delete; inspect
-any native Tk backtrace before changing production behavior. Report current
-results accurately instead of treating earlier successes as proof of every
-check.
+Review the latest Desktop compatibility GitHub Actions results and artifacts
+for the current commit. Clean first-launch checks passed on 22.04, 24.04 and
+26.04. Broader suites passed on Windows, 24.04 and 26.04, but a later 26.04
+repeat exposed intermittent loss of an unsaved editor buffer during renderer
+reload. A shared fix removes duplicate startup loads and requires matching
+renderer tokens and restored text before acknowledging recovery; verify it
+natively, including detach/reattach, repeated renderer reload and cloud Pull.
+Run node direct/verify_editor_recovery.js and the real direct/verify_runtime.py
+fixture. Never relax dirty-text assertions or clear snapshots to obtain a pass.
+
+The 22.04/Python 3.10 browser fixture crashed in Tk Listbox.delete. Its fixture
+now uses direct/tk_downloader_fixture.py without Qt imports, matching the
+production downloader's separate process. Check the latest native result and
+backtrace if this still fails; do not change production based only on a mixed
+test-process crash. Ubuntu investigation was stopped at my request so it can
+continue on this machine. Earlier successes do not prove the current revision.
 
 Launch through MCU_Flasher or bash direct/ubuntu/run.sh. Diagnose with --check
 and repair only if needed. Verify the actual desktop, including Wayland when

@@ -1022,6 +1022,9 @@
         if (typeof qt === 'undefined' || !qt.webChannelTransport) return;
         if (window.__webChannelReady) return;
         window.__webChannelReady = true;
+        const rendererToken = new URLSearchParams(window.location.search).get('renderer') || '';
+        const rendererMethods = {mark_modified: 'mark_renderer_modified',
+          snapshot_buffer: 'snapshot_renderer_buffer', update_editor_buffer: 'update_renderer_buffer'};
 
         new QWebChannel(qt.webChannelTransport, function (channel) {
           const bridge = channel.objects.editorBridge;
@@ -1029,11 +1032,13 @@
           window.pywebview = {
             api: new Proxy(bridge, {
               get(target, prop) {
-                if (typeof target[prop] === 'function') {
+                const method = rendererMethods[prop] || prop;
+                if (typeof target[method] === 'function') {
                   return function (...args) {
                     return new Promise((resolve, reject) => {
                       try {
-                        target[prop](...args, function (res) {
+                        const parameters = rendererMethods[prop] ? [rendererToken, ...args] : args;
+                        target[method](...parameters, function (res) {
                           if (prop === 'read_file' && res?.success === false) {
                             window._editorReadFailures = (window._editorReadFailures || 0) + 1;
                             reject(new Error(res.error || 'File could not be read'));
@@ -1050,7 +1055,7 @@
                     });
                   };
                 }
-                return target[prop];
+                return rendererMethods[prop] ? undefined : target[prop];
               }
             })
           };
@@ -1060,12 +1065,12 @@
           if (typeof window.loadProject === 'function') {
             window.removeEventListener('pywebviewready', window.loadProject);
           }
-          window.dispatchEvent(new Event('pywebviewready'));
           if (typeof window.safeLoadProject === 'function') {
-            window.safeLoadProject();
+            window.__mcuInitialProjectLoad = window.safeLoadProject();
           } else if (typeof window.loadProject === 'function') {
-            window.loadProject();
+            window.__mcuInitialProjectLoad = Promise.resolve(window.loadProject());
           }
+          window.dispatchEvent(new Event('pywebviewready'));
         });
       }
       // Let the bundle create its editor and startup listener before publishing
@@ -1257,26 +1262,61 @@
       // the same file twice in the tab bar.
       let projectLoadInFlight = null;
       const originalLoadProject = window.loadProject;
+      const rendererToken = new URLSearchParams(window.location.search).get('renderer') || '';
       window.safeLoadProject = function () {
         if (projectLoadInFlight) return projectLoadInFlight;
+        if (!window.pywebview || !window.pywebview.api) return Promise.resolve(false);
         if (typeof originalLoadProject !== 'function') return Promise.resolve();
         projectLoadInFlight = Promise.resolve(originalLoadProject())
           .then(async () => {
             const api = window.pywebview && window.pywebview.api;
-            if (!api || !api.get_recovery_buffers) return;
-            const snapshots = await api.get_recovery_buffers();
+            if (!api) return false;
+            const generationRequired = !!window.editorBridge || !!api.get_renderer_recovery;
+            if (generationRequired && (!api.get_renderer_recovery || !api.complete_renderer_recovery)) return false;
+            if (!generationRequired && !api.get_recovery_buffers) return true;
+            // The bundle creates tabs before their paths are mapped. Recovery
+            // must wait for that mapping before activating any dirty model.
+            if (window.syncTabPaths) await window.syncTabPaths();
+            const state = api.get_renderer_recovery
+              ? await api.get_renderer_recovery(rendererToken)
+              : {accepted: true, buffers: await api.get_recovery_buffers()};
+            if (!state?.accepted) return false;
+            const snapshots = state.buffers || {};
+            const restored = {};
+            const restoredModels = new Map();
             const active = document.querySelector('#tab-bar .tab.active');
             const activePath = active && active._filePath;
-            for (const [path, content] of Object.entries(snapshots || {})) {
-              if (!window.activateProjectFile || !window.activateProjectFile(path)) continue;
-              await new Promise(resolve => requestAnimationFrame(resolve));
-              const model = window.editorInstance && window.editorInstance.getModel();
-              // Load disk content first so setValue marks the restored buffer
-              // as dirty through the bundle's normal edit/save lifecycle.
-              if (model && model.getValue() !== content) model.setValue(content);
+            const editor = window.editorInstance;
+            const restoring = Object.keys(snapshots).length > 0;
+            const wasReadOnly = editor?.getRawOptions().readOnly;
+            if (restoring) editor?.updateOptions({readOnly: true});
+            try {
+              for (const [path, content] of Object.entries(snapshots)) {
+                if (!window.activateProjectFile || !window.activateProjectFile(path)) return false;
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                const current = document.querySelector('#tab-bar .tab.active');
+                if (window.projectPathKey(current?._filePath) !== window.projectPathKey(path)) return false;
+                const model = window.editorInstance && window.editorInstance.getModel();
+                // Also set equal text: a recovered dirty model must retain
+                // the bundle's dirty indicator and normal save lifecycle.
+                if (!model || model.isDisposed()) return false;
+                model.setValue(content);
+                if (model.getValue() !== content) return false;
+                restored[path] = model.getValue();
+                restoredModels.set(path, model);
+              }
+              for (const [path, model] of restoredModels) {
+                if (model.isDisposed() || model.getValue() !== restored[path]) return false;
+              }
+              if (generationRequired) {
+                return await api.complete_renderer_recovery(rendererToken, restored);
+              }
+              if (api.recovery_complete) await api.recovery_complete();
+              return true;
+            } finally {
+              if (restoring) editor?.updateOptions({readOnly: !!wasReadOnly});
+              if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
             }
-            if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
-            if (api.recovery_complete) await api.recovery_complete();
           })
           .finally(() => { projectLoadInFlight = null; });
         return projectLoadInFlight;

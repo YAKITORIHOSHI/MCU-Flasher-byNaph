@@ -188,6 +188,11 @@ when source and target fingerprints match. Serial and editor failures use
 bounded recovery; these recovery paths never replay uploads, erases, resets,
 or commands.
 
+Editor recovery loads a replacement renderer's project once and restores dirty
+models before opening the active file. Recovery acknowledgements must match
+that renderer and the restored text, so an older page's delayed load cannot
+discard the replacement's recovery buffers.
+
 See [Ubuntu and recovery details](direct/UBUNTU.md) and
 [hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04
 runtime, Qt/Monaco, terminal, crash-regression and responsive checks pass locally

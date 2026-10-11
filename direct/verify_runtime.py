@@ -30,6 +30,60 @@ from src.modules import private_python_guard as guard
 
 
 class RuntimeChecks(unittest.TestCase):
+    def test_renderer_recovery_rejects_stale_pages_and_requires_exact_buffers(self):
+        from main.qt.editor_panel import EditorBridgeAPI
+        project = ROOT / "temp/scratch/renderer-generation-fixture"
+        source = str(project / "sample.ino")
+        empty_header = str(project / "empty.h")
+        backend = SimpleNamespace(sketch_dir_path=project, modified_files={})
+        backend.mark_modified = lambda name, dirty=True: backend.modified_files.update({name: dirty})
+        bridge = EditorBridgeAPI(backend)
+        outgoing = bridge.begin_renderer_load()
+        bridge.update_editor_buffer(source, "unsaved Unicode \U0001f600")
+        bridge.update_editor_buffer(empty_header, "")
+        bridge.begin_buffer_recovery()
+        self.assertFalse(bridge.get_renderer_recovery(outgoing)["accepted"])
+        replacement = bridge.begin_renderer_load()
+        expected = {source: "unsaved Unicode \U0001f600", empty_header: ""}
+        bridge.mark_modified(source, False)
+        bridge.mark_modified(empty_header, False)
+        self.assertEqual(bridge.get_renderer_recovery(replacement)["buffers"], expected)
+        self.assertFalse(bridge.complete_renderer_recovery(outgoing, expected))
+        self.assertFalse(bridge.complete_renderer_recovery(replacement, {source: "saved disk"}))
+        self.assertEqual(bridge.get_recovery_buffers(), expected)
+        self.assertTrue(bridge.complete_renderer_recovery(replacement, expected))
+        self.assertFalse(bridge._recovering_buffers)
+        self.assertTrue(all(backend.modified_files.values()))
+        self.assertEqual(bridge._buffer_snapshots, expected)
+        bridge.begin_buffer_recovery()
+        self.assertEqual(bridge.get_recovery_buffers(), expected)
+        bridge.deleteLater()
+
+    def test_renderer_callbacks_preserve_newer_recovery_edits(self):
+        from main.qt.editor_panel import EditorBridgeAPI
+        project = ROOT / "temp/scratch/renderer-newer-edit-fixture"
+        source = str(project / "sample.ino")
+        backend = SimpleNamespace(sketch_dir_path=project, modified_files={})
+        backend.mark_modified = lambda name, dirty=True: backend.modified_files.update({name: dirty})
+        bridge = EditorBridgeAPI(backend)
+        outgoing = bridge.begin_renderer_load()
+        bridge.update_editor_buffer(source, "frozen A")
+        bridge.begin_buffer_recovery()
+        replacement = bridge.begin_renderer_load()
+        expected = bridge.get_renderer_recovery(replacement)["buffers"]
+        bridge.update_renderer_buffer(outgoing, source, "stale outgoing text")
+        bridge.snapshot_renderer_buffer(outgoing, source, "stale outgoing snapshot")
+        bridge.mark_renderer_modified(outgoing, source, False)
+        self.assertEqual(bridge.get_recovery_buffers(), expected)
+        self.assertTrue(backend.modified_files[source])
+        bridge.update_renderer_buffer(replacement, source, "newer B")
+        self.assertFalse(bridge.complete_renderer_recovery(replacement, expected))
+        self.assertEqual(bridge.get_recovery_buffers(), {source: "newer B"})
+        self.assertTrue(bridge.complete_renderer_recovery(replacement, {source: "newer B"}))
+        bridge.begin_buffer_recovery()
+        self.assertEqual(bridge.get_recovery_buffers(), {source: "newer B"})
+        bridge.deleteLater()
+
     def test_application_guidance_does_not_escape_to_sketches(self):
         from main.core.file_utils import application_agent_guidance
         self.assertIn("Application development scope", application_agent_guidance(ROOT))
@@ -681,7 +735,8 @@ def qt_smoke(app, render_dir=None):
 
         @checked
         def verify_restored(value):
-            if value != unsaved and time.monotonic() < recovery_deadline[0]:
+            bridge = window._editor_panel.bridge
+            if (value != unsaved or bridge._recovering_buffers) and time.monotonic() < recovery_deadline[0]:
                 QTimer.singleShot(150, read_restored)
                 return
             assert value == unsaved, (
@@ -690,7 +745,21 @@ def qt_smoke(app, render_dir=None):
                 f"recovery_buffers={window._editor_panel.bridge._recovery_buffers!r}"
             )
             assert backend.modified_files.get(backend.active_file_path), "Restored buffer must remain dirty"
-            assert not window._editor_panel.bridge._recovering_buffers
+            assert not bridge._recovering_buffers
+            # A late host loadFinished must only connect the channel, without
+            # rebuilding disk models after the restored text was acknowledged.
+            window._editor_panel._on_load_finished(True)
+            QTimer.singleShot(250, read_after_host_init)
+
+        @checked
+        def read_after_host_init():
+            page.runJavaScript("window.editorInstance?.getValue()", verify_after_host_init)
+
+        @checked
+        def verify_after_host_init(value):
+            assert value == unsaved, "Late host initialization replaced restored text with disk content"
+            assert backend.modified_files.get(backend.active_file_path)
+            assert window._editor_panel.bridge._buffer_snapshots.get(backend.active_file_path) == unsaved
             verify_window_ownership()
             collector._last_full -= 61
             collector.collect_pending()

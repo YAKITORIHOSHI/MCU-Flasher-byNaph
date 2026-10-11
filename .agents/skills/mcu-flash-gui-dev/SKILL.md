@@ -361,11 +361,10 @@ For explicitly requested assistant delegation, use the local
   only its own PTY; retain the tab and never replay input or start a replacement
   automatically. Reconcile the supervisor's original Popen handle after
   descendant reaping so normal signal shutdown does not report a live child.
-- Linux CI cloud/developer fixtures use `--no-finalize` only after their owned
-  widgets and service workers retire, matching the existing WebEngine/runtime
-  probes. Keep failed assertions and surviving-worker checks as failures. This
-  avoids the observed Python 3.11/PySide mandatory interpreter-GC abort; it is
-  a fixture teardown limitation, not evidence that the binding defect is fixed.
+- Linux cloud/developer fixtures finalize normally with the compatible Qt
+  range. Do not restore their old `--no-finalize` workaround to conceal a native
+  binding defect. Existing WebEngine/runtime probes have separate teardown
+  constraints; failed assertions and surviving-worker checks remain failures.
 - Recalculate Tk list/details pane minima from the available native pixels even
   when orientation stays unchanged. Preserve valid user sash positions and
   selected-item/detail state. Bound responsive board fixtures to a 1024x768
@@ -387,6 +386,14 @@ For explicitly requested assistant delegation, use the local
   Keep Python 3.12+ on its current Qt range. Validate installed compatibility
   before native widget imports and invalidate stale readiness so launch repairs
   affected environments. CI must cover both Ubuntu's native Python and 3.11.
+- Monaco startup owns one initial project-load promise. Host WebChannel
+  initialization must not trigger a second disk load after dirty restoration.
+  Bind recovery reads/acknowledgements to the original document's renderer
+  token and verify every recovered model's current text before clearing host
+  snapshots. Stale-page acknowledgements must fail; keep explicit project/Pull
+  reload separate. Verify deterministic races with
+  `direct/verify_editor_recovery.js` and real recovery/Pull with
+  `direct/verify_runtime.py`.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow
@@ -788,7 +795,7 @@ MCU Flasher by Naph/
 - Reviewed STM32 20.0.0 Arduino preparation groups boards only by exact core and full package specifications after matching platform, framework and nested variant script fingerprints. Its Arduino checks reduce from 163 to 7; retain every other framework's probes and separate checks for unknown or modified scripts. Replan after package preparation so missing scripts cannot grant sharing. Verify isolated signatures and source edits with `direct/verify_bootstrap_builders.py`.
 - Scope extended paths to PlatformIO's installer-module copying and cleanup only after canonical containment within the configured package/platform/library store or its `pkg-installing` staging directories. Preserve literal trailing-dot TAR entries; leave global filesystem modules and unrelated/native Linux calls untouched. Verify local TAR entries, deep ZIP/TAR paths, overwrite/version detachment, traversal rejection, junction escapes and hook restoration with `direct/verify_bootstrap_archives.py`; no live install/cache writes in verification.
 - The downloader (`arduino_lib_req.py`) retains Tk/ttk network and archive workflows. `tk_glass.py` supplies static glass cards around package lists, details and installed items in all three palettes; advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
-- `browser_loading.py` validates compact catalogs against source path/mtime/size and schema, rebuilding damaged or stale derived caches. Cache writes are atomic and bounded. Keep large raw JSON out of the RAM cache, publish cached data before HTTP refresh, and use two network workers on constrained hosts (four otherwise). `TkTasks` is the Tk-thread delivery boundary; workers never call Tcl. Search ranking, selected-version status, installed inventories and detail selections use one active scan plus one latest request; cancel stale scans and stop dispatcher timers when idle. Preserve active search on catalog updates, batch list/label delivery and cancel closed-widget callbacks. Verify with `direct/verify_browser_loading.py` using temporary catalogs and mocked HTTP.
+- `browser_loading.py` validates compact catalogs against source path/mtime/size and schema, rebuilding damaged or stale derived caches. Cache writes are atomic and bounded. Keep large raw JSON out of the RAM cache, publish cached data before HTTP refresh, and use two network workers on constrained hosts (four otherwise). `TkTasks` is the Tk-thread delivery boundary; workers never call Tcl. Search ranking, selected-version status, installed inventories and detail selections use one active scan plus one latest request; cancel stale scans and stop dispatcher timers when idle. Preserve active search on catalog updates, batch list/label delivery and cancel closed-widget callbacks. Verify with `direct/verify_browser_loading.py` using temporary catalogs and mocked HTTP. Its shared `direct/tk_downloader_fixture.py` must stay Tk-only: do not import the Qt Controls fixture or construct QApplication in the downloader process.
 - Settings' legacy `graphics_acceleration` key controls continuous splitter resize, not the GPU. Unsaved defaults use divider previews on constrained devices; preserve explicit choices. Save a complete preference set once and report persistence failure. Reset controls must revalidate target/framework/port and busy state in their callbacks.
 - `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts. Tk uses its own native point/pixel scale, coalesced panes and scrollable installed details; cancel bound callbacks on destruction.
 - Main windows have a minimum width of half the current monitor's available width in Qt logical pixels. Allow wider resizing and normal maximization, including saved maximized state. Recalculate the minimum on monitor changes and fit normal window frames to the work area. Detached editor and explicit dialog sizing keep their own contracts.

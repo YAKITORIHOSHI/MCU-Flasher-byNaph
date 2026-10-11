@@ -41,18 +41,13 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QWebChannel JS bootstrap
-# Injected after the page loads as fallback/sync to ensure QWebChannel connects
-# and triggers safeLoadProject.
+# Injected after the page loads to connect QWebChannel as a fallback. The page
+# initializer owns its single initial project load.
 # ─────────────────────────────────────────────────────────────────────────────
 _WEBCHANNEL_INIT_JS = """
 (function() {
     if (typeof window.__initQtWebChannel === 'function') {
         window.__initQtWebChannel();
-    }
-    if (typeof window.safeLoadProject === 'function') {
-        window.safeLoadProject();
-    } else if (typeof window.loadProject === 'function') {
-        window.loadProject();
     }
 })();
 """
@@ -81,6 +76,7 @@ class EditorBridgeAPI(QObject):
         self._buffer_snapshots = {}
         self._recovery_buffers = {}
         self._recovering_buffers = False
+        self._renderer_token = ""
         self._syntax_generation = 0
         self._syntax_running = False
         self._syntax_pending = None
@@ -300,6 +296,8 @@ class EditorBridgeAPI(QObject):
             return
         if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}:
             self._buffer_snapshots[str(path)] = content
+            if self._recovering_buffers and str(path) in self._recovery_buffers:
+                self._recovery_buffers[str(path)] = content
             # Invalidate old diagnostics immediately, before the next debounce
             # requests a parse. Otherwise stale markers can appear while typing.
             self._syntax_generation += 1
@@ -310,6 +308,21 @@ class EditorBridgeAPI(QObject):
         """One WebChannel message per edit keeps dirty state and recovery current."""
         self.mark_modified(file_path, True)
         self.snapshot_buffer(file_path, content)
+
+    @Slot(str, str, bool)
+    def mark_renderer_modified(self, token: str, file_path: str, is_modified: bool = True):
+        if token and token == self._renderer_token:
+            self.mark_modified(file_path, is_modified)
+
+    @Slot(str, str, str)
+    def snapshot_renderer_buffer(self, token: str, file_path: str, content: str):
+        if token and token == self._renderer_token:
+            self.snapshot_buffer(file_path, content)
+
+    @Slot(str, str, str)
+    def update_renderer_buffer(self, token: str, file_path: str, content: str):
+        if token and token == self._renderer_token:
+            self.update_editor_buffer(file_path, content)
 
     @Slot(result="QVariant")
     def get_recovery_buffers(self):
@@ -328,6 +341,35 @@ class EditorBridgeAPI(QObject):
                 if self._backend and self._backend.modified_files.get(path)
             }
         self._recovering_buffers = True
+        # The outgoing document must never acknowledge its replacement's
+        # recovery, even if one of its asynchronous loads finishes late.
+        self._renderer_token = ""
+
+    def begin_renderer_load(self) -> str:
+        from uuid import uuid4
+        self._renderer_token = uuid4().hex
+        return self._renderer_token
+
+    @Slot(str, result="QVariant")
+    def get_renderer_recovery(self, token: str) -> dict:
+        accepted = bool(token and token == self._renderer_token)
+        return {"accepted": accepted, "buffers": self.get_recovery_buffers() if accepted else {}}
+
+    @Slot(str, "QVariant", result=bool)
+    def complete_renderer_recovery(self, token: str, restored: dict) -> bool:
+        if not token or token != self._renderer_token or not isinstance(restored, dict):
+            return False
+        expected = self.get_recovery_buffers()
+        if any(restored.get(path) != content for path, content in expected.items()):
+            return False
+        # Monaco's content listener may still be attaching on a fresh page.
+        # Keep the acknowledged text recoverable through another renderer loss.
+        for path, content in expected.items():
+            self._buffer_snapshots.setdefault(path, content)
+        for path in expected:
+            self._backend.mark_modified(path, True)
+        self.recovery_complete()
+        return True
 
     @Slot()
     def recovery_complete(self):
@@ -614,6 +656,7 @@ class MonacoEditorPanel(QWidget):
     def _load_editor(self) -> None:
         if self._editor_html.exists():
             url = QUrl.fromLocalFile(str(self._editor_html.resolve()))
+            url.setQuery("renderer=" + self._bridge.begin_renderer_load())
             self._view.load(url)
         else:
             # Fallback: blank page with error message
@@ -683,15 +726,17 @@ class MonacoEditorPanel(QWidget):
             return
         path_json = json.dumps(str(file_path))
         js = (
-            f"if (typeof window.activateProjectFile === 'function') {{"
-            f"  if (!window.activateProjectFile({path_json})) {{"
-            f"    if (typeof window.safeLoadProject === 'function') {{"
-            f"      window.safeLoadProject().then(() => {{"
-            f"        if (typeof window.activateProjectFile === 'function') window.activateProjectFile({path_json});"
-            f"      }});"
-            f"    }}"
-            f"  }}"
-            f"}}"
+            "(() => { const activate = () => {"
+            " Promise.resolve(window.__mcuInitialProjectLoad).then(() => {"
+            f"  if (typeof window.activateProjectFile === 'function' && !window.activateProjectFile({path_json})) {{"
+            "   window.safeLoadProject?.().then(() => {"
+            f"    window.activateProjectFile?.({path_json});"
+            "   });"
+            "  }"
+            " }); };"
+            " if (window.__mcuInitialProjectLoad || window.pywebview?.api) activate();"
+            " else window.addEventListener('pywebviewready', activate, {once: true});"
+            "})()"
         )
         self._view.page().runJavaScript(js)
 
