@@ -712,6 +712,12 @@ to the Ubuntu account's usual folders. A project terminal whose renderer
 stops closes its own Bash session and offers a new session without replaying
 commands.
 
+Ubuntu with Python 3.10 or 3.11 uses Qt for Python below 6.12. Native isolated
+checks reproduced a reference-count crash in the Linux 6.12 package on those
+Python versions; 6.11 passes the same checks. Python 3.12 and newer retain the
+current Qt range. Launch readiness checks repair an incompatible older runtime
+before opening the workspace.
+
 On short screens, the board/library downloader now fits both list and details
 panes to the available height at the selected font scale. Resizing preserves
 the selected item, its details and a valid manually adjusted divider. Short

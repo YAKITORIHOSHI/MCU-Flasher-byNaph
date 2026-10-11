@@ -677,7 +677,6 @@ class PortalChecks(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--render-dir", type=Path)
-    parser.add_argument("--no-finalize", action="store_true")
     args, rest = parser.parse_known_args()
     if args.render_dir:
         RENDER_DIR = args.render_dir.resolve()
@@ -692,13 +691,4 @@ if __name__ == "__main__":
             if worker.is_alive():
                 print("Developer UI fixture worker survived owned cleanup.", file=sys.stderr)
                 exit_code = 1
-    if args.no_finalize:
-        # Match the isolated runtime probes after their owned-window cleanup;
-        # Linux Qt wrapper finalization is separate from the UI assertions.
-        from PySide6.QtCore import QCoreApplication, QEvent
-        COLLECTOR.stop()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(exit_code)
     raise SystemExit(exit_code)

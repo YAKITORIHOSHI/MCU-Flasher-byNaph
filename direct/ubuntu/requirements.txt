@@ -1,5 +1,7 @@
 # Native amd64 Ubuntu runtime; excludes Windows DLLs, pywin32, pywinpty and WebView2.
-PySide6>=6.7,<7
+# Linux 6.12 wheels lose None references on the mutable-None Python ABI.
+PySide6>=6.7,<6.12; python_version < "3.12"
+PySide6>=6.7,<7; python_version >= "3.12"
 pyserial>=3.5,<4
 # Workspace ESP chip inspection and Soft/Hard Reset; independent of PIO tools.
 esptool>=4.11,<6

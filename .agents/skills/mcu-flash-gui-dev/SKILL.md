@@ -382,6 +382,11 @@ For explicitly requested assistant delegation, use the local
   work areas through 200% scale, including every line's scroll reachability.
   Use direct/verify_qt_binding_lifetime.py to isolate native Qt binding lifetime
   failures from app services; run older mutable-None Python in a fresh process.
+- Ubuntu Python 3.10/3.11 must resolve PySide6 below 6.12; the native Linux
+  6.12.0 wheel loses None references in application-free setters and callbacks.
+  Keep Python 3.12+ on its current Qt range. Validate installed compatibility
+  before native widget imports and invalidate stale readiness so launch repairs
+  affected environments. CI must cover both Ubuntu's native Python and 3.11.
 - Keep maintenance resource plans in the respective `cleaner/windows/` and
   `cleaner/ubuntu/` implementations. Preview is the default; explicit cleanup
   preserves settings, sketches, protected project caches and recovery. Follow

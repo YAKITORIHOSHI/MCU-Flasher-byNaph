@@ -2,6 +2,8 @@
 """Read-only Ubuntu dependency checks; never install packages or open a GUI."""
 from __future__ import annotations
 
+from importlib import metadata
+
 import argparse
 import ctypes
 import ctypes.util
@@ -156,12 +158,31 @@ def bootstrap_ready(core) -> bool:
     return bool(find_arduino_cli() and find_opencode_cli() and ready(core) and startup_ready(core))
 
 
+def check_qt_python_compatibility() -> None:
+    """Reject affected Linux wheels using metadata, before any native Qt import."""
+    if not sys.platform.startswith("linux") or sys.version_info >= (3, 12):
+        return
+    try:
+        version = metadata.version("PySide6")
+        parts = version.split(".", 2)
+        release = int(parts[0]), int(parts[1])
+    except (metadata.PackageNotFoundError, ValueError, IndexError) as exc:
+        raise RuntimeError("The Ubuntu Qt runtime version cannot be validated. "
+                           "Run bash direct/ubuntu/run.sh --repair.") from exc
+    if release >= (6, 12):
+        raise RuntimeError(f"PySide6 {version} is incompatible with Ubuntu Python "
+                           f"{sys.version_info[0]}.{sys.version_info[1]}. "
+                           "This Linux wheel can crash while rendering. "
+                           "Run bash direct/ubuntu/run.sh --repair to install PySide6 below 6.12.")
+
+
 def runtime_preflight(root=ROOT) -> None:
     """Validate private imports and native Qt plugins without creating windows."""
     root = Path(root).resolve()
     expected = root / ".venv-linux"
     if sys.prefix == sys.base_prefix or Path(sys.prefix).resolve() != expected:
         raise RuntimeError("MCU Flasher must use its own .venv-linux environment. Rerun Ubuntu Bootstrap.")
+    check_qt_python_compatibility()
     sys.path.insert(0, str(root))
     try:
         _check_tk()

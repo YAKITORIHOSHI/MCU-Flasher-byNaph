@@ -503,8 +503,13 @@ isolated Xvfb display: 35 runtime checks plus the real Monaco workspace, seven
 event-filter/heap-crash checks, 25 native serial-view checks, 24 build-console
 checks, and 26 performance checks. The responsive suite passed 14 Qt/Tk checks
 at 100/125/150/200% with PySide6 6.8.3 and again at 100% with 6.12; current
-runtime/renderer/crash checks also passed with 6.12. Existing Qt dependency ranges
-remain unchanged. The clipboard verifier needs a native xcb display through
+runtime/renderer/crash checks also passed with 6.12 on newer Python. An isolated
+native binding probe subsequently reproduced sustained `None` reference loss
+with Linux PySide6 6.12.0 on Python 3.11; all nine cases pass with 6.11.2.
+Ubuntu therefore uses `PySide6<6.12` on Python 3.10/3.11 and retains `<7` on
+Python 3.12+. Readiness rejects the incompatible combination before opening
+the workspace and directs existing installations through Bootstrap repair.
+The clipboard verifier needs a native xcb display through
 process exit; the offscreen plugin can crash while releasing transferred MIME
 data after its assertions pass. Ubuntu CI runs that fixture under Xvfb.
 

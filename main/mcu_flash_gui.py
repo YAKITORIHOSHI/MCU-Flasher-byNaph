@@ -41,6 +41,14 @@ configure_webengine_environment()
 from src.modules.private_python_guard import enforce_private_python
 enforce_private_python()
 
+if sys.platform.startswith("linux"):
+    from direct.ubuntu.preflight import check_qt_python_compatibility
+    try:
+        check_qt_python_compatibility()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+
 from src.modules.offline_runtime import activate
 from src.modules.offline_mode import offline_enabled
 activate(offline_enabled())

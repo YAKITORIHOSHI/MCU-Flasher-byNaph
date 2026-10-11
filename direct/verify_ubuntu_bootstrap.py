@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import ast
 import contextlib
 import io
 from pathlib import Path
@@ -51,6 +52,60 @@ class UbuntuReleasePackageChecks(unittest.TestCase):
 
 
 class BootstrapEnvironmentChecks(unittest.TestCase):
+    def test_qt_compatibility_rejects_old_python_before_native_imports(self):
+        for python in ((3, 10), (3, 11)):
+            with self.subTest(python=python), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=python)), \
+                    patch.object(preflight.metadata, "version", return_value="6.12.0"), \
+                    patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
+                with self.assertRaisesRegex(RuntimeError, "--repair.*below 6.12"):
+                    preflight.check_qt_python_compatibility()
+        owning_root = ROOT / "temp/audit/qt-compatibility-owner"
+        private = str(owning_root / ".venv-linux")
+        with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 11),
+                                                            prefix=private, base_prefix="system")), \
+                patch.object(preflight.metadata, "version", return_value="6.12.0"), \
+                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native validation ran")):
+            with self.assertRaisesRegex(RuntimeError, "incompatible"):
+                preflight.runtime_preflight(owning_root)
+
+    def test_supported_qt_versions_and_hosts_do_not_trigger_repair(self):
+        for host, python, qt in (("linux", (3, 10), "6.11.2"), ("linux", (3, 11), "6.8.3"),
+                                ("linux", (3, 12), "6.12.0"), ("linux", (3, 14), "6.12.0"),
+                                ("win32", (3, 11), "6.12.0")):
+            with self.subTest(host=host, python=python), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform=host, version_info=python)), \
+                    patch.object(preflight.metadata, "version", return_value=qt):
+                preflight.check_qt_python_compatibility()
+
+    def test_unknown_old_python_qt_version_has_actionable_repair(self):
+        for result in ("unrecognized", preflight.metadata.PackageNotFoundError("PySide6")):
+            kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+            with self.subTest(result=str(result)), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 11))), \
+                    patch.object(preflight.metadata, "version", **kwargs):
+                with self.assertRaisesRegex(RuntimeError, "--repair"):
+                    preflight.check_qt_python_compatibility()
+
+    def test_native_requirements_and_direct_entry_preserve_compatibility_boundary(self):
+        from pip._vendor.packaging.requirements import Requirement
+        requirements = [Requirement(line) for line in (ROOT / "direct/ubuntu/requirements.txt").read_text().splitlines()
+                        if line.strip() and not line.startswith("#")]
+        qt = [item for item in requirements if item.name == "PySide6"]
+        for python in ("3.10", "3.11", "3.12", "3.14"):
+            matching = [item for item in qt if item.marker.evaluate({"python_version": python})]
+            self.assertEqual(len(matching), 1)
+            self.assertIn("6.11.2", matching[0].specifier)
+            self.assertEqual("6.12.0" in matching[0].specifier, python in ("3.12", "3.14"))
+        entry = ast.parse((ROOT / "main/mcu_flash_gui.py").read_text(encoding="utf-8"))
+        guarded = next(node.lineno for node in ast.walk(entry) if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Name) and node.func.id == "check_qt_python_compatibility")
+        bridge = next(node.lineno for node in ast.walk(entry) if isinstance(node, ast.ImportFrom)
+                      and node.module == "main.web_bridge")
+        widgets = next(node.lineno for node in ast.walk(entry) if isinstance(node, ast.ImportFrom)
+                       and node.module == "PySide6.QtWidgets")
+        self.assertLess(guarded, min(bridge, widgets))
+
     def test_private_pip_and_platformio_interpreters_ignore_foreign_destinations(self):
         from platformio.proc import get_pythonexe_path
 
