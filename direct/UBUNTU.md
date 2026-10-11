@@ -537,6 +537,9 @@ The standalone browser-loading suite passed 29 checks on Python 3.14.4.
 Ubuntu 22.04/Python 3.10 remains unresolved: run 38115716448's authenticated
 logs and GDB artifact show an invalid free in `_tkinter` during Listbox.delete,
 without Qt loaded. A pass on newer Python does not establish a Jammy fix.
+The failure-only CI diagnostic records native runtime versions and binary
+hashes alongside full GDB stacks, registers and shared-library mappings. It
+retains the original failure and bounds both diagnostic subprocesses.
 Cloud service, owner-ticket service and provider configuration fixtures passed
 38, 27 and 10 checks. Isolated launch, Bootstrap, Offline Mode, platform and
 PTY cleanup fixtures passed 107 checks, with two Windows-only cases skipped.

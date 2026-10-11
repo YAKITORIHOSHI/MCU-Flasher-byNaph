@@ -335,8 +335,37 @@ jobs:
           sudo apt-get install -y gdb
           mkdir -p temp/audit/compatibility
           # Diagnostic only: the preceding failed verification stays failed.
-          xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 90 gdb --batch -ex run -ex 'thread apply all bt' --args .venv-linux/bin/python -B direct/verify_browser_loading.py > temp/audit/compatibility/tk-native-backtrace.log 2>&1 || true
-          tail -n 180 temp/audit/compatibility/tk-native-backtrace.log
+          timeout 15 xvfb-run -a .venv-linux/bin/python -B - <<'PY' > temp/audit/compatibility/tk-native-runtime.log 2>&1 || true
+          import hashlib
+          import os
+          from pathlib import Path
+          import sys
+          import _tkinter
+          import tkinter as tk
+          root = tk.Tk()
+          root.withdraw()
+          print('Python:', sys.version)
+          print('Executable:', sys.executable)
+          print('libc:', os.confstr('CS_GNU_LIBC_VERSION'))
+          print('Tcl:', root.tk.call('info', 'patchlevel'))
+          print('Tk:', root.tk.call('package', 'provide', 'Tk'))
+          paths = {Path(sys.executable).resolve(), Path(_tkinter.__file__).resolve()}
+          for line in Path('/proc/self/maps').read_text().splitlines():
+              parts = line.split(maxsplit=5)
+              if len(parts) == 6 and any(name in parts[5] for name in ('libtcl8.6', 'libtk8.6', 'libBLT', 'libc.so')):
+                  paths.add(Path(parts[5]).resolve())
+          for path in sorted(paths):
+              print('SHA256:', hashlib.sha256(path.read_bytes()).hexdigest(), path)
+          root.destroy()
+          PY
+          xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 90 gdb --batch \
+            -ex run -ex 'thread apply all bt full' -ex 'info registers' \
+            -ex 'info sharedlibrary' -ex 'info proc mappings' -ex 'py-bt' \
+            -ex 'frame 4' -ex 'info args' -ex 'info locals' \
+            -ex 'info registers r12 r13 rsp rbp' -ex 'x/12i $pc-32' \
+            --args .venv-linux/bin/python -B direct/verify_browser_loading.py > temp/audit/compatibility/tk-native-backtrace.log 2>&1 || true
+          cat temp/audit/compatibility/tk-native-runtime.log
+          tail -n 320 temp/audit/compatibility/tk-native-backtrace.log
       - name: Desktop previews
         if: always()
         uses: actions/upload-artifact@v6

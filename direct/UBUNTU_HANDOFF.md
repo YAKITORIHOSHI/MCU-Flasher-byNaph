@@ -37,6 +37,9 @@ The extension-module list contains no Qt; the separated
 direct/tk_downloader_fixture.py did not resolve this crash. Preserve the full
 browser assertions and investigate on the affected Python/Tk combination;
 do not attribute it to a mixed Qt process or claim a fix from newer Python alone.
+The failure-only CI diagnostic preserves the failing result and records exact
+native runtime versions/hashes, full GDB stacks, registers and loaded mappings.
+Compare these with an isolated Jammy fixture before changing production Tk code.
 Earlier successes do not prove the current revision.
 
 Launch through MCU_Flasher or bash direct/ubuntu/run.sh. Diagnose with --check
