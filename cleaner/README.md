@@ -24,8 +24,12 @@ for the current architecture. It stays intact unless runtime reset explicitly
 selects `--include-native-store`, which also requires a matching native receipt.
 Ubuntu maintenance runs with system Python, outside the environment it removes.
 Python 3.14's Unicode interpreter alias is unlinked only when it belongs to the
-same validated environment; its external interpreter is preserved. Protected
-systemd session services are recognized by command, name and kernel unit when
+same validated environment; its external interpreter is preserved. Native
+package library/directory aliases are supported only when their existing
+destination stays inside the authenticated architecture store. They are unlinked
+without traversal; broken, cyclic, external or cross-architecture aliases block
+the entire cleanup. Protected systemd session services are recognized by
+command, name and kernel unit when
 their executable cannot be inspected. Unknown inaccessible processes still
 block cleanup.
 

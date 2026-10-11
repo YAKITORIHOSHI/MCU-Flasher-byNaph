@@ -89,6 +89,11 @@ removed, retaining compact logs/captures, installers, settings, sources, Git and
 all protected caches/journals. The checkout is approximately 1.5 GB. Preserve
 this lean state; let the native launcher run Bootstrap when the user next opens
 the application, rather than reprovisioning live dependencies for verification.
+The same-account receipt-authenticated XDG native PlatformIO downloads were
+also explicitly cleaned, freeing another 5.1 GB outside the checkout. Internal
+packaged aliases are unlinked only when they resolve within that architecture
+tree. All 45 isolated maintenance checks passed, including external/cyclic-link
+refusal and other-architecture preservation; the runtime CI includes them.
 
 Run relevant hardware-free direct/ verifiers with .venv-linux/bin/python,
 using isolated fixtures and temp/ captures. Preserve protected cache/journal

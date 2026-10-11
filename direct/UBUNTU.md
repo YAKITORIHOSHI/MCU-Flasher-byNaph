@@ -40,7 +40,10 @@ and add `--apply` to carry out the reviewed plan. It removes the validated
 `.venv-linux`, owned native tools and Linux offline extras, preserving sketches,
 settings and protected build/recovery caches. The shared XDG PlatformIO store
 requires the separate `--include-native-store` opt-in and matching ownership
-receipt. Next launch uses Bootstrap to download or restore missing dependencies;
+receipt. Packaged library/directory aliases must resolve inside that exact
+architecture tree and are unlinked without following them. External, broken or
+cyclic links still refuse cleanup. Next launch uses Bootstrap to download or
+restore missing dependencies;
 do not include generated environments or audit fixtures in source releases.
 
 For manual provisioning, the equivalent desktop dependencies are:
@@ -576,7 +579,11 @@ it did not install system packages or provision live board stores. At the
 user's request, generated Linux/Windows Python runtimes and bulky isolated
 audit dependencies were subsequently removed. Compact validation evidence and
 the original settings, installers, sources and protected caches were retained;
-the checkout is approximately 1.5 GB, with nearly 1 GB in Git history.
+the checkout is approximately 1.5 GB, with nearly 1 GB in Git history. The
+receipt-authenticated XDG native PlatformIO downloads were also removed,
+freeing approximately 5.1 GB outside the checkout. All 45 isolated Ubuntu
+maintenance checks passed, including external-link and other-architecture
+preservation; CI runs this verifier on each Ubuntu runtime combination.
 
 Local Ubuntu 24.04 amd64 verification passes with the native xcb backend on an
 isolated Xvfb display: 35 runtime checks plus the real Monaco workspace, seven

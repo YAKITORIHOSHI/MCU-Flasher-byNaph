@@ -131,6 +131,10 @@ Classify paths before changing attributes or deleting anything:
   Native descriptor-relative deletion must not follow venv interpreter links.
   Python 3.14's `bin/𝜋thon` link is recognized only when it resolves to that
   environment's own `bin/python`; a different destination remains a refusal.
+  In a receipt-authenticated native store, admit packaged file/directory aliases
+  only when their final existing destination stays inside that exact architecture
+  tree. Unlink aliases through the descriptor boundary; never traverse them.
+  Refuse broken, cyclic, external and cross-architecture links before mutation.
 - Cleanup refuses running app/package operations and never kills them to unlock
   files. The separate legacy Windows Stop entry point requires explicit
   acknowledgement, captured creation identity and exact owned entry/executable

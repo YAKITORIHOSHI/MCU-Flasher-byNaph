@@ -198,6 +198,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_upload_workers.py
           .venv-linux/bin/python -B direct/verify_build_log_routing.py
           .venv-linux/bin/python -B direct/verify_ubuntu_logging.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_maintenance.py
           .venv-linux/bin/python -B direct/verify_serial_reader.py
           # Clipboard ownership needs a native platform through process exit.
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_serial_view.py --no-finalize

@@ -191,6 +191,16 @@ def _allowed_venv_link(path, target):
     return False
 
 
+def _allowed_native_store_link(path, target):
+    """Admit packaged aliases only inside this authenticated architecture tree."""
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return (resolved.is_relative_to(target.path)
+            and (resolved.is_file() or resolved.is_dir()))
+
+
 def _snapshot(target, budget):
     """Validate the complete finite tree before deleting its first entry."""
     _contained(target.path, target.anchor)
@@ -205,7 +215,9 @@ def _snapshot(target, budget):
             raise MaintenanceError(f"Directory nesting exceeds its limit: {path}")
         info = path.lstat()
         linked = _linked(path)
-        if linked and not (target.kind == "venv" and _allowed_venv_link(path, target)):
+        if linked and not (
+                target.kind == "venv" and _allowed_venv_link(path, target)
+                or target.kind == "shared-native-store" and _allowed_native_store_link(path, target)):
             raise MaintenanceError(f"Unexpected link was retained: {path}")
         if not linked and not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
             raise MaintenanceError(f"Special filesystem entry was retained: {path}")

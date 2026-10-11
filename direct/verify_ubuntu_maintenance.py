@@ -168,6 +168,59 @@ class UbuntuMaintenanceTests(unittest.TestCase):
             self.plan("runtime", include_native_store=True, environment={"XDG_DATA_HOME": str(base)}, architecture="x86_64")
         self.assertTrue(core.exists())
 
+    def test_native_package_library_and_directory_aliases_are_unlinked(self):
+        base, core = self.core()
+        package = core / "packages/native-tool"
+        package.mkdir()
+        library = package / "libtool.so.1"
+        library.write_text("owned library", encoding="utf-8")
+        self.symlink(package / "libtool.so", "libtool.so.1")
+        self.symlink(core / "packages/alias", "native-tool", directory=True)
+        other = base / "mcu-flasher/platformio/aarch64"
+        other.mkdir()
+        (other / "keep").write_text("other architecture", encoding="utf-8")
+        self.apply(self.native_plan(base))
+        self.assertFalse(core.exists())
+        self.assertEqual((other / "keep").read_text(), "other architecture")
+
+    def test_native_package_external_alias_blocks_all_cleanup(self):
+        base, core = self.core()
+        outside = self.base / "outside-library.so"
+        outside.write_text("unrelated library", encoding="utf-8")
+        self.symlink(core / "packages/libtool.so", outside)
+        bytecode = self.write("main/fixture.pyc")
+        with self.assertRaisesRegex(maintenance.MaintenanceError, "Unexpected link"):
+            self.native_plan(base)
+        self.assertTrue(core.exists())
+        self.assertTrue(bytecode.exists())
+        self.assertEqual(outside.read_text(), "unrelated library")
+
+    def test_native_package_alias_cannot_cross_architectures(self):
+        base, core = self.core()
+        other = base / "mcu-flasher/platformio/aarch64"
+        other.mkdir()
+        keep = other / "library.so"
+        keep.write_text("other architecture", encoding="utf-8")
+        self.symlink(core / "packages/libtool.so", keep)
+        with self.assertRaisesRegex(maintenance.MaintenanceError, "Unexpected link"):
+            self.native_plan(base)
+        self.assertEqual(keep.read_text(), "other architecture")
+
+    def test_native_package_broken_and_cyclic_aliases_are_refused(self):
+        for destination in ("missing-library.so", "libtool.so"):
+            with self.subTest(destination=destination):
+                base, core = self.core()
+                alias = core / "packages/libtool.so"
+                self.symlink(alias, destination)
+                with self.assertRaisesRegex(maintenance.MaintenanceError, "Unexpected link"):
+                    self.native_plan(base)
+                self.assertTrue(core.exists())
+                alias.unlink()
+                (core / "packages/fixture").unlink()
+                (core / "packages").rmdir()
+                (core / ".mcu-offline-ready.json").unlink()
+                core.rmdir()
+
     def test_known_native_target_metadata_and_stale_locks_are_supported(self):
         base, core = self.core()
         (core / ".mcu-index-targets.json").write_text('{"schema": 1, "host": "linux", "rows": []}', encoding="utf-8")
