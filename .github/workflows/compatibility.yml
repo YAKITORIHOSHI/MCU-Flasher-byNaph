@@ -122,6 +122,7 @@ jobs:
           sudo apt-get install -y "${qt_runtime_packages[@]}"
       - name: Linux runtime and verification
         if: runner.os == 'Linux'
+        timeout-minutes: 6
         run: |
           bash -n direct/ubuntu/run.sh
           bash -n direct/ubuntu/build_launcher.sh
@@ -166,11 +167,19 @@ jobs:
           .venv-linux/bin/python -B direct/verify_board_families.py
           .venv-linux/bin/python -B direct/verify_board_search.py --no-finalize
           .venv-linux/bin/python -B direct/verify_projects.py
+      - name: Linux cloud and developer integration
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
           .venv-linux/bin/python -B direct/verify_cloud_configuration.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py
           .venv-linux/bin/python -B direct/verify_owner_ticket_service.py
           .venv-linux/bin/python -B direct/verify_owner_tickets.py --render-dir temp/audit/compatibility/developer
+      - name: Linux service and storage integration
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
           .venv-linux/bin/python -B direct/verify_application_guard.py
           .venv-linux/bin/python -B direct/verify_actions.py
           .venv-linux/bin/python -B direct/verify_cursor.py
@@ -187,11 +196,19 @@ jobs:
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_serial_view.py --no-finalize
           .venv-linux/bin/python -B direct/verify_serial_wrap.py --no-finalize
           .venv-linux/bin/python -B direct/verify_serial_delivery.py --no-finalize
+      - name: Linux editor and auxiliary windows
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
           node direct/verify_editor_preferences.js
           xvfb-run -a env QT_QPA_PLATFORM=xcb QT_DEBUG_PLUGINS=1 .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility --no-finalize
           .venv-linux/bin/python -B direct/verify_performance.py --no-finalize
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_controls.py --render-dir temp/audit/compatibility
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_browser_loading.py
+      - name: Linux responsive display scales
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: |
           for scale in 1 1.25 1.5 2; do
             xvfb-run -a env QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=$scale .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/compatibility/scale-$scale
           done
@@ -265,6 +282,11 @@ jobs:
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Windows editor and auxiliary windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
           & env/Scripts/python.exe -B direct/verify_serial_wrap.py --no-finalize
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_serial_delivery.py --no-finalize
@@ -284,12 +306,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_browser_loading.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows responsive display scales
+        if: runner.os == 'Windows'
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = 'windows'
           foreach ($scale in '1', '1.25', '1.5', '2') {
             $env:QT_SCALE_FACTOR = $scale
             & env/Scripts/python.exe -B direct/verify_responsive.py --render-dir "temp/audit/compatibility/scale-$scale"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           exit $LASTEXITCODE
+      - name: Native Tk crash evidence
+        if: failure() && runner.os == 'Linux' && matrix.python == '3.10'
+        timeout-minutes: 3
+        run: |
+          sudo apt-get install -y gdb
+          mkdir -p temp/audit/compatibility
+          # Diagnostic only: the preceding failed verification stays failed.
+          xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 90 gdb --batch -ex run -ex 'thread apply all bt' --args .venv-linux/bin/python -B direct/verify_browser_loading.py > temp/audit/compatibility/tk-native-backtrace.log 2>&1 || true
+          tail -n 180 temp/audit/compatibility/tk-native-backtrace.log
       - name: Desktop previews
         if: always()
         uses: actions/upload-artifact@v6
@@ -297,6 +334,7 @@ jobs:
           name: desktop-${{ matrix.os }}-python-${{ matrix.python }}
           path: |
             temp/audit/compatibility/**/*.png
+            temp/audit/compatibility/*.log
             temp/audit/target-resolution/*/*.json
             temp/audit/target-resolution/*/*.log
           if-no-files-found: ignore
