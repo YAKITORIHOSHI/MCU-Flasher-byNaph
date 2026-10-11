@@ -199,7 +199,10 @@ refresh keeps the editor protected and offers Retry. Cloud configuration and
 upload prompts retain mouse access to their fields, scroll short forms and keep
 their actions visible when the monitor or display scale changes.
 Terminal tab scroll arrows use the selected palette and remain readable when
-many sessions fill the header.
+many sessions fill the header. Native Qt icon styles retain themed normal,
+hover and disabled glyphs through tab layouts and display-scale changes.
+The terminal output scrollbar is hidden on both hosts; mouse-wheel and
+keyboard scrolling still reach the retained history.
 
 See [Ubuntu and recovery details](direct/UBUNTU.md) and
 [hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04

@@ -176,11 +176,14 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         .xterm-viewport {
             background: var(--terminal-bg) !important;
             overflow-y: auto !important;
+            scrollbar-width: none;
         }
         .xterm-screen {
             background: var(--terminal-bg) !important;
         }
-        ::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
+        .xterm .xterm-viewport::-webkit-scrollbar {
+            display: none; width: 0; height: 0;
+        }
     </style>
     <link rel="stylesheet" href="/assets/xterm/xterm.css" />
     <script src="/assets/xterm/xterm.js" onerror="window.xtermErr=true"></script>

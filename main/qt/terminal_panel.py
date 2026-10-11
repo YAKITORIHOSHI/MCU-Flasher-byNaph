@@ -26,7 +26,8 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QSize
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -93,6 +94,42 @@ class _EmbedContainer(QWidget):
 
 
 class _SessionTabBar(QTabBar):
+    def set_scroll_colors(self, normal, active, disabled):
+        colors = (normal, active, disabled)
+        if colors != getattr(self, "_scroll_colors", None):
+            from main.qt.icons import icon
+            self._scroll_colors = colors
+            self._scroll_icons = {}
+            for name in ("scroll_left", "scroll_right"):
+                themed = QIcon()
+                for mode, color in ((QIcon.Mode.Normal, normal), (QIcon.Mode.Active, active),
+                                    (QIcon.Mode.Disabled, disabled)):
+                    themed.addPixmap(icon(name, color, size=12).pixmap(QSize(12, 12), 2.0), mode)
+                self._scroll_icons[name] = themed
+        self._refresh_scroll_icons()
+
+    def _refresh_scroll_icons(self):
+        icons = getattr(self, "_scroll_icons", None)
+        if not icons:
+            return
+        previous, following = ("scroll_right", "scroll_left") if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else ("scroll_left", "scroll_right")
+        for object_name, name in (("ScrollLeftButton", previous), ("ScrollRightButton", following)):
+            button = self.findChild(QToolButton, object_name)
+            if button is None:
+                continue
+            if button.arrowType() != Qt.ArrowType.NoArrow:
+                button.setArrowType(Qt.ArrowType.NoArrow)
+            if button.icon().cacheKey() != icons[name].cacheKey():
+                button.setIcon(icons[name])
+            if button.iconSize() != QSize(12, 12):
+                button.setIconSize(QSize(12, 12))
+
+    def tabLayoutChange(self):
+        super().tabLayoutChange()
+        # Qt 6.12 assigns native standard icons on every tab layout. Reapply
+        # cached palette glyphs after that assignment without replacing buttons.
+        self._refresh_scroll_icons()
+
     def minimumSizeHint(self):
         # Qt's scroll-button reservation can exceed a single tab's width.
         # Keep short strips intrinsic; retain the normal scrolling minimum
@@ -1029,6 +1066,7 @@ class TerminalPanel(QWidget):
                 }}
                 QTabBar QToolButton:disabled {{ color: {text_dim}; }}
             """)
+            self._tab_bar.set_scroll_colors(text, text_bright, text_dim)
 
         if hasattr(self, "_btn_add_tab") and self._btn_add_tab:
             self._btn_add_tab.setStyleSheet(f"""

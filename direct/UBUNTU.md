@@ -318,7 +318,8 @@ terminal and assistant integration.
 
 Both project terminal implementations preserve terminal capability replies,
 Unicode input, alternate screens and bracketed paste for installed coding
-CLIs. Output is acknowledged after xterm parses it, so a slow renderer applies
+CLIs. Their output scrollbar is hidden while mouse-wheel and keyboard
+scrolling retain access to scrollback. Output is acknowledged after xterm parses it, so a slow renderer applies
 backpressure instead of accumulating unlimited output. Clear does not type
 `cls` or `Clear-Host` into the current CLI. On Windows the hardware-free
 `direct/verify_terminal.py` probe checks the browser/PTY protocol and runs only
@@ -529,6 +530,12 @@ containment and input visibility in all three palettes. Shared fitting measures
 native frame margins, including decorations that appear after the first resize,
 and adjusts minimum sizes without changing content fonts. Tab-scroll arrows
 use the selected palette and retain left/right click behavior.
+Their cached normal, active and disabled glyphs survive native Qt standard-icon
+assignment during tab layouts, including Windows styles used by CI.
+The xterm viewport hides only its scrollbar, preserving overflow, terminal
+history and wheel scrolling; session-tab navigation remains available.
+`direct/verify_terminal_scroll.py` checks both actual offline renderer pages
+with fixture transports, real wheel/key events and no shell or account access.
 Cloud prompt fixtures also force overflow from measured content and frame
 heights, because offscreen windows have smaller decorations and can fit forms
 at heights that require scrolling on Wayland. Fixed monitor cases and complete

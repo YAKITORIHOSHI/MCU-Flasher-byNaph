@@ -22,14 +22,15 @@ os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
 if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
-from PySide6.QtCore import QRect, QPoint, QObject, Signal, Qt, QTimer
+from PySide6.QtCore import QRect, QPoint, QSize, QObject, Signal, Qt, QTimer
+from PySide6.QtGui import QIcon, QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
-                              QLineEdit, QToolButton,
+                              QLineEdit, QToolButton, QStyle,
                               QApplication)
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
-from main.qt.theme import build_stylesheet, register_fonts
+from main.qt.theme import build_stylesheet, register_fonts, get_palette
 from main.qt.responsive import clamp_window, fit_dialog, ScreenWatcher
 from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size
 
@@ -401,8 +402,33 @@ class QtResponsiveChecks(ControlChecks):
         self.assertEqual(new_calls, [])
 
     def test_terminal_many_tabs_scroll_without_pushing_add_button_outside_header(self):
+        from main.core.log_colors import contrast_ratio
+        from main.qt.terminal_panel import _SessionTabBar
         host = self.own(QWidget())
         layout = QVBoxLayout(host)
+        native_icons = {'ScrollLeftButton': APP.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft),
+                        'ScrollRightButton': APP.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)}
+        self.assertTrue(all(not icon.isNull() for icon in native_icons.values()))
+        layout_state = {'depth': 0, 'max_depth': 0, 'calls': 0}
+
+        class NativeIconTabBar(_SessionTabBar):
+            def tabLayoutChange(bar):
+                # Register the virtual override before Qt constructs the bar.
+                # Emulate styles assigning native icons before the app hook.
+                layout_state['calls'] += 1
+                layout_state['depth'] += 1
+                layout_state['max_depth'] = max(layout_state['max_depth'], layout_state['depth'])
+                try:
+                    for name, icon in native_icons.items():
+                        button = bar.findChild(QToolButton, name)
+                        if button is not None:
+                            button.setArrowType(Qt.ArrowType.NoArrow)
+                            button.setIcon(icon)
+                    super().tabLayoutChange()
+                finally:
+                    layout_state['depth'] -= 1
+
+        self.stack.enter_context(patch('main.qt.terminal_panel._SessionTabBar', NativeIconTabBar))
         panel, sent = self.terminal(host)
         layout.addWidget(panel)
         host.show()
@@ -419,6 +445,13 @@ class QtResponsiveChecks(ControlChecks):
                     pump()
                     panel._tab_bar.setCurrentIndex(panel._tab_bar.count() - 1)
                     pump()
+                    settled_calls = layout_state['calls']
+                    pump()
+                    self.assertEqual(layout_state['calls'], settled_calls,
+                                     'Replacing native icons must not cause recurring idle tab layouts')
+                    self.assertEqual(layout_state['max_depth'], 1,
+                                     'Replacing native icons must not reenter tab layout')
+                    self.assertEqual(len(panel._tab_bar._scroll_icons), 2)
                     self.assertLessEqual(host.width(), width)
                     self.contained(panel._tab_bar, panel._header)
                     self.contained(panel._btn_add_tab, panel._header)
@@ -445,10 +478,42 @@ class QtResponsiveChecks(ControlChecks):
                         self.assertGreater(button.geometry().left(), panel._btn_add_tab.geometry().right())
                     if width == 480:
                         capture(host, f'terminal-{mode}-many-tabs')
-                        left_button = next(button for button in scroll_buttons
-                                           if button.arrowType() == Qt.ArrowType.LeftArrow)
-                        right_button = next(button for button in scroll_buttons
-                                            if button.arrowType() == Qt.ArrowType.RightArrow)
+                        # Qt keeps these scroll-action names when native styles
+                        # render standard icons instead of setting arrowType.
+                        buttons_by_name = {button.objectName(): button for button in scroll_buttons}
+                        self.assertIn('ScrollLeftButton', buttons_by_name)
+                        self.assertIn('ScrollRightButton', buttons_by_name)
+                        left_button = buttons_by_name['ScrollLeftButton']
+                        right_button = buttons_by_name['ScrollRightButton']
+                        palette = get_palette(mode)
+                        for button in (left_button, right_button):
+                            self.assertEqual(button.arrowType(), Qt.ArrowType.NoArrow)
+                            self.assertFalse(button.icon().isNull())
+                            for icon_mode, token in ((QIcon.Mode.Normal, 'TEXT'),
+                                                     (QIcon.Mode.Active, 'TEXT_BRIGHT'),
+                                                     (QIcon.Mode.Disabled, 'TEXT_DIM')):
+                                image = button.icon().pixmap(QSize(12, 12), 2.0, icon_mode).toImage()
+                                ink = QColor(palette[token])
+                                pixels = [image.pixelColor(x, y) for x in range(image.width())
+                                          for y in range(image.height())
+                                          if image.pixelColor(x, y).alpha() >= 200]
+                                self.assertTrue(pixels, f'{button.objectName()} {icon_mode} has no readable glyph')
+                                self.assertTrue(any(max(abs(pixel.red() - ink.red()),
+                                                        abs(pixel.green() - ink.green()),
+                                                        abs(pixel.blue() - ink.blue())) <= 1 for pixel in pixels),
+                                                f'{button.objectName()} {icon_mode} lost {token} ink in {mode}')
+                            # Check the pixels painted by QToolButton, not only
+                            # its available QIcon modes. Ignore the border rim.
+                            image = button.grab().toImage()
+                            ratio = image.devicePixelRatio()
+                            cx, cy = image.width() // 2, image.height() // 2
+                            half = max(1, round(5 * ratio))
+                            background = image.pixelColor(round(2 * ratio), cy).name()
+                            painted_contrast = max(contrast_ratio(image.pixelColor(x, y).name(), background)
+                                                   for x in range(cx - half, cx + half)
+                                                   for y in range(cy - half, cy + half))
+                            self.assertGreaterEqual(painted_contrast, 3.0 if button.isEnabled() else 1.5,
+                                                    f'{button.objectName()} painted glyph lacks contrast in {mode}')
                         before = panel._tab_bar.tabRect(0).left()
                         self.assertTrue(left_button.isEnabled())
                         QTest.mouseClick(left_button, Qt.MouseButton.LeftButton)
@@ -460,6 +525,8 @@ class QtResponsiveChecks(ControlChecks):
                         self.assertEqual(panel._tab_bar.tabRect(0).left(), before)
                         self.assertEqual(panel._tab_bar.currentIndex(), panel._tab_bar.count() - 1)
                         self.contained(panel._btn_add_tab, panel._header)
+        print(f"Terminal native-icon layouts: {layout_state['calls']}; "
+              f"max callback depth: {layout_state['max_depth']}; idle layouts: 0")
 
     def test_build_console_original_journal_preserves_saved_fonts(self):
         from main.core import config

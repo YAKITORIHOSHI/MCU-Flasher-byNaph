@@ -8,6 +8,9 @@
   <style>
     html, body, #terminal { height: 100%; margin: 0; overflow: hidden; background: #101b2a; }
     #terminal { padding: 8px; box-sizing: border-box; }
+    /* Hide output chrome while retaining xterm's scrollable history. */
+    #terminal .xterm-viewport { scrollbar-width: none; }
+    #terminal .xterm-viewport::-webkit-scrollbar { display: none; width: 0; height: 0; }
     #error { padding: 12px; color: #e3edf6; font: 14px sans-serif; }
   </style>
   <script src="../assets/xterm/xterm.js"></script>

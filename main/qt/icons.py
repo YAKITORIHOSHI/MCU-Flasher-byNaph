@@ -44,6 +44,8 @@ PATHS = {
     "details": '<path d="M4 5h16M4 12h16M4 19h10M3 5h.1M17 19h4"/>',
     "time": '<path d="M8 4h8l5 5v7l-5 5H8l-5-5V9l5-5ZM12 8v5h4M9 1h6"/>',
     "close": '<path d="m5 5 14 14M5 19 19 5"/>',
+    "scroll_left": '<path d="m15 5-7 7 7 7"/>',
+    "scroll_right": '<path d="m9 5 7 7-7 7"/>',
 }
 
 

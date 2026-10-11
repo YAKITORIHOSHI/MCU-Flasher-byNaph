@@ -63,6 +63,14 @@ For headless Cloud prompt checks, force overflow using measured content height
 and frame clearance. Keep fixed monitor cases, complete field visibility and
 text/font assertions; smaller offscreen decorations can fit a form without
 scrolling at the same work-area height.
+Terminal output scrollbars are hidden with viewport-scoped styles in both
+renderers. Keep retained history, mouse-wheel and Shift+PageUp scrolling;
+session-tab navigation stays visible when needed. Run
+direct/verify_terminal_scroll.py against both actual offline pages with isolated
+transports, no PTY or authenticated CLI. The tab-arrow fixture also exercises
+native standard-icon assignments, palette contrast, real navigation clicks and
+settled idle layouts. Ubuntu QWebEngine checks of the Windows HTML do not
+establish native WebView2 behavior; keep the Windows terminal checks in CI.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4,
 which does not resolve the older Jammy failure above.
 A uniquely namespaced production-adapter GNOME Secret Service round
