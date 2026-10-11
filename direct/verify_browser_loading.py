@@ -4,6 +4,7 @@ import json
 import hashlib
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -18,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.modules import arduino_lib_req as browser
 from src.modules import browser_loading as loading
-from direct.verify_controls import DownloaderChecks
+from direct.tk_downloader_fixture import TkDownloaderFixture
 
 
 def flush_writes():
@@ -50,6 +51,25 @@ class CacheChecks(unittest.TestCase):
     def touch_source(self):
         stat = self.source.stat()
         os.utime(self.source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    def test_standalone_tk_fixture_never_imports_qt(self):
+        # The real downloader has its own Tk process. Loading the unrelated
+        # Actions/Settings fixture here used to create a QApplication too.
+        probe = """
+import importlib.abc
+import sys
+class NoQt(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'PySide6', 'PyQt5', 'shiboken6'}:
+            raise AssertionError('Qt imported into the Tk-only fixture: ' + fullname)
+sys.meta_path.insert(0, NoQt())
+from direct import verify_browser_loading
+assert 'direct.verify_controls' not in sys.modules
+assert not any(name.split('.')[0] in {'PySide6', 'PyQt5', 'shiboken6'} for name in sys.modules)
+"""
+        result = subprocess.run([sys.executable, '-B', '-W', 'error', '-c', probe],
+                                cwd=ROOT, capture_output=True, text=True, timeout=20, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_memory_disk_hit_and_source_replacement(self):
         build = Mock(return_value=record())
@@ -195,7 +215,7 @@ class CacheChecks(unittest.TestCase):
         self.assertEqual(browser._read_board_catalog([missing], {missing: fresh_boards})['Core']['versions'][0]['version'], '2.0.0')
 
 
-class BrowserLoadingChecks(DownloaderChecks):
+class BrowserLoadingChecks(TkDownloaderFixture):
     def setUp(self):
         super().setUp()
         parent = ROOT / 'temp/audit/downloader'
