@@ -529,6 +529,10 @@ containment and input visibility in all three palettes. Shared fitting measures
 native frame margins, including decorations that appear after the first resize,
 and adjusts minimum sizes without changing content fonts. Tab-scroll arrows
 use the selected palette and retain left/right click behavior.
+Cloud prompt fixtures also force overflow from measured content and frame
+heights, because offscreen windows have smaller decorations and can fit forms
+at heights that require scrolling on Wayland. Fixed monitor cases and complete
+field visibility, text and font assertions remain in place.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4.
 Ubuntu 22.04/Python 3.10 remains unresolved: run 38115716448's authenticated
 logs and GDB artifact show an invalid free in `_tkinter` during Listbox.delete,

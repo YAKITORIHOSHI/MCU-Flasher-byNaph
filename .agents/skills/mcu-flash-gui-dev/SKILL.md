@@ -195,7 +195,10 @@ For explicitly requested assistant delegation, use the local
   prompts keep their form containers mouse-enabled, scroll short bodies, pin
   actions and follow monitor changes through the shared screen watcher. Verify
   window-level mouse delivery, full frame fit and readable input lines in all
-  three palettes. Runtime recovery checks retain both active and inactive dirty
+  three palettes. Force a scrolling case from measured body height and native
+  frame clearance; a fixed short work area can fit without scrolling on the
+  offscreen backend. Keep fixed monitor cases and all visibility assertions.
+  Runtime recovery checks retain both active and inactive dirty
   Unicode models through three detach/reattach and renderer reload cycles before
   confirmed Pull; never weaken the text/snapshot assertions.
   Distinguish an inaccessible/missing source directory from a successful empty

@@ -56,6 +56,10 @@ oversized synthetic windows, so use Xvfb for artificial monitor coordinates.
 Actual Wayland cloud prompt checks also passed strict frame/input containment
 and native mouse routing. Shared fitting measures native decorations and lowers
 minimum sizes only as required to keep the complete frame inside the work area.
+For headless Cloud prompt checks, force overflow using measured content height
+and frame clearance. Keep fixed monitor cases, complete field visibility and
+text/font assertions; smaller offscreen decorations can fit a form without
+scrolling at the same work-area height.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4,
 which does not resolve the older Jammy failure above.
 A uniquely namespaced production-adapter GNOME Secret Service round

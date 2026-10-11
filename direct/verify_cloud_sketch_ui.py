@@ -260,6 +260,9 @@ class CloudUIChecks(unittest.TestCase):
                 self.widgets.append(dialog)
                 dialog.show()
                 dialog.activateWindow()
+                # Window-level clicks require compositor activation, which can
+                # arrive after show on a native Wayland desktop.
+                self.assertTrue(QTest.qWaitForWindowActive(dialog, 3000))
                 self.settle_layout()
                 for field in (dialog.api_key, dialog.database_url, dialog.project_id):
                     self.assertEqual(field.text(), "")
@@ -324,7 +327,18 @@ class CloudUIChecks(unittest.TestCase):
                     fonts = [field.font() for field in fields]
                     actions = ((dialog.cancel_button, dialog.save_button) if kind == "connection"
                                else (dialog.cancel_button, dialog.upload_button))
-                    for width, height in ((683, 336), (640, 312), (480, 270), (384, 640), (1280, 720)):
+                    # Frame decoration differs between offscreen and native
+                    # platforms. Retain fixed work areas, then require scrolling
+                    # with a body budget below its measured minimum content.
+                    scroll = dialog._body_scroll
+                    content_height = scroll.widget().minimumSizeHint().height()
+                    field_height = max(field.height() for field in fields)
+                    viewport_budget = max(field_height, content_height - field_height)
+                    self.assertLess(viewport_budget, content_height)
+                    scroll_height = dialog.frameGeometry().height() - scroll.viewport().height() + viewport_budget
+                    work_areas = ((683, 336, False), (640, 312, False), (480, 270, False),
+                                  (480, scroll_height, True), (384, 640, False), (1280, 720, False))
+                    for width, height, requires_scroll in work_areas:
                         screen.area = QRect(native_area.x(), native_area.y(), width, height)
                         screen.availableGeometryChanged.emit(screen.area)
                         self.wait(lambda: screen.area.contains(dialog.frameGeometry()))
@@ -352,7 +366,9 @@ class CloudUIChecks(unittest.TestCase):
                             reading = field.style().subElementRect(QStyle.SubElement.SE_LineEditContents,
                                                                   option, field)
                             self.assertGreaterEqual(reading.height(), field.fontMetrics().height())
-                        if height == 270:
+                        if requires_scroll:
+                            self.assertLess(dialog._body_scroll.viewport().height(),
+                                            dialog._body_scroll.widget().minimumSizeHint().height())
                             self.assertGreater(dialog._body_scroll.verticalScrollBar().maximum(), 0)
                         self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-{kind}-prompt-{width}-{height}.png")))
                     dialog.close()
