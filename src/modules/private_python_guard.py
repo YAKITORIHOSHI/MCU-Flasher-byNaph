@@ -3,9 +3,9 @@
 """
 src.modules.private_python_guard — Strict Private Python Runtime Enforcer.
 
-Guarantees that MCU Flasher by Naph ONLY executes using its own private Python
-runtime located in:
-    <project_root>/src/_python/python.exe (or pythonw.exe)
+Guarantees that MCU Flasher by Naph uses its host's private Python runtime:
+    Windows: <project_root>/src/_python/python.exe (or pythonw.exe), with env/
+    Ubuntu:  <project_root>/.venv-linux/bin/python, prepared through Bash
 
 NO FALLBACKS TO SYSTEM / DESKTOP PYTHON ARE ALLOWED AT ALL COSTS.
 If invoked by any other Python interpreter (system Python, Microsoft Store stub,
@@ -45,15 +45,13 @@ LINUX_ENV_DIR = _PROJECT_ROOT / ".venv-linux"
 
 
 def is_running_private_python() -> bool:
-    """Return True iff current sys.executable is inside src/_python or the project venv (env/)."""
+    """Accept only this host's runtime inside this application copy."""
     try:
         if sys.platform.startswith("linux"):
             # Ubuntu venv executables normally point to /usr/bin/python.
             # sys.prefix identifies the environment; resolving executable does not.
             prefix = Path(sys.prefix).resolve()
-            return sys.prefix != sys.base_prefix and prefix in {
-                LINUX_ENV_DIR.resolve(), ENV_PYTHON_DIR.resolve(),
-            }
+            return sys.prefix != sys.base_prefix and prefix == LINUX_ENV_DIR.resolve()
         current_exe = Path(sys.executable).resolve()
         private_dir = PRIVATE_PYTHON_DIR.resolve()
         if private_dir in current_exe.parents or current_exe == (private_dir / "python.exe") or current_exe == (private_dir / "pythonw.exe"):
@@ -88,7 +86,9 @@ def _heal_private_runtime_if_needed(target_dir: Path) -> bool:
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        # Run silent installer directly into src/_python
+        log_dir = _PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        # Windows repair never writes to Ubuntu's .venv-linux.
         install_cmd = [
             str(installer),
             "/quiet",
@@ -99,6 +99,8 @@ def _heal_private_runtime_if_needed(target_dir: Path) -> bool:
             "Include_launcher=0",
             "InstallLauncherAllUsers=0",
             "PrependPath=0",
+            "/log",
+            str(log_dir / "python_heal_guard.log"),
         ]
         res = subprocess.run(
             install_cmd,
@@ -107,30 +109,38 @@ def _heal_private_runtime_if_needed(target_dir: Path) -> bool:
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             timeout=180,
         )
-        return res.returncode == 0
+        if res.returncode != 0:
+            return False
+        verified = subprocess.run(
+            [str(target_dir / "python.exe"), "-I", "-B", "-c",
+             "import sys, encodings; assert sys.version_info >= (3, 8)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW, timeout=10,
+        )
+        return verified.returncode == 0
     except Exception:
         return False
 
 
 def get_private_python_exe(prefer_pythonw: bool = False, *, allow_repair: bool = False) -> Path:
     """
-    Get the exact Path to the private Python executable in src/_python.
+    Get this host's private interpreter; never borrow the other host's runtime.
     STRICT: NEVER returns any system or external Python.
     """
     if sys.platform.startswith("linux"):
-        for env_dir in (LINUX_ENV_DIR, ENV_PYTHON_DIR):
+        for env_dir in (LINUX_ENV_DIR,):
             candidate = env_dir / "bin" / "python"
             if candidate.is_file():
                 try:
                     result = subprocess.run(
-                        [str(candidate), "-c", "import sys, encodings; assert sys.prefix != sys.base_prefix"],
+                        [str(candidate), "-I", "-B", "-c", "import sys, encodings; assert sys.prefix != sys.base_prefix"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
                     )
                     if result.returncode == 0:
                         return candidate
                 except (OSError, subprocess.TimeoutExpired):
                     continue
-        raise RuntimeError("Ubuntu runtime is missing or damaged. Run: python3 direct/ubuntu/setup.py")
+        raise RuntimeError("Ubuntu runtime is missing or damaged. Run: bash direct/ubuntu/run.sh --repair")
     pyw = PRIVATE_PYTHON_DIR / "pythonw.exe"
     py  = PRIVATE_PYTHON_DIR / "python.exe"
 
@@ -142,7 +152,7 @@ def get_private_python_exe(prefer_pythonw: bool = False, *, allow_repair: bool =
         try:
             cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             res = subprocess.run(
-                [str(target), "-c", "import sys, encodings; sys.exit(0)"],
+                [str(target), "-I", "-B", "-c", "import sys, encodings; sys.exit(0)"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=cf,
@@ -154,7 +164,7 @@ def get_private_python_exe(prefer_pythonw: bool = False, *, allow_repair: bool =
 
     if not healthy:
         if not allow_repair:
-            raise RuntimeError("Private Python is missing or damaged. Run direct/windows/run.vbs --repair; the main app does not install runtimes.")
+            raise RuntimeError("Windows private Python is missing or damaged. Restore src/_python or run direct/windows/run.vbs --repair with the bundled installer present; see logs/python_heal_vbs.log.")
         # Attempt healing
         if _heal_private_runtime_if_needed(PRIVATE_PYTHON_DIR):
             target = pyw if prefer_pythonw and pyw.is_file() else py

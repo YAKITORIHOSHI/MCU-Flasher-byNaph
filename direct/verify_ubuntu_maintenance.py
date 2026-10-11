@@ -118,10 +118,13 @@ class UbuntuMaintenanceTests(unittest.TestCase):
 
     def test_runtime_receipts_and_linux_extras_are_removed(self):
         arduino, opencode, extras = self.tool("arduino-cli"), self.tool("opencode"), self.extras()
+        windows = [self.write("src/_python/python.exe"), self.write("src/_python/Lib/encodings/__init__.py"),
+                   self.write("env/pyvenv.cfg"), self.write("env/Scripts/python.exe")]
         self.apply(self.plan("runtime"))
         self.assertFalse(arduino.exists())
         self.assertFalse(opencode.exists())
         self.assertFalse(extras.exists())
+        self.assertTrue(all(path.exists() for path in windows))
 
     def test_python314_alias_is_unlinked_without_touching_system_interpreter(self):
         venv = self.venv()

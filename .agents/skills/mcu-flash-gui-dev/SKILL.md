@@ -324,6 +324,16 @@ For explicitly requested assistant delegation, use the local
 
 ## Platform Scope
 
+- Windows 10/11 uses downloaded `src/_python` plus Windows `env`; Ubuntu
+  22.04/24.04/26.04 uses Bash and `.venv-linux`. Preserve Windows resources
+  during Ubuntu work and cleanup. Recover missing runtime files from a known
+  working copy without replacing shared source, settings or protected caches.
+  Windows health probes use isolated Python and WSH clears inherited Python
+  settings before launch; an installer exit code alone cannot certify repair.
+  Verify host selection and native moved-venv repair with
+  `direct/verify_private_runtimes.py`. CI covers the bundled Windows Python
+  installer separately from its hosted Python environment.
+
 - Arduino CLI is restricted to `arduino:zephyr:unoq` (Arduino UNO Q) and
   `rp2040:rp2040:rpipico2` (Raspberry Pi Pico 2 / RP2350), with explicit local
   opt-in. Enforce the central `arduino_board_selection` allowlist in downloader

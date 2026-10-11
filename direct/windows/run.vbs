@@ -15,9 +15,11 @@ Set shell = CreateObject("WScript.Shell")
 ' must start without the workspace's conditional offline runtime guard.
 Dim setupEnvironment, setupVariable
 Set setupEnvironment = shell.Environment("PROCESS")
-For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX")
+For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX", _
+                                "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE")
     If Len(setupEnvironment(setupVariable)) > 0 Then setupEnvironment.Remove setupVariable
 Next
+setupEnvironment("PYTHONNOUSERSITE") = "1"
 
 ' Reject unsupported hardware before bootstrap, cleanup, or runtime repair.
 Dim logicalCores
@@ -101,9 +103,9 @@ End If
 
 
 ' ---------------------------------------------
-'  FIND PRIVATE RUNTIME - src\_python\python.exe ONLY
+'  FIND WINDOWS PRIVATE RUNTIME - src\_python\python.exe ONLY
 '  No fallbacks. No system Python. No winget install.
-'  If the private runtime is missing, show a clear error and exit.
+'  Restore missing Windows Python from the bundled installer; Linux uses .venv-linux.
 ' ---------------------------------------------
 Dim hostPython, systemPython
 hostPython   = ""
@@ -279,9 +281,9 @@ Function IsPythonExeValid(exePath)
     Dim runCmd, exitCode
     On Error Resume Next
     If InStr(LCase(exePath), "\env\") > 0 Then
-        runCmd = """" & exePath & """ -B -c ""import sys, encodings, pip; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -I -B -c ""import sys, encodings, pip; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     Else
-        runCmd = """" & exePath & """ -B -c ""import sys, encodings; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
+        runCmd = """" & exePath & """ -I -B -c ""import sys, encodings; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     End If
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number <> 0 Or exitCode <> 0 Then
@@ -599,7 +601,7 @@ Function AutoHealPrivatePython(rootDir)
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number = 0 And exitCode = 0 Then
         shell.Run "attrib +h """ & targetDir & """", 0, True
-        If fso.FileExists(targetDir & "\python.exe") Then
+        If IsPythonExeValid(targetDir & "\python.exe") Then
             AutoHealPrivatePython = True
         End If
     End If

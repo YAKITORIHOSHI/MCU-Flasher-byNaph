@@ -1,5 +1,13 @@
 # Ubuntu setup and platform behavior
 
+Windows 10/11 keeps its downloaded Python in `src/_python` and its dependencies
+in `env`. Ubuntu 22.04/24.04/26.04 uses the Bash launcher and its separately
+prepared `.venv-linux`. Preserve both Windows directories when cleaning Ubuntu
+or distributing one folder for both hosts. Linux runtime selection rejects
+Windows `env` even if copied files resemble a Linux environment. Windows starts
+through `MCU_Flasher.exe` or `direct/windows/run.vbs`, whose native path repair
+updates a moved Windows environment before Bootstrap proceeds.
+
 The desktop detects Windows, Ubuntu, and other Linux distributions. Windows
 continues to use the bundled runtime and Windows launchers. Linux uses a native
 virtual environment; copied Windows executables and package stores are never

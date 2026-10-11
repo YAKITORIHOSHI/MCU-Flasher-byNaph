@@ -85,6 +85,9 @@ jobs:
         include:
           - os: windows-latest
             python: '3.11'
+          - os: windows-latest
+            python: '3.14'
+            bundled: true
           - os: ubuntu-22.04
             python: '3.10'
           - os: ubuntu-24.04
@@ -154,6 +157,7 @@ jobs:
           print('Native Qt X11 plugin dependencies are available')
           PY
           .venv-linux/bin/python -B direct/verify_platforms.py
+          .venv-linux/bin/python -B direct/verify_private_runtimes.py
           .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
           .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_system_setup.py
@@ -269,7 +273,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          python -m venv env
+          if ('${{ matrix.bundled }}' -eq 'true') {
+            # Exercise the shipped Windows installer and src/_python, rather
+            # than proving only that hosted system Python can run the app.
+            $installer = Get-ChildItem installers/.handsoff/python-*-amd64.exe | Sort-Object Name -Descending | Select-Object -First 1
+            $target = Join-Path $env:GITHUB_WORKSPACE 'src/_python'
+            $log = Join-Path $env:RUNNER_TEMP 'mcu-private-python.log'
+            $arguments = @('/quiet', 'InstallAllUsers=0', "TargetDir=`"$target`"", 'PrependPath=0', 'Include_launcher=0', 'Include_test=0', 'Include_doc=0', '/log', "`"$log`"")
+            $install = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
+            if ($install.ExitCode -ne 0) { Get-Content $log; exit $install.ExitCode }
+            & src/_python/python.exe -I -B -c 'import sys, encodings, pip, tkinter, venv; print(sys.version); assert sys.version_info[:2] == (3, 14)'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & src/_python/python.exe -I -B -m venv env
+          } else {
+            python -m venv env
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_private_runtimes.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -m pip install 'PySide6>=6.7,<7' 'pyserial>=3.5,<4' 'psutil>=5.9,<8' 'platformio>=6.1,<7' 'requests>=2.31,<3' pywinpty websockets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_platforms.py

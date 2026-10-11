@@ -309,8 +309,10 @@ and system repair remain explicit actions. See the maintenance guide for the
 native commands and confirmation phrases.
 Removing generated Python environments also removes their PlatformIO Python
 packages; the native launcher restores dependencies through Bootstrap on the
-next launch. Keep the Windows Python installer under `installers/.handsoff/`
-so its launcher can restore a removed `src/_python` runtime. Source releases
+next launch. Ubuntu cleanup must retain Windows `src/_python`, `env` and the
+Python installer under `installers/.handsoff/`. Keep the working Windows runtime
+when preparing a folder for both operating systems. Its launcher can restore a
+missing runtime from that installer and repair moved Windows `env` paths. Source releases
 should exclude generated environments, package stores and audit fixtures.
 
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
@@ -713,6 +715,17 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 ## 🚀 Quick Start
 
 **Ubuntu (64-bit Intel/AMD):** open **`MCU_Flasher`**, the native Linux executable beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+
+Windows 10/11 and Ubuntu 22.04/24.04/26.04 share application source but use
+separate Python environments. Windows launches through `MCU_Flasher.exe` or
+`direct/windows/run.vbs`, using downloaded Python in `src/_python` and Windows
+dependencies in `env`. Ubuntu's Bash setup builds `.venv-linux` with native Linux
+packages; it never selects the Windows runtime or `env`. Windows health checks
+ignore inherited Python settings, and missing-runtime repair must verify the
+installed interpreter before proceeding. CI checks both the hosted Windows
+Python and the bundled Windows Python 3.14 installer, including moved `env`
+repair with real Windows Script Host. Run `direct/verify_private_runtimes.py`
+with the host's private interpreter for isolated selection/relocation checks.
 
 Ubuntu's Serial port list hides unidentified `N/A` entries. Available devices use
 their description, product/manufacturer details or hardware ID; discovery stays
