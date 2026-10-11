@@ -152,7 +152,7 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         self.process()
         return owner, view, follow
 
-    def test_linux_does_not_install_application_filters_and_windows_keeps_them(self):
+    def test_pointer_is_scoped_on_both_hosts_and_windows_log_filter_is_preserved(self):
         owner = self.widget()
         view = self.widget(QPlainTextEdit, owner)
         with patch.object(self.app, "installEventFilter") as install:
@@ -162,8 +162,7 @@ class UbuntuEventFilterChecks(unittest.TestCase):
             with patch("sys.platform", "win32"):
                 windows_guard = WorkspacePointerGuard(owner)
                 windows_follow = LogFollow(view)
-            self.assertEqual([item.args[0] for item in install.call_args_list],
-                             [windows_guard, windows_follow])
+            self.assertEqual([item.args[0] for item in install.call_args_list], [windows_follow])
 
     def test_new_owned_and_detached_widgets_restore_pointer_without_changing_normal_cursors(self):
         owner = self.widget()

@@ -668,6 +668,7 @@ def qt_smoke(app, render_dir=None):
             def run(*args):
                 if finished[0]:
                     return
+                progress[0] = callback.__name__
                 try:
                     callback(*args)
                 except Exception as exc:
@@ -910,8 +911,12 @@ def qt_smoke(app, render_dir=None):
             window.resize(900, 700)
             QTimer.singleShot(250, capture_compact)
 
+        progress = ["initial editor load"]
         QTimer.singleShot(2500, capture)
-        QTimer.singleShot(20000, lambda: finish(AssertionError("Qt verification timed out")))
+        # The smoke includes two real renderer loads plus a separate 15-second
+        # recovery deadline. Leave bounded room for a busy software CI renderer.
+        QTimer.singleShot(60000, lambda: finish(AssertionError(
+            "Qt verification timed out after " + progress[0])))
         app.exec()
         if capture_errors:
             raise capture_errors[0]

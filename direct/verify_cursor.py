@@ -62,15 +62,7 @@ class CursorChecks(unittest.TestCase):
         unrelated = QWidget()
         unrelated.setCursor(Qt.CursorShape.BlankCursor)
         self.assertEqual(unrelated.cursor().shape(), Qt.CursorShape.BlankCursor)
-        if sys.platform.startswith("linux"):
-            detached = self._assert_owned_detached_pointer_is_restored()
-        else:
-            # Exercise the Linux tree-scanner path on Windows too, where the
-            # app-wide event filter would otherwise restore the cursor first.
-            APP.removeEventFilter(self.guard)
-            with patch.object(cursor_visibility.sys, "platform", "linux"):
-                WorkspacePointerGuard(self.owner)
-                detached = self._assert_owned_detached_pointer_is_restored()
+        detached = self._assert_owned_detached_pointer_is_restored()
         detached.close()
         unrelated.close()
 
@@ -78,7 +70,7 @@ class CursorChecks(unittest.TestCase):
         detached = QWidget(self.owner, Qt.WindowType.Window)
         child = QWidget(detached)
         child.setCursor(Qt.CursorShape.BlankCursor)
-        # Ubuntu's guard defers scans until widget construction has returned.
+        # Scans wait until widget construction has returned on every host.
         APP.processEvents()
         self.assertEqual(child.cursor().shape(), Qt.CursorShape.ArrowCursor)
         return detached
