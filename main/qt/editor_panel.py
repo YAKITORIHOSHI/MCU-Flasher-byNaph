@@ -22,6 +22,7 @@ JS side so editor → Python calls work.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -68,6 +69,8 @@ class EditorBridgeAPI(QObject):
     request_save_all = Signal()
     save_finished = Signal(str, bool)
     cloud_reload_finished = Signal(str, bool)
+    cloud_project_files_ready = Signal(str, dict)
+    _cloud_manifest_finished = Signal(str, dict)
     _syntax_finished = Signal(dict)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
@@ -81,7 +84,9 @@ class EditorBridgeAPI(QObject):
         self._syntax_running = False
         self._syntax_pending = None
         self._save_failure_count = 0
+        self._cloud_manifest_running = False
         self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
+        self._cloud_manifest_finished.connect(self._finish_cloud_manifest, Qt.ConnectionType.QueuedConnection)
 
     # ── Called FROM Monaco JS ─────────────────────────────────────────────
 
@@ -106,6 +111,40 @@ class EditorBridgeAPI(QObject):
         if self._backend:
             return self._backend.get_project_files()
         return []
+
+    @Slot(str, result=bool)
+    def request_cloud_project_files(self, token: str) -> bool:
+        """Scan off the GUI thread, with at most one outstanding directory walk."""
+        if not token or self._cloud_manifest_running or not self._backend:
+            return False
+        self._cloud_manifest_running = True
+        backend = self._backend
+        project = backend.sketch_dir_path
+
+        def scan():
+            manifest = {"success": False, "files": []}
+            try:
+                result = backend.get_cloud_project_files()
+                if isinstance(result, dict) and backend.sketch_dir_path == project:
+                    manifest = result
+            except Exception:
+                pass
+            try:
+                self._cloud_manifest_finished.emit(token, manifest)
+            except RuntimeError:
+                pass  # The workspace may have been disposed while storage was busy.
+
+        try:
+            threading.Thread(target=scan, daemon=True, name="MCU_CloudManifest").start()
+        except Exception:
+            self._cloud_manifest_running = False
+            return False
+        return True
+
+    @Slot(str, dict)
+    def _finish_cloud_manifest(self, token: str, manifest: dict) -> None:
+        self._cloud_manifest_running = False
+        self.cloud_project_files_ready.emit(token, manifest)
 
     @Slot(str, result="QVariant")
     def read_file(self, file_path: str) -> dict:
@@ -759,6 +798,8 @@ class MonacoEditorPanel(QWidget):
             return
         import uuid
         token = uuid.uuid4().hex
+        renderer_token = self._bridge._renderer_token
+        reload_started = False
         self._cloud_reload_pending = token
         self._bridge._buffer_snapshots.clear()
         self._bridge._recovery_buffers.clear()
@@ -766,8 +807,13 @@ class MonacoEditorPanel(QWidget):
         def finished(received, success):
             if received != token or self._cloud_reload_pending != token:
                 return
+            # A reply from the page replaced during Pull cannot certify the
+            # replacement's models or release its editor reload lock.
+            success = bool(success and reload_started and renderer_token
+                           and renderer_token == self._bridge._renderer_token)
             self._cloud_reload_pending = None
             self._bridge.cloud_reload_finished.disconnect(finished)
+            self._bridge.cloud_project_files_ready.disconnect(files_ready)
             if success:
                 if self._backend:
                     self._backend.modified_files.clear()
@@ -776,16 +822,28 @@ class MonacoEditorPanel(QWidget):
             elif failure_callback:
                 failure_callback()
 
+        def files_ready(received, manifest):
+            nonlocal reload_started
+            if received != token or self._cloud_reload_pending != token:
+                return
+            if renderer_token != self._bridge._renderer_token or not renderer_token or manifest.get("success") is not True:
+                finished(token, False)
+                return
+            reload_started = True
+            self._view.page().runJavaScript(
+                "(async () => { let ok = false; try {"
+                " if (typeof window.reloadCloudSnapshot === 'function') {"
+                f"  ok = (await window.reloadCloudSnapshot({json.dumps(manifest)})) === true; }}"
+                " } catch (error) { console.error(error); }"
+                f" if (window.editorBridge) window.editorBridge.finish_cloud_reload({json.dumps(token)}, ok);"
+                "})()"
+            )
+
         self._bridge.cloud_reload_finished.connect(finished)
+        self._bridge.cloud_project_files_ready.connect(files_ready)
         QTimer.singleShot(30000, self, lambda: finished(token, False))
-        self._view.page().runJavaScript(
-            "(async () => { let ok = false; try {"
-            " if (typeof window.reloadCloudSnapshot === 'function') {"
-            "  ok = (await window.reloadCloudSnapshot()) === true; }"
-            " } catch (error) { console.error(error); }"
-            f" if (window.editorBridge) window.editorBridge.finish_cloud_reload({json.dumps(token)}, ok);"
-            "})()"
-        )
+        if not self._bridge.request_cloud_project_files(token):
+            finished(token, False)
 
     def set_theme(self, theme_name: str) -> None:
         """Change the Monaco editor colour theme."""

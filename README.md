@@ -192,6 +192,14 @@ Editor recovery loads a replacement renderer's project once and restores dirty
 models before opening the active file. Recovery acknowledgements must match
 that renderer and the restored text, so an older page's delayed load cannot
 discard the replacement's recovery buffers.
+Cloud Pull scans its source list in a worker and acknowledges its editor refresh
+only after a successful scan, complete model loading and confirmation from the
+same renderer. A failed or interrupted
+refresh keeps the editor protected and offers Retry. Cloud configuration and
+upload prompts retain mouse access to their fields, scroll short forms and keep
+their actions visible when the monitor or display scale changes.
+Terminal tab scroll arrows use the selected palette and remain readable when
+many sessions fill the header.
 
 See [Ubuntu and recovery details](direct/UBUNTU.md) and
 [hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04
@@ -1469,7 +1477,7 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 has local native hardware-free verification, with Ubuntu 22.04/24.04/26.04 CI targets. Ubuntu 26.04 native results require a completed CI run.
+- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 and 26.04 have local native hardware-free verification, including GNOME Wayland on 26.04, with Ubuntu 22.04/24.04/26.04 CI targets. Check the compatibility results for the revision being used.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
 - **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)

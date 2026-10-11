@@ -55,6 +55,30 @@ class _ElidedLabel(QLabel):
             top += line_height
 
 
+def _prompt_body(parent, layout):
+    scroll = QScrollArea(parent)
+    scroll.setObjectName("cloud-prompt-scroll")
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setMinimumSize(0, 0)
+    scroll.viewport().setAutoFillBackground(False)
+    body = QWidget(scroll)
+    body.setObjectName("cloud-content")
+    content = QVBoxLayout(body)
+    content.setContentsMargins(0, 0, 0, 0)
+    content.setSpacing(10)
+    scroll.setWidget(body)
+    layout.addWidget(scroll, 1)
+    return scroll, body, content
+
+
+def _fit_prompt_fields(fields):
+    for field in fields:
+        field.ensurePolished()
+        field.setMinimumHeight(max(32, field.fontMetrics().height() + 18))
+
+
 class _CloudConnectionDialog(QDialog):
     """Write-only provider settings entry; saved values are never read back to UI."""
 
@@ -65,7 +89,6 @@ class _CloudConnectionDialog(QDialog):
         self._glass = GlassCard(self, radius=10)
         if parent is not None and hasattr(parent, "_palette"):
             self._glass.set_palette(parent._palette)
-        self._glass.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._glass.lower()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
@@ -73,28 +96,29 @@ class _CloudConnectionDialog(QDialog):
         layout = QVBoxLayout(self._glass)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
-        heading = QLabel("Secure cloud connection", self._glass)
+        self._body_scroll, body, content = _prompt_body(self._glass, layout)
+        heading = QLabel("Secure cloud connection", body)
         heading.setObjectName("cloud-heading")
-        layout.addWidget(heading)
+        content.addWidget(heading)
         note = QLabel("Enter new values to replace this device's encrypted settings. "
-                      "Saved values are never displayed.", self._glass)
+                      "Saved values are never displayed.", body)
         note.setWordWrap(True)
-        layout.addWidget(note)
+        content.addWidget(note)
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setVerticalSpacing(8)
         form.setHorizontalSpacing(10)
-        self.api_key = QLineEdit(self._glass)
+        self.api_key = QLineEdit(body)
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key.setMaxLength(256)
         self.api_key.setPlaceholderText("Enter Firebase API key")
         self.api_key.setAccessibleName("New Firebase API key; hidden while typing")
-        self.database_url = QLineEdit(self._glass)
+        self.database_url = QLineEdit(body)
         self.database_url.setEchoMode(QLineEdit.EchoMode.Password)
         self.database_url.setMaxLength(512)
         self.database_url.setPlaceholderText("Enter HTTPS database address")
         self.database_url.setAccessibleName("New Firebase database address; hidden while typing")
-        self.project_id = QLineEdit(self._glass)
+        self.project_id = QLineEdit(body)
         self.project_id.setEchoMode(QLineEdit.EchoMode.Password)
         self.project_id.setMaxLength(128)
         self.project_id.setPlaceholderText("Enter Firebase project ID")
@@ -102,7 +126,8 @@ class _CloudConnectionDialog(QDialog):
         form.addRow("API key", self.api_key)
         form.addRow("Database", self.database_url)
         form.addRow("Project ID", self.project_id)
-        layout.addLayout(form)
+        content.addLayout(form)
+        content.addStretch(1)
         actions = QHBoxLayout()
         actions.addStretch(1)
         self.cancel_button = QPushButton("Cancel", self._glass)
@@ -114,8 +139,11 @@ class _CloudConnectionDialog(QDialog):
         actions.addWidget(self.save_button)
         layout.addLayout(actions)
         self.setStyleSheet(parent.styleSheet() if parent else "")
-        from main.qt.responsive import fit_dialog
+        _fit_prompt_fields((self.api_key, self.database_url, self.project_id))
+        from main.qt.responsive import fit_dialog, ScreenWatcher
         fit_dialog(self, (560, 360), (360, 300))
+        self._screen_watcher = ScreenWatcher(self, lambda _screen:
+            _fit_prompt_fields((self.api_key, self.database_url, self.project_id)))
 
     def values(self):
         return {
@@ -149,30 +177,34 @@ class _CloudUploadDialog(QDialog):
         layout = QVBoxLayout(self._glass)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
-        heading = QLabel("Upload a local sketch", self._glass)
+        self._body_scroll, body, content = _prompt_body(self._glass, layout)
+        heading = QLabel("Upload a local sketch", body)
         heading.setObjectName("cloud-heading")
-        layout.addWidget(heading)
-        layout.addWidget(QLabel("Choose a sketch folder and its cloud name.", self._glass))
+        content.addWidget(heading)
+        description = QLabel("Choose a sketch folder and its cloud name.", body)
+        description.setWordWrap(True)
+        content.addWidget(description)
         row = QHBoxLayout()
-        self.folder = QLineEdit(root, self._glass)
+        self.folder = QLineEdit(root, body)
         self.folder.setReadOnly(True)
         self.folder.setMinimumWidth(0)
         self.folder.setPlaceholderText("Choose a sketch folder")
         self.folder.setAccessibleName("Local sketch folder to upload")
         row.addWidget(self.folder, 1)
-        self.browse_button = QPushButton("Browse", self._glass)
+        self.browse_button = QPushButton("Browse", body)
         self.browse_button.clicked.connect(self._browse)
         row.addWidget(self.browse_button)
-        layout.addLayout(row)
-        self.name = QLineEdit(Path(root).name if root else "", self._glass)
+        content.addLayout(row)
+        self.name = QLineEdit(Path(root).name if root else "", body)
         self.name.setMinimumWidth(0)
         self.name.setPlaceholderText("Sketch name")
         self.name.setAccessibleName("Cloud sketch name")
-        layout.addWidget(self.name)
-        note = QLabel("Sketch source files and notes are included.", self._glass)
+        content.addWidget(self.name)
+        note = QLabel("Sketch source files and notes are included.", body)
         note.setObjectName("cloud-secondary")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        content.addWidget(note)
+        content.addStretch(1)
         actions = QHBoxLayout()
         self.cancel_button = QPushButton("Cancel", self._glass)
         self.cancel_button.clicked.connect(self.reject)
@@ -185,8 +217,11 @@ class _CloudUploadDialog(QDialog):
         self.folder.textChanged.connect(lambda: self.upload_button.setEnabled(bool(self.folder.text())))
         self.upload_button.setEnabled(bool(root))
         self.setStyleSheet(parent.styleSheet() if parent else "")
-        from main.qt.responsive import fit_dialog
+        _fit_prompt_fields((self.folder, self.name))
+        from main.qt.responsive import fit_dialog, ScreenWatcher
         fit_dialog(self, (560, 320), (360, 280))
+        self._screen_watcher = ScreenWatcher(self, lambda _screen:
+            _fit_prompt_fields((self.folder, self.name)))
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, "Choose a local sketch folder", self.folder.text())

@@ -15,6 +15,13 @@ const loaderStart = html.indexOf('      let projectLoadInFlight = null;');
 const loaderEnd = html.indexOf('      // The account dialog confirms', loaderStart);
 assert(loaderStart > 0 && loaderEnd > loaderStart);
 const loader = html.slice(loaderStart, loaderEnd);
+const cloudReloadEnd = html.indexOf('\n      function dedupeProjectTabs()', loaderEnd);
+assert(cloudReloadEnd > loaderEnd);
+const cloudReload = html.slice(loaderEnd, cloudReloadEnd);
+const mapperStart = html.indexOf('      let fileList = [];');
+const mapperEnd = html.indexOf('      let dragSrcEl = null;', mapperStart);
+assert(mapperStart > 0 && mapperEnd > mapperStart);
+const tabMapper = html.slice(mapperStart, mapperEnd);
 const bootstrapStart = html.indexOf('      function initQtWebChannel()');
 const bootstrapEnd = html.indexOf('      // Let the bundle create', bootstrapStart);
 assert(bootstrapStart > 0 && bootstrapEnd > bootstrapStart);
@@ -24,7 +31,10 @@ const hostInit = host.match(/_WEBCHANNEL_INIT_JS = """([\s\S]*?)"""/)[1];
 function bridge() {
   return {
     token: 'current', buffers: {}, recovering: false, acknowledgements: 0,
+    ordinaryFileLists: 0,
+    files: ['/fixture/sketch.ino', '/fixture/notes.h'].map(file => ({path: file, name: path.basename(file)})),
     updates: [],
+    get_project_files(callback) { this.ordinaryFileLists++; callback(this.files); },
     mark_renderer_modified(token, file, dirty, callback) {
       if (token === this.token) this.updates.push({file, dirty});
       callback();
@@ -55,11 +65,14 @@ function bridge() {
 }
 
 function page(native, token, {delay, mapDelay, missing = false, mismatched = false,
-    initialReadOnly = false, restoreThrows = false} = {}) {
+    initialReadOnly = false, restoreThrows = false, loadedPaths,
+    initialReadFailure, unmappedPaths = [], disposedPaths = [],
+    reloadReadFailure} = {}) {
   const models = new Map();
   const listeners = new Map();
   let active = null;
   let loads = 0;
+  let reloads = 0;
   let pathsMapped = !mapDelay;
   let readOnly = initialReadOnly;
   const api = new Proxy(native, {get(target, name) {
@@ -76,16 +89,26 @@ function page(native, token, {delay, mapDelay, missing = false, mismatched = fal
     dispatchEvent(event) { listeners.get(event.type)?.(); },
     loadProject: async () => {
       loads++;
+      const files = await window.pywebview.api.get_project_files();
       if (delay) await delay;
       models.clear();
-      for (const file of ['/fixture/sketch.ino', '/fixture/notes.h']) {
+      for (const file of loadedPaths || files.map(file => file.path)) {
+        // The real bundle catches an initial read rejection and resolves after
+        // leaving only the models created before that failed read.
+        if (file === initialReadFailure) {
+          window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+          return;
+        }
         let content = 'saved disk source';
-        models.set(file, {getValue: () => content, isDisposed: () => false,
+        models.set(file, {getValue: () => content, isDisposed: () => disposedPaths.includes(file),
           setValue: value => {content = mismatched ? 'wrong value' : value;}});
       }
-      active = {file: '/fixture/sketch.ino', _filePath: pathsMapped ? '/fixture/sketch.ino' : undefined};
+      const file = models.keys().next().value;
+      active = file ? {file, _filePath: pathsMapped ? file : undefined} : null;
+      window.__tabMutation?.();
     },
     async syncTabPaths() {
+      await window.pywebview.api.get_project_files();
       if (mapDelay) await mapDelay;
       pathsMapped = true;
       if (active) active._filePath = active.file;
@@ -98,19 +121,138 @@ function page(native, token, {delay, mapDelay, missing = false, mismatched = fal
       active = {file, _filePath: file};
       return true;
     },
+    async reloadActiveFile() {
+      reloads++;
+      const model = models.get(active?._filePath);
+      if (!model || model.isDisposed()) return false;
+      if (active._filePath === reloadReadFailure) {
+        window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+        return false;
+      }
+      model.setValue('saved disk source');
+      return true;
+    },
   };
   const context = vm.createContext({window, URLSearchParams, console,
-    document: {querySelector: () => active},
+    document: {querySelector: () => active,
+      querySelectorAll: () => Array.from(models.keys(), file => ({
+        _filePath: pathsMapped && !unmappedPaths.includes(file) ? file : undefined,
+        querySelector: () => ({textContent: path.basename(file)}), setAttribute() {}}))},
     requestAnimationFrame: callback => queueMicrotask(callback),
     Event: class {constructor(type) {this.type = type;}},
     qt: {webChannelTransport: {}},
     QWebChannel: function (transport, callback) {callback({objects: {editorBridge: native}});},
   });
   vm.runInContext(loader, context);
-  return {window, context, api, models, loads: () => loads};
+  vm.runInContext(cloudReload, context);
+  return {window, context, api, models, loads: () => loads, reloads: () => reloads,
+    reloadCloud: () => window.reloadCloudSnapshot({success: true, files: native.files})};
 }
 
 async function main() {
+  for (const manifest of [undefined, {success: false, files: []},
+    {success: false, files: [{path: '/fixture/sketch.ino'}]},
+    {success: true, files: null}]) {
+    const rejected = page(bridge(), 'current');
+    rejected.window.pywebview = {api: rejected.api};
+    assert.equal(await rejected.window.reloadCloudSnapshot(manifest), false,
+      'A missing or failed strict enumeration must not acknowledge a Pull');
+    assert.equal(rejected.loads(), 0, 'Do not replace buffers after a rejected source enumeration');
+  }
+  for (const options of [
+    {initialReadFailure: '/fixture/notes.h'},
+    {loadedPaths: ['/fixture/sketch.ino']},
+    {loadedPaths: []},
+    {loadedPaths: ['/fixture/sketch.ino', '/fixture/notes.h', '/fixture/deleted.h']},
+    {unmappedPaths: ['/fixture/notes.h']},
+    {disposedPaths: ['/fixture/notes.h']},
+    {reloadReadFailure: '/fixture/notes.h'},
+  ]) {
+    const failed = page(bridge(), 'current', options);
+    failed.window.pywebview = {api: failed.api};
+    assert.equal(await failed.reloadCloud(), false,
+      'A failed initial read, incomplete source set or failed live-model reload must not acknowledge a Pull: ' +
+      JSON.stringify(options));
+    assert.equal(failed.window.pywebview.api, failed.api,
+      'A failed Cloud reload must restore the ordinary API');
+  }
+  const emptyNative = bridge();
+  emptyNative.files = [];
+  const empty = page(emptyNative, 'current');
+  empty.window.pywebview = {api: empty.api};
+  assert.equal(await empty.reloadCloud(), true,
+    'A genuinely empty source list must complete a confirmed Pull');
+  assert.equal(empty.reloads(), 0);
+  assert.equal(emptyNative.ordinaryFileLists, 0,
+    'An empty Cloud reload must reuse its worker-certified list without scanning on Qt');
+  assert.equal(empty.window.pywebview.api, empty.api);
+
+  const mixedNative = bridge();
+  mixedNative.files = ['sketch.ino', 'logic.cpp', 'driver.c', 'notes.h', 'Notes.h',
+    'config.hpp', 'NOTE.txt'].map(name => ({path: '/fixture/' + name, name}));
+  const mixed = page(mixedNative, 'current');
+  mixed.window.pywebview = {api: mixed.api};
+  assert.equal(await mixed.reloadCloud(), true,
+    'Pull coverage must include every editable backend source/note and preserve Linux path case');
+  assert.equal(mixed.reloads(), mixedNative.files.length);
+  assert.equal(mixedNative.ordinaryFileLists, 0,
+    'The bundled loader and tab mapping must both reuse the Cloud manifest');
+  assert.equal(mixed.window.pywebview.api, mixed.api);
+  await mixed.window.pywebview.api.get_project_files();
+  assert.equal(mixedNative.ordinaryFileLists, 1,
+    'Ordinary editor listing must resume after the Cloud reload');
+
+  // Execute the actual tab mapper and observer scheduling as well as the
+  // loader fixture. A timer left after the scoped API is restored would
+  // call the native getter and repeat the directory walk on Qt.
+  const mappedNative = bridge();
+  mappedNative.get_project_files = () => {throw new Error('Qt source scan must not run during Cloud reload');};
+  const mapped = page(mappedNative, 'current');
+  mapped.window.pywebview = {api: mapped.api};
+  let nextTimer = 0;
+  const mappingTimers = new Map();
+  mapped.context.setTimeout = callback => {
+    const timer = ++nextTimer;
+    mappingTimers.set(timer, callback);
+    return timer;
+  };
+  mapped.context.clearTimeout = timer => mappingTimers.delete(timer);
+  mapped.context.document.getElementById = () => ({});
+  mapped.context.dedupeProjectTabs = () => {};
+  mapped.context.MutationObserver = function (callback) {
+    mapped.window.__tabMutation = callback;
+    this.observe = () => {};
+  };
+  vm.runInContext(tabMapper, mapped.context);
+  // Settle the mapper's startup callback while the fixture API is usable.
+  mappedNative.get_project_files = bridge().get_project_files;
+  for (const [timer, callback] of [...mappingTimers]) {
+    mappingTimers.delete(timer);
+    await callback();
+  }
+  const ordinaryBeforeCloud = mappedNative.ordinaryFileLists;
+  mappedNative.get_project_files = () => {throw new Error('Qt source scan must not run during Cloud reload');};
+  assert.equal(await mapped.reloadCloud(), true,
+    'The actual tab mapper and loader must use the certified Cloud manifest');
+  assert.equal(mappedNative.ordinaryFileLists, ordinaryBeforeCloud);
+  assert.equal(mappingTimers.size, 0,
+    'Cloud tab mapping must cancel its queued observer refresh before restoring the API');
+  assert.equal(mapped.window.pywebview.api, mapped.api);
+
+  let releaseCloud;
+  const cloudDelay = new Promise(resolve => {releaseCloud = resolve;});
+  const slowCloud = page(bridge(), 'current', {delay: cloudDelay});
+  slowCloud.window.pywebview = {api: slowCloud.api};
+  const firstCloud = slowCloud.reloadCloud();
+  await Promise.resolve();
+  assert.equal(await slowCloud.reloadCloud(), false,
+    'A retry after the native timeout must not overlap a still-running renderer reload');
+  assert.equal(slowCloud.loads(), 1);
+  releaseCloud();
+  assert.equal(await firstCloud, true);
+  assert.equal(slowCloud.window.pywebview.api, slowCloud.api,
+    'The original API must return after a delayed Cloud reload and rejected overlapping retry');
+
   const native = bridge();
   const initial = page(native, 'current');
   vm.runInContext(bootstrap, initial.context);
@@ -133,6 +275,9 @@ async function main() {
   const preChannel = page(native, 'current');
   assert.equal(await preChannel.window.safeLoadProject(), false);
   assert.equal(preChannel.loads(), 0, 'A pre-channel request must not create a no-op in-flight load');
+  assert.equal(await preChannel.reloadCloud(), false,
+    'An unavailable channel must not acknowledge a Pull with zero source tabs');
+  assert.equal(preChannel.reloads(), 0);
 
   let release;
   const delayed = new Promise(resolve => {release = resolve;});
@@ -147,6 +292,11 @@ async function main() {
   const before = native.acknowledgements;
   release();
   assert.equal(await oldLoad, false, 'An outgoing page must not consume replacement recovery');
+  assert.equal(native.acknowledgements, before);
+  assert.equal(native.recovering, true);
+  assert.equal(await outgoing.reloadCloud(), false,
+    'An outgoing renderer must not acknowledge a Pull after its project load was rejected');
+  assert.equal(outgoing.reloads(), 0);
   assert.equal(native.acknowledgements, before);
   assert.equal(native.recovering, true);
 
@@ -165,6 +315,11 @@ async function main() {
   await Promise.resolve();
   assert.equal(replacement.loads(), 1, 'Late host initialization must not reload an acknowledged recovery');
   assert.equal(replacement.models.get('/fixture/sketch.ino').getValue(), 'unsaved Unicode 😀');
+  assert.equal(await replacement.reloadCloud(), true,
+    'A confirmed Pull with a current renderer must reload every source model');
+  assert.equal(replacement.reloads(), 2);
+  assert.equal(replacement.models.get('/fixture/sketch.ino').getValue(), 'saved disk source');
+  assert.equal(replacement.models.get('/fixture/notes.h').getValue(), 'saved disk source');
 
   let releaseMapping;
   const mapDelay = new Promise(resolve => {releaseMapping = resolve;});
@@ -200,6 +355,18 @@ async function main() {
   vm.runInContext(bootstrap, incompleteQt.context);
   incompleteQt.window.__initQtWebChannel();
   assert.equal(await incompleteQt.window.__mcuInitialProjectLoad, false);
+  assert.equal(await incompleteQt.reloadCloud(), false,
+    'Incomplete Qt recovery methods must not acknowledge a Pull');
+  assert.equal(incompleteQt.reloads(), 0);
+
+  const rejectsCompletion = {...bridge(), complete_renderer_recovery(token, restored, callback) {
+    callback(false);
+  }};
+  const rejectedCompletion = page(rejectsCompletion, 'current');
+  rejectedCompletion.window.pywebview = {api: rejectedCompletion.api};
+  assert.equal(await rejectedCompletion.reloadCloud(), false,
+    'A failed recovery acknowledgement must retain the Pull reload lock');
+  assert.equal(rejectedCompletion.reloads(), 0);
 
   for (const failure of [{missing: true}, {mismatched: true}]) {
     native.buffers = {'/fixture/sketch.ino': 'keep recoverable'};
@@ -210,7 +377,13 @@ async function main() {
     assert.equal(native.recovering, true, 'Missing or mismatched models must retain recovery');
     assert.equal(native.buffers['/fixture/sketch.ino'], 'keep recoverable');
     assert.equal(failed.window.editorInstance.getRawOptions().readOnly, false);
+    assert.equal(await failed.reloadCloud(), false,
+      'A missing or mismatched recovered model must not acknowledge a Pull');
+    assert.equal(failed.reloads(), 0);
+    assert.equal(native.recovering, true);
+    assert.equal(native.buffers['/fixture/sketch.ino'], 'keep recoverable');
   }
   console.log('Editor startup loads once; stale pages and incomplete restoration cannot acknowledge recovery.');
+  console.log('Cloud Pull requires complete mapped live source models and successful reads; empty projects remain valid.');
 }
 main().catch(error => {console.error(error); process.exitCode = 1;});

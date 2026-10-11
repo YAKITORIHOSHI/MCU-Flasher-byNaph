@@ -1019,6 +1019,15 @@ class TerminalPanel(QWidget):
                 QTabBar::close-button:hover {{
                     background: #e74c3c; border-radius: 2px;
                 }}
+                QTabBar QToolButton {{
+                    background: {bg_dark}; color: {text};
+                    border: 1px solid {border}; border-radius: 3px; padding: 0;
+                }}
+                QTabBar QToolButton:hover {{
+                    background: {bg_hover}; color: {text_bright};
+                    border-color: {border_lit};
+                }}
+                QTabBar QToolButton:disabled {{ color: {text_dim}; }}
             """)
 
         if hasattr(self, "_btn_add_tab") and self._btn_add_tab:

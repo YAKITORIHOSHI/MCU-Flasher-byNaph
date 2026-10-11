@@ -1102,6 +1102,19 @@ class MCUWebBackendAPI:
         except Exception:
             return []
 
+    def get_cloud_project_files(self) -> dict[str, Any]:
+        """Certify a complete Cloud reload source set; call from a worker."""
+        try:
+            if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
+                return {"success": False, "files": []}
+            paths = get_sketch_files_fast(self.sketch_dir_path,
+                supported_extensions={".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}, strict=True)
+            paths.sort(key=lambda p: (0 if p.suffix.lower() == ".ino" else 1, p.name.lower()))
+            return {"success": True, "files": [{"name": p.name, "path": str(p)} for p in paths]}
+        except Exception:
+            # A failed scan must not certify an empty or partially readable sketch.
+            return {"success": False, "files": []}
+
     def read_file(self, file_path: str) -> dict[str, Any]:
         """Read text content of a sketch file for Monaco editor."""
         try:

@@ -1325,22 +1325,76 @@
       // The account dialog confirms discarding local changes before Pull.
       // Reuse the native clean-state reload for each tab after loading the
       // downloaded file set, including files added/deleted by that revision.
-      window.reloadCloudSnapshot = async function () {
+      let cloudReloadInFlight = false;
+      window.reloadCloudSnapshot = async function (manifest) {
+        if (cloudReloadInFlight) return false;
+        cloudReloadInFlight = true;
         const active = document.querySelector('#tab-bar .tab.active');
         const activePath = active && active._filePath;
-        await window.safeLoadProject();
-        let success = true;
-        const paths = Array.from(document.querySelectorAll('#tab-bar .tab'))
-          .map(tab => tab._filePath).filter(Boolean);
-        for (const path of paths) {
-          if (!window.activateProjectFile || !window.activateProjectFile(path)) {
-            success = false;
-            continue;
+        const readFailures = window._editorReadFailures || 0;
+        let originalApi;
+        let manifestApi;
+        try {
+          // The host's worker certifies enumeration separately from ordinary
+          // best-effort listing, which can hide an inaccessible directory.
+          if (manifest?.success !== true) return false;
+          const files = manifest.files;
+          if (!Array.isArray(files)) return false;
+          const paths = new Map();
+          for (const file of files) {
+            if (typeof file?.path !== 'string' || !file.path) return false;
+            const key = window.projectPathKey(file.path);
+            if (!key || paths.has(key)) return false;
+            paths.set(key, file.path);
           }
-          if (await window.reloadActiveFile() !== true) success = false;
+          originalApi = window.pywebview?.api;
+          if (!originalApi) return false;
+          // Both the bundled loader and tab-path mapper use this getter.
+          // Reuse the worker's certified list instead of scanning storage
+          // again through a synchronous Qt WebChannel slot.
+          manifestApi = new Proxy(originalApi, {
+            get(target, property, receiver) {
+              return property === 'get_project_files'
+                ? () => Promise.resolve(files)
+                : Reflect.get(target, property, receiver);
+            }
+          });
+          window.pywebview.api = manifestApi;
+          // The bundle catches initial read errors, so a resolved load does
+          // not prove that it created every source model from the pulled set.
+          if (await window.safeLoadProject() !== true ||
+              (window._editorReadFailures || 0) !== readFailures) return false;
+          const mapped = new Set();
+          for (const tab of document.querySelectorAll('#tab-bar .tab')) {
+            const key = window.projectPathKey(tab._filePath);
+            if (!paths.has(key) || mapped.has(key)) return false;
+            mapped.add(key);
+          }
+          if (mapped.size !== paths.size) return false;
+          const models = new Set();
+          for (const [key, path] of paths) {
+            if (!window.activateProjectFile || !window.activateProjectFile(path)) return false;
+            const current = document.querySelector('#tab-bar .tab.active');
+            const model = window.editorInstance?.getModel();
+            if (window.projectPathKey(current?._filePath) !== key || !model ||
+                model.isDisposed() || models.has(model)) return false;
+            if (await window.reloadActiveFile() !== true ||
+                (window._editorReadFailures || 0) !== readFailures ||
+                window.editorInstance?.getModel() !== model || model.isDisposed()) return false;
+            models.add(model);
+          }
+          // An empty backend list with no source tabs is a valid empty sketch.
+          return Array.from(models).every(model => !model.isDisposed());
+        } catch (error) {
+          console.error('Cloud source reload failed:', error);
+          return false;
+        } finally {
+          cloudReloadInFlight = false;
+          if (manifestApi && window.pywebview?.api === manifestApi) {
+            window.pywebview.api = originalApi;
+          }
+          if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
         }
-        if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
-        return success;
       };
 
       function dedupeProjectTabs() {
@@ -1493,6 +1547,8 @@
 
       let syncInFlight = null;
       function syncTabPaths() {
+        clearTimeout(tabSyncTimer);
+        tabSyncTimer = null;
         if (syncInFlight) return syncInFlight;
         if (!window.pywebview || !window.pywebview.api ||
             !window.pywebview.api.get_project_files) {

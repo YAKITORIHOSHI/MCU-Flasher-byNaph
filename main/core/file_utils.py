@@ -1413,18 +1413,26 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
     except Exception:
         pass
 
-def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
+def get_sketch_files_fast(sketch_dir, supported_extensions=None, *, strict=False) -> list[Path]:
     """Perform an optimized, shallow-pruned directory walk over sketch_dir.
     Prunes hidden/internal directories (.pio, .git, build, MCU-FLASHER-SRC, etc.)
-    at the directory level BEFORE recursing, avoiding massive disk scan freezes."""
+    at the directory level BEFORE recursing, avoiding massive disk scan freezes.
+    strict=True rejects missing roots and any scan failure instead of returning
+    an empty or partial list; ordinary editor listing remains best-effort."""
     if not sketch_dir:
+        if strict:
+            raise FileNotFoundError("Sketch folder is unavailable")
         return []
     s_dir = Path(sketch_dir)
     if not s_dir.exists():
+        if strict:
+            raise FileNotFoundError("Sketch folder is unavailable")
         return []
 
     # SAFETY GUARD: Never treat MCU Flasher application codebase as a sketch!
     if is_application_codebase_dir(s_dir):
+        if strict:
+            raise ValueError("Application codebase is not a sketch folder")
         return []
 
     ignored_dir_names = {
@@ -1441,17 +1449,20 @@ def get_sketch_files_fast(sketch_dir, supported_extensions=None) -> list[Path]:
 
     def _walk(current_dir):
         try:
-            for entry in os.scandir(current_dir):
-                name_low = entry.name.lower()
-                if name_low.startswith(".") or name_low in ignored_dir_names or name_low.startswith("mcu-flasher"):
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    _walk(entry.path)
-                elif entry.is_file(follow_symlinks=False):
-                    p = Path(entry.path)
-                    if p.suffix.lower() in supp_set:
-                        results.append(p)
+            with os.scandir(current_dir) as entries:
+                for entry in entries:
+                    name_low = entry.name.lower()
+                    if name_low.startswith(".") or name_low in ignored_dir_names or name_low.startswith("mcu-flasher"):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        _walk(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        p = Path(entry.path)
+                        if p.suffix.lower() in supp_set:
+                            results.append(p)
         except Exception:
+            if strict:
+                raise
             pass
 
     _walk(s_dir)

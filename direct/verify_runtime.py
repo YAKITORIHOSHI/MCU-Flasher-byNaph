@@ -30,6 +30,41 @@ from src.modules import private_python_guard as guard
 
 
 class RuntimeChecks(unittest.TestCase):
+    def test_cloud_reload_rejects_completion_after_renderer_replacement(self):
+        from PySide6.QtWidgets import QApplication, QWidget
+        from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
+        for replaced in (False, True):
+            with self.subTest(renderer_replaced=replaced):
+                backend = SimpleNamespace(modified_files={"fixture.ino": True},
+                    sketch_dir_path=ROOT / "temp/scratch/cloud-reload-fixture",
+                    get_cloud_project_files=lambda: {"success": True, "files": []})
+                panel = QWidget()
+                bridge = EditorBridgeAPI(backend, panel)
+                bridge.begin_renderer_load()
+                scripts = []
+                panel._bridge = bridge
+                panel._backend = backend
+                panel._view = SimpleNamespace(page=lambda: SimpleNamespace(runJavaScript=scripts.append))
+                results = []
+                MonacoEditorPanel.reload_cloud_snapshot(panel,
+                    callback=lambda: results.append(True),
+                    failure_callback=lambda: results.append(False))
+                token = panel._cloud_reload_pending
+                deadline = time.monotonic() + 5
+                while not scripts and time.monotonic() < deadline:
+                    QApplication.instance().processEvents()
+                    time.sleep(0.005)
+                self.assertEqual(len(scripts), 1)
+                bridge.finish_cloud_reload("unrelated request", True)
+                self.assertEqual(results, [])
+                if replaced:
+                    bridge.begin_renderer_load()
+                bridge.finish_cloud_reload(token, True)
+                self.assertEqual(results, [not replaced])
+                self.assertIsNone(panel._cloud_reload_pending)
+                self.assertEqual(backend.modified_files, {"fixture.ino": True} if replaced else {})
+                panel.deleteLater()
+
     def test_renderer_recovery_rejects_stale_pages_and_requires_exact_buffers(self):
         from main.qt.editor_panel import EditorBridgeAPI
         project = ROOT / "temp/scratch/renderer-generation-fixture"
@@ -585,6 +620,9 @@ class PreviewBackend:
             {"name": "preview_config.h", "path": str(self.sketch_dir_path / "preview_config.h"), "extension": ".h", "is_main": False},
         ]
 
+    def get_cloud_project_files(self):
+        return {"success": True, "files": self.get_project_files()}
+
     def get_project_dir(self):
         return str(self.sketch_dir_path)
 
@@ -731,6 +769,10 @@ def qt_smoke(app, render_dir=None):
 
         page = window._editor_panel._view.page()
         unsaved = "// Unsaved renderer recovery sentinel\nvoid setup() {}\nvoid loop() {}\n"
+        unsaved_header = "// Unsaved inactive header \U0001f600\n#pragma once\n"
+        source_path = backend.active_file_path
+        header_path = str(backend.sketch_dir_path / "preview_config.h")
+        recovery_round = [0]
         recovery_deadline = [0.0]
 
         @checked
@@ -760,10 +802,21 @@ def qt_smoke(app, render_dir=None):
             assert value == unsaved, "Late host initialization replaced restored text with disk content"
             assert backend.modified_files.get(backend.active_file_path)
             assert window._editor_panel.bridge._buffer_snapshots.get(backend.active_file_path) == unsaved
+            assert window._editor_panel.bridge._buffer_snapshots.get(header_path) == unsaved_header
+            page.runJavaScript("JSON.stringify(window.monaco.editor.getModels().map(m => m.getValue()))", verify_recovered_models)
+
+        @checked
+        def verify_recovered_models(value):
+            contents = json.loads(value)
+            assert unsaved in contents and unsaved_header in contents, "Reload lost an active or inactive dirty buffer"
+            assert backend.modified_files.get(header_path), "Inactive recovered header must remain dirty"
             verify_window_ownership()
             collector._last_full -= 61
             collector.collect_pending()
-            print("Qt tabs, keyboard navigation, compact/wide ownership, detach/reattach, action gating and dirty renderer recovery: OK")
+            if recovery_round[0] < 3:
+                QTimer.singleShot(100, reload_renderer)
+                return
+            print("Qt tabs, keyboard navigation, compact/wide ownership, three detach/reattach and dirty renderer recovery cycles: OK")
             # A confirmed cloud Pull must replace every model, including a
             # dirty inactive header, without reviving renderer recovery text.
             backend.read_file = lambda path: {"success": True, "content":
@@ -780,6 +833,7 @@ def qt_smoke(app, render_dir=None):
             contents = json.loads(value)
             assert "// pulled header\n" in contents and "// pulled sketch\n" in contents, contents
             assert unsaved not in contents, "Confirmed Pull revived a discarded editor buffer"
+            assert unsaved_header not in contents, "Confirmed Pull revived a discarded inactive header"
             assert not any(backend.modified_files.values()), "Pulled buffers remained dirty"
             assert not window._editor_panel.bridge._buffer_snapshots
             print("Confirmed cloud Pull replaces all Monaco source buffers and clears dirty recovery: OK")
@@ -792,7 +846,9 @@ def qt_smoke(app, render_dir=None):
         @checked
         def reload_renderer():
             bridge = window._editor_panel.bridge
+            recovery_round[0] += 1
             assert bridge._buffer_snapshots.get(backend.active_file_path) == unsaved, f"Snapshot mismatch: active={backend.active_file_path!r}, snapshots={bridge._buffer_snapshots!r}"
+            assert bridge._buffer_snapshots.get(header_path) == unsaved_header, "Inactive header snapshot was lost"
             # Only explicit detachment may create a second workspace window.
             # Closing it must keep the same WebEngine page and dirty buffer.
             window.detach_editor()
@@ -821,7 +877,11 @@ def qt_smoke(app, render_dir=None):
             profile_check = "true"
             if window._editor_panel._performance.constrained:
                 profile_check = "document.documentElement.classList.contains('resource-constrained') && window.editorInstance.getRawOptions().minimap.enabled === false && window.editorInstance.getRawOptions().cursorBlinking === 'solid'"
-            page.runJavaScript("Boolean(window.editorInstance?.getModel() && (" + profile_check + ") && (window.editorInstance.setValue(" + json.dumps(unsaved) + "), true))", edit_loaded)
+            page.runJavaScript("Boolean(window.editorInstance?.getModel() && (" + profile_check + ") && "
+                "window.activateProjectFile(" + json.dumps(header_path) + ") && "
+                "(window.editorInstance.setValue(" + json.dumps(unsaved_header) + "), true) && "
+                "window.activateProjectFile(" + json.dumps(source_path) + ") && "
+                "(window.editorInstance.setValue(" + json.dumps(unsaved) + "), true))", edit_loaded)
 
         @checked
         def capture_compact():
@@ -982,9 +1042,9 @@ def qt_smoke(app, render_dir=None):
 
         progress = ["initial editor load"]
         QTimer.singleShot(2500, capture)
-        # The smoke includes two real renderer loads plus a separate 15-second
-        # recovery deadline. Leave bounded room for a busy software CI renderer.
-        QTimer.singleShot(60000, lambda: finish(AssertionError(
+        # Three renderer recoveries each retain their strict 15-second deadline.
+        # Leave bounded room for initial layout and a busy software CI renderer.
+        QTimer.singleShot(90000, lambda: finish(AssertionError(
             "Qt verification timed out after " + progress[0])))
         app.exec()
         if capture_errors:
@@ -1000,7 +1060,11 @@ def main():
     args = parser.parse_args()
     from PySide6.QtWidgets import QApplication
     app = QApplication(["MCU runtime verification"])
+    from main.qt.garbage_collection import install_gui_garbage_collector
+    collector = install_gui_garbage_collector(app)
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RuntimeChecks)
+    from direct.verify_cloud_editor_manifest import CloudManifestChecks
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(CloudManifestChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
         exit_code = 1

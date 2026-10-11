@@ -365,6 +365,14 @@ Each renderer has a distinct recovery token. The replacement loads its initial
 project once and acknowledges recovery only after checking the restored model
 text; delayed work from an older page cannot clear its buffers. Explicit project
 reload and cloud Pull still load the newly selected sources.
+Cloud Pull first certifies its source list in a worker; failed directory scans
+cannot masquerade as an empty sketch. The complete backend source list must have
+mapped, live Monaco models and successful reads. Completion must come from the
+renderer that
+started the refresh. A failed or interrupted refresh retains the protected editor
+and Retry action instead of reporting success with missing or stale tabs.
+Cloud connection and upload prompts accept native mouse input, scroll their
+forms on short screens and retain visible actions as the work area changes.
 This does not recover from complete process termination. Flashing, erasing,
 resets, and shell commands are never automatically replayed by these recovery
 paths. Errors remain visible; broad try/catch blocks do not prove recovery.
@@ -503,6 +511,39 @@ The responsive verifier also exercises small work areas, negative monitor
 origins, compact control rows, popup scrolling and native Tk font scaling.
 Use separate processes at `QT_SCALE_FACTOR=1`, `1.25`, `1.5` and `2`.
 
+On 2026-10-11, Ubuntu 26.04.1 with Python 3.14.4 and PySide6 6.12.0 passed
+the exact `31e6e24` runtime fixture (37 checks and real Monaco recovery).
+The subsequent Cloud Pull and prompt fixes passed 46 runtime/manifest checks and three
+detach/reattach/reload cycles on both the GNOME XWayland and native Wayland
+backends. Each cycle retained active and inactive Unicode dirty buffers; a
+confirmed Pull then replaced every source model. Native XWayland cloud UI
+and developer UI fixtures passed 25 and 18 checks respectively.
+The isolated performance suite passed all 26 checks, including real Node editor
+resource/debounce checks, bounded logs and background parsing.
+All 16 responsive Qt/Tk checks passed at 175% and 200% on an isolated native
+Xvfb display, with saved fonts and negative-origin assertions retained. The
+real GNOME compositor auto-maximized oversized synthetic fixture windows;
+its forced sizes are unsuitable for that suite's artificial work-area cases.
+Actual Wayland cloud prompt checks passed native mouse routing, complete frame
+containment and input visibility in all three palettes. Shared fitting measures
+native frame margins, including decorations that appear after the first resize,
+and adjusts minimum sizes without changing content fonts. Tab-scroll arrows
+use the selected palette and retain left/right click behavior.
+The standalone browser-loading suite passed 29 checks on Python 3.14.4.
+Ubuntu 22.04/Python 3.10 remains unresolved: run 38115716448's authenticated
+logs and GDB artifact show an invalid free in `_tkinter` during Listbox.delete,
+without Qt loaded. A pass on newer Python does not establish a Jammy fix.
+Cloud service, owner-ticket service and provider configuration fixtures passed
+38, 27 and 10 checks. Isolated launch, Bootstrap, Offline Mode, platform and
+PTY cleanup fixtures passed 107 checks, with two Windows-only cases skipped.
+The GNOME Secret Service passed an isolated store/read/remove round trip using
+the production vault adapter and a unique test-only service namespace.
+No existing account record or real sketch was accessed by those fixtures.
+This host still needs normal Bootstrap preparation: `.venv-linux` is absent and
+the read-only launcher check reports missing `libsecret-tools`. Verification
+used a disposable runtime and checksum-verified temporary Ubuntu vault tools;
+it did not install system packages or provision live board stores.
+
 Local Ubuntu 24.04 amd64 verification passes with the native xcb backend on an
 isolated Xvfb display: 35 runtime checks plus the real Monaco workspace, seven
 event-filter/heap-crash checks, 25 native serial-view checks, 24 build-console
@@ -525,8 +566,8 @@ authentication. The isolated system-setup suite verifies successful installation
 cancellation, apt failures, dependency rechecks, private-runtime continuation
 and missing-Python rescue with fake installers. Those UI/system checks did not
 run installers or firmware operations; separate isolated native first-run and
-ESP32 Compile probes are described below. Ubuntu 22.04,
-Wayland-specific desktop behavior and actual hardware remain separate checks.
+ESP32 Compile probes are described below. Ubuntu 22.04, other Wayland desktop
+environments and actual hardware remain separate checks.
 Windows driver installers and UNC mappings remain Windows-specific; the new
 `MCU_Flasher` supplies Ubuntu's native executable launcher.
 

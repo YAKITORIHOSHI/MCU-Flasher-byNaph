@@ -188,6 +188,19 @@ For explicitly requested assistant delegation, use the local
   and hardware operations; refresh every Monaco model only after confirmed Pull.
   Verify `direct/verify_cloud_sketch_service.py`, `verify_cloud_configuration.py`,
   `verify_cloud_sketch_ui.py` and the real Monaco cloud-pull runtime fixture.
+  Cloud reload success requires a successful strict source scan off the GUI
+  thread, complete expected-file/model coverage and the
+  renderer that received the request; failed loads or stale-page replies retain
+  the Pull Retry state, editor lock and suspended autosave. Connection/upload
+  prompts keep their form containers mouse-enabled, scroll short bodies, pin
+  actions and follow monitor changes through the shared screen watcher. Verify
+  window-level mouse delivery, full frame fit and readable input lines in all
+  three palettes. Runtime recovery checks retain both active and inactive dirty
+  Unicode models through three detach/reattach and renderer reload cycles before
+  confirmed Pull; never weaken the text/snapshot assertions.
+  Distinguish an inaccessible/missing source directory from a successful empty
+  source list; verify `direct/verify_cloud_editor_manifest.py` before accepting
+  Pull completion.
   Rules and provider deployment are administrative actions separate from app login;
   preserve existing user tickets. See `direct/cloud/README.md` and validated rules.
   Capture Developer Access/settings/dashboard in all palettes and compact sizes

@@ -17,8 +17,9 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer
-from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit
+from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer, QObject, Signal
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame
 from main.qt.cloud_sketch_panel import (
     CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
 )
@@ -205,6 +206,8 @@ class CloudUIChecks(unittest.TestCase):
             self.assertTrue(ancestor.rect().contains(bounds),
                             (widget.objectName() or getattr(widget, "text", lambda: "")(),
                              bounds, ancestor.objectName(), ancestor.size()))
+            if ancestor.isWindow():
+                break  # A separate dialog is not clipped by its owner's client area.
             ancestor = ancestor.parentWidget()
 
     def assert_compact_sketch_header(self, panel):
@@ -246,6 +249,113 @@ class CloudUIChecks(unittest.TestCase):
         self.assertFalse(panel._state["authenticated"])
         self.assertEqual(panel._sketches.count(), 0)
         self.assertFalse(panel._open_btn.isEnabled())
+
+    def test_connection_dialog_routes_native_mouse_to_fields_and_cancel(self):
+        panel = self.panel()
+        for mode in ("default", "light", "solarized_dark"):
+            with self.subTest(theme=mode):
+                APP.setStyleSheet(build_stylesheet(mode))
+                panel.apply_theme(mode)
+                dialog = _CloudConnectionDialog(panel)
+                self.widgets.append(dialog)
+                dialog.show()
+                dialog.activateWindow()
+                self.settle_layout()
+                for field in (dialog.api_key, dialog.database_url, dialog.project_id):
+                    self.assertEqual(field.text(), "")
+                    self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
+                    dialog._body_scroll.ensureWidgetVisible(field)
+                    self.settle_layout()
+                    position = field.mapTo(dialog, field.rect().center())
+                    self.assertIs(dialog.childAt(position), field)
+                dialog.api_key.setFocus()
+                dialog._body_scroll.ensureWidgetVisible(dialog.database_url)
+                self.settle_layout()
+                position = dialog.database_url.mapTo(dialog, dialog.database_url.rect().center())
+                # A QWidget-targeted QTest click bypasses native child hit testing.
+                QTest.mouseClick(dialog.windowHandle(), Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.NoModifier, position)
+                self.settle_layout()
+                self.assertTrue(dialog.database_url.hasFocus())
+                for button in (dialog.save_button, dialog.cancel_button):
+                    position = button.mapTo(dialog, button.rect().center())
+                    self.assertIs(dialog.childAt(position), button)
+                position = dialog.cancel_button.mapTo(dialog, dialog.cancel_button.rect().center())
+                QTest.mouseClick(dialog.windowHandle(), Qt.MouseButton.LeftButton,
+                                 Qt.KeyboardModifier.NoModifier, position)
+                self.settle_layout()
+                self.assertFalse(dialog.isVisible())
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
+
+    def test_cloud_prompts_fit_changed_work_areas_and_keep_complete_field_lines(self):
+        class Screen(QObject):
+            availableGeometryChanged = Signal(QRect)
+            logicalDotsPerInchChanged = Signal(float)
+
+            def __init__(self, area):
+                super().__init__()
+                self.area = area
+
+            def availableGeometry(self):
+                return self.area
+
+        # Keep the styling parent unshown: a real window manager centers modal
+        # children over a visible parent, which would retain its larger work area.
+        panel = CloudSketchPanel(self.backend, service=self.service)
+        self.widgets.append(panel)
+        native_area = APP.primaryScreen().availableGeometry()
+        for mode in ("default", "light", "solarized_dark"):
+            APP.setStyleSheet(build_stylesheet(mode))
+            panel.apply_theme(mode)
+            for kind in ("connection", "upload"):
+                screen = Screen(QRect(native_area.x(), native_area.y(), 1280, 720))
+                with self.subTest(theme=mode, prompt=kind), \
+                     patch("main.qt.responsive.active_screen", return_value=screen):
+                    dialog = (_CloudConnectionDialog(panel) if kind == "connection"
+                              else _CloudUploadDialog(str(self.local), panel))
+                    self.widgets.append(dialog)
+                    fields = ((dialog.api_key, dialog.database_url, dialog.project_id)
+                              if kind == "connection" else (dialog.folder, dialog.name))
+                    for index, field in enumerate(fields):
+                        field.setText(f"fixture literal {index} Ω " + "x" * 80)
+                    texts = [field.text() for field in fields]
+                    dialog.show()
+                    self.settle_layout()
+                    fonts = [field.font() for field in fields]
+                    actions = ((dialog.cancel_button, dialog.save_button) if kind == "connection"
+                               else (dialog.cancel_button, dialog.upload_button))
+                    for width, height in ((683, 336), (640, 312), (480, 270), (384, 640), (1280, 720)):
+                        screen.area = QRect(native_area.x(), native_area.y(), width, height)
+                        screen.availableGeometryChanged.emit(screen.area)
+                        self.wait(lambda: screen.area.contains(dialog.frameGeometry()))
+                        self.settle_layout()
+                        self.assertTrue(screen.area.contains(dialog.frameGeometry()),
+                                        (width, height, dialog.frameGeometry(), dialog.geometry(),
+                                         dialog.minimumSize(), dialog.minimumSizeHint()))
+                        self.assertEqual(dialog._body_scroll.horizontalScrollBar().maximum(), 0)
+                        for action in actions:
+                            self.assert_visible_in_ancestors(action)
+                        for index, field in enumerate(fields):
+                            # QScrollArea.ensureWidgetVisible uses a line edit's
+                            # input-method cursor rectangle. Scroll the complete
+                            # field before checking every clipping ancestor.
+                            scroll = dialog._body_scroll
+                            center = field.mapTo(scroll.widget(), QPoint(field.width() // 2, field.height() // 2))
+                            scroll.ensureVisible(center.x(), center.y(),
+                                                 (field.width() + 1) // 2, (field.height() + 1) // 2)
+                            self.settle_layout()
+                            self.assert_visible_in_ancestors(field)
+                            self.assertEqual(field.text(), texts[index])
+                            self.assertEqual(field.font(), fonts[index])
+                            option = QStyleOptionFrame()
+                            field.initStyleOption(option)
+                            reading = field.style().subElementRect(QStyle.SubElement.SE_LineEditContents,
+                                                                  option, field)
+                            self.assertGreaterEqual(reading.height(), field.fontMetrics().height())
+                        if height == 270:
+                            self.assertGreater(dialog._body_scroll.verticalScrollBar().maximum(), 0)
+                        self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-{kind}-prompt-{width}-{height}.png")))
+                    dialog.close()
 
     def test_login_literal_password_options_and_forget_flow(self):
         self.service.authenticated = False

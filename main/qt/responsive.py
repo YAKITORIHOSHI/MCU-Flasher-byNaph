@@ -32,12 +32,19 @@ def clamp_window(widget, screen=None):
     if widget.isMaximized() or widget.isFullScreen():
         return
     area = work_area(widget, screen)
-    client, frame = widget.geometry(), widget.frameGeometry()
-    dx, dy = client.x() - frame.x(), client.y() - frame.y()
-    fw, fh = max(0, frame.width() - client.width()), max(0, frame.height() - client.height())
-    x, y, width, height = fit_rect(frame.x(), frame.y(), frame.width(), frame.height(), area)
-    rect = QRect(x + dx, y + dy, max(1, width - fw), max(1, height - fh))
-    if rect != client:
+    # Native decorations can become measurable only after the first geometry
+    # change. Recheck once, keeping fitting bounded and in Qt logical pixels.
+    for _ in range(2):
+        client, frame = widget.geometry(), widget.frameGeometry()
+        dx, dy = client.x() - frame.x(), client.y() - frame.y()
+        fw = max(0, frame.width() - client.width())
+        fh = max(0, frame.height() - client.height())
+        widget.setMinimumSize(min(widget.minimumWidth(), max(1, area.width - fw)),
+                              min(widget.minimumHeight(), max(1, area.height - fh)))
+        x, y, width, height = fit_rect(frame.x(), frame.y(), frame.width(), frame.height(), area)
+        rect = QRect(x + dx, y + dy, max(1, width - fw), max(1, height - fh))
+        if rect == client:
+            break
         widget.setGeometry(rect)
 
 

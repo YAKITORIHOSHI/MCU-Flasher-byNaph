@@ -16,21 +16,28 @@ combination before native widgets load. Do not remove this guard without
 passing direct/verify_qt_binding_lifetime.py on older Python.
 
 Review the latest Desktop compatibility GitHub Actions results and artifacts
-for the current commit. Clean first-launch checks passed on 22.04, 24.04 and
-26.04. Broader suites passed on Windows, 24.04 and 26.04, but a later 26.04
-repeat exposed intermittent loss of an unsaved editor buffer during renderer
-reload. A shared fix removes duplicate startup loads and requires matching
-renderer tokens and restored text before acknowledging recovery; verify it
-natively, including detach/reattach, repeated renderer reload and cloud Pull.
+for the current commit. Revision 31e6e24 passed nine of ten jobs, including
+clean first launch on 22.04/24.04/26.04, Windows and 24.04/26.04 runtime jobs.
+That exact revision also passed the native Ubuntu 26.04.1 runtime fixture on
+2026-10-11. Subsequent fixes require a successful background source scan,
+complete source-model coverage and matching
+renderer tokens before acknowledging Cloud Pull, and restore cloud prompt
+mouse access and short-screen scrolling. The updated fixture passed 46 runtime/manifest checks
+plus three real detach/reattach/reload cycles on GNOME XWayland and Wayland,
+retaining active and inactive Unicode unsaved buffers. Verify these behaviors
+again when changing recovery or Pull.
 Run node direct/verify_editor_recovery.js and the real direct/verify_runtime.py
 fixture. Never relax dirty-text assertions or clear snapshots to obtain a pass.
 
-The 22.04/Python 3.10 browser fixture crashed in Tk Listbox.delete. Its fixture
-now uses direct/tk_downloader_fixture.py without Qt imports, matching the
-production downloader's separate process. Check the latest native result and
-backtrace if this still fails; do not change production based only on a mixed
-test-process crash. Ubuntu investigation was stopped at my request so it can
-continue on this machine. Earlier successes do not prove the current revision.
+The remaining 31e6e24 failure is 22.04/Python 3.10's browser fixture. Authenticated
+logs and the GDB artifact for run 38115716448/job 114400091025 reproduce an
+invalid free in _tkinter during Listbox.delete, reached by
+test_download_button_launch_failure_restores_controls_and_explicit_retry.
+The extension-module list contains no Qt; the separated
+direct/tk_downloader_fixture.py did not resolve this crash. Preserve the full
+browser assertions and investigate on the affected Python/Tk combination;
+do not attribute it to a mixed Qt process or claim a fix from newer Python alone.
+Earlier successes do not prove the current revision.
 
 Launch through MCU_Flasher or bash direct/ubuntu/run.sh. Diagnose with --check
 and repair only if needed. Verify the actual desktop, including Wayland when
@@ -40,6 +47,22 @@ and the Ubuntu credential store. Offline Mode applies only to board/library
 download and preparation. Cloud copies belong under the generated
 _MCUFlasherByNaph_src/Cloud folder. Keep secrets out of source, logs and captures;
 never fall back to plaintext credential storage.
+
+The 2026-10-11 native audit passed 25 cloud UI, 18 developer UI and 26
+performance checks, plus isolated service/connectivity/launch/Bootstrap/PTY
+fixtures. All 16 responsive Qt/Tk checks also passed at 175% and 200% on an
+isolated native Xvfb display with the assertions unchanged; GNOME auto-maximizes
+oversized synthetic windows, so use Xvfb for artificial monitor coordinates.
+Actual Wayland cloud prompt checks also passed strict frame/input containment
+and native mouse routing. Shared fitting measures native decorations and lowers
+minimum sizes only as required to keep the complete frame inside the work area.
+The standalone browser-loading suite passed 29 checks on Python 3.14.4,
+which does not resolve the older Jammy failure above.
+A uniquely namespaced production-adapter GNOME Secret Service round
+trip passed without reading existing account records. This machine's normal
+private runtime is still unprepared and its launcher check reports missing
+libsecret-tools. Temporary verification tools were checksum-verified and
+extracted under temp/; no system installer or live metadata generation ran.
 
 Run relevant hardware-free direct/ verifiers with .venv-linux/bin/python,
 using isolated fixtures and temp/ captures. Preserve protected cache/journal

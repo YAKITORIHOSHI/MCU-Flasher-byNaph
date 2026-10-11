@@ -89,6 +89,59 @@ class QtResponsiveChecks(ControlChecks):
             frame = widget.frameGeometry()
             self.assertTrue(QRect(-640, 20, 640, 480).contains(frame), str(frame))
 
+    def test_clamp_remeasures_native_frame_and_fits_minimum(self):
+        class LateFrame:
+            def __init__(self):
+                self.client = QRect(-4000, -4000, 900, 660)
+                self.minimum = (800, 500)
+                self.geometry_changes = 0
+                self.maximized = self.fullscreen = False
+
+            def geometry(self):
+                return QRect(self.client)
+
+            def frameGeometry(self):
+                return self.client.adjusted(-11, -49, 11, 11) if self.geometry_changes else QRect(self.client)
+
+            def minimumWidth(self):
+                return self.minimum[0]
+
+            def minimumHeight(self):
+                return self.minimum[1]
+
+            def setMinimumSize(self, width, height):
+                self.minimum = (width, height)
+
+            def setGeometry(self, rect):
+                self.client = QRect(rect.x(), rect.y(), max(rect.width(), self.minimum[0]),
+                                    max(rect.height(), self.minimum[1]))
+                self.geometry_changes += 1
+
+            def isMaximized(self):
+                return self.maximized
+
+            def isFullScreen(self):
+                return self.fullscreen
+
+        for area in (WorkArea(-640, 20, 640, 312), WorkArea(1920, -900, 384, 640)):
+            with self.subTest(area=area), patch('main.qt.responsive.work_area', return_value=area):
+                widget = LateFrame()
+                clamp_window(widget)
+                self.assertTrue(QRect(area.x, area.y, area.width, area.height).contains(widget.frameGeometry()))
+                self.assertEqual(widget.minimum, (area.width - 22, min(500, area.height - 60)))
+                self.assertEqual(widget.geometry_changes, 2)
+                fitted = widget.geometry()
+                clamp_window(widget)
+                self.assertEqual(widget.geometry(), fitted)
+                self.assertEqual(widget.geometry_changes, 2)
+                for state in ('maximized', 'fullscreen'):
+                    setattr(widget, state, True)
+                    widget.client = QRect(-4000, -4000, 900, 660)
+                    clamp_window(widget)
+                    self.assertEqual(widget.geometry(), QRect(-4000, -4000, 900, 660))
+                    self.assertEqual(widget.geometry_changes, 2)
+                    setattr(widget, state, False)
+
     def test_project_selector_glass_pages_and_frame(self):
         # Reuse the owned project fixtures, including safe action dispatch,
         # rather than constructing a backend that can touch live preferences.
@@ -392,6 +445,21 @@ class QtResponsiveChecks(ControlChecks):
                         self.assertGreater(button.geometry().left(), panel._btn_add_tab.geometry().right())
                     if width == 480:
                         capture(host, f'terminal-{mode}-many-tabs')
+                        left_button = next(button for button in scroll_buttons
+                                           if button.arrowType() == Qt.ArrowType.LeftArrow)
+                        right_button = next(button for button in scroll_buttons
+                                            if button.arrowType() == Qt.ArrowType.RightArrow)
+                        before = panel._tab_bar.tabRect(0).left()
+                        self.assertTrue(left_button.isEnabled())
+                        QTest.mouseClick(left_button, Qt.MouseButton.LeftButton)
+                        pump()
+                        self.assertGreater(panel._tab_bar.tabRect(0).left(), before)
+                        self.assertTrue(right_button.isEnabled())
+                        QTest.mouseClick(right_button, Qt.MouseButton.LeftButton)
+                        pump()
+                        self.assertEqual(panel._tab_bar.tabRect(0).left(), before)
+                        self.assertEqual(panel._tab_bar.currentIndex(), panel._tab_bar.count() - 1)
+                        self.contained(panel._btn_add_tab, panel._header)
 
     def test_build_console_original_journal_preserves_saved_fonts(self):
         from main.core import config
