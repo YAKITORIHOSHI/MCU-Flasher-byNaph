@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -122,8 +123,18 @@ class TargetResolutionChecks(unittest.TestCase):
         worker = getattr(self.api, "_operation_worker", None)
         while (self.api.is_busy or (worker is not None and worker.is_alive())) and time.monotonic() < deadline:
             QTest.qWait(5)
-        self.assertFalse(self.api.is_busy)
-        self.assertFalse(worker is not None and worker.is_alive())
+            if worker is not None:
+                # Qt's native wait pumps events, but can retain Python's GIL.
+                # Give the real Python worker a scheduling opportunity too;
+                # keep the same deadline and require it to finish normally.
+                worker.join(timeout=min(.005, max(0, deadline - time.monotonic())))
+        detail = ""
+        if self.api.is_busy or (worker is not None and worker.is_alive()):
+            frame = sys._current_frames().get(worker.ident) if worker is not None else None
+            detail = (f"phase={self.api._current_op_phase}; recent events={self.events[-6:]}\n"
+                      + ("".join(traceback.format_stack(frame)) if frame is not None else "No live worker frame"))
+        self.assertFalse(self.api.is_busy, detail)
+        self.assertFalse(worker is not None and worker.is_alive(), detail)
         QTest.qWait(10)
 
     def test_compile_click_repairs_selected_cached_row_and_reaches_build_worker(self):

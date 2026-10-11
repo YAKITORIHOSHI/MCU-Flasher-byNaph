@@ -83,12 +83,18 @@ trip passed without reading existing account records. This machine's normal
 private runtime is still unprepared and its launcher check reports missing
 libsecret-tools. Temporary verification tools were checksum-verified and
 extracted under temp/; no system installer or live metadata generation ran.
-The user then requested dependency cleanup. The Linux environment/native CLI,
-copied Windows env/private Python and bulky owned audit dependencies were
-removed, retaining compact logs/captures, installers, settings, sources, Git and
-all protected caches/journals. The checkout is approximately 1.5 GB. Preserve
-this lean state; let the native launcher run Bootstrap when the user next opens
-the application, rather than reprovisioning live dependencies for verification.
+The user initially requested dependency cleanup, then clarified that the shared
+application copy must retain its working Windows runtime. The current repair
+target is Stable Release-4; Stable Release-3 is the unchanged Windows recovery
+source. Windows `src/_python` and `env` were restored into Release-4 and all
+31,149 copied files were SHA-256 verified. Do not remove these Windows resources
+as part of Ubuntu cleanup. Windows uses its bundled Python and WSH launcher;
+Ubuntu uses Bash Bootstrap and its separate `.venv-linux`. The Linux environment
+was recreated for hardware-free verification, but the previously cleaned native
+board packages remain unprepared. Let the Ubuntu launcher prepare those packages
+when the user opens the application; verification must use isolated stores.
+Windows launcher probes now ignore inherited Python overrides, and native CI
+checks moved-environment repair using the actual bundled Python 3.14 installer.
 The same-account receipt-authenticated XDG native PlatformIO downloads were
 also explicitly cleaned, freeing another 5.1 GB outside the checkout. Internal
 packaged aliases are unlinked only when they resolve within that architecture

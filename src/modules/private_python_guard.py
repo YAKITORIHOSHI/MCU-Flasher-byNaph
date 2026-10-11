@@ -10,8 +10,8 @@ Guarantees that MCU Flasher by Naph uses its host's private Python runtime:
 NO FALLBACKS TO SYSTEM / DESKTOP PYTHON ARE ALLOWED AT ALL COSTS.
 If invoked by any other Python interpreter (system Python, Microsoft Store stub,
 PATH python, etc.):
-- Automatically re-launches under <project_root>/src/_python/python.exe with the
-  exact same command-line arguments and an isolated environment.
+- Automatically re-launches under the host's private interpreter with the exact
+  same command-line arguments and an isolated environment.
 - A missing or damaged runtime stops workspace entry points with a bootstrap
   repair instruction. Only bootstrap launchers can opt into auto-healing from
   installers/.handsoff/python-*-amd64.exe.
