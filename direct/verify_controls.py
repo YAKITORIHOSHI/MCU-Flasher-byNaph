@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import gc
 import json
 import os
 import re
@@ -36,10 +37,12 @@ from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, 
 from main.core.theme import Theme
 from main.qt import settings_dialog as settings_module
 from main.qt.toolbar import PrimaryToolbar, ControlsBar, CompactDropdownPopup
+from main.qt.garbage_collection import install_gui_garbage_collector
 from src.modules.runtime_resources import performance_profile
 from verify_runtime import PreviewBackend
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 RENDER_DIR = None
 
 
@@ -895,6 +898,9 @@ class ControlChecks(unittest.TestCase):
 
 class DownloaderChecks(unittest.TestCase):
     def setUp(self):
+        # Previous disposable Tcl/Qt wrapper cycles must retire on this UI
+        # thread before the next fixture starts any catalog/disk workers.
+        gc.collect()
         import tkinter as tk
         from src.modules import arduino_lib_req as downloader
         self.module = downloader
