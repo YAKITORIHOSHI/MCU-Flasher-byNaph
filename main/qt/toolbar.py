@@ -49,23 +49,29 @@ UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if 
 
 
 class _DeveloperLogoLabel(QLabel):
-    """Logo label that reliably counts both ordinary and double-click presses."""
+    """Logo label that reports one activation for each completed left click."""
 
     clicked = Signal()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.rect().contains(event.position().toPoint()):
+                self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 def _make_action_btn(text: str, tooltip: str, object_name: str,
@@ -570,19 +576,22 @@ class PrimaryToolbar(QToolBar):
             self._backend.open_in_explorer()
 
     def _on_logo_click(self) -> None:
-        """Count a five-click gesture without relying on instance monkey-patching."""
+        """Open Developer Access on the fifth completed logo click."""
+        if not self._logo_click_timer.isActive():
+            self._logo_click_count = 0
         self._logo_click_count += 1
-        self._logo_click_timer.start(800)
+        if self._logo_click_count >= 5:
+            self._logo_click_count = 0
+            self._logo_click_timer.stop()
+            self._open_owner_ticket_dialog()
+            return
+        # Give the user a comfortable pause between clicks and open immediately
+        # on click five instead of making the gesture depend on a timer timeout.
+        self._logo_click_timer.start(1800)
 
     def _on_logo_click_timeout(self) -> None:
-        """Evaluates click count once user ceases clicking."""
-        try:
-            count = self._logo_click_count
-            self._logo_click_count = 0
-            if count == 5:
-                self._open_owner_ticket_dialog()
-        except Exception:
-            self._logo_click_count = 0
+        """Reset an incomplete gesture after the user pauses."""
+        self._logo_click_count = 0
 
     def _open_owner_ticket_dialog(self) -> None:
         """Launch or foreground the private ticket portal, including offline."""
@@ -597,8 +606,12 @@ class PrimaryToolbar(QToolBar):
             else:
                 self._owner_dialog.raise_()
                 self._owner_dialog.activateWindow()
-        except Exception:
-            pass
+        except Exception as exc:
+            QMessageBox.critical(
+                self.window(),
+                "Developer access unavailable",
+                f"The Developer Access window could not be opened.\n\n{exc}",
+            )
 
     def _on_new_project(self) -> None:
         if self._is_busy():
