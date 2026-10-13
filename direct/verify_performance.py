@@ -455,9 +455,14 @@ class PerformanceChecks(unittest.TestCase):
                     widget._flush_queue()
                     QTest.qWait(10)
                     self.assertEqual(widget.firstVisibleBlock().text(), visible)
-                # A release delivered outside the viewport must still resume Auto.
-                QTest.mouseRelease(widget, Qt.MouseButton.LeftButton,
-                                   Qt.KeyboardModifier.NoModifier, QPoint(2, 2))
+                # The application filter must resume Auto even when the
+                # receiving widget ignores a release outside the viewport.
+                from PySide6.QtGui import QMouseEvent
+                release = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(2, 2),
+                                      QPointF(widget.mapToGlobal(QPoint(2, 2))),
+                                      Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+                                      Qt.KeyboardModifier.NoModifier)
+                APP.sendEvent(widget, release)
                 QTest.qWait(30)
                 self.assertEqual(bar.value(), bar.maximum())
                 widget.set_autoscroll(False)

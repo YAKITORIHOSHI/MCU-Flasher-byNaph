@@ -87,7 +87,7 @@ FIXTURE = r"""
     mark_modified: () => true,
     snapshot_buffer: () => true,
     on_editor_content_change: () => true,
-    realtime_check_syntax: () => ({success:true, errors:[], warnings:[]}),
+    realtime_check_syntax: () => 'null',  // Qt queues diagnostics separately from the string reply.
     save_tab_order: () => true,
     set_cursor_position: () => true,
     get_board_info: () => ({connected:false}),
@@ -186,12 +186,27 @@ BANNER_GEOMETRY = r"""
 """
 
 
+class ReviewPage(QWebEnginePage):
+    """Keep asynchronous renderer warnings/errors visible to unittest."""
+    def __init__(self, profile, parent):
+        super().__init__(profile, parent)
+        self.console_issues = []
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        if level != QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel:
+            self.console_issues.append({"message": message, "line": line, "source": source})
+        super().javaScriptConsoleMessage(level, message, line, source)
+
+
 class EditorReviewChecks(unittest.TestCase):
     def setUp(self):
         self.view = QWebEngineView()
         self.profile = QWebEngineProfile(self.view)  # Off the record: no saved browser/session data.
-        self.page = QWebEnginePage(self.profile, self.view)
+        self.page = ReviewPage(self.profile, self.view)
         self.view.setPage(self.page)
+        # Cleanup assertions run after disposal, so delayed console messages
+        # cannot silently turn a failing renderer check into a passing test.
+        self.addCleanup(self.assertFalse, self.page.console_issues)
         self.addCleanup(self._dispose_renderer)
         self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self.view.resize(1000, 620)
@@ -259,6 +274,23 @@ class EditorReviewChecks(unittest.TestCase):
           await window.reloadActiveFileWithDiff(f.mainPath);
           return true;
         """)
+
+    def test_realtime_syntax_reply_uses_queued_diagnostic_contract(self):
+        self.assertEqual(self.async_js(r"""
+          const f = window.__reviewFixture;
+          return await window.pywebview.api.realtime_check_syntax(f.helperPath, 'void helper() {}');
+        """), 'null')
+        self.js(r"""(() => {
+          const f = window.__reviewFixture;
+          f.calls.length = 0;
+          window.editorInstance.getModel().applyEdits([
+            {range:new monaco.Range(1,1,1,1),text:'// delayed syntax fixture\n'}
+          ]);
+          return true;
+        })()""")
+        until(lambda: self.js("window.__reviewFixture.calls.some(c => c.method === 'realtime_check_syntax')"))
+        self.async_js('await new Promise(resolve => setTimeout(resolve,100));return true;')
+        self.assertFalse(self.page.console_issues)
 
     def test_diagnostics_activate_exact_model_preserve_dirty_buffers_and_reveal_top(self):
         result = self.async_js(r"""

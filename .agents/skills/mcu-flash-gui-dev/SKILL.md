@@ -83,6 +83,9 @@ For explicitly requested assistant delegation, use the local
   overlay GUI-owned dirty snapshots and reject both changed snapshots and older
   editor revisions. Verify with `direct/verify_syntax_navigation.py` and the real
   offline renderer fixture `direct/verify_editor_review_ui.py`.
+  Keep the renderer's syntax mock aligned with the Qt bridge: return the string
+  `"null"` while diagnostics arrive separately. Fail renderer verification on
+  asynchronous JavaScript console warnings/errors as well as assertion failures.
 - Live C/C++ checks scan structure and probable terminators; do not claim full
   compiler/type resolution. Ignore directive replacement brackets and known
   inactive branches; inspect one unresolved conditional branch, leaving target

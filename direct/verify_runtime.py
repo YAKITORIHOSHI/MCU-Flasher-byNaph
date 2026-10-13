@@ -988,7 +988,7 @@ def qt_smoke(app, render_dir=None):
         def verify_small_tool_navigation():
             tabs = window._bottom_tabs.tabBar()
             assert tabs.visibleRegion().contains(tabs.rect().center()), "Tool navigation clipped"
-            local = window._editor_panel.mapFrom(tabs, tabs.rect().center())
+            local = window._editor_panel.mapFromGlobal(tabs.mapToGlobal(tabs.rect().center()))
             assert not window._editor_panel.rect().contains(local), "Editor covered tool navigation"
 
         @checked
