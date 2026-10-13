@@ -151,6 +151,13 @@ For explicitly requested assistant delegation, use the local
   Firebase HTTPS destinations immediately before opening each request.
   Bound authentication replies to 64 KiB, ticket replies to 4 MiB and errors to
   8 KiB; close HTTP error responses after extracting safe provider codes.
+  Keep the five-click toolbar entry as the portal's Easter egg. The production
+  sign-in uses one responsive neobrutalist card with the real Firebase/local-key
+  controls; do not copy the prototype's illustration or sample credentials.
+  Category creation remains in the ticket forms: validate and save names in the
+  per-user portal config off the GUI thread, preserve ticket-snapshot categories,
+  and filter the cached ticket snapshot by status and category. The shared Qt
+  source supplies the same portal layout on Windows and Ubuntu.
   Local access uses a user-configured salted PBKDF2 key (at least 12 characters),
   never a universal default key or cloud identity. Changing an existing local key
   requires an authenticated session. Keep cloud fallback caches partitioned by

@@ -107,12 +107,18 @@ If both bars are hidden, **View → Show All Toolbars** restores them.
 Settings reset and system-theme fallback resolve the current glass theme names.
 Five left-clicks on the toolbar's MCU Flasher title open the private developer
 ticket portal. It remains available offline and uses local ticket storage when
-cloud synchronization cannot be reached. The portal follows all three workspace
-themes with cached beveled glass cards, Montserrat text and circuit icons. Login, ticket
-creation/editing and Firebase settings share readable form surfaces and keyboard
-focus. Narrow forms stack their fields; short windows scroll while edit and cloud
-actions stay visible. Theme changes retain drafts, search and filters. Failed
-Firebase settings writes keep the form open with an explanation.
+cloud synchronization cannot be reached. The portal remains an Easter egg behind
+that gesture. Its sign-in uses a compact neobrutalist ticket-stub card with a
+single-column form; production Firebase and local-key authentication are unchanged.
+The signed-in dashboard follows all three workspace themes with cached beveled
+glass cards, Montserrat text and circuit icons. Ticket categories can be added
+from the create or edit form, and the dashboard filters by both status and
+category. Added categories are saved in the local developer portal settings;
+categories already present on synchronized tickets remain available on each
+computer. Narrow forms stack their fields; short windows scroll while edit and
+cloud actions stay visible. Theme changes retain drafts, search and filters.
+Failed Firebase settings writes keep the form open with an explanation. The same
+native portal UI is used on Windows and Ubuntu.
 Ticket titles, notes and metadata wrap inside the card, including long URLs and
 unbroken log lines. The dashboard keeps its search, filters and ticket actions
 inside the window. Long notes use a bounded reading area with vertical scrolling,

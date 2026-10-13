@@ -1,7 +1,7 @@
-"""Private developer tickets with static, theme-aware glass surfaces.
+"""Private developer tickets with a focused login and theme-aware dashboard.
 
 The owner service remains responsible for authentication, Firebase and local
-storage. UI forms share cached cards and retain their widgets during reflow.
+storage. Ticket forms retain their widgets during reflow.
 """
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
-from PySide6.QtCore import Qt, Signal, QTimer, QObject, Slot, QEvent
-from PySide6.QtGui import QIcon, QTextOption
+from PySide6.QtCore import Qt, QSize, Signal, QTimer, QObject, Slot, QEvent
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QRectF, QTextOption
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
-    QLabel, QLineEdit, QTextEdit, QMessageBox,
+    QLabel, QLineEdit, QTextEdit, QMessageBox, QFrame,
     QSizePolicy, QMenu,
 )
 
@@ -22,6 +22,7 @@ from main.qt.owner_ticket_style import (
     PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
     refresh_portal_children, retone, scroll_body,
 )
+from main.qt.icons import icon
 from main.qt.setup_components import GlassCard
 from main.qt.responsive import fit_dialog
 
@@ -112,10 +113,34 @@ class _TaskPortal(PortalDialog):
         pass
 
 
+class NeoLoginCard(QFrame):
+    """The portal's compact paper card with a crisp, printed shadow."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+    def paintEvent(self, event):
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        bounds = QRectF(self.rect()).adjusted(2, 2, -9, -9)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#141414"))
+        painter.drawRect(bounds.translated(7, 7))
+        painter.setPen(QPen(QColor("#141414"), 3))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRect(bounds)
+
+
 class TicketFields(QWidget):
     """Shared create/edit fields; narrow windows stack classifications."""
 
-    def __init__(self, parent, ticket=None):
+    category_add_requested = Signal(str)
+
+    def __init__(self, parent, ticket=None, categories=None):
         super().__init__(parent)
         ticket = ticket or {}
         layout = QVBoxLayout(self)
@@ -124,11 +149,30 @@ class TicketFields(QWidget):
         self.title = QLineEdit(ticket.get("title", ""), self)
         self.title.setPlaceholderText("Briefly describe the issue")
         layout.addWidget(field("Title", self.title, self))
-        self.category = combo(CATEGORIES, self, ticket.get("category", CATEGORIES[0]))
+        self.category = combo(list(categories or CATEGORIES), self, ticket.get("category", CATEGORIES[0]))
+        category_field = field("Category", self.category, self)
+        category_entry = QWidget(category_field)
+        category_row = QHBoxLayout(category_entry)
+        category_row.setContentsMargins(0, 0, 0, 0)
+        category_row.setSpacing(8)
+        self.category_input = QLineEdit(category_entry)
+        self.category_input.setPlaceholderText("Add a category")
+        self.category_input.setAccessibleName("New ticket category")
+        self.category_input.returnPressed.connect(self._request_category_add)
+        self.btn_add_category = button("+", category_entry, self._request_category_add, role="category-add")
+        self.btn_add_category.setFixedWidth(42)
+        self.btn_add_category.setToolTip("Add a category")
+        self.btn_add_category.setAccessibleName("Add category")
+        category_row.addWidget(self.category_input, 1)
+        category_row.addWidget(self.btn_add_category)
+        category_field.layout().addWidget(category_entry)
+        self.category_feedback = label("", category_field, "metadata", wrap=True)
+        self.category_feedback.hide()
+        category_field.layout().addWidget(self.category_feedback)
         self.severity = combo(SEVERITIES, self, ticket.get("severity", "Medium"))
         self.status = combo(STATUSES, self, ticket.get("status", "Open"))
         self.classifications = ResponsiveGrid([
-            field("Category", self.category, self),
+            category_field,
             field("Severity", self.severity, self),
             field("Status", self.status, self),
         ], self, cell_width=170)
@@ -146,6 +190,40 @@ class TicketFields(QWidget):
         self.description.setMinimumHeight(110)
         self.description.setMaximumHeight(180)
         layout.addWidget(field("Notes", self.description, self))
+
+    def _request_category_add(self):
+        category = self.category_input.text().strip()
+        if not category:
+            self.show_category_feedback("Enter a category name first.", "warn")
+            self.category_input.setFocus()
+            return
+        self.show_category_feedback("", "muted")
+        self.category_add_requested.emit(category)
+
+    def show_category_feedback(self, message, tone="muted"):
+        self.category_feedback.setText(message)
+        self.category_feedback.setVisible(bool(message))
+        retone(self.category_feedback, tone)
+
+    def set_categories(self, categories, *, current=None):
+        selected = self.category.currentText() if current is None else current
+        values = []
+        seen = set()
+        for value in list(categories or CATEGORIES) + ([selected] if selected else []):
+            if isinstance(value, str) and value.strip() and value.casefold() not in seen:
+                values.append(value)
+                seen.add(value.casefold())
+        if selected and selected not in values:
+            values.append(selected)
+        self.category.blockSignals(True)
+        self.category.clear()
+        self.category.addItems(values)
+        for index, value in enumerate(values):
+            self.category.setItemData(index, value, Qt.ItemDataRole.ToolTipRole)
+        if selected:
+            self.category.setCurrentText(selected)
+        self.category.setToolTip(self.category.currentText())
+        self.category.blockSignals(False)
 
 
 class TicketCard(GlassCard):
@@ -248,10 +326,13 @@ class TicketCard(GlassCard):
 
 
 class EditTicketDialog(_TaskPortal):
-    def __init__(self, ticket, service, parent=None):
+    categories_updated = Signal(object)
+
+    def __init__(self, ticket, service, parent=None, *, categories=None):
         super().__init__(parent, preferred=(680, 640))
         self.ticket = ticket
         self.service = service
+        self.categories = list(categories or CATEGORIES)
         self._ticket_id = ticket.get("id", "")
         self.setObjectName("edit-ticket-dialog")
         self.setWindowTitle("Edit ticket — MCU Flasher")
@@ -260,7 +341,8 @@ class EditTicketDialog(_TaskPortal):
         card = GlassCard(body, radius=16)
         fields_layout = QVBoxLayout(card)
         fields_layout.setContentsMargins(20, 20, 20, 20)
-        self.fields = TicketFields(card, ticket)
+        self.fields = TicketFields(card, ticket, self.categories)
+        self.fields.category_add_requested.connect(self._add_ticket_category)
         fields_layout.addWidget(self.fields)
         self.txt_title = self.fields.title
         self.cb_category = self.fields.category
@@ -311,6 +393,26 @@ class EditTicketDialog(_TaskPortal):
         self.btn_save.setEnabled(not busy)
         self.fields.setEnabled(not busy)
         self.btn_save.setText("Saving…" if busy else "Save changes")
+
+    def _add_ticket_category(self, category):
+        if self._task_name:
+            return
+        self._pending_category = category
+        self._run_task("category", lambda: self.service.add_ticket_category(category), self._category_added)
+
+    def _category_added(self, result, error):
+        if error or not result:
+            self.fields.show_category_feedback(error or "The category could not be saved. Try again.", "fail")
+            return
+        ok, message, categories = result
+        self.categories = list(categories or self.categories)
+        selected = next((value for value in self.categories
+                         if value.casefold() == self._pending_category.casefold()), "")
+        self.fields.set_categories(self.categories, current=selected if ok else None)
+        if ok:
+            self.fields.category_input.clear()
+            self.categories_updated.emit(self.categories)
+        self.fields.show_category_feedback(message, "ok" if ok else "warn")
 
     def _saved(self, ok, error):
         if ok:
@@ -475,23 +577,40 @@ class OwnerTicketDialog(_TaskPortal):
         self._endpoint_message = ""
         self._dashboard_fitted = False
         self._active_filter = "All Status"
+        self._active_category_filter = "All categories"
         self._search_query = ""
         self.setObjectName("owner-portal-dialog")
         self.setWindowTitle("Developer tickets — MCU Flasher")
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
         if _mcu_icon_path.exists():
             self.setWindowIcon(QIcon(str(_mcu_icon_path)))
-        header = QHBoxLayout()
-        header.addWidget(label("Developer tickets", self.backdrop, "label"), 1)
+        self.portal_header = QWidget(self.backdrop)
+        header = QHBoxLayout(self.portal_header)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(label("Developer tickets", self.portal_header, "label"), 1)
         self.cloud_badge = label("Checking connection…", self.backdrop, "metadata")
         header.addWidget(self.cloud_badge)
-        self.content.addLayout(header)
+        self.content.addWidget(self.portal_header)
         self.stack = QStackedWidget(self.backdrop)
         self.content.addWidget(self.stack, 1)
+        self.stack.currentChanged.connect(self._update_portal_header)
         self._build_auth_screen()
         self._build_dashboard_screen()
+        self._update_portal_header(self.stack.currentIndex())
         self.apply_theme(self._theme_name)
         QTimer.singleShot(0, self, self._initialize_service)
+
+    def apply_theme(self, mode):
+        super().apply_theme(mode)
+        if hasattr(self, "auth_scroll"):
+            for control in (self.auth_scroll.findChildren(QLineEdit)
+                            + self.auth_scroll.findChildren(QTextEdit)):
+                palette = control.palette()
+                palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#625d63"))
+                control.setPalette(palette)
+
+    def _update_portal_header(self, index):
+        self.portal_header.setVisible(index != 0)
 
     def _initialize_service(self):
         def initialize():
@@ -509,6 +628,7 @@ class OwnerTicketDialog(_TaskPortal):
             return
         self.service, self._config, connection = result
         self._endpoint_state, self._endpoint_message = connection
+        self._sync_category_options()
         if not self.txt_auth_email.isModified():
             self.txt_auth_email.setText(self._config.get("owner_email", ""))
         self._set_busy(False)
@@ -525,18 +645,36 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _build_auth_screen(self):
         page = QWidget(self.stack)
+        page.setObjectName("developer-login-page")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         self.auth_scroll, body, layout = scroll_body(page)
         self.auth_scroll.viewport().installEventFilter(self)
-        self.auth_card = GlassCard(body, radius=20, accent=True)
+        self.auth_card = NeoLoginCard(body)
+        self.auth_card.setObjectName("developer-login-card")
         self.auth_card.setMaximumWidth(520)
         self.auth_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         form = QVBoxLayout(self.auth_card)
-        form.setContentsMargins(20, 20, 20, 20)
-        form.setSpacing(12)
-        form.addWidget(heading(self.auth_card, "Developer access", "Sign in to manage your issue reports."))
+        form.setContentsMargins(24, 24, 34, 32)
+        form.setSpacing(16)
+        identity = QWidget(self.auth_card)
+        identity_layout = QHBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(14)
+        brand = QLabel(identity)
+        brand.setFixedSize(54, 54)
+        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand.setPixmap(icon("brand", "#141414", size=40).pixmap(QSize(40, 40)))
+        brand.setStyleSheet("background: #ff91d5; border: 2px solid #141414; padding: 5px;")
+        identity_layout.addWidget(brand)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+        title_box.addWidget(label("Developer access", identity, "heading", wrap=True))
+        title_box.addWidget(label("Sign in to manage your issue reports.", identity, "muted", wrap=True))
+        identity_layout.addLayout(title_box, 1)
+        form.addWidget(identity)
         self.connection_note = label("Checking connection…", self.auth_card, "muted", wrap=True)
+        self.connection_note.setObjectName("developer-connection-note")
         self.connection_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addWidget(self.connection_note)
         self.txt_auth_email = QLineEdit(self.auth_card)
@@ -698,9 +836,15 @@ class OwnerTicketDialog(_TaskPortal):
         self.search_input.textChanged.connect(self._on_search_changed)
         self.filter_cb = combo(["All Status"] + STATUSES, body)
         self.filter_cb.setAccessibleName("Filter tickets by status")
-        self.filter_cb.setMaximumWidth(170)
+        self.filter_cb.setMaximumWidth(155)
         self.filter_cb.currentTextChanged.connect(self._on_filter_changed)
-        self.search_row = ResponsiveRow([(self.search_input, 1), (self.filter_cb, 0)], body, compact_width=440)
+        self.category_filter = combo(["All categories"] + CATEGORIES, body)
+        self.category_filter.setAccessibleName("Filter tickets by category")
+        self.category_filter.setMaximumWidth(190)
+        self.category_filter.currentTextChanged.connect(self._on_category_filter_changed)
+        self.search_row = ResponsiveRow(
+            [(self.search_input, 1), (self.filter_cb, 0), (self.category_filter, 0)],
+            body, compact_width=720)
         layout.addWidget(self.search_row)
         self.access_label = label("Private defect reports", body, "metadata", wrap=True)
         account_actions = QWidget(body)
@@ -718,7 +862,8 @@ class OwnerTicketDialog(_TaskPortal):
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
         form.addWidget(label("New ticket", self.form_card, "title"))
-        self.new_fields = TicketFields(self.form_card)
+        self.new_fields = TicketFields(self.form_card, categories=self._category_options())
+        self.new_fields.category_add_requested.connect(self._add_ticket_category)
         form.addWidget(self.new_fields)
         self.new_title = self.new_fields.title
         self.new_category = self.new_fields.category
@@ -754,6 +899,65 @@ class OwnerTicketDialog(_TaskPortal):
         box.addWidget(val)
         box.addWidget(label(caption, widget, "metadata"))
         return widget
+
+    def _category_options(self):
+        configured = self._config.get("ticket_categories") if isinstance(self._config, dict) else None
+        values = list(configured) if isinstance(configured, list) else list(CATEGORIES)
+        options = []
+        seen = set()
+        for value in values:
+            if isinstance(value, str) and value.strip() and value.casefold() not in seen:
+                options.append(value)
+                seen.add(value.casefold())
+        for ticket in self._tickets:
+            value = ticket.get("category") if isinstance(ticket, dict) else None
+            if (isinstance(value, str) and value.strip() and len(value) <= 256
+                    and value.casefold() not in seen):
+                options.append(value)
+                seen.add(value.casefold())
+        return options or list(CATEGORIES)
+
+    def _sync_category_options(self, selected=None):
+        categories = self._category_options()
+        if hasattr(self, "new_fields"):
+            self.new_fields.set_categories(categories, current=selected)
+        if not hasattr(self, "category_filter"):
+            return
+        previous = self.category_filter.currentText()
+        options = ["All categories"] + categories
+        current = previous
+        if current not in options:
+            current = "All categories"
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        self.category_filter.addItems(options)
+        for index, value in enumerate(options):
+            self.category_filter.setItemData(index, value, Qt.ItemDataRole.ToolTipRole)
+        self.category_filter.setCurrentText(current)
+        self.category_filter.setToolTip(current)
+        self.category_filter.blockSignals(False)
+        self._active_category_filter = current
+
+    def _add_ticket_category(self, category):
+        if self._task_name or self.service is None:
+            return
+        self._pending_category = category
+        self._run_task("category", lambda: self.service.add_ticket_category(category), self._category_added)
+
+    def _category_added(self, result, error):
+        if error or not result:
+            self.new_fields.show_category_feedback(
+                error or "The category could not be saved. Try again.", "fail")
+            return
+        ok, message, categories = result
+        categories = list(categories or self._category_options())
+        self._config["ticket_categories"] = categories
+        selected = next((value for value in categories
+                         if value.casefold() == self._pending_category.casefold()), None)
+        self._sync_category_options(selected=selected)
+        if ok:
+            self.new_fields.category_input.clear()
+        self.new_fields.show_category_feedback(message, "ok" if ok else "warn")
 
     def _toggle_new_ticket_form(self):
         opening = self.form_card.isHidden()
@@ -817,10 +1021,13 @@ class OwnerTicketDialog(_TaskPortal):
                 widget.hide()
                 widget.deleteLater()
         tickets = self._tickets
+        self._sync_category_options()
         self._update_stats(tickets)
         query = self._search_query.lower()
         filtered = [ticket for ticket in tickets
                     if (self._active_filter in ("All", "All Status") or ticket.get("status") == self._active_filter)
+                    and (self._active_category_filter in ("All", "All categories")
+                         or str(ticket.get("category", "")).casefold() == self._active_category_filter.casefold())
                     and (not query or query in " ".join(str(ticket.get(key, "")) for key in ("title", "description", "category")).lower())]
         if not filtered:
             empty = GlassCard(self.cards_container, radius=14)
@@ -828,7 +1035,7 @@ class OwnerTicketDialog(_TaskPortal):
             box.setContentsMargins(24, 30, 24, 30)
             box.setSpacing(8)
             box.addWidget(label("No matching tickets" if tickets else "No tickets yet", empty, "title", wrap=True))
-            box.addWidget(label("Try a different search or status filter." if tickets else "Create a ticket to record an issue and track its progress.", empty, "muted", wrap=True))
+            box.addWidget(label("Try a different search, status or category filter." if tickets else "Create a ticket to record an issue and track its progress.", empty, "muted", wrap=True))
             self.cards_layout.insertWidget(0, empty)
         for index, ticket in enumerate(filtered):
             card = TicketCard(ticket, self.cards_container)
@@ -840,11 +1047,17 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _open_edit_ticket_modal(self, ticket: Dict[str, Any]) -> None:
         try:
-            dlg = EditTicketDialog(ticket=ticket, service=self.service, parent=self)
+            dlg = EditTicketDialog(ticket=ticket, service=self.service, parent=self,
+                                   categories=self._category_options())
+            dlg.categories_updated.connect(self._categories_updated)
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 self._refresh_tickets_list()
         except Exception:
             pass
+
+    def _categories_updated(self, categories):
+        self._config["ticket_categories"] = list(categories or CATEGORIES)
+        self._sync_category_options()
 
     def _on_ticket_status_changed(self, ticket_id, status):
         def update():
@@ -871,6 +1084,13 @@ class OwnerTicketDialog(_TaskPortal):
     def _on_filter_changed(self, text: str) -> None:
         try:
             self._active_filter = text
+            self._render_tickets_list()
+        except Exception:
+            pass
+
+    def _on_category_filter_changed(self, text: str) -> None:
+        try:
+            self._active_category_filter = text
             self._render_tickets_list()
         except Exception:
             pass

@@ -20,6 +20,7 @@ import hmac
 import secrets
 import urllib.request
 import urllib.error
+import unicodedata
 from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
 from datetime import datetime
@@ -42,6 +43,38 @@ _PROVIDER_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project
 _OWNER_METADATA_KEYS = {"owner_email", "firebase_user_uid"}
 _AUTH_RESPONSE_BYTES = 64 * 1024
 _TICKET_RESPONSE_BYTES = 4 * 1024 * 1024
+_DEFAULT_TICKET_CATEGORIES = (
+    "GUI / Interface", "Monaco Code Editor", "Serial Monitor",
+    "PlatformIO / Toolchain", "Hardware & COM Port", "Low-End & HDD", "General Defect",
+)
+_MAX_TICKET_CATEGORIES = 64
+_MAX_TICKET_CATEGORY_LENGTH = 80
+
+
+def _clean_ticket_category(value: Any) -> str:
+    if not isinstance(value, str) or any(unicodedata.category(char) == "Cc" for char in value):
+        return ""
+    value = " ".join(value.split())
+    if not value or len(value) > _MAX_TICKET_CATEGORY_LENGTH:
+        return ""
+    return value
+
+
+def _normalize_ticket_categories(values: Any) -> list[str]:
+    categories = []
+    seen = set()
+    source = list(_DEFAULT_TICKET_CATEGORIES)
+    if isinstance(values, list):
+        source.extend(values)
+    for value in source:
+        category = _clean_ticket_category(value)
+        key = category.casefold()
+        if category and key not in seen:
+            categories.append(category)
+            seen.add(key)
+            if len(categories) >= _MAX_TICKET_CATEGORIES:
+                break
+    return categories
 
 class _NoFirebaseRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
@@ -181,6 +214,7 @@ class OwnerTicketService:
                     "firebase_root_collection": _DEFAULT_ROOT_COLLECTION,
                     "use_firebase": True,
                     "local_access": {},
+                    "ticket_categories": list(_DEFAULT_TICKET_CATEGORIES),
                     "owner_email": "",
                     "firebase_user_uid": "",
                 }
@@ -270,8 +304,32 @@ class OwnerTicketService:
                     for key in _OWNER_METADATA_KEYS})
         cfg["firebase_root_collection"] = cfg.get("firebase_root_collection") or _DEFAULT_ROOT_COLLECTION
         cfg.setdefault("use_firebase", True)
+        cfg["ticket_categories"] = _normalize_ticket_categories(cfg.get("ticket_categories"))
         cfg["local_access_configured"] = self._local_access_valid(cfg.get("local_access"))
         return cfg
+
+    def get_ticket_categories(self) -> list[str]:
+        """Return the built-in starting set plus saved user-defined categories."""
+        return _normalize_ticket_categories(self._read_config().get("ticket_categories"))
+
+    def add_ticket_category(self, value: str) -> tuple[bool, str, list[str]]:
+        """Add a bounded category to the per-user developer portal settings."""
+        if not isinstance(value, str) or any(unicodedata.category(char) == "Cc" for char in value):
+            return False, "Enter a category using up to 80 characters.", self.get_ticket_categories()
+        category = _clean_ticket_category(value)
+        if not category:
+            return False, "Enter a category using 1 to 80 characters.", self.get_ticket_categories()
+        if category.casefold() == "all categories":
+            return False, "Choose a different category name.", self.get_ticket_categories()
+        categories = self.get_ticket_categories()
+        if any(existing.casefold() == category.casefold() for existing in categories):
+            return False, "That category already exists.", categories
+        if len(categories) >= _MAX_TICKET_CATEGORIES:
+            return False, "The category list is full.", categories
+        categories.append(category)
+        if not self.save_config({"ticket_categories": categories}):
+            return False, "The category could not be saved. Try again.", self.get_ticket_categories()
+        return True, f"Added {category}.", categories
 
     def update_vault(self, updates: Dict[str, Any]) -> bool:
         """Compatibility entry point: save to the current user's OS vault."""

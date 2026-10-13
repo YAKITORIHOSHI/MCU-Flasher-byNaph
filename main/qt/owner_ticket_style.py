@@ -104,6 +104,45 @@ def portal_stylesheet(mode: str) -> str:
         QMenu {{ background: {c['BG_DARK']}; border: 1px solid {c['BORDER']}; padding: 5px; }}
         QMenu::item {{ padding: 8px 16px; }}
         QMenu::item:selected {{ background: {c['BG_HOVER']}; }}
+
+        /* The five-click portal uses a focused neobrutalist sign-in surface. */
+        QWidget#developer-login-page {{ background: #fffdf5; }}
+        QWidget#developer-login-page QWidget {{ color: #141414; }}
+        QWidget#developer-login-page QLabel[role="heading"],
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="heading"] {{ font-size: 25px; font-weight: 900; color: #141414; }}
+        QWidget#developer-login-page QLabel[role="title"],
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="title"] {{ font-size: 14px; font-weight: 800; color: #141414; }}
+        QWidget#developer-login-page QLabel[role="muted"],
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="muted"] {{ color: #49454b; }}
+        QWidget#developer-login-page QLineEdit,
+        QWidget#developer-login-page QTextEdit,
+        QWidget#developer-login-page QComboBox {{
+            background: #ffffff; color: #141414; border: 2px solid #141414;
+            border-radius: 2px; padding: 9px; selection-background-color: #ff91d5;
+            selection-color: #141414;
+        }}
+        QWidget#developer-login-page QLineEdit:focus,
+        QWidget#developer-login-page QTextEdit:focus,
+        QWidget#developer-login-page QComboBox:focus {{ border: 2px solid #2667c9; }}
+        QWidget#developer-login-page QPushButton {{
+            background: #ffffff; color: #141414; border: 2px solid #141414;
+            border-radius: 2px; padding: 9px 12px; font-weight: 800;
+        }}
+        QWidget#developer-login-page QPushButton:hover {{ background: #ffe85b; }}
+        QWidget#developer-login-page QPushButton:pressed {{ background: #80c8ff; }}
+        QWidget#developer-login-page QPushButton:focus {{ border: 2px dashed #2667c9; padding: 9px 12px; }}
+        QWidget#developer-login-page QPushButton[role="primary"] {{ background: #ffe85b; color: #141414; border-color: #141414; }}
+        QWidget#developer-login-page QPushButton[role="primary"]:hover {{ background: #ff91d5; }}
+        QWidget#developer-login-page QPushButton:disabled {{ background: #e7e3e5; color: #625d63; }}
+        QWidget#developer-login-page QLabel#developer-connection-note,
+        QWidget#developer-login-page QTextEdit#developer-connection-note {{
+            background: #80c8ff; color: #141414; border: 2px solid #141414; padding: 10px;
+        }}
+        QWidget#developer-login-page QLabel[role="feedback"],
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="feedback"] {{
+            background: #ff91d5; color: #141414; border: 2px solid #141414;
+            border-radius: 2px; padding: 10px;
+        }}
     """
 
 
