@@ -6,9 +6,16 @@ from main.qt.icons import icon
 
 
 class SvgLogGutter(QWidget):
-    def __init__(self, editor, name_for):
+    def __init__(self, editor, name_for, *, transparent=False):
         super().__init__(editor)
         self.editor, self.name_for = editor, name_for
+        # Setup logs expose their owning glass card; an opaque palette Base
+        # (black on native Windows) must not cover that material. Ordinary
+        # console gutters retain their solid reading surface by default.
+        self._transparent = bool(transparent)
+        if self._transparent:
+            self.setAutoFillBackground(False)
+            self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         editor.setViewportMargins(22, 0, 0, 0)
         editor.updateRequest.connect(self._update_request)
         editor.installEventFilter(self)
@@ -29,7 +36,8 @@ class SvgLogGutter(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), self.editor.palette().color(QPalette.ColorRole.Base))
+        if not self._transparent:
+            painter.fillRect(self.rect(), self.editor.palette().color(QPalette.ColorRole.Base))
         block = self.editor.firstVisibleBlock()
         y = self.editor.blockBoundingGeometry(block).translated(self.editor.contentOffset()).top()
         budget = 256

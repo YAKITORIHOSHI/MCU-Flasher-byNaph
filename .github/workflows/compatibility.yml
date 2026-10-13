@@ -78,6 +78,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             python -B direct/verify_downloader_appearance.py --scale $scale --render-dir "temp/audit/svg-native/browser-$scale"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python -B direct/verify_bootstrap_headers.py --render-dir "temp/audit/svg-native/setup-$scale"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Remove-Item Env:QT_SCALE_FACTOR
           python -B direct/verify_svg_icons.py --native-tk
@@ -94,6 +96,7 @@ jobs:
           for scale in 1 1.25 1.5 1.75 2; do
             QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR="$scale" xvfb-run -a python -B direct/verify_svg_icons.py --render-dir "temp/audit/svg-native/scale-$scale"
             QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_downloader_appearance.py --scale "$scale" --render-dir "temp/audit/svg-native/browser-$scale"
+            QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR="$scale" xvfb-run -a python -B direct/verify_bootstrap_headers.py --render-dir "temp/audit/svg-native/setup-$scale"
           done
           xvfb-run -a python -B direct/verify_svg_icons.py --native-tk
           QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_theme_readability.py

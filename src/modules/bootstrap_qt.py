@@ -453,8 +453,8 @@ class BootstrapDialog(QDialog):
         self._follow = LogFollow(self.log_edit, resume_on_release=True)
         self._summary_follow = LogFollow(self.summary_edit, resume_on_release=True)
         from main.qt.svg_gutter import SvgLogGutter
-        self._raw_svg_gutter = SvgLogGutter(self.log_edit, self._log_icon)
-        self._summary_svg_gutter = SvgLogGutter(self.summary_edit, self._log_icon)
+        self._raw_svg_gutter = SvgLogGutter(self.log_edit, self._log_icon, transparent=True)
+        self._summary_svg_gutter = SvgLogGutter(self.summary_edit, self._log_icon, transparent=True)
         self._step_start_cursor = QTextCursor(self.log_edit.document())
         self._step_start_cursor.setKeepPositionOnInsert(True)
         self._summary_step_start = QTextCursor(self.summary_edit.document())

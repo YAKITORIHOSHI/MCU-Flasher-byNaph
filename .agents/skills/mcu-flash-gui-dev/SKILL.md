@@ -37,6 +37,10 @@ Preserve native listbox selection/scroll callbacks and explicit CLI board choice
 Compatibility warnings use `SOFT_WARNING_PREFIX` and the shared classifier,
 including older stored cautions; never infer severity from an empty prefix.
 Log status marks paint beside literal text and never enter copied journals.
+Use `SvgLogGutter(..., transparent=True)` for transparent setup journals; never
+fill them from an inherited Base palette. Retain the opaque default for normal
+Build Console logs. Check the composited gutter against its underlying glass in
+both setup views and all themes with `direct/verify_bootstrap_headers.py`.
 Preserve user Unicode in sketches and serial/terminal input/output.
 Verify `direct/verify_svg_icons.py` and `--native-tk`, plus theme, panel, build,
 setup, downloader and editor fixtures. Native CI covers Windows Qt ranges and

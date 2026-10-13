@@ -338,7 +338,9 @@ Solarized Dark. Developer Access retains its solid paper palette.
 Qt reads the same local SVG assets on Windows and Ubuntu. Cold Tk setup uses a
 bounded standard-library renderer of those assets, with no Qt, Pillow, external
 icon font, network request or live animation requirement. Native window icons
-retain the OS-required ICO/PNG formats. Log marks live beside copyable text;
+retain the OS-required ICO/PNG formats. Setup log icon gutters remain transparent
+over the glass in both summary and technical views; ordinary Build Console gutters
+retain their opaque reading surface. Log marks live beside copyable text;
 user sketches, received serial/terminal Unicode and saved content are preserved.
 Compatibility severity and Arduino CLI selections use explicit state rather
 than displayed glyphs.
