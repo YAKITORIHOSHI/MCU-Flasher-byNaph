@@ -34,7 +34,7 @@ class SourceChecks(unittest.TestCase):
                 text=path.read_text(encoding='utf-8-sig')
                 self.assertFalse(EMOJI.search(text),str(path.relative_to(ROOT)))
                 ast.parse(text,filename=str(path))
-        self.assertFalse(EMOJI.search((ROOT/'src/editor/index.html').read_text()))
+        self.assertFalse(EMOJI.search((ROOT/'src/editor/index.html').read_text(encoding='utf-8')))
 
     def test_control_svg_inks_match_checked_hover_disabled_and_field_surfaces(self):
         from src.modules.svg_icons import control_assets
@@ -42,7 +42,7 @@ class SourceChecks(unittest.TestCase):
             palette = Theme.PALETTES[mode]
             controls = control_assets(mode)
             for state,surface in (("checked","CYAN_DIM"),("hover","CYAN"),("disabled","BG_MID"),("chevron","BG_DARK"),("setup-hover","BORDER_LIT")):
-                source = Path(controls[state]).read_text()
+                source = Path(controls[state]).read_text(encoding='utf-8')
                 ink = ET.fromstring(source)[0].get("stroke")
                 self.assertGreaterEqual(contrast_ratio(ink,palette[surface]),3 if state=="disabled" else 4.5,(mode,state))
 
