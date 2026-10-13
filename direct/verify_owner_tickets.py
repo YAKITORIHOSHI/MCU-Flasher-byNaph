@@ -26,7 +26,9 @@ from main.qt import owner_ticket_dialog as portal
 from main.qt import toolbar as toolbar_module
 from main.qt.toolbar import PrimaryToolbar, _DeveloperLogoLabel
 from main.core.runtime_recovery import bootstrap_can_repair
-from main.qt.owner_ticket_style import WrappedLabel, portal_colors
+from main.qt.owner_ticket_style import NeoCard, PortalDialog, WrappedLabel, portal_colors
+from main.qt.glass import GlassWorkspace
+from main.qt.setup_components import GlassCard
 from main.core.log_colors import contrast_ratio
 from main.qt.theme import build_stylesheet, register_fonts
 from main.qt.garbage_collection import install_gui_garbage_collector
@@ -775,17 +777,61 @@ class PortalChecks(unittest.TestCase):
         edit.close()
         edit.deleteLater()
 
-    def test_reading_inks_against_card_reflection(self):
+    def test_paper_cards_have_flat_fills_hard_shadows_and_readable_inks(self):
         for mode in ("default", "light", "solarized_dark"):
             c = portal_colors(mode)
-            card = portal.GlassCard(palette=Theme.PALETTES[mode])
+            card = NeoCard()
             show(card, (400, 200))
             surface = card._cached_surface.toImage()
-            samples = [surface.pixelColor(x, y).name() for x in range(20, 380, 8) for y in range(16, 184, 8)]
+            dpr = surface.devicePixelRatio()
+            pixel = lambda x, y: surface.pixelColor(round(x * dpr), round(y * dpr))
+            samples = [pixel(x, y).name() for x in range(20, 380, 8) for y in range(16, 184, 8)]
+            self.assertEqual(set(samples), {"#ffffff"}, mode)
+            self.assertEqual(pixel(397, 100).name(), "#141414")
+            self.assertEqual(pixel(200, 197).name(), "#141414")
+            self.assertIsNone(card.graphicsEffect())
             for token in ("TEXT", "TEXT_DIM", "TEXT_BRIGHT", "CYAN", "RED", "GREEN", "ORANGE", "YELLOW"):
                 self.assertGreaterEqual(min(contrast_ratio(c[token], background) for background in samples), 4.5, (mode, token))
+            for token, fill in (("CYAN", "#e7f5ff"), ("RED", "#ffe4f4"),
+                                ("YELLOW", "#fff5b8"), ("GREEN", "#e4f5e9")):
+                self.assertGreaterEqual(contrast_ratio(c[token], fill), 4.5, (mode, token))
             card.close()
             card.deleteLater()
+
+    def test_every_developer_surface_retains_neobrutalism_across_workspace_themes(self):
+        self.sign_in()
+        self.dialog.btn_new.click()
+        self.dialog.new_title.setText("Keep this draft")
+        edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
+        settings = portal.FirebaseSettingsDialog(self.service, self.dialog)
+        for child in (edit, settings):
+            self.addCleanup(child.deleteLater)
+            self.addCleanup(child.close)
+            show(child)
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            self.dialog.apply_theme(mode)
+            pump()
+            for surface in (self.dialog, edit, settings):
+                self.assertIsInstance(surface, PortalDialog)
+                self.assertNotIsInstance(surface.backdrop, GlassWorkspace)
+                self.assertEqual(surface.backdrop.palette().color(QPalette.ColorRole.Window).name(), "#fffdf5")
+                self.assertEqual(surface.findChildren(GlassCard), [])
+                self.assertGreater(len(surface.findChildren(NeoCard)), 0)
+                self.assertNotIn("qlineargradient", surface.styleSheet().lower())
+                for action in surface.findChildren(portal.QPushButton):
+                    if action.isEnabled():
+                        self.assertEqual(action.palette().color(QPalette.ColorRole.ButtonText).name(), "#141414")
+            self.assertEqual(self.dialog.new_title.text(), "Keep this draft")
+        settings.close()
+        edit.close()
+        self.dialog.form_card.hide()
+        self.dialog._tickets = []
+        self.dialog._render_tickets_list()
+        pump()
+        self.assertIsInstance(self.dialog.cards_layout.itemAt(0).widget(), NeoCard)
+        capture(self.dialog, "tickets-empty-neobrutalism")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Private developer tickets with a focused login and theme-aware dashboard.
+"""Private developer tickets with a focused login and neobrutalist dashboard.
 
 The owner service remains responsible for authentication, Firebase and local
 storage. Ticket forms retain their widgets during reflow.
@@ -10,21 +10,20 @@ from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
 from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QTextOption
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
-    QLabel, QLineEdit, QTextEdit, QMessageBox, QFrame,
+    QLabel, QLineEdit, QTextEdit, QMessageBox,
     QSizePolicy, QMenu, QPushButton,
 )
 
 from main.core.owner_tickets import OwnerTicketService
 from main.qt.owner_ticket_style import (
-    PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
+    NeoCard, PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
     refresh_portal_children, retone, scroll_body,
 )
 from main.qt.icons import icon
-from main.qt.setup_components import GlassCard
 from main.qt.responsive import fit_dialog
 
 _assets_dir = Path(__file__).resolve().parents[2] / "src/assets"
@@ -129,26 +128,8 @@ class DeveloperArtwork(QWidget):
         self.renderer.render(painter, QRectF(self.rect()))
 
 
-class NeoLoginCard(QFrame):
-    """The portal's compact paper card with a crisp, printed shadow."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-
-    def paintEvent(self, event):
-        if self.width() <= 0 or self.height() <= 0:
-            return
-        bounds = QRectF(self.rect()).adjusted(2, 2, -9, -9)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#141414"))
-        painter.drawRect(bounds.translated(7, 7))
-        painter.setPen(QPen(QColor("#141414"), 3))
-        painter.setBrush(QColor("#ffffff"))
-        painter.drawRect(bounds)
+class NeoLoginCard(NeoCard):
+    """The sign-in uses the same paper card as every Developer Access screen."""
 
 
 class TicketFields(QWidget):
@@ -242,13 +223,13 @@ class TicketFields(QWidget):
         self.category.blockSignals(False)
 
 
-class TicketCard(GlassCard):
+class TicketCard(NeoCard):
     status_changed = Signal(str, str)
     deleted = Signal(str)
     edit_requested = Signal(dict)
 
     def __init__(self, ticket, parent=None):
-        super().__init__(parent, radius=14)
+        super().__init__(parent)
         self.ticket = dict(ticket)
         self._ticket_id = ticket.get("id", "")
         self.setObjectName("ticket-card")
@@ -275,7 +256,7 @@ class TicketCard(GlassCard):
         controls = QHBoxLayout()
         controls.setSpacing(12)
         severity = ticket.get("severity", "Medium")
-        self.severity_label = label(severity, self, "label", wrap=True)
+        self.severity_label = label(severity, self, "severity", wrap=True)
         self.severity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.severity_label.setReadingHeightLimit(80)
         retone(self.severity_label, SEVERITY_TONES.get(severity, "muted"))
@@ -354,7 +335,7 @@ class EditTicketDialog(_TaskPortal):
         self.setWindowTitle("Edit ticket — MCU Flasher")
         self.content.addWidget(heading(self.backdrop, "Edit ticket", "Update the issue and investigation notes."))
         self.scroll, body, layout = scroll_body(self.backdrop)
-        card = GlassCard(body, radius=16)
+        card = NeoCard(body)
         fields_layout = QVBoxLayout(card)
         fields_layout.setContentsMargins(20, 20, 20, 20)
         self.fields = TicketFields(card, ticket, self.categories)
@@ -445,7 +426,7 @@ class FirebaseSettingsDialog(_TaskPortal):
         self.setWindowTitle("Connection settings — MCU Flasher")
         self.content.addWidget(heading(self.backdrop, "Connection settings"))
         self.scroll, body, layout = scroll_body(self.backdrop)
-        card = GlassCard(body, radius=16)
+        card = NeoCard(body)
         form = QVBoxLayout(card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
@@ -468,7 +449,7 @@ class FirebaseSettingsDialog(_TaskPortal):
         layout.addWidget(card)
         self._local_configured = bool(cfg.get("local_access_configured"))
         self._local_unlocked = bool(getattr(parent, "_authenticated_access", False))
-        local_card = GlassCard(body, radius=16)
+        local_card = NeoCard(body)
         local_form = QVBoxLayout(local_card)
         local_form.setContentsMargins(20, 20, 20, 20)
         local_form.setSpacing(12)
@@ -604,7 +585,7 @@ class OwnerTicketDialog(_TaskPortal):
         header = QHBoxLayout(self.portal_header)
         header.setContentsMargins(0, 0, 0, 0)
         header.addWidget(label("Developer tickets", self.portal_header, "label"), 1)
-        self.cloud_badge = label("Checking connection…", self.backdrop, "metadata")
+        self.cloud_badge = label("Checking connection…", self.backdrop, "session")
         header.addWidget(self.cloud_badge)
         self.content.addWidget(self.portal_header)
         self.stack = QStackedWidget(self.backdrop)
@@ -841,12 +822,15 @@ class OwnerTicketDialog(_TaskPortal):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(16)
         title_row = QHBoxLayout()
+        self.dashboard_brand = DeveloperArtwork("developer-access-chip.svg", page)
+        self.dashboard_brand.setFixedSize(48, 48)
+        title_row.addWidget(self.dashboard_brand)
         title_row.addWidget(label("Issue tracker", page, "heading", wrap=True), 1)
         self.btn_new = button("New ticket", page, self._toggle_new_ticket_form, role="primary", vector="modify")
         title_row.addWidget(self.btn_new)
         outer.addLayout(title_row)
         self.scroll, body, layout = scroll_body(page)
-        ribbon = GlassCard(body, radius=14)
+        ribbon = NeoCard(body)
         stats_layout = QVBoxLayout(ribbon)
         stats_layout.setContentsMargins(18, 14, 18, 14)
         self.stat_total = self._make_stat_badge("Total tickets", "0", "active", ribbon)
@@ -858,6 +842,7 @@ class OwnerTicketDialog(_TaskPortal):
         layout.addWidget(ribbon)
         self.search_input = QLineEdit(body)
         self.search_input.setPlaceholderText("Search tickets")
+        self.search_input.addAction(icon("search", "#141414"), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.setAccessibleName("Search tickets")
         self.search_input.textChanged.connect(self._on_search_changed)
         self.filter_cb = combo(["All Status"] + STATUSES, body)
@@ -878,12 +863,12 @@ class OwnerTicketDialog(_TaskPortal):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(10)
         self.btn_cloud = button("Connection settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
-        self.btn_lock = button("Lock", body, self._do_lock, role="quiet")
+        self.btn_lock = button("Lock", body, self._do_lock, role="quiet", vector="lock")
         actions.addWidget(self.btn_cloud)
         actions.addWidget(self.btn_lock)
         self.account_row = ResponsiveRow([(self.access_label, 1), (account_actions, 0)], body, compact_width=520)
         layout.addWidget(self.account_row)
-        self.form_card = GlassCard(body, radius=16, accent=True)
+        self.form_card = NeoCard(body, accent=True)
         form = QVBoxLayout(self.form_card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
@@ -916,8 +901,11 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _make_stat_badge(self, caption, value, tone, parent):
         widget = QWidget(parent)
+        widget.setProperty("role", "metric")
+        widget.setProperty("tone", tone)
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         box = QVBoxLayout(widget)
-        box.setContentsMargins(0, 0, 0, 0)
+        box.setContentsMargins(12, 10, 12, 10)
         box.setSpacing(4)
         val = label(value, widget, "value")
         val.setObjectName("val-label")
@@ -1056,11 +1044,16 @@ class OwnerTicketDialog(_TaskPortal):
                          or str(ticket.get("category", "")).casefold() == self._active_category_filter.casefold())
                     and (not query or query in " ".join(str(ticket.get(key, "")) for key in ("title", "description", "category")).lower())]
         if not filtered:
-            empty = GlassCard(self.cards_container, radius=14)
+            empty = NeoCard(self.cards_container)
             box = QVBoxLayout(empty)
             box.setContentsMargins(24, 30, 24, 30)
             box.setSpacing(8)
-            box.addWidget(label("No matching tickets" if tickets else "No tickets yet", empty, "title", wrap=True))
+            title_row = QHBoxLayout()
+            mark = DeveloperArtwork("developer-access-chip.svg", empty)
+            mark.setFixedSize(44, 44)
+            title_row.addWidget(mark)
+            title_row.addWidget(label("No matching tickets" if tickets else "No tickets yet", empty, "title", wrap=True), 1)
+            box.addLayout(title_row)
             box.addWidget(label("Try a different search, status or category filter." if tickets else "Create a ticket to record an issue and track its progress.", empty, "muted", wrap=True))
             self.cards_layout.insertWidget(0, empty)
         for index, ticket in enumerate(filtered):

@@ -620,10 +620,15 @@ class PrimaryToolbar(QToolBar):
         repairable = bootstrap_can_repair(error) and callable(restart)
         box = QMessageBox(parent)
         box.setWindowTitle("Developer access unavailable")
+        try:
+            from main.qt.owner_ticket_style import portal_stylesheet
+            box.setStyleSheet(portal_stylesheet(Theme.active_theme))
+        except (ImportError, SyntaxError):
+            pass  # Recovery must still open if the portal's style module is damaged.
         box.setIcon(QMessageBox.Icon.Critical)
-        box.setWindowIcon(icon("brand"))
+        box.setWindowIcon(icon("brand", "#141414"))
         box.setIconPixmap(icon("repair" if repairable else "warning",
-                               Theme.YELLOW if repairable else Theme.RED,
+                               "#141414",
                                size=48).pixmap(QSize(48, 48)))
         box.setText("The Developer Access window could not be opened.")
         box.setInformativeText(
@@ -635,11 +640,11 @@ class PrimaryToolbar(QToolBar):
         box.setDetailedText(str(error))
         box.setStandardButtons(QMessageBox.StandardButton.Close)
         retry = box.addButton("Retry", QMessageBox.ButtonRole.ActionRole)
-        retry.setIcon(icon("reload"))
+        retry.setIcon(icon("reload", "#141414"))
         repair = box.addButton("Repair and restart", QMessageBox.ButtonRole.ActionRole) if repairable else None
         if repair is not None:
-            repair.setIcon(icon("repair"))
-        box.button(QMessageBox.StandardButton.Close).setIcon(icon("close"))
+            repair.setIcon(icon("repair", "#141414"))
+        box.button(QMessageBox.StandardButton.Close).setIcon(icon("close", "#141414"))
         box.exec()
         chosen = box.clickedButton()
         box.deleteLater()

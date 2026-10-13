@@ -111,8 +111,11 @@ ticket portal. It remains available offline and uses local ticket storage when
 cloud synchronization cannot be reached. The portal remains an Easter egg behind
 that gesture. Its sign-in uses a compact neobrutalist ticket-stub card with a
 single-column form; production Firebase and local-key authentication are unchanged.
-The signed-in dashboard follows all three workspace themes with cached beveled
-glass cards, Montserrat text and circuit icons. Ticket categories can be added
+Every Developer Access screen uses neobrutalism: the login, dashboard, ticket
+cards, create/edit forms, connection settings and recovery prompts share cream
+backgrounds, solid cards, thick black borders and hard offset shadows. Colored
+metric tiles, severity labels and original circuit icons retain this appearance
+when the workspace theme changes. Ticket categories can be added
 from the create or edit form, and the dashboard filters by both status and
 category. Added categories are saved in the local developer portal settings;
 categories already present on synchronized tickets remain available on each

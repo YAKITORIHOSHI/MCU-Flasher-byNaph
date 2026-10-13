@@ -164,8 +164,13 @@ For explicitly requested assistant delegation, use the local
   Native Windows CI runs the portal/service/restart verifiers with QT_QPA_PLATFORM=windows
   across both supported Qt binding ranges; mocked Windows dispatch from Linux is
   not native Windows execution evidence.
-  The production
-  sign-in uses one responsive neobrutalist card with the real Firebase/local-key
+  Every Developer Access screen uses neobrutalism independently of the workspace
+  theme: solid cream backdrops, NeoCard paper fills, 3px black outlines and hard
+  offset shadows. Apply it to dashboard, stats, tickets, create/edit forms,
+  connection/local-key settings, menus and recovery prompts as well as login.
+  Do not use GlassCard/GlassWorkspace, reflections, gradients or compositor effects
+  inside this portal. Keep semantic text inks readable on the solid accent fills.
+  The production sign-in uses one responsive card with the real Firebase/local-key
   controls; do not copy the prototype's illustration or sample credentials.
   Keep original SVG chip/circuit artwork inside the sign-in card. Use the shared
   SVG icon family for inputs, mask toggle and recovery actions; paint artwork in
@@ -186,7 +191,7 @@ For explicitly requested assistant delegation, use the local
   Preserve literal text and selection rather than inserting break characters.
   Keep search, filters and ticket actions visible at compact/scaled widths,
   using bounded vertically scrollable reading areas for long notes so a log
-  cannot create an enormous cached glass surface. Retain the complete text for
+  cannot create an enormous cached card surface. Retain the complete text for
   selection/copying. Verify long-text ticket fixtures in all three palettes
   without creating real tickets.
 - Cloud sketches use `main/core/cloud_sketch_service.py` and the selector's
@@ -553,7 +558,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
      - `project_dialog.py`: Project selector & new project scaffolding wizard. Keep the Existing path blank at startup; selecting a source file preserves that file as the editor's active file, while folder validation stays at the project root. At compact widths shorten Recent/Open-window action labels but retain full accessible names.
-     - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login and Firebase settings; cached shared glass surfaces and responsive forms.
+     - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login and Firebase settings; cached neobrutalist paper cards and responsive forms.
      - `modify_dialog.py`: Project sketch file management dialog (add, rename, delete).
      - `download_dialog.py`: Explicit handoff to the separate host bootstrap process.
      - `package_progress.py`: Window-owned, focus-preserving package job card with stage/progress display and a Notifications action.
@@ -561,7 +566,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `theme.py`: QSS generator for Glass Smoked Dark, Glass Frosted Light and Solarized Dark.
 
    **Theme and log readability**
-   - Developer tickets share the workspace's GlassCard/GlassWorkspace and original vectors. Five left-clicks on the toolbar brand open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count both Qt press and double-click events in a label subclass. Use portal inks checked against actual reflected surfaces in all three palettes; retain keyboard focus, masked access keys, drafts and filters through theme changes. Center the compact login card, scroll short forms and pin actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
+   - Developer tickets use their own neobrutalist NeoCard/PortalDialog surfaces and original SVG vectors. Exactly five completed left-clicks on the toolbar brand and a brief pause open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count each completed click once, including double-click sequences. Use portal inks checked against solid paper and accent fills; retain the same appearance, keyboard focus, masked access keys, drafts and filters through workspace theme changes. Center the compact login card, scroll short forms and pin actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; verify that every developer screen is free of glass primitives and gradients. Only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
    - Build and serial output, ANSI foregrounds, connection state and transient status-bar messages use semantic colors with readable contrast against the active theme. Recolor retained output after theme changes instead of leaving stale inline colors.
    - Check rendered compatibility logs, syntax severity/status brushes and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
    - The workspace owns one theme signal connection and one propagation pass. Hosted panels opt out of direct theme subscriptions; standalone panels retain them. Status timers are window-owned, restart for the latest message and never clear a newer operation status. Failed notification clears preserve history; filters use bounded retained records and apply to live events. Refresh external history off the GUI thread on panel reveal, discard stale project results and preserve unpersisted live events. Report failed history writes without recursively persisting the warning. Notification replacement must be atomic; verify failure preservation with the isolated notification persistence/writes verifiers.

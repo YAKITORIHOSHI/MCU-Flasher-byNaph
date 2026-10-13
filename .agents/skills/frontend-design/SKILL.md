@@ -8,6 +8,14 @@ license: Complete terms in LICENSE.txt
 
 ## MCU Flasher workspace contract
 
+Developer Access has its own neobrutalist identity on Windows and Ubuntu.
+Use solid cream backdrops, white paper cards, thick black borders, hard offset
+shadows and pink/yellow/blue accent fills throughout login, dashboard, ticket
+forms, connection settings and recovery prompts. Preserve its original SVG
+chip/circuit artwork. Workspace theme changes must retain this portal style;
+glass primitives and gradients belong to the surrounding workspace and setup.
+
+
 For this application's Qt/Monaco UI, refine the existing smoked/frosted glass
 palette and Montserrat navigation rather than introducing website sections.
 Keep board/port selection in Controls and keep the editor dominant; do not add

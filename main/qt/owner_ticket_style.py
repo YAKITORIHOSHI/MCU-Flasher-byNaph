@@ -1,153 +1,153 @@
-"""Static glass, readable inks and responsive forms for the developer portal."""
+"""Paper surfaces, bold ink and responsive forms for Developer Access."""
 from __future__ import annotations
 
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QPalette, QTextDocument, QTextOption
+from PySide6.QtCore import QEvent, QSize, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QBoxLayout, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QBoxLayout, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionComboBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from main.core.log_colors import contrast_ratio
-from main.core.theme import Theme, get_palette
-from main.qt.glass import GlassWorkspace
+from main.core.theme import Theme
 from main.qt.icons import icon
 from main.qt.responsive import ScreenWatcher, fit_dialog
-from main.qt.setup_components import GlassCard, VectorGlyph
+from main.qt.setup_components import VectorGlyph
 
 
 def portal_colors(mode: str) -> dict[str, str]:
-    """Keep text readable even under the shared card's brightest reflection."""
-    colors = dict(get_palette(mode))
-    light = QColor(colors["BG_DARKEST"]).lightness() > 128
-    base = QColor(colors["BG_LIGHT"])
-    alpha = (92 if light else 46) / 255
-    reflection = QColor(*[round(c * (1 - alpha) + 255 * alpha)
-                          for c in (base.red(), base.green(), base.blue())]).name()
-    surfaces = [colors[key] for key in ("BG_DARKEST", "BG_DARK", "BG_MID", "BG_LIGHT", "BG_HOVER")]
-    surfaces.append(reflection)
-    for key in ("TEXT", "TEXT_DIM", "TEXT_BRIGHT", "CYAN", "GREEN", "YELLOW", "RED", "ORANGE", "BLUE"):
-        value = QColor(colors[key])
-        for _ in range(36):
-            if min(contrast_ratio(value.name(), bg) for bg in surfaces) >= 4.5:
-                break
-            value = value.darker(110) if light else value.lighter(110)
-        else:
-            value = QColor("#000000" if light else "#ffffff")
-        colors[key] = value.name()
-    return colors
+    """Developer Access retains its paper-and-ink identity in every workspace theme."""
+    return {
+        "BG_DARKEST": "#fffdf5", "BG_DARK": "#ffffff", "BG_MID": "#ffffff",
+        "BG_LIGHT": "#ffffff", "BG_HOVER": "#fff5b8", "BORDER": "#141414",
+        "TEXT": "#141414", "TEXT_BRIGHT": "#141414", "TEXT_DIM": "#49454b",
+        "CYAN": "#135f73", "GREEN": "#126039", "YELLOW": "#735000",
+        "RED": "#ab1738", "ORANGE": "#9a3b00", "BLUE": "#15529f",
+    }
 
 
 def portal_stylesheet(mode: str) -> str:
     c = portal_colors(mode)
-    accent = get_palette(mode)["CYAN"]
-    primary_ink = max(("#101b2a", "#ffffff"), key=lambda ink: contrast_ratio(ink, accent))
-    arrow = (Path(__file__).resolve().parents[2] / "src/assets/icons/chevron-down.svg").as_posix()
+    arrow = (Path(__file__).resolve().parents[2] / "src/assets/icons/developer-chevron.svg").as_posix()
     return f"""
-        QDialog {{ background: {c['BG_DARKEST']}; }}
-        QWidget {{ font-family: 'Montserrat', 'Segoe UI', sans-serif; font-size: 12px; color: {c['TEXT']}; }}
+        QDialog, QWidget#developer-portal-surface {{ background: #fffdf5; }}
+        QWidget {{ font-family: 'Montserrat', 'Segoe UI', sans-serif; font-size: 12px; color: #141414; }}
         QLabel, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
         QLabel {{ padding: 0; }}
-        QLabel[role="heading"], QTextEdit[wrappedLabel="true"][role="heading"] {{ font-size: 24px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
-        QLabel[role="title"], QTextEdit[wrappedLabel="true"][role="title"] {{ font-size: 16px; font-weight: 700; color: {c['TEXT_BRIGHT']}; }}
-        QLabel[role="label"], QTextEdit[wrappedLabel="true"][role="label"] {{ font-weight: 600; }}
+        QLabel[role="heading"], QTextEdit[wrappedLabel="true"][role="heading"] {{ font-size: 25px; font-weight: 900; color: #141414; }}
+        QLabel[role="title"], QTextEdit[wrappedLabel="true"][role="title"] {{ font-size: 16px; font-weight: 800; color: #141414; }}
+        QLabel[role="label"], QTextEdit[wrappedLabel="true"][role="label"] {{ font-weight: 700; }}
         QLabel[role="muted"], QLabel[role="metadata"], QTextEdit[wrappedLabel="true"][role="muted"], QTextEdit[wrappedLabel="true"][role="metadata"] {{ color: {c['TEXT_DIM']}; }}
         QLabel[role="metadata"], QTextEdit[wrappedLabel="true"][role="metadata"] {{ font-size: 11px; }}
-        QLabel[role="value"] {{ font-size: 23px; font-weight: 700; }}
-        QLabel[tone="active"], QTextEdit[wrappedLabel="true"][tone="active"] {{ color: {c['CYAN']}; }}
-        QLabel[tone="ok"], QTextEdit[wrappedLabel="true"][tone="ok"] {{ color: {c['GREEN']}; }}
-        QLabel[tone="warn"], QTextEdit[wrappedLabel="true"][tone="warn"] {{ color: {c['YELLOW']}; }}
-        QLabel[tone="fail"], QTextEdit[wrappedLabel="true"][tone="fail"] {{ color: {c['RED']}; }}
-        QLabel[tone="high"], QTextEdit[wrappedLabel="true"][tone="high"] {{ color: {c['ORANGE']}; }}
-        QLabel[role="feedback"] {{ background: {c['BG_DARKEST']}; border-radius: 8px; padding: 10px; }}
+        QLabel[role="value"] {{ font-size: 25px; font-weight: 900; }}
+        QLabel[tone="active"], QTextEdit[wrappedLabel="true"][tone="active"], QComboBox[tone="active"] {{ color: {c['CYAN']}; }}
+        QLabel[tone="ok"], QTextEdit[wrappedLabel="true"][tone="ok"], QComboBox[tone="ok"] {{ color: {c['GREEN']}; }}
+        QLabel[tone="warn"], QTextEdit[wrappedLabel="true"][tone="warn"], QComboBox[tone="warn"] {{ color: {c['YELLOW']}; }}
+        QLabel[tone="fail"], QTextEdit[wrappedLabel="true"][tone="fail"], QComboBox[tone="fail"] {{ color: {c['RED']}; }}
+        QLabel[tone="high"], QTextEdit[wrappedLabel="true"][tone="high"], QComboBox[tone="high"] {{ color: {c['ORANGE']}; }}
         QLineEdit, QTextEdit, QComboBox {{
-            background: {c['BG_DARKEST']}; color: {c['TEXT']};
-            border: 1px solid {c['BORDER']}; border-radius: 8px; padding: 9px 11px;
-            selection-background-color: {c['BG_HOVER']}; selection-color: {c['TEXT_BRIGHT']};
+            background: #ffffff; color: #141414; border: 2px solid #141414;
+            border-radius: 2px; padding: 9px; selection-background-color: #ff91d5; selection-color: #141414;
         }}
-        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border: 1px solid {accent}; }}
+        QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{ border-color: #2667c9; }}
         QTextEdit[wrappedLabel="true"], QTextEdit[wrappedLabel="true"]:focus {{
             background: transparent; border: none; border-radius: 0; padding: 0;
         }}
-        QTextEdit[wrappedLabel="true"][role="feedback"] {{ background: {c['BG_DARKEST']}; border-radius: 8px; padding: 10px; }}
+        QLabel[role="feedback"], QTextEdit[wrappedLabel="true"][role="feedback"] {{
+            background: #ffe4f4; border: 2px solid #141414; border-radius: 2px; padding: 10px;
+        }}
         QComboBox {{ padding-right: 28px; }}
         QComboBox::drop-down {{ border: none; width: 24px; }}
         QComboBox::down-arrow {{ image: url("{arrow}"); width: 10px; height: 10px; }}
         QComboBox QAbstractItemView {{
-            background: {c['BG_DARK']}; color: {c['TEXT']}; border: 1px solid {c['BORDER']};
-            selection-background-color: {c['BG_HOVER']}; selection-color: {c['TEXT_BRIGHT']}; padding: 4px;
-        }}
-        QComboBox[tone="active"] {{ color: {c['CYAN']}; }}
-        QComboBox[tone="ok"] {{ color: {c['GREEN']}; }}
-        QComboBox[tone="warn"] {{ color: {c['YELLOW']}; }}
-        QComboBox[tone="fail"] {{ color: {c['RED']}; }}
-        QComboBox[tone="high"] {{ color: {c['ORANGE']}; }}
-        QPushButton {{
-            background: {c['BG_MID']}; border: 1px solid {c['BORDER']}; border-radius: 8px;
-            padding: 9px 13px; font-weight: 600; color: {c['TEXT']};
-        }}
-        QPushButton:hover {{ background: {c['BG_HOVER']}; border-color: {accent}; }}
-        QPushButton:focus {{ border: 2px solid {accent}; padding: 8px 12px; }}
-        QPushButton[role="primary"] {{ background: {accent}; color: {primary_ink}; border-color: {accent}; }}
-        QPushButton[role="primary"]:hover {{ background: {QColor(accent).lighter(108).name()}; }}
-        QPushButton[role="quiet"] {{ background: transparent; }}
-        QPushButton[role="icon"] {{ background: transparent; border-color: transparent; padding: 6px; }}
-        QPushButton[role="icon"]:hover, QPushButton[role="icon"]:focus {{ background: {c['BG_HOVER']}; border-color: {accent}; }}
-        QPushButton:disabled {{ color: {c['TEXT_DIM']}; background: {c['BG_DARK']}; border-color: {c['BORDER']}; }}
-        QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-        QScrollBar::handle:vertical {{ background: {c['BORDER']}; border-radius: 3px; min-height: 28px; }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-        QMenu {{ background: {c['BG_DARK']}; border: 1px solid {c['BORDER']}; padding: 5px; }}
-        QMenu::item {{ padding: 8px 16px; }}
-        QMenu::item:selected {{ background: {c['BG_HOVER']}; }}
-
-        /* The five-click portal uses a focused neobrutalist sign-in surface. */
-        QWidget#developer-login-page {{ background: #fffdf5; }}
-        QWidget#developer-login-page QWidget {{ color: #141414; }}
-        QWidget#developer-login-page QLabel[role="heading"],
-        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="heading"] {{ font-size: 25px; font-weight: 900; color: #141414; }}
-        QWidget#developer-login-page QLabel[role="title"],
-        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="title"] {{ font-size: 14px; font-weight: 800; color: #141414; }}
-        QWidget#developer-login-page QLabel[role="muted"],
-        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="muted"] {{ color: #49454b; }}
-        QWidget#developer-login-page QLineEdit,
-        QWidget#developer-login-page QTextEdit,
-        QWidget#developer-login-page QComboBox {{
             background: #ffffff; color: #141414; border: 2px solid #141414;
-            border-radius: 2px; padding: 9px; selection-background-color: #ff91d5;
-            selection-color: #141414;
+            selection-background-color: #ffe85b; selection-color: #141414; padding: 4px;
         }}
-        QWidget#developer-login-page QLineEdit:focus,
-        QWidget#developer-login-page QTextEdit:focus,
-        QWidget#developer-login-page QComboBox:focus {{ border: 2px solid #2667c9; }}
-        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="heading"],
-        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="muted"] {{
-            background: transparent; border: none; padding: 0;
-        }}
-        QWidget#developer-login-page QPushButton {{
+        QPushButton {{
             background: #ffffff; color: #141414; border: 2px solid #141414;
             border-radius: 2px; padding: 9px 12px; font-weight: 800;
         }}
-        QWidget#developer-login-page QPushButton:hover {{ background: #ffe85b; }}
-        QWidget#developer-login-page QPushButton:pressed {{ background: #80c8ff; }}
-        QWidget#developer-login-page QPushButton:focus {{ border: 2px dashed #2667c9; padding: 9px 12px; }}
-        QWidget#developer-login-page QPushButton[role="primary"] {{ background: #ffe85b; color: #141414; border-color: #141414; }}
-        QWidget#developer-login-page QPushButton[role="primary"]:hover {{ background: #ff91d5; }}
-        QWidget#developer-login-page QPushButton:disabled {{ background: #e7e3e5; color: #625d63; }}
+        QPushButton:hover {{ background: #ffe85b; }}
+        QPushButton:pressed {{ background: #80c8ff; }}
+        QPushButton:focus {{ border: 2px dashed #2667c9; }}
+        QPushButton[role="primary"] {{ background: #ffe85b; }}
+        QPushButton[role="primary"]:hover {{ background: #ff91d5; }}
+        QPushButton[role="icon"] {{ padding: 5px; }}
+        QPushButton[role="category-add"] {{ background: #80c8ff; }}
+        QPushButton:disabled {{ background: #e7e3e5; color: #625d63; }}
+        QWidget[role="metric"] {{ border: 2px solid #141414; background: #e7f5ff; }}
+        QWidget[role="metric"][tone="fail"] {{ background: #ffe4f4; }}
+        QWidget[role="metric"][tone="warn"] {{ background: #fff5b8; }}
+        QWidget[role="metric"][tone="ok"] {{ background: #e4f5e9; }}
+        QWidget[role="metric"] QLabel {{ border: none; background: transparent; }}
+        QLabel[role="session"] {{ background: #e4f5e9; border: 2px solid #141414; padding: 5px 8px; font-weight: 700; }}
+        QLabel[role="session"][tone="active"] {{ background: #e7f5ff; }}
+        QLabel[role="session"][tone="fail"] {{ background: #ffe4f4; }}
+        QLabel[role="session"][tone="warn"] {{ background: #fff5b8; }}
+        QLabel[role="session"][tone="muted"] {{ background: #e7e3e5; }}
+        QTextEdit[wrappedLabel="true"][role="severity"] {{ border: 2px solid #141414; background: #fff5b8; padding: 5px; font-weight: 800; }}
+        QTextEdit[wrappedLabel="true"][role="severity"][tone="fail"] {{ background: #ffe4f4; }}
+        QTextEdit[wrappedLabel="true"][role="severity"][tone="ok"] {{ background: #e4f5e9; }}
+        QScrollBar:vertical {{ background: #fffdf5; width: 10px; margin: 2px; }}
+        QScrollBar::handle:vertical {{ background: #141414; border-radius: 0; min-height: 28px; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        QMenu {{ background: #ffffff; color: #141414; border: 2px solid #141414; padding: 5px; }}
+        QMenu::item {{ padding: 8px 16px; }}
+        QMenu::item:selected {{ background: #ffe85b; }}
         QWidget#developer-login-page QLabel#developer-connection-note,
         QWidget#developer-login-page QTextEdit#developer-connection-note {{
             background: #80c8ff; color: #141414; border: 2px solid #141414; padding: 10px;
         }}
         QWidget#developer-login-page QLabel[role="feedback"],
         QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="feedback"] {{
-            background: #ff91d5; color: #141414; border: 2px solid #141414;
-            border-radius: 2px; padding: 10px;
+            background: #ff91d5; color: #141414; border: 2px solid #141414; padding: 10px;
         }}
     """
+
+
+class NeoCard(QFrame):
+    """Solid paper, a thick ink border and a hard offset shadow; no glass layers."""
+
+    def __init__(self, parent=None, *, accent=False, fill="#ffffff"):
+        super().__init__(parent)
+        self._fill = QColor(fill)
+        self._accent = accent
+        self._cached_surface = None
+        self._cache_key = None
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._cached_surface = None
+
+    def paintEvent(self, event):
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        dpr = self.devicePixelRatioF()
+        key = (self.size(), dpr)
+        if self._cached_surface is None or self._cache_key != key:
+            self._cached_surface = QPixmap(ceil(self.width() * dpr), ceil(self.height() * dpr))
+            self._cached_surface.setDevicePixelRatio(dpr)
+            self._cached_surface.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(self._cached_surface)
+            bounds = QRectF(self.rect()).adjusted(2, 2, -9, -9)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#141414"))
+            painter.drawRect(bounds.translated(7, 7))
+            painter.setPen(QPen(QColor("#141414"), 3))
+            painter.setBrush(self._fill)
+            painter.drawRect(bounds)
+            if self._accent:
+                painter.fillRect(bounds.adjusted(2, 2, -2, -bounds.height() + 8), QColor("#ffe85b"))
+            painter.end()
+            self._cache_key = key
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._cached_surface)
 
 
 class WrappedLabel(QTextEdit):
@@ -427,8 +427,6 @@ def scroll_body(parent: QWidget) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
 
 def refresh_portal_children(root: QWidget, mode: str):
     c = portal_colors(mode)
-    for card in root.findChildren(GlassCard):
-        card.set_palette(get_palette(mode))
     for glyph in root.findChildren(VectorGlyph):
         glyph.set_icon(glyph._name, c["CYAN"])
     for control in root.findChildren(QLineEdit) + root.findChildren(QTextEdit):
@@ -439,14 +437,11 @@ def refresh_portal_children(root: QWidget, mode: str):
         vector = action.property("vector")
         if vector:
             ink = c["TEXT"]
-            if action.property("role") == "primary":
-                accent = get_palette(mode)["CYAN"]
-                ink = max(("#101b2a", "#ffffff"), key=lambda value: contrast_ratio(value, accent))
             action.setIcon(icon(vector, ink))
 
 
 class PortalDialog(QDialog):
-    """A cached workspace backdrop with shared glass form styling."""
+    """Developer dialogs share a solid paper surface and neobrutalist controls."""
 
     def __init__(self, parent=None, *, preferred=(880, 740)):
         super().__init__(parent)
@@ -454,7 +449,9 @@ class PortalDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self.backdrop = GlassWorkspace(self)
+        self.backdrop = QWidget(self)
+        self.backdrop.setObjectName("developer-portal-surface")
+        self.backdrop.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         outer.addWidget(self.backdrop)
         self.content = QVBoxLayout(self.backdrop)
         self.content.setContentsMargins(24, 20, 24, 20)
@@ -466,7 +463,7 @@ class PortalDialog(QDialog):
         self._theme_name = mode
         self.setStyleSheet(portal_stylesheet(mode))
         refresh_portal_children(self, mode)
-        self.backdrop.invalidate_cache()
+        self.backdrop.update()
         for dialog in self.findChildren(PortalDialog):
             if dialog.parentWidget() is self:
                 dialog.apply_theme(mode)

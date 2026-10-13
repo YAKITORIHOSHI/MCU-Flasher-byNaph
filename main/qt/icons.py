@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QPushButton
 from main.core.theme import Theme
 
 PATHS = {
+    "lock": '<path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v10H5V10Zm7 4v3"/>',
     "mail": '<path d="M3 6h18v12H3V6Zm0 1 9 7 9-7M3 18l6-6m12 6-6-6"/>',
     "key": '<circle cx="16" cy="8" r="5"/><path d="m12.5 11.5-9.5 9.5v-5h4v-4h4M16 6h.1"/>',
     "unlock": '<path d="M7 10V7a5 5 0 0 1 9-3M5 10h14v10H5V10Zm7 4v3M2 14H1m20 0h2"/>',
