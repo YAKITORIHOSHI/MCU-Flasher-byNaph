@@ -65,7 +65,8 @@ def main():
         scaled = output / ("scale-" + scale)
         scaled.mkdir(parents=True, exist_ok=True)
         for script, options in checks(args.group, scale, scaled):
-            log_path = scaled / (script + ".log")
+            variant = "-native-tk" if "--native-tk" in options else ""
+            log_path = scaled / (script + variant + ".log")
             env = os.environ.copy()
             env.update(QT_SCALE_FACTOR=scale, PYTHONDONTWRITEBYTECODE="1",
                        PYTHONFAULTHANDLER="1")

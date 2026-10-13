@@ -268,6 +268,25 @@ class AppearanceChecks(TkDownloaderFixture):
             self.assertLessEqual(frame.x + frame.width, area.x + area.width)
             self.assertLessEqual(frame.y + frame.height, area.y + area.height)
 
+    def test_short_glass_panel_retains_complete_svg_button_height(self):
+        panel = tk.Toplevel(self.root)
+        self.addCleanup(panel.destroy)
+        card = GlassCard(panel, self.module.Theme, padding=9, expand=True, heading="Package details")
+        card.pack(fill="both", expand=True)
+        action = self.module.make_flat_button(card.body, "Prepare board support", lambda: None,
+                                              self.module.Theme.BTN_MONITOR, self.module.Theme.BTN_MONITOR_H)
+        action.pack(anchor="w")
+        panel.update_idletasks()
+        required = action.winfo_reqheight()
+        for height in (required + round(12 * ui_scale(panel)), required + 2, required + 80):
+            panel.geometry(f"{round(360 * ui_scale(panel))}x{height}+40+40")
+            self.pump()
+            self.assertGreaterEqual(card.body.winfo_height(), required)
+            self.assertGreaterEqual(action.winfo_height(), required)
+            self.assertGreaterEqual(action.winfo_rooty(), card.body.winfo_rooty())
+            self.assertLessEqual(action.winfo_rooty() + action.winfo_height(),
+                                 card.body.winfo_rooty() + card.body.winfo_height())
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

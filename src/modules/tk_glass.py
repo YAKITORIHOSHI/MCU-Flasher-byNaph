@@ -307,6 +307,15 @@ class ResponsivePanes:
             # the actual space; preserve their widgets, fonts and selection.
             left = max(1, min(available - 1, round(available * left / (left + right))))
             right = available - left
+            if vertical:
+                # Native SVG actions can be taller than a single text line.
+                # Keep one complete reading/control surface in each pane when
+                # it fits, before allocating optional scaled padding/chrome.
+                reading_left = self.left._reading_height() if isinstance(self.left, GlassCard) else 1
+                reading_right = self.right._reading_height() if isinstance(self.right, GlassCard) else 1
+                if reading_left + reading_right <= available:
+                    left = max(reading_left, min(left, available - reading_right))
+                    right = available - left
         minima = (left, right)
         if minima != self._minimum_sizes:
             pane.paneconfigure(self.left, minsize=left)
@@ -767,6 +776,11 @@ class GlassCard(tk.Canvas):
             while pending:
                 widget = pending.pop()
                 pending.extend(item for item in widget.winfo_children() if item.winfo_manager())
+                if isinstance(widget, GlassButton):
+                    # SVG artwork can exceed the typographic line height. The
+                    # native request includes both the image and hit-area
+                    # padding and must fit wholly inside the reading viewport.
+                    line_height = max(line_height, widget.winfo_reqheight())
                 try:
                     content_font = widget.cget("font")
                 except tk.TclError:

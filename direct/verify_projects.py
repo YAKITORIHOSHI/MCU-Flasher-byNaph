@@ -1080,7 +1080,7 @@ class ProjectChecks(unittest.TestCase):
                     self.assertEqual(prompt._glass._colors['BG_DARKEST'], dialog._dialog_palette['BG_DARKEST'])
                     if RENDER_DIR:
                         self.assertTrue(prompt.grab().save(str(RENDER_DIR / f'project-{theme}-{name}.png')))
-                    next(button for button in prompt.buttons() if button.text() == 'Cancel').click()
+                    prompt.button(QMessageBox.StandardButton.Cancel).click()
 
                 QTimer.singleShot(0, lambda: cancel_prompt('window-choice'))
                 self.assertIsNone(dialog._choose_project_window('SensorLogger'))

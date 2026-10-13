@@ -126,6 +126,9 @@ appears. Category feedback spans the classification group below its controls;
 long messages wrap and grow within the scroll body. Login and connection
 feedback receive their complete reading height, while long ticket notes retain
 their bounded reading area. Reflow preserves the same draft and focus widgets.
+The Resources browser also reserves complete native SVG button heights in
+short detail panes, including 200% scaling. Optional headings and padding yield
+before controls; valid list/detail sash positions and saved fonts are retained.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the

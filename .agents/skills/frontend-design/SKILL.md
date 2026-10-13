@@ -27,6 +27,12 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 
 ## Native browser material
 
+Reserve the full native request height of SVG actions, which can exceed a font
+line. Short vertical list/detail panes allocate complete reading/control minima
+when both fit. Optional panel headings and rims yield first; keep saved fonts
+and valid user sash positions. Check board controls at 200% and compact SVG
+cards in the responsive and downloader appearance fixtures.
+
 Paint the Library & Board Browser title directly on its static glass material.
 Use antialiased, smoothly faded reflections and one subtle rim; avoid stepped
 bevels, hard diagonal cuts and opaque title labels covering the surface.

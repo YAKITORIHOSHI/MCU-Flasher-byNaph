@@ -12,6 +12,12 @@ For explicitly requested assistant delegation, use the local
 
 ## Native browser glass
 
+Native SVG action request heights include artwork and hit-area padding. Reserve
+them in short detail cards before headings/rims. Compressed vertical list/detail
+panes allocate complete reading/control minima when their sum fits, retaining
+saved fonts and valid user sash positions. Verify board controls at 200% plus
+the standalone compact SVG-card fixture in downloader appearance checks.
+
 `tk_glass.py` precomposes antialiased static materials using only the standard
 library. The browser title paints on the glass itself; buttons retain native
 Tk command/focus/state behavior and SVG marks, and rounded notebook skins retain
