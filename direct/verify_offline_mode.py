@@ -385,8 +385,10 @@ class RestartChecks(unittest.TestCase):
         source = ROOT / "main/qt/main_window.py"
         tree = ast.parse(source.read_text(encoding="utf-8-sig"))
         window_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MCUMainWindow")
-        method = next(node for node in window_class.body if isinstance(node, ast.FunctionDef) and node.name == "restart_for_offline_mode")
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), self.scope)
+        methods = [node for node in window_class.body if isinstance(node, ast.FunctionDef) and node.name in
+                   {"restart_for_offline_mode", "restart_for_runtime_repair", "_restart_through_bootstrap"}]
+        exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), self.scope)
+        self.window._restart_through_bootstrap = lambda **kwargs: self.scope["_restart_through_bootstrap"](self.window, **kwargs)
 
     def request(self):
         self.scope["restart_for_offline_mode"](self.window, False)
@@ -451,6 +453,25 @@ class RestartChecks(unittest.TestCase):
         self.assertIn("previous mode could not be restored", self.warning.call_args.args[2])
         self.window.close.assert_not_called()
 
+    def test_runtime_repair_save_failure_preserves_mode_and_keeps_workspace_open(self):
+        self.scope["restart_for_runtime_repair"](self.window)
+        self.window._editor_panel.trigger_save_all.call_args.kwargs["failure_callback"]("fixture save failed")
+        self.save.assert_not_called()
+        self.launch.assert_not_called()
+        self.window.close.assert_not_called()
+        self.window.setEnabled.assert_called_with(True)
+
+    def test_runtime_repair_waits_for_acknowledgement_and_preserves_mode_on_handoff_failure(self):
+        self.scope["restart_for_runtime_repair"](self.window)
+        self.launch.assert_not_called()
+        self.acknowledge()
+        self.launch.assert_called_once()
+        self.window._is_busy.return_value = True
+        self.timers.pop()()
+        self.child.terminate.assert_called_once()
+        self.save.assert_not_called()
+        self.window.close.assert_not_called()
+
     def helper(self):
         spec = importlib.util.spec_from_file_location("fixture_restart_workspace", ROOT / "direct/restart_workspace.py")
         helper = importlib.util.module_from_spec(spec)
@@ -475,6 +496,12 @@ class RestartChecks(unittest.TestCase):
             self.assertIn("--repair", command)
             self.assertEqual(command[-2:], ["--project", str(self.root / "Sketch With Spaces")])
             self.assertTrue(command[1].endswith("run.vbs" if host == "win32" else "run.sh"))
+            if host == "win32":
+                self.assertTrue(command[0].endswith("wscript.exe"))
+                self.assertEqual(launch.call_args.kwargs["creationflags"], subprocess.CREATE_NO_WINDOW)
+            else:
+                self.assertEqual(command[0], "bash")
+                self.assertTrue(launch.call_args.kwargs["start_new_session"])
             for key in ("MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
                 self.assertNotIn(key, launch.call_args.kwargs["env"])
 

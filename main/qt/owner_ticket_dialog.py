@@ -9,12 +9,12 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
-from PySide6.QtCore import Qt, QSize, Signal, QTimer, QObject, Slot, QEvent
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QRectF, QTextOption
+from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QTextOption
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QLineEdit, QTextEdit, QMessageBox, QFrame,
-    QSizePolicy, QMenu,
+    QSizePolicy, QMenu, QPushButton,
 )
 
 from main.core.owner_tickets import OwnerTicketService
@@ -608,6 +608,10 @@ class OwnerTicketDialog(_TaskPortal):
                 palette = control.palette()
                 palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#625d63"))
                 control.setPalette(palette)
+            for action in self.auth_scroll.findChildren(QPushButton):
+                vector = action.property("vector")
+                if vector:
+                    action.setIcon(icon(vector, "#141414"))
 
     def _update_portal_header(self, index):
         self.portal_header.setVisible(index != 0)
@@ -725,7 +729,7 @@ class OwnerTicketDialog(_TaskPortal):
             QTimer.singleShot(0, self, self._fit_auth_card)
 
     def _fit_auth_card(self):
-        self.auth_card.setFixedWidth(min(520, max(1, self.auth_scroll.viewport().width() - 4)))
+        self.auth_card.setMaximumWidth(min(520, max(1, self.auth_scroll.viewport().width() - 4)))
 
     def eventFilter(self, watched, event):
         if (hasattr(self, "auth_scroll") and watched is self.auth_scroll.viewport()

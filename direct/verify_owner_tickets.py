@@ -23,7 +23,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
 from main.core.theme import Theme
 from main.qt import owner_ticket_dialog as portal
-from main.qt.toolbar import PrimaryToolbar
+from main.qt import toolbar as toolbar_module
+from main.qt.toolbar import PrimaryToolbar, _DeveloperLogoLabel
+from main.core.runtime_recovery import bootstrap_can_repair
 from main.qt.owner_ticket_style import WrappedLabel, portal_colors
 from main.core.log_colors import contrast_ratio
 from main.qt.theme import build_stylesheet, register_fonts
@@ -275,9 +277,15 @@ class PortalChecks(unittest.TestCase):
             for widget, token in ((card.title_label, "TEXT_BRIGHT"),
                                   (card.severity_label, "RED"),
                                   (card.description_label, "TEXT"),
-                                  (card.metadata, "TEXT_DIM"),
-                                  (self.dialog.lbl_auth_error, "RED")):
+                                  (card.metadata, "TEXT_DIM")):
                 self.assertEqual(widget.palette().color(QPalette.ColorRole.Text).name(), colors[token], (mode, token))
+            self.assertEqual(self.dialog.lbl_auth_error.palette().color(QPalette.ColorRole.Text).name(), "#141414")
+            self.assertGreaterEqual(contrast_ratio("#141414", "#ff91d5"), 4.5)
+            for action in (self.dialog.btn_diagnose, self.dialog.btn_auth_cloud):
+                glyph = action.icon().pixmap(24, 24).toImage()
+                self.assertTrue(any(glyph.pixelColor(x, y).alpha() > 128 and
+                                    glyph.pixelColor(x, y).lightness() < 64
+                                    for x in range(glyph.width()) for y in range(glyph.height())))
             self.assertEqual(self.dialog.access_label.focusPolicy(), Qt.FocusPolicy.NoFocus)
             self.assertEqual(card.description_label.focusPolicy(), Qt.FocusPolicy.StrongFocus)
         # Reflow must not recreate the reading documents or their copied text.
@@ -506,6 +514,107 @@ class PortalChecks(unittest.TestCase):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
             QTest.qWait(850)
             open_portal.assert_not_called()
+
+    def test_real_five_click_gesture_constructs_the_login(self):
+        backend = SimpleNamespace(is_busy=False, active_operation=None, _current_op_phase=None,
+                                  current_board="", current_port="")
+        toolbar = PrimaryToolbar(backend)
+        self.addCleanup(toolbar.deleteLater)
+        real_dialog = portal.OwnerTicketDialog
+
+        def construct(**kwargs):
+            dialog = real_dialog(**kwargs)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            self.addCleanup(dialog.deleteLater)
+            self.addCleanup(dialog.close)
+            return dialog
+
+        with patch.object(portal, "OwnerTicketDialog", side_effect=construct) as created:
+            for _ in range(5):
+                QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
+            QTest.qWait(850)
+            created.assert_called_once()
+        settle(toolbar._owner_dialog)
+        self.assertIsInstance(toolbar._owner_dialog, real_dialog)
+        self.assertTrue(toolbar._owner_dialog.isVisible())
+        self.assertEqual(toolbar._owner_dialog.stack.currentIndex(), 0)
+        self.assertTrue(toolbar._owner_dialog.btn_unlock.isEnabled())
+
+    def test_logo_counts_double_click_releases_once_and_ignores_incomplete_clicks(self):
+        logo = _DeveloperLogoLabel("Fixture logo")
+        self.addCleanup(logo.deleteLater)
+        self.addCleanup(logo.close)
+        show(logo, (220, 40))
+        activated = Mock()
+        logo.clicked.connect(activated)
+        QTest.mouseClick(logo, Qt.MouseButton.LeftButton)
+        QTest.mouseDClick(logo, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(logo, Qt.MouseButton.LeftButton)
+        self.assertEqual(activated.call_count, 2)
+        QTest.mouseRelease(logo, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(logo, Qt.MouseButton.RightButton)
+        QTest.mousePress(logo, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(logo, Qt.MouseButton.LeftButton, pos=QPoint(-20, -20))
+        self.assertEqual(activated.call_count, 2)
+
+    def test_repair_is_offered_for_missing_runtime_and_never_for_source_import_errors(self):
+        runtime = ModuleNotFoundError("No module named 'PySide6.QtSvg'", name="PySide6.QtSvg")
+        source = ImportError("cannot import name 'QRectF' from 'PySide6.QtGui'", name="PySide6.QtGui")
+        self.assertTrue(bootstrap_can_repair(runtime))
+        self.assertTrue(bootstrap_can_repair(ImportError("DLL load failed while importing QtGui", name="PySide6.QtGui")))
+        self.assertFalse(bootstrap_can_repair(source))
+        self.assertFalse(bootstrap_can_repair(ModuleNotFoundError("No module named 'main.missing'", name="main.missing")))
+        self.assertFalse(bootstrap_can_repair(OSError("Access denied to a sketch file")))
+        toolbar = PrimaryToolbar(None)
+        self.addCleanup(toolbar.deleteLater)
+        toolbar.restart_for_runtime_repair = Mock()
+        for error, repairable in ((source, False), (runtime, True)):
+            with self.subTest(repairable=repairable):
+                buttons = {}
+                def add_button(text, role):
+                    buttons[text] = object()
+                    return buttons[text]
+                box = Mock()
+                box.addButton.side_effect = add_button
+                box.clickedButton.side_effect = lambda: buttons.get("Repair and restart")
+                with patch.object(toolbar_module, "QMessageBox", return_value=box):
+                    toolbar._show_owner_ticket_error(error)
+                self.assertEqual("Repair and restart" in buttons, repairable)
+                box.setDetailedText.assert_called_once_with(str(error))
+        toolbar.restart_for_runtime_repair.assert_called_once()
+
+    def test_category_creation_preserves_draft_and_filters_snapshot_categories(self):
+        self.sign_in()
+        self.dialog.btn_new.click()
+        fields = self.dialog.new_fields
+        fields.title.setText("Keep my title")
+        fields.description.setPlainText("Keep my notes")
+        category = "Bluetooth / BLE"
+        def add_category(value):
+            self.assertIsNot(QThread.currentThread(), APP.thread())
+            return True, "Category saved", self.dialog._category_options() + [value]
+        self.service.add_ticket_category.side_effect = add_category
+        fields.category_input.setText(category)
+        fields.btn_add_category.click()
+        settle(self.dialog)
+        self.service.add_ticket_category.assert_called_once_with(category)
+        self.assertEqual(fields.category.currentText(), category)
+        self.assertEqual(fields.category_input.text(), "")
+        self.assertEqual(fields.title.text(), "Keep my title")
+        self.assertEqual(fields.description.toPlainText(), "Keep my notes")
+        self.assertGreaterEqual(self.dialog.category_filter.findText(category), 0)
+        ticket = dict(TICKETS[0], category="Snapshot only")
+        self.dialog._tickets = [ticket, TICKETS[1]]
+        self.dialog._sync_category_options()
+        self.dialog.category_filter.setCurrentText("Snapshot only")
+        self.assertEqual(self.dialog.cards_layout.itemAt(0).widget().ticket["category"], "Snapshot only")
+        self.service.add_ticket_category.side_effect = None
+        self.service.add_ticket_category.return_value = (False, "Category could not be saved", self.dialog._category_options())
+        fields.category_input.setText("Unsaved category")
+        fields.btn_add_category.click()
+        settle(self.dialog)
+        self.assertEqual(fields.category_input.text(), "Unsaved category")
+        self.assertEqual(fields.title.text(), "Keep my title")
 
     def test_cloud_diagnosis_is_async_and_never_claims_sign_in(self):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")

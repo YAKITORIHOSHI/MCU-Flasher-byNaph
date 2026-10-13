@@ -53,21 +53,29 @@ class _DeveloperLogoLabel(QLabel):
 
     clicked = Signal()
 
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self._left_pressed = False
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._left_pressed = True
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._left_pressed = True
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.rect().contains(event.position().toPoint()):
+            activate = self._left_pressed and self.rect().contains(event.position().toPoint())
+            self._left_pressed = False
+            if activate:
                 self.clicked.emit()
             event.accept()
             return
@@ -576,22 +584,16 @@ class PrimaryToolbar(QToolBar):
             self._backend.open_in_explorer()
 
     def _on_logo_click(self) -> None:
-        """Open Developer Access on the fifth completed logo click."""
-        if not self._logo_click_timer.isActive():
-            self._logo_click_count = 0
+        """Count a five-click gesture without relying on instance monkey-patching."""
         self._logo_click_count += 1
-        if self._logo_click_count >= 5:
-            self._logo_click_count = 0
-            self._logo_click_timer.stop()
-            self._open_owner_ticket_dialog()
-            return
-        # Give the user a comfortable pause between clicks and open immediately
-        # on click five instead of making the gesture depend on a timer timeout.
-        self._logo_click_timer.start(1800)
+        self._logo_click_timer.start(800)
 
     def _on_logo_click_timeout(self) -> None:
-        """Reset an incomplete gesture after the user pauses."""
+        """Evaluate the gesture after the user pauses."""
+        count = self._logo_click_count
         self._logo_click_count = 0
+        if count == 5:
+            self._open_owner_ticket_dialog()
 
     def _open_owner_ticket_dialog(self) -> None:
         """Launch or foreground the private ticket portal, including offline."""
@@ -607,11 +609,34 @@ class PrimaryToolbar(QToolBar):
                 self._owner_dialog.raise_()
                 self._owner_dialog.activateWindow()
         except Exception as exc:
-            QMessageBox.critical(
-                self.window(),
-                "Developer access unavailable",
-                f"The Developer Access window could not be opened.\n\n{exc}",
-            )
+            self._show_owner_ticket_error(exc)
+
+    def _show_owner_ticket_error(self, error: Exception) -> None:
+        from main.core.runtime_recovery import bootstrap_can_repair
+
+        parent = self.window()
+        restart = getattr(parent, "restart_for_runtime_repair", None)
+        repairable = bootstrap_can_repair(error) and callable(restart)
+        box = QMessageBox(parent)
+        box.setWindowTitle("Developer access unavailable")
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setText("The Developer Access window could not be opened.")
+        box.setInformativeText(
+            "A required runtime component could not load. Repair and restart saves your sketch, "
+            "then runs Bootstrap to repair dependencies."
+            if repairable else
+            "Retry after updating the application. Bootstrap cannot repair this application error."
+        )
+        box.setDetailedText(str(error))
+        box.setStandardButtons(QMessageBox.StandardButton.Close)
+        retry = box.addButton("Retry", QMessageBox.ButtonRole.ActionRole)
+        repair = box.addButton("Repair and restart", QMessageBox.ButtonRole.ActionRole) if repairable else None
+        box.exec()
+        chosen = box.clickedButton()
+        if chosen is retry:
+            QTimer.singleShot(0, self, self._open_owner_ticket_dialog)
+        elif repair is not None and chosen is repair:
+            restart()
 
     def _on_new_project(self) -> None:
         if self._is_busy():

@@ -40,6 +40,33 @@ class Response:
 
 
 class OwnerTicketServiceChecks(unittest.TestCase):
+    def test_custom_categories_persist_with_defaults_and_reject_invalid_or_duplicate_names(self):
+        saved = {}
+        def save(updates):
+            saved.update(updates)
+            return True
+        with patch.object(self.service, "_read_config", side_effect=lambda: dict(saved)):
+            self.service.save_config.side_effect = save
+            defaults = self.service.get_ticket_categories()
+            ok, _, categories = self.service.add_ticket_category("  Bluetooth / BLE  ")
+            self.assertTrue(ok)
+            self.assertEqual(categories, defaults + ["Bluetooth / BLE"])
+            self.assertEqual(self.service.get_ticket_categories(), categories)
+            for value in ("bluetooth / ble", "", "x" * 81, "bad\nname", "All categories"):
+                self.assertFalse(self.service.add_ticket_category(value)[0], value)
+                self.assertEqual(self.service.get_ticket_categories(), categories)
+
+    def test_failed_category_save_preserves_existing_options(self):
+        saved = {"ticket_categories": ["Custom fixture"]}
+        with patch.object(self.service, "_read_config", return_value=saved):
+            self.service.save_config.side_effect = None
+            self.service.save_config.return_value = False
+            before = self.service.get_ticket_categories()
+            ok, _, categories = self.service.add_ticket_category("Unsaved fixture")
+            self.assertFalse(ok)
+            self.assertEqual(categories, before)
+            self.assertEqual(saved, {"ticket_categories": ["Custom fixture"]})
+
     def setUp(self):
         # Bypass the constructor entirely: it normally creates the private
         # owner directory and loads repository/local configuration.

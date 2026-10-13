@@ -105,7 +105,8 @@ its unsaved buffers back to the main workspace.
 Use **View → Toolbars** to show or hide **Primary Actions** and **Controls**.
 If both bars are hidden, **View → Show All Toolbars** restores them.
 Settings reset and system-theme fallback resolve the current glass theme names.
-Five left-clicks on the toolbar's MCU Flasher title open the private developer
+Exactly five completed left-clicks on the toolbar's MCU Flasher title, followed
+by a brief pause, open the private developer
 ticket portal. It remains available offline and uses local ticket storage when
 cloud synchronization cannot be reached. The portal remains an Easter egg behind
 that gesture. Its sign-in uses a compact neobrutalist ticket-stub card with a
@@ -119,6 +120,13 @@ computer. Narrow forms stack their fields; short windows scroll while edit and
 cloud actions stay visible. Theme changes retain drafts, search and filters.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
+If Developer Access cannot open, **Retry** repeats the attempt and **Show Details**
+reveals the error. Missing runtime modules or Qt library loading failures also
+offer **Repair and restart**. This saves acknowledged editor contents, checks
+for active operations and other project windows, then runs the host's Bootstrap
+with `--repair` and reopens the same project. A failed save or handoff leaves the
+workspace open. Source errors such as a wrong Qt import require an application
+fix and do not trigger dependency repair.
 Ticket titles, notes and metadata wrap inside the card, including long URLs and
 unbroken log lines. The dashboard keeps its search, filters and ticket actions
 inside the window. Long notes use a bounded reading area with vertical scrolling,

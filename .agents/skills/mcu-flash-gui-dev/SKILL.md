@@ -152,6 +152,19 @@ For explicitly requested assistant delegation, use the local
   Bound authentication replies to 64 KiB, ticket replies to 4 MiB and errors to
   8 KiB; close HTTP error responses after extracting safe provider codes.
   Keep the five-click toolbar entry as the portal's Easter egg. The production
+  gesture counts completed releases once, including native double-click sequences,
+  and opens after exactly five clicks and a brief pause. Import Qt geometry types
+  such as QRectF from QtCore. The UI verifier must construct the real portal through
+  the trigger as well as test ordinary/double clicks and failed launches.
+  Failed launches offer Retry and details; offer Repair and restart only for known
+  missing runtime modules or Qt library loader errors. Source import errors require
+  source fixes, never installer loops. Reuse the save-acknowledged Bootstrap restart
+  handoff; check busy/other-window state before and after save, retain the project,
+  clear inherited runtime markers, and preserve package mode during runtime repair.
+  Native Windows CI runs the portal/service/restart verifiers with QT_QPA_PLATFORM=windows
+  across both supported Qt binding ranges; mocked Windows dispatch from Linux is
+  not native Windows execution evidence.
+  The production
   sign-in uses one responsive neobrutalist card with the real Firebase/local-key
   controls; do not copy the prototype's illustration or sample credentials.
   Category creation remains in the ticket forms: validate and save names in the

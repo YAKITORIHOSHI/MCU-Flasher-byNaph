@@ -1191,18 +1191,26 @@ class MCUMainWindow(QMainWindow):
         self._editor_panel.trigger_save_all()
 
     def restart_for_offline_mode(self, previous_mode: bool) -> None:
+        self._restart_through_bootstrap(previous_mode=previous_mode)
+
+    def restart_for_runtime_repair(self) -> None:
+        """Save the workspace and request host Bootstrap dependency repair."""
+        self._restart_through_bootstrap()
+
+    def _restart_through_bootstrap(self, previous_mode=None) -> None:
         """Save acknowledged editor bytes before handing restart to Bootstrap."""
         from src.modules.offline_mode import transition_blocker
         import subprocess
 
         def failed(message="The sketch could not be saved. The workspace remains open."):
             self.setEnabled(True)
-            from main.core.config import _load_raw_config, _save_raw_config
-            data = _load_raw_config(fresh=True)
-            data.setdefault("shared", {})["offline_enabled"] = bool(previous_mode)
-            data["shared"]["offline_preparation_pending"] = False
-            if _save_raw_config(data) is False:
-                message += " The previous mode could not be restored; run Bootstrap on the next launch."
+            if previous_mode is not None:
+                from main.core.config import _load_raw_config, _save_raw_config
+                data = _load_raw_config(fresh=True)
+                data.setdefault("shared", {})["offline_enabled"] = bool(previous_mode)
+                data["shared"]["offline_preparation_pending"] = False
+                if _save_raw_config(data) is False:
+                    message += " The previous mode could not be restored; run Bootstrap on the next launch."
             QMessageBox.warning(self, "Restart cancelled", message)
 
         def saved():
