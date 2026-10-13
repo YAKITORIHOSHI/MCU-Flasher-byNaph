@@ -558,6 +558,29 @@ class GlassButton(SvgButton):
                                 highlightbackground=outside)
 
 
+def material_ink(color, upper, lower, minimum=4.5):
+    """Retain a semantic ink, adjusting it only for the reflective bounds."""
+    from src.modules.ui_palette import contrast_ratio
+    surfaces = (mix(upper, "#ffffff", .065), lower)
+    def readable(value):
+        return all(contrast_ratio(value, surface) >= minimum for surface in surfaces)
+    if readable(color):
+        return color
+    choices = []
+    for endpoint in ("#000000", "#ffffff"):
+        if not readable(endpoint):
+            continue
+        low, high = 0., 1.
+        for _ in range(16):
+            middle = (low + high) / 2
+            if readable(mix(color, endpoint, middle)):
+                high = middle
+            else:
+                low = middle
+        choices.append((high, mix(color, endpoint, high)))
+    return min(choices)[1] if choices else readable_foreground(upper)
+
+
 class BrowserHeader(tk.Canvas):
     """Paint the title directly on glass so opaque labels cannot hide it."""
 
@@ -609,7 +632,7 @@ class BrowserHeader(tk.Canvas):
             self._surface_key = key
             self._surface = glass_photo(self, *key)
         self.create_image(0, 0, image=self._surface, anchor="nw", tags="material")
-        self._brand = svg_photo(self, "brand", p.CYAN, mark_size)
+        self._brand = svg_photo(self, "brand", material_ink(p.CYAN, top, p.BG_DARK, 3), mark_size)
         self.create_image(pad, pad + max(mark_size, title_height) / 2, image=self._brand,
                           anchor="w", tags="material")
         title_x = pad + mark_size + gap
@@ -618,14 +641,15 @@ class BrowserHeader(tk.Canvas):
         if not stacked:
             self.create_text(title_x, pad + self._title_font.metrics("linespace") + round(4 * scale),
                              text="MCU Flasher by Naph · Arduino packages", anchor="nw",
-                             font=self._subtitle_font, fill=p.TEXT_DIM, tags="material")
+                             font=self._subtitle_font, fill=material_ink(p.TEXT_DIM, top, p.BG_DARK), tags=("material", "subtitle"))
         action_y = height - pad - action_height if stacked else (height - action_height) / 2
         self.coords(self._actions_window, width - pad, action_y)
         self.tag_lower("material", self._actions_window)
         # Native button focus and commands stay native. Blend their surrounding
         # pixels with the material immediately behind the action row.
         background = mix(top, p.BG_DARK, min(1., (action_y + action_height / 2) / height * 1.25))
-        self.actions.configure(bg=background)
+        if self.actions.cget("background") != background:
+            self.actions.configure(bg=background)
         self._actions_surface = tk.PhotoImage(master=self, width=action_width, height=action_height)
         self.tk.call(self._actions_surface, "copy", self._surface,
                      "-from", max(0, width - pad - action_width), round(action_y), width - pad, round(action_y) + action_height)

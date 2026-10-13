@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct.tk_downloader_fixture import TkDownloaderFixture
-from src.modules.tk_glass import DialogFit, GlassCard, NativeResizeFocus, _desktop_work_area, _native_frame, _x11_work_area, ui_scale
+from src.modules.tk_glass import DialogFit, GlassCard, BrowserHeader, NativeResizeFocus, _desktop_work_area, _native_frame, _x11_work_area, ui_scale
 from src.modules.ui_metrics import WorkArea
 from src.modules.ui_palette import contrast_ratio
 
@@ -111,15 +111,26 @@ class AppearanceChecks(TkDownloaderFixture):
         # at large scales. Await actual idleness with a deadline, preserving the
         # assertions that static glass must settle without an animation timer.
         def painting(widget):
-            return (isinstance(widget, GlassCard) and widget._redraw_id is not None
+            return (getattr(widget, "_redraw_id", None) is not None
                     or any(painting(child) for child in widget.winfo_children()))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 10
         earliest = time.monotonic() + .25
+        quiet_since = None
         while time.monotonic() < deadline:
             self.root.update()
-            if time.monotonic() >= earliest and not painting(self.root):
-                return
+            if painting(self.root):
+                quiet_since = None
+            else:
+                quiet_since = quiet_since or time.monotonic()
+                # Header, empty-state and pane reflow all enqueue paint turns.
+                # Require quiet longer than their longest 60 ms debounce.
+                if time.monotonic() >= earliest and time.monotonic() - quiet_since >= .12:
+                    return
             time.sleep(.025)
+        def pending(widget):
+            own = [f"{type(widget).__name__}:{widget.winfo_geometry()}"] if getattr(widget, "_redraw_id", None) else []
+            return own + [item for child in widget.winfo_children() for item in pending(child)]
+        self.fail(f"Native glass did not settle within 10 seconds: {pending(self.root)}")
 
     def show(self, width=1040, height=660):
         scale = ui_scale(self.root)
@@ -167,6 +178,12 @@ class AppearanceChecks(TkDownloaderFixture):
                         material = "#" + "".join(f"{int(channel):02x}" for channel in rgb)
                         self.assertGreaterEqual(contrast_ratio(button.cget("foreground"), material), 4.5)
                 self.assertIs(self.root.focus_get(), app.lib_tab.search_entry)
+                header = next(child for child in self.root.winfo_children() if isinstance(child, BrowserHeader))
+                for item in header.find_withtag("subtitle"):
+                    ink = header.itemcget(item, "fill")
+                    rgb = self.root.tk.call(str(header._surface), "get", header.winfo_width() // 2, 2)
+                    material = "#" + "".join(f"{int(channel):02x}" for channel in rgb)
+                    self.assertGreaterEqual(contrast_ratio(ink, material), 4.5)
                 for control in (app.folder_entry, app.browse_btn, app.sources_btn, app.refresh_btn,
                                 app.quit_btn, app.lib_tab.version_combo, app.lib_tab.download_btn):
                     self.assertTrue(control.winfo_ismapped())
