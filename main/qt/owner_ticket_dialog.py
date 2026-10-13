@@ -163,9 +163,6 @@ class TicketFields(QWidget):
         category_row.addWidget(self.category_input, 1)
         category_row.addWidget(self.btn_add_category)
         category_field.layout().addWidget(category_entry)
-        self.category_feedback = label("", category_field, "metadata", wrap=True)
-        self.category_feedback.hide()
-        category_field.layout().addWidget(self.category_feedback)
         self.severity = combo(SEVERITIES, self, ticket.get("severity", "Medium"))
         self.status = combo(STATUSES, self, ticket.get("status", "Open"))
         self.classifications = ResponsiveGrid([
@@ -174,6 +171,12 @@ class TicketFields(QWidget):
             field("Status", self.status, self),
         ], self, cell_width=170)
         layout.addWidget(self.classifications)
+        # Feedback belongs to the classification group, spanning its width.
+        # Keeping it outside an individual grid cell avoids unequal row heights
+        # and gives wrapped errors room without shifting adjacent controls.
+        self.category_feedback = label("", self, "metadata", wrap=True)
+        self.category_feedback.hide()
+        layout.addWidget(self.category_feedback)
         self.severity.currentTextChanged.connect(lambda value: retone(self.severity, SEVERITY_TONES.get(value, "muted")))
         self.status.currentTextChanged.connect(lambda value: retone(self.status, STATUS_TONES.get(value, "muted")))
         retone(self.severity, SEVERITY_TONES.get(self.severity.currentText(), "muted"))

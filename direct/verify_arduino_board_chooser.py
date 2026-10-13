@@ -105,7 +105,7 @@ class BoardChooserChecks(unittest.TestCase):
             dialog = self.open()
             self.assertEqual(dialog._cli_chosen, {'beta'})
             first = dialog._cli_tree.get_children()[0]
-            self.assertIn('[alpha]', dialog._cli_tree.item(first, 'values')[1])
+            self.assertIn('[alpha]', dialog._cli_tree.set(first, 'board'))
             dialog._cli_toggle(first)
             dialog._cli_search.insert(0, 'beta')
             self.pump()
@@ -270,7 +270,7 @@ class BoardChooserChecks(unittest.TestCase):
         dialog = self.open()
         self.assertEqual(dialog._cli_chosen, {'beta'})
         self.assertEqual(len(dialog._cli_tree.get_children()), 2)
-        self.assertFalse(any('[excluded]' in dialog._cli_tree.item(row, 'values')[1]
+        self.assertFalse(any('[excluded]' in dialog._cli_tree.set(row, 'board')
                              for row in dialog._cli_tree.get_children()))
         dialog._cli_save.invoke()
         self.pump(lambda: not dialog.winfo_exists())

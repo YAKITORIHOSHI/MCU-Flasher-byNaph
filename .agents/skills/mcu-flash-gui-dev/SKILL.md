@@ -25,6 +25,19 @@ isolated selected/empty catalogs and belong under `temp/audit/`.
 
 ## SVG action contract
 
+Developer Access field captions/controls are top-aligned inside grid cells.
+Category feedback spans the classification group below its controls. Unbounded
+wrapped feedback gets a complete reading minimum at its actual native width;
+bounded ticket text keeps a one-line minimum with its own scrollbar. Queue
+measurement and geometry refresh after font/style/width dispatch, retaining
+literal text, selections, drafts and focus. Verify message show/hide, success,
+warning and long errors in create/edit, login and connection forms. The native
+`direct/verify_ui_layout.py` matrix renders workspace/tool panes, Resources,
+setup and auxiliary dialogs at five display scales in separate processes;
+continue collecting evidence for later screens after an individual failure.
+`.github/workflows/ui-layout.yml` covers Windows Qt ranges and native Ubuntu
+24.04/26.04 without real setup, accounts or hardware.
+
 Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.
 Keep geometry original: chamfered silhouettes, routed strokes and open terminals.
 Keep text and SVG state separate; no decorative emoji or icon-font glyphs in

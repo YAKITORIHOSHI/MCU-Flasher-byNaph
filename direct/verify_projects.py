@@ -915,16 +915,26 @@ class ProjectChecks(unittest.TestCase):
         parent = QWidget()
         dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
         try:
+            callback_errors = []
             def choose_current():
-                box = next(widget for widget in APP.topLevelWidgets() if isinstance(widget, QMessageBox))
-                labels = {button.text() for button in box.buttons()}
-                self.assertTrue({"This window", "New window", "Cancel"}.issubset(labels))
-                if RENDER_DIR:
-                    self.assertTrue(box.grab().save(str(RENDER_DIR / "project-window-choice.png")))
-                next(button for button in box.buttons() if button.text() == "This window").click()
+                box = next(widget for widget in APP.topLevelWidgets()
+                           if isinstance(widget, QMessageBox) and widget.isVisible()
+                           and widget.parentWidget() is dialog)
+                try:
+                    # Native styles may add mnemonic ampersands to button text.
+                    labels = {button.text().replace("&", "").strip() for button in box.buttons()}
+                    self.assertTrue({"This window", "New window", "Cancel"}.issubset(labels))
+                    if RENDER_DIR:
+                        self.assertTrue(box.grab().save(str(RENDER_DIR / "project-window-choice.png")))
+                    next(button for button in box.buttons()
+                         if button.accessibleName() == "Open in current window").click()
+                except BaseException as error:
+                    callback_errors.append(error)
+                    box.reject()  # Report a failed check instead of hanging in exec().
 
             QTimer.singleShot(0, choose_current)
             self.assertFalse(dialog._choose_project_window("demo"))
+            self.assertEqual(callback_errors, [])
         finally:
             dialog.close()
             dialog.deleteLater()

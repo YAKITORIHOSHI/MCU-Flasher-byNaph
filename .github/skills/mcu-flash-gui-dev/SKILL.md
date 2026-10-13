@@ -16,6 +16,13 @@ Verify older-release rejection using isolated fixtures only.
 
 ## Platform Scope
 
+For native UI layout verification, use `direct/verify_ui_layout.py` and
+`.github/workflows/ui-layout.yml`. Include shown/hidden validation and long
+feedback in Developer Access create/edit, login and connection forms. Field
+contents remain top-aligned; category feedback spans the group below them.
+Follow the canonical skill's queued measurement and bounded reading rules.
+Use separate native Windows and Ubuntu fixtures, never live setup or accounts.
+
 - Focus on the Windows main app, `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`, `src/launcher.cpp`, `src/launcher.cs`), and supporting modules.
 - Treat real sketch files and unknown user content as visible, user-owned data.
   Hide only known app-generated project metadata, and keep it writable.

@@ -121,6 +121,11 @@ category. Added categories are saved in the local developer portal settings;
 categories already present on synchronized tickets remain available on each
 computer. Narrow forms stack their fields; short windows scroll while edit and
 cloud actions stay visible. Theme changes retain drafts, search and filters.
+Category, severity and status labels and controls stay aligned when validation
+appears. Category feedback spans the classification group below its controls;
+long messages wrap and grow within the scroll body. Login and connection
+feedback receive their complete reading height, while long ticket notes retain
+their bounded reading area. Reflow preserves the same draft and focus widgets.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the

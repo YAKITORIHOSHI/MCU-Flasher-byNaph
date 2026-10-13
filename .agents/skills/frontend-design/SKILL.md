@@ -47,6 +47,16 @@ shadows and pink/yellow/blue accent fills throughout login, dashboard, ticket
 forms, connection settings and recovery prompts. Preserve its original SVG
 chip/circuit artwork. Workspace theme changes must retain this portal style;
 glass primitives and gradients belong to the surrounding workspace and setup.
+Anchor field captions and controls at the top of their shared grid row.
+Category validation spans the classification group below the controls; it must
+not stretch the adjacent severity/status field contents. Unbounded inline
+feedback takes its complete wrapped height after native width/font changes;
+bounded ticket reading areas retain their own scrollbar and shrinkable minimum.
+Queue measuring-document changes after native style/resize dispatch. Verify
+empty, success, warning and long failure messages in create/edit, login and
+connection forms with `direct/verify_owner_tickets.py`. Run
+`direct/verify_ui_layout.py` for native screens and all five scales; its logs and
+captures must come from isolated fixtures, with no live setup or accounts.
 
 
 For this application's Qt/Monaco UI, refine the existing smoked/frosted glass

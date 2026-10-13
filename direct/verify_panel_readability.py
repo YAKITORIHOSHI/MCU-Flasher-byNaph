@@ -73,7 +73,10 @@ class PanelReadabilityChecks(unittest.TestCase):
             instance._bg_timer.stop()
         self.addCleanup(instance.deleteLater)
         if isinstance(instance, NotifPanel):
-            APP.processEvents()
+            # The initial zero-delay read emits a queued completion. Drain both
+            # turns before inspecting the snapshot in this synchronous fixture.
+            for _ in range(3):
+                APP.processEvents()
         return instance
 
     def assert_readable(self, color, *backgrounds):

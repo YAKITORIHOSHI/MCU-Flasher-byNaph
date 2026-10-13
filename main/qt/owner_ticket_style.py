@@ -176,6 +176,7 @@ class WrappedLabel(QTextEdit):
         option = QTextOption()
         option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self._measure.setDefaultTextOption(option)
+        self._reading_limit = None
         self._heights = {}
         self._measurement_refresh = QTimer(self)
         self._measurement_refresh.setSingleShot(True)
@@ -201,7 +202,9 @@ class WrappedLabel(QTextEdit):
 
     def setReadingHeightLimit(self, height):
         """Keep large literal content reachable without a giant card surface."""
+        self._reading_limit = height
         self.setMaximumHeight(height)
+        self._invalidate_measurement()
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.updateGeometry()
 
@@ -215,12 +218,27 @@ class WrappedLabel(QTextEdit):
         self._heights.clear()
         self._measure.setDefaultFont(self.font())
         self._measure.setPlainText(self.toPlainText())
+        # Unbounded inline messages must receive their full wrapped height.
+        # Long ticket reading areas retain a one-line minimum and their own
+        # scrollbar, so they can still shrink inside compact cards.
+        minimum = (self.fontMetrics().height() + max(0, self.height() - self.viewport().height())
+                   if self._reading_limit is not None
+                   else self.heightForWidth(max(1, self.width())))
+        self.setMinimumHeight(min(self.maximumHeight(), minimum))
         self.updateGeometry()
 
     def eventFilter(self, watched, event):
         if watched is self and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
             self._invalidate_measurement()
         return False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            # Scroll bodies use minimum hints to decide when to grow. Recheck
+            # wrapped reading height after the actual native width is known,
+            # outside the resize/style dispatch that requested this geometry.
+            self._invalidate_measurement()
 
     def heightForWidth(self, width):
         horizontal = max(0, self.width() - self.viewport().width())
@@ -241,7 +259,12 @@ class WrappedLabel(QTextEdit):
         return min(self.maximumHeight(), self._heights[key])
 
     def minimumSizeHint(self):
-        return QSize(1, self.fontMetrics().height())
+        # A one-line minimum lets a growing form squeeze multi-line feedback
+        # into a clipped strip. Width remains shrinkable; height follows the
+        # current wrap width and any explicit reading limit instead.
+        height = (self.fontMetrics().height() if self._reading_limit is not None
+                  else self.heightForWidth(max(1, self.width())))
+        return QSize(1, height)
 
     def sizeHint(self):
         width = min(520, max(1, self.width()))
@@ -329,6 +352,10 @@ def field(caption: str, control: QWidget, parent: QWidget) -> QWidget:
     layout = QVBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(7)
+    # A neighboring field may grow when inline feedback is shown. Keep this
+    # caption/control pair together at the top of the shared grid row instead
+    # of distributing that spare height through its label and spacing.
+    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
     caption_label = label(caption, box, "label")
     caption_label.setBuddy(control)
     control.setAccessibleName(caption)

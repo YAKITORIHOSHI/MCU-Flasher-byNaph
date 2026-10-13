@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "offscreen")
-from PySide6.QtCore import QEvent, QPoint, Qt, QThread
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QThread
 from PySide6.QtGui import QPalette, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMenu, QMessageBox, QStyle, QStyleOptionComboBox
@@ -124,10 +124,27 @@ class PortalChecks(unittest.TestCase):
         settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
 
+    def settle_logo_gesture(self, toolbar):
+        # A fixed 850 ms sleep races the native 800 ms timer on a busy/high-DPI
+        # Windows runner. Wait for the actual gesture deadline, with a bound.
+        deadline = time.monotonic() + 3
+        while toolbar._logo_click_timer.isActive() and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertFalse(toolbar._logo_click_timer.isActive(), "Logo gesture timer did not complete")
+        pump()
+
     def assert_scroll_width(self, scroll):
         viewport = scroll.viewport()
         self.assertLessEqual(scroll.widget().width(), viewport.width())
         self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+
+    def reveal_full_widget(self, scroll, widget):
+        # QScrollArea.ensureWidgetVisible honors QTextEdit's cursor rectangle.
+        # Inspect the complete reading surface, not only its first text line.
+        rect = QRect(widget.mapTo(scroll.widget(), QPoint()), widget.size())
+        scroll.ensureVisible(rect.center().x(), rect.center().y(),
+                             rect.width() // 2 + 2, rect.height() // 2 + 2)
+        pump()
 
     def assert_wrapped_text(self, widget, *, fully_visible=True):
         self.assertEqual(widget.wordWrapMode(), QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
@@ -509,7 +526,7 @@ class PortalChecks(unittest.TestCase):
         with patch.object(portal, "OwnerTicketDialog", return_value=owner_dialog) as create_dialog:
             for _ in range(5):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
-            QTest.qWait(850)
+            self.settle_logo_gesture(toolbar)
             create_dialog.assert_called_once_with(backend=backend, parent=toolbar)
             owner_dialog.show.assert_called_once()
             owner_dialog.raise_.assert_called_once()
@@ -518,7 +535,7 @@ class PortalChecks(unittest.TestCase):
         with patch.object(toolbar, "_open_owner_ticket_dialog") as open_portal:
             for _ in range(6):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
-            QTest.qWait(850)
+            self.settle_logo_gesture(toolbar)
             open_portal.assert_not_called()
 
     def test_real_five_click_gesture_constructs_the_login(self):
@@ -538,7 +555,7 @@ class PortalChecks(unittest.TestCase):
         with patch.object(portal, "OwnerTicketDialog", side_effect=construct) as created:
             for _ in range(5):
                 QTest.mouseClick(toolbar.logo, Qt.MouseButton.LeftButton)
-            QTest.qWait(850)
+            self.settle_logo_gesture(toolbar)
             created.assert_called_once()
         settle(toolbar._owner_dialog)
         self.assertIsInstance(toolbar._owner_dialog, real_dialog)
@@ -622,6 +639,109 @@ class PortalChecks(unittest.TestCase):
         settle(self.dialog)
         self.assertEqual(fields.category_input.text(), "Unsaved category")
         self.assertEqual(fields.title.text(), "Keep my title")
+
+    def test_category_feedback_keeps_create_and_edit_classifications_aligned(self):
+        self.sign_in()
+        self.dialog.btn_new.click()
+        edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
+        self.addCleanup(edit.close)
+        self.addCleanup(edit.deleteLater)
+        show(edit)
+        messages = (("", "muted"), ("Enter a category name first.", "warn"),
+                    ("Category saved.", "ok"),
+                    ("The category could not be saved. Your draft is still here. " * 5, "fail"))
+        for name, window, fields, scroll in (
+                ("create", self.dialog, self.dialog.new_fields, self.dialog.scroll),
+                ("edit", edit, edit.fields, edit.scroll)):
+            show(window)
+            fields.title.setText("Keep this draft")
+            fields.description.setPlainText("Keep these investigation notes")
+            fields.category_input.setText("New category draft")
+            controls = (fields.category, fields.severity, fields.status)
+            original_widgets = tuple(fields.classifications._widgets)
+            for mode in ("default", "light", "solarized_dark"):
+                Theme.apply_theme(mode)
+                APP.setStyleSheet(build_stylesheet(mode))
+                window.apply_theme(mode)
+                for size in ((880, 740), (600, 520), (380, 420), (880, 740)):
+                    window.resize(*size)
+                    pump()
+                    fields.category_input.setFocus()
+                    for message, tone in messages:
+                        fields.show_category_feedback(message, tone)
+                        pump()
+                        self.assert_scroll_width(scroll)
+                        captions, positions = {}, {}
+                        for index, (box, control) in enumerate(zip(original_widgets, controls)):
+                            caption = box.layout().itemAt(0).widget()
+                            row = index // fields.classifications._columns
+                            caption_y = caption.mapTo(fields.classifications, QPoint()).y()
+                            control_y = control.mapTo(fields.classifications, QPoint()).y()
+                            self.assertLessEqual(abs(caption_y - captions.setdefault(row, caption_y)), 1,
+                                                 (name, mode, size, message, "captions"))
+                            self.assertLessEqual(abs(control_y - positions.setdefault(row, control_y)), 1,
+                                                 (name, mode, size, message, "controls"))
+                            gap = control.y() - (caption.y() + caption.height())
+                            self.assertLessEqual(abs(gap - box.layout().spacing()), 1)
+                            self.assertTrue(box.rect().contains(QRect(control.pos(), control.size())))
+                        if message:
+                            self.assert_wrapped_text(fields.category_feedback)
+                            self.assertGreaterEqual(fields.category_feedback.y(),
+                                                    fields.classifications.geometry().bottom())
+                        self.assertEqual(fields.title.text(), "Keep this draft")
+                        self.assertEqual(fields.description.toPlainText(), "Keep these investigation notes")
+                        self.assertEqual(fields.category_input.text(), "New category draft")
+                        self.assertEqual(tuple(fields.classifications._widgets), original_widgets)
+                        self.assertTrue(fields.category_input.hasFocus())
+                    # Exercise the real empty-category validation route as well.
+                    fields.category_input.clear()
+                    fields.btn_add_category.click()
+                    pump()
+                    self.assertIn("Enter a category", fields.category_feedback.text())
+                    self.reveal_full_widget(scroll, fields.category_feedback)
+                    self.assertTrue(scroll.viewport().rect().contains(QRect(
+                        fields.category_feedback.mapTo(scroll.viewport(), QPoint()),
+                        fields.category_feedback.size())),
+                        (name, mode, size, fields.category_feedback.size(),
+                         fields.category_feedback.mapTo(scroll.viewport(), QPoint()), scroll.viewport().size()))
+                    capture(window, f"{name}-validation-{mode}-{size[0]}")
+                    fields.category_input.setText("New category draft")
+
+    def test_login_and_connection_feedback_fit_without_clipping_actions(self):
+        cloud = portal.FirebaseSettingsDialog(self.service, self.dialog)
+        self.addCleanup(cloud.close)
+        self.addCleanup(cloud.deleteLater)
+        show(cloud)
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            self.dialog.apply_theme(mode)
+            cloud.apply_theme(mode)
+            for size in ((590, 580), (380, 420), (360, 320)):
+                self.dialog.resize(*size)
+                cloud.resize(*size)
+                self.dialog.lbl_auth_error.setText("Sign-in could not finish. Your access key is unchanged. " * 4)
+                self.dialog.lbl_auth_error.show()
+                cloud._show_feedback("Connection could not be verified. Check the endpoint and retry. " * 4, "fail")
+                pump()
+                for window, scroll, feedback, action, name in (
+                        (self.dialog, self.dialog.auth_scroll, self.dialog.lbl_auth_error,
+                         self.dialog.btn_unlock, "login"),
+                        (cloud, cloud.scroll, cloud.feedback, cloud.test_button, "connection")):
+                    self.assert_scroll_width(scroll)
+                    self.assert_wrapped_text(feedback)
+                    self.reveal_full_widget(scroll, feedback)
+                    self.assertTrue(scroll.viewport().rect().contains(QRect(
+                        feedback.mapTo(scroll.viewport(), QPoint()), feedback.size())),
+                        (name, mode, size, feedback.size(), feedback.mapTo(scroll.viewport(), QPoint()),
+                         scroll.viewport().size()))
+                    capture(window, f"{name}-feedback-{mode}-{size[0]}")
+                    scroll.ensureWidgetVisible(action, 0, 0)
+                    pump()
+                    self.assertTrue(scroll.viewport().rect().contains(QRect(
+                        action.mapTo(scroll.viewport(), QPoint()), action.size())))
+                self.assertTrue(cloud.rect().contains(QRect(
+                    cloud.save_button.mapTo(cloud, QPoint()), cloud.save_button.size())))
 
     def test_cloud_diagnosis_is_async_and_never_claims_sign_in(self):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")

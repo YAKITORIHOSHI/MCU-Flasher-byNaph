@@ -1,0 +1,74 @@
+name: Native UI layouts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: '3.11'
+            qt: 'PySide6>=6.7,<6.12'
+          - os: windows-latest
+            python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-24.04
+            python: '3.12'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-26.04
+            python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Fixture dependencies
+        run: python -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets
+      - name: Native Windows terminal provider
+        if: runner.os == 'Windows'
+        run: python -m pip install pywinpty
+      - name: Native Ubuntu display dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libfreetype6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1 libxcb-dri3-0
+          read -r -a qt_runtime_packages <<< "$(python -c 'from direct.ubuntu.preflight import normalize_packages; print(" ".join(normalize_packages(["libasound2", "libglib2.0-0"])))')"
+          sudo apt-get install -y "${qt_runtime_packages[@]}"
+      - name: Windows screens, validation states and display scales
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+      - name: Ubuntu screens, validation states and display scales
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+      - name: Native screen captures and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: layouts-${{ matrix.os }}-python-${{ matrix.python }}
+          path: |
+            temp/audit/layout-native
+            temp/audit/package-coverage/*.png
+          if-no-files-found: warn
