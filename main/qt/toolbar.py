@@ -633,6 +633,7 @@ class PrimaryToolbar(QToolBar):
         repair = box.addButton("Repair and restart", QMessageBox.ButtonRole.ActionRole) if repairable else None
         box.exec()
         chosen = box.clickedButton()
+        box.deleteLater()
         if chosen is retry:
             QTimer.singleShot(0, self, self._open_owner_ticket_dialog)
         elif repair is not None and chosen is repair:

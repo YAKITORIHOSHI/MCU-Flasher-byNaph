@@ -581,6 +581,7 @@ class PortalChecks(unittest.TestCase):
                     toolbar._show_owner_ticket_error(error)
                 self.assertEqual("Repair and restart" in buttons, repairable)
                 box.setDetailedText.assert_called_once_with(str(error))
+                box.deleteLater.assert_called_once()
         toolbar.restart_for_runtime_repair.assert_called_once()
 
     def test_category_creation_preserves_draft_and_filters_snapshot_categories(self):
