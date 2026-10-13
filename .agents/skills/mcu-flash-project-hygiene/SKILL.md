@@ -110,6 +110,11 @@ Classify paths before changing attributes or deleting anything:
 
 ## Native maintenance utilities
 
+- Ubuntu maintenance and repair admission requires native Ubuntu 24.04 or newer.
+  Reject older or unknown releases before planning/mutation; never clean or migrate
+  projects, settings, credentials, installed resources or AI journals on rejection.
+  Keep release fixtures under temp and use older versions for rejection only.
+
 - Keep `cleaner/windows/maintenance.ps1` and `cleaner/ubuntu/maintenance.py`
   separate. Compatibility wrappers in `cleaner/` and `DANGER-ZONE/` resolve
   from their own location, preserve exit codes and default to a read-only plan.

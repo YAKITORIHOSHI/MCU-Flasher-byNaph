@@ -118,6 +118,9 @@ def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool
 
 
 def main(argv=None) -> int:
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repair", action="store_true", help="Repair native runtime dependencies before opening")
     parser.add_argument("--check", action="store_true", help="Diagnose dependencies without installing or launching")

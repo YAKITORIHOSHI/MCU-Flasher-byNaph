@@ -5,6 +5,8 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     printf '%s\n' 'Use direct/windows/run.vbs on Windows.' >&2
     exit 1
 fi
+source "$app_root/direct/ubuntu/release_guard.sh"
+require_supported_ubuntu || exit 1
 # Bootstrap's coordinator uses Ubuntu Python; the workspace always uses its venv.
 unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
 unset PYTHONEXEPATH PIO_PYTHON_EXE PLATFORMIO_PYTHON_EXE PLATFORMIO_PENV_DIR

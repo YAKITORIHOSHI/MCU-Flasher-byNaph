@@ -150,6 +150,8 @@ def _installation_lock(tools: Path):
 
 def ensure_arduino_cli(*, env=None, log=print) -> str:
     """Reuse a healthy install or atomically prepare the pinned CLI in app-owned files."""
+    from src.modules.ubuntu_release import require_supported_ubuntu
+    require_supported_ubuntu()
     if (not sys.platform.startswith("linux") or platform.machine().lower() not in {"x86_64", "amd64"}
             or os.geteuid() == 0):
         raise RuntimeError("Prepare Arduino CLI as the normal Ubuntu amd64 desktop account.")

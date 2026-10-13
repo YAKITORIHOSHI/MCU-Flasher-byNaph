@@ -44,6 +44,7 @@ class PtySession(QObject):
         self._closed = False
         self._prompt_observer = None
         self.assistant_active = None
+        self.prompt_source = "cli"
 
     @Slot(result=bool)
     def start(self):
@@ -93,7 +94,8 @@ class PtySession(QObject):
             self._input_bytes += len(encoded)
             try:
                 if self._prompt_observer is None:
-                    self._prompt_observer = PromptObserver(self.cwd, active=self.assistant_active)
+                    self._prompt_observer = PromptObserver(self.cwd, active=self.assistant_active,
+                                                           source=self.prompt_source)
                 self._prompt_observer.feed(data, self.process.pid)
             except Exception:
                 pass

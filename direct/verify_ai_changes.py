@@ -22,6 +22,8 @@ from main.qt.console_panel import ConsolePanel
 from src.modules.ai_prompt_context import PromptInputTracker
 
 APP = QApplication.instance() or QApplication([])
+from main.qt.garbage_collection import install_gui_garbage_collector
+COLLECTOR = install_gui_garbage_collector(APP)
 from main.qt.theme import register_fonts
 register_fonts()
 
@@ -184,25 +186,151 @@ class AIChangesChecks(unittest.TestCase):
         tracker.feed("Update Ω and header\r")
         payload = json.loads((cache / "ai_prompt.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["source"], "cli")
+        self.assertEqual(payload["sourceVersion"], 1)
         self.assertEqual(payload["prompt"], "Update Ω and header")
         self.assertTrue(payload["id"])
 
-    def test_cli_groups_have_exact_label_and_keep_known_prompt_tooltip(self):
-        known = {"id": "cli-1", "prompt": "Fix the sensor setup", "source": "cli"}
+    def test_source_groups_have_exact_labels_and_keep_known_prompt_tooltip(self):
+        known = {"id": "cli-1", "prompt": "Fix the sensor setup", "source": "cli", "sourceVersion": 1}
         self.queue("CLI.ino", prompt=known)
+        self.queue("Assistant.cpp", prompt={"id": "assistant-1", "prompt": "Assistant changes header",
+                                           "source": "assistant", "sourceVersion": 1})
         self.queue("Legacy.cpp", prompt={"id": "legacy", "prompt": "Assistant prompt (title unavailable)"})
         self.queue("Unknown.h")
         with patch("main.core.config.get_monitor_font_size", return_value=11):
             panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
         groups = [panel._tree.topLevelItem(i) for i in range(panel._tree.topLevelItemCount())]
-        self.assertEqual([item.text(0) for item in groups].count("Assistant Prompt (CLI)"), 2)
-        self.assertIn("External assistant changes (prompt unavailable)", [item.text(0) for item in groups])
-        self.assertIn("Fix the sensor setup", [item.toolTip(0) for item in groups])
+        self.assertEqual([item.text(0) for item in groups].count("CLI"), 1)
+        self.assertEqual([item.text(0) for item in groups].count("Assistant"), 1)
+        self.assertEqual([item.text(0) for item in groups].count("Unknown source"), 2)
+        self.assertTrue(any("Fix the sensor setup" in item.toolTip(0) for item in groups))
         records = self.manager.get_ai_changes()
         self.assertEqual(next(item for item in records if item["groupId"] == "cli-1")["prompt"], known["prompt"])
+        output = ROOT / "temp/audit/ai-source-checks"
+        output.mkdir(parents=True, exist_ok=True)
+        panel.resize(820, 350)
+        panel.show()
+        APP.processEvents()
+        self.assertTrue(panel.grab().save(str(output / "ai-tab-source-labels.png")))
         panel.close()
         panel.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_source_survives_pending_reload_decision_and_undo_redo(self):
+        for source in ("cli", "assistant"):
+            context = {"id": source, "source": source, "sourceVersion": 1, "prompt": "Update Ω"}
+            path = self.queue(source + ".cpp", prompt=context)
+            review = self.manager.consume_ai_edit_snapshot(str(path))
+            self.assertEqual(review["promptSource"], source)
+            self.assertEqual(review["promptSourceVersion"], 1)
+            self.assertEqual(self.manager.get_ai_edit_reviews()[-1]["prompt"], context["prompt"])
+            reopened = AIReviewManager()
+            reopened.project_dir = self.root
+            reopened._ai_review_state_path = self.manager._ai_review_state_path
+            reopened._load_pending_ai_edits_locked()
+            self.assertEqual(reopened.consume_ai_edit_snapshot(str(path))["promptSource"], source)
+            self.assertEqual(reopened.get_ai_changes()[-1]["promptSource"], source)
+            self.assertTrue(self.manager.accept_ai_edit(str(path), review["revision"])["success"])
+            history = self.manager.get_ai_history_state()["undo"]
+            self.assertEqual(history["promptSource"], source)
+            self.assertEqual(history["promptSourceVersion"], 1)
+            self.assertEqual(history["prompt"], context["prompt"])
+            self.assertTrue(self.manager.undo_ai_edit_decision()["success"])
+            self.assertEqual(self.manager.get_ai_history_state()["redo"]["promptSource"], source)
+            self.assertTrue(self.manager.redo_ai_edit_decision()["success"])
+
+    def test_combined_pending_file_retains_both_channel_sources(self):
+        path = self.queue("Combined.cpp", prompt={"id": "cli", "prompt": "Terminal edit", "source": "cli", "sourceVersion": 1})
+        self.manager.queue_ai_edit_snapshot(path, "new\n", "newer\n",
+            prompt_context={"id": "assistant", "prompt": "Assistant edit", "source": "assistant", "sourceVersion": 1})
+        review = self.manager.consume_ai_edit_snapshot(str(path))
+        self.assertEqual(review["promptSource"], "mixed")
+        self.assertEqual(review["promptSources"], ["assistant", "cli"])
+        self.assertEqual(review["prompt"], "Terminal edit\n\nAssistant edit")
+        reopened = AIReviewManager()
+        reopened.project_dir = self.root
+        reopened._ai_review_state_path = self.manager._ai_review_state_path
+        reopened._load_pending_ai_edits_locked()
+        self.assertEqual(reopened.consume_ai_edit_snapshot(str(path))["prompt"], review["prompt"])
+        self.assertEqual([row["promptSource"] for row in self.manager.get_ai_changes()], ["cli", "mixed"])
+        self.assertTrue(self.manager.accept_ai_edit(str(path), review["revision"])["success"])
+        self.assertEqual(self.manager.get_ai_history_state()["undo"]["promptSource"], "mixed")
+        self.assertEqual(self.manager.get_ai_history_state()["undo"]["prompt"], review["prompt"])
+
+    def test_unobserved_context_keeps_known_channels_without_claiming_attribution(self):
+        from main.core.ai_review import _merge_prompt_context
+        context = _merge_prompt_context(None, {"id": "new", "prompt": "Observed assistant prompt",
+                                             "source": "assistant", "sourceVersion": 1})
+        path = self.queue("Unknown.cpp", prompt=context)
+        review = self.manager.consume_ai_edit_snapshot(str(path))
+        self.assertEqual(review["promptSource"], "external")
+        self.assertEqual(review["promptSources"], ["assistant", "external"])
+        self.assertEqual(review["prompt"], "Observed assistant prompt")
+        known = self.queue("KnownThenUnknown.cpp", prompt={"id": "known", "prompt": "Original CLI prompt",
+                                                         "source": "cli", "sourceVersion": 1})
+        self.manager.queue_ai_edit_snapshot(known, "new\n", "unobserved update\n", prompt_context=None)
+        updated = self.manager.consume_ai_edit_snapshot(str(known))
+        self.assertEqual(updated["promptSource"], "external")
+        self.assertEqual(updated["promptSources"], ["cli", "external"])
+        self.assertEqual(updated["prompt"], "Original CLI prompt")
+
+    def test_legacy_metadata_cannot_claim_a_known_source(self):
+        for context in ({"id": "old-cli", "source": "cli"},
+                        {"id": "old-assistant", "source": "assistant"},
+                        {"id": "fallback", "prompt": "Assistant prompt (title unavailable)"},
+                        {"id": "bad-version", "source": "cli", "sourceVersion": True}):
+            path = self.queue(context["id"] + ".cpp", prompt=context)
+            self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["promptSource"], "external")
+        self.assertEqual(AIChangesPanel._prompt_title({"promptSource": "cli"}), "Unknown source")
+        self.assertEqual(AIChangesPanel._prompt_title({"promptSource": "assistant", "promptSourceVersion": True}), "Unknown source")
+
+    def test_watcher_keeps_first_change_context_when_another_prompt_arrives_during_settle(self):
+        path = self.root / "Sensor.cpp"
+        path.write_text("original", encoding="utf-8")
+        watcher = self.watcher()
+        self.scan(watcher)
+        (self.root / ".mcu_flasher_build_cache").mkdir(exist_ok=True)
+        PromptInputTracker(self.root, source="cli").feed("Edit sensor from terminal\r")
+        path.write_text("CLI edit", encoding="utf-8")
+        self.scan(watcher)
+        PromptInputTracker(self.root, source="assistant").feed("Another prompt from assistant\r")
+        for item in watcher._pending_settle.values():
+            item["last_change_time"] -= 1
+        self.scan(watcher)
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["promptSource"], "cli")
+
+    def test_watcher_records_both_sources_if_file_changes_again_while_settling(self):
+        path = self.root / "Sensor.cpp"
+        path.write_text("original", encoding="utf-8")
+        watcher = self.watcher()
+        self.scan(watcher)
+        (self.root / ".mcu_flasher_build_cache").mkdir(exist_ok=True)
+        PromptInputTracker(self.root, source="cli").feed("Edit sensor from terminal\r")
+        path.write_text("CLI edit", encoding="utf-8")
+        self.scan(watcher)
+        PromptInputTracker(self.root, source="assistant").feed("Update sensor from assistant\r")
+        path.write_text("Assistant edit", encoding="utf-8")
+        self.scan(watcher)
+        for item in watcher._pending_settle.values():
+            item["last_change_time"] -= 1
+        self.scan(watcher)
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["promptSource"], "mixed")
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["prompt"],
+                         "Edit sensor from terminal\n\nUpdate sensor from assistant")
+
+    def test_new_watcher_does_not_attribute_edits_to_a_prior_session_prompt(self):
+        path = self.root / "Sensor.cpp"
+        path.write_text("original", encoding="utf-8")
+        (self.root / ".mcu_flasher_build_cache").mkdir(exist_ok=True)
+        PromptInputTracker(self.root, source="assistant").feed("A prior session prompt\r")
+        watcher = self.watcher()
+        self.scan(watcher)
+        path.write_text("unobserved edit", encoding="utf-8")
+        self.scan(watcher)
+        for item in watcher._pending_settle.values():
+            item["last_change_time"] -= 1
+        self.scan(watcher)
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["promptSource"], "external")
 
     def test_code_preview_numbers_follow_scroll_wrap_and_font_metrics(self):
         from PySide6.QtGui import QFont, QTextCursor
@@ -310,7 +438,7 @@ class AIChangesChecks(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_filenames_and_timestamps_remain_visible_in_shared_history_pane(self):
-        prompt = {"id": "three-files", "prompt": "Update controller and header", "source": "cli"}
+        prompt = {"id": "three-files", "prompt": "Update controller and header", "source": "cli", "sourceVersion": 1}
         paths = [self.queue(name, prompt=prompt) for name in ("Header.h", "Controller.ino", "loop.cpp")]
         review = self.manager.get_ai_edit_reviews()[0]
         self.assertTrue(self.manager.accept_ai_edit(str(paths[0]), review["revision"])["success"])
@@ -332,7 +460,7 @@ class AIChangesChecks(unittest.TestCase):
                     APP.processEvents()
                     self.assertEqual(panel._tree.columnCount(), 2)
                     group = panel._tree.topLevelItem(0)
-                    self.assertEqual(group.text(0), "Assistant Prompt (CLI)")
+                    self.assertEqual(group.text(0), "CLI")
                     self.assertEqual(group.childCount(), 3)
                     for index in range(group.childCount()):
                         card = group.child(index)

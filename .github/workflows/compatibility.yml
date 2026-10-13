@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
+        os: [ubuntu-24.04, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -88,8 +88,6 @@ jobs:
           - os: windows-latest
             python: '3.14'
             bundled: true
-          - os: ubuntu-22.04
-            python: '3.10'
           - os: ubuntu-24.04
             python: '3.11'
           - os: ubuntu-24.04
@@ -108,7 +106,6 @@ jobs:
         with:
           lfs: true
       - uses: actions/setup-python@v6
-        if: matrix.os != 'ubuntu-22.04'
         with:
           python-version: ${{ matrix.python }}
       - uses: actions/setup-node@v6
@@ -134,13 +131,7 @@ jobs:
           bash direct/ubuntu/build_launcher.sh
           ./MCU_Flasher --help
           # Verification may run on a runner below the desktop's CPU minimum.
-          if [[ '${{ matrix.os }}' == ubuntu-22.04 ]]; then
-            # Match Bootstrap's native Python/Tcl pair rather than combining
-            # hosted Python's _tkinter extension with Jammy's older Tcl.
-            /usr/bin/python3 -m venv .venv-linux
-          else
-            python -m venv .venv-linux
-          fi
+          python -m venv .venv-linux
           .venv-linux/bin/python -m pip install -r direct/ubuntu/requirements.txt
           .venv-linux/bin/python -B direct/verify_qt_binding_lifetime.py
           # Report the actual native plugin dependency instead of Qt's generic
@@ -158,6 +149,7 @@ jobs:
           PY
           .venv-linux/bin/python -B direct/verify_platforms.py
           .venv-linux/bin/python -B direct/verify_private_runtimes.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_release.py
           .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
           .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_system_setup.py
@@ -183,6 +175,8 @@ jobs:
         timeout-minutes: 5
         run: |
           .venv-linux/bin/python -B direct/verify_cloud_configuration.py
+          .venv-linux/bin/python -B direct/verify_prompt_sources.py
+          .venv-linux/bin/python -B direct/verify_ai_changes.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py
           .venv-linux/bin/python -B direct/verify_owner_ticket_service.py
@@ -214,16 +208,20 @@ jobs:
         run: |
           node direct/verify_editor_preferences.js
           node direct/verify_editor_recovery.js
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_editor_review_ui.py --render-dir temp/audit/compatibility/editor-review
           xvfb-run -a env QT_QPA_PLATFORM=xcb QT_DEBUG_PLUGINS=1 .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility --no-finalize
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_terminal_scroll.py --render-dir temp/audit/compatibility/terminal-scroll
           .venv-linux/bin/python -B direct/verify_performance.py --no-finalize
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_controls.py --render-dir temp/audit/compatibility
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_browser_loading.py
+          for scale in 1 1.25 1.5 1.75 2; do
+            xvfb-run -a .venv-linux/bin/python -B direct/verify_downloader_appearance.py --scale "$scale"
+          done
       - name: Linux responsive display scales
         if: runner.os == 'Linux'
         timeout-minutes: 8
         run: |
-          for scale in 1 1.25 1.5 2; do
+          for scale in 1 1.25 1.5 1.75 2; do
             xvfb-run -a env QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=$scale .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/compatibility/scale-$scale
           done
       - name: Native Ubuntu AVR Compile-button integration
@@ -354,50 +352,12 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'windows'
-          foreach ($scale in '1', '1.25', '1.5', '2') {
+          foreach ($scale in '1', '1.25', '1.5', '1.75', '2') {
             $env:QT_SCALE_FACTOR = $scale
             & env/Scripts/python.exe -B direct/verify_responsive.py --render-dir "temp/audit/compatibility/scale-$scale"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           exit $LASTEXITCODE
-      - name: Native Tk crash evidence
-        if: failure() && runner.os == 'Linux' && matrix.python == '3.10'
-        timeout-minutes: 3
-        run: |
-          sudo apt-get install -y gdb
-          mkdir -p temp/audit/compatibility
-          # Diagnostic only: the preceding failed verification stays failed.
-          timeout 15 xvfb-run -a .venv-linux/bin/python -B - <<'PY' > temp/audit/compatibility/tk-native-runtime.log 2>&1 || true
-          import hashlib
-          import os
-          from pathlib import Path
-          import sys
-          import _tkinter
-          import tkinter as tk
-          root = tk.Tk()
-          root.withdraw()
-          print('Python:', sys.version)
-          print('Executable:', sys.executable)
-          print('libc:', os.confstr('CS_GNU_LIBC_VERSION'))
-          print('Tcl:', root.tk.call('info', 'patchlevel'))
-          print('Tk:', root.tk.call('package', 'provide', 'Tk'))
-          paths = {Path(sys.executable).resolve(), Path(_tkinter.__file__).resolve()}
-          for line in Path('/proc/self/maps').read_text().splitlines():
-              parts = line.split(maxsplit=5)
-              if len(parts) == 6 and any(name in parts[5] for name in ('libtcl8.6', 'libtk8.6', 'libBLT', 'libc.so')):
-                  paths.add(Path(parts[5]).resolve())
-          for path in sorted(paths):
-              print('SHA256:', hashlib.sha256(path.read_bytes()).hexdigest(), path)
-          root.destroy()
-          PY
-          xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 90 gdb --batch \
-            -ex run -ex 'thread apply all bt full' -ex 'info registers' \
-            -ex 'info sharedlibrary' -ex 'info proc mappings' -ex 'py-bt' \
-            -ex 'frame 4' -ex 'info args' -ex 'info locals' \
-            -ex 'info registers r12 r13 rsp rbp' -ex 'x/12i $pc-32' \
-            --args .venv-linux/bin/python -B direct/verify_browser_loading.py > temp/audit/compatibility/tk-native-backtrace.log 2>&1 || true
-          cat temp/audit/compatibility/tk-native-runtime.log
-          tail -n 320 temp/audit/compatibility/tk-native-backtrace.log
       - name: Desktop previews
         if: always()
         uses: actions/upload-artifact@v6

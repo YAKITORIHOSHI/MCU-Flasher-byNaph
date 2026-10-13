@@ -58,12 +58,23 @@ For explicitly requested assistant delegation, use the local
   tooltips. Prompt groups and review navigation retain their original IDs.
   Do not paint numbers inside copied text. Align preview gutters to real
   QTextBlock geometry under scrolling/wrapping and update widths for fonts/digits.
-  Preserve unchanged preview text/scroll/selection through themes. PTY contexts
-  carry `source: "cli"`; journal cards retain `promptSource` and original prompt
-  text, displaying exactly `Assistant Prompt (CLI)` with text in the tooltip.
-  The exact legacy PTY fallback title may map to CLI at display time; unknown
-  external changes retain their unknown-source label. Verify with mocked
-  `direct/verify_ai_changes.py`; never migrate a live journal during verification.
+  Preserve unchanged preview text/scroll/selection through themes. Terminal
+  contexts carry `source: "cli"`; built-in OpenCode uses `source: "assistant"`
+  on Windows and Ubuntu, with `sourceVersion: 1` on both. Carry `promptSource`,
+  `promptSourceVersion`, accumulated `promptSources` and original prompt through
+  pending snapshots, journals, navigation and decision/Undo/Redo summaries.
+  Display CLI or Assistant in AI Changes and review/history; combined pending
+  sources show Mixed, including combined AI Changes cards. Retain the observed
+  prompt text during merges (bounded to 2000 characters); never replace it with
+  a generic mixed-source title. Old unversioned entries and unobserved sources stay Unknown:
+  earlier producers tagged both channels CLI, so neither their tag nor fallback
+  title proves a source. Preserve old journals without migration. Freeze context
+  at first observed change through settling; merge sources when content changes
+  again and ignore pre-watcher-session prompts. Reset passive trackers on PTY
+  generations while preserving bytes, Unicode, paste and backpressure. Source
+  association is observed prompt context, not process-level file-write tracing.
+  Verify `direct/verify_prompt_sources.py`, `direct/verify_ai_changes.py` and the
+  offline review renderer with mocked PTYs and isolated journals under temp/.
 - Syntax Check double-clicks carry the exact canonical root file and full range
   through `editor_goto_diagnostic`. Convert analyzer codepoint columns to Monaco
   UTF-16, await exact tab/model activation and reveal the selected line at the top
@@ -90,6 +101,10 @@ For explicitly requested assistant delegation, use the local
   cached token metadata. Verify cold/normal offline renderer startup with
   `direct/verify_editor_c.py` and the editor resource verifier.
 - AI Review/History Hide and the source-tab toggle only change bar visibility.
+  Keep the bar on one nonwrapping row; progressively elide filenames/messages
+  and compact navigation/metadata for narrow or short editor viewports, retaining
+  tooltips, accessible action names and every decision/history control. Verify
+  real review/history actions and long labels at 100–200% renderer zoom.
   Retain pending decisions, history actions, decorations, glyphs and read-only
   state, remembering history visibility in sessionStorage across renderer reloads.
   A newly pending AI edit must reopen its Accept/Reject review bar so a decision
@@ -168,7 +183,16 @@ For explicitly requested assistant delegation, use the local
   clear it once no saved login or session remains. Local developer access requires a salted PBKDF2 key;
   changing an existing key requires authentication. Partition remote ticket caches
   by provider and verified UID; local access cannot inherit cloud identity/cache.
-- Upload preserves the original local project. Cloud copies always use explicit
+- Upload preserves the original local project. Provide explicit
+  selected-sketch Rename/Delete actions. Confirm cloud deletion while preserving
+  local sources/links/recovery. Compare names without case or outer whitespace;
+  an existing upload name requires Replace, numbered Save a copy, or Cancel.
+  Revalidate names/revisions in the worker after the prompt; Replace/Rename
+  append bounded revisions and Delete uses conditional ETag removal. Rename
+  retains a source-identical version for the existing published rules, so local
+  working copies retain their base revision until explicit Pull. Keep these
+  prompts scrollable with pinned actions and sketch actions inside the heading.
+  Cloud copies always use explicit
   independent windows, a vector cloud indicator and [Cloud] title. Focus an open
   working copy without pulling; opening a closed existing copy preserves its
   saved sources. Use readable sketch folders under the configured generated source
@@ -179,6 +203,9 @@ For explicitly requested assistant delegation, use the local
   Pin the sketch heading and Refresh action above the list; assign spare height
   to the list rather than stretching its header. Check the real project selector
   Cloud tab as well as the standalone dialog with long names and compact sizes.
+  Keep the Cloud host/scroll viewport/content transparent over the owner's glass;
+  retain opaque card/field/list reading surfaces and sync the standalone backdrop
+  palette with the panel when themes change.
   Push/Pull are explicit, with ETag/revision conflict handling,
   account/provider link validation, root UTF-8 source boundaries and bounded
   history. Pull confirms replacement, retains external recovery copies, validates
@@ -324,8 +351,14 @@ For explicitly requested assistant delegation, use the local
 
 ## Platform Scope
 
+- Require native Ubuntu 24.04 or newer using installed OS-release version numbers.
+  Keep `src/modules/ubuntu_release.py` and `direct/ubuntu/release_guard.sh` admission
+  before runtime handoff, setup, repair, missing-Python rescue and service startup.
+  Missing/malformed data fails explicitly; rejection never cleans or migrates
+  user resources. Older-release fixtures test rejection only. Verify with
+  `direct/verify_ubuntu_release.py`; native application checks target supported hosts.
 - Windows 10/11 uses downloaded `src/_python` plus Windows `env`; Ubuntu
-  22.04/24.04/26.04 uses Bash and `.venv-linux`. Preserve Windows resources
+  24.04 and newer use Bash and `.venv-linux`. Preserve Windows resources
   during Ubuntu work and cleanup. Recover missing runtime files from a known
   working copy without replacing shared source, settings or protected caches.
   Windows health probes use isolated Python and WSH clears inherited Python
@@ -391,6 +424,11 @@ For explicitly requested assistant delegation, use the local
   range. Do not restore their old `--no-finalize` workaround to conceal a native
   binding defect. Existing WebEngine/runtime probes have separate teardown
   constraints; failed assertions and surviving-worker checks remain failures.
+- On Linux, native downloader resize can unset X11 input focus before reflow.
+  `NativeResizeFocus` retains the prior control and restores only when X11 has
+  no focused client; never force focus over another application. Cancel the
+  owned coalesced callback on destruction. Await actual bounded paint idleness
+  in appearance fixtures at large scales, retaining static-glass assertions.
 - Recalculate Tk list/details pane minima from the available native pixels even
   when orientation stays unchanged. Preserve valid user sash positions and
   selected-item/detail state. Bound responsive board fixtures to a 1024x768
@@ -411,7 +449,8 @@ For explicitly requested assistant delegation, use the local
   6.12.0 wheel loses None references in application-free setters and callbacks.
   Keep Python 3.12+ on its current Qt range. Validate installed compatibility
   before native widget imports and invalidate stale readiness so launch repairs
-  affected environments. CI must cover both Ubuntu's native Python and 3.11.
+  affected environments. CI covers supported Ubuntu's native Python and custom 3.11; this ABI fix is shared
+  by supported hosts and must remain.
 - Monaco startup owns one initial project-load promise. Host WebChannel
   initialization must not trigger a second disk load after dirty restoration.
   Bind recovery reads/acknowledgements to the original document's renderer
@@ -821,8 +860,13 @@ MCU Flasher by Naph/
 - Reviewed STM32 20.0.0 Arduino preparation groups boards only by exact core and full package specifications after matching platform, framework and nested variant script fingerprints. Its Arduino checks reduce from 163 to 7; retain every other framework's probes and separate checks for unknown or modified scripts. Replan after package preparation so missing scripts cannot grant sharing. Verify isolated signatures and source edits with `direct/verify_bootstrap_builders.py`.
 - Scope extended paths to PlatformIO's installer-module copying and cleanup only after canonical containment within the configured package/platform/library store or its `pkg-installing` staging directories. Preserve literal trailing-dot TAR entries; leave global filesystem modules and unrelated/native Linux calls untouched. Verify local TAR entries, deep ZIP/TAR paths, overwrite/version detachment, traversal rejection, junction escapes and hook restoration with `direct/verify_bootstrap_archives.py`; no live install/cache writes in verification.
 - The downloader (`arduino_lib_req.py`) retains Tk/ttk network and archive workflows. `tk_glass.py` supplies static glass cards around package lists, details and installed items in all three palettes; advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
+  Use bounded static shaded rims/reflections and panel headings, with opaque
+  reading surfaces. Headings yield to native reading-line budgets on short
+  panes; folder, vendor URL and version rows reflow from native Tk font widths.
+  Fit the complete frame on monitor changes without applying Qt scaling.
+  Verify `direct/verify_downloader_appearance.py` in fresh native processes at
+  100/125/150/175/200% scale with mocked persistence and no installers.
 - `browser_loading.py` validates compact catalogs against source path/mtime/size and schema, rebuilding damaged or stale derived caches. Cache writes are atomic and bounded. Keep large raw JSON out of the RAM cache, publish cached data before HTTP refresh, and use two network workers on constrained hosts (four otherwise). `TkTasks` is the Tk-thread delivery boundary; workers never call Tcl. Search ranking, selected-version status, installed inventories and detail selections use one active scan plus one latest request; cancel stale scans and stop dispatcher timers when idle. Preserve active search on catalog updates, batch list/label delivery and cancel closed-widget callbacks. Verify with `direct/verify_browser_loading.py` using temporary catalogs and mocked HTTP. Its shared `direct/tk_downloader_fixture.py` must stay Tk-only: do not import the Qt Controls fixture or construct QApplication in the downloader process.
-- Before the standalone downloader's Linux Tk root, `tk_font_runtime.py` checks the loaded Xft version. Xft before 2.3.5 cannot submit color glyphs; old Tk can later call a retired font error handler through its expired stack pointer. Supplement only the process's existing Fontconfig configuration with `src/assets/tk_fontconfig_legacy.conf` to exclude color fallback. Preserve Unicode strings, requested fonts, user configuration files/environment and separately launched Qt viewers. The Tk-only fixture must initialize the same compatibility path. Verify unchanged browser checks on native Ubuntu and the exact Jammy Python/Tk/Xft/libc graph; do not replace Tk calls or weaken worker/recovery assertions to hide native font failures.
 - Settings' legacy `graphics_acceleration` key controls continuous splitter resize, not the GPU. Unsaved defaults use divider previews on constrained devices; preserve explicit choices. Save a complete preference set once and report persistence failure. Reset controls must revalidate target/framework/port and busy state in their callbacks.
 - `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts. Tk uses its own native point/pixel scale, coalesced panes and scrollable installed details; cancel bound callbacks on destruction.
 - Main windows have a minimum width of half the current monitor's available width in Qt logical pixels. Allow wider resizing and normal maximization, including saved maximized state. Recalculate the minimum on monitor changes and fit normal window frames to the work area. Detached editor and explicit dialog sizing keep their own contracts.
@@ -901,7 +945,7 @@ On Ubuntu use `.venv-linux/bin/python -B direct/verify_runtime.py`. The Windows
 terminal probe exercises the real PTY and local xterm renderer, including installed
 CLI version commands; it does not authenticate or request AI work. CPU previews
 simulate policy and cannot prove timing on a physical low-end machine.
-The compatibility workflow targets Ubuntu 22.04/24.04/26.04. Its first-launch
+The compatibility workflow targets Ubuntu 24.04/26.04. Its first-launch
 job uses the native system Python (3.14 on 26.04); package selection must use
 `direct.ubuntu.preflight.normalize_packages` rather than an exact 24.04 branch.
 Cross-host OS-release fixtures do not prove native 26.04 or Wayland execution;

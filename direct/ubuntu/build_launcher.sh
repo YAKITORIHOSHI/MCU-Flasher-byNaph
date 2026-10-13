@@ -6,6 +6,8 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
     printf '%s\n' 'The Ubuntu desktop release currently requires x86_64 Linux.' >&2
     exit 1
 fi
+source "$app_root/direct/ubuntu/release_guard.sh"
+require_supported_ubuntu || exit 1
 output="${1:-$app_root/MCU_Flasher}"
 compiler="${CC:-cc}"
 if ! command -v "$compiler" >/dev/null; then

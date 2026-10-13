@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 # %k is supplied by the desktop launcher as one literal filename or URI argument.
 # Only this fixed code becomes shell source; the checkout path never does. Use
@@ -80,6 +82,9 @@ def desktop_entry(root: Path, *, portable: bool = False) -> str:
 
 
 def main(argv=None) -> int:
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true", help="Also register in your Applications menu")
     args = parser.parse_args(argv)

@@ -52,7 +52,7 @@ class OpenCodeSession(QObject):
         self._intentional_exit = False
         self._exit_requested_at = 0.0
         self._line_pasted = False
-        self._exit_observer = PromptInputTracker(cwd)
+        self._exit_observer = PromptInputTracker(cwd, source="assistant")
         self._restart_timer = QTimer(self)
         self._restart_timer.setSingleShot(True)
         self._restart_timer.setInterval(800)
@@ -73,10 +73,11 @@ class OpenCodeSession(QObject):
         self._intentional_exit = False
         self._exit_requested_at = 0.0
         self._line_pasted = False
-        self._exit_observer = PromptInputTracker(self.cwd)
+        self._exit_observer = PromptInputTracker(self.cwd, source="assistant")
         self._diagnostic_tail = ""
         child = PtySession(self.cwd, opencode_argv(self.executable, self.cwd), self)
         child.assistant_active = True
+        child.prompt_source = "assistant"
         self._child = child
         child.resize(*self._dimensions)
         child.output.connect(lambda data: self._forward_output(child, generation, data))

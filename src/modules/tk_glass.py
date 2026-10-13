@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import tkinter as tk
 import sys
+import math
+from tkinter import font as tkfont
 from tkinter import ttk
 from src.modules.ui_palette import mix, readable_foreground
 from src.modules.ui_metrics import WorkArea, fit_rect
@@ -11,6 +13,79 @@ from src.modules.ui_metrics import WorkArea, fit_rect
 def ui_scale(widget):
     """Tk distances are native pixels; fonts already follow Tk point scaling."""
     return max(.75, min(3.0, widget.winfo_fpixels("1i") / 96.0))
+
+
+def _desktop_work_area(fallback, values, desktop=None):
+    """Validate EWMH rectangles and intersect them with Tk's native bounds."""
+    if not values or len(values) % 4:
+        return fallback
+    if desktop is None:
+        if len(values) != 4:
+            return fallback
+        desktop = 0
+    if not isinstance(desktop, int) or desktop < 0 or desktop >= len(values) // 4:
+        return fallback
+    x, y, width, height = values[desktop * 4:desktop * 4 + 4]
+    if width <= 0 or height <= 0:
+        return fallback
+    # X11 CARDINALs carry signed origins in their low 32 bits.
+    x = x - 2**32 if x >= 2**31 else x
+    y = y - 2**32 if y >= 2**31 else y
+    left, top = max(fallback.x, x), max(fallback.y, y)
+    right = min(fallback.x + fallback.width, x + width)
+    bottom = min(fallback.y + fallback.height, y + height)
+    return WorkArea(left, top, right - left, bottom - top) if right > left and bottom > top else fallback
+
+
+def _x11_work_area(widget, fallback):
+    """Read bounded desktop work-area hints through native X11, without probes."""
+    import ctypes
+    display = None
+    try:
+        x11 = ctypes.CDLL("libX11.so.6")
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_long, ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_void_p)]
+        x11.XFree.argtypes = [ctypes.c_void_p]
+        display = x11.XOpenDisplay(widget.winfo_screen().encode("utf-8"))
+        if not display:
+            return fallback
+        root = x11.XDefaultRootWindow(display)
+
+        def property_values(name, limit):
+            atom = x11.XInternAtom(display, name, 1)
+            if not atom:
+                return None
+            actual, count, remaining = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_ulong()
+            format_bits, data = ctypes.c_int(), ctypes.c_void_p()
+            try:
+                status = x11.XGetWindowProperty(display, root, atom, 0, limit, 0, 0,
+                    ctypes.byref(actual), ctypes.byref(format_bits), ctypes.byref(count),
+                    ctypes.byref(remaining), ctypes.byref(data))
+                if status or format_bits.value != 32 or remaining.value or count.value > limit or not data.value:
+                    return None
+                pointer = ctypes.cast(data, ctypes.POINTER(ctypes.c_ulong))
+                return [int(pointer[index]) for index in range(count.value)]
+            finally:
+                if data.value:
+                    x11.XFree(data)
+
+        desktops = property_values(b"_NET_CURRENT_DESKTOP", 1)
+        values = property_values(b"_NET_WORKAREA", 64)
+        return _desktop_work_area(fallback, values, desktops[0] if desktops else None)
+    except (AttributeError, OSError, ValueError, tk.TclError):
+        return fallback
+    finally:
+        if display:
+            x11.XCloseDisplay(display)
 
 
 def native_work_area(widget):
@@ -38,6 +113,8 @@ def native_work_area(widget):
                 area = WorkArea(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
         except (AttributeError, OSError, ValueError, tk.TclError):
             pass
+    elif sys.platform.startswith("linux"):
+        area = _x11_work_area(widget, area)
     return area
 
 
@@ -128,6 +205,64 @@ class DialogFit:
             self._fitting = False
 
 
+def _x11_focus_unset(widget):
+    """Force restoration only if X11 has no focused client, never another app."""
+    import ctypes
+    display = None
+    try:
+        x11 = ctypes.CDLL("libX11.so.6")
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XGetInputFocus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int)]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        display = x11.XOpenDisplay(widget.winfo_screen().encode("utf-8"))
+        if not display:
+            return False
+        window, revert = ctypes.c_ulong(), ctypes.c_int()
+        x11.XGetInputFocus(display, ctypes.byref(window), ctypes.byref(revert))
+        return window.value in (0, 1)  # X11 None / PointerRoot, no other client.
+    except (AttributeError, OSError, tk.TclError):
+        return False
+    finally:
+        if display:
+            x11.XCloseDisplay(display)
+
+
+class NativeResizeFocus:
+    """Retain a downloader control across Linux's native resize focus reset."""
+
+    def __init__(self, root):
+        self.root = root
+        self._focused = None
+        self._pending = None
+        root.bind("<FocusIn>", self._remember, add="+")
+        root.bind("<Configure>", self._schedule, add="+")
+        root.bind("<Destroy>", self._cancel, add="+")
+
+    def _remember(self, event):
+        if event.widget is not self.root:
+            self._focused = self.root.focus_get()
+
+    def _schedule(self, event):
+        if event.widget is self.root and self._pending is None:
+            self._pending = self.root.after(60, self._restore)
+
+    def _cancel(self, event):
+        if event.widget is self.root and self._pending is not None:
+            self.root.after_cancel(self._pending)
+            self._pending = None
+
+    def _restore(self):
+        self._pending = None
+        focused = self._focused
+        try:
+            if (focused is not None and focused.winfo_exists() and focused.winfo_viewable()
+                    and self.root.focus_get() is None and _x11_focus_unset(self.root)):
+                focused.focus_force()
+        except tk.TclError:
+            pass
+
+
 class ResponsivePanes:
     """Reflow list/details once per resize burst and stop on destruction."""
 
@@ -177,6 +312,48 @@ class ResponsivePanes:
         fitted = max(left, min(position, available - right))
         if changed or fitted != position:
             pane.sash_place(0, 0 if vertical else fitted, fitted if vertical else 0)
+
+
+class FieldRow:
+    """Keep a native entry usable by moving it below its label and action."""
+
+    def __init__(self, parent, label, field, action, minimum=150):
+        self.parent, self.label, self.field, self.action = parent, label, field, action
+        self.minimum = minimum
+        self._pending = None
+        self._stacked = None
+        for widget in (label, field, action):
+            widget.pack_forget()
+        action.bind("<Configure>", self._schedule, add="+")
+        parent.bind("<Configure>", self._schedule, add="+")
+        parent.bind("<Destroy>", self._cancel, add="+")
+        self._schedule()
+
+    def _schedule(self, event=None):
+        if (event is None or event.widget in (self.parent, self.action)) and self._pending is None:
+            self._pending = self.parent.after(40, self._fit)
+
+    def _cancel(self, event):
+        if event.widget is self.parent and self._pending is not None:
+            self.parent.after_cancel(self._pending)
+            self._pending = None
+
+    def _fit(self):
+        self._pending = None
+        gap = round(8 * ui_scale(self.parent))
+        required = self.label.winfo_reqwidth() + self.action.winfo_reqwidth() + round(self.minimum * ui_scale(self.parent)) + 2 * gap
+        stacked = self.parent.winfo_width() < required
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        self.parent.grid_columnconfigure(0, weight=1 if stacked else 0)
+        self.parent.grid_columnconfigure(1, weight=0 if stacked else 1)
+        self.parent.grid_columnconfigure(2, weight=0)
+        self.label.grid(row=0, column=0, sticky="w")
+        self.action.grid(row=0, column=1 if stacked else 2, sticky="e")
+        self.field.grid(row=1 if stacked else 0, column=0 if stacked else 1,
+                        columnspan=2 if stacked else 1, sticky="ew",
+                        padx=0 if stacked else (gap, gap), pady=(gap, 0) if stacked else 0)
 
 
 class ScrollBody(tk.Frame):
@@ -255,13 +432,15 @@ class ScrollForm(ScrollBody):
 
 
 class GlassCard(tk.Canvas):
-    """A bordered gradient around an opaque content frame, redrawn on resize."""
+    """Static shaded glass chrome around an opaque native reading surface."""
 
-    def __init__(self, parent, palette, padding: int = 10, *, expand=False):
+    def __init__(self, parent, palette, padding: int = 10, *, expand=False, heading=""):
         super().__init__(parent, bg=palette.BG_DARKEST, height=1, bd=0, highlightthickness=0)
         self.palette = palette
         self.expand = expand
         self.padding = round(padding * ui_scale(self))
+        self.heading = heading
+        self._heading_font = tkfont.Font(root=self, family="Montserrat", size=9, weight="bold") if heading else None
         self._redraw_id = None
         self.body = tk.Frame(self, bg=palette.BG_MID)
         self._body_window = self.create_window(self.padding, self.padding, window=self.body, anchor="nw")
@@ -317,24 +496,57 @@ class GlassCard(tk.Canvas):
         width = self.winfo_width()
         if not self.expand and self.winfo_pixels(self.cget("height")) != height:
             self.configure(height=height)
+        heading_height = self._heading_font.metrics("linespace") + round(10 * ui_scale(self)) if self.heading else 0
+        reading_height = self._reading_height() if self.expand else self.body.winfo_reqheight()
+        # A short pane spends its pixels on reading before panel headings.
+        if self.expand and height < reading_height + heading_height + 2 * self.padding:
+            heading_height = 0
         self.itemconfigure(self._body_window, width=max(1, width - 2 * self.padding))
         if self.expand:
-            vertical_padding = min(self.padding, max(0, (height - self._reading_height()) // 2))
-            self.coords(self._body_window, self.padding, vertical_padding)
-            self.itemconfigure(self._body_window, height=max(1, height - 2 * vertical_padding))
+            vertical_padding = min(self.padding, max(0, (height - reading_height - heading_height) // 2))
+            self.coords(self._body_window, self.padding, vertical_padding + heading_height)
+            self.itemconfigure(self._body_window, height=max(1, height - 2 * vertical_padding - heading_height))
         self.delete("glass")
-        radius = min(12, height // 2)
-        points = [1 + radius, 1, width - radius - 1, 1, width - 1, 1,
-                  width - 1, 1 + radius, width - 1, height - radius - 1,
-                  width - 1, height - 1, width - radius - 1, height - 1,
-                  radius + 1, height - 1, 1, height - 1, 1, height - radius - 1,
-                  1, radius + 1, 1, 1]
-        self.create_polygon(points, smooth=True, fill=p.BG_MID, outline=p.BORDER, tags="glass")
-        # A small rim suggests frosted glass without obscuring list text.
-        self.create_line(radius, 2, width - radius, 2,
-                         fill=mix(p.BORDER, p.TEXT_BRIGHT, .28), tags="glass")
-        for step in range(6):
-            y = 3 + step
-            self.create_line(radius, y, width - radius, y,
-                             fill=mix(p.BG_MID, p.BG_LIGHT, (6 - step) / 9), tags="glass")
+        if width < 4 or height < 4:
+            return
+        radius = min(round(12 * ui_scale(self)), height // 2, width // 2)
+        points = []
+        for x, y, angle in ((1 + radius, 1 + radius, 180),
+                            (width - 1 - radius, 1 + radius, 270),
+                            (width - 1 - radius, height - 1 - radius, 0),
+                            (1 + radius, height - 1 - radius, 90)):
+            for step in range(9):
+                theta = math.radians(angle + step * 90 / 8)
+                points.extend((x + radius * math.cos(theta), y + radius * math.sin(theta)))
+        light = readable_foreground(p.BG_DARKEST) == "#000000"
+        top = mix(p.BG_LIGHT, "#ffffff", .30 if light else .10)
+        bottom = mix(p.BG_MID, p.BG_DARKEST, .30)
+        rim = mix(p.BORDER, p.BG_MID, .30)
+        self.create_polygon(points, smooth=True, fill=bottom, outline="", tags="glass")
+        # Bounded bands add depth down the whole rim. The upper-left diagonal
+        # reflection follows the workspace without sampling or blurring it.
+        bands = min(80, max(1, height - 4))
+        for step in range(bands):
+            y0 = 2 + (height - 4) * step / bands
+            y1 = 2 + (height - 4) * (step + 1) / bands
+            center = (y0 + y1) / 2
+            edge = max(0, radius - min(center - 1, height - 1 - center))
+            inset = radius - math.sqrt(max(0, radius * radius - edge * edge))
+            color = mix(top, bottom, min(1, center / max(1, height * .72)))
+            self.create_rectangle(1 + inset, y0, width - 1 - inset, y1,
+                                  fill=color, outline="", tags="glass")
+            reflection_end = width * (.60 - .26 * center / max(1, height))
+            if reflection_end > 1 + inset:
+                reflection = mix(color, "#ffffff", (.13 if light else .055) * max(0, 1 - center / max(1, height * .6)))
+                self.create_rectangle(1 + inset, y0, reflection_end, y1,
+                                      fill=reflection, outline="", tags="glass")
+        self.create_polygon(points, smooth=True, fill="", outline=rim, tags="glass")
+        self.create_line(radius + 1, 2, width - radius - 1, 2,
+                         fill=mix(rim, "#ffffff", .45 if light else .32), tags="glass")
+        self.create_line(radius + 1, height - 2, width - radius - 1, height - 2,
+                         fill=mix(bottom, p.BG_DARKEST, .55), tags="glass")
+        if heading_height:
+            self.create_text(self.padding + 2, self.padding + heading_height // 2,
+                             text=self.heading, anchor="w", font=self._heading_font,
+                             fill=p.TEXT_BRIGHT, tags="glass")
         self.tag_lower("glass", self._body_window)

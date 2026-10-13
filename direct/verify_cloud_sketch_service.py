@@ -90,6 +90,8 @@ class MemoryHTTP:
             parent[key] = json.loads(request.data)
             return copy.deepcopy(parent[key]), {}
         if method == "DELETE":
+            if self.force_conflict or (request.get_header("If-match") and request.get_header("If-match") != etag):
+                self.fail(request, 412, "Fixture conflict")
             parent.pop(key, None)
             return None, {}
         raise AssertionError(method)
@@ -135,6 +137,76 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual(payload["password"], " literal password ")
         self.assertEqual(payload["email"], "user@example.com")
         self.assertFalse(self.store.values)
+
+    def test_duplicate_upload_requires_choice_and_numbers_available_names(self):
+        self.login()
+        first = self.service.upload_project(self.local, "Sensor")
+        with self.assertRaises(cloud.CloudNameConflict) as caught:
+            self.service.upload_project(self.local, " sensor ")
+        self.assertEqual(caught.exception.matches[0]["id"], first["id"])
+        self.assertEqual(len(self.service.list_sketches()), 1)
+        for number in (1, 2):
+            copy = self.service.upload_project(self.local, "Sensor", duplicate=True)
+            self.assertEqual(copy["name"], f"Sensor ({number})")
+            self.assertNotEqual(copy["id"], first["id"])
+        self.assertFalse((self.local / cloud.LINK_NAME).exists())
+
+    def test_replace_retains_identity_history_and_local_sources(self):
+        meta = self.upload()
+        original = (self.local / "Sketch.ino").read_bytes()
+        result = self.service.upload_project(self.local, meta["name"], replace_id=meta["id"], expected_revision=1)
+        self.assertEqual(result["id"], meta["id"])
+        self.assertEqual(result["revision"], 2)
+        self.assertEqual([row["revision"] for row in self.service.list_revisions(meta["id"])], [2, 1])
+        self.assertEqual((self.local / "Sketch.ino").read_bytes(), original)
+        self.assertEqual(cloud.read_project_link(self.local)["revision"], 1)
+        with self.assertRaises(cloud.CloudConflict):
+            self.service.upload_project(self.local, meta["name"], replace_id=meta["id"], expected_revision=1)
+
+    def test_rename_keeps_versions_and_delete_keeps_local_working_copy(self):
+        meta = self.upload()
+        before = {path.name: path.read_bytes() for path in self.local.iterdir() if path.is_file()}
+        renamed = self.service.rename_sketch(meta["id"], "測定 sketch", 1)
+        self.assertEqual(renamed["name"], "測定 sketch")
+        self.assertEqual(renamed["revision"], 2)
+        self.assertEqual(self.service.working_directory(meta["id"], renamed["name"]), self.local)
+        self.assertEqual(len(self.service.list_revisions(meta["id"])), 2)
+        with self.assertRaises(cloud.CloudConflict):
+            self.service.delete_sketch(meta["id"], 1)
+        self.service.delete_sketch(meta["id"], 2)
+        self.assertEqual(self.service.list_sketches(), [])
+        self.assertEqual({path.name: path.read_bytes() for path in self.local.iterdir() if path.is_file()}, before)
+
+    def test_rename_rejects_existing_name_and_guarded_changes_reject_races(self):
+        self.login()
+        first = self.service.upload_project(self.local, "Sensor")
+        second = self.service.upload_project(self.local, "Other")
+        with self.assertRaisesRegex(cloud.CloudError, "already exists"):
+            self.service.rename_sketch(second["id"], " sensor ", 1)
+        for operation in (
+                lambda: self.service.rename_sketch(first["id"], "Renamed", 1),
+                lambda: self.service.delete_sketch(first["id"], 1),
+                lambda: self.service.upload_project(self.local, "Sensor", replace_id=first["id"], expected_revision=1)):
+            self.http.force_conflict = True
+            with self.assertRaises(cloud.CloudConflict):
+                operation()
+            self.http.force_conflict = False
+        self.assertEqual({row["name"] for row in self.service.list_sketches()}, {"Sensor", "Other"})
+
+    def test_invalid_or_long_names_are_rejected_without_writes(self):
+        self.login()
+        for name in (" ", "x" * 101, "bad\nname", "😀" * 51):
+            with self.subTest(name=name), self.assertRaises(cloud.CloudError):
+                self.service.upload_project(self.local, name)
+        self.assertFalse(self.http.data)
+
+    def test_numbered_copy_keeps_names_within_firebase_utf16_limit(self):
+        self.login()
+        name = "😀" * 50
+        self.service.upload_project(self.local, name)
+        result = self.service.upload_project(self.local, name, duplicate=True)
+        self.assertEqual(result["name"], "😀" * 48 + " (1)")
+        self.assertEqual(len(result["name"].encode("utf-16-le")) // 2, 100)
 
     def test_save_login_and_remember_session_are_distinct(self):
         self.login(save_login=True)
@@ -337,7 +409,7 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual(one.parent, self.folder / "_MCUFlasherByNaph_src" / "Cloud")
         self.assertNotIn(first["id"], one.name)
         self.assertNotIn("..", one.name)
-        two_meta = self.service.upload_project(self.local, first["name"].upper())
+        two_meta = self.service.upload_project(self.local, first["name"].upper(), duplicate=True)
         two = self.service.pull_project(two_meta["id"])
         self.assertNotEqual(one.name.casefold(), two.name.casefold())
         self.http.uid = "other-account"

@@ -486,6 +486,8 @@ class PerformanceChecks(unittest.TestCase):
             widget.resize(360, 160)
             widget.setMaximumBlockCount(80)
             widget.show()
+            widget.activateWindow()
+            self.assertTrue(QTest.qWaitForWindowActive(widget, 3000))
             try:
                 for number in range(70):
                     widget.append_log({"text": f"Row {number:03d} " + "x" * 100})
@@ -526,11 +528,16 @@ class PerformanceChecks(unittest.TestCase):
     def test_notification_updates_preserve_reading_anchor_and_scrollbar_hold(self):
         from PySide6.QtCore import QPoint
         from main.qt.notif_panel import NotifPanel
-        with patch("src.dbs.dbs_read.get_notifications", return_value=[]):
-            panel = NotifPanel()
+        isolated_reader = patch("src.dbs.dbs_read.get_notifications", return_value=[])
+        isolated_reader.start()
+        self.addCleanup(isolated_reader.stop)
+        panel = NotifPanel()
         panel.resize(480, 240)
         panel.show()
+        panel.activateWindow()
+        self.assertTrue(QTest.qWaitForWindowActive(panel, 3000))
         try:
+            wait_until(lambda: not panel._refresh_running)
             view = panel._browser
             view.document().setMaximumBlockCount(120)
             for number in range(45):

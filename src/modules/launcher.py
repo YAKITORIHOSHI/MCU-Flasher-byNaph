@@ -27,6 +27,10 @@ for path in (SCRIPT_DIR, modules_path):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from src.modules.ubuntu_release import enforce_supported_ubuntu
+if not enforce_supported_ubuntu():
+    raise SystemExit(1)
+
 from src.modules.runtime_resources import enforce_minimum_cpu_requirement, configure_webengine_environment
 if not enforce_minimum_cpu_requirement():
     raise SystemExit(1)

@@ -1636,12 +1636,13 @@ class BrowseTab:
         self.search_entry.bind("<Return>", lambda _event: self._execute_search())
 
         # Paned window: list | detail
-        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BORDER, sashwidth=2, sashrelief=tk.FLAT, bd=0)
+        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BG_DARKEST, sashwidth=5, sashrelief=tk.FLAT, bd=0)
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=7, expand=True)
+        left_card = GlassCard(pane, Theme, padding=7, expand=True,
+                              heading="Available libraries" if self._detail_builder == self.app._build_library_detail else "Available boards")
         pane.add(left_card, minsize=200)
         left = left_card.body
 
@@ -1649,8 +1650,8 @@ class BrowseTab:
             left, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
-            highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
-            borderwidth=1, relief=tk.FLAT,
+            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
+            highlightthickness=1, borderwidth=0, relief=tk.FLAT,
             activestyle="none",
             exportselection=False
         )
@@ -1662,7 +1663,7 @@ class BrowseTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=9, expand=True)
+        detail_card = GlassCard(pane, Theme, padding=9, expand=True, heading="Package details")
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -1951,12 +1952,12 @@ class InstalledTab:
         self.search_entry.bind("<KeyRelease>", self._on_search)
 
         # Paned window: list | detail
-        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BORDER, sashwidth=2, sashrelief=tk.FLAT, bd=0)
+        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BG_DARKEST, sashwidth=5, sashrelief=tk.FLAT, bd=0)
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=7, expand=True)
+        left_card = GlassCard(pane, Theme, padding=7, expand=True, heading="Installed packages")
         pane.add(left_card, minsize=200)
         left = left_card.body
 
@@ -1964,8 +1965,8 @@ class InstalledTab:
             left, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
-            highlightcolor=Theme.CYAN, highlightbackground=Theme.BORDER,
-            borderwidth=1, relief=tk.FLAT,
+            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
+            highlightthickness=1, borderwidth=0, relief=tk.FLAT,
             activestyle="none",
             exportselection=False
         )
@@ -1977,7 +1978,7 @@ class InstalledTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=9, expand=True)
+        detail_card = GlassCard(pane, Theme, padding=9, expand=True, heading="Installed details")
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -2547,8 +2548,8 @@ class ArduinoBrowser:
     """Main application window with Libraries, Boards, and Installed tabs."""
 
     def __init__(self, *, linux_channel=None):
-        from src.modules.tk_font_runtime import prepare_tk_font_runtime
-        prepare_tk_font_runtime()
+        from src.modules.ubuntu_release import require_supported_ubuntu
+        require_supported_ubuntu()
         # DPI awareness on Windows
         if sys.platform == "win32":
             try:
@@ -2579,56 +2580,10 @@ class ArduinoBrowser:
             except Exception:
                 pass
 
-        # Tk uses native screen units; its fonts independently follow point scaling.
-        work_w, work_h = 1280, 720
-        start_x, start_y = 0, 0
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                from ctypes import wintypes
-
-                class _WorkAreaRect(ctypes.Structure):
-                    _fields_ = [
-                        ('left', wintypes.LONG),
-                        ('top', wintypes.LONG),
-                        ('right', wintypes.LONG),
-                        ('bottom', wintypes.LONG)
-                    ]
-
-                rect = _WorkAreaRect()
-                SPI_GETWORKAREA = 0x0030
-                if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-                    work_w = max(1, rect.right - rect.left)
-                    work_h = max(1, rect.bottom - rect.top)
-                    start_x = rect.left
-                    start_y = rect.top
-                else:
-                    work_w = max(1, self.root.winfo_screenwidth())
-                    work_h = max(1, self.root.winfo_screenheight())
-            except Exception:
-                work_w = max(1, self.root.winfo_screenwidth())
-                work_h = max(1, self.root.winfo_screenheight())
-        else:
-            work_w = max(1, self.root.winfo_screenwidth())
-            work_h = max(1, self.root.winfo_screenheight())
-
-        from src.modules.tk_glass import ui_scale
-        scale = ui_scale(self.root)
-        target_w = min(round(1040 * scale), int(work_w * .88))
-        target_h = min(round(740 * scale), int(work_h * .88))
-        # Ensure target does not exceed usable work area
-        target_w = min(target_w, max(1, work_w - 24))
-        target_h = min(target_h, max(1, work_h - 48))
-
-        pos_x = start_x + (work_w - target_w) // 2
-        pos_y = start_y + (work_h - target_h) // 2
-
-        self.root.geometry(f"{target_w}x{target_h}+{pos_x}+{pos_y}")
-
-        # Lists and details stack vertically below the horizontal content budget.
-        min_w = min(target_w, round(480 * scale))
-        min_h = min(target_h, round(400 * scale))
-        self.root.minsize(min_w, min_h)
+        # Fit the complete native frame to its current monitor, including after
+        # moves. Tk distances and point fonts remain independent of Qt scaling.
+        from src.modules.tk_glass import DialogFit
+        self._window_fit = DialogFit(self.root, preferred=(1040, 740), minimum=(480, 400))
 
         self._busy = False
         self._active_download_tab = None
@@ -2875,7 +2830,9 @@ class ArduinoBrowser:
             self._inventory_request_id = 0
             self._catalog_revision = 0
         self._rendered_theme = Theme.active_theme
-        from src.modules.tk_glass import GlassCard
+        from src.modules.tk_glass import GlassCard, NativeResizeFocus
+        if sys.platform.startswith("linux"):
+            self._native_resize_focus = NativeResizeFocus(self.root)
         from src.modules.runtime_resources import performance_profile
         self._progress_interval = 120 if performance_profile().constrained else 80
         self.root.configure(bg=Theme.BG_DARKEST)
@@ -2928,8 +2885,8 @@ class ArduinoBrowser:
         folder_card.pack(fill="x", padx=12, pady=(0, 8))
         folder_bar = folder_card.body
 
-        tk.Label(folder_bar, text="Download folder:",
-                 font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(side="left")
+        folder_label = tk.Label(folder_bar, text="Download folder:",
+                                font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
 
         self.folder_var = tk.StringVar(value=self._download_dir)
         self.folder_entry = tk.Entry(
@@ -2939,7 +2896,6 @@ class ArduinoBrowser:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER
         )
-        self.folder_entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
         self.folder_entry.bind("<Return>", lambda e: self._apply_folder_entry())
         self.folder_entry.bind("<FocusOut>", lambda e: self._apply_folder_entry())
 
@@ -2947,7 +2903,8 @@ class ArduinoBrowser:
             folder_bar, "Browse…", self._choose_download_dir,
             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
-        self.browse_btn.pack(side="right")
+        from src.modules.tk_glass import FieldRow
+        self._folder_row = FieldRow(folder_bar, folder_label, self.folder_entry, self.browse_btn)
 
         # Additional board manager indexes. The default Arduino index is
         # always loaded; this field lets users add vendor indexes such as the
@@ -2957,10 +2914,10 @@ class ArduinoBrowser:
         board_url_bar = tk.Frame(self._sources_card.body, bg=Theme.BG_MID)
         board_url_bar.pack(fill="x")
 
-        tk.Label(
+        urls_label = tk.Label(
             board_url_bar, text="Vendor URLs:",
             font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
-        ).pack(side="left")
+        )
 
         self.board_urls_var = tk.StringVar(value=", ".join(self._additional_board_urls))
         self.board_urls_entry = tk.Entry(
@@ -2970,14 +2927,13 @@ class ArduinoBrowser:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER,
         )
-        self.board_urls_entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
         self.board_urls_entry.bind("<Return>", lambda e: self._apply_board_urls())
 
         self.board_urls_apply_btn = make_flat_button(
             board_url_bar, "Apply & refresh", self._apply_board_urls,
             Theme.BTN_MONITOR, Theme.BTN_MONITOR_H,
         )
-        self.board_urls_apply_btn.pack(side="right")
+        self._urls_row = FieldRow(board_url_bar, urls_label, self.board_urls_entry, self.board_urls_apply_btn)
 
         sources_hint = tk.Label(
             self._sources_card.body,
@@ -3265,16 +3221,16 @@ class ArduinoBrowser:
         ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
-        tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST).pack(side="left")
+        version_label = tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
         tab.version_var = tk.StringVar()
         tab.version_combo = ttk.Combobox(ver_frame,
                                          textvariable=tab.version_var,
                                          state="readonly", width=20)
-        tab.version_combo.pack(side="left", padx=4)
 
         tab.download_btn = make_flat_button(ver_frame, "⬇ Download",
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        tab.download_btn.pack(side="left", padx=8)
+        from src.modules.tk_glass import FieldRow
+        tab._version_row = FieldRow(ver_frame, version_label, tab.version_combo, tab.download_btn, minimum=130)
 
         tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
                                      bg=Theme.BG_DARKEST, anchor="w", justify="left")
@@ -3378,16 +3334,16 @@ class ArduinoBrowser:
         ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
-        tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST).pack(side="left")
+        version_label = tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
         tab.version_var = tk.StringVar()
         tab.version_combo = ttk.Combobox(ver_frame,
                                          textvariable=tab.version_var,
                                          state="readonly", width=20)
-        tab.version_combo.pack(side="left", padx=4)
 
         tab.download_btn = make_flat_button(ver_frame, "⬇ Download",
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
-        tab.download_btn.pack(side="left", padx=8)
+        from src.modules.tk_glass import FieldRow
+        tab._version_row = FieldRow(ver_frame, version_label, tab.version_combo, tab.download_btn, minimum=130)
 
         tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
                                      bg=Theme.BG_DARKEST, anchor="w", justify="left")
@@ -4855,6 +4811,9 @@ class ArduinoBrowser:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
     from src.modules.runtime_resources import enforce_minimum_cpu_requirement
     if not enforce_minimum_cpu_requirement():
         raise SystemExit(2)

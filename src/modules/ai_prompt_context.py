@@ -21,8 +21,11 @@ def assistant_process_active(pid):
 
 
 class PromptInputTracker:
-    def __init__(self, project):
+    def __init__(self, project, *, source="cli"):
+        if source not in {"cli", "assistant"}:
+            raise ValueError("Prompt source must be cli or assistant")
         self.project = Path(project)
+        self.source = source
         self.line = ""
         self.escape = ""
         self.paste = False
@@ -75,7 +78,7 @@ class PromptInputTracker:
         temp = cache / f".ai-prompt-{os.getpid()}-{uuid4().hex}.tmp"
         try:
             payload = {"id": uuid4().hex, "prompt": prompt[:500], "time": time.time(),
-                       "source": "cli"}
+                       "source": self.source, "sourceVersion": 1}
             temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             from main.core.file_utils import ensure_file_writable
             ensure_file_writable(target)

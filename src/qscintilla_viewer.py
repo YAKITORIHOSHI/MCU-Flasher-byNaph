@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+if __name__ == "__main__" and sys.platform.startswith("linux"):
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
+
 from main.core.theme import get_palette
 from main.core.log_colors import contrast_ratio, themed_log_colors
 from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size

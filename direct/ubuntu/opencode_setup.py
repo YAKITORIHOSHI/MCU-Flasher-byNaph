@@ -170,6 +170,8 @@ def _installation_lock(tools: Path):
 
 def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str:
     """Reuse a working native CLI or atomically prepare the pinned owned binary."""
+    from src.modules.ubuntu_release import require_supported_ubuntu
+    require_supported_ubuntu()
     if not sys.platform.startswith("linux") or platform.machine().casefold() not in {"x86_64", "amd64"}:
         raise RuntimeError("Native OpenCode Bootstrap supports Ubuntu amd64.")
     if hasattr(os, "geteuid") and os.geteuid() == 0:

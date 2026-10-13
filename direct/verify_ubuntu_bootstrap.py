@@ -23,9 +23,8 @@ from direct.ubuntu import preflight, setup
 class UbuntuReleasePackageChecks(unittest.TestCase):
     """OS-release/package fixtures also run on Windows, without Linux syscalls."""
 
-    def test_release_packages_cover_22_24_and_26_without_installing(self):
-        for version, expected in (("22.04", ("libasound2", "libglib2.0-0")),
-                                  ("24.04", ("libasound2t64", "libglib2.0-0t64")),
+    def test_release_packages_cover_supported_hosts_without_installing(self):
+        for version, expected in (("24.04", ("libasound2t64", "libglib2.0-0t64")),
                                   ("26.04", ("libasound2t64", "libglib2.0-0t64"))):
             with self.subTest(version=version), \
                     patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": version}), \
@@ -195,10 +194,10 @@ class UbuntuBootstrapChecks(unittest.TestCase):
         self.assertEqual(set(missing.exception.packages), {"libxcomposite1", "libxdamage1", "libxtst6",
                          "libxkbfile1", "libgbm1", "libxcb-dri3-0", "libglib2.0-0t64"})
 
-    def test_ubuntu_22_library_names_are_preserved(self):
+    def test_ubuntu_22_is_rejected_before_package_guidance(self):
         with patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "22.04"}):
-            self.assertEqual(preflight.normalize_packages(["libasound2", "libglib2.0-0"]),
-                             ("libasound2", "libglib2.0-0"))
+            with self.assertRaisesRegex(RuntimeError, "requires Ubuntu 24.04 or newer"):
+                preflight.normalize_packages(["libasound2", "libglib2.0-0"])
 
     def test_unsupported_architecture_stops_before_dependency_work(self):
         with patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="aarch64")), \

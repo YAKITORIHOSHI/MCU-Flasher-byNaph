@@ -224,6 +224,13 @@ class MissingPythonChecks(unittest.TestCase):
             source = source.replace('[[ "$(uname -s)" != "Linux" ]]', "false")
         # Root CI uses an isolated fake desktop uid for this shell-only fixture.
         source = source.replace("(( EUID == 0 ))", "false")
+        # The copied launcher includes admission; use a supported release fixture
+        # for fake-installer shell orchestration on either native Bash or Git Bash.
+        release = self.root / "os-release"
+        release.write_text('ID=ubuntu\nVERSION_ID="24.04"\n', encoding="utf-8")
+        guard = (ROOT / "direct/ubuntu/release_guard.sh").read_text()
+        guard = guard.replace("/etc/os-release", shlex.quote(self.shell_path(release)))
+        (folder / "release_guard.sh").write_text(guard, encoding="utf-8", newline="\n")
         self.script.write_text(source, encoding="utf-8", newline="\n")
         self.env = os.environ.copy()
         self.env.pop("BASH_ENV", None)

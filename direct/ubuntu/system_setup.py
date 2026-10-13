@@ -23,6 +23,8 @@ ALLOWED_PACKAGES = frozenset(("python3", "python3-venv", "python3-tk", "libasoun
 
 def install_system_packages(packages, *, env=None) -> None:
     """One bounded install attempt, with OS-owned authentication and visible output."""
+    from src.modules.ubuntu_release import require_supported_ubuntu
+    require_supported_ubuntu()
     packages = normalize_packages(packages)
     if not packages:
         return

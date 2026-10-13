@@ -9,7 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QPainter
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
-    QTreeWidgetItem, QSplitter, QPlainTextEdit, QMessageBox, QTextEdit, QHeaderView)
+    QTreeWidgetItem, QSplitter, QPlainTextEdit, QMessageBox, QTextEdit, QHeaderView,
+    QSizePolicy)
 
 from main.qt.icons import ActionButton
 from main.qt.signals import signals
@@ -32,6 +33,7 @@ class CodePreview(QPlainTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._number_background = QColor("#151922")
         self._number_foreground = QColor("#adc0d3")
@@ -106,6 +108,7 @@ class AIChangesPanel(QWidget):
     def __init__(self, backend=None, parent=None):
         super().__init__(parent)
         self._backend = backend
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self.setObjectName("ai-changes-panel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._records = {}
@@ -115,6 +118,7 @@ class AIChangesPanel(QWidget):
         layout.setContentsMargins(10, 6, 10, 6)
         header = QHBoxLayout()
         self._status = QLabel("No AI changes yet", self)
+        self._status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.addWidget(self._status, 1)
         self._review = ActionButton("Review file", self)
         self._review.setToolTip("Open this file's pending Accept / Reject review")
@@ -138,9 +142,11 @@ class AIChangesPanel(QWidget):
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.setMinimumWidth(0)
+        self._tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         # Keep file identity visible even when the history shares a narrow pane
         # with previews. A separate timestamp column can consume the whole pane.
         self._tree.setUniformRowHeights(False)
+        self._tree_indent = self._tree.indentation()
         self._tree.currentItemChanged.connect(self._select)
         self._tree.itemDoubleClicked.connect(lambda *_: self._review_selected())
         previews = QWidget(splitter)
@@ -170,18 +176,18 @@ class AIChangesPanel(QWidget):
         from main.core.config import get_monitor_font_size
         size = get_monitor_font_size()
         text.setFont(QFont("Consolas", size))
+        text.setStyleSheet(f"QPlainTextEdit {{ font-family: 'Consolas'; font-size: {size}pt; }}")
         column.addWidget(text, 1)
         layout.addWidget(panel, 1)
         return text
 
     @staticmethod
     def _prompt_title(record):
-        title = str(record.get("prompt", "Assistant changes"))
-        # The legacy fallback was emitted only by the integrated PTY tracker.
-        # Other unknown external edits retain their explicit unknown-source title.
-        cli = (str(record.get("promptSource", "")).casefold() == "cli"
-               or title == "Assistant prompt (title unavailable)")
-        return "Assistant Prompt (CLI)" if cli else title
+        # Earlier trackers tagged both channels as CLI; titles cannot recover
+        # that provenance. New records explicitly version their channel tag.
+        source = (record.get("promptSource") if type(record.get("promptSourceVersion")) is int
+                  and record["promptSourceVersion"] == 1 else "external")
+        return {"cli": "CLI", "assistant": "Assistant", "mixed": "Mixed sources"}.get(source, "Unknown source")
 
     def refresh(self, *_):
         manager = getattr(self._backend, "ai_review_manager", None)
@@ -195,7 +201,7 @@ class AIChangesPanel(QWidget):
             group_id = record.get("groupId", "")
             if group_id not in groups:
                 group = QTreeWidgetItem([self._prompt_title(record), ""])
-                group.setToolTip(0, record.get("prompt", ""))
+                group.setToolTip(0, f"Source: {self._prompt_title(record)}\n{record.get('prompt', '')}")
                 self._tree.addTopLevelItem(group)
                 group.setFirstColumnSpanned(True)
                 group.setExpanded(True)
@@ -207,7 +213,7 @@ class AIChangesPanel(QWidget):
             decision = record.get("status", "pending").capitalize()
             card = QTreeWidgetItem([f"{Path(record['path']).name}\n{edited}", decision])
             card.setData(0, Qt.ItemDataRole.UserRole, record["id"])
-            tooltip = f"{record['path']}\nEdited: {edited}\nDecision: {decision}"
+            tooltip = f"{record['path']}\nEdited: {edited}\nDecision: {decision}\nSource: {self._prompt_title(record)}"
             card.setToolTip(0, tooltip)
             card.setToolTip(1, tooltip)
             groups[group_id].addChild(card)
@@ -218,6 +224,7 @@ class AIChangesPanel(QWidget):
         self._select(target)
         count = len(self._records)
         self._status.setText(f"{count} change{'s' if count != 1 else ''}" if count else "No changes yet")
+        self._status.setToolTip(self._status.text())
         self._clear.setEnabled(bool(self._records) and not self._busy)
 
     def _selected_id(self):
@@ -315,25 +322,46 @@ class AIChangesPanel(QWidget):
             color.setAlpha(45)
             setattr(self, name, color)
         self._select(self._tree.currentItem())
+        self._adapt_layout(self.width(), self.height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        compact = event.size().width() < 650
+        self._adapt_layout(event.size().width(), event.size().height())
+
+    def _adapt_layout(self, width, height):
+        compact = width < 650
         metrics = self._tree.fontMetrics()
         self._tree.setMinimumWidth(0 if compact else (
             metrics.horizontalAdvance("Sep 30, 2000 23:59:59") + metrics.horizontalAdvance("Accepted")
             + self._tree.indentation() * 2 + 32))
+        row_minimum = self._tree.header().sizeHint().height() + metrics.height() * 2 + self._tree.frameWidth() * 2
+        stacked = compact and height >= 240
+        short_history = compact and not stacked
+        self._tree.setIndentation(12 if short_history else self._tree_indent)
         self._tree.setMinimumHeight(min(
             self._tree.header().height() + metrics.height() * 7 + self._tree.frameWidth() * 2,
-            max(72, event.size().height() // 3)) if compact else 0)
+            max(row_minimum, height // 3)) if stacked else row_minimum)
         for button, full, short in ((self._review, "Review file", "Review"),
                                     (self._delete, "Delete card", "Delete"),
                                     (self._clear, "Delete all", "Clear")):
             button.setText(short if compact else full)
-        self._splitter.setOrientation(Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal)
+        self._splitter.setOrientation(Qt.Orientation.Vertical if stacked else Qt.Orientation.Horizontal)
+        if getattr(self, "_short_history", None) != short_history:
+            self._short_history = short_history
+            self._splitter.setStretchFactor(0, 1)
+            self._splitter.setStretchFactor(1, 1 if short_history else 3)
+            if short_history:
+                self._splitter.setSizes([width // 2, width // 2])
+        for preview in (self._before, self._after):
+            preview.setMinimumHeight(preview.fontMetrics().lineSpacing()
+                + round(preview.document().documentMargin() * 2)
+                + preview.frameWidth() * 2
+                + preview.horizontalScrollBar().sizeHint().height())
 
     def set_font_size(self, size):
         for preview in (self._before, self._after):
             font = preview.font()
             font.setPointSize(int(size))
             preview.setFont(font)
+            preview.setStyleSheet(f"QPlainTextEdit {{ font-family: 'Consolas'; font-size: {int(size)}pt; }}")
+        self._adapt_layout(self.width(), self.height())

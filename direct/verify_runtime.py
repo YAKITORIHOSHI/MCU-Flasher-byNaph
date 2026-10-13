@@ -1032,7 +1032,7 @@ def qt_smoke(app, render_dir=None):
                     assert panel.rect().contains(QRect(position, button.size())), f"Panel {index} control outside pane: {button.text()}"
             if render_dir:
                 assert window.grab().save(str(render_dir / f"glass-small-tool-{index}.png"))
-            if index < 5:
+            if index < window._bottom_tabs.count() - 1:
                 check_small_panel(index + 1)
                 return
             window._bottom_tabs.setCurrentIndex(0)

@@ -23,7 +23,7 @@ from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QAbstractItemView,
-    QComboBox, QLineEdit
+    QComboBox, QLineEdit, QGridLayout, QSizePolicy
 )
 from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_colors import contrast_ratio, themed_log_colors
@@ -64,6 +64,7 @@ class SyntaxPanel(QWidget):
         sig_bus.project_updated.connect(self._on_project_updated)
 
         self._build_ui()
+        self.set_responsive_width(320)
         try:
             from main.core.config import get_monitor_font_size
             self.set_font_size(get_monitor_font_size())
@@ -88,42 +89,44 @@ class SyntaxPanel(QWidget):
 
         # ── Header Bar ────────────────────────────────────────────────────────
         header = QFrame()
+        self._header = header
         header.setObjectName("syntax-header")
+        header.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.setFixedHeight(36)
-        hl = QHBoxLayout(header)
+        hl = QGridLayout(header)
         hl.setContentsMargins(10, 2, 10, 2)
         hl.setSpacing(8)
         self._header_layout = hl
 
         lbl = QLabel("🔍 Syntax Diagnostics")
         self._title_lbl = lbl
-        hl.addWidget(lbl)
+        hl.addWidget(lbl, 0, 0)
 
         # Count badges
         self._badge_errors = QLabel("✖ 0")
         self._badge_errors.setStyleSheet(
             "background: #3d1c24; color: #f7768e; border: 1px solid #7a2d3c; border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
         )
-        hl.addWidget(self._badge_errors)
+        hl.addWidget(self._badge_errors, 0, 1)
 
         self._badge_warnings = QLabel("⚠ 0")
         self._badge_warnings.setStyleSheet(
             "background: #3d321c; color: #e0af68; border: 1px solid #7a632d; border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
         )
-        hl.addWidget(self._badge_warnings)
+        hl.addWidget(self._badge_warnings, 0, 2)
 
         # Filter dropdown
         lbl_filter = QLabel("Show:")
         self._lbl_filter = lbl_filter
         lbl_filter.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 4px;")
-        hl.addWidget(lbl_filter)
+        hl.addWidget(lbl_filter, 0, 3)
 
         self._filter_combo = QComboBox()
         self._filter_combo.addItems(["All Issues", "✖ Errors Only", "⚠ Warnings Only"])
         self._filter_combo.setFixedWidth(125)
         self._filter_combo.setStyleSheet("QComboBox { font-size: 11px; padding: 2px 6px; }")
         self._filter_combo.currentTextChanged.connect(self._apply_filters)
-        hl.addWidget(self._filter_combo)
+        hl.addWidget(self._filter_combo, 0, 4)
 
         # Search filter input
         self._search_input = QLineEdit()
@@ -136,13 +139,13 @@ class SyntaxPanel(QWidget):
             "QLineEdit:focus { border: 1px solid #56cfbf; }"
         )
         self._search_input.textChanged.connect(self._apply_filters)
-        hl.addWidget(self._search_input)
+        hl.addWidget(self._search_input, 0, 5)
 
         self._lbl_status = QLabel("Ready")
+        self._lbl_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._lbl_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-family: monospace;")
-        hl.addWidget(self._lbl_status)
-
-        hl.addStretch()
+        hl.addWidget(self._lbl_status, 0, 6)
+        hl.setColumnStretch(6, 1)
 
         btn_run = QPushButton("▶ Run Check")
         btn_run.setFixedHeight(22)
@@ -153,7 +156,7 @@ class SyntaxPanel(QWidget):
         )
         btn_run.clicked.connect(self._run_manual_check)
         self._btn_run = btn_run
-        hl.addWidget(btn_run)
+        hl.addWidget(btn_run, 0, 7)
 
         btn_clear = QPushButton("Clear")
         btn_clear.setFixedHeight(22)
@@ -164,12 +167,13 @@ class SyntaxPanel(QWidget):
         )
         btn_clear.clicked.connect(self.clear)
         self._btn_clear = btn_clear
-        hl.addWidget(btn_clear)
+        hl.addWidget(btn_clear, 0, 8)
 
         layout.addWidget(header)
 
         # ── Results Table ─────────────────────────────────────────────────────
         self._table = QTableWidget(0, 4)
+        self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self._table.setObjectName("syntax-table")
         self._table.setHorizontalHeaderLabels(["File", "Line", "Severity", "Description"])
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -230,6 +234,39 @@ class SyntaxPanel(QWidget):
             self._btn_clear.setText("🗑")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
+        # Preserve all diagnostics controls at half-width scaled monitors.
+        # Reuse the same widgets so focus, filters and search text survive reflow.
+        controls = (self._title_lbl, self._badge_errors, self._badge_warnings,
+                    self._lbl_filter, self._filter_combo, self._search_input,
+                    self._lbl_status, self._btn_run, self._btn_clear)
+        visible = [widget for widget in controls if widget is not self._lbl_filter or width >= 1100]
+        margins = self._header_layout.contentsMargins()
+        required = sum(widget.minimumSizeHint().width() for widget in visible
+                       if widget is not self._lbl_status)
+        required += margins.left() + margins.right() + self._header_layout.spacing() * (len(visible) - 1) + 28
+        stacked = width < required
+        if stacked:
+            self._search_input.setMinimumWidth(0)
+            self._search_input.setMaximumWidth(16777215)
+        mode = (stacked, width >= 1100)
+        if getattr(self, "_header_rows", None) != mode:
+            self._header_rows = mode
+            while self._header_layout.count():
+                self._header_layout.takeAt(0)
+            for column in range(9):
+                self._header_layout.setColumnStretch(column, 0)
+            if stacked:
+                for column, widget in enumerate((self._title_lbl, self._badge_errors,
+                        self._badge_warnings, self._lbl_status, self._btn_run, self._btn_clear)):
+                    self._header_layout.addWidget(widget, 0, column)
+                self._header_layout.setColumnStretch(3, 1)
+                self._header_layout.addWidget(self._filter_combo, 1, 0, 1, 3)
+                self._header_layout.addWidget(self._search_input, 1, 3, 1, 3)
+            else:
+                for column, widget in enumerate(visible):
+                    self._header_layout.addWidget(widget, 0, column)
+                self._header_layout.setColumnStretch(visible.index(self._lbl_status), 1)
+        self._header.setFixedHeight(max(36, self._header_layout.sizeHint().height()))
 
     def set_font_size(self, size: int) -> None:
         """Update syntax diagnostic table font size."""
@@ -243,6 +280,9 @@ class SyntaxPanel(QWidget):
         self._table.setFont(font)
         self._table.setStyleSheet(getattr(self, "_table_base_style", "") + f"QTableWidget {{ font-size: {sz}pt; }}")
         self._table.resizeRowsToContents()
+        self._table.setMinimumHeight(self._table.horizontalHeader().sizeHint().height()
+                                     + self._table.fontMetrics().lineSpacing()
+                                     + self._table.frameWidth() * 2 + 4)
 
     def connect_signals(self, sig_bus, *, connect_theme=True) -> None:
         """Connect to global signal bus for real-time diagnostic updates."""

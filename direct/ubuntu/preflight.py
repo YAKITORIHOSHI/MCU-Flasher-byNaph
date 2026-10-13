@@ -17,6 +17,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from src.modules.ubuntu_release import require_supported_ubuntu
 
 # Ubuntu package names are kept beside their SONAMEs so a first-run failure
 # explains the actual missing dependency instead of Qt's generic xcb warning.
@@ -28,8 +30,8 @@ SYSTEM_LIBRARIES = (
     ("Xfixes", "libxfixes3"), ("Xrandr", "libxrandr2"), ("Xrender", "libxrender1"),
     ("Xtst", "libxtst6"), ("xkbfile", "libxkbfile1"), ("xkbcommon", "libxkbcommon0"),
     ("dbus-1", "libdbus-1-3"), ("fontconfig", "libfontconfig1"), ("freetype", "libfreetype6"),
-    ("glib-2.0", "libglib2.0-0"), ("xcb", "libxcb1"),
-    ("asound", "libasound2"), ("xcb-cursor", "libxcb-cursor0"),
+    ("glib-2.0", "libglib2.0-0t64"), ("xcb", "libxcb1"),
+    ("asound", "libasound2t64"), ("xcb-cursor", "libxcb-cursor0"),
     ("xkbcommon-x11", "libxkbcommon-x11-0"), ("xcb-icccm", "libxcb-icccm4"),
     ("xcb-image", "libxcb-image0"), ("xcb-keysyms", "libxcb-keysyms1"),
     ("xcb-render-util", "libxcb-render-util0"), ("xcb-xinerama", "libxcb-xinerama0"),
@@ -46,22 +48,9 @@ SYSTEM_TOOLS = (("bash", "bash"), ("git", "git"), ("make", "build-essential"),
 CLIPBOARD_PACKAGES = ("xclip", "wl-clipboard")
 
 
-def _ubuntu_t64_packages() -> bool:
-    try:
-        release = platform.freedesktop_os_release()
-        if release.get("ID") == "ubuntu" and int(release.get("VERSION_ID", "0").split(".")[0]) >= 24:
-            return True
-    except (OSError, ValueError, AttributeError):
-        pass
-    return False
-
-
-def _alsa_package() -> str:
-    return "libasound2t64" if _ubuntu_t64_packages() else "libasound2"
-
-
 def normalize_packages(packages) -> tuple[str, ...]:
-    renamed = {"libasound2": "libasound2t64", "libglib2.0-0": "libglib2.0-0t64"} if _ubuntu_t64_packages() else {}
+    require_supported_ubuntu()
+    renamed = {"libasound2": "libasound2t64", "libglib2.0-0": "libglib2.0-0t64"}
     return tuple(dict.fromkeys(renamed.get(item, item) for item in packages))
 
 
@@ -95,6 +84,7 @@ def _check_tk() -> None:
 
 
 def host_preflight(*, require_display=False) -> None:
+    require_supported_ubuntu()
     if not sys.platform.startswith("linux"):
         raise RuntimeError("This launcher requires native Ubuntu/Linux. Use MCU_Flasher.exe on Windows.")
     if sys.version_info < (3, 10):
@@ -178,6 +168,7 @@ def check_qt_python_compatibility() -> None:
 
 def runtime_preflight(root=ROOT) -> None:
     """Validate private imports and native Qt plugins without creating windows."""
+    require_supported_ubuntu()
     root = Path(root).resolve()
     expected = root / ".venv-linux"
     if sys.prefix == sys.base_prefix or Path(sys.prefix).resolve() != expected:

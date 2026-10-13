@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
-from main.core.cloud_sketch_service import CloudSketchService, read_project_link
+from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, read_project_link
 from main.core.credential_store import save_cloud_configuration
 
 
@@ -196,6 +196,7 @@ class _CloudUploadDialog(QDialog):
         row.addWidget(self.browse_button)
         content.addLayout(row)
         self.name = QLineEdit(Path(root).name if root else "", body)
+        self.name.setMaxLength(100)
         self.name.setMinimumWidth(0)
         self.name.setPlaceholderText("Sketch name")
         self.name.setAccessibleName("Cloud sketch name")
@@ -230,7 +231,80 @@ class _CloudUploadDialog(QDialog):
             self.name.setText(Path(path).name)
 
 
+class _CloudSketchActionDialog(QDialog):
+    """Compact rename/collision prompt with pinned actions and a scrolling body."""
+
+    def __init__(self, name, parent, *, matches=None):
+        super().__init__(parent)
+        self.choice = ""
+        self.setWindowTitle("Sketch already exists" if matches else "Rename cloud sketch")
+        card = GlassCard(self, radius=10)
+        card.set_palette(parent._palette)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        self._body_scroll, body, content = _prompt_body(card, layout)
+        note = QLabel(body)
+        note.setTextFormat(Qt.TextFormat.PlainText)
+        note.setWordWrap(True)
+        note.setMinimumWidth(0)
+        note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        content.addWidget(note)
+        self.name = QLineEdit(name, body)
+        self.name.setMaxLength(100)
+        self.name.setMinimumWidth(0)
+        self.name.setAccessibleName("New cloud sketch name")
+        self.target = QComboBox(body)
+        self.target.setMinimumWidth(0)
+        self.target.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        if matches:
+            note.setText(f'A sketch named “{name}” already exists. Replace its cloud sources and keep version history, or save a numbered copy.')
+            self.name.hide()
+            for row in matches:
+                self.target.addItem(f"{row['name']} · Version {row['revision']}", dict(row))
+                self.target.setItemData(self.target.count() - 1, row['name'], Qt.ItemDataRole.ToolTipRole)
+            self.target.setAccessibleName("Existing sketch to replace")
+            self.target.setVisible(len(matches) > 1)
+            content.addWidget(self.target)
+        else:
+            note.setText("Enter a new cloud name. Local sketch folders and files are kept.")
+            self.target.hide()
+            content.addWidget(self.name)
+        content.addStretch(1)
+        actions = QHBoxLayout()
+        def add(text, choice):
+            button = QPushButton(text, card)
+            button.clicked.connect(lambda: self._choose(choice))
+            actions.addWidget(button)
+            return button
+        add("Cancel", "")
+        if matches:
+            add("Replace", "replace")
+            self.confirm_button = add("Save a copy", "copy")
+        else:
+            self.confirm_button = add("Rename", "rename")
+            self.name.textChanged.connect(lambda text: self.confirm_button.setEnabled(bool(text.strip())))
+        self.confirm_button.setProperty("cloudPrimary", True)
+        self.confirm_button.setDefault(True)
+        layout.addLayout(actions)
+        self.setStyleSheet(parent.styleSheet())
+        _fit_prompt_fields((self.name,))
+        from main.qt.responsive import fit_dialog, ScreenWatcher
+        fit_dialog(self, (480, 250), (320, 210))
+        self._screen_watcher = ScreenWatcher(self, lambda _screen: _fit_prompt_fields((self.name,)))
+        if not matches:
+            self.name.selectAll()
+            self.name.setFocus()
+
+    def _choose(self, choice):
+        self.choice = choice
+        self.accept() if choice else self.reject()
+
+
 class CloudSketchPanel(QWidget):
+    palette_changed = Signal(dict)
     project_pulled = Signal(str)
     cloud_opened = Signal(str)
     _finished = Signal(int, object)
@@ -300,6 +374,9 @@ class CloudSketchPanel(QWidget):
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(7)
         self._scroll.setWidget(content)
+        self._scroll.setAutoFillBackground(False)
+        self._scroll.viewport().setAutoFillBackground(False)
+        content.setAutoFillBackground(False)
         outer.addWidget(self._scroll, 1)
 
         self._content_layout.addStretch(1)
@@ -462,6 +539,13 @@ class CloudSketchPanel(QWidget):
         sketch_heading.addWidget(self._sketch_title, 1)
         self._refresh_btn = self._button("Refresh", self._refresh, self._sketch_header)
         sketch_heading.addWidget(self._refresh_btn)
+        self._sketch_actions = self._button("Actions", lambda: None, self._sketch_header)
+        self._sketch_actions.setAccessibleName("Selected cloud sketch actions")
+        self._sketch_menu = QMenu(self._sketch_actions)
+        self._rename_sketch_action = self._sketch_menu.addAction("Rename sketch…", self._rename_sketch)
+        self._delete_sketch_action = self._sketch_menu.addAction("Delete sketch…", self._delete_sketch)
+        self._sketch_actions.setMenu(self._sketch_menu)
+        sketch_heading.addWidget(self._sketch_actions)
         sketches.addWidget(self._sketch_header)
         self._sketches = QListWidget(sketches_card)
         self._sketches.setAccessibleName("Cloud sketch list")
@@ -650,7 +734,8 @@ class CloudSketchPanel(QWidget):
                  include_connectivity=False, redactions=()):
         if self._closed or self._busy or self._waiting_for_save:
             return False
-        if kind in {"refresh", "upload", "open", "push", "pull", "restore", "history"} \
+        authenticated_kinds = {"upload", "open", "push", "pull", "restore", "history", "rename_sketch", "delete_sketch"}
+        if kind in authenticated_kinds | {"refresh"} \
                 and not self._state.get("authenticated"):
             self._status.setText("Sign in to manage cloud sketches.")
             return False
@@ -662,6 +747,7 @@ class CloudSketchPanel(QWidget):
         self._busy = True
         self._generation += 1
         generation, root = self._generation, self._active_root()
+        account_uid = self._state.get("account", {}).get("uid") if kind in authenticated_kinds else None
         token = object() if project_io and self._backend else None
         self._project_token = token
         if token:
@@ -680,9 +766,13 @@ class CloudSketchPanel(QWidget):
                         message = message.replace(secret, "[hidden]")
                 return message[:1500]
             try:
+                if account_uid and self._service.account_info.get("uid") != account_uid:
+                    raise ValueError("The cloud account changed. Refresh before managing sketches.")
                 result["value"] = operation()
             except Exception as exc:
                 result["error"] = safe_message(exc)
+                if isinstance(exc, CloudNameConflict):
+                    result["upload_conflict"] = {"root": exc.root, "name": exc.name, "matches": exc.matches}
                 if getattr(exc, "local_sources_changed", False):
                     result["sources_changed"] = True
                     result["value"] = root
@@ -722,6 +812,10 @@ class CloudSketchPanel(QWidget):
             return
         self._apply_state(result.get("state", {}))
         kind, value = result["kind"], result.get("value")
+        if result.get("upload_conflict"):
+            self._complete_job()
+            self._resolve_upload_conflict(result["upload_conflict"])
+            return
         if result.get("error") and result.get("sources_changed"):
             self._reload_pending = result
             self._reload_current()
@@ -761,7 +855,11 @@ class CloudSketchPanel(QWidget):
             self._status.setText("Firebase is reachable." if value else
                                  "Firebase could not be reached. Check your internet connection.")
         elif kind == "upload":
-            self._status.setText("Local sketch uploaded. Open it from the cloud list in its own workspace.")
+            self._status.setText(f"Uploaded {(value or {}).get('name', 'local sketch')}. Open it from the cloud list.")
+        elif kind == "rename_sketch":
+            self._status.setText(f"Cloud sketch renamed to {(value or {}).get('name', '')}.")
+        elif kind == "delete_sketch":
+            self._status.setText("Cloud sketch deleted. Local sketch files are kept.")
         elif kind == "push":
             self._status.setText(f"Cloud sketch updated to revision {(value or {}).get('revision', '')}.")
             refresh_link = getattr(self._backend, "refresh_cloud_project_link", None)
@@ -959,7 +1057,7 @@ class CloudSketchPanel(QWidget):
         if link:
             metadata = next((row for row in self._state.get("sketches", [])
                              if row.get("id") == link.get("sketch_id")), {})
-            name = link.get("name") or metadata.get("name") or "Current cloud sketch"
+            name = metadata.get("name") or link.get("name") or "Current cloud sketch"
             self._linked.setText(f"Open sketch: {name}\nVersion {link['revision']} on this computer")
         else:
             self._linked.setText("")
@@ -988,8 +1086,13 @@ class CloudSketchPanel(QWidget):
         self._back_to_sign_in.setEnabled(idle)
         self._open_btn.setEnabled(idle and authenticated and bool(self._selected_sketch()) and not self._backend_busy())
         self._upload_btn.setEnabled(idle and authenticated and not self._backend_busy())
+        selected = bool(self._selected_sketch())
+        self._sketch_actions.setEnabled(idle and authenticated and selected and not self._backend_busy())
+        self._rename_sketch_action.setEnabled(self._sketch_actions.isEnabled())
+        self._delete_sketch_action.setEnabled(self._sketch_actions.isEnabled())
         link = self._state.get("link")
-        linked_account = bool(link and link.get("uid") == self._state.get("account", {}).get("uid"))
+        linked_account = bool(link and link.get("uid") == self._state.get("account", {}).get("uid")
+                              and any(row.get("id") == link.get("sketch_id") for row in self._state.get("sketches", [])))
         self._linked_section.setVisible(authenticated and linked_account)
         self._linked_actions.setVisible(authenticated and linked_account)
         if not linked_account:
@@ -1178,11 +1281,56 @@ class CloudSketchPanel(QWidget):
         except Exception:
             failed()
 
-    def _upload_local(self):
+    def _rename_sketch(self):
+        if self._busy or self._waiting_for_save or self._closed or self._backend_busy() or not self._state.get("authenticated"):
+            return
+        row = dict(self._selected_sketch())
+        if not row:
+            return
+        dialog = _CloudSketchActionDialog(row.get("name", ""), self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        name = dialog.name.text().strip()
+        dialog.deleteLater()
+        if accepted and name and not self._backend_busy():
+            self._request("rename_sketch", "Renaming cloud sketch…",
+                          lambda: self._service.rename_sketch(row["id"], name, row["revision"]))
+
+    def _delete_sketch(self):
+        if self._busy or self._waiting_for_save or self._closed or self._backend_busy() or not self._state.get("authenticated"):
+            return
+        row = dict(self._selected_sketch())
+        if not row:
+            return
+        prompt = QMessageBox(QMessageBox.Icon.Warning, "Delete cloud sketch",
+                             f'Permanently delete “{row.get("name", "Cloud sketch")}” and its cloud version history? Local sketch files are kept.',
+                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        prompt.setDefaultButton(QMessageBox.StandardButton.No)
+        accepted = prompt.exec() == QMessageBox.StandardButton.Yes
+        prompt.deleteLater()
+        if accepted and not self._backend_busy():
+            self._request("delete_sketch", "Deleting cloud sketch…",
+                          lambda: self._service.delete_sketch(row["id"], row["revision"]))
+
+    def _resolve_upload_conflict(self, conflict):
+        if self._closed or self._busy or self._backend_busy() or not self._state.get("authenticated"):
+            return
+        dialog = _CloudSketchActionDialog(conflict["name"], self, matches=conflict["matches"])
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        choice, row = dialog.choice, dialog.target.currentData()
+        dialog.deleteLater()
+        if not accepted:
+            self._status.setText("Upload cancelled. Cloud sketches are kept.")
+            return
+        options = {"duplicate": True} if choice == "copy" else {"replace_id": row["id"], "expected_revision": row["revision"]}
+        self._upload_local(root=conflict["root"], name=conflict["name"], options=options)
+
+    def _upload_local(self, *, root=None, name=None, options=None):
         if not self._state.get("authenticated"):
             self._status.setText("Sign in to upload a local sketch.")
             return
-        root, name = self._local_path.text().strip(), self._name.text().strip() or None
+        root = root if root is not None else self._local_path.text().strip()
+        name = name if name is not None else self._name.text().strip() or None
         if not root:
             self._status.setText("Choose a local sketch folder to upload.")
             return
@@ -1190,7 +1338,7 @@ class CloudSketchPanel(QWidget):
             from main.core.constants import is_application_codebase_dir
             if is_application_codebase_dir(root):
                 raise ValueError("Choose a sketch folder; the MCU Flasher application cannot be uploaded as a sketch.")
-            return self._service.upload_project(root, name=name)
+            return self._service.upload_project(root, name=name, **(options or {}))
         self._with_saved_project(root, lambda: self._request("upload", "Uploading local sketch…", upload, project_io=True))
 
     def _open_cloud(self):
@@ -1318,7 +1466,7 @@ class CloudSketchPanel(QWidget):
             card.set_palette(original)
         primary = readable_foreground(pal["BTN_COMPILE"])
         self.setStyleSheet(f"""
-            QWidget#cloud-sketch-panel {{ background: {pal['BG_DARKEST']}; }}
+            QWidget#cloud-sketch-panel {{ background: transparent; }}
             QWidget#cloud-content, QScrollArea {{ background: transparent; }}
             QLabel {{ color: {pal['TEXT']}; background: transparent; font-size: 12px; }}
             QLabel#cloud-heading {{ font-size: 15px; font-weight: 700; color: {pal['TEXT_BRIGHT']}; }}
@@ -1343,6 +1491,7 @@ class CloudSketchPanel(QWidget):
                 button.setIcon(icon(button._icon_name, primary if button.property("cloudPrimary") else pal["TEXT_BRIGHT"]))
         for index in range(self._sketches.count()):
             self._sketches.item(index).setIcon(icon("cloud", pal["CYAN"]))
+        self.palette_changed.emit(original)
 
 
 class CloudSketchDialog(QDialog):
@@ -1356,6 +1505,8 @@ class CloudSketchDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         self.panel = CloudSketchPanel(backend, self)
+        self._glass.set_palette(self.panel._palette)
+        self.panel.palette_changed.connect(self._glass.set_palette)
         layout.addWidget(self.panel)
         if on_pulled and self.panel._pull_handler() is None:
             self.panel.project_pulled.connect(on_pulled)

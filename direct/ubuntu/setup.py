@@ -62,6 +62,9 @@ def prepare_environment_directory(directory: Path) -> None:
 
 
 def main(argv=None) -> int:
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--project", help="Sketch folder to open after setup")

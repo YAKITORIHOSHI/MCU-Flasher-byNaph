@@ -24,8 +24,10 @@ from PySide6.QtCore import QCoreApplication, QEvent, QTimer, QUrl
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from main.qt.garbage_collection import install_gui_garbage_collector
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 APP.setQuitOnLastWindowClosed(False)
 CAPTURES = None
 
@@ -90,12 +92,17 @@ FIXTURE = r"""
     set_cursor_position: () => true,
     get_board_info: () => ({connected:false}),
     accept_ai_edit: (path, revision) => {
+      const snapshot = state.reviews.find(s => s.revision === revision) || {};
       state.reviews = state.reviews.filter(s => s.revision !== revision);
       state.history = {canUndo:true,canRedo:false,undoDepth:1,redoDepth:0,
-        undo:{path,fileName:path.split('/').pop(),action:'accepted'}};
+        undo:{path,fileName:path.split('/').pop(),action:'accepted',
+          promptSource:snapshot.promptSource,promptSourceVersion:snapshot.promptSourceVersion,
+          promptSources:snapshot.promptSources,prompt:snapshot.prompt}};
       return {success:true};
     },
     reject_ai_edit: () => ({success:false,error:'Fixture rejects writes'}),
+    undo_ai_edit_decision: () => ({success:false,error:'Fixture history is read-only'}),
+    redo_ai_edit_decision: () => ({success:false,error:'Fixture history is read-only'}),
     read_file: () => {throw new Error('Navigation must preserve its already loaded model');},
     save_file: () => {throw new Error('No fixture may write source files');},
     run_action: () => {throw new Error('No hardware action is permitted in this fixture');}
@@ -134,6 +141,8 @@ SNAPSHOT = r"""
       expanded:toggle.getAttribute('aria-expanded'), text:toggle.textContent,
       label:toggle.getAttribute('aria-label')} : null,
     title:byId('ai-review-title').textContent,
+    source:{text:byId('ai-review-source').innerText,title:byId('ai-review-source').title,
+      label:byId('ai-review-source').getAttribute('aria-label')},
     file:byId('ai-review-file').textContent,
     accept:{disabled:byId('ai-review-accept').disabled,display:byId('ai-review-accept').style.display},
     reject:{disabled:byId('ai-review-reject').disabled,display:byId('ai-review-reject').style.display},
@@ -147,6 +156,32 @@ SNAPSHOT = r"""
     pending:window.__reviewFixture.reviews.map(r => r.revision),
     calls:window.__reviewFixture.calls.filter(c => ['read_file','save_file','run_action','accept_ai_edit','reject_ai_edit'].includes(c.method))
   };
+})()
+"""
+
+
+BANNER_GEOMETRY = r"""
+(() => {
+  const banner = document.getElementById('ai-diff-banner');
+  const rect = element => {
+    const r = element.getBoundingClientRect();
+    return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};
+  };
+  const visible = element => getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0;
+  const controls = Array.from(banner.querySelectorAll('button')).filter(visible).map(button => ({
+    id:button.id,rect:rect(button),label:button.getAttribute('aria-label'),title:button.title,
+    text:button.innerText,disabled:button.disabled,
+    hit:document.elementFromPoint((rect(button).left+rect(button).right)/2,
+      (rect(button).top+rect(button).bottom)/2)?.closest('button')?.id
+  }));
+  return {viewport:{width:innerWidth,height:innerHeight},banner:rect(banner),
+    editor:rect(document.getElementById('editor-container')),controls,
+    content:Array.from(banner.children).filter(visible).map(element => ({id:element.id,rect:rect(element)})),
+    title:banner.title,description:banner.getAttribute('aria-description'),
+    navLabel:getComputedStyle(document.querySelector('.review-nav-label')).display,
+    badgeLabel:getComputedStyle(document.querySelector('.diff-badge-label')).display,
+    fileTitle:document.getElementById('ai-review-file').title,
+    positionTitle:document.getElementById('ai-review-position').title};
 })()
 """
 
@@ -213,6 +248,7 @@ class EditorReviewChecks(unittest.TestCase):
         return self.async_js(r"""
           const f = window.__reviewFixture, model = f.models.get(window.projectPathKey(f.mainPath));
           const snapshot = {path:f.mainPath,fileName:'Sketch.ino',revision:""" + json.dumps(revision) + r""",
+            promptSource:'assistant',promptSourceVersion:1,promptSources:['assistant'],prompt:'Fixture Assistant prompt',
             beforeExists:true,afterExists:true,content:model.getValue(),beforeContent:'// original',
             pendingCount:1,reviewIndex:1,diff:{added:1,modified:1,removed:2,firstLine:75,changes:[
               {type:'added',startLine:73,endLine:73},
@@ -336,6 +372,245 @@ class EditorReviewChecks(unittest.TestCase):
         self.review('after-reload')
         self.assertEqual(self.snapshot()['banner'], 'flex')
         self.assertEqual(self.snapshot()['toggle']['expanded'], 'true')
+
+    def test_review_and_history_fit_one_row_at_narrow_short_and_scaled_sizes(self):
+        self.review('responsive-review')
+        self.async_js(r"""
+          const f=window.__reviewFixture;
+          const main=f.reviews[0];
+          main.fileName='Extremely_long_source_filename_with_unicode_😀_and_details.ino';
+          main.pendingCount=2;main.reviewIndex=1;
+          main.diff.added=1234567;main.diff.modified=4567890;main.diff.removed=7890123;
+          const helper=f.models.get(window.projectPathKey(f.helperPath));
+          f.reviews.push({...main,path:f.helperPath,fileName:'helper.cpp',revision:'responsive-helper',
+            reviewIndex:2,content:helper.getValue(),beforeContent:helper.getValue(),diff:{}});
+          await window.reloadActiveFileWithDiff(f.mainPath);
+          document.querySelectorAll('#tab-bar .tab .dirty-dot').forEach(dot => dot.style.display='inline');
+          return true;
+        """)
+        baseline = self.js(r"""(() => {
+          const f=window.__reviewFixture;
+          return {models:Array.from(f.models.values()).map(m => ({uri:m.uri.toString(),content:m.getValue(),
+            version:m.getAlternativeVersionId()})),tabs:Array.from(document.querySelectorAll('#tab-bar .tab'))
+              .map(t => ({path:t._filePath,dirty:t.querySelector('.dirty-dot').style.display}))};
+        })()""")
+        sizes = (
+            ('wide',1000,620,1), ('short',1000,300,1), ('compact',620,240,1),
+            ('middle',520,240,1), ('badge-limit',480,220,1),
+            ('narrow',460,180,1), ('small',360,150,1), ('minimum',280,120,1),
+            ('scale125',800,400,1.25), ('scale150',720,330,1.5),
+            ('scale175',700,300,1.75), ('scale200',640,260,2),
+        )
+        for mode in ('review','history'):
+            if mode == 'history':
+                self.js(r"""(() => {
+                  const f=window.__reviewFixture;f.reviews=[];
+                  f.history={canUndo:true,canRedo:true,undoDepth:123,redoDepth:45,
+                    undo:{path:f.mainPath,fileName:'Extremely_long_history_filename_😀.ino',action:'accepted',
+                      promptSource:'assistant',promptSourceVersion:1,promptSources:['assistant'],prompt:'Fixture Assistant history prompt'},
+                    redo:{path:f.helperPath,fileName:'helper.cpp',action:'rejected'}};
+                  window.resetAiReviewForProject();return true;
+                })()""")
+                until(lambda: 'History' in self.snapshot()['title'])
+            expected_ids = {'ai-history-undo','ai-history-redo','ai-history-close'} if mode == 'history' else {
+                'ai-review-previous','ai-review-next','ai-review-reject','ai-review-accept','ai-history-close'}
+            for theme in ('default','light','solarized'):
+                self.js('window.__reviewFixture.theme=' + json.dumps(theme) + ';window.setEditorTheme(window.__reviewFixture.theme);true')
+                for label,width,height,zoom in sizes:
+                    with self.subTest(mode=mode,theme=theme,size=label):
+                        self.page.setZoomFactor(zoom)
+                        self.view.resize(width,height)
+                        until(lambda: abs(self.js('innerWidth') - width/zoom) <= 1 and
+                            abs(self.js('innerHeight') - height/zoom) <= 1)
+                        self.async_js('await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));return true;')
+                        geometry = self.js(BANNER_GEOMETRY)
+                        bar, editor = geometry['banner'], geometry['editor']
+                        self.assertLessEqual(bar['height'], 42, geometry)
+                        self.assertGreaterEqual(bar['left'], editor['left'], geometry)
+                        self.assertLessEqual(bar['right'], editor['right'] + .5, geometry)
+                        self.assertGreaterEqual(bar['top'], editor['top'], geometry)
+                        self.assertLessEqual(bar['bottom'], editor['bottom'], geometry)
+                        self.assertEqual({c['id'] for c in geometry['controls']}, expected_ids, geometry)
+                        for control in geometry['controls']:
+                            r = control['rect']
+                            self.assertTrue(control['label'], control)
+                            self.assertTrue(control['title'], control)
+                            self.assertEqual(control['hit'], control['id'], control)
+                            self.assertGreaterEqual(r['width'], 28, control)
+                            self.assertGreaterEqual(r['height'], 28, control)
+                            self.assertGreaterEqual(r['left'], bar['left'], geometry)
+                            self.assertLessEqual(r['right'], bar['right'], geometry)
+                            self.assertLess(abs((r['top'] + r['bottom'])/2 - (bar['top'] + bar['bottom'])/2), 1, geometry)
+                        for item in geometry['content']:
+                            self.assertGreaterEqual(item['rect']['left'], bar['left'], geometry)
+                            self.assertLessEqual(item['rect']['right'], bar['right'] + .5, geometry)
+                        self.assertIn('C:/fixture/Sketch/Sketch.ino', geometry['title'])
+                        self.assertEqual(geometry['description'], geometry['title'])
+                        self.assertIn('Assistant source', geometry['title'])
+                        if geometry['viewport']['width'] <= 900 or geometry['viewport']['height'] <= 420:
+                            self.assertEqual(geometry['navLabel'], 'none', geometry)
+                            self.assertEqual(geometry['badgeLabel'], 'none', geometry)
+                            self.assertLessEqual(bar['height'], 38, geometry)
+                        if mode == 'review':
+                            self.assertIn('+1234567 added', geometry['title'])
+                            self.assertIn('1 of 2', geometry['title'])
+                            self.assertEqual(next(c['text'] for c in geometry['controls'] if c['id']=='ai-review-accept'), 'Accept')
+                            self.assertEqual(next(c['text'] for c in geometry['controls'] if c['id']=='ai-review-reject'), 'Reject')
+                        else:
+                            self.assertIn('123 undo / 45 redo', geometry['title'])
+                            self.assertIn('Last AI edit accepted', geometry['title'])
+                        if CAPTURES and label in ('wide','short','small','scale200'):
+                            # The DOM can report its new viewport before the
+                            # offscreen WebEngine surface paints that frame.
+                            self.async_js('await new Promise(resolve => setTimeout(resolve,120));return true;')
+                            self.view.grab().save(str(CAPTURES / f'{mode}-{theme}-{label}.png'))
+                self.js("document.getElementById('ai-history-close').focus();true")
+                self.assertEqual(self.js('document.activeElement.id'), 'ai-history-close')
+            unchanged = self.js(r"""(() => {
+              const f=window.__reviewFixture;
+              return {models:Array.from(f.models.values()).map(m => ({uri:m.uri.toString(),content:m.getValue(),
+                version:m.getAlternativeVersionId()})),tabs:Array.from(document.querySelectorAll('#tab-bar .tab'))
+                  .map(t => ({path:t._filePath,dirty:t.querySelector('.dirty-dot').style.display}))};
+            })()""")
+            self.assertEqual(unchanged, baseline)
+            self.assertEqual(self.snapshot()['calls'], [])
+        self.page.setZoomFactor(1)
+
+    def test_compact_controls_keep_navigation_decisions_and_history_actions(self):
+        self.review('compact-main')
+        self.async_js(r"""
+          const f=window.__reviewFixture,main=f.reviews[0];
+          main.pendingCount=2;main.reviewIndex=1;
+          const helper=f.models.get(window.projectPathKey(f.helperPath));
+          f.reviews.push({...main,path:f.helperPath,fileName:'helper.cpp',revision:'compact-helper',
+            reviewIndex:2,content:helper.getValue(),beforeContent:helper.getValue(),diff:{}});
+          await window.reloadActiveFileWithDiff(f.mainPath);return true;
+        """)
+        self.view.resize(320,140)
+        until(lambda: self.js('innerWidth') == 320)
+        self.async_js('await window.reloadActiveFileWithDiff(window.__reviewFixture.helperPath);return true;')
+        self.assertTrue(self.snapshot()['path'].endswith('Sketch.ino'))
+        self.assertIn('Another AI-edited file is queued', self.js("document.getElementById('ai-diff-banner').title"))
+        self.js("document.getElementById('ai-review-next').click();true")
+        until(lambda: self.snapshot()['path'].endswith('helper.cpp'))
+        until(lambda: not self.snapshot()['accept']['disabled'])
+        self.js("document.getElementById('ai-review-previous').click();true")
+        until(lambda: self.snapshot()['path'].endswith('Sketch.ino'))
+        until(lambda: not self.snapshot()['accept']['disabled'])
+        before = self.snapshot()
+        self.js("document.getElementById('ai-review-reject').click();true")
+        until(lambda: 'Fixture rejects writes' in self.js("document.getElementById('ai-diff-banner').title"))
+        rejected = self.snapshot()
+        notice = self.js("(() => {const node=document.getElementById('ai-review-message');return {label:node.getAttribute('aria-label'),icon:getComputedStyle(node.querySelector('.review-icon')).display,text:getComputedStyle(node.querySelector('.review-message-text')).display};})()")
+        self.assertEqual(notice['label'], 'Fixture rejects writes')
+        self.assertEqual(notice['icon'], 'block')
+        self.assertEqual(notice['text'], 'none')
+        for key in ('uri','content','version','readOnly','decorations','pending'):
+            self.assertEqual(rejected[key], before[key], key)
+        self.assertEqual([call['method'] for call in rejected['calls']], ['reject_ai_edit'])
+        self.assertFalse(rejected['accept']['disabled'])
+        self.assertFalse(rejected['reject']['disabled'])
+        self.js(r"""(() => {
+          const f=window.__reviewFixture;f.reviews=[];
+          f.history={canUndo:true,canRedo:true,undoDepth:1,redoDepth:1,
+            undo:{path:f.mainPath,fileName:'Sketch.ino',action:'accepted'},
+            redo:{path:f.helperPath,fileName:'helper.cpp',action:'rejected'}};
+          window.resetAiReviewForProject();return true;
+        })()""")
+        until(lambda: 'History' in self.snapshot()['title'])
+        for direction in ('undo','redo'):
+            self.js("document.getElementById('ai-history-" + direction + "').click();true")
+            until(lambda: self.js("window.__reviewFixture.calls.filter(c => c.method === '" + direction + "_ai_edit_decision').length") == 1)
+            until(lambda: not self.snapshot()[direction]['disabled'])
+        after = self.snapshot()
+        self.assertEqual(after['content'], before['content'])
+        self.assertEqual(after['version'], before['version'])
+        self.assertFalse(any(call['method'] in ('read_file','save_file','run_action') for call in after['calls']))
+
+    def test_review_and_history_source_labels_preserve_explicit_and_unknown_provenance(self):
+        self.review('source-provenance')
+        before = self.snapshot()
+        legacy = 'Assistant prompt (title unavailable)'
+        scenarios = (
+            ('cli',1,'Run the command-line edit\nKeep the literal prompt.','CLI','CLI',['cli']),
+            ('assistant',1,'Update from the built-in Assistant','Assistant','Asst.',['assistant']),
+            ('assistant',1,legacy,'Assistant','Asst.',['assistant']),
+            ('external',1,legacy,'Unknown','?',['external']),
+            ('external',1,'An external editor changed this source','Unknown','?',['external']),
+            ('mixed',1,'A Terminal and Assistant contributed','Mixed','Mixed',['cli','assistant']),
+            ('unrecognized',1,'No known source metadata','Unknown','?',None),
+            ('cli',None,legacy,'Unknown','?',None),
+            ('assistant',None,legacy,'Unknown','?',None),
+            ('cli',0,'Old channel metadata','Unknown','?',None),
+            ('cli','1','Unverified marker type','Unknown','?',None),
+            (None,None,legacy,'Unknown','?',None),
+            (None,None,'Assistant-like text alone cannot identify a source','Unknown','?',None),
+        )
+        for source,version,prompt,label,compact,sources in scenarios:
+            with self.subTest(source=source,prompt=prompt):
+                self.async_js(r"""
+                  const f=window.__reviewFixture,review=f.reviews[0];
+                  const source=""" + json.dumps(source) + r""";
+                  if (source===null) delete review.promptSource;else review.promptSource=source;
+                  const version=""" + json.dumps(version) + r""";
+                  if (version===null) delete review.promptSourceVersion;else review.promptSourceVersion=version;
+                  const sources=""" + json.dumps(sources) + r""";
+                  if (sources===null) delete review.promptSources;else review.promptSources=sources;
+                  review.prompt=""" + json.dumps(prompt) + r""";
+                  await window.reloadActiveFileWithDiff(f.mainPath);return true;
+                """)
+                title = label + ' source' + (' (CLI + Assistant)' if label == 'Mixed' else '') + '\n' + prompt
+                for width,height,expected in ((1000,620,label),(280,140,compact)):
+                    self.view.resize(width,height)
+                    until(lambda: self.js('innerWidth') == width)
+                    state = self.snapshot()
+                    self.assertEqual(state['source']['text'], expected)
+                    self.assertEqual(state['source']['title'], title)
+                    self.assertEqual(state['source']['label'], state['source']['title'])
+                    geometry = self.js(BANNER_GEOMETRY)
+                    self.assertIn(title, geometry['title'])
+                    self.assertLessEqual(geometry['banner']['height'],42)
+                    self.assertEqual({control['id'] for control in geometry['controls']},
+                        {'ai-review-accept','ai-review-reject','ai-history-close'})
+                    for control in geometry['controls']:
+                        self.assertEqual(control['hit'],control['id'])
+                        self.assertLessEqual(control['rect']['right'],geometry['banner']['right'])
+                self.js('window.setAiBannerHidden(true);true')
+                self.assertIn(label + ' Review',self.snapshot()['toggle']['text'])
+                self.js('window.setAiBannerHidden(false);true')
+                after = self.snapshot()
+                for key in ('uri','content','version','readOnly','decorations','pending','calls'):
+                    self.assertEqual(after[key],before[key],key)
+        for active_source,version,prompt,label,sources in (
+                ('assistant',1,'Assistant history prompt','Assistant',['assistant']),
+                ('cli',1,'CLI history prompt','CLI',['cli']),
+                ('mixed',1,'Combined history prompt','Mixed',['cli','assistant']),
+                ('external',1,legacy,'Unknown',['external']),('cli',None,legacy,'Unknown',None)):
+            self.js(r"""(() => {
+              const f=window.__reviewFixture;f.reviews=[];
+              f.history={canUndo:true,canRedo:true,undoDepth:1,redoDepth:1,
+                undo:{path:f.mainPath,fileName:'Sketch.ino',action:'accepted',
+                  promptSource:""" + json.dumps(active_source) + ',promptSourceVersion:' + json.dumps(version) +
+                  ',promptSources:' + json.dumps(sources) + ',prompt:' + json.dumps(prompt) + r"""},
+                redo:{path:f.helperPath,fileName:'helper.cpp',action:'rejected',
+                  promptSource:'cli',promptSourceVersion:1,promptSources:['cli'],prompt:'Separate CLI redo prompt'}};
+              window.resetAiReviewForProject();return true;
+            })()""")
+            title = label + ' source' + (' (CLI + Assistant)' if label == 'Mixed' else '') + '\n' + prompt
+            until(lambda: self.snapshot()['source']['title'] == title)
+            state = self.snapshot()
+            self.assertEqual(state['source']['title'],title)
+            labels = self.js("['ai-history-undo','ai-history-redo'].map(id => document.getElementById(id).getAttribute('aria-label'))")
+            self.assertIn('Undo ' + label + ' edit',labels[0])
+            self.assertIn('Redo CLI edit',labels[1])
+            self.js('window.setAiBannerHidden(true);true')
+            self.assertIn(label + ' History',self.snapshot()['toggle']['text'])
+            self.js('window.setAiBannerHidden(false);true')
+        self.js("(() => {const f=window.__reviewFixture;f.history.canUndo=false;f.history.undo=null;window.resetAiReviewForProject();return true;})()")
+        until(lambda: self.snapshot()['source']['title'] == 'CLI source\nSeparate CLI redo prompt')
+        self.assertEqual(self.snapshot()['content'],before['content'])
+        self.assertEqual(self.snapshot()['version'],before['version'])
+        self.assertEqual(self.snapshot()['calls'],[])
 
     def test_removed_anchor_and_existing_rulers_follow_each_theme(self):
         self.review()

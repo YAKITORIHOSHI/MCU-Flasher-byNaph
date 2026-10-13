@@ -1,15 +1,15 @@
 # Ubuntu setup and platform behavior
 
 Windows 10/11 keeps its downloaded Python in `src/_python` and its dependencies
-in `env`. Ubuntu 22.04/24.04/26.04 uses the Bash launcher and its separately
+in `env`. Ubuntu 24.04/26.04 uses the Bash launcher and its separately
 prepared `.venv-linux`. Preserve both Windows directories when cleaning Ubuntu
 or distributing one folder for both hosts. Linux runtime selection rejects
 Windows `env` even if copied files resemble a Linux environment. Windows starts
 through `MCU_Flasher.exe` or `direct/windows/run.vbs`, whose native path repair
 updates a moved Windows environment before Bootstrap proceeds.
 
-The desktop detects Windows, Ubuntu, and other Linux distributions. Windows
-continues to use the bundled runtime and Windows launchers. Linux uses a native
+The application supports Windows and native Ubuntu 24.04 or newer. Windows
+uses the bundled runtime and Windows launchers. Ubuntu uses a native
 virtual environment; copied Windows executables and package stores are never
 used for native Linux builds. Ubuntu launch/setup files are in `direct/ubuntu/`;
 Windows launch files are in `direct/windows/`. The shared GUI selects only one
@@ -25,12 +25,55 @@ host implementation through `main/core/toolchain.py`:
 | `direct/ubuntu/launch.py` / `preflight.py` | First-run Bootstrap handoff, desktop launch and dependency diagnostics |
 | `direct/ubuntu/install_desktop.py` | Local desktop shortcut and optional per-user Applications entry |
 
+## Native parity audit — 2026-10-13
+
+The current audit used Ubuntu 26.04.1 LTS (amd64), private Python 3.14.4,
+PySide6 6.12.0 and native Tcl/Tk 8.6. Qt, WebEngine, Tk and PTY probes ran
+under isolated Xvfb displays; the fake OpenCode CLI exercised actual capability
+replies, Unicode, bracketed paste, hide/reveal, restart and process shutdown.
+Cloud operations used isolated service/configuration fixtures, never real accounts.
+
+The existing cloud Rename/Delete/Replace/copy actions, transparent Cloud surface,
+static downloader glass, compact review/history and Syntax Check reflow were
+validated. New native release admission covers launch, repair, bootstrap,
+maintenance, direct GUI/downloader/sample-editor entries and native dependency
+preparation. The obsolete old-Xft Fontconfig supplement was removed; the Qt ABI
+check for custom Python 3.10/3.11 remains relevant on supported hosts.
+
+Tk native resizing now retains the previously focused downloader control only
+when X11 has no focused client; it refuses to force focus over another client.
+Prompt merges preserve original observed text and all channel markers through
+settling, pending journals and decision history. Combined AI Changes cards show
+Mixed; unknown or legacy attribution remains Unknown. Existing journals are not
+migrated. This is observed prompt context, not process-level write attribution.
+
+Cloud service/configuration/UI, prompt-source, AI Changes, offline editor review,
+recovery, runtime, performance, downloader appearance/workflow/preparation,
+maintenance and native PTY/OpenCode renderer verifiers passed. The full responsive
+suite passed at 100/125/150/175/200%; the changed Tk cases were rechecked at every
+scale. Captures and logs are under `temp/audit/ubuntu-parity-2026-10-13/`.
+Read-only `./MCU_Flasher --check` passes native host admission but reports missing
+native tool/board preparation. No live installer, AI request, cloud mutation,
+hardware operation or live-cache metadata generation ran. Windows-only checks
+were skipped on this host. Current 24.04/26.04 CI, native Windows, real provider
+integration, full live-store Bootstrap and physical hardware remain separate
+verification requirements; this run used X11/Xvfb rather than a new Wayland audit.
+
 ## Install on Ubuntu
 
-Use a normal desktop account and a writable checkout on 64-bit Intel/AMD Ubuntu.
+Use a normal desktop account and a writable checkout on 64-bit Intel/AMD Ubuntu 24.04 or newer.
+All Ubuntu launch, setup, repair, downloader and direct Python entry points validate
+the installed OS release before runtime preparation, installation or services.
+Older releases stop with “MCU Flasher requires Ubuntu 24.04 or newer.” Missing,
+malformed or non-Ubuntu OS release information stops explicitly. Rejection performs
+no cleanup or migration and preserves settings, credentials, projects and resources.
+The Bash check also runs before missing-system-Python rescue; it never sources
+os-release as shell code. Python admission reads native freedesktop release data.
+`direct/verify_ubuntu_release.py` uses isolated fixtures for older, minimum, newer
+and malformed releases; older fixtures verify rejection only.
 Python 3.10 or newer,
 four CPU cores, and enough space for native board toolchains are
-required. Ubuntu 22.04, 24.04 and 26.04 are the compatibility workflow targets.
+required. Ubuntu 24.04 and 26.04 are the compatibility workflow targets.
 The first-launch job uses each release's system Python, including Python 3.14
 on 26.04. Check the completed compatibility run for the revision being used;
 first-launch, runtime and compile results are separate jobs. CI uses X11/Xvfb
@@ -69,9 +112,8 @@ sudo apt install python3-venv python3-tk build-essential git libegl1 libgl1 libn
   ripgrep xclip wl-clipboard libsecret-tools
 ```
 
-Qt also needs ALSA and GLib: install `libasound2` and `libglib2.0-0` on Ubuntu
-22.04, or `libasound2t64` and `libglib2.0-0t64` on Ubuntu 24.04 and 26.04.
-Bootstrap selects these names automatically. See Qt's
+Qt also needs ALSA and GLib: install `libasound2t64` and `libglib2.0-0t64`
+on supported Ubuntu releases. Bootstrap uses these package names. See Qt's
 [Linux requirements](https://doc.qt.io/qtforpython-6/overviews/qtdoc-linux-requirements.html)
 for other distributions or missing system libraries.
 
@@ -451,7 +493,7 @@ full default Bootstrap, opens the actual Monaco workspace, verifies a prepared
 launch, clicks Compile for ESP32 and runs the runtime checks. It redirects home
 paths in the fixture and prohibits serial opens; installers run normally only
 inside the fixture. It leaves logs and firmware there and never installs system
-packages. CI runs this separately on Ubuntu 22.04/24.04/26.04; its explicit
+packages. CI runs this separately on Ubuntu 24.04/26.04; its explicit
 `--allow-small-runner` override affects only the disposable copy's CPU admission.
 
 ```bash
@@ -560,20 +602,6 @@ heights, because offscreen windows have smaller decorations and can fit forms
 at heights that require scrolling on Wayland. Fixed monitor cases and complete
 field visibility, text and font assertions remain in place.
 The standalone browser-loading suite passed 29 checks on Python 3.14.4.
-The Ubuntu 22.04/Python 3.10 failure in run 38115716448 was reproduced with
-matching native Python, Tk and libc hashes. A hardware watchpoint identified
-Tk's retired font error callback writing into an expired stack slot after
-libXft 2.3.4 submitted unsupported color glyphs. Before creating the downloader's
-Tk root, `tk_font_runtime.py` now supplements the process's existing Fontconfig
-configuration to exclude color fallback only on libXft before 2.3.5. Unicode
-text, requested fonts, user configuration files and environment are preserved.
-Modern Xft keeps color fonts. The unchanged 29-check browser suite passed four
-times on the matched Jammy graph, including a debug allocator run; disabling
-only the compatibility helper reproduced the original crash. Native Ubuntu 26
-also passed all 29 browser checks and the full runtime/recovery fixture.
-The failure-only CI diagnostic records native runtime versions and binary
-hashes alongside full GDB stacks, registers and shared-library mappings. It
-retains the original failure and bounds both diagnostic subprocesses.
 Cloud service, owner-ticket service and provider configuration fixtures passed
 38, 27 and 10 checks. Isolated launch, Bootstrap, Offline Mode, platform and
 PTY cleanup fixtures passed 107 checks, with two Windows-only cases skipped.
@@ -615,8 +643,8 @@ authentication. The isolated system-setup suite verifies successful installation
 cancellation, apt failures, dependency rechecks, private-runtime continuation
 and missing-Python rescue with fake installers. Those UI/system checks did not
 run installers or firmware operations; separate isolated native first-run and
-ESP32 Compile probes are described below. Ubuntu 22.04, other Wayland desktop
-environments and actual hardware remain separate checks.
+ESP32 Compile probes are described below. Other Wayland desktop environments
+and actual hardware remain separate checks.
 Windows driver installers and UNC mappings remain Windows-specific; the new
 `MCU_Flasher` supplies Ubuntu's native executable launcher.
 

@@ -22,6 +22,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame
 from main.qt.cloud_sketch_panel import (
     CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
+    _CloudSketchActionDialog,
 )
 from main.qt.project_dialog import ProjectDialog
 from main.qt.theme import build_stylesheet, register_fonts
@@ -128,9 +129,18 @@ class FakeService:
         self.record("push", folder, sketch_id, revision)
         return {"revision": 4}
 
-    def upload_project(self, folder, name=None):
-        self.record("upload", folder, name)
+    def upload_project(self, folder, name=None, **options):
+        self.record("upload", folder, name, **options)
         return {"id": "fixture", "revision": 1}
+
+    def rename_sketch(self, sketch_id, name, revision):
+        self.record("rename_sketch", sketch_id, name, revision)
+        self.rows = [dict(row, name=name, revision=revision + 1) if row["id"] == sketch_id else row for row in self.rows]
+        return next(row for row in self.rows if row["id"] == sketch_id)
+
+    def delete_sketch(self, sketch_id, revision):
+        self.record("delete_sketch", sketch_id, revision)
+        self.rows = [row for row in self.rows if row["id"] != sketch_id]
 
     def list_revisions(self, sketch_id):
         self.record("history", sketch_id)
@@ -372,6 +382,81 @@ class CloudUIChecks(unittest.TestCase):
                             self.assertGreater(dialog._body_scroll.verticalScrollBar().maximum(), 0)
                         self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-{kind}-prompt-{width}-{height}.png")))
                     dialog.close()
+
+    def test_selected_sketch_actions_rename_delete_and_busy_guards(self):
+        panel = self.panel()
+        self.assertTrue(panel._sketch_actions.isEnabled())
+        def rename(dialog):
+            dialog.name.setText("Renamed sensor")
+            return QDialog.DialogCode.Accepted
+        with patch.object(_CloudSketchActionDialog, "exec", rename):
+            panel._rename_sketch()
+        self.wait(lambda: not panel._busy)
+        self.assertEqual(self.service.rows[0]["name"], "Renamed sensor")
+        self.assertEqual(next(call for call in self.service.calls if call[0] == "rename_sketch")[1][1], "Renamed sensor")
+        self.backend.is_busy = True
+        panel._delete_sketch()
+        panel._rename_sketch()
+        self.assertFalse(any(call[0] == "delete_sketch" for call in self.service.calls))
+        self.backend.is_busy = False
+        with patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.No):
+            panel._delete_sketch()
+        self.assertFalse(any(call[0] == "delete_sketch" for call in self.service.calls))
+        with patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Yes):
+            panel._delete_sketch()
+        self.wait(lambda: not panel._busy)
+        self.assertFalse(self.service.rows)
+        self.assertFalse(panel._sketch_actions.isEnabled())
+        self.assertEqual((self.local / "Sensor.ino").read_text(), "// local fixture\n")
+
+    def test_duplicate_upload_decisions_are_serialized_and_cancel_preserves_sketches(self):
+        from main.core.cloud_sketch_service import CloudNameConflict
+        panel = self.panel()
+        panel._local_path.setText(str(self.local))
+        panel._name.setText("Sensor sketch")
+        conflict = {"root": str(self.local), "name": "Sensor sketch", "matches": list(self.service.rows)}
+        for choice in ("copy", "replace", ""):
+            self.service.calls.clear()
+            self.service.upload_project = Mock(side_effect=[CloudNameConflict(**conflict), {"name": "Sensor sketch", "revision": 4}])
+            def choose(dialog):
+                self.assertFalse(panel._busy)
+                self.assertFalse(self.backend._cloud_project_operation)
+                dialog.choice = choice
+                return QDialog.DialogCode.Accepted if choice else QDialog.DialogCode.Rejected
+            with patch.object(_CloudSketchActionDialog, "exec", choose):
+                panel._upload_local()
+                self.wait(lambda: not panel._busy)
+            self.assertEqual(self.service.upload_project.call_count, 2 if choice else 1)
+            if choice:
+                kwargs = self.service.upload_project.call_args.kwargs
+                self.assertEqual(kwargs, {"name": "Sensor sketch", **({"duplicate": True} if choice == "copy" else
+                    {"replace_id": self.service.rows[0]["id"], "expected_revision": self.service.rows[0]["revision"]})})
+            else:
+                self.assertIn("cancelled", panel._status.text())
+
+    def test_sketch_action_prompts_fit_compact_palettes(self):
+        panel = self.panel()
+        for mode in ("default", "light", "solarized_dark"):
+            panel.apply_theme(mode)
+            multiple = [dict(self.service.rows[0], name="LongSketchName" * 7),
+                        dict(self.service.rows[0], id="other", name="LongSketchName" * 7)]
+            for matches in (None, list(self.service.rows), multiple):
+                dialog = _CloudSketchActionDialog("測定" * 50, panel, matches=matches)
+                self.widgets.append(dialog)
+                dialog.resize(340, 220)
+                dialog.show()
+                self.settle_layout()
+                self.assert_visible_in_ancestors(dialog.confirm_button)
+                self.assertLessEqual(dialog._body_scroll.widget().width(), dialog._body_scroll.viewport().width())
+                if not matches:
+                    self.assert_visible_in_ancestors(dialog.name)
+                    self.assertEqual(dialog.name.maxLength(), 100)
+                elif len(matches) > 1:
+                    dialog._body_scroll.ensureWidgetVisible(dialog.target)
+                    self.settle_layout()
+                    self.assert_visible_in_ancestors(dialog.target)
+                self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-{'collision' if matches else 'rename'}-compact.png")))
+                dialog.close()
 
     def test_login_literal_password_options_and_forget_flow(self):
         self.service.authenticated = False

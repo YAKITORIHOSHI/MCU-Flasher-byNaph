@@ -401,6 +401,91 @@ class QtResponsiveChecks(ControlChecks):
         new_calls = [call for call in sent.call_args_list if call.args[0] == 'new']
         self.assertEqual(new_calls, [])
 
+    def test_remaining_tool_headers_and_history_fit_scaled_half_width(self):
+        from main.qt.syntax_panel import SyntaxPanel
+        from main.qt.notif_panel import NotifPanel
+        from main.qt.compat_panel import CompatPanel
+        from main.qt.ai_changes_panel import AIChangesPanel
+        self.stack.enter_context(patch('main.core.config.get_theme_mode', return_value='default'))
+        self.stack.enter_context(patch('main.core.config.get_monitor_font_size', return_value=11))
+        self.stack.enter_context(patch.object(NotifPanel, '_request_refresh'))
+        record = dict(id='responsive-history', path=str(ROOT / 'temp/scratch/Controller.ino'),
+            groupId='responsive-prompt', prompt='Update controller', timestamp='2026-10-13T08:00:00+00:00',
+            beforeContent='before();\n' + 'long ' * 80, content='after();\n' + 'long ' * 80,
+            status='pending')
+        self.backend.ai_review_manager = Mock()
+        self.backend.ai_review_manager.get_ai_changes.return_value = [record]
+        self.backend.ai_review_manager.has_pending_ai_edit.return_value = True
+        for cls in (SyntaxPanel, NotifPanel, CompatPanel, AIChangesPanel):
+            host = self.own(QWidget())
+            layout = QVBoxLayout(host)
+            layout.setContentsMargins(0, 0, 0, 0)
+            panel = cls(parent=host) if cls is CompatPanel else cls(self.backend, host)
+            layout.addWidget(panel)
+            if isinstance(panel, SyntaxPanel):
+                panel._bg_timer.stop()
+                panel._search_input.setText('controller')
+            if isinstance(panel, CompatPanel):
+                panel.search_input.setText('controller')
+            if isinstance(panel, AIChangesPanel):
+                panel._before.selectAll()
+                preserved_selection = panel._before.textCursor().selectedText()
+            host.show()
+            for mode in ('default', 'light', 'solarized_dark'):
+                APP.setStyleSheet(build_stylesheet(mode))
+                panel.apply_theme(mode)
+                focus_field = (panel._search_input if isinstance(panel, SyntaxPanel) else
+                               panel.search_input if isinstance(panel, CompatPanel) else
+                               panel._tree if isinstance(panel, AIChangesPanel) else panel._filter_combo)
+                host.activateWindow()
+                focus_field.setFocus()
+                pump()
+                for width, height in ((1440, 360), (640, 180), (480, 160), (320, 160), (500, 360), (1440, 360)):
+                    with self.subTest(panel=cls.__name__, theme=mode, width=width, height=height):
+                        host.resize(width, height)
+                        pump()
+                        self.assertLessEqual(host.width(), width, 'A tool header must not widen a compact window')
+                        self.assertLessEqual(host.height(), height, 'Reading minima must fit short tool panes')
+                        self.assertIs(APP.focusWidget(), focus_field, 'Tool reflow must retain keyboard focus')
+                        for button in panel.findChildren(QAbstractButton):
+                            if button.isVisible():
+                                self.contained(button, panel)
+                                self.assertTrue(button.visibleRegion().contains(button.rect().center()),
+                                                f'{button.text()} was clipped by an ancestor')
+                        if isinstance(panel, SyntaxPanel):
+                            for field in (panel._filter_combo, panel._search_input, panel._badge_errors, panel._badge_warnings):
+                                self.contained(field, panel._header)
+                            self.assertEqual(panel._search_input.text(), 'controller')
+                            self.assertEqual(panel._table.font().pointSize(), 11)
+                        if isinstance(panel, CompatPanel):
+                            self.assertEqual(panel.search_input.text(), 'controller')
+                        if isinstance(panel, AIChangesPanel):
+                            self.assertEqual(panel._selected_id(), record['id'])
+                            self.assertEqual(panel._before.textCursor().selectedText(), preserved_selection)
+                            for preview, key in ((panel._before, 'beforeContent'), (panel._after, 'content')):
+                                self.assertEqual(preview.toPlainText(), record[key])
+                                self.assertEqual(preview.font().pointSize(), 11)
+                                self.assertGreaterEqual(preview.viewport().height(),
+                                    preview.fontMetrics().lineSpacing() + round(preview.document().documentMargin() * 2))
+                            expected = Qt.Orientation.Vertical if width < 650 and height >= 240 else Qt.Orientation.Horizontal
+                            self.assertEqual(panel._splitter.orientation(), expected)
+                        if width == 320:
+                            capture(host, f'tool-{cls.__name__}-{mode}-compact')
+            host.hide()
+            if isinstance(panel, (SyntaxPanel, AIChangesPanel)):
+                host.show()
+                for size in (15, 11):
+                    panel.set_font_size(size)
+                    host.resize(320, 180)
+                    pump()
+                    self.assertLessEqual(host.size().width(), 320)
+                    self.assertLessEqual(host.size().height(), 180)
+                    readings = (panel._table,) if isinstance(panel, SyntaxPanel) else (panel._before, panel._after)
+                    for reading in readings:
+                        self.assertEqual(reading.font().pointSize(), size)
+                        self.assertGreaterEqual(reading.viewport().height(), reading.fontMetrics().lineSpacing())
+                host.hide()
+
     def test_terminal_many_tabs_scroll_without_pushing_add_button_outside_header(self):
         from main.core.log_colors import contrast_ratio
         from main.qt.terminal_panel import _SessionTabBar

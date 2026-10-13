@@ -5,9 +5,10 @@ import threading
 
 class PromptObserver:
     """Observe input on a worker without delaying or changing native PTY bytes."""
-    def __init__(self, project, *, active=None):
+    def __init__(self, project, *, active=None, source="cli"):
         from src.modules.ai_prompt_context import PromptInputTracker
-        self._tracker = PromptInputTracker(project)
+        self._tracker = PromptInputTracker(project, source=source)
+        self._source = source
         self._active = active
         self._known_active = False
         self._condition = threading.Condition()
@@ -45,7 +46,7 @@ class PromptObserver:
                 data, pid, size = self._pending.popleft()
                 self._bytes -= size
                 if self._reset:
-                    self._tracker = PromptInputTracker(self._tracker.project)
+                    self._tracker = PromptInputTracker(self._tracker.project, source=self._source)
                     self._reset = False
             try:
                 active = self._active

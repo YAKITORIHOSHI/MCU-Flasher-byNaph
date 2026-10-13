@@ -212,8 +212,17 @@ See [Ubuntu and recovery details](direct/UBUNTU.md) and
 [hardware-free verification](direct/verify_runtime.py). Native Ubuntu 24.04
 runtime, Qt/Monaco, terminal, crash-regression and responsive checks pass locally
 using an isolated Xvfb display. Windows paths retain their existing behavior;
-physical board compilation/upload and the full Ubuntu 22.04/24.04/26.04 CI remain
+physical board compilation/upload and the full Ubuntu 24.04/26.04 CI remain
 separate verification requirements.
+
+On 2026-10-13, the parity audit ran natively on Ubuntu 26.04.1 LTS with
+`.venv-linux` Python 3.14.4 and PySide6 6.12.0. Cloud management/background,
+AI prompt provenance, offline editor review/recovery, downloader workflows,
+performance and native PTY/OpenCode fake-CLI renderer checks passed using isolated
+fixtures. All tool tabs and downloader appearance passed at 100/125/150/175/200%.
+The full launcher still reports that native tool/board preparation is needed;
+this audit did not install or launch against the live store. Updated CI targets
+24.04/26.04; its current run and Windows native verification remain separate.
 
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
@@ -714,9 +723,14 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu (64-bit Intel/AMD):** open **`MCU_Flasher`**, the native Linux executable beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+**Ubuntu 24.04 or newer (64-bit Intel/AMD):** open **`MCU_Flasher`**, the native Linux executable beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
 
-Windows 10/11 and Ubuntu 22.04/24.04/26.04 share application source but use
+Ubuntu launch, setup, repair, downloader and direct Python entries read the installed
+OS release before preparing a runtime or starting services. Releases below 24.04
+stop with “MCU Flasher requires Ubuntu 24.04 or newer.” Missing or malformed
+release information also stops explicitly, preserving all local resources.
+
+Windows 10/11 and Ubuntu 24.04/26.04 share application source but use
 separate Python environments. Windows launches through `MCU_Flasher.exe` or
 `direct/windows/run.vbs`, using downloaded Python in `src/_python` and Windows
 dependencies in `env`. Ubuntu's Bash setup builds `.venv-linux` with native Linux
@@ -761,6 +775,11 @@ panes to the available height at the selected font scale. Resizing preserves
 the selected item, its details and a valid manually adjusted divider. Short
 glass cards reduce their decorative padding to keep a complete native text
 line visible; longer details remain reachable by scrolling.
+Static shaded glass rims, reflections and panel headings now match the workspace
+in Glass, Frosted Light and Solarized. Headings yield to reading space on short
+panes; folder, vendor URL and version rows reflow using native Tk font widths.
+The full native frame is fitted after window moves. Windows uses the current
+monitor work area; Ubuntu uses desktop work-area hints with a Tk fallback.
 
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only
@@ -1016,9 +1035,19 @@ account, manage cloud sketches, or delete your account after confirming your
 current password. Sign-in and account creation open as separate sections within
 the Cloud tab. After sign-in, a compact account header and sketch list replace
 the login form. The list heading and Refresh action stay together at the top,
-and the sketch list uses the available space below them. **Upload local** opens
-a folder/name dialog; select a sketch and choose **Open sketch**. The current
-linked sketch also offers **Push changes**,
+and the sketch list uses the available space below them. The Cloud tab shares
+the selector's glass background, retaining opaque fields and reading surfaces.
+**Upload local** opens
+a folder/name dialog; select a sketch and choose **Open sketch**. The
+selected sketch's **Actions** menu offers **Rename sketch** and **Delete sketch**.
+Deletion confirms removal of the cloud sketch and its version history, retaining
+local working files. Names are checked without case or surrounding whitespace;
+uploading an existing name offers **Replace**, **Save a copy**, or **Cancel**.
+Replace keeps the sketch identity and bounded version history. Save a copy adds
+the next available suffix, starting with **(1)**. Rename rejects another sketch's
+name and records a new version with the same sources. Existing working copies
+retain their local revision; use Pull latest before pushing a renamed sketch.
+The current linked sketch also offers **Push changes**,
 **Pull latest**, and **Versions**. Sign-out, saved-login removal, and account
 deletion live in the **Account** menu. **Save credentials** fills your email/password on the next sign-in;
 **Remember me** restores a session using its refresh token. **Forget saved
@@ -1235,9 +1264,16 @@ line-number gutters and highlight removed and added lines. The gutters follow
 scrolling, wrapping, fonts and themes. Delete card and Delete all affect display history only, preserving
 pending reviews and recovery copies. History survives reopening the project and
 is bounded to 200 cards / 4 MiB; large previews are marked as truncated.
-Integrated terminal edits display **Assistant Prompt (CLI)**; captured prompt text
-remains available in the group tooltip. Unidentified external changes are grouped
-by settled activity and explicitly show that the prompt is unavailable. Add/Rename/Delete in Modify are
+Edits associated with a prompt submitted through the **Terminal** are labeled
+**CLI**. Edits associated with the app's built-in OpenCode **AI Assistant** are
+labeled **Assistant**. The labels appear in AI Changes groups, file tooltips and
+the editor's review/history bar; captured prompt text remains in the tooltips.
+Pending reviews that combine both channels show **Mixed**. Unobserved sources
+and older entries show **Unknown**: earlier versions tagged both channels as CLI,
+so their original source cannot be recovered reliably. Existing journals remain
+unchanged. Source association follows observed prompts and settled file changes;
+it is not an operating-system audit of which process wrote each file.
+Add/Rename/Delete in Modify are
 registered as manual operations before disk changes and never become AI reviews.
 Whenever a new pending AI edit is detected, its review bar automatically opens
 with Accept and Reject available, even if an earlier AI history bar was hidden.
@@ -1273,6 +1309,11 @@ Both languages work from the bundled offline assets.
 The **AI Review / History** bar has a **Hide** action. Use the control beside the
 source tabs to show it again. Its hidden state survives editor reloads during
 the session while pending reviews, highlights and history actions stay intact.
+The bar stays on one compact row. Filenames and status text yield to the review
+actions at narrow widths, and short editor panes use smaller chrome; full text
+remains available in tooltips. Syntax Check and AI Changes also reflow their
+headers and let reading areas shrink on compact screens while retaining saved
+content fonts.
 Diffs use green for additions, blue for changed lines and red for removals in
 Glass Smoked Dark, Glass Frosted Light and Solarized Dark. Removed lines leave a
 red gutter mark and boundary at their former position; a whole deleted file is
@@ -1502,7 +1543,7 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 and 26.04 have local native hardware-free verification, including GNOME Wayland on 26.04, with Ubuntu 22.04/24.04/26.04 CI targets. Check the compatibility results for the revision being used.
+- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 and 26.04 have local native hardware-free verification, including GNOME Wayland on 26.04, with Ubuntu 24.04/26.04 CI targets. Check the compatibility results for the revision being used.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
 - **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
@@ -1568,6 +1609,7 @@ node direct/verify_editor_layout_scheduling.js
 & src/_python/python.exe -B direct/verify_ubuntu_maintenance.py
 & src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
+& src/_python/python.exe -B direct/verify_downloader_appearance.py --scale 1
 & src/_python/python.exe -B direct/verify_package_jobs.py
 & src/_python/python.exe -B direct/verify_board_preparation.py
 & src/_python/python.exe -B direct/verify_board_index_targets.py
@@ -1643,7 +1685,7 @@ checks never install packages or write to physical hardware.
 `direct/verify_platforms.py` checks host selection/import order, native package
 paths, setup argument forwarding, upload process options and Bash/Windows Script
 Host syntax without running installers or launchers. The compatibility workflow
-also provisions AVR packages in a CI scratch store on Ubuntu 22.04/24.04/26.04, then
+also provisions AVR packages in a CI scratch store on Ubuntu 24.04/26.04, then
 checks the actual Compile button for Uno, Nano and Mega using copied native
 packages. Local native Ubuntu GUI/runtime checks pass; these actual firmware
 build integrations remain separate CI results.

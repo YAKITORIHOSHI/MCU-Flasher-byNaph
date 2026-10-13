@@ -102,6 +102,19 @@ Uploading a local project creates a separate cloud sketch and leaves the local
 folder unlinked. Open that cloud sketch to materialize its own per-user working
 folder in a separate workspace.
 
+The selected sketch's Actions menu offers Rename and Delete. Names are compared
+without case or surrounding whitespace. Uploading an existing name requires an
+explicit Replace or Save a copy choice; numbered copies use the first available
+` (1)`, ` (2)`, etc. Replace preserves the sketch ID and appends a guarded source
+revision. Rename rejects other sketches' names and appends a source-identical
+revision to satisfy the existing published rules. Delete uses the sketch ETag
+and selected revision, removes cloud history, and preserves all local sources,
+links and recovery copies. These operations reject stale revisions or ETags;
+they do not retry a conflicting write automatically. Existing working copies
+keep their local revision after Rename/Replace, so explicitly Pull latest before
+their next Push. These are bounded client name checks; independent simultaneous
+clients do not provide a server-wide unique-name transaction.
+
 Push reads source bytes and conditionally replaces the sketch record using the
 Firebase ETag. A stale base revision or ETag fails with a conflict: explicitly
 pull before pushing again. No automatic retry overwrites remote data. Up to

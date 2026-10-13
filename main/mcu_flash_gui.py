@@ -28,6 +28,10 @@ for _p in (_project_root, _modules_path, _main_path):
 if sys.platform == "win32" and _env_site.is_dir() and str(_env_site) not in sys.path:
     sys.path.insert(0, str(_env_site))
 
+from src.modules.ubuntu_release import enforce_supported_ubuntu
+if not enforce_supported_ubuntu():
+    raise SystemExit(1)
+
 from src.modules.runtime_resources import (
     MINIMUM_LOGICAL_CORES, enforce_minimum_cpu_requirement,
     configure_webengine_environment,

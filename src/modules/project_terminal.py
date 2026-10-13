@@ -29,6 +29,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
+if __name__ == "__main__" and sys.platform.startswith("linux"):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
+
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_SITE_PACKAGES = SCRIPT_DIR / "env" / "Lib" / "site-packages"
 XTERM_ASSET_DIR = SCRIPT_DIR / "src" / "assets" / "xterm"
@@ -765,6 +771,8 @@ class ShellSession:
         self.history_chars = 0
         self.history_limit = performance_profile().terminal_history_chars
         self.dimensions = (30, 120)
+        self._prompt_tracker = None
+        self._assistant_input_active = False
 
     def append_history(self, data: str) -> None:
         with self.lock:
@@ -884,6 +892,8 @@ class ProjectTerminalServer:
             session.stop_event.clear()
             session.history.clear()
             session.history_chars = 0
+            session._prompt_tracker = None
+            session._assistant_input_active = False
         session.thread = threading.Thread(
             target=self._shell_worker,
             args=(session, generation),
@@ -904,6 +914,8 @@ class ProjectTerminalServer:
             session.stop_event.set()
             pty = session.pty
             session.pty = None
+            session._prompt_tracker = None
+            session._assistant_input_active = False
         if pty:
             try:
                 pty.close(force=True)
@@ -1142,7 +1154,7 @@ class ProjectTerminalServer:
                             from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_active
                             tracker = getattr(session, "_prompt_tracker", None)
                             if tracker is None:
-                                tracker = session._prompt_tracker = PromptInputTracker(self.target_dir)
+                                tracker = session._prompt_tracker = PromptInputTracker(self.target_dir, source="cli")
                             active = getattr(session, "_assistant_input_active", False)
                             if "\r" in clean_data or "\n" in clean_data:
                                 active = session._assistant_input_active = assistant_process_active(getattr(pty, "pid", 0))

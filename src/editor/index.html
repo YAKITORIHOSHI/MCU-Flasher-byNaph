@@ -772,52 +772,81 @@
 
     #ai-diff-banner {
       position: absolute;
-      bottom: 16px;
+      bottom: 10px;
       left: 50%;
       z-index: 99999;
       display: none;
       align-items: center;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 8px;
+      justify-content: flex-start;
+      flex-wrap: nowrap;
+      gap: 6px;
       background: linear-gradient(135deg, var(--bg-dark), var(--bg-darkest));
       border: 1px solid var(--border);
       border-top-color: var(--accent);
-      border-radius: 12px;
-      padding: 10px 12px;
+      border-radius: 10px;
+      padding: 6px 8px;
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2), inset 0 1px 0 var(--tab-rim);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
       font-size: 12px;
       color: var(--text);
       transform: translateX(-50%);
       width: max-content;
-      max-width: min(calc(100% - 24px), 820px);
+      max-width: min(calc(100% - 20px), 1100px);
       box-sizing: border-box;
     }
 
     #ai-diff-banner .review-title {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 4px;
       color: var(--accent);
       font-weight: 700;
       white-space: nowrap;
     }
 
+    #ai-diff-banner .review-source {
+      flex: 0 0 auto;
+      padding: 2px 5px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--bg-darkest);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #ai-diff-banner .review-source-short {
+      display: none;
+    }
+
     #ai-diff-banner .review-file {
+      flex: 0 1 190px;
+      min-width: 0;
       max-width: 190px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       color: var(--text);
       font-weight: 600;
-      padding: 3px 6px;
+      padding: 3px 0;
     }
 
     #ai-diff-banner .review-position {
+      flex: 0 0 auto;
       color: var(--text-dim);
       font-size: 11px;
       white-space: nowrap;
     }
+    #ai-diff-banner .review-position-short {
+      display: none;
+    }
 
     #ai-diff-banner .review-message {
+      flex: 0 1 260px;
+      min-width: 0;
+      align-items: center;
+      gap: 3px;
       color: var(--text);
       max-width: 260px;
       overflow: hidden;
@@ -825,12 +854,21 @@
       white-space: nowrap;
       font-size: 11px;
     }
+    #ai-diff-banner .review-message-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #ai-diff-banner .review-message .review-icon {
+      display: none;
+    }
 
     #ai-diff-banner .review-actions {
       display: flex;
-      flex-wrap: wrap;
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
       align-items: center;
       gap: 6px;
+      margin-left: auto;
     }
 
     #ai-diff-banner .diff-badge-add,
@@ -840,6 +878,10 @@
       border-radius: 6px;
       font-weight: 600;
       font-size: 11px;
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
     #ai-diff-banner .diff-badge-add {
@@ -859,11 +901,18 @@
     }
 
     #ai-diff-banner .review-btn {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-width: 28px;
+      min-height: 28px;
       background: var(--bg-darkest);
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: 7px;
-      padding: 6px 10px;
+      padding: 4px 8px;
       cursor: pointer;
       font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
       white-space: nowrap;
@@ -871,6 +920,23 @@
     #ai-diff-banner .review-btn:hover:not(:disabled) {
       background: var(--bg-tab-hover);
       border-color: var(--accent);
+    }
+    #ai-diff-banner .review-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    #ai-diff-banner .review-icon {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    #ai-history-close .review-icon {
+      display: none;
     }
     #ai-diff-banner .review-btn:disabled {
       color: var(--text-dim);
@@ -887,33 +953,109 @@
       background: rgba(var(--diff-add-rgb), 0.12);
     }
 
+    /* Compact the chrome for short panes as well as narrow/scaled windows.
+       Keep decisions in one row; source text and review state never change. */
+    @media (max-width: 900px), (max-height: 420px) {
+      #ai-diff-banner {
+        bottom: 6px;
+        gap: 5px;
+        padding: 4px 6px;
+      }
+      #ai-diff-banner .review-nav-label,
+      #ai-diff-banner .diff-badge-label,
+      #ai-diff-banner .review-ai-label {
+        display: none;
+      }
+      #ai-diff-banner .review-position-long {
+        display: none;
+      }
+      #ai-diff-banner .review-position-short {
+        display: inline;
+      }
+      #ai-diff-banner .review-message {
+        max-width: 170px;
+      }
+      #ai-diff-banner .diff-badge-add,
+      #ai-diff-banner .diff-badge-remove,
+      #ai-diff-banner .diff-badge-modify {
+        padding: 3px 5px;
+      }
+      #ai-diff-banner .review-actions {
+        gap: 4px;
+      }
+    }
+
     @media (max-width: 700px) {
       #ai-diff-banner {
-        left: 8px;
-        right: 8px;
-        bottom: 8px;
+        left: 6px;
+        right: 6px;
+        bottom: 6px;
         top: auto;
         transform: none;
-        animation-name: bannerSlideInMobile;
         width: auto;
-        gap: 6px;
-        padding: 5px 7px;
-        flex-wrap: wrap;
-        font-size: 11px;
         max-width: none;
       }
-
-      #ai-diff-banner .review-file,
-      #ai-diff-banner .review-message {
-        max-width: calc(100vw - 145px);
+      #ai-diff-banner .review-file {
+        flex: 1 1 140px;
+        max-width: 190px;
       }
-
-      #ai-diff-banner .review-actions {
-        margin-left: 0;
+      #ai-diff-banner .review-message {
+        flex: 0 0 auto;
+        max-width: none;
+      }
+      #ai-diff-banner .review-message-text {
+        display: none;
+      }
+      #ai-diff-banner .review-message .review-icon {
+        display: block;
       }
 
       #detached-action-bar button {
         padding: 5px 7px;
+      }
+    }
+
+    @media (max-width: 620px), (max-height: 300px) {
+      #ai-diff-banner .review-title-label {
+        display: none;
+      }
+      #ai-diff-banner .review-position {
+        font-size: 11px;
+      }
+    }
+
+    @media (max-width: 520px) {
+      #ai-diff-banner {
+        gap: 4px;
+      }
+      #ai-diff-banner .review-title,
+      #ai-history-close .review-hide-label {
+        display: none;
+      }
+      #ai-history-close .review-icon {
+        display: block;
+      }
+      #ai-diff-banner .review-btn {
+        padding: 4px 6px;
+      }
+    }
+
+    @media (max-width: 460px) {
+      #ai-diff-banner .diff-badge-add,
+      #ai-diff-banner .diff-badge-remove,
+      #ai-diff-banner .diff-badge-modify {
+        display: none !important;
+      }
+    }
+
+    @media (max-width: 320px) {
+      #ai-diff-banner .review-file,
+      #ai-diff-banner .review-position,
+      #ai-diff-banner .review-source-label {
+        display: none;
+      }
+      #ai-diff-banner .review-source-short {
+        display: inline;
       }
     }
 
@@ -966,21 +1108,22 @@
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
-        <span id="ai-review-title" class="review-title">⚡ AI Review</span>
+        <span id="ai-review-title" class="review-title" title="AI Review"><span class="review-title-icon" aria-hidden="true">⚡</span><span class="review-title-label">AI Review</span></span>
+        <span id="ai-review-source" class="review-source" aria-label="Unknown source" title="Unknown source"><span class="review-source-label">Unknown</span><span class="review-source-short" aria-hidden="true">?</span></span>
         <span id="ai-review-file" class="review-file"></span>
         <span id="ai-review-position" class="review-position"></span>
-        <button id="ai-review-previous" class="review-btn" type="button" aria-label="Previous file review">Previous</button>
-        <button id="ai-review-next" class="review-btn" type="button" aria-label="Next file review">Next</button>
-        <span id="ai-diff-add-count" class="diff-badge-add">+0 added</span>
-        <span id="ai-diff-modify-count" class="diff-badge-modify">~0 changed</span>
-        <span id="ai-diff-remove-count" class="diff-badge-remove">-0 removed</span>
-        <span id="ai-review-message" class="review-message"></span>
+        <button id="ai-review-previous" class="review-btn" type="button" aria-label="Previous file review" title="Previous file review"><svg class="review-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3-5 5 5 5"/></svg><span class="review-nav-label">Previous</span></button>
+        <button id="ai-review-next" class="review-btn" type="button" aria-label="Next file review" title="Next file review"><span class="review-nav-label">Next</span><svg class="review-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+        <span id="ai-diff-add-count" class="diff-badge-add">+0<span class="diff-badge-label"> added</span></span>
+        <span id="ai-diff-modify-count" class="diff-badge-modify">~0<span class="diff-badge-label"> changed</span></span>
+        <span id="ai-diff-remove-count" class="diff-badge-remove">-0<span class="diff-badge-label"> removed</span></span>
+        <span id="ai-review-message" class="review-message"><svg class="review-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7v4m0-7v.2"/></svg><span class="review-message-text"></span></span>
         <span class="review-actions">
-          <button id="ai-review-reject" class="review-btn reject" type="button">Reject</button>
-          <button id="ai-review-accept" class="review-btn accept" type="button">Accept</button>
-          <button id="ai-history-undo" class="review-btn undo" type="button" style="display:none">Undo AI</button>
-          <button id="ai-history-redo" class="review-btn redo" type="button" style="display:none">Redo AI</button>
-          <button id="ai-history-close" class="review-btn close-banner" type="button" aria-label="Hide AI review or history bar" title="Hide this bar; reopen it beside the source tabs">Hide</button>
+          <button id="ai-review-reject" class="review-btn reject" type="button" aria-label="Reject AI edit" title="Reject AI edit">Reject</button>
+          <button id="ai-review-accept" class="review-btn accept" type="button" aria-label="Accept AI edit" title="Accept AI edit">Accept</button>
+          <button id="ai-history-undo" class="review-btn undo" type="button" aria-label="Undo AI decision" style="display:none">Undo<span class="review-ai-label"> AI</span></button>
+          <button id="ai-history-redo" class="review-btn redo" type="button" aria-label="Redo AI decision" style="display:none">Redo<span class="review-ai-label"> AI</span></button>
+          <button id="ai-history-close" class="review-btn close-banner" type="button" aria-label="Hide AI review or history bar" title="Hide this bar; reopen it beside the source tabs"><span class="review-hide-label">Hide</span><svg class="review-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg></button>
         </span>
       </div>
     </div>
@@ -2173,14 +2316,24 @@
         if (banner) {
           banner.style.display = visible ? 'flex' : 'none';
           banner.setAttribute('aria-hidden', String(!visible));
+          // Compact panes keep full metadata available on hover and to assistive
+          // technology, even when its optional visible labels are shortened.
+          const contextIds = ['ai-review-title', 'ai-review-source', 'ai-review-file', 'ai-review-position'];
+          if (currentReview) contextIds.push('ai-diff-add-count', 'ai-diff-modify-count', 'ai-diff-remove-count');
+          contextIds.push('ai-review-message');
+          const context = contextIds.map(id => document.getElementById(id)?.title || '').filter(Boolean).join('\n');
+          banner.title = context;
+          banner.setAttribute('aria-description', context);
         }
         if (toggle) {
           toggle.style.display = available ? 'inline-flex' : 'none';
           toggle.setAttribute('aria-expanded', String(visible));
-          const title = currentReview ? 'AI Review' : 'AI History';
+          const entry = currentReview || lastAiHistoryState?.undo || lastAiHistoryState?.redo;
+          const source = aiEditProvenance(entry);
+          const title = `${source.label} ${currentReview ? 'Review' : 'History'}`;
           const count = currentReview ? Number(currentReview.pendingCount) || 1 : 0;
           toggle.textContent = visible ? 'Hide AI bar' : title + (count ? ` (${count})` : '');
-          toggle.title = visible ? 'Hide AI Review / History' : `Show ${title}${count ? ` — ${count} pending` : ''}`;
+          toggle.title = visible ? `Hide ${title}` : `Show ${title}${count ? ` — ${count} pending` : ''}`;
           toggle.setAttribute('aria-label', toggle.title);
         }
       }
@@ -2237,9 +2390,69 @@
         }
       }
 
-      function setBannerReviewMode() {
+      function setAiBannerTitle(text, icon) {
         const title = document.getElementById('ai-review-title');
-        if (title) title.textContent = '⚡ AI Review';
+        if (!title) return;
+        title.querySelector('.review-title-icon').textContent = icon;
+        title.querySelector('.review-title-label').textContent = text;
+        title.title = text;
+        const banner = document.getElementById('ai-diff-banner');
+        if (banner) banner.setAttribute('aria-label', text);
+      }
+
+      function aiEditProvenance(entry) {
+        // Earlier producers tagged the built-in Assistant as CLI. Only the new
+        // verified channel marker can identify a source; old titles cannot.
+        if (entry?.promptSourceVersion !== 1) return {label:'Unknown', compact:'?'};
+        const source = String(entry?.promptSource || '').trim().toLowerCase();
+        if (source === 'cli') return {label:'CLI', compact:'CLI'};
+        if (source === 'assistant') return {label:'Assistant', compact:'Asst.'};
+        if (source === 'mixed') return {label:'Mixed', compact:'Mixed'};
+        return {label:'Unknown', compact:'?'};
+      }
+
+      function setAiBannerSource(entry) {
+        const badge = document.getElementById('ai-review-source');
+        if (!badge) return;
+        const source = aiEditProvenance(entry);
+        badge.querySelector('.review-source-label').textContent = source.label;
+        badge.querySelector('.review-source-short').textContent = source.compact;
+        const sources = source.label === 'Mixed' && Array.isArray(entry?.promptSources)
+          ? [...new Set(entry.promptSources.map(value => value === 'cli' ? 'CLI'
+              : value === 'assistant' ? 'Assistant' : value === 'external' ? 'Unknown' : '').filter(Boolean))]
+          : [];
+        const detail = sources.length ? ` (${sources.join(' + ')})` : '';
+        badge.title = `${source.label} source${detail}${typeof entry?.prompt === 'string' && entry.prompt ? `\n${entry.prompt}` : ''}`;
+        badge.setAttribute('aria-label', badge.title);
+      }
+
+      function setAiBannerPosition(position, text, compactText) {
+        if (!position) return;
+        const full = document.createElement('span');
+        full.className = 'review-position-long';
+        full.textContent = text;
+        const compact = document.createElement('span');
+        compact.className = 'review-position-short';
+        compact.setAttribute('aria-hidden', 'true');
+        compact.textContent = compactText;
+        position.replaceChildren(full, compact);
+        position.title = text;
+        position.setAttribute('aria-label', text);
+      }
+
+      function setAiDiffBadge(badge, prefix, count, text) {
+        if (!badge) return;
+        const value = `${prefix}${Number(count) || 0}`;
+        const label = document.createElement('span');
+        label.className = 'diff-badge-label';
+        label.textContent = ` ${text}`;
+        badge.replaceChildren(document.createTextNode(value), label);
+        badge.title = `${value} ${text}`;
+        badge.setAttribute('aria-label', badge.title);
+      }
+
+      function setBannerReviewMode() {
+        setAiBannerTitle('AI Review', '⚡');
         setVisible(document.getElementById('ai-diff-add-count'), true);
         setVisible(document.getElementById('ai-diff-modify-count'), true);
         setVisible(document.getElementById('ai-diff-remove-count'), true);
@@ -2261,6 +2474,7 @@
         try { sessionStorage.setItem('mcu_ai_banner_hidden', '0'); } catch (error) {}
         aiHistoryBannerToken = '';
         setBannerReviewMode();
+        setAiBannerSource(snapshot);
         const diff = snapshot.diff || {};
         const file = document.getElementById('ai-review-file');
         const position = document.getElementById('ai-review-position');
@@ -2275,22 +2489,23 @@
         if (position) {
           const index = Number(snapshot.reviewIndex) || 1;
           const count = Number(snapshot.pendingCount) || 1;
-          position.textContent = `${index} of ${count}`;
+          setAiBannerPosition(position, `${index} of ${count}`, `${index}/${count}`);
           for (const id of ['ai-review-previous', 'ai-review-next']) {
             const button = document.getElementById(id);
             if (button) button.style.display = count > 1 ? 'inline-flex' : 'none';
           }
         }
-        if (addBadge) addBadge.textContent = `+${Number(diff.added) || 0} added`;
-        if (modifyBadge) modifyBadge.textContent = `~${Number(diff.modified) || 0} changed`;
-        if (removeBadge) removeBadge.textContent = `-${Number(diff.removed) || 0} removed`;
+        setAiDiffBadge(addBadge, '+', diff.added, 'added');
+        setAiDiffBadge(modifyBadge, '~', diff.modified, 'changed');
+        setAiDiffBadge(removeBadge, '-', diff.removed, 'removed');
         let stateMessage = message || '';
         if (!stateMessage && snapshot.beforeExists === false) stateMessage = 'New file';
         if (!stateMessage && snapshot.afterExists === false) stateMessage = 'File deleted';
         if (messageNode) {
-          messageNode.textContent = stateMessage;
+          messageNode.querySelector('.review-message-text').textContent = stateMessage;
           messageNode.title = stateMessage;
-          messageNode.style.display = stateMessage ? 'inline' : 'none';
+          messageNode.setAttribute('aria-label', stateMessage);
+          messageNode.style.display = stateMessage ? 'inline-flex' : 'none';
         }
         updateAiBannerVisibility();
       }
@@ -2311,7 +2526,6 @@
             return state;
           }
 
-          const title = document.getElementById('ai-review-title');
           const file = document.getElementById('ai-review-file');
           const position = document.getElementById('ai-review-position');
           const messageNode = document.getElementById('ai-review-message');
@@ -2329,7 +2543,8 @@
           }
           lastAiHistoryState = state;
 
-          if (title) title.textContent = '↶ AI History';
+          setAiBannerTitle('AI History', '↶');
+          setAiBannerSource(activeEntry);
           setVisible(document.getElementById('ai-review-previous'), false);
           setVisible(document.getElementById('ai-review-next'), false);
           if (file) {
@@ -2337,7 +2552,8 @@
             file.title = activeEntry.path || '';
           }
           if (position) {
-            position.textContent = `${Number(state.undoDepth) || 0} undo / ${Number(state.redoDepth) || 0} redo`;
+            const undoDepth = Number(state.undoDepth) || 0, redoDepth = Number(state.redoDepth) || 0;
+            setAiBannerPosition(position, `${undoDepth} undo / ${redoDepth} redo`, `↶${undoDepth} ↷${redoDepth}`);
           }
           setVisible(document.getElementById('ai-diff-add-count'), false);
           setVisible(document.getElementById('ai-diff-modify-count'), false);
@@ -2350,14 +2566,16 @@
           if (undoButton) {
             undoButton.disabled = historyBusy || !state.canUndo;
             undoButton.title = state.undo
-              ? `Undo AI ${state.undo.action || 'decision'}: ${state.undo.fileName || ''}`
+              ? `Undo ${aiEditProvenance(state.undo).label} edit: ${state.undo.fileName || ''} (${state.undo.action || 'decision'})`
               : 'No AI decision to undo';
+            undoButton.setAttribute('aria-label', undoButton.title);
           }
           if (redoButton) {
             redoButton.disabled = historyBusy || !state.canRedo;
             redoButton.title = state.redo
-              ? `Redo AI ${state.redo.action || 'decision'}: ${state.redo.fileName || ''}`
+              ? `Redo ${aiEditProvenance(state.redo).label} edit: ${state.redo.fileName || ''} (${state.redo.action || 'decision'})`
               : 'No AI decision to redo';
+            redoButton.setAttribute('aria-label', redoButton.title);
           }
           if (closeButton) closeButton.disabled = false;
           let stateMessage = message || '';
@@ -2367,9 +2585,10 @@
             stateMessage = 'AI decision undone — Redo is available';
           }
           if (messageNode) {
-            messageNode.textContent = stateMessage;
+            messageNode.querySelector('.review-message-text').textContent = stateMessage;
             messageNode.title = stateMessage;
-            messageNode.style.display = stateMessage ? 'inline' : 'none';
+            messageNode.setAttribute('aria-label', stateMessage);
+            messageNode.style.display = stateMessage ? 'inline-flex' : 'none';
           }
           updateAiBannerVisibility();
           return state;
@@ -2672,12 +2891,12 @@
           normalizePath(currentReview.path) === normalizePath(snapshot.path);
       }
 
-      window.reloadActiveFileWithDiff = async function (filePath) {
+      window.reloadActiveFileWithDiff = async function (filePath, options = {}) {
         const api = bridgeApi();
         if (!api || !api.consume_ai_edit_snapshot || !filePath) return;
         if (currentReview &&
             normalizePath(currentReview.path) !== normalizePath(filePath) &&
-            !resolvingReview) {
+            !resolvingReview && !options.navigateReview) {
           showReviewBanner(currentReview, 'Another AI-edited file is queued');
           return;
         }
@@ -3069,7 +3288,9 @@
         const index = reviews.findIndex(review => normalizePath(review.path) === normalizePath(currentReview.path));
         if (reviews.length > 1) {
           const next = reviews[(Math.max(0, index) + direction + reviews.length) % reviews.length];
-          await window.reloadActiveFileWithDiff(next.path);
+          // An explicit navigation button may change the focused pending file;
+          // unsolicited AI updates still leave the current decision in place.
+          await window.reloadActiveFileWithDiff(next.path, {navigateReview:true});
         }
       }
       const previousReviewButton = document.getElementById('ai-review-previous');

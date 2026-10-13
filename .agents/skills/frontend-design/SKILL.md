@@ -22,7 +22,13 @@ allow wider resizing and maximization. Project selection asks whether to use
 the current window or a separate sketch window; show full paths for running
 projects. Keep the current project's buffers, focus and terminal sessions when
 opening another window, and resolve unsaved changes before switching projects.
-Carry the same palette into native setup and the Tk downloader. Keep utility
+Carry the same palette into native setup and the Tk downloader on Ubuntu 24.04
+or newer. Use native Tk font measurements for folder, URL and version reflow,
+static rounded rims/reflections and opaque reading surfaces. Cloud host, viewport
+and content remain transparent over the owning glass; synchronize the standalone
+dialog backdrop on theme changes. Keep AI Review/History on one compact row with
+optional metadata yielding before essential actions. Verify Glass, Frosted Light
+and Solarized at 100/125/150/175/200% using isolated fixtures. Keep utility
 screens focused on logs or package lists; advanced index URLs can be collapsed.
 Setup uses the app's original circuit-chip mark and static glass reflections
 with visible rims and depth. Keep a clean activity journal as the default,
@@ -41,7 +47,8 @@ workspace palette and static glass geometry intact.
 Keep the editor and every workspace tool pane flush to the
 available central area: outer content margins and pane borders stay zero.
 Keep inner toolbar/control and reading padding, tab focus and splitter handles.
-Check selected-tab and button contrast in all three palettes, including after
+Preserve native Linux downloader focus through reflow without forcing focus over
+another active client. Check selected-tab and button contrast in all three palettes, including after
 a sleeping downloader is reopened. Coalesce static card redraws on resize.
 Use Qt logical coordinates without multiplying by DPI or devicePixelRatio;
 Tk uses native pixel/point metrics. Reduce chrome spacing before reducing text.

@@ -10,6 +10,13 @@ import sys
 import argparse
 from typing import Any
 
+if __name__ == "__main__" and sys.platform.startswith("linux"):
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
+
 try:
     # pyrefly: ignore [missing-import]
     from PyQt5.QtCore import Qt, QTimer as QTimer_cls

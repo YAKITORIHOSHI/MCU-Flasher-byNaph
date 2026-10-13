@@ -615,7 +615,7 @@ class TerminalServer:
         input_line = [""]
         input_escape = [False]
         from src.modules.ai_prompt_context import PromptInputTracker
-        prompt_tracker = PromptInputTracker(target_dir)
+        prompt_tracker = PromptInputTracker(target_dir, source="assistant")
 
         def input_requests_exit(raw_data):
             """Detect a complete user-entered /exit line without swallowing it."""

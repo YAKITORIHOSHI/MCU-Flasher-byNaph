@@ -547,6 +547,8 @@ def _bootstrap_http_timeouts(connect_timeout=10, read_timeout=30):
 
 
 def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None, board_sources=()):
+    from src.modules.ubuntu_release import require_supported_ubuntu
+    require_supported_ubuntu()
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
@@ -870,6 +872,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
 
 def prepare_runtime(core, log=print):
     """Prepare the online runtime without exhaustive offline board/library packs."""
+    from src.modules.ubuntu_release import require_supported_ubuntu
+    require_supported_ubuntu()
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Runtime preparation belongs to Bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
@@ -887,6 +891,9 @@ def prepare_runtime(core, log=print):
 
 
 def main(argv=None):
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--plan", type=Path)

@@ -49,6 +49,26 @@ class CloudConflict(CloudError):
     """The cloud version changed after this local copy was downloaded."""
 
 
+class CloudNameConflict(CloudError):
+    """An upload needs an explicit replace or numbered-copy decision."""
+
+    def __init__(self, root, name, matches):
+        super().__init__("A cloud sketch with this name already exists. Choose Replace or Save a copy.")
+        self.root = str(root)
+        self.name = name
+        self.matches = [dict(row) for row in matches]
+
+
+def _sketch_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise CloudError("Enter a valid sketch name of at most 100 characters.")
+    value = value.strip()
+    if (not value or len(value.encode("utf-16-le", errors="surrogatepass")) // 2 > 100
+            or any(ord(char) < 32 or 0xD800 <= ord(char) <= 0xDFFF for char in value)):
+        raise CloudError("Enter a valid sketch name of at most 100 characters.")
+    return value
+
+
 class CloudRecoveryError(CloudError):
     """A failed pull left changed disk sources; old editor models must reload."""
 
@@ -891,16 +911,83 @@ class CloudSketchService:
                                      "source_revision": source_revision or meta["revision"], "files": files,
                                      "name": meta["name"]})
 
-    def upload_project(self, root: Path | str, name: str | None = None) -> dict:
+    def _append_revision(self, record: dict, files: dict) -> None:
+        revision = record["meta"]["revision"] + 1
+        if revision > 1000000000:
+            raise CloudError("This cloud sketch has reached its revision limit.")
+        now = max(int(time.time() * 1000), record["meta"]["created_at"])
+        record["meta"].update(revision=revision, updated_at=now, file_count=len(files))
+        versions = record["versions"]
+        versions["r" + str(revision)] = {"revision": revision, "created_at": now, "files": files}
+        ordered = sorted(versions, key=lambda key: int(key[1:]))
+        while len(ordered) > MAX_REVISIONS or len(json.dumps(versions, ensure_ascii=False).encode("utf-8")) > MAX_HISTORY_BYTES:
+            if len(ordered) == 1:
+                raise CloudError("This source snapshot is too large for cloud version history.")
+            del versions[ordered.pop(0)]
+
+    def rename_sketch(self, sketch_id: str, name: str, expected_revision: int) -> dict:
         with self._lock:
-            sources = _root_snapshot(root)
-            ids, _ = self._database("GET", "cloud_sketches", query={"shallow": "true"})
-            if ids is not None and (not isinstance(ids, dict) or len(ids) >= MAX_SKETCHES):
+            sketch_id, name = _safe_id(sketch_id), _sketch_name(name)
+            record, etag = self._record(sketch_id)
+            if type(expected_revision) is not int or record["meta"]["revision"] != expected_revision:
+                raise CloudConflict("This cloud sketch changed. Refresh before renaming it.")
+            rows = self.list_sketches()
+            if any(row["id"] != sketch_id and row.get("name", "").strip().casefold() == name.casefold() for row in rows):
+                raise CloudError("A cloud sketch with this name already exists. Enter a different name.")
+            if record["meta"]["name"] == name:
+                return dict(record["meta"])
+            files = record["versions"]["r" + str(expected_revision)]["files"]
+            _validate_snapshot(files)
+            record["meta"]["name"] = name
+            # Published rules require each mutation to advance the revision and
+            # retain a matching immutable source snapshot, including a rename.
+            self._append_revision(record, files)
+            self._database("PUT", "cloud_sketches/" + sketch_id, record, headers={"If-Match": etag})
+            return dict(record["meta"])
+
+    def delete_sketch(self, sketch_id: str, expected_revision: int) -> None:
+        with self._lock:
+            sketch_id = _safe_id(sketch_id)
+            record, etag = self._record(sketch_id)
+            if type(expected_revision) is not int or record["meta"]["revision"] != expected_revision:
+                raise CloudConflict("This cloud sketch changed. Refresh before deleting it.")
+            self._database("DELETE", "cloud_sketches/" + sketch_id, headers={"If-Match": etag})
+            # Local working sources, links and recovery copies belong to the user.
+
+    def upload_project(self, root: Path | str, name: str | None = None, *, duplicate=False,
+                       replace_id: str | None = None, expected_revision: int | None = None) -> dict:
+        with self._lock:
+            display_name = _sketch_name(name if name is not None else Path(root).name)
+            rows = self.list_sketches()
+            matches = [row for row in rows if row.get("name", "").strip().casefold() == display_name.casefold()]
+            if replace_id is not None:
+                replace_id = _safe_id(replace_id)
+                if duplicate or not any(row["id"] == replace_id for row in matches):
+                    raise CloudConflict("The sketch name changed. Refresh and choose the upload action again.")
+                record, etag = self._record(replace_id)
+                if (type(expected_revision) is not int or record["meta"]["revision"] != expected_revision
+                        or record["meta"]["name"].strip().casefold() != display_name.casefold()):
+                    raise CloudConflict("This cloud sketch changed. Refresh before replacing it.")
+                self._append_revision(record, _root_snapshot(root))
+                self._database("PUT", "cloud_sketches/" + replace_id, record, headers={"If-Match": etag})
+                return dict(record["meta"])
+            if matches and not duplicate:
+                raise CloudNameConflict(root, display_name, matches)
+            if duplicate:
+                used = {row.get("name", "").strip().casefold() for row in rows}
+                for number in range(1, MAX_SKETCHES + 2):
+                    suffix = f" ({number})"
+                    stem = display_name
+                    while len(stem.encode("utf-16-le")) // 2 > 100 - len(suffix):
+                        stem = stem[:-1]
+                    candidate = stem.rstrip() + suffix
+                    if candidate.casefold() not in used:
+                        display_name = candidate
+                        break
+            if len(rows) >= MAX_SKETCHES:
                 raise CloudError("This account already has 100 cloud sketches.")
+            sources = _root_snapshot(root)
             sketch_id = uuid.uuid4().hex
-            display_name = (name or Path(root).name).strip()[:100]
-            if not display_name or any(ord(char) < 32 for char in display_name):
-                raise CloudError("Enter a valid sketch name.")
             now = int(time.time() * 1000)
             meta = {"id": sketch_id, "name": display_name, "owner_uid": self._uid, "revision": 1,
                     "created_at": now, "updated_at": now, "file_count": len(sources)}
@@ -923,16 +1010,7 @@ class CloudSketchService:
             record, etag = self._record(sketch_id)
             if record["meta"]["revision"] != expected_revision:
                 raise CloudConflict("This cloud sketch changed. Pull the latest version before pushing again.")
-            revision = expected_revision + 1
-            now = int(time.time() * 1000)
-            record["meta"].update(revision=revision, updated_at=now, file_count=len(sources))
-            versions = record["versions"]
-            versions["r" + str(revision)] = {"revision": revision, "created_at": now, "files": sources}
-            ordered = sorted(versions, key=lambda key: int(key[1:]))
-            while len(ordered) > MAX_REVISIONS or len(json.dumps(versions, ensure_ascii=False).encode("utf-8")) > MAX_HISTORY_BYTES:
-                if len(ordered) == 1:
-                    raise CloudError("This source snapshot is too large for cloud version history.")
-                del versions[ordered.pop(0)]
+            self._append_revision(record, sources)
             self._database("PUT", "cloud_sketches/" + sketch_id, record, headers={"If-Match": etag})
             try:
                 self._link(Path(root), record["meta"], [entry["name"] for entry in sources.values()])

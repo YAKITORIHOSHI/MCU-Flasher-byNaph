@@ -23,6 +23,10 @@ for _p in (_ROOT, _MAIN_DIR, _MODULES_DIR):
 if sys.platform == "win32" and _ENV_SITE.is_dir() and str(_ENV_SITE) not in sys.path:
     sys.path.insert(0, str(_ENV_SITE))
 
+from src.modules.ubuntu_release import enforce_supported_ubuntu
+if not enforce_supported_ubuntu():
+    raise SystemExit(1)
+
 # Check hardware before runtime handoff or importing any GUI/backend services.
 from src.modules.runtime_resources import enforce_minimum_cpu_requirement
 

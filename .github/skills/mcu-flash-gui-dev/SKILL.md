@@ -7,6 +7,13 @@ description: "Developer and troubleshooting guide for the Windows MCU Flash GUI 
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) and its supporting execution ecosystem on Windows 10/11.
 
+The canonical current application guidance is
+[`.agents/skills/mcu-flash-gui-dev/SKILL.md`](../../../.agents/skills/mcu-flash-gui-dev/SKILL.md).
+Native Ubuntu requires 24.04 or newer, validated from installed OS-release
+information before runtime preparation, installation, repair or services. Missing
+or malformed data fails explicitly; rejection preserves all user resources.
+Verify older-release rejection using isolated fixtures only.
+
 ## Platform Scope
 
 - Focus on the Windows main app, `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`, `src/launcher.cpp`, `src/launcher.cs`), and supporting modules.

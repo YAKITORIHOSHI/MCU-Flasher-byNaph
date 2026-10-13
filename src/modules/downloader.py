@@ -17,6 +17,12 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
+if __name__ == "__main__" and sys.platform.startswith("linux"):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
+
 import requests
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox

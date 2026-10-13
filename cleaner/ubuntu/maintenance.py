@@ -14,6 +14,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from src.modules.ubuntu_release import enforce_supported_ubuntu
 SOURCE_TREES = ("main", "src/modules", "src/dbs", "direct", "cleaner", "DANGER-ZONE")
 PROTECTED = frozenset((".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode",
                        ".clangd", ".opencode", ".git", "node_modules", "env", "_python",
@@ -536,6 +538,8 @@ def apply_plan(root, plan, *, proc_root=Path("/proc")):
 
 
 def main(argv=None):
+    if not enforce_supported_ubuntu():
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("bytecode", "fresh", "runtime"))
     action = parser.add_mutually_exclusive_group()

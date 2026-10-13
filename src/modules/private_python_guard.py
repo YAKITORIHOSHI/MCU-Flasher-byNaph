@@ -225,6 +225,12 @@ def enforce_private_python(prefer_pythonw: bool = False, *, allow_repair: bool =
     src/_python, this IMMEDIATELY replaces/relaunches with the private Python
     and terminates the current process.
     """
+    if __package__:
+        from .ubuntu_release import enforce_supported_ubuntu
+    else:
+        from ubuntu_release import enforce_supported_ubuntu
+    if not enforce_supported_ubuntu():
+        raise SystemExit(1)
     if is_running_private_python():
         # Already running under private Python — ensure env is clean
         for var in ["PYTHONHOME", "PYTHONPATH"]:

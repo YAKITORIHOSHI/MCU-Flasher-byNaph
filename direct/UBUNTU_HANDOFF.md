@@ -17,7 +17,7 @@ passing direct/verify_qt_binding_lifetime.py on older Python.
 
 Review the latest Desktop compatibility GitHub Actions results and artifacts
 for the current commit. Revision 31e6e24 passed nine of ten jobs, including
-clean first launch on 22.04/24.04/26.04, Windows and 24.04/26.04 runtime jobs.
+Windows and supported Ubuntu runtime jobs.
 That exact revision also passed the native Ubuntu 26.04.1 runtime fixture on
 2026-10-11. Subsequent fixes require a successful background source scan,
 complete source-model coverage and matching
@@ -29,25 +29,14 @@ again when changing recovery or Pull.
 Run node direct/verify_editor_recovery.js and the real direct/verify_runtime.py
 fixture. Never relax dirty-text assertions or clear snapshots to obtain a pass.
 
-The 31e6e24 Ubuntu 22.04/Python 3.10 browser failure was reproduced with
-matching Python, Tk and libc hashes. A native hardware watchpoint identified
-Tk's retired font error callback writing through expired stack client data
-after old libXft submitted unsupported color glyphs. The downloader and its
-shared Tk-only fixture now initialize tk_font_runtime.py before creating a Tk
-root. Only Xft before 2.3.5 receives an in-memory Fontconfig supplement excluding
-color fallback; Unicode text, requested fonts, user files/environment and modern
-Xft behavior remain intact. The unchanged full 29-check Jammy browser suite
-passed four times, including a debug allocator run. Disabling only the helper
-reproduced the original crash. Preserve all assertions and check the current
-commit's CI; newer Python alone would not establish a Jammy fix.
-The failure-only CI diagnostic preserves the failing result and records exact
-native runtime versions/hashes, full GDB stacks, registers and loaded mappings.
-Compact causal logs and binary hashes are retained under
-temp/audit/tk-native-font-crash-evidence-2026-10-11.
+Ubuntu execution now requires 24.04 or newer; verify older release rejection only.
+The old Xft color-font fallback and its obsolete CI diagnostics were removed.
+Keep the shared Qt/Python ABI check for custom older Python on supported hosts.
 Earlier successes do not prove the current revision.
 
-Launch through MCU_Flasher or bash direct/ubuntu/run.sh. Diagnose with --check
-and repair only if needed. Verify the actual desktop, including Wayland when
+Launch through MCU_Flasher or bash direct/ubuntu/run.sh on Ubuntu 24.04 or newer.
+Diagnose with --check. During verification, mock installers and use isolated
+fixtures under temp; never repair the live package store. Verify the actual desktop, including Wayland when
 available, resize/scaling, editor dirty recovery, developer long-text wrapping,
 cloud login, upload/open/push/pull, independent cloud/developer connectivity,
 and the Ubuntu credential store. Offline Mode applies only to board/library

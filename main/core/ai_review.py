@@ -126,6 +126,42 @@ def build_ai_line_diff(before_content: str, after_content: str) -> dict:
     }
 
 
+def _context_source(context: dict | None) -> str:
+    context = context or {}
+    if type(context.get("sourceVersion")) is not int or context["sourceVersion"] != 1:
+        return "external"
+    source = context.get("source")
+    return source if source in ("cli", "assistant", "mixed") else "external"
+
+
+def _context_sources(context: dict | None) -> set[str]:
+    context = context or {}
+    source = _context_source(context)
+    if type(context.get("sourceVersion")) is not int or context["sourceVersion"] != 1:
+        return {"external"}
+    values = context.get("sources", [source])
+    if not isinstance(values, (list, tuple)):
+        values = [source]
+    sources = {value if value in ("cli", "assistant") else "external" for value in values}
+    if source != "mixed":
+        sources.add(source)
+    return sources or {"external"}
+
+
+def _merge_prompt_context(first: dict | None, latest: dict | None) -> dict | None:
+    if first == latest:
+        return first
+    sources = set()
+    for context in (first, latest):
+        sources.update(_context_sources(context))
+    prompts = list(dict.fromkeys(str((context or {}).get("prompt", ""))
+                                 for context in (first, latest)))
+    source = "external" if "external" in sources else "mixed" if len(sources) > 1 else next(iter(sources), "external")
+    return {"id": (first or latest or {}).get("id", ""),
+            "prompt": "\n\n".join(prompt for prompt in prompts if prompt)[:2000],
+            "sourceVersion": 1, "source": source, "sources": sorted(sources)}
+
+
 class AIReviewManager:
     """
     Manages pending AI review proposals, multi-file review queues,
@@ -430,20 +466,28 @@ class AIReviewManager:
         now = time.monotonic()
         context = context or {}
         group = str(context.get("id", ""))[:160]
-        title = str(context.get("prompt", ""))[:500]
-        prompt_source = "cli" if context.get("source") == "cli" else ""
+        title = str(context.get("prompt", ""))[:2000]
+        previous_prompt = str(payload.get("prompt", ""))
+        if previous_prompt and title and previous_prompt != title:
+            title = (previous_prompt + "\n\n" + title)[:2000]
+        elif previous_prompt and not title:
+            title = previous_prompt[:2000]
+        prompt_source = _context_source(context)
         if not group:
             if not self._change_group or now - self._change_group_time > 8:
                 self._change_group = f"external:{time.time_ns()}"
             group = self._change_group
-            title = "External assistant changes (prompt unavailable)"
-            prompt_source = "external"
+            title = title or "External assistant changes (prompt unavailable)"
         self._change_group_time = now
         record_id = f"{group}:{self._path_key(payload['path'])}"
         existing = next((item for item in self._ai_changes if item.get("id") == record_id), None)
+        sources = set(payload.get("promptSources", []))
+        sources.update(_context_sources(context))
+        payload.update(groupId=group, prompt=title or "Assistant changes", promptSourceVersion=1,
+                       promptSources=sorted(sources), promptSource=("external" if "external" in sources else
+                           "mixed" if len(sources) > 1 else prompt_source))
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         record = dict(payload, id=record_id, groupId=group, prompt=title or "Assistant changes",
-                      promptSource=prompt_source or (existing or {}).get("promptSource", ""),
                       timestamp=existing.get("timestamp", stamp) if existing else stamp,
                       updatedAt=stamp, status="pending", beforeContent=existing.get("beforeContent", before) if existing else before)
         if existing:
@@ -536,6 +580,10 @@ class AIReviewManager:
                 "afterExists": after_exists,
                 "diff": build_ai_line_diff(original_content, after_content),
             }
+            if existing:
+                payload["prompt"] = existing.get("prompt", "")
+                payload["promptSources"] = (list(existing.get("promptSources", []))
+                    if existing.get("promptSourceVersion") == 1 else ["external"])
             # Diff calculation can take time for a large source. If a manual
             # save or project switch won meanwhile, do not start journal I/O.
             if expected_valid is not None and not expected_valid():
@@ -580,6 +628,10 @@ class AIReviewManager:
                     "diff": snapshot.get("diff"),
                     "pendingCount": snapshot.get("pendingCount"),
                     "reviewIndex": snapshot.get("reviewIndex"),
+                    "prompt": snapshot.get("prompt", ""),
+                    "promptSource": snapshot.get("promptSource", "external"),
+                    "promptSourceVersion": snapshot.get("promptSourceVersion", 0),
+                    "promptSources": list(snapshot.get("promptSources", [])),
                 })
             return result
 
@@ -641,6 +693,10 @@ class AIReviewManager:
                 "path": resolved["path"],
                 "fileName": Path(resolved["path"]).name,
                 "action": "accepted" if accept else "rejected",
+                "prompt": resolved.get("prompt", ""),
+                "promptSource": resolved.get("promptSource", "external"),
+                "promptSourceVersion": resolved.get("promptSourceVersion", 0),
+                "promptSources": list(resolved.get("promptSources", [])),
                 "appliedExists": final_exists,
                 "appliedContent": final_content,
                 "undoExists": (
@@ -709,6 +765,10 @@ class AIReviewManager:
                 "path": entry.get("path", ""),
                 "fileName": entry.get("fileName") or Path(entry.get("path", "")).name,
                 "action": entry.get("action", "edited"),
+                "prompt": entry.get("prompt", ""),
+                "promptSource": entry.get("promptSource", "external"),
+                "promptSourceVersion": entry.get("promptSourceVersion", 0),
+                "promptSources": list(entry.get("promptSources", [])),
             }
 
         undo_entry = self._ai_decision_history[-1] if self._ai_decision_history else None
@@ -829,6 +889,7 @@ class AIEditWatcher(QObject):
         self._save_versions: dict[str, int] = {}
         self._closed = False
         self._user_operations: set[str] = set()
+        self._prompt_context_after = time.time()
 
         # File events are immediate. The fallback is deliberately less frequent
         # even on high-core PCs: faster CPUs do not improve mechanical seeks.
@@ -873,6 +934,7 @@ class AIEditWatcher(QObject):
             self._last_signal_mtime = 0.0
             self._generation += 1
             self._baseline_ready = False
+            self._prompt_context_after = time.time()
             self._force_read = False
             self._save_versions.clear()
             self._scan_pending = False
@@ -999,7 +1061,8 @@ class AIEditWatcher(QObject):
             context_file = project / ".mcu_flasher_build_cache" / "ai_prompt.json"
             if context_file.stat().st_size <= 8192:
                 candidate = json.loads(context_file.read_text(encoding="utf-8"))
-                if isinstance(candidate, dict) and 0 <= time.time() - float(candidate.get("time", 0)) < 3600:
+                if (isinstance(candidate, dict) and float(candidate.get("time", 0)) >= self._prompt_context_after
+                        and 0 <= time.time() - float(candidate.get("time", 0)) < 3600):
                     prompt_context = candidate
         except (OSError, ValueError, TypeError):
             pass
@@ -1044,8 +1107,10 @@ class AIEditWatcher(QObject):
                     "path": str(path), "before": contents.get(key, ""),
                     "before_exists": previous is not None,
                     "last_change_time": now, "last_mtime": signature,
+                    "prompt_context": prompt_context,
                 })
                 if item["last_mtime"] != signature:
+                    item["prompt_context"] = _merge_prompt_context(item.get("prompt_context"), prompt_context)
                     item["last_mtime"] = signature
                     item["last_change_time"] = now
         if ready:
@@ -1053,12 +1118,15 @@ class AIEditWatcher(QObject):
                 item = pending.setdefault(key, {
                     "path": key, "before": contents.get(key, ""), "before_exists": True,
                     "last_change_time": now, "last_mtime": None,
+                    "prompt_context": prompt_context,
                 })
                 if item["last_mtime"] is not None:
+                    item["prompt_context"] = _merge_prompt_context(item.get("prompt_context"), prompt_context)
                     item["last_mtime"] = None
                     item["last_change_time"] = now
         pending = {key: value for key, value in pending.items() if key in current or key in signatures}
         events = []
+        event_contexts = {}
         for key, item in list(pending.items()):
             if now - item["last_change_time"] < 0.35:
                 continue
@@ -1067,6 +1135,7 @@ class AIEditWatcher(QObject):
                 contents.pop(key, None)
                 signatures.pop(key, None)
                 events.append((key, item["path"], item["before"], "", True, False))
+                event_contexts[key] = item.get("prompt_context")
                 continue
             path, signature = current[key]
             try:
@@ -1084,6 +1153,7 @@ class AIEditWatcher(QObject):
             pending.pop(key, None)
             if before != after or not exists:
                 events.append((key, str(path), before, after, exists, True))
+                event_contexts[key] = item.get("prompt_context")
 
         published = []
         with self._lock:
@@ -1126,7 +1196,7 @@ class AIEditWatcher(QObject):
                             and key not in self._user_operations)
             result = self.review_manager.queue_ai_edit_snapshot(
                 *event, expected_project=project, expected_valid=still_valid,
-                prompt_context=prompt_context)
+                prompt_context=event_contexts.get(key))
             if result and result != "cancelled":
                 published.append((key, *event))
         return {"generation": generation, "events": published,
