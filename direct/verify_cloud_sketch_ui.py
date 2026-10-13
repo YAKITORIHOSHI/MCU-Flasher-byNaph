@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer, QObject, Signal
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame
+from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame, QScrollArea
 from main.qt.cloud_sketch_panel import (
     CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
     _CloudSketchActionDialog,
@@ -219,6 +219,25 @@ class CloudUIChecks(unittest.TestCase):
             if ancestor.isWindow():
                 break  # A separate dialog is not clipped by its owner's client area.
             ancestor = ancestor.parentWidget()
+
+    def reveal_in_scroll_ancestors(self, widget):
+        # A native high-DPI monitor can leave less room than a requested dialog
+        # size. Verify full action reachability through both the account scroll
+        # body and the project selector's enclosing page, retaining font sizes.
+        ancestor = widget.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea):
+                rect = QRect(widget.mapTo(ancestor.widget(), QPoint()), widget.size())
+                ancestor.ensureVisible(rect.center().x(), rect.center().y(),
+                                       rect.width() // 2 + 2, rect.height() // 2 + 2)
+                self.settle_layout()
+            if ancestor.isWindow():
+                break
+            ancestor = ancestor.parentWidget()
+
+    def has_room_for_full_sketch_list(self, panel):
+        return (panel._scroll.viewport().height() >= panel._scroll.widget().minimumSizeHint().height()
+                + panel._sketch_header.height() * 2)
 
     def assert_compact_sketch_header(self, panel):
         card, header, listing = panel._sketches_card, panel._sketch_header, panel._sketches
@@ -796,10 +815,12 @@ class CloudUIChecks(unittest.TestCase):
                     self.settle_layout()
                     self.assertEqual((dialog.width(), dialog.height()), (width, height))
                     self.assert_compact_sketch_header(panel)
+                    self.reveal_in_scroll_ancestors(panel._refresh_btn)
                     self.assert_visible_in_ancestors(panel._refresh_btn)
                     for button in (panel._upload_btn, panel._open_btn):
+                        self.reveal_in_scroll_ancestors(button)
                         self.assert_visible_in_ancestors(button)
-                    if width > 400:
+                    if width > 400 and self.has_room_for_full_sketch_list(panel):
                         self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
                         self.assertGreater(panel._sketches.height(), panel._sketch_header.height() * 3)
                         account_bounds = QRect(panel._account_card.mapTo(panel, QPoint()), panel._account_card.size())
@@ -875,16 +896,20 @@ class CloudUIChecks(unittest.TestCase):
             self.wait(lambda: not panel._busy)
             self.settle_layout()
             self.assert_compact_sketch_header(panel)
-            self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
+            if self.has_room_for_full_sketch_list(panel):
+                self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
             self.assertGreater(panel._sketches.verticalScrollBar().maximum(), 0)
             header_geometry, footer_geometry = panel._sketch_header.geometry(), panel._sync_actions.geometry()
+            outer_position = panel._scroll.verticalScrollBar().value()
             panel._sketches.setCurrentRow(19)
             panel._sketches.scrollToBottom()
             self.settle_layout()
             self.assertEqual(panel._sketch_header.geometry(), header_geometry)
             self.assertEqual(panel._sync_actions.geometry(), footer_geometry)
-            self.assertEqual(panel._scroll.verticalScrollBar().value(), 0)
+            self.assertEqual(panel._scroll.verticalScrollBar().value(), outer_position)
+            self.reveal_in_scroll_ancestors(panel._refresh_btn)
             self.assert_visible_in_ancestors(panel._refresh_btn)
+            self.reveal_in_scroll_ancestors(panel._open_btn)
             self.assert_visible_in_ancestors(panel._open_btn)
             self.assertTrue(dialog.grab().save(str(self.output / "selector-cloud-many-sketches.png")))
             self.service.rows = []
@@ -894,7 +919,9 @@ class CloudUIChecks(unittest.TestCase):
             self.assert_compact_sketch_header(panel)
             self.assertTrue(panel._empty.isVisible())
             self.assertFalse(panel._open_btn.isEnabled())
+            self.reveal_in_scroll_ancestors(panel._refresh_btn)
             self.assert_visible_in_ancestors(panel._refresh_btn)
+            self.reveal_in_scroll_ancestors(panel._upload_btn)
             self.assert_visible_in_ancestors(panel._upload_btn)
             self.assertTrue(dialog.grab().save(str(self.output / "selector-cloud-empty.png")))
 

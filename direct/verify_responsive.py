@@ -444,6 +444,14 @@ class QtResponsiveChecks(ControlChecks):
                     with self.subTest(panel=cls.__name__, theme=mode, width=width, height=height):
                         host.resize(width, height)
                         pump()
+                        # Native Windows applies the previous splitter minimum
+                        # before delivering resize. Give the newly reflowed
+                        # minimum a second real resize, like a continuous drag.
+                        for _ in range(2):
+                            if host.height() <= height:
+                                break
+                            host.resize(width, height)
+                            pump()
                         self.assertLessEqual(host.width(), width, 'A tool header must not widen a compact window')
                         self.assertLessEqual(host.height(), height, 'Reading minima must fit short tool panes')
                         self.assertIs(APP.focusWidget(), focus_field, 'Tool reflow must retain keyboard focus')
@@ -467,7 +475,8 @@ class QtResponsiveChecks(ControlChecks):
                                 self.assertEqual(preview.font().pointSize(), 11)
                                 self.assertGreaterEqual(preview.viewport().height(),
                                     preview.fontMetrics().lineSpacing() + round(preview.document().documentMargin() * 2))
-                            expected = Qt.Orientation.Vertical if width < 650 and height >= 240 else Qt.Orientation.Horizontal
+                            expected = (Qt.Orientation.Vertical if panel.width() < 650 and panel.height() >= 240
+                                        else Qt.Orientation.Horizontal)
                             self.assertEqual(panel._splitter.orientation(), expected)
                         if width == 320:
                             capture(host, f'tool-{cls.__name__}-{mode}-compact')

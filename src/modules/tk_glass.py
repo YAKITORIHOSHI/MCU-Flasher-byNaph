@@ -278,8 +278,8 @@ class ResponsivePanes:
         pane.bind("<Configure>", self._schedule, add="+")
         pane.bind("<Destroy>", self._cancel, add="+")
 
-    def _schedule(self, event):
-        if event.widget is self.pane and self._pending is None:
+    def _schedule(self, event=None):
+        if (event is None or event.widget is self.pane) and self._pending is None:
             self._pending = self.pane.after(60, self._fit)
 
     def _cancel(self, event):

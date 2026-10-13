@@ -43,6 +43,14 @@ setup and auxiliary dialogs at five display scales in separate processes;
 continue collecting evidence for later screens after an individual failure.
 `.github/workflows/ui-layout.yml` covers Windows Qt ranges and native Ubuntu
 24.04/26.04 without real setup, accounts or hardware.
+CI creates the host's private `env` / `.venv-linux` for workspace rendering;
+never weaken private-Python enforcement to accommodate a fixture. Native
+top-level windows can clamp requested sizes or apply an older splitter minimum
+before delivering resize. Validate actual reading/view bounds, retry a bounded
+resize after reflow, and reveal complete actions through nested scroll areas on
+short monitors. WebEngine CSS dimensions follow its actual contents rectangle
+and zoom. Keep geometry/reading/focus assertions intact. Installed Tk metadata
+queues its existing card/pane timers when content changes without outer resize.
 
 Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.
 Keep geometry original: chamfered silhouettes, routed strokes and open terminals.

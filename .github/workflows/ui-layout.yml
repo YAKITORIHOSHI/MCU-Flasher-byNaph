@@ -41,11 +41,19 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Fixture dependencies
-        run: python -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets
-      - name: Native Windows terminal provider
+      - name: Private Windows fixture runtime
         if: runner.os == 'Windows'
-        run: python -m pip install pywinpty
+        shell: pwsh
+        run: |
+          python -m venv env
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets pywinpty
+          exit $LASTEXITCODE
+      - name: Private Ubuntu fixture runtime
+        if: runner.os == 'Linux'
+        run: |
+          python -m venv .venv-linux
+          .venv-linux/bin/python -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets
       - name: Native Ubuntu display dependencies
         if: runner.os == 'Linux'
         run: |
@@ -57,12 +65,12 @@ jobs:
         if: runner.os == 'Windows'
         env:
           QT_QPA_PLATFORM: windows
-        run: python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+        run: env/Scripts/python.exe -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
       - name: Ubuntu screens, validation states and display scales
         if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a -s '-screen 0 1920x1080x24' python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' .venv-linux/bin/python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
       - name: Native screen captures and logs
         if: always()
         uses: actions/upload-artifact@v6

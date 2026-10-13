@@ -67,7 +67,7 @@ FIXTURE = r"""
     tab.setAttribute('data-file-path', file.path);
     const label = document.createElement('span'); label.textContent = file.name;
     const dirty = document.createElement('span'); dirty.className = 'dirty-dot';
-    dirty.textContent = '●'; dirty.style.display = 'none';
+    dirty.textContent = ''; dirty.style.display = 'none';
     tab.append(label, dirty);
     tab.addEventListener('click', () => {
       document.querySelectorAll('#tab-bar .tab.active').forEach(t => t.classList.remove('active'));
@@ -452,8 +452,12 @@ class EditorReviewChecks(unittest.TestCase):
                     with self.subTest(mode=mode,theme=theme,size=label):
                         self.page.setZoomFactor(zoom)
                         self.view.resize(width,height)
-                        until(lambda: abs(self.js('innerWidth') - width/zoom) <= 1 and
-                            abs(self.js('innerHeight') - height/zoom) <= 1)
+                        # Native windows may clamp a top-level WebEngine view
+                        # to the monitor. Compare CSS with the actual reading
+                        # viewport, while retaining the complete control bounds
+                        # and one-row assertions below.
+                        until(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1 and
+                            abs(self.js('innerHeight') - self.view.contentsRect().height()/zoom) <= 1)
                         self.async_js('await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));return true;')
                         geometry = self.js(BANNER_GEOMETRY)
                         bar, editor = geometry['banner'], geometry['editor']

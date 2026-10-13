@@ -129,6 +129,8 @@ their bounded reading area. Reflow preserves the same draft and focus widgets.
 The Resources browser also reserves complete native SVG button heights in
 short detail panes, including 200% scaling. Optional headings and padding yield
 before controls; valid list/detail sash positions and saved fonts are retained.
+Selecting installed-package metadata also refreshes the card's reading budget
+when its title changes, including native Windows font metrics.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the

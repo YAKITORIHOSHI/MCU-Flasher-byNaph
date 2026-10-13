@@ -2010,6 +2010,15 @@ class InstalledTab:
         self._details_view = ScrollBody(self.detail_frame, Theme.BG_DARKEST)
         self._detail_content = self._details_view.body
 
+        def _reading_content_changed(_event):
+            # Selecting an installed package can change its native title height
+            # without resizing the outer card. Reallocate reading space after
+            # the content geometry settles, using the existing coalesced timers.
+            detail_card._schedule()
+            self._responsive_panes._schedule()
+
+        self._detail_content.bind("<Configure>", _reading_content_changed, add="+")
+
         def _on_detail_configure(event):
             pad = 30
             for lbl in self._wrapping_labels:
