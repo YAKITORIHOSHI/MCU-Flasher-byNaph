@@ -19,6 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from main.core import config
 from main.qt.console_panel import ConsolePanel, ConsolePanelContainer
@@ -485,6 +486,8 @@ class BuildConsoleChecks(unittest.TestCase):
     def test_theme_timestamp_changes_preserve_selection_focus_and_reading_anchor(self):
         console = self.widget()
         console.show()
+        console.activateWindow()
+        self.assertTrue(QTest.qWaitForWindowActive(console, 3000))
         APP.processEvents()
         for number in range(100):
             console.append_log({"text": f"Row {number:03d} " + "x" * 120, "timestamp": "[01:02:03]"})
@@ -493,6 +496,8 @@ class BuildConsoleChecks(unittest.TestCase):
         console.set_autoscroll(False)
         console.setTextCursor(console.document().find("Row 040"))
         console.setFocus()
+        APP.processEvents()
+        self.assertTrue(console.hasFocus(), "fixture must have focus before checking preservation")
         console.verticalScrollBar().setValue(35)
         console.horizontalScrollBar().setValue(50)
         visible = console.firstVisibleBlock().text()
