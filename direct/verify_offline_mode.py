@@ -212,6 +212,8 @@ class ModeChecks(unittest.TestCase):
             observed["after_main"] = runtime.network_access_disabled()
             return 0
         with ExitStack() as stack:
+            stack.enter_context(patch("src.modules.ubuntu_release.platform.freedesktop_os_release",
+                                      return_value={"ID": "ubuntu", "VERSION_ID": "24.04"}, create=True))
             stack.enter_context(patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True))
             stack.enter_context(patch("src.modules.private_python_guard.enforce_private_python"))
             stack.enter_context(patch("src.modules.windows_tool_paths.install_espidf_component_relpaths"))

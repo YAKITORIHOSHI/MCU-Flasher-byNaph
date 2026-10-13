@@ -59,7 +59,7 @@ jobs:
       - name: Developer Access fixture dependencies
         shell: pwsh
         run: |
-          python -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4'
+          python -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native Windows click, login, categories and recovery
         shell: pwsh
